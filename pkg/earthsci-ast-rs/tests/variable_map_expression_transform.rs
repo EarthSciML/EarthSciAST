@@ -545,17 +545,27 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn simulate_variable_map_expression_transform_end_to_end() {
-    use earthsci_ast::{SimulateOptions, simulate};
+    use earthsci_ast::SolveOptions;
 
     let file =
         expression_transform_fixture(VariableMapTransform::Expression(transform_node()), None);
 
-    let opts = SimulateOptions {
-        output_times: Some(vec![0.0, 1.0]),
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 1.0]),
         ..Default::default()
     };
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
 
     assert_eq!(sol.state_variable_names, vec!["Sink.u".to_string()]);
     let last = sol.time.len() - 1;

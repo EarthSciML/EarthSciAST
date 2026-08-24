@@ -22,8 +22,7 @@
 
 use earthsci_ast::simulate::Solution;
 use earthsci_ast::{
-    Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load_string,
-    simulate,
+    Alg, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, load_string,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -102,24 +101,30 @@ fn run_model_test(
     let mut sorted_times: Vec<f64> = t.assertions.iter().map(|a| a.time).collect();
     sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     sorted_times.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(sorted_times.clone()),
+        maxiters: 100_000,
+        saveat: Some(sorted_times.clone()),
         progress: None,
+        callback: None,
     };
     let params: HashMap<String, f64> = HashMap::new();
     let initial_conditions: HashMap<String, f64> =
         t.initial_conditions.as_ref().cloned().unwrap_or_default();
-    let sol = match simulate(
+    let sol = match earthsci_ast::esm_problem(
         file,
         (t.time_span.start, t.time_span.end),
-        &params,
-        &initial_conditions,
-        &opts,
-    ) {
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: initial_conditions.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    {
         Ok(s) => s,
         Err(e) => panic!(
             "[{fixture_name}/{model_name}/{}] simulate failed: {e}",

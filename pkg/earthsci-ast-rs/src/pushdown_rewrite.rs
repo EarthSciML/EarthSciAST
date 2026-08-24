@@ -1147,10 +1147,7 @@ fn pd_subscript_sketch(node: &Value) -> String {
         Value::Object(o) => {
             let op = o.get("op").and_then(Value::as_str).unwrap_or("?");
             let empty: Vec<Value> = Vec::new();
-            let args = o
-                .get("args")
-                .and_then(Value::as_array)
-                .unwrap_or(&empty);
+            let args = o.get("args").and_then(Value::as_array).unwrap_or(&empty);
             if op == "index" && !args.is_empty() {
                 let inner: Vec<String> = args[1..].iter().map(pd_subscript_sketch).collect();
                 format!("{}[{}]", pd_subscript_sketch(&args[0]), inner.join(", "))

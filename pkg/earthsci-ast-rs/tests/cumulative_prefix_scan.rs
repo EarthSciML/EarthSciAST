@@ -415,13 +415,17 @@ fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
             let abs_tol = tol["abs"].as_f64().unwrap_or(0.0);
             for test in model["tests"].as_array().into_iter().flatten() {
                 let end = test["time_span"]["end"].as_f64().expect("time_span.end");
-                let sol = earthsci_ast::simulate(
+                let sol = earthsci_ast::esm_problem(
                     &file,
                     (0.0, end),
-                    &std::collections::HashMap::new(),
-                    &std::collections::HashMap::new(),
-                    &earthsci_ast::SimulateOptions::default(),
+                    earthsci_ast::ProblemOptions {
+                        p: std::collections::HashMap::new().clone(),
+                        u0: std::collections::HashMap::new().clone(),
+                        compile: earthsci_ast::Compile::Always,
+                        ..Default::default()
+                    },
                 )
+                .and_then(|prob| earthsci_ast::solve(&prob, &earthsci_ast::SolveOptions::default()))
                 .unwrap_or_else(|e| panic!("{name}::{model_name} simulate: {e}"));
 
                 for a in test["assertions"].as_array().into_iter().flatten() {

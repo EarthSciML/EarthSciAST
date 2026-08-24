@@ -1,4 +1,4 @@
-//! [`SimulateOptions::progress`]: per-step progress reporting and caller cancel.
+//! [`SolveOptions::progress`]: per-step progress reporting and caller cancel.
 //!
 //! The observer is installed in one place — [`earthsci_ast::simulate`]'s shared
 //! `run_solver` — which both the scalar ODE path and the array/spatial path
@@ -9,9 +9,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{
-    Flow, Progress, ProgressFn, SimulateError, SimulateOptions, SolverChoice, load_string, simulate,
-};
+use earthsci_ast::{Alg, Flow, Progress, ProgressFn, ReturnCode, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -141,25 +139,59 @@ const ARRAY: &str = r#"
     }
     "#;
 
+/// An OWNED snapshot of a [`Progress`] report.
+///
+/// `Progress` borrows the integrator's state vector (`u`), so it cannot outlive
+/// the step it describes — which is the point: the observer is called on every
+/// accepted step and must not allocate a state copy per call. A recorder that
+/// wants a log therefore takes the scalars it cares about.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Snap {
+    t0: f64,
+    t: f64,
+    t_end: f64,
+    step: usize,
+    maxiters: usize,
+    n_u: usize,
+}
+
+impl Snap {
+    fn fraction(&self) -> f64 {
+        let span = self.t_end - self.t0;
+        if !span.is_finite() || span <= 0.0 {
+            return 0.0;
+        }
+        ((self.t - self.t0) / span).clamp(0.0, 1.0)
+    }
+}
+
 /// A recording observer plus the log it writes to.
-fn recorder() -> (ProgressFn, Arc<Mutex<Vec<Progress>>>) {
+fn recorder() -> (ProgressFn, Arc<Mutex<Vec<Snap>>>) {
     let log = Arc::new(Mutex::new(Vec::new()));
     let sink = log.clone();
-    let obs: ProgressFn = Arc::new(move |p: &Progress| {
-        sink.lock().unwrap().push(*p);
+    let obs: ProgressFn = Arc::new(move |p: &Progress<'_>| {
+        sink.lock().unwrap().push(Snap {
+            t0: p.t0,
+            t: p.t,
+            t_end: p.t_end,
+            step: p.step,
+            maxiters: p.maxiters,
+            n_u: p.u.len(),
+        });
         Flow::Continue
     });
     (obs, log)
 }
 
-fn opts(progress: Option<ProgressFn>, output_times: Option<Vec<f64>>) -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn opts(progress: Option<ProgressFn>, saveat: Option<Vec<f64>>) -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times,
+        maxiters: 100_000,
+        saveat,
         progress,
+        callback: None,
     }
 }
 
@@ -167,7 +199,7 @@ fn opts(progress: Option<ProgressFn>, output_times: Option<Vec<f64>>) -> Simulat
 /// the first step, monotonically advancing `t`, and a final report that reaches
 /// the end of the interval (so the bar lands on 100% rather than stopping at
 /// whatever the last step happened to be).
-fn assert_well_formed(log: &[Progress], t0: f64, t_end: f64) {
+fn assert_well_formed(log: &[Snap], t0: f64, t_end: f64) {
     assert!(
         log.len() >= 2,
         "expected a pre-loop report plus at least one step, got {}",
@@ -204,7 +236,11 @@ fn assert_well_formed(log: &[Progress], t0: f64, t_end: f64) {
     );
     assert_eq!(last.fraction(), 1.0, "the bar must land on 100%");
     assert!(log.iter().all(|p| p.t0 == t0 && p.t_end == t_end));
-    assert!(log.iter().all(|p| p.max_steps == 100_000));
+    assert!(log.iter().all(|p| p.maxiters == 100_000));
+    // Every report carries the integrator's live state vector, which is what
+    // lets a Problem-level callback write output or checkpoint rather than only
+    // draw a bar.
+    assert!(log.iter().all(|p| p.n_u > 0), "reports must carry `u`");
 }
 
 #[test]
@@ -212,13 +248,17 @@ fn reports_progress_on_the_natural_step_grid() {
     let file = load_string(DECAY).expect("load");
     let (obs, log) = recorder();
 
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), None),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), None)))
     .expect("simulate");
 
     let log = log.lock().unwrap();
@@ -242,13 +282,17 @@ fn reports_progress_on_an_interpolated_output_grid() {
     // The requested output grid is much coarser than the solver's own steps;
     // progress must still track the SOLVER, not the output samples.
     let grid: Vec<f64> = (0..=4).map(|i| i as f64 * 5.0).collect();
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), Some(grid.clone())),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), Some(grid.clone()))))
     .expect("simulate");
 
     assert_eq!(
@@ -271,13 +315,17 @@ fn reports_progress_from_the_array_runtime() {
     let file = load_string(ARRAY).expect("load");
     let (obs, log) = recorder();
 
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 1.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), Some(vec![0.0, 1.0])),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), Some(vec![0.0, 1.0]))))
     .expect("simulate");
 
     // Sanity that this really is the array path and it still computes:
@@ -308,45 +356,53 @@ fn returning_cancel_stops_the_run() {
         }
     });
 
-    let err = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), None),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
-    .expect_err("cancel should abort the run");
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), None)))
+    .expect("a cancel is a retcode, not an error");
 
-    match err {
-        SimulateError::Cancelled { step, t } => {
-            assert_eq!(step, 3);
-            assert!(t > 0.0 && t < 20.0, "cancelled mid-interval, got t = {t}");
-        }
-        other => panic!("expected Cancelled, got {other:?}"),
-    }
+    // esm-libraries-spec §2.5.3: stopping early is a RETURN CODE, not an error.
+    // The caller keeps the trajectory computed up to the cancel.
+    assert_eq!(sol.retcode, ReturnCode::Terminated);
+    let t_last = *sol.time.last().expect("partial trajectory is returned");
+    assert!(
+        t_last > 0.0 && t_last < 20.0,
+        "cancelled mid-interval, got t = {t_last}"
+    );
 }
 
 #[test]
 fn cancelling_at_step_zero_stops_before_any_work() {
     let file = load_string(DECAY).expect("load");
-    let obs: ProgressFn = Arc::new(|_: &Progress| Flow::Cancel);
+    let obs: ProgressFn = Arc::new(|_: &Progress<'_>| Flow::Cancel);
 
-    let err = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), None),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
-    .expect_err("cancel should abort the run");
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), None)))
+    .expect("a cancel is a retcode, not an error");
 
-    match err {
-        SimulateError::Cancelled { step, t } => {
-            assert_eq!(step, 0);
-            assert_eq!(t, 0.0);
-        }
-        other => panic!("expected Cancelled, got {other:?}"),
-    }
+    assert_eq!(sol.retcode, ReturnCode::Terminated);
+    assert!(
+        sol.time.is_empty(),
+        "cancelling at step 0 must not integrate anything, got {:?}",
+        sol.time
+    );
 }
 
 /// Observing a run must not change its answer. The observer sits between
@@ -357,23 +413,31 @@ fn observing_does_not_perturb_the_trajectory() {
     let file = load_string(DECAY).expect("load");
     let grid = Some(vec![0.0, 1.0, 5.0, 20.0]);
 
-    let plain = simulate(
+    let plain = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(None, grid.clone()),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(None, grid.clone())))
     .expect("simulate");
 
     let (obs, _log) = recorder();
-    let observed = simulate(
+    let observed = earthsci_ast::esm_problem(
         &file,
         (0.0, 20.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts(Some(obs), grid),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts(Some(obs), grid)))
     .expect("simulate");
 
     assert_eq!(plain.time, observed.time);
@@ -388,12 +452,14 @@ fn observing_does_not_perturb_the_trajectory() {
 /// degenerate cases must be values, not NaNs.
 #[test]
 fn fraction_is_clamped_and_never_nan() {
+    let u: [f64; 1] = [0.0];
     let p = |t0: f64, t: f64, t_end: f64| Progress {
         t0,
         t,
         t_end,
         step: 0,
-        max_steps: 0,
+        maxiters: 0,
+        u: &u,
     };
     assert_eq!(p(0.0, 5.0, 10.0).fraction(), 0.5);
     assert_eq!(p(0.0, -1.0, 10.0).fraction(), 0.0, "clamped below");

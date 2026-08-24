@@ -20,7 +20,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -124,16 +124,27 @@ fn build_once_spatial_field_trajectory_matches_golden() {
         .collect();
     want_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: Some(want_times.clone()),
+        maxiters: 1_000_000,
+        saveat: Some(want_times.clone()),
         progress: None,
+        callback: None,
     };
-    let sol = simulate(&file, (t0, t1), &HashMap::new(), &HashMap::new(), &opts)
-        .unwrap_or_else(|e| panic!("simulate failed: {e}"));
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (t0, t1),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .unwrap_or_else(|e| panic!("simulate failed: {e}"));
 
     // Locate each state slot `u[c]` (single-model path uses bare slot names).
     let slot_of = |cell: usize| -> usize {

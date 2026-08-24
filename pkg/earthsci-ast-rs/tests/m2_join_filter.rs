@@ -19,7 +19,7 @@
 //!   value-equality engine is M3), rather than silently producing the wrong sum.
 
 use earthsci_ast::types::Expr;
-use earthsci_ast::{EsmFile, SimulateOptions, SolverChoice, load_string, simulate, to_json};
+use earthsci_ast::{Alg, EsmFile, SolveOptions, load_string, to_json};
 use std::collections::HashMap;
 
 /// Build a `D(y[i]) = aggregate over j of body` contraction model. `rhs_extra`
@@ -55,18 +55,29 @@ fn contraction_model(rhs_extra: &str) -> String {
 /// forcing, so `y[i](1)` equals that constant rate.
 fn sim_y(model_json: &str, slot: &str) -> Result<f64, String> {
     let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     };
     let ics: HashMap<String, f64> =
         HashMap::from([("y[1]".to_string(), 0.0), ("y[2]".to_string(), 0.0)]);
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
-        .map_err(|e| format!("simulate: {e}"))?;
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .map_err(|e| format!("simulate: {e}"))?;
     let idx = sol
         .state_variable_names
         .iter()

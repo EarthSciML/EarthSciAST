@@ -1181,19 +1181,28 @@ fn ab_model_file_if_available() {
     }
     let file =
         crate::load_path_with_options(std::path::Path::new(&path), &mp).expect("model loads");
-    let seed_sol = crate::simulate::simulate(
+    let seed_sol = crate::problem::esm_problem(
         &file,
         (0.0, 1.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &crate::simulate::SimulateOptions {
-            solver: crate::simulate::SolverChoice::Erk,
-            abstol: 1e-8,
-            reltol: 1e-6,
-            output_times: Some(vec![0.0]),
+        crate::problem::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: crate::problem::Compile::Always,
             ..Default::default()
         },
     )
+    .and_then(|prob| {
+        crate::problem::solve(
+            &prob,
+            &crate::simulate::SolveOptions {
+                alg: crate::simulate::Alg::Erk,
+                abstol: 1e-8,
+                reltol: 1e-6,
+                saveat: Some(vec![0.0]),
+                ..Default::default()
+            },
+        )
+    })
     .expect("u0 seed solve");
     let compiled = ArrayCompiled::from_file(&file).expect("model compiles");
     let n = compiled.state_variable_names().len();

@@ -22,7 +22,7 @@
 use earthsci_ast::flatten::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::types::Expr;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 
 /// Two coupled array-shaped models.
@@ -172,14 +172,15 @@ const COUPLED_ARRAY_JSON: &str = r#"
     }
     "#;
 
-fn fast_opts(final_t: f64) -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn fast_opts(final_t: f64) -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![final_t]),
+        maxiters: 100_000,
+        saveat: Some(vec![final_t]),
         progress: None,
+        callback: None,
     }
 }
 
@@ -323,7 +324,7 @@ fn coupled_array_compiles_and_evaluates_via_from_flattened() {
     .collect();
 
     let sol = compiled
-        .simulate((0.0, 1.0), &HashMap::new(), &ics, &fast_opts(1.0))
+        .solve((0.0, 1.0), &HashMap::new(), &ics, &fast_opts(1.0))
         .expect("simulate coupled array");
 
     let decay = (-1.0f64).exp(); // e^{-1}
@@ -361,8 +362,18 @@ fn coupled_array_evaluates_via_top_level_dispatcher() {
     .map(|(k, v)| (k.to_string(), *v))
     .collect();
 
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &fast_opts(1.0))
-        .expect("dispatcher routes coupled array file through the seam");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &fast_opts(1.0)))
+    .expect("dispatcher routes coupled array file through the seam");
 
     let grow = 1.0 - (-1.0f64).exp();
     let w2 = final_value(&sol, "Snk.w[2]");
@@ -464,8 +475,18 @@ fn single_model_array_path_unchanged() {
         .iter()
         .map(|(k, v)| (k.to_string(), *v))
         .collect();
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &fast_opts(1.0))
-        .expect("single-model array simulate");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &fast_opts(1.0)))
+    .expect("single-model array simulate");
     let decay = (-1.0f64).exp();
     let u2 = final_value(&sol, "u[2]");
     assert!(

@@ -1158,19 +1158,19 @@ mod elementwise_array_observed_tests {
     //! `_fold_elementwise_array_observeds` pass; the test locks the behaviour so
     //! the same `.esm` keeps running identically in both toolkits.
     use super::*;
-    use crate::simulate::{SimulateOptions, SolverChoice, simulate};
+    use crate::simulate::{Alg, SolveOptions};
     use crate::types::EsmFile;
     use serde_json::json;
 
     fn typed(doc: serde_json::Value) -> EsmFile {
         serde_json::from_value(doc).expect("test document deserializes")
     }
-    fn erk() -> SimulateOptions {
-        SimulateOptions {
-            solver: SolverChoice::Erk,
+    fn erk() -> SolveOptions {
+        SolveOptions {
+            alg: Alg::Erk,
             reltol: 1e-10,
             abstol: 1e-12,
-            output_times: Some(vec![1.0]),
+            saveat: Some(vec![1.0]),
             ..Default::default()
         }
     }
@@ -1201,8 +1201,18 @@ mod elementwise_array_observed_tests {
             }}
         });
         let file = typed(doc);
-        let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &erk())
-            .expect("simulates");
+        let sol = crate::problem::esm_problem(
+            &file,
+            (0.0, 1.0),
+            crate::problem::ProblemOptions {
+                p: HashMap::new().clone(),
+                u0: HashMap::new().clone(),
+                compile: crate::problem::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| crate::problem::solve(&prob, &erk()))
+        .expect("simulates");
         let ti = sol.time.len() - 1;
         let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
         assert_eq!(cells.len(), 3);

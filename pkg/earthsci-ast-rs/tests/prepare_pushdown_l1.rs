@@ -23,7 +23,8 @@ use std::rc::Rc;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, prepare};
+use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 // ---- Lambert conformal conic (unit sphere), plain-Rust ORACLE --------------
 
@@ -324,20 +325,29 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     .into_iter()
     .collect();
 
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
     };
-    let prep = prepare(&doc, ca, providers, &opts).expect("prepare");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: ca,
+            build_providers: providers,
+            ..opts
+        },
+    )
+    .expect("prepare");
 
     // ---- the rewrite fired and recorded its own gate ------------------------
-    let set = prep.doc["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"]
+    let set = prep.document()["metadata"]["x_esd"]["pushdown"]["gated_select"]["gated_by"]
         .as_str()
         .unwrap();
     assert_eq!(set, "pd_support__src_cells");
-    assert_eq!(prep.gated_provider_keys.len(), 5);
-    let faq_members = &prep.members["pd_faq__src_cells"];
+    assert_eq!(prep.gated_provider_keys().len(), 5);
+    let faq_members = &prep.members()["pd_faq__src_cells"];
     assert_eq!(faq_members, &vec![1i64, 2, 4, 9]);
 
     // ---- the gated mocks were fetched pre-sliced, never wholesale -----------
@@ -362,35 +372,35 @@ fn prepare_pushdown_l1_matches_the_step0_oracle_with_presliced_gated_fetch() {
     // ---- results through the prepared document's own graph ------------------
     assert_close(
         "E_VOC",
-        prep.observed_field("E_VOC").unwrap(),
+        &observed_field(&prep, "E_VOC").unwrap(),
         &oracle_e(&is_voc),
     );
     assert_close(
         "E_PM25",
-        prep.observed_field("E_PM25").unwrap(),
+        &observed_field(&prep, "E_PM25").unwrap(),
         &oracle_e(&is_pm25),
     );
     assert_close(
         "conc_SOA",
-        prep.observed_field("conc_SOA").unwrap(),
+        &observed_field(&prep, "conc_SOA").unwrap(),
         &oracle_conc("SOA"),
     );
     assert_close(
         "TotalPM25",
-        prep.observed_field("TotalPM25").unwrap(),
+        &observed_field(&prep, "TotalPM25").unwrap(),
         &oracle_total,
     );
     assert_close(
         "deathsK",
-        prep.observed_field("deathsK").unwrap(),
+        &observed_field(&prep, "deathsK").unwrap(),
         &oracle_deaths(RR_K),
     );
     assert_close(
         "deathsL",
-        prep.observed_field("deathsL").unwrap(),
+        &observed_field(&prep, "deathsL").unwrap(),
         &oracle_deaths(RR_L),
     );
-    assert!(prep.observed_field("no_such_observed").is_err());
+    assert!(observed_field(&prep, "no_such_observed").is_err());
 }
 
 /// n=1 pin (cross-language: the Python binding's scalarisation footgun): every
@@ -554,15 +564,24 @@ fn prepare_pushdown_l1_single_member_support_set() {
     .into_iter()
     .collect();
 
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
     };
-    let prep = prepare(&doc, ca, providers, &opts).expect("prepare with |members| = 1");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: ca,
+            build_providers: providers,
+            ..opts
+        },
+    )
+    .expect("prepare with |members| = 1");
 
     // The engine derived a ONE-member support set…
-    assert_eq!(&prep.members["pd_faq__src_cells"], &vec![1i64]);
+    assert_eq!(&prep.members()["pd_faq__src_cells"], &vec![1i64]);
     // …and each gated fetch pushed exactly that one-member selection down.
     let expect_sel = vec![
         AxisSel::Indices(vec![0]),
@@ -583,27 +602,27 @@ fn prepare_pushdown_l1_single_member_support_set() {
     }
 
     // The full downstream graph evaluated off the one-member axis.
-    let e_voc = prep.observed_field("E_VOC").unwrap();
+    let e_voc = observed_field(&prep, "E_VOC").unwrap();
     assert_eq!(e_voc.len(), 1, "E_VOC must stay a length-1 ARRAY");
-    assert_close("E_VOC", e_voc, &oracle_e(&is_voc));
+    assert_close("E_VOC", &e_voc, &oracle_e(&is_voc));
     assert_close(
         "conc_SOA",
-        prep.observed_field("conc_SOA").unwrap(),
+        &observed_field(&prep, "conc_SOA").unwrap(),
         &oracle_conc("SOA"),
     );
     assert_close(
         "TotalPM25",
-        prep.observed_field("TotalPM25").unwrap(),
+        &observed_field(&prep, "TotalPM25").unwrap(),
         &oracle_total,
     );
     assert_close(
         "deathsK",
-        prep.observed_field("deathsK").unwrap(),
+        &observed_field(&prep, "deathsK").unwrap(),
         &oracle_deaths(RR_K),
     );
     assert_close(
         "deathsL",
-        prep.observed_field("deathsL").unwrap(),
+        &observed_field(&prep, "deathsL").unwrap(),
         &oracle_deaths(RR_L),
     );
 }

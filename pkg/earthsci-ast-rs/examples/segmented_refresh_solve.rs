@@ -49,7 +49,7 @@ use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
+use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -278,7 +278,7 @@ fn segmented_solve(
     forcing: &ForcingBuffer,
     tspan: (f64, f64),
     initial_conditions: &HashMap<String, f64>,
-    base_opts: &SimulateOptions,
+    base_opts: &SolveOptions,
 ) -> Result<Solution, Box<dyn std::error::Error>> {
     let (t0, t_end) = tspan;
     let params = HashMap::new();
@@ -312,8 +312,8 @@ fn segmented_solve(
 
         // Fresh solver per segment (restarts the order at the discontinuity).
         let mut opts = base_opts.clone();
-        opts.output_times = Some(vec![seg_end]);
-        let sol = compiled.simulate((seg_start, seg_end), &params, &ics, &opts)?;
+        opts.saveat = Some(vec![seg_end]);
+        let sol = compiled.solve((seg_start, seg_end), &params, &ics, &opts)?;
 
         println!(
             "  integrated [{seg_start}, {seg_end}] -> Box.c = {:?}, Sink.d = {:?}",
@@ -399,13 +399,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|n| (n.clone(), 0.0))
         .collect();
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: None,
+        maxiters: 100_000,
+        saveat: None,
         progress: None,
+        callback: None,
     };
 
     println!("=== Segmented discrete-cadence solve (coupled, forced, non-PDE) ===\n");

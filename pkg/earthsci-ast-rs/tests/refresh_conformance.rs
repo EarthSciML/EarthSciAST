@@ -27,7 +27,7 @@ use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::{ArrayCompiled, BuildInspection};
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
+use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -166,14 +166,15 @@ fn final_value(sol: &Solution, name: &str) -> f64 {
     *sol.state[row].last().expect("at least one output time")
 }
 
-fn base_opts() -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn base_opts() -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 1_000_000,
-        output_times: None,
+        maxiters: 1_000_000,
+        saveat: None,
         progress: None,
+        callback: None,
     }
 }
 
@@ -224,9 +225,9 @@ fn refresh_regrid_band_matches_golden() {
         exec.refresh_at(a, &forcing).expect("refresh_at");
         let mut insp = BuildInspection::default();
         let mut opts = base_opts();
-        opts.output_times = Some(vec![a]);
+        opts.saveat = Some(vec![a]);
         compiled
-            .simulate_inspect(
+            .solve_inspect(
                 (a, a + 1.0),
                 &HashMap::new(),
                 &HashMap::new(),
@@ -281,9 +282,9 @@ fn refresh_trajectory_band_matches_golden() {
         let (a, b) = (pair[0], pair[1]);
         exec.refresh_at(a, &forcing).expect("refresh_at");
         let mut opts = base_opts();
-        opts.output_times = Some(vec![b]);
+        opts.saveat = Some(vec![b]);
         let sol = compiled
-            .simulate((a, b), &HashMap::new(), &ics, &opts)
+            .solve((a, b), &HashMap::new(), &ics, &opts)
             .unwrap_or_else(|e| panic!("simulate segment [{a},{b}]: {e}"));
         ics = cells
             .iter()

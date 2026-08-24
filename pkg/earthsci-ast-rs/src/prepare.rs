@@ -1,12 +1,21 @@
-//! `prepare` — the build-time public surface of the Rust binding, mirroring
-//! the Julia `prepare`/`observed_field` (simulate.jl) and the Python
-//! `earthsci_ast.prepare` (Phase 4 of the clean consolidation).
+//! The deterministic-per-document **build pipeline** — what
+//! [`crate::problem::esm_problem`] runs before it compiles a right-hand side.
+//!
+//! This module used to be the public `prepare` / `Prepared` entry point.
+//! `esm-libraries-spec.md` §2.5.1 replaces that: `prepare` and `Prepared` are
+//! the same concept as `Problem` under a local name, and construction absorbs
+//! them rather than sitting beside them. What survives here is the pipeline
+//! itself ([`run_build_pipeline`], crate-internal) and the two things a caller
+//! genuinely reaches for — the build-time provider contract
+//! ([`PrepareProvider`]) and the build-observability seam ([`PreparePhase`],
+//! [`PrepareProgress`]), both extension seam under `API_SPEC.md` §3, neither
+//! stable API.
 //!
 //! Runs everything deterministic-per-document ONCE — pushdown rewrite →
 //! loader extent discovery → typed load → provider materialization →
 //! build-time coordinate evaluation → value-invention → member-factor feedback
 //! → gated pre-sliced fetch → dependency-ordered observed-graph evaluation —
-//! and returns a [`Prepared`] whose [`Prepared::observed_field`] reads the
+//! and returns a [`PreparedBuild`] whose [`PreparedBuild::observed_field`] reads the
 //! build-time fields back. This is the entry point the isrm.esm runner drives;
 //! it never integrates.
 //!
@@ -19,8 +28,8 @@
 //! [`PrepareProvider::extent_metaparameter`].
 //!
 //! Those arrows are also [`PreparePhase`], and a host can watch them go by:
-//! [`PrepareOptions::progress`] is the build-time counterpart of
-//! [`crate::simulate::SimulateOptions::progress`], down to sharing its
+//! [`crate::problem::ProblemOptions::progress`] is the build-time counterpart of
+//! [`crate::simulate::SolveOptions::progress`], down to sharing its
 //! [`Flow`]. It exists because a document with no ODEs never reaches the
 //! solver, so a dispatched static evaluation had no observer at all — no
 //! progress bar, no cancel button, and no way to enforce a resource cap on a
@@ -81,8 +90,9 @@ use crate::simulate_array::{
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
 
-/// What a [`PrepareOptions::progress`] observer wants [`prepare`] to do next —
-/// the SAME type a [`crate::simulate::SimulateOptions::progress`] observer
+/// What a [`crate::problem::ProblemOptions::progress`] observer wants the build
+/// to do next —
+/// the SAME type a [`crate::simulate::SolveOptions::progress`] observer
 /// returns.
 ///
 /// Deliberately shared rather than mirrored: a host that already drives a solve
@@ -100,7 +110,7 @@ impl PrepareError {
     /// than a private convention.
     pub const CANCELLED_PREFIX: &'static str = "cancelled by the caller during";
 
-    /// Whether this error is a [`PrepareOptions::progress`] observer's own
+    /// Whether this error is a build progress observer's own
     /// [`Flow::Cancel`] rather than something going wrong — the counterpart of
     /// matching [`crate::simulate::SimulateError::Cancelled`].
     ///
@@ -120,7 +130,7 @@ impl PrepareError {
     /// dispatcher distinguishing "the user pressed stop" from "the run hit its
     /// billing cap" must record that inside the observer, because only the
     /// observer knows — exactly as `earthscilab`'s `dispatch::solve` already
-    /// does around `simulate`, where the two bill differently. The message
+    /// does around a solve, where the two bill differently. The message
     /// names the phase and the item, so whichever it was, the stopping point is
     /// attributable rather than "somewhere in the last eight minutes".
     pub fn is_cancelled(&self) -> bool {
@@ -177,7 +187,7 @@ impl AxisSel {
     }
 }
 
-/// The CONST data-provider contract [`prepare`] consumes: one provider feeds
+/// The CONST data-provider contract the build pipeline consumes: one provider feeds
 /// ONE field (the `providers["<ModelPath>.<param>"]` convention shared with the
 /// Julia/Python bindings). A gated provider may additionally honour a pushed-
 /// down per-axis selection; one that cannot is fetched whole and sliced
@@ -203,7 +213,7 @@ pub trait PrepareProvider {
     }
 
     /// `false` for a DISCRETE provider (non-empty refresh times) — rejected by
-    /// [`prepare`], which is build-time-only.
+    /// the build pipeline, which is build-time-only.
     fn is_const(&self) -> bool {
         true
     }
@@ -218,7 +228,7 @@ pub trait PrepareProvider {
     /// loader that discovers its record count at read time — an FF10 point
     /// inventory whose surviving-row count is not knowable until the table is
     /// decoded and filtered — declares `extent: {"metaparameter": "N_REC"}`,
-    /// and [`prepare`] closes that metaparameter with the length of this
+    /// and the build closes that metaparameter with the length of this
     /// provider's leading axis BEFORE the typed load, instead of the caller
     /// counting rows and passing the number in.
     ///
@@ -233,11 +243,11 @@ pub trait PrepareProvider {
 // Progress observation.
 // --------------------------------------------------------------------------- //
 
-/// Which stage of the build [`prepare`] is in when it reports.
+/// Which stage of the build [`crate::problem::esm_problem`] is in when it reports.
 ///
-/// These are the document-independent stages of [`prepare`]'s own pipeline, in
+/// These are the document-independent stages of the build pipeline, in
 /// the order it runs them, and they are exactly the stages
-/// [`PrepareOptions::verbose`] already narrates — the observer did not invent a
+/// [`crate::problem::ProblemOptions::verbose`] already narrates — the observer did not invent a
 /// structure, it made the existing one addressable.
 ///
 /// **The stages are nowhere near equal in cost.** On the InMAP ISRM document a
@@ -316,8 +326,8 @@ impl fmt::Display for PreparePhase {
     }
 }
 
-/// How far along an in-flight [`prepare`] is, handed to
-/// [`PrepareOptions::progress`] at every phase boundary AND at every unit of
+/// How far along an in-flight build is, handed to
+/// [`crate::problem::ProblemOptions::progress`] at every phase boundary AND at every unit of
 /// work inside the two phases that dominate a large build.
 ///
 /// A report is delivered BEFORE the unit it names is done, so `item` is what
@@ -354,7 +364,7 @@ impl PrepareProgress<'_> {
     }
 }
 
-/// A build progress observer. See [`PrepareOptions::progress`].
+/// A build progress observer. See [`crate::problem::ProblemOptions::progress`].
 ///
 /// Unconditionally `Send + Sync`, unlike [`crate::simulate::ProgressFn`], which
 /// drops the bound on `wasm32` for a `js_sys::Function` observer: the whole
@@ -362,9 +372,11 @@ impl PrepareProgress<'_> {
 /// wasm host to accommodate and no reason to make native callers pay for one.
 pub type PrepareProgressFn = Arc<dyn Fn(&PrepareProgress<'_>) -> Flow + Send + Sync>;
 
-/// Build-time options for [`prepare`].
+/// Build-time options for [`run_build_pipeline`]. Crate-internal: the public
+/// spelling of every one of these is a field of
+/// [`crate::problem::ProblemOptions`].
 #[derive(Clone, Default)]
-pub struct PrepareOptions {
+pub(crate) struct PrepareOptions {
     /// Select one model when the document holds several.
     pub model_name: Option<String>,
     /// Metaparameter bindings closed at load (esm-spec §9.7.6 site 4).
@@ -378,7 +390,7 @@ pub struct PrepareOptions {
     /// Per-step progress lines on stdout.
     ///
     /// This is the built-in observer: it prints at the same points
-    /// [`PrepareOptions::progress`] is called, and the two are independent —
+    /// [`crate::problem::ProblemOptions::progress`] is called, and the two are independent —
     /// setting both prints and observes.
     pub verbose: bool,
 
@@ -388,7 +400,7 @@ pub struct PrepareOptions {
     /// for which [`PrepareError::is_cancelled`] is true.
     ///
     /// **Called unthrottled, deliberately**, for the same reason
-    /// [`crate::simulate::SimulateOptions::progress`] is: `prepare` has no
+    /// [`crate::simulate::SolveOptions::progress`] is: `prepare` has no
     /// portable clock to throttle against, and rate limiting therefore belongs
     /// to the host, which does. Keep the observer cheap — a document with
     /// hundreds of observeds reports hundreds of times in a build that may take
@@ -397,7 +409,7 @@ pub struct PrepareOptions {
     /// ## What this is for
     ///
     /// A dispatched static evaluation — a document with no ODEs, which
-    /// `simulate` never touches — is otherwise a black box for as long as it
+    /// no solver ever touches — is otherwise a black box for as long as it
     /// runs: no progress, no cancel, and no way for a caller to enforce a
     /// resource cap except by killing the process. A watchdog thread is not a
     /// substitute: it stops at an arbitrary point with no attributable elapsed
@@ -428,7 +440,7 @@ pub struct PrepareOptions {
 // Hand-written because `PrepareProgressFn` is a trait object: it cannot derive
 // `Debug`, and a `PrepareOptions` that no longer prints would be a regression
 // for every existing `{:?}` on a build error path. Mirrors the same treatment
-// `SimulateOptions` needed when it grew an observer.
+// `SolveOptions` needed when it grew an observer.
 impl fmt::Debug for PrepareOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrepareOptions")
@@ -451,10 +463,10 @@ impl fmt::Debug for PrepareOptions {
     }
 }
 
-/// The product of [`prepare`]: every build-time-evaluable observed of the
+/// The product of [`run_build_pipeline`]: every build-time-evaluable observed of the
 /// prepared document, materialized through the document's own graph, plus the
 /// value-invention products the contract record reports.
-pub struct Prepared {
+pub struct PreparedBuild {
     /// The (possibly rewritten) raw document.
     pub doc: JsonValue,
     /// The prepared model's name.
@@ -467,31 +479,6 @@ pub struct Prepared {
     pub extents: HashMap<String, i64>,
     /// Provider keys that were deferred + fetched pre-sliced (sorted).
     pub gated_provider_keys: Vec<String>,
-}
-
-impl Prepared {
-    /// The build-time field of observed `name` (exact, else the unique
-    /// dotted-name tail match), or an error when `name` was not evaluated.
-    pub fn observed_field(&self, name: &str) -> Result<&ArrayD<f64>, PrepareError> {
-        if let Some(a) = self.fields.get(name) {
-            return Ok(a);
-        }
-        if !name.contains('.') {
-            let mut matches: Vec<&String> = self
-                .fields
-                .keys()
-                .filter(|k| k.contains('.') && k.rsplit('.').next() == Some(name))
-                .collect();
-            matches.sort();
-            if let Some(k) = matches.first() {
-                return Ok(&self.fields[*k]);
-            }
-        }
-        Err(err(format!(
-            "observed_field: '{name}' is not a build-time-evaluable observed of the \
-             prepared document"
-        )))
-    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -820,7 +807,7 @@ fn gated_fetch_plan(
 /// in place rather than via `ndarray::concatenate` matters at this size: the SR
 /// slabs are hundreds of MB, and holding every piece plus their concatenation
 /// would peak at twice the answer instead of the answer plus one batch.
-/// [`prepare`]'s internal observation sink, erased so a helper can report
+/// The build pipeline's internal observation sink, erased so a helper can report
 /// without knowing whether an observer is attached or what it captured.
 type ReportFn<'a> =
     dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
@@ -956,7 +943,7 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 /// (when opted in), materialize CONST providers, evaluate the build-time
 /// coordinates, run value-invention, feed the member factor back, fetch the
 /// gated providers pre-sliced, and evaluate the whole observed graph in
-/// dependency order. Returns the [`Prepared`] artifact.
+/// dependency order. Returns the [`PreparedBuild`] artifact.
 ///
 /// `providers` maps the CONSUMING PARAMETER's namespaced name
 /// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
@@ -973,7 +960,7 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 ///
 /// A build over real data is not fast: on the InMAP ISRM the gated fetch alone
 /// is tens of gigabytes and the whole `prepare` runs for the better part of a
-/// quarter of an hour. [`PrepareOptions::progress`] observes it as it goes —
+/// quarter of an hour. [`crate::problem::ProblemOptions::progress`] observes it as it goes —
 /// per gated request and per observed, not merely per phase — and returning
 /// [`Flow::Cancel`] stops it at a named point. Pair it with
 /// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
@@ -1006,12 +993,20 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
     })
 }
 
-pub fn prepare(
+/// Run the deterministic-per-document pipeline: pushdown rewrite → loader
+/// extent discovery → typed load → provider materialization → build-time
+/// coordinate evaluation → value invention → member-factor feedback → gated
+/// pre-sliced fetch → dependency-ordered observed-graph evaluation.
+///
+/// Crate-internal: the public entry point is
+/// [`crate::problem::esm_problem`], which calls this and then compiles the
+/// right-hand side.
+pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
     providers: Vec<(String, Box<dyn PrepareProvider>)>,
     opts: &PrepareOptions,
-) -> Result<Prepared, PrepareError> {
+) -> Result<PreparedBuild, PrepareError> {
     let log = |msg: &str| {
         if opts.verbose {
             println!("{msg}");
@@ -1521,12 +1516,52 @@ pub fn prepare(
     }
     report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
 
-    Ok(Prepared {
+    Ok(PreparedBuild {
         doc: rewritten.into_owned(),
         model_name,
         fields,
         members,
         extents,
         gated_provider_keys: gated_keys,
+    })
+}
+
+// --------------------------------------------------------------------------- //
+// The adapter Problem construction goes through.
+// --------------------------------------------------------------------------- //
+
+/// Run the build pipeline for [`crate::problem::esm_problem`], translating
+/// [`crate::problem::ProblemOptions`] into this module's internal option
+/// struct and its error into [`SimulateError`].
+///
+/// Consumes `opts`'s build providers and const arrays: they are moved into the
+/// pipeline, which is the one place they are used.
+pub(crate) fn run_build_pipeline(
+    doc: &JsonValue,
+    opts: &mut crate::problem::ProblemOptions,
+) -> Result<PreparedBuild, crate::simulate::SimulateError> {
+    let internal = PrepareOptions {
+        model_name: opts.model_name.clone(),
+        metaparameters: opts.metaparameters.clone(),
+        base_path: opts.base_path.clone(),
+        pushdown_rewrite: opts.pushdown_rewrite,
+        parameters: opts.p.clone(),
+        verbose: opts.verbose,
+        progress: opts.progress.clone(),
+        gated_fetch_batch: opts.gated_fetch_batch,
+    };
+    let const_arrays = std::mem::take(&mut opts.const_arrays);
+    let providers = std::mem::take(&mut opts.build_providers);
+    run_prepare(doc, const_arrays, providers, &internal).map_err(|e| {
+        // A cancel keeps its own identity across the boundary: `is_cancelled`
+        // must still answer "the caller stopped this" rather than "the build
+        // failed", which is the whole point of the marker.
+        if e.is_cancelled() {
+            crate::simulate::SimulateError::Cancelled { details: e.0 }
+        } else {
+            crate::simulate::SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError { details: e.0 },
+            )
+        }
     })
 }

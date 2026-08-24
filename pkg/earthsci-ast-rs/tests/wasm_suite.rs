@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use wasm_bindgen_test::*;
 
 use earthsci_ast::{
-    Manifold, SimulateOptions, SolverChoice, component_graph, free_variables, intersect_polygon,
-    load_string, polygon_area, shoelace_area, simulate, stoichiometric_matrix, to_json, validate,
+    Alg, Manifold, SolveOptions, component_graph, free_variables, intersect_polygon, load_string,
+    polygon_area, shoelace_area, stoichiometric_matrix, to_json, validate,
 };
 
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒
@@ -139,12 +139,22 @@ fn find_state<'a>(sol: &'a earthsci_ast::Solution, name: &str) -> &'a [f64] {
 #[wasm_bindgen_test]
 fn scalar_ode_matches_analytic() {
     let file = load_string(SCALAR_ODE).expect("load");
-    let opts = SimulateOptions {
-        output_times: Some(vec![1.0]),
-        ..SimulateOptions::default()
+    let opts = SolveOptions {
+        saveat: Some(vec![1.0]),
+        ..SolveOptions::default()
     };
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("scalar ODE simulate in wasm");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("scalar ODE simulate in wasm");
     let x = find_state(&sol, "x");
     let last = *x.last().unwrap();
     let want = (-1.0f64).exp(); // e^{-1}
@@ -163,16 +173,27 @@ fn array_pde_heat_matches_analytic() {
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![0.1]),
+        maxiters: 100_000,
+        saveat: Some(vec![0.1]),
         progress: None,
+        callback: None,
     };
-    let sol = simulate(&file, (0.0, 0.1), &HashMap::new(), &ic, &opts)
-        .expect("array PDE simulate in wasm");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 0.1),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("array PDE simulate in wasm");
 
     // Exact discrete-eigenvalue decay at t=0.1 (fixture assertions).
     for (name, want) in [

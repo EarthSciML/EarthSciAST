@@ -33,9 +33,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use earthsci_ast::esio_provider::{EsioProvider, providers_from_document};
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, prepare};
+use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::provider::CadenceProvider;
 use earthsci_ast::pushdown_rewrite::GateAxis;
+use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::ArrayD;
 use serde_json::{Value, json};
 
@@ -261,14 +262,17 @@ fn prepare_discovers_n_rec_and_the_graph_is_sized_by_it() {
 
     // NOTE the empty metaparameters: the caller passes NO N_REC. The document
     // declares that the loader knows it.
-    let prep = prepare(
+    let prep = esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            metaparameters: BTreeMap::new(),
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                metaparameters: BTreeMap::new(),
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("prepare");
@@ -284,7 +288,7 @@ fn prepare_discovers_n_rec_and_the_graph_is_sized_by_it() {
         vec![1.0, 1.0, 0.0],
         "the observed graph is evaluated over the 3 SURVIVING records"
     );
-    let e_nox = prep.observed_field("E_NOx").expect("E_NOx");
+    let e_nox = observed_field(&prep, "E_NOx").expect("E_NOx");
     assert_eq!(
         e_nox.iter().copied().collect::<Vec<f64>>(),
         vec![107.0],
@@ -304,14 +308,17 @@ fn a_caller_binding_that_contradicts_the_discovered_extent_is_an_error() {
         .collect();
     let mut metaparameters = BTreeMap::new();
     metaparameters.insert("N_REC".to_string(), 5); // the RAW row count, a stale guess
-    let msg = match prepare(
+    let msg = match esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            metaparameters,
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                metaparameters,
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     ) {
         Err(e) => e.to_string(),
@@ -391,18 +398,21 @@ fn a_truncated_table_re_discovers_its_own_smaller_extent() {
         .into_iter()
         .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
         .collect();
-    let prep = prepare(
+    let prep = esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("prepare");
     assert_eq!(
-        prep.observed_field("E_NOx")
+        observed_field(&prep, "E_NOx")
             .expect("E_NOx")
             .iter()
             .copied()
@@ -410,7 +420,7 @@ fn a_truncated_table_re_discovers_its_own_smaller_extent() {
         vec![107.0]
     );
     assert_eq!(
-        prep.observed_field("is_NOx").expect("is_NOx").len(),
+        observed_field(&prep, "is_NOx").expect("is_NOx").len(),
         2,
         "N_REC follows the DELIVERED records, so a reduced run needs no other knob"
     );
@@ -425,17 +435,20 @@ fn the_selected_prefix_reaches_the_model_as_its_own_axis() {
         .into_iter()
         .map(|(k, p)| (k, Box::new(p) as Box<dyn PrepareProvider>))
         .collect();
-    let prep = prepare(
+    let prep = esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("prepare");
-    let w = prep.observed_field("src_width").expect("src_width");
+    let w = observed_field(&prep, "src_width").expect("src_width");
     assert_eq!(
         w.shape(),
         &[4],
@@ -634,13 +647,16 @@ fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
     let doc = document(tmp.path());
     let (providers, logs) = spied_providers(&doc, &tmp.path().join("cache"));
 
-    let prep = prepare(
+    let prep = esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("prepare");
@@ -648,12 +664,12 @@ fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
     // The graph invented the support set from the emission records: the three
     // surviving points at -90, -92 and -93 fall in 1-based cells 5, 3 and 2.
     assert_eq!(
-        prep.members.get("emis_cell_set"),
+        prep.members().get("emis_cell_set"),
         Some(&vec![2i64, 3, 5]),
         "the distinct member set is sorted, not insertion-ordered"
     );
     assert_eq!(
-        prep.gated_provider_keys,
+        prep.gated_provider_keys(),
         vec!["Ingest.emis_W".to_string()],
         "exactly the gated loader variable was deferred"
     );
@@ -673,7 +689,7 @@ fn a_gated_fetch_asks_for_the_support_set_and_never_the_full_axis() {
     // 100+i store — so the compact slab is the right slab, not merely the right
     // length.
     assert_eq!(
-        prep.observed_field("emis_width")
+        observed_field(&prep, "emis_width")
             .expect("emis_width")
             .iter()
             .copied()
@@ -688,13 +704,16 @@ fn the_ungated_siblings_are_still_read_eagerly_and_whole() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let doc = document(tmp.path());
     let (providers, logs) = spied_providers(&doc, &tmp.path().join("cache"));
-    prepare(
+    esm_problem(
         &doc,
-        HashMap::new(),
-        providers,
-        &PrepareOptions {
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: HashMap::new(),
+            build_providers: providers,
+            ..ProblemOptions {
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("prepare");
