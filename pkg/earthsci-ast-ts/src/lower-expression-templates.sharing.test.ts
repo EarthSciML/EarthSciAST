@@ -8,7 +8,7 @@
  * canonical serialized bytes are unchanged, which the small-depth test pins.
  */
 import { describe, it, expect } from 'vitest'
-import { loadString, loadDocument } from './parse.js'
+import { loadDocument } from './parse.js'
 
 function applyNode(name: string) {
   return { op: 'apply_expression_template', args: [], name, bindings: {} }

@@ -17,7 +17,7 @@
 
 using Test
 using EarthSciAST
-using EarthSciAST: load, flatten, build_evaluator
+using EarthSciAST: load_path, flatten, build_evaluator
 
 include("testutils.jl")
 const ESM = EarthSciAST

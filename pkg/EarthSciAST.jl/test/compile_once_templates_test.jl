@@ -15,7 +15,7 @@
 using Test
 using JSON3
 using EarthSciAST
-using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
+using EarthSciAST: load_path, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
     ExpressionTemplateError,
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
     _bench_reset!

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateSchema, loadString, loadDocument, SchemaValidationError, ParseError } from './index.js'
+import { validateSchema, loadDocument, SchemaValidationError, ParseError } from './index.js'
 import type { Model, ReactionSystem } from './types.js'
 
 describe('Schema Edge Cases', () => {
