@@ -96,7 +96,7 @@ fn main() {
 
     if let Some(src) = src {
         let t1 = Instant::now();
-        let file = earthsci_ast::parse::load(&src).expect("public load API");
+        let file = earthsci_ast::parse::load_string(&src).expect("public load API");
         println!(
             "depth={depth} parse::load={:?} reactions={}",
             t1.elapsed(),

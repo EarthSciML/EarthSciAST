@@ -1,7 +1,7 @@
 /**
  * The precompiled validator must agree with the one Ajv would compile.
  *
- * `parse.ts` used to call `ajv.compile(schema)` at module load. Ajv is a code
+ * `parse.ts` used to call `ajv.compile(schema)` at module loadString. Ajv is a code
  * generator, so that needs `'unsafe-eval'` — and because the compile happened at
  * import time, a consumer with a strict Content-Security-Policy did not lose
  * validation, it lost the whole application. `src/generated-validator.js` is the

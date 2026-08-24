@@ -372,7 +372,7 @@ end
     # ASSERTION 2 — Part A: build-time LCC projection produces X/Y for VI, and
     #               vi.members == the projected-point support set (only lon/lat in).
     # ============================================================
-    f = EA.load(td; base_path=pwd())
+    f = EA.load_document(td; base_path=pwd())
     model = EA._select_model(f, "ISRM")
     # raw lon/lat only; the scalar LCC params ride the model defaults.
     ca_vi = Dict{String,Any}("lon"=>lon, "lat"=>lat, "W"=>W, "S"=>Sv, "E"=>Ev, "N"=>Nv)

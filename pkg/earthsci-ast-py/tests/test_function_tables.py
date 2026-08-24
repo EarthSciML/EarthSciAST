@@ -16,9 +16,8 @@ from earthsci_ast import (
     ExprNode,
     FunctionTable,
     FunctionTableAxis,
-    load,
-    save,
-)
+    load_document,
+    to_json,)
 
 
 FIXTURE = {
@@ -80,7 +79,7 @@ FIXTURE = {
 
 
 def test_function_tables_load():
-    ef = load(FIXTURE)
+    ef = load_document(FIXTURE)
     assert isinstance(ef, EsmFile)
     assert set(ef.function_tables.keys()) == {"sigma_O3", "F_actinic"}
 
@@ -99,7 +98,7 @@ def test_function_tables_load():
 
 
 def test_table_lookup_node_load():
-    ef = load(FIXTURE)
+    ef = load_document(FIXTURE)
     eqs = ef.models["M"].equations
     assert len(eqs) == 2
 
@@ -119,8 +118,8 @@ def test_table_lookup_node_load():
 
 
 def test_function_tables_roundtrip():
-    ef = load(FIXTURE)
-    out = save(ef)
+    ef = load_document(FIXTURE)
+    out = to_json(ef)
     reloaded = json.loads(out)
     # function_tables block survives.
     assert set(reloaded["function_tables"].keys()) == {"sigma_O3", "F_actinic"}
@@ -134,6 +133,6 @@ def test_function_tables_roundtrip():
     assert rhs1["op"] == "table_lookup"
     assert rhs1["output"] == "NO2"
     # Round-trip is a fixed point: re-load and re-save yields the same dict.
-    ef2 = load(reloaded)
-    out2 = save(ef2)
+    ef2 = load_document(reloaded)
+    out2 = to_json(ef2)
     assert json.loads(out2) == reloaded

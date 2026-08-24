@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateSchema, load, SchemaValidationError, ParseError } from './index.js'
+import { validateSchema, loadDocument, SchemaValidationError, ParseError } from './index.js'
 import type { Model, ReactionSystem } from './types.js'
 
 describe('Schema Edge Cases', () => {
@@ -14,8 +14,8 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(invalid)
       expect(errors.length).toBeGreaterThan(0)
 
-      // Should also throw when using load()
-      expect(() => load(invalid)).toThrow(SchemaValidationError)
+      // Should also throw when using loadString()
+      expect(() => loadDocument(invalid)).toThrow(SchemaValidationError)
     })
 
     it('should pass with only models', () => {
@@ -33,8 +33,8 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(withModels)
       expect(errors).toEqual([])
 
-      // Should not throw when using load()
-      const result = load(withModels)
+      // Should not throw when using loadString()
+      const result = loadDocument(withModels)
       expect(result.esm).toBe('1.0.0')
     })
 
@@ -54,14 +54,14 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(withReactionSystems)
       expect(errors).toEqual([])
 
-      // Should not throw when using load()
-      const result = load(withReactionSystems)
+      // Should not throw when using loadString()
+      const result = loadDocument(withReactionSystems)
       expect(result.esm).toBe('1.0.0')
     })
 
     it('should pass with only data_sources (source-only file)', () => {
       // RFC pure-io-data-loaders §4.3: a document whose sole content is the
-      // data registry (no models, no reaction_systems) is valid and must load.
+      // data registry (no models, no reaction_systems) is valid and must loadString.
       // From 1.0.0 the registry is `data_sources` and an entry declares NO
       // `variables` of its own — a source is ingest configuration, not a
       // component, so it exposes nothing and is not a coupling endpoint. A
@@ -80,8 +80,8 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(sourceOnly)
       expect(errors).toEqual([])
 
-      // Should not throw when using load()
-      const result = load(sourceOnly)
+      // Should not throw when using loadString()
+      const result = loadDocument(sourceOnly)
       expect(result.esm).toBe('1.0.0')
       expect(result.data_sources?.['weather']?.kind).toBe('grid')
     })
@@ -107,7 +107,7 @@ describe('Schema Edge Cases', () => {
 
       const errors = validateSchema(withLoaderVariables)
       expect(errors.some((error) => error.keyword === 'additionalProperties')).toBe(true)
-      expect(() => load(withLoaderVariables)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(withLoaderVariables)).toThrow(SchemaValidationError)
     })
 
     it('should pass with both models and reaction_systems', () => {
@@ -132,8 +132,8 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(withBoth)
       expect(errors).toEqual([])
 
-      // Should not throw when using load()
-      const result = load(withBoth)
+      // Should not throw when using loadString()
+      const result = loadDocument(withBoth)
       expect(result.esm).toBe('1.0.0')
     })
   })
@@ -168,8 +168,8 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(validDeepNested)
       expect(errors).toEqual([])
 
-      // Should also work with load()
-      const result = load(validDeepNested)
+      // Should also work with loadString()
+      const result = loadDocument(validDeepNested)
       expect(result.esm).toBe('1.0.0')
     })
 
@@ -247,7 +247,7 @@ describe('Schema Edge Cases', () => {
       expect(errors.find((error) => error.keyword === 'enum')).toBeUndefined()
       expect(errors).toEqual([])
       // Loading is permissive — the open-tier op survives to (deferred) evaluation.
-      expect(() => load(openOp)).not.toThrow()
+      expect(() => loadDocument(openOp)).not.toThrow()
 
       // A MALFORMED op string (violates the op `pattern`) is still rejected.
       const malformed = JSON.parse(JSON.stringify(openOp))
@@ -285,7 +285,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(validLargeNumbers)
       expect(errors).toEqual([])
 
-      const result = load(validLargeNumbers)
+      const result = loadDocument(validLargeNumbers)
       expect((result.models?.['large_model'] as Model).variables?.['avogadro']?.default).toBe(
         6.022140857e23,
       )
@@ -314,7 +314,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(edgeCaseNumbers)
       expect(errors).toEqual([])
 
-      const result = load(edgeCaseNumbers)
+      const result = loadDocument(edgeCaseNumbers)
       expect(
         (result.models?.['edge_model'] as Model).variables?.['max_safe_integer']?.default,
       ).toBe(Number.MAX_SAFE_INTEGER)
@@ -372,7 +372,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(unicodeVariables)
       expect(errors).toEqual([])
 
-      const result = load(unicodeVariables)
+      const result = loadDocument(unicodeVariables)
       expect((result.models?.['unicode_model'] as Model).variables?.['température']?.default).toBe(
         298.15,
       )
@@ -409,7 +409,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(unicodeReaction)
       expect(errors).toEqual([])
 
-      const result = load(unicodeReaction)
+      const result = loadDocument(unicodeReaction)
       expect(
         (result.reaction_systems?.['unicode_rs'] as ReactionSystem).species?.['CO₂']?.default,
       ).toBe(0.0)
@@ -435,7 +435,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(unicodeMetadata)
       expect(errors).toEqual([])
 
-      const result = load(unicodeMetadata)
+      const result = loadDocument(unicodeMetadata)
       expect(result.metadata.description).toContain('émissions')
       expect(result.metadata.authors?.[1]).toBe('李小明')
     })
@@ -461,7 +461,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(emptyFields)
       expect(errors).toEqual([])
 
-      const result = load(emptyFields)
+      const result = loadDocument(emptyFields)
       expect(result.metadata.authors).toEqual([])
       expect((result.models?.['empty_model'] as Model).equations).toEqual([])
     })
@@ -495,7 +495,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(nullFields)
       expect(errors).toEqual([])
 
-      const result = load(nullFields)
+      const result = loadDocument(nullFields)
       expect(
         (result.reaction_systems?.['null_rs'] as ReactionSystem).reactions[0].substrates,
       ).toBeNull()
@@ -547,7 +547,7 @@ describe('Schema Edge Cases', () => {
       )
       expect(typeError).toBeDefined()
 
-      expect(() => load(invalidNull)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalidNull)).toThrow(SchemaValidationError)
     })
   })
 
@@ -572,7 +572,7 @@ describe('Schema Edge Cases', () => {
       const additionalPropsError = errors.find((error) => error.keyword === 'additionalProperties')
       expect(additionalPropsError).toBeDefined()
 
-      expect(() => load(extraProps)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(extraProps)).toThrow(SchemaValidationError)
     })
 
     it('should fail with additional properties in metadata', () => {
@@ -598,7 +598,7 @@ describe('Schema Edge Cases', () => {
       )
       expect(additionalPropsError).toBeDefined()
 
-      expect(() => load(extraMetadata)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(extraMetadata)).toThrow(SchemaValidationError)
     })
 
     it('should fail with additional properties in ExpressionNode', () => {
@@ -630,7 +630,7 @@ describe('Schema Edge Cases', () => {
       const additionalPropsError = errors.find((error) => error.keyword === 'additionalProperties')
       expect(additionalPropsError).toBeDefined()
 
-      expect(() => load(extraExprProps)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(extraExprProps)).toThrow(SchemaValidationError)
     })
 
     it('should allow additional properties in data source metadata', () => {
@@ -665,7 +665,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(configProps)
       expect(errors).toEqual([])
 
-      const result = load(configProps)
+      const result = loadDocument(configProps)
       const source = result.data_sources?.['test_source']
       const metadata = source?.metadata as Record<string, unknown> | undefined
       expect(metadata?.['custom_setting']).toBe('allowed')
@@ -709,7 +709,7 @@ describe('Schema Edge Cases', () => {
       expect(errors.length).toBe(0)
 
       // Load succeeds, with a forward-compatibility warning.
-      const { result, warnings } = captureWarnings(() => load(minorVersionUpgrade))
+      const { result, warnings } = captureWarnings(() => loadDocument(minorVersionUpgrade))
       expect(result.esm).toBe('1.1.0')
       expect(result.metadata.name).toBe('test')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(true)
@@ -733,13 +733,13 @@ describe('Schema Edge Cases', () => {
       expect(errors[0].keyword).toBe('major_version_mismatch')
 
       // Load function should also reject due to major version mismatch
-      expect(() => load(majorVersionUpgrade)).toThrow(ParseError)
-      expect(() => load(majorVersionUpgrade)).toThrow('Unsupported major version 2')
+      expect(() => loadDocument(majorVersionUpgrade)).toThrow(ParseError)
+      expect(() => loadDocument(majorVersionUpgrade)).toThrow('Unsupported major version 2')
 
       // A 0.x document is refused the same way: 1.0.0 has no deprecation path.
       const legacy = { ...majorVersionUpgrade, esm: '0.8.0' }
       expect(validateSchema(legacy)[0]?.keyword).toBe('major_version_mismatch')
-      expect(() => load(legacy)).toThrow('Unsupported major version 0')
+      expect(() => loadDocument(legacy)).toThrow('Unsupported major version 0')
     })
 
     it('should fail with invalid version format', () => {
@@ -765,7 +765,7 @@ describe('Schema Edge Cases', () => {
       )
       expect(patternError).toBeDefined()
 
-      expect(() => load(invalidVersionFormat)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalidVersionFormat)).toThrow(SchemaValidationError)
     })
 
     it('should validate ISO 8601 datetime formats', () => {
@@ -787,7 +787,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(validDates)
       expect(errors).toEqual([])
 
-      const result = load(validDates)
+      const result = loadDocument(validDates)
       expect(result.metadata.created).toBe('2024-01-15T10:30:00Z')
     })
 
@@ -815,7 +815,7 @@ describe('Schema Edge Cases', () => {
       )
       expect(dateError).toBeDefined()
 
-      expect(() => load(invalidDate)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalidDate)).toThrow(SchemaValidationError)
     })
 
     it('should validate URI formats', () => {
@@ -872,7 +872,7 @@ describe('Schema Edge Cases', () => {
       )
       expect(formatError).toBeDefined()
 
-      expect(() => load(invalidURI)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalidURI)).toThrow(SchemaValidationError)
     })
   })
 
@@ -913,7 +913,7 @@ describe('Schema Edge Cases', () => {
         errors.some((error) => error.path.includes('bad_observed') && error.keyword === 'enum'),
       ).toBe(true)
 
-      expect(() => load(invalid)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalid)).toThrow(SchemaValidationError)
     })
 
     it('should reject an `expression` field on a variable of a valid type', () => {
@@ -943,7 +943,7 @@ describe('Schema Edge Cases', () => {
         ),
       ).toBe(true)
 
-      expect(() => load(invalid)).toThrow(SchemaValidationError)
+      expect(() => loadDocument(invalid)).toThrow(SchemaValidationError)
     })
 
     it('should accept both 1.0.0 variable types, neither carrying an expression', () => {
@@ -972,7 +972,7 @@ describe('Schema Edge Cases', () => {
       const errors = validateSchema(valid)
       expect(errors).toEqual([])
 
-      const result = load(valid)
+      const result = loadDocument(valid)
       expect(result.esm).toBe('1.0.0')
     })
   })

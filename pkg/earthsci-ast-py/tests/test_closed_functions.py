@@ -19,7 +19,7 @@ from typing import Any, List
 import pytest
 from conftest import FIXTURES_ROOT as _TESTS_ROOT, VALID_DIR
 
-from earthsci_ast import load
+from earthsci_ast import load_path, load_string
 from earthsci_ast.numpy_interpreter import fold_constant_expr
 from earthsci_ast.registered_functions import (
     ClosedFunctionError,
@@ -135,7 +135,7 @@ def test_closed_function_fixture(fixture_dir: Path):
 
     # Parser must accept the fixture (validates the `fn`-op AST under the
     # current schema).
-    file = load(canonical)
+    file = load_path(canonical)
     assert file.version == "1.0.0", f"expected a 1.0.0 fixture, got {file.version}"
 
     spec = json.loads(expected.read_text())
@@ -201,7 +201,7 @@ def test_searchsorted_empty_table():
 def test_evaluate_through_ast():
     """End-to-end: load a fixture, evaluate via the canonical AST evaluator."""
     fixture = FIXTURES_ROOT / "datetime" / "year" / "canonical.esm"
-    file = load(fixture)
+    file = load_path(fixture)
     eq = file.models["Probe"].equations[0]
     assert fold_constant_expr(eq.rhs, {"t_utc": 0.0}) == 1970.0
     assert fold_constant_expr(eq.rhs, {"t_utc": 951825600.0}) == 2000.0
@@ -212,7 +212,7 @@ def test_searchsorted_through_ast():
     the inline ``const`` table as a raw list (not per-element-evaluated).
     """
     fixture = FIXTURES_ROOT / "interp" / "searchsorted" / "canonical.esm"
-    file = load(fixture)
+    file = load_path(fixture)
     eq = file.models["Probe"].equations[0]
     assert fold_constant_expr(eq.rhs, {"x": 2.5}) == 3.0
     assert fold_constant_expr(eq.rhs, {"x": 10.0}) == 6.0
@@ -222,7 +222,7 @@ def test_searchsorted_through_ast():
 def test_enums_lowered_to_const():
     """End-to-end: ``enum`` ops are resolved to ``const`` integers at load."""
     fixture = VALID_DIR / "enums_categorical_lookup.esm"
-    file = load(fixture)
+    file = load_path(fixture)
     assert "season" in file.enums
     assert file.enums["season"]["summer"] == 3
     assert file.enums["land_use_class"]["deciduous_forest"] == 3
@@ -306,12 +306,12 @@ def test_serializer_roundtrip_fn_op():
     """A loaded fixture's ``fn`` op survives serialize → reload byte-for-byte
     on the salient fields.
     """
-    from earthsci_ast import save
+    from earthsci_ast import to_json
 
     fixture = FIXTURES_ROOT / "datetime" / "year" / "canonical.esm"
-    file = load(fixture)
-    out = save(file)
-    file2 = load(out)
+    file = load_path(fixture)
+    out = to_json(file)
+    file2 = load_string(out)
     eq2 = file2.models["Probe"].equations[0]
     assert eq2.rhs.op == "fn"
     assert eq2.rhs.name == "datetime.year"
@@ -322,12 +322,12 @@ def test_serializer_roundtrip_const_array():
     """The inline ``const`` array under ``interp.searchsorted`` survives a
     serialize → reload round-trip.
     """
-    from earthsci_ast import save
+    from earthsci_ast import to_json
 
     fixture = FIXTURES_ROOT / "interp" / "searchsorted" / "canonical.esm"
-    file = load(fixture)
-    out = save(file)
-    file2 = load(out)
+    file = load_path(fixture)
+    out = to_json(file)
+    file2 = load_string(out)
     rhs2 = file2.models["Probe"].equations[0].rhs
     assert rhs2.op == "fn"
     assert rhs2.name == "interp.searchsorted"
@@ -337,10 +337,10 @@ def test_serializer_roundtrip_const_array():
 
 def test_serializer_roundtrip_enums_block():
     """The top-level ``enums`` block round-trips through serialize → reload."""
-    from earthsci_ast import save
+    from earthsci_ast import to_json
 
     fixture = VALID_DIR / "enums_categorical_lookup.esm"
-    file = load(fixture)
-    out = save(file)
-    file2 = load(out)
+    file = load_path(fixture)
+    out = to_json(file)
+    file2 = load_string(out)
     assert file2.enums == file.enums

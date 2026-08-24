@@ -12,7 +12,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use earthsci_ast::{EsmFile, load, save};
+//! use earthsci_ast::{EsmFile, load_string, to_json};
 //!
 //! // Load an ESM file
 //! let esm_data = r#"
@@ -29,10 +29,10 @@
 //!   }
 //! }
 //! "#;
-//! let esm_file: EsmFile = load(esm_data)?;
+//! let esm_file: EsmFile = load_string(esm_data)?;
 //!
 //! // Save back to JSON
-//! let json = save(&esm_file)?;
+//! let json = to_json(&esm_file)?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
@@ -187,7 +187,10 @@ pub use graph::{
     VariableKind, VariableNode, component_exists, component_graph, expression_graph,
     expression_graph_with_options, get_component_type,
 };
-pub use parse::{LoadOptions, load, load_path, load_path_with_options, load_with_options};
+pub use parse::{
+    LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
+    load_string, load_string_with_options,
+};
 pub use parse_expression::{ExpressionParseError, parse_equation, parse_expression};
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
@@ -204,7 +207,7 @@ pub use relational::{
     FloatKeyError, Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct,
     group_aggregate, rank, rank_with_base, serialize_keys, serialize_pairs, skolem, skolem_edge,
 };
-pub use serialize::{save, save_compact};
+pub use serialize::{to_json, to_json_compact, write_path};
 pub use substitute::{
     ScopedContext, substitute, substitute_in_model, substitute_in_model_with_context,
     substitute_in_reaction_system, substitute_in_reaction_system_with_context,
@@ -286,12 +289,17 @@ pub use performance::ParallelEvaluator;
 #[cfg(feature = "custom_alloc")]
 pub use performance::ModelAllocator;
 
-/// Package version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This crate's OWN version — NOT the `.esm` format version, which is
+/// [`SCHEMA_VERSION`]. The two are unrelated numbers and used to share a
+/// name: `VERSION` meant the package version here and the SCHEMA version in
+/// TypeScript, so the same identifier read two different things depending on
+/// which binding you were in. `VERSION` is gone; every binding now exposes
+/// exactly `SCHEMA_VERSION` and `LIBRARY_VERSION`.
+pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ESM schema version supported by this implementation. Must track the
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
-/// `parse::LIBRARY_VERSION` (major-compat gating) derives from it.
+/// `parse::library_version()` (major-compat gating) derives from it.
 pub const SCHEMA_VERSION: &str = "1.0.0";
 
 #[cfg(test)]

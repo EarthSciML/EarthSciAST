@@ -547,7 +547,7 @@ describe('scoped-reference split keeps the full variable path (splitScopedRef)',
 
 describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => {
   // validate() parses string input through the same `losslessJsonParse`
-  // machinery `load()` uses (tagged leaves stripped back to plain numbers),
+  // machinery `loadString()` uses (tagged leaves stripped back to plain numbers),
   // rather than a divergent bare `JSON.parse`. A malformed string is still
   // reported in the historical `json_parse_error` envelope — same code,
   // empty-string document-root path, `details.error` shape, and `Invalid JSON: `

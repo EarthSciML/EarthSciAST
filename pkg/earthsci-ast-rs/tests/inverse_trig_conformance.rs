@@ -22,7 +22,8 @@
 
 use earthsci_ast::simulate::Solution;
 use earthsci_ast::{
-    Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load, simulate,
+    Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load_string,
+    simulate,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -73,7 +74,7 @@ fn model_iter(file: &earthsci_ast::EsmFile) -> Vec<(&String, &Model)> {
 /// carried a `tests` block (so the caller can assert discovery worked).
 fn run_fixture(path: &PathBuf) -> usize {
     let json_text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let file = match load(&json_text) {
+    let file = match load_string(&json_text) {
         Ok(f) => f,
         Err(e) => panic!("load {path:?}: {e}"),
     };

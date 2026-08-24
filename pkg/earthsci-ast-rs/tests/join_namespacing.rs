@@ -91,7 +91,7 @@ fn flattened_model_json(doc: &Value, flat: &earthsci_ast::flatten::FlattenedSyst
 #[test]
 fn flatten_namespaces_overlap_envelope_factors() {
     let text = std::fs::read_to_string(FIXTURE).expect("fixture");
-    let file = earthsci_ast::parse::load(&text).expect("parse");
+    let file = earthsci_ast::parse::load_string(&text).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
 
@@ -149,7 +149,7 @@ fn flatten_namespaces_overlap_envelope_factors() {
 fn flattened_overlap_producer_materializes_the_golden_support_set() {
     let text = std::fs::read_to_string(FIXTURE).expect("fixture");
     let doc: Value = serde_json::from_str(&text).expect("json");
-    let file = earthsci_ast::parse::load(&text).expect("parse");
+    let file = earthsci_ast::parse::load_string(&text).expect("parse");
     let flat = flatten(&file).expect("flatten");
 
     let model = flattened_model_json(&doc, &flat);
@@ -188,7 +188,7 @@ fn flattened_overlap_producer_materializes_the_golden_support_set() {
 #[test]
 fn join_on_loop_symbols_and_index_sets_are_left_alone() {
     let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
-    let file = earthsci_ast::parse::load(fixture).expect("parse");
+    let file = earthsci_ast::parse::load_string(fixture).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
     let on = &node.join.as_ref().expect("join")[0].on;
@@ -219,7 +219,7 @@ fn join_on_key_column_naming_a_local_buffer_is_namespaced() {
     doc["models"]["EmissionsAggregate"]["equations"][0]["rhs"]["join"] =
         serde_json::json!([{ "on": [["src_bin", "tgt_bin"], ["src", "sourceType"]] }]);
 
-    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let file = earthsci_ast::parse::load_string(&doc.to_string()).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
     let on = &node.join.as_ref().expect("join")[0].on;
@@ -257,7 +257,7 @@ fn variable_map_removal_renames_join_envelope_names() {
         "transform": "param_to_var"
     }]);
 
-    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let file = earthsci_ast::parse::load_string(&doc.to_string()).expect("parse");
     let flat = flatten(&file).expect("flatten");
     assert!(
         !flat.parameters.contains_key("ISRM.W"),
@@ -306,7 +306,7 @@ fn shadowed_loop_symbol_stays_a_loop_symbol() {
     doc["models"]["EmissionsAggregate"]["variables"]["src"] =
         serde_json::json!({ "type": "parameter" });
 
-    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let file = earthsci_ast::parse::load_string(&doc.to_string()).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
     assert_eq!(
@@ -332,7 +332,7 @@ fn shadowed_output_index_stays_a_binder() {
     rhs["output_idx"] = serde_json::json!(["o", 1]);
     rhs["join"] = serde_json::json!([{ "on": [["o", "sourceType"], ["src", "sourceType"]] }]);
 
-    let file = earthsci_ast::parse::load(&doc.to_string()).expect("parse");
+    let file = earthsci_ast::parse::load_string(&doc.to_string()).expect("parse");
     let flat = flatten(&file).expect("flatten");
     let node = flattened_producer(&flat.equations);
     assert_eq!(

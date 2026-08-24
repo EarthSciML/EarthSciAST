@@ -5,15 +5,15 @@
 ```julia
 try
                             # Load original
-                            original = EarthSciAST.load(filepath)
+                            original = EarthSciAST.load_path(filepath)
 
                             # Create temp file for round-trip test
                             temp_file = tempname() * ".esm"
 
                             try
                                 # Save and reload
-                                EarthSciAST.save(temp_file, original)
-                                reloaded = EarthSciAST.load(temp_file)
+                                EarthSciAST.write_path(original, temp_file)
+                                reloaded = EarthSciAST.load_path(temp_file)
 
                                 # Compare key fields
                                 @test original.esm == reloaded.esm

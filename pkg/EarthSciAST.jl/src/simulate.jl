@@ -104,10 +104,10 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
                           base_path::AbstractString = pwd())
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
-        input = load(input; metaparameters=metaparameters)
+        input = load_path(input; metaparameters=metaparameters)
     end
     if input isa AbstractDict
-        input = load(input; base_path=base_path, metaparameters=metaparameters)
+        input = load_document(input; base_path=base_path, metaparameters=metaparameters)
     end
     # Capture the verbatim document-scoped `coordinates` registry (RFC §8.3) BEFORE
     # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
@@ -559,9 +559,9 @@ function prepare(input;
         pfile = input isa EsmFile ? input :
                 input isa AbstractString ?
                     (isfile(input) || throw(SimulateError("prepare: no such file '$input'"));
-                     load(input; metaparameters=metaparams)) :
-                input isa AbstractDict ? load(input; base_path=base_path,
-                                              metaparameters=metaparams) :
+                     load_path(input; metaparameters=metaparams)) :
+                input isa AbstractDict ? load_document(input; base_path=base_path,
+                                                       metaparameters=metaparams) :
                 throw(SimulateError(
                     "prepare: pushdown_rewrite=true needs a path, native Dict, or " *
                     "EsmFile input — a FlattenedSystem is already past the rewrite point"))

@@ -1125,7 +1125,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     # those same objects, so they must not be re-emitted here. Only ORPHAN
     # events — attached directly to EsmFile.events by tooling, never parsed
     # from a schema-valid file — fall back to the top-level keys the schema
-    # forbids; load() strips and reattaches them on round-trip.
+    # forbids; the load* entry points strip and reattach them on round-trip.
     owned = set()
     for component in list(esm_file.models.values()) + list(esm_file.reaction_systems.values()):
         owned.update(id(ev) for ev in component.continuous_events)
@@ -1147,38 +1147,59 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     return result
 
 
-def save(esm_file: EsmFile, path: str | Path | None = None) -> str:
+def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
     """
-    Serialize an ESM file to JSON string, optionally writing to file.
+    Serialize an ESM file to a JSON string. PURE — never touches disk.
+
+    ``save(esm_file, path=None)`` used to do both: return the string AND,
+    when handed a path, write it. It was a pure function in TypeScript and
+    Rust and a disk write in Julia, under one name. Writing now lives in
+    :func:`write_path`, which returns nothing.
 
     Args:
         esm_file: The EsmFile object to serialize
-        path: Optional file path to write the JSON to
+        indent: Indentation for the emitted JSON; ``None`` or ``0`` for the
+            single-line compact form (see :func:`to_json_compact`)
 
     Returns:
         JSON string representation of the ESM file
+    """
+    data = _serialize_esm_file(esm_file)
+    if indent:
+        return json.dumps(data, indent=indent, ensure_ascii=False)
+    # Compact: `json.dumps(indent=None)` still emits `", "` / `": "` separators,
+    # where every other binding's compact form (serde_json::to_string,
+    # encoding/json.Marshal, JSON.stringify) emits none. Pin the separators so
+    # `to_json_compact` means the same bytes in all five.
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+
+
+def to_json_compact(esm_file: EsmFile) -> str:
+    """:func:`to_json` with no indentation — the single-line wire form.
+
+    Present in every binding, because Rust and Go have no default arguments
+    and so cannot express ``to_json(file, indent=0)``.
+    """
+    return to_json(esm_file, indent=None)
+
+
+def write_path(esm_file: EsmFile, path: str | Path) -> None:
+    """
+    Write an ESM file to ``path`` as JSON. Returns ``None``: no function in
+    this API both writes and hands back the payload — call :func:`to_json`
+    when you want the string.
 
     Raises:
-        IOError: If writing to file fails
+        OSError: If writing to file fails
     """
-    # Serialize to dictionary
-    data = _serialize_esm_file(esm_file)
-
-    # Convert to JSON string with nice formatting
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-
-    # Write to file if path provided
-    if path is not None:
-        with open(path, "w") as f:
-            f.write(json_str)
-
-    return json_str
+    with open(path, "w") as f:
+        f.write(to_json(esm_file))
 
 
 # ---------------------------------------------------------------------------
 # Canonical byte writer for the Option-B *emitted* form (esm-spec §9.6.4 rule 5).
-# Co-located with :func:`save` (the document write-back writer) so both hand-off
-# JSON writers live together. Unlike :func:`save` (``json.dumps(indent=2,
+# Co-located with :func:`to_json` (the document serializer) so both hand-off
+# JSON writers live together. Unlike :func:`to_json` (``json.dumps(indent=2,
 # sort_keys=False)`` over the wire dict), this writer sorts object keys
 # lexicographically EXCEPT the entries of an ``expression_templates`` object,
 # which keep their authored-first / materialized-sorted insertion order — the
@@ -1257,3 +1278,4 @@ def emit_esm_string(doc: Any) -> str:
     _emit_write(buf, doc, 0)
     buf.append("\n")
     return "".join(buf)
+

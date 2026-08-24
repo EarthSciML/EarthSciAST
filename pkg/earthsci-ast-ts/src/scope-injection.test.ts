@@ -16,7 +16,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { save } from './serialize.js'
+import { toJson } from './serialize.js'
 import { ephemeralInjectedFile, resolveSubsystemRefs } from './ref-loading.js'
 import { errCode, fixturesDir, loadFixtureFile } from './test-helpers.js'
 
@@ -24,10 +24,10 @@ const conf = (...parts: string[]) => fixturesDir('conformance', 'expression_temp
 
 const golden = (goldenPath: string): unknown => JSON.parse(fs.readFileSync(goldenPath, 'utf8'))
 
-/** load() from a fixture path with the fixture's directory as basePath. */
+/** loadString() from a fixture path with the fixture's directory as basePath. */
 const loadPath = (p: string): any => loadFixtureFile(p)
 
-/** load() then resolve subsystem refs (the assembled document). */
+/** loadString() then resolve subsystem refs (the assembled document). */
 async function loadResolved(p: string): Promise<any> {
   const f = loadPath(p)
   await resolveSubsystemRefs(f, path.dirname(p))
@@ -48,7 +48,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     expect(f.index_sets.lat.size).toBe(181)
     // Round-trip golden: the resolved+lowered assembly; the injection field
     // is gone (form A does not survive parse → emit).
-    expect(JSON.parse(save(f))).toEqual(golden(conf('inject_subsystem_ref', 'expanded.esm')))
+    expect(JSON.parse(toJson(f))).toEqual(golden(conf('inject_subsystem_ref', 'expanded.esm')))
 
     // The leaf loads standalone with its D intact (agnostic; unlowered).
     const leaf = loadPath(conf('inject_subsystem_ref', 'leaf.esm'))
@@ -56,7 +56,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
 
     // Negative twin: mounting WITHOUT injection loads cleanly (the D survives
     // — the op namespace is open); the unlowered_operator gate is an
-    // evaluation-time concern, not a load error.
+    // evaluation-time concern, not a loadString error.
     const ni = await loadResolved(conf('inject_subsystem_ref', 'no_inject.esm'))
     const niRunoff = ni.models.Assembly.subsystems.Runoff
     expect(niRunoff.equations).toBeDefined()
@@ -72,7 +72,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     // Emit (the 0-D partner) named no key and stays untouched.
     expect(f.models.Emit.equations[0].lhs.op).toBe('D')
     // The injection map is consumed — form B does not survive parse → emit.
-    const ser = JSON.parse(save(f)) as any
+    const ser = JSON.parse(toJson(f)) as any
     expect('expression_template_imports' in ser.coupling[0]).toBe(false)
     expect(ser).toEqual(golden(conf('inject_coupling_entry', 'expanded.esm')))
 
@@ -94,7 +94,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
     const f = loadPath(conf('inject_test_block', 'fixture.esm'))
     const adv = f.models.Advection
     // The enclosing component round-trips with its D INTACT (form C does not
-    // lower it at load) and each test keeps its import field (survives emit).
+    // lower it at loadString) and each test keeps its import field (survives emit).
     expect(adv.equations[0].rhs.args[1].op).toBe('D')
     expect(adv.tests.length).toBe(2)
     expect(
@@ -103,7 +103,7 @@ describe('scope-directed template injection (esm-spec §9.7.10)', () => {
           Array.isArray(t.expression_template_imports) && t.expression_template_imports.length > 0,
       ),
     ).toBe(true)
-    expect(JSON.parse(save(f))).toEqual(golden(conf('inject_test_block', 'roundtrip.esm')))
+    expect(JSON.parse(toJson(f))).toEqual(golden(conf('inject_test_block', 'roundtrip.esm')))
 
     // One suite, many schemes: each test builds an INDEPENDENT ephemeral
     // instance with its own grid, with the D lowered in that build only — the

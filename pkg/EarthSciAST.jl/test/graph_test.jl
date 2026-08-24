@@ -147,7 +147,7 @@ _graph_rsys() = ReactionSystem(
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
                         "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
-        file = ESSG.load(IOBuffer(JSON3.write(doc)))
+        file = ESSG.load_string(IOBuffer(JSON3.write(doc)))
         @test file.component_templates !== nothing       # the reference survived load
         g = expression_graph(file)
         pair(e) = Set([e.source.name, e.target.name])

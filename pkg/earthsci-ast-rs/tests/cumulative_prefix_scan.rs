@@ -406,7 +406,7 @@ fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
         let path = common::repo_fixture(name);
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {name}: {e}"));
         let doc: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
-        let file = earthsci_ast::load(&raw).unwrap_or_else(|e| panic!("load {name}: {e}"));
+        let file = earthsci_ast::load_string(&raw).unwrap_or_else(|e| panic!("load {name}: {e}"));
 
         let models = doc["models"].as_object().expect("models object");
         for (model_name, model) in models {

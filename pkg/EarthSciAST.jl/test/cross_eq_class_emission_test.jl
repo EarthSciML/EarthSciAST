@@ -438,7 +438,7 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         direct_total = 0
         for path in esms
             file = try
-                ESM.load(path)
+                ESM.load_path(path)
             catch
                 skipped += 1
                 continue

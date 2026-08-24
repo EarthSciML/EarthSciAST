@@ -36,7 +36,7 @@ using JSON3
         fpath = joinpath(fixtures_dir, fname)
         @testset "fixture $fname" begin
             # 1. Parse.
-            original = EarthSciAST.load(fpath)
+            original = EarthSciAST.load_path(fpath)
             @test original isa EarthSciAST.EsmFile
             @test original.data_sources !== nothing
             @test !isempty(original.data_sources)
@@ -51,8 +51,8 @@ using JSON3
             # 3. Round-trip.
             tmp = tempname() * ".esm"
             try
-                EarthSciAST.save(original, tmp)
-                reloaded = EarthSciAST.load(tmp)
+                EarthSciAST.write_path(original, tmp)
+                reloaded = EarthSciAST.load_path(tmp)
                 @test length(reloaded.data_sources) == length(original.data_sources)
                 for (name, orig_source) in original.data_sources
                     @test haskey(reloaded.data_sources, name)

@@ -15,7 +15,7 @@
 using Test
 using JSON3
 using EarthSciAST
-using EarthSciAST: load, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
+using EarthSciAST: load_path, flatten, build_evaluator, coerce_esm_file, TreeWalkError,
     ExpressionTemplateError,
     _BENCH_ON, _BENCH_BODY_VARIANTS, _BENCH_BRANCH_TEMPLATES, _BENCH_COMPILE_CALLS,
     _bench_reset!
@@ -52,7 +52,7 @@ end
     # (the load-time Option-A hatch) takes effect where it lives.
     function build_and_probe(fix::AbstractString; env=(), form::Symbol=:inplace)
         withenv(env...) do
-            flat = flatten(load(fix))
+            flat = flatten(load_path(fix))
             _BENCH_ON[] = true
             _bench_reset!()
             f, u0, p, _, _ = build_evaluator(flat; form=form)
@@ -111,7 +111,7 @@ end
         # fallback), and the whole array phase evaluates WITHOUT scalar-indexing the
         # state — the property a tracer (Reactant/XLA) actually rejects.
         FIX = bench("transport_3axis_7cubed_fullrank.esm")
-        flat = flatten(load(FIX))
+        flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = build_evaluator(flat; form=:oop)
         # `fo` is the `_OopRHS` wrapper (B2); the walk closure — and its captured
         # lane plans — is the explicit-buffers form behind `rhs_with_buffers`.
@@ -375,7 +375,7 @@ end
                 JSON3.write(io, doc)
             end
             err = try
-                flatten(load(fix))
+                flatten(load_path(fix))
                 nothing
             catch e
                 e
@@ -388,7 +388,7 @@ end
             # coupling, so the same document flattens (and builds) fine —
             # exactly the divergence the guard exists to catch.
             withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-                flat = flatten(load(fix))
+                flat = flatten(load_path(fix))
                 @test isempty(flat.template_registry)
                 f, u0, p, _, _ = build_evaluator(flat)
                 du = similar(u0)

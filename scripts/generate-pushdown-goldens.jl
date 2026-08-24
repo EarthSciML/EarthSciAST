@@ -615,7 +615,7 @@ function main()
     eor = EA.desugar_pushdown(eo; model_name="Binned")
     eor === eo && error("envelope-overlap fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(eor) === eor || error("envelope-overlap golden re-desugars (idempotency broken)")
-    EA.load(eo)          # the fixture must be a VALID document, not just a dict
+    EA.load_document(eo)  # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_envelope_overlap.esm"), eo)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_envelope_overlap.rewritten.json"), eor)
 
@@ -623,7 +623,7 @@ function main()
     par = EA.desugar_pushdown(pa; model_name="Binned")
     par === pa && error("polygon-area fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(par) === par || error("polygon-area golden re-desugars (idempotency broken)")
-    EA.load(pa)          # the fixture must be a VALID document, not just a dict
+    EA.load_document(pa)  # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_polygon_area.esm"), pa)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_polygon_area.rewritten.json"), par)
 
@@ -631,7 +631,7 @@ function main()
     tbr = EA.desugar_pushdown(tb; model_name="Binned")
     tbr === tb && error("template-body fixture: desugar_pushdown did not fire")
     EA.desugar_pushdown(tbr) === tbr || error("template-body golden re-desugars (idempotency broken)")
-    EA.load(tb)          # the fixture must be a VALID document, not just a dict
+    EA.load_document(tb)  # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_template_body.esm"), tb)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_template_body.rewritten.json"), tbr)
 
@@ -640,7 +640,7 @@ function main()
     ujr === uj || error("unreadable-join fixture: desugar_pushdown fired but must not")
     ujd = EA.pushdown_diagnostics(uj; model_name="Binned")
     isempty(ujd) && error("unreadable-join fixture: no residual diagnostic emitted")
-    EA.load(uj)          # the fixture must be a VALID document, not just a dict
+    EA.load_document(uj)  # the fixture must be a VALID document, not just a dict
     write_canon(joinpath(OUTDIR, "fixtures", "pushdown_unreadable_join.esm"), uj)
     write_canon(joinpath(OUTDIR, "golden", "pushdown_unreadable_join.diagnostics.json"), ujd)
 
@@ -652,10 +652,10 @@ function main()
         isrm_path = get(ENV, "ISRM_ESM",
                         normpath(joinpath(REPO, "..", "isrm.esm", "isrm.esm")))
         isfile(isrm_path) || error("isrm.esm not found at $isrm_path (set ISRM_ESM)")
-        ser = EA.serialize_esm_file(EA.load(isrm_path))   # metaparameter defaults folded
+        ser = EA.serialize_esm_file(EA.load_path(isrm_path))   # metaparameter defaults folded
         write_canon(joinpath(OUTDIR, "fixtures", "isrm.esm"), ser)
     end
-    ser = EA.serialize_esm_file(EA.load(joinpath(OUTDIR, "fixtures", "isrm.esm")))
+    ser = EA.serialize_esm_file(EA.load_path(joinpath(OUTDIR, "fixtures", "isrm.esm")))
     isrm = EA.desugar_pushdown(ser)
     isrm === ser && error("isrm.esm: desugar_pushdown did not fire")
     EA.desugar_pushdown(isrm) === isrm || error("isrm golden re-desugars (idempotency broken)")

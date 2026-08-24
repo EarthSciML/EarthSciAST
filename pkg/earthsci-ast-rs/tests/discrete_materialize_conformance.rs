@@ -24,7 +24,7 @@
 
 use earthsci_ast::flatten::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::fs;
@@ -109,7 +109,7 @@ fn final_value(sol: &earthsci_ast::Solution, name: &str) -> f64 {
 fn discrete_materialize_flatten_keeps_observeds_and_single_state() {
     let path = fixture_dir().join("fixtures/discrete_materialize_contraction.esm");
     let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
     let flat = flatten(&file).unwrap_or_else(|e| panic!("flatten: {e}"));
 
     for obs in ["M.W", "M.g", "M.k"] {
@@ -141,7 +141,7 @@ fn discrete_materialize_trajectory_matches_golden() {
     let golden = read_json(&fixture_dir().join("golden/discrete_materialize_contraction.json"));
 
     let json = fs::read_to_string(&fixture).unwrap_or_else(|e| panic!("read {fixture:?}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
     let flat = flatten(&file).unwrap_or_else(|e| panic!("flatten: {e}"));
     let compiled =
         ArrayCompiled::from_flattened(&flat).unwrap_or_else(|e| panic!("from_flattened: {e}"));

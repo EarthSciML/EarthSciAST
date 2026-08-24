@@ -144,7 +144,7 @@ end
 # `data_sources`: a `select` range bound may name a `metaparameters` entry, and
 # the bindings live on the models' parameters.
 _doc_raw(doc::AbstractDict) = doc
-_doc_raw(doc::AbstractString) = _doc_raw(EarthSciAST.load(doc))
+_doc_raw(doc::AbstractString) = _doc_raw(EarthSciAST.load_path(doc))
 # EsmFile (or anything typed that serializes): reuse the round-trip emitter.
 _doc_raw(file) = _doc_raw(EarthSciAST.serialize_esm_file(file))
 

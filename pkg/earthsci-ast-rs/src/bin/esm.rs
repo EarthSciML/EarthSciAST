@@ -10,7 +10,8 @@ use earthsci_ast::analysis::{
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    component_exists, component_graph, load, save, save_compact, validate, validate_complete,
+    component_exists, component_graph, load_string, to_json, to_json_compact, validate,
+    validate_complete,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -1154,7 +1155,7 @@ fn detect_coupling_antipatterns(
 }
 
 /// `esm init` project templates. Every template MUST load cleanly with
-/// [`earthsci_ast::load`] — the `init_templates_are_loadable` test and a
+/// [`earthsci_ast::load_string`] — the `init_templates_are_loadable` test and a
 /// pre-write self-check in the `init` command both enforce this, so the CLI
 /// can never scaffold a project its own `validate` rejects. `{name}` is
 /// replaced with the project name.
@@ -1428,7 +1429,7 @@ fn collect_esm_files(
 fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        let _ = load(content)?;
+        let _ = load_string(content)?;
     }
     let duration = start.elapsed();
     println!(
@@ -1441,7 +1442,7 @@ fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::erro
 }
 
 fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = load(content)?;
+    let esm_file = load_string(content)?;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         let _ = validate(&esm_file);
@@ -1458,7 +1459,7 @@ fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::e
 
 /// Time repeated 1-time-unit simulations from default initial conditions.
 fn bench_simulate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = load(content)?;
+    let esm_file = load_string(content)?;
     let opts = earthsci_ast::SimulateOptions::default();
     let params = HashMap::new();
     let initial_conditions = HashMap::new();
@@ -1642,7 +1643,7 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
 
 fn run_pretty(file: PathBuf, format: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     // Reject an unknown format cleanly BEFORE any rendering loop (bug fix: the
     // reaction-rate loop used to fall through to `unreachable!()`).
@@ -1693,7 +1694,7 @@ fn run_extract(
     output: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     // Check if component exists
     if !component_exists(&esm_file, &component) {
@@ -1758,7 +1759,7 @@ fn run_extract(
         extracted_esm.operators = Some(extracted_op);
     }
 
-    let output_content = save(&extracted_esm)?;
+    let output_content = to_json(&extracted_esm)?;
 
     if let Some(output_path) = output {
         fs::write(&output_path, output_content)?;
@@ -1776,8 +1777,8 @@ fn run_extract(
 fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let content1 = read_input(&file1)?;
     let content2 = read_input(&file2)?;
-    let esm_file1 = load(&content1)?;
-    let esm_file2 = load(&content2)?;
+    let esm_file1 = load_string(&content1)?;
+    let esm_file2 = load_string(&content2)?;
 
     println!("Comparing {} and {}:", file1.display(), file2.display());
 
@@ -1789,7 +1790,7 @@ fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Er
 
 fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         if let Some(rs) = reaction_systems.get(&system) {
@@ -1854,7 +1855,7 @@ fn run_graph(
     system: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     match level.as_str() {
         "component" => {
@@ -1954,11 +1955,11 @@ fn run_convert(
     to: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&input)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     let output_content = match to.as_str() {
-        "json" => save(&esm_file)?,
-        "compact-json" => save_compact(&esm_file)?,
+        "json" => to_json(&esm_file)?,
+        "compact-json" => to_json_compact(&esm_file)?,
         _ => reject_unknown("format", &to, "Use json or compact-json."),
     };
 
@@ -1973,7 +1974,7 @@ fn run_convert(
 
 fn run_analyze(file: PathBuf, analysis_type: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("System Analysis for: {}", file.display());
     println!("Analysis Type: {analysis_type}");
@@ -2132,7 +2133,7 @@ fn run_simulate(
     output: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
@@ -2172,7 +2173,7 @@ fn run_simulate(
 
 fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("ESM File Information for: {}", file.display());
     println!("ESM Version: {}", esm_file.esm);
@@ -2227,7 +2228,7 @@ fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("Units Analysis for: {}", file.display());
 
@@ -2290,7 +2291,7 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
 
 fn run_coupling_analysis(file: PathBuf, depth: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("Coupling Dependency Analysis for: {}", file.display());
     println!("Depth: {depth}");
@@ -2323,7 +2324,7 @@ fn run_performance_profile(
     profile_type: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("Performance Profile for: {}", file.display());
     println!("Profile type: {profile_type}");
@@ -2408,7 +2409,7 @@ fn run_performance_profile(
             let iterations = 100;
             let start = std::time::Instant::now();
             for _ in 0..iterations {
-                let _ = load(&content)?;
+                let _ = load_string(&content)?;
             }
             let parse_duration = start.elapsed();
             println!(
@@ -2479,7 +2480,7 @@ fn run_performance_profile(
             let iterations = 50;
             let start = std::time::Instant::now();
             for _ in 0..iterations {
-                let _ = load(&content)?;
+                let _ = load_string(&content)?;
             }
             let parse_duration = start.elapsed();
             println!("Parse time: {:?}/iter", parse_duration / iterations as u32);
@@ -2506,8 +2507,8 @@ fn run_compare(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content1 = read_input(&file1)?;
     let content2 = read_input(&file2)?;
-    let esm_file1 = load(&content1)?;
-    let esm_file2 = load(&content2)?;
+    let esm_file1 = load_string(&content1)?;
+    let esm_file2 = load_string(&content2)?;
 
     println!("Comparing {} and {}:", file1.display(), file2.display());
     println!("Comparison type: {comparison_type}");
@@ -2535,7 +2536,7 @@ fn run_compare(
 
 fn run_optimize(file: PathBuf, opt_type: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load(&content)?;
+    let esm_file = load_string(&content)?;
 
     println!("Optimization Analysis for: {}", file.display());
     println!("Optimization type: {opt_type}");
@@ -2573,7 +2574,7 @@ fn run_init(name: String, template: String) -> Result<(), Box<dyn std::error::Er
     fs::create_dir(&project_dir)?;
 
     // Create basic ESM template (see the TEMPLATE_* consts; each is
-    // load()-checked by the `init_templates_are_loadable` unit test).
+    // load_string()-checked by the `init_templates_are_loadable` unit test).
     let template_content = match template.as_str() {
         "minimal" => TEMPLATE_MINIMAL,
         "atmospheric" => TEMPLATE_ATMOSPHERIC,
@@ -2589,7 +2590,7 @@ fn run_init(name: String, template: String) -> Result<(), Box<dyn std::error::Er
     let final_content = template_content.replace("{name}", &name);
 
     // Defensive self-check: never write a file our own loader rejects.
-    if let Err(e) = load(&final_content) {
+    if let Err(e) = load_string(&final_content) {
         eprintln!("internal error: generated template does not load: {e}");
         std::process::exit(1);
     }
@@ -2695,7 +2696,7 @@ fn run_schema_check(
     }
 
     // Load performs schema validation
-    match load(&content) {
+    match load_string(&content) {
         Ok(_) => println!("✓ Schema validation passed"),
         Err(e) => {
             println!("✗ Schema validation failed: {e}");
@@ -2717,7 +2718,7 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
 
     for round in 1..=rounds {
         // Load
-        let esm_file = match load(&content) {
+        let esm_file = match load_string(&content) {
             Ok(file) => file,
             Err(e) => {
                 eprintln!("Round {round}: Load failed: {e}");
@@ -2726,7 +2727,7 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
         };
 
         // Save
-        content = match save(&esm_file) {
+        content = match to_json(&esm_file) {
             Ok(content) => content,
             Err(e) => {
                 eprintln!("Round {round}: Save failed: {e}");
@@ -2738,8 +2739,8 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     }
 
     // Check if final content matches original (semantically)
-    let original_esm = load(&original_content)?;
-    let final_esm = load(&content)?;
+    let original_esm = load_string(&original_content)?;
+    let final_esm = load_string(&content)?;
 
     let original_json = serde_json::to_value(&original_esm)?;
     let final_json = serde_json::to_value(&final_esm)?;
@@ -3269,8 +3270,8 @@ mod tests {
             ("coupling", TEMPLATE_COUPLING),
         ] {
             let content = template.replace("{name}", "demo_project");
-            let esm_file =
-                load(&content).unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
+            let esm_file = load_string(&content)
+                .unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
             let result = validate(&esm_file);
             assert!(
                 result.is_valid,

@@ -430,7 +430,7 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     end
 
     # esm-spec §9.6.4 rule 5 (Option B): re-inject each component's MATERIALIZED
-    # `expression_templates` registry so `save(EsmFile)` emits the
+    # `expression_templates` registry so `to_json(EsmFile)` emits the
     # reference-preserving form byte-identically to the raw `emit_document` path.
     # The component's surviving `apply_expression_template` references already
     # round-tripped through `serialize_expression` (call sites verbatim); these
@@ -496,24 +496,26 @@ function serialize_function_table_axis(ax::FunctionTableAxis)::Dict{String,Any}
 end
 
 """
-    save(file::EsmFile, path::String)
+    to_json(file::EsmFile) -> String
 
-Save an EsmFile object to a JSON file at the specified path. Argument order is
-data-first (`save(file, path)`), matching `write(io, x)` and the `save(file, io)`
-stream method below.
-"""
-function save(file::EsmFile, path::String)
-    open(path, "w") do io
-        save(file, io)
-    end
-end
+Serialize an `EsmFile` to wire-form JSON. PURE — it never touches disk;
+[`write_path`](@ref) is the writer.
 
-"""
-    save(file::EsmFile, io::IO)
+`save` used to WRITE, here and in Python, while returning the string and
+touching nothing in TypeScript and Rust — one name, two opposite effects. No
+function in this API both writes and hands back the payload any more.
 
-Save an EsmFile object to a JSON stream.
+Takes no `indent` option, unlike the Python and TypeScript twins: JSON3 emits
+the single-line form and its `indent=` keyword is a silent no-op in the pinned
+version, so `save(file, path)` has been writing UNINDENTED bytes since it was
+written, despite saying `indent=2`. Offering an option that does nothing would
+be worse than not offering it. (Byte-canonical output is a separate concern
+with its own path — see `emit_esm_string` / esm-spec §9.6.4 rule 5.)
+
+A document carrying surviving template references emits in the canonical
+reference-preserving byte form instead.
 """
-function save(file::EsmFile, io::IO)
+function to_json(file::EsmFile)::String
     serialized = serialize_esm_file(file)
     if file.component_templates !== nothing
         # esm-spec §9.6.4 rule 5 (Option B): a document carrying surviving
@@ -521,10 +523,36 @@ function save(file::EsmFile, io::IO)
         # reference-preserving byte form — keys sorted except the ordered
         # `expression_templates` blocks — byte-identical to the raw
         # `emit_document` path. Other documents keep the historical JSON3 form.
-        write(io, emit_esm_string(serialized))
+        return emit_esm_string(serialized)
     else
-        write(io, JSON3.write(serialized, indent=2))
+        return JSON3.write(serialized)
     end
+end
+
+"""
+    to_json_compact(file::EsmFile) -> String
+
+The single-line wire form. Exists in every binding for call-site parity —
+Rust and Go have no default arguments and so cannot express
+`to_json(file, indent=0)`.
+
+In THIS binding it returns exactly what [`to_json`](@ref) returns, because
+JSON3 already emits the compact form (see `to_json`).
+"""
+to_json_compact(file::EsmFile)::String = to_json(file)
+
+"""
+    write_path(file::EsmFile, path::AbstractString) -> Nothing
+
+Write an `EsmFile` to `path` as wire-form JSON. Returns `nothing`: call
+[`to_json`](@ref) when you want the string. Argument order is data-first
+(`write_path(file, path)`), matching `write(io, x)`.
+"""
+function write_path(file::EsmFile, path::AbstractString)::Nothing
+    open(String(path), "w") do io
+        write(io, to_json(file))
+    end
+    return nothing
 end
 # ========================================
 # Table-generated record serializers

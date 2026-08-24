@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "build_once_spatial_field"
@@ -41,7 +41,7 @@ def _golden() -> dict:
 def test_flatten_keeps_field_observeds_and_single_state() -> None:
     from earthsci_ast.flatten import flatten
 
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     assert "Field.area" in flat.observed_variables
     assert "Field.darea" in flat.observed_variables
     # `u` is the only integrated state; area/darea are observeds, not slots.
@@ -51,7 +51,7 @@ def test_flatten_keeps_field_observeds_and_single_state() -> None:
 
 def test_build_once_spatial_field_trajectory_matches_golden() -> None:
     golden = _golden()
-    esm = load(str(_FIXTURE))
+    esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
     result = simulate(esm, tspan=(float(t0), float(t1)), method="LSODA", rtol=1e-10, atol=1e-12)
     assert result.success, result.message

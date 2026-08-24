@@ -31,7 +31,7 @@ func TestAggregateValidFixtures(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			if _, err := Load(path); err != nil {
+			if _, err := LoadPath(path); err != nil {
 				t.Fatalf("expected %s to validate, got error: %v", name, err)
 			}
 		})
@@ -115,12 +115,12 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 			case pin.ResolverOnly:
 				// Schema-valid; rejected only by a resolver the schema-only Go
 				// binding does not run. Load must ACCEPT it.
-				if _, err := Load(path); err != nil {
+				if _, err := LoadPath(path); err != nil {
 					t.Fatalf("resolver-only fixture %s must pass schema validation, got error: %v", name, err)
 				}
 			case len(pin.SchemaErrors) > 0:
 				// Schema violation: rejected at Load (schema validation).
-				if _, err := Load(path); err == nil {
+				if _, err := LoadPath(path); err == nil {
 					t.Fatalf("expected %s to be rejected at schema validation, but it validated", name)
 				}
 			default:
@@ -137,7 +137,7 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 // path) present in the emitted structural errors.
 func assertStructuralRejection(t *testing.T, path, name string, pin expectedPin) {
 	t.Helper()
-	file, err := Load(path)
+	file, err := LoadPath(path)
 	if err != nil {
 		t.Fatalf("structural fixture %s must pass schema validation, got error: %v", name, err)
 	}
@@ -223,7 +223,7 @@ func TestIndexSetsDocumentScopeRoundTrip(t *testing.T) {
 		t.Run(filepath.Base(tc.rel), func(t *testing.T) {
 			path := filepath.Join(repoRoot, tc.rel)
 
-			esmFile, err := Load(path)
+			esmFile, err := LoadPath(path)
 			if err != nil {
 				t.Fatalf("load %s: %v", tc.rel, err)
 			}

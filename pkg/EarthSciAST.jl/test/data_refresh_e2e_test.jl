@@ -85,7 +85,7 @@ end
         #   D(c[i]) = scale[i]·src[i]   (scale CONST → const_arrays; src DISCRETE → live buffer)
         #   D(d[i]) = c[i]              (coupling: d integrates the forced tracer)
         # Forcing is piecewise-constant per segment, so the run is exact to solver tol.
-        file = EarthSciAST.load(_refresh_fixture("coupled_forced.esm"))
+        file = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
         @test file isa EarthSciAST.EsmFile
         model = file.models["M"]
 
@@ -120,7 +120,7 @@ end
 
     @testset "cadence: CONST materialized once; DISCRETE once per boundary, no-op between" begin
         # The Julia mirror of Rust's const_materialized_once_discrete_refreshed_once_per_boundary.
-        file  = EarthSciAST.load(_refresh_fixture("coupled_forced.esm"))
+        file  = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
         model = file.models["M"]
         scale  = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
@@ -164,7 +164,7 @@ end
         # The hot per-step path only READS the live buffer, so it must allocate
         # nothing — both before any refresh and after one driven through the full
         # callback machinery (sample → buf .=), which mutates in place.
-        file  = EarthSciAST.load(_refresh_fixture("coupled_forced.esm"))
+        file  = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
         model = file.models["M"]
         scale  = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]

@@ -15,7 +15,7 @@ import json
 import pytest
 from conftest import CORPUS_UNIT_DEFECTS, VALID_DIR
 from pint import UnitRegistry, DimensionalityError
-from earthsci_ast import load
+from earthsci_ast import load_string
 from earthsci_ast.validation import validate
 from earthsci_ast.esm_types import (
     ModelVariable,
@@ -546,14 +546,14 @@ class TestCrossBindingUnitsFixtures:
             pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
         assert path.is_file(), f"missing fixture {path}"
-        esm = load(path.read_text())
+        esm = load_string(path.read_text())
         assert esm.models, f"{fixture_name}: no models loaded"
 
     def test_unit_validator_runs(self, units_fixtures_dir, fixture_name):
         if fixture_name in CORPUS_UNIT_DEFECTS:
             pytest.skip(f"{fixture_name}: {CORPUS_UNIT_DEFECTS[fixture_name]}")
         path = units_fixtures_dir / fixture_name
-        esm = load(path.read_text())
+        esm = load_string(path.read_text())
         validator = UnitValidator()
         result = validator.validate_esm_file(esm)
         assert isinstance(result, UnitValidationResult)

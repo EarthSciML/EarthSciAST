@@ -65,7 +65,7 @@ import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .flatten import flatten
-from .parse import load
+from .parse import load_path, load_string
 from .simulation import BuildInspection, _eval_buildtime_field, simulate
 
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
@@ -578,7 +578,7 @@ def _ephemeral_injected_file(
         break
     if not injected:
         raise ValueError(f"component '{mname}' not found for per-test injection (esm-spec §9.7.10)")
-    return load(json.dumps(raw), base_path=str(base_dir))
+    return load_string(json.dumps(raw), base_path=str(base_dir))
 
 
 def _result(
@@ -733,13 +733,13 @@ def run_pde_tests(
     to the .esm file's directory when ``pde_input`` is a path, else the working
     directory. Mirrors the Julia binding's ``run_pde_tests`` 1:1 (tolerances
     per §6.6.4; the pass predicate is Julia ``isapprox``)."""
-    file = load(pde_input) if isinstance(pde_input, str) else pde_input
+    file = load_path(pde_input) if isinstance(pde_input, str) else pde_input
     if not isinstance(file, EsmFile):
         raise TypeError(f"run_pde_tests expects a path or EsmFile, got {type(pde_input)}")
     if base_dir is not None:
         resolved_base = str(base_dir)
     elif isinstance(pde_input, str) and os.path.isfile(pde_input):
-        # `load` accepts a path or raw JSON text; only a real path anchors
+        # `load_path` needs a real path; only a real path anchors
         # from_file references at the .esm file's directory.
         resolved_base = os.path.dirname(os.path.abspath(pde_input))
     else:

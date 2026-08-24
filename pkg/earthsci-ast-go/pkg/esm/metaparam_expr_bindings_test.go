@@ -287,7 +287,7 @@ func TestMetaExpr_MountEdgeProductBindingFoldsToConcrete(t *testing.T) {
 	writeFileString(t, p, metaExprParentMount(
 		`{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}`))
 
-	f, err := Load(p, WithMetaparameters(map[string]int64{"NX": 18, "NY": 20}))
+	f, err := LoadPath(p, WithMetaparameters(map[string]int64{"NX": 18, "NY": 20}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestMetaExpr_MountEdgeFoldsAgainstParentDefaults(t *testing.T) {
 		`{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}`))
 
 	// No API bindings -> parent defaults NX=18, NY=20.
-	f, err := Load(p)
+	f, err := LoadPath(p)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestMetaExpr_MountEdgePlainIntegerRegression(t *testing.T) {
 	p := filepath.Join(dir, "parent_plain.esm")
 	writeFileString(t, p, metaExprParentMount(`{"NX": 5, "NY": 6, "NTGT": 30}`))
 
-	f, err := Load(p)
+	f, err := LoadPath(p)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestMetaExpr_MountEdgeUnknownParentNameIsLoud(t *testing.T) {
 	writeFileString(t, p, metaExprParentMount(
 		`{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}`))
 
-	_, err := Load(p, WithMetaparameters(map[string]int64{"NX": 18}))
+	_, err := LoadPath(p, WithMetaparameters(map[string]int64{"NX": 18}))
 	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
 		t.Errorf("mount-edge unknown name code = %s; want template_import_unknown_name", code)
 	}

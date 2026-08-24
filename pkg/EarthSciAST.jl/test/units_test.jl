@@ -518,7 +518,7 @@ using Unitful
             fpath = joinpath(fixtures_root, fname)
             @testset "$fname" begin
                 @test isfile(fpath)
-                esm_data = EarthSciAST.load(fpath)
+                esm_data = EarthSciAST.load_path(fpath)
                 @test esm_data isa EarthSciAST.EsmFile
                 @test esm_data.models !== nothing && !isempty(esm_data.models)
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
-import { save } from './serialize.js'
+import { loadString, loadDocument } from './parse.js'
+import { toJson } from './serialize.js'
 import type { Model } from './types.js'
 
 const FIXTURE = {
@@ -70,7 +70,7 @@ const FIXTURE = {
 
 describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
   it('loads a top-level function_tables block', () => {
-    const ef = load(FIXTURE)
+    const ef = loadDocument(FIXTURE)
     expect(ef.function_tables).toBeDefined()
     const fts = ef.function_tables as Record<string, unknown>
     expect(Object.keys(fts).sort()).toEqual(['F_actinic', 'sigma_O3'])
@@ -82,8 +82,8 @@ describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
     expect(fa.axes[0].units).toBe('Pa')
   })
 
-  it('preserves table_lookup AST nodes through load', () => {
-    const ef = load(FIXTURE)
+  it('preserves table_lookup AST nodes through loadString', () => {
+    const ef = loadDocument(FIXTURE)
     const eqs = (ef.models!.M as Model).equations as unknown as Array<{
       rhs: Record<string, unknown>
     }>
@@ -98,8 +98,8 @@ describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
   })
 
   it('round-trips both blocks unchanged', () => {
-    const ef = load(FIXTURE)
-    const out = save(ef)
+    const ef = loadDocument(FIXTURE)
+    const out = toJson(ef)
     const reloaded = JSON.parse(out)
     expect(Object.keys(reloaded.function_tables).sort()).toEqual(['F_actinic', 'sigma_O3'])
     const rhs0 = reloaded.models.M.equations[0].rhs
@@ -110,8 +110,8 @@ describe('function_tables block + table_lookup AST op (esm-spec §9.5)', () => {
     expect(rhs1.op).toBe('table_lookup')
     expect(rhs1.output).toBe('NO2')
     // Round-trip is a fixed point.
-    const ef2 = load(reloaded)
-    const out2 = save(ef2)
+    const ef2 = loadString(reloaded)
+    const out2 = toJson(ef2)
     expect(JSON.parse(out2)).toEqual(reloaded)
   })
 })

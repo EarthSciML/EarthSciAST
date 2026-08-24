@@ -10,8 +10,8 @@ fn load_fixture(name: &str) -> EsmFile {
 
 fn roundtrip(name: &str) -> (EsmFile, EsmFile) {
     let first = load_fixture(name);
-    let serialized = save(&first).expect("serialize");
-    let second: EsmFile = load(&serialized).expect("reparse");
+    let serialized = to_json(&first).expect("serialize");
+    let second: EsmFile = load_string(&serialized).expect("reparse");
     (first, second)
 }
 

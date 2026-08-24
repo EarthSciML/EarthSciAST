@@ -73,7 +73,7 @@ end
     out = mtk2esm(sys)
 
     @test out isa Dict
-    @test out["esm"] == ESM.ESM_FORMAT_VERSION
+    @test out["esm"] == ESM.SCHEMA_VERSION
     @test haskey(out, "metadata")
     @test haskey(out, "models")
     @test haskey(out["models"], "ToyDecay")
@@ -135,7 +135,7 @@ end
     # Must round-trip through JSON without errors
     s = JSON3.write(out)
     parsed = JSON3.read(s)
-    @test parsed["esm"] == ESM.ESM_FORMAT_VERSION
+    @test parsed["esm"] == ESM.SCHEMA_VERSION
     @test haskey(parsed["models"], "ToyDecay")
 end
 
@@ -147,7 +147,7 @@ end
     rs = _toy_catalyst_system()
     out = mtk2esm(rs)
 
-    @test out["esm"] == ESM.ESM_FORMAT_VERSION
+    @test out["esm"] == ESM.SCHEMA_VERSION
     @test haskey(out, "reaction_systems")
     @test haskey(out["reaction_systems"], "ToyReactions")
 
@@ -221,9 +221,9 @@ end
             write(io, JSON3.write(out; indent=2))
         end
 
-        reloaded = ESM.load(tmpfile)
+        reloaded = ESM.load_path(tmpfile)
         @test reloaded isa ESM.EsmFile
-        @test reloaded.esm == ESM.ESM_FORMAT_VERSION
+        @test reloaded.esm == ESM.SCHEMA_VERSION
         @test reloaded.models !== nothing
         @test haskey(reloaded.models, "RoundTrip")
 
@@ -251,7 +251,7 @@ end
         open(tmpfile, "w") do io
             write(io, JSON3.write(out; indent=2))
         end
-        reloaded = ESM.load(tmpfile)
+        reloaded = ESM.load_path(tmpfile)
         rt_sys = MTK.System(reloaded.models["NumRT"]; name=:NumRTBack)
 
         # Simulate original
@@ -334,7 +334,7 @@ end
     # Export to ESM
     out = mtk2esm(sys; metadata=(; source_ref="test/minmax"))
 
-    @test out["esm"] == ESM.ESM_FORMAT_VERSION
+    @test out["esm"] == ESM.SCHEMA_VERSION
     @test haskey(out["models"], "MinMaxClamp")
 
     model_dict = out["models"]["MinMaxClamp"]
@@ -365,7 +365,7 @@ end
         open(tmpfile, "w") do io
             write(io, s)
         end
-        reloaded = ESM.load(tmpfile)
+        reloaded = ESM.load_path(tmpfile)
         rt_sys = MTK.System(reloaded.models["MinMaxClamp"]; name=:MinMaxClampRT)
         @test rt_sys isa MTK.AbstractSystem
     finally
@@ -396,7 +396,7 @@ end
     sys = MTK.System(model; name=:NaryMinMax)
 
     out = mtk2esm(sys)
-    @test out["esm"] == ESM.ESM_FORMAT_VERSION
+    @test out["esm"] == ESM.SCHEMA_VERSION
 
     model_dict = out["models"]["NaryMinMax"]
     eq = model_dict["equations"][1]

@@ -72,7 +72,7 @@ using EarthSciAST
 
         @test_throws EarthSciAST.SchemaValidationError begin
             io = IOBuffer(invalid_json)
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
         end
     end
 
@@ -87,7 +87,7 @@ using EarthSciAST
         local threw = false
         local perr = nothing
         try
-            EarthSciAST.load(fixture)
+            EarthSciAST.load_path(fixture)
         catch e
             threw = true
             perr = e
@@ -131,7 +131,7 @@ using EarthSciAST
             }
         }
         """
-        @test EarthSciAST.load(IOBuffer(ok_json)) isa EarthSciAST.EsmFile
+        @test EarthSciAST.load_string(IOBuffer(ok_json)) isa EarthSciAST.EsmFile
     end
 
 end

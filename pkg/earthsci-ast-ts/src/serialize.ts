@@ -1,8 +1,8 @@
 /**
  * ESM Format JSON Serialization (esm-cs3).
  *
- * `save(file)` emits an `EsmFile` as wire-form JSON suitable for round-trip
- * through `load()`. Mirrors the Python and Julia serializers in three respects:
+ * `toJson(file)` emits an `EsmFile` as wire-form JSON suitable for round-trip
+ * through `loadString()`. Mirrors the Python and Julia serializers in three respects:
  *
  *   1. **AST canonical numeric handling.** `NumericLiteral` tagged leaves
  *      (the in-memory int/float carrier produced by `losslessJsonParse` and
@@ -22,7 +22,7 @@
  *   3. **Wire-form keys.** TypeScript types are generated from the JSON
  *      schema, so the in-memory shape already matches the wire form (no
  *      Python-style dataclass → wire field-name remapping is needed).
- *      Object key order is the insertion order produced by `load()` /
+ *      Object key order is the insertion order produced by `loadString()` /
  *      authored constructors, which is itself schema-driven.
  *
  * The Python reference at `pkg/earthsci-ast-py/src/earthsci_ast/serialize.py`
@@ -31,6 +31,7 @@
  * delegating shape preservation to the generated types.
  */
 
+import { writeFileSyncNode } from './path-utils.js'
 import type { EsmFile } from './types.js'
 import {
   isNumericLiteral,
@@ -39,8 +40,8 @@ import {
   stripNumericLiterals,
 } from './numeric-literal.js'
 
-/** Optional behavior controls for {@link save}. */
-export interface SaveOptions {
+/** Optional behavior controls for {@link toJson} / {@link writePath}. */
+export interface ToJsonOptions {
   /**
    * When `true`, emit byte-canonical JSON per RFC §5.4.6: integer-tagged
    * `NumericLiteral` leaves as integer tokens, float-tagged leaves with
@@ -62,22 +63,43 @@ export interface SaveOptions {
 }
 
 /**
- * Serialize an `EsmFile` to wire-form JSON.
+ * Serialize an `EsmFile` to wire-form JSON. PURE — it never touches disk;
+ * {@link writePath} is the writer.
  *
  * @param file - The `EsmFile` to serialize.
- * @param options - Optional behavior controls (see {@link SaveOptions}).
+ * @param options - Optional behavior controls (see {@link ToJsonOptions}).
  * @returns Wire-form JSON string.
  * @throws {CanonicalNonfiniteError} In `canonical: true` mode, if a
  *   `NumericLiteral` leaf holds NaN or ±Infinity (RFC §5.4.6 forbids
  *   non-finite numbers in the canonical wire form).
  */
-export function save(file: EsmFile, options?: SaveOptions): string {
+export function toJson(file: EsmFile, options?: ToJsonOptions): string {
   const indent = options?.indent ?? 2
   if (options?.canonical === true) {
     return emitCanonical(file, indent)
   }
   const stripped = stripNumericLiterals(file)
   return JSON.stringify(stripped, null, indent)
+}
+
+/**
+ * {@link toJson} with no indentation — the single-line wire form. Present in
+ * every binding, because Rust and Go have no default arguments and so cannot
+ * express `toJson(file, { indent: 0 })`.
+ */
+export function toJsonCompact(file: EsmFile, options?: ToJsonOptions): string {
+  return toJson(file, { ...options, indent: 0 })
+}
+
+/**
+ * Write an `EsmFile` to `path` as wire-form JSON. Returns nothing: no
+ * function in this API both writes and hands back the payload — call
+ * {@link toJson} when you want the string.
+ *
+ * Requires synchronous file access (Node).
+ */
+export function writePath(file: EsmFile, path: string, options?: ToJsonOptions): void {
+  writeFileSyncNode(path, toJson(file, options))
 }
 
 /**

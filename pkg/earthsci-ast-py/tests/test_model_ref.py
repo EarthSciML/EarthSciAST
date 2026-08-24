@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-from earthsci_ast import flatten, load
+from earthsci_ast import flatten, load_path
 from earthsci_ast.parse import (
     CircularReferenceError,
     SubsystemRefError,
@@ -98,7 +98,7 @@ def test_load_resolves_top_level_model_ref():
             },
         )
 
-        loaded = load(main_path)
+        loaded = load_path(main_path)
         producer = loaded.models["Producer"]
         # Spliced under the SAME key with name = X; carries its real variables.
         assert hasattr(producer, "variables")
@@ -139,7 +139,7 @@ def test_coupled_model_refs_resolve_zero_rewrite():
             },
         )
 
-        loaded = load(main_path)
+        loaded = load_path(main_path)
         assert set(loaded.models) == {"Producer", "Consumer"}
 
         fs = flatten(loaded)
@@ -178,7 +178,7 @@ def test_model_ref_mixes_with_inline_model():
             },
         )
 
-        loaded = load(main_path)
+        loaded = load_path(main_path)
         assert "y" in loaded.models["Producer"].variables
         assert "w" in loaded.models["Inline"].variables
 
@@ -199,7 +199,7 @@ def test_model_ref_missing_file_raises():
         )
 
         with pytest.raises(SubsystemRefError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_model_ref_to_loader_only_file_raises():
@@ -228,7 +228,7 @@ def test_model_ref_to_loader_only_file_raises():
         )
 
         with pytest.raises(SubsystemRefError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_circular_model_ref_detection():
@@ -264,7 +264,7 @@ def test_circular_model_ref_detection():
         )
 
         with pytest.raises(CircularReferenceError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_resolve_model_refs_is_idempotent_on_inline_models():
@@ -287,7 +287,7 @@ def test_resolve_model_refs_is_idempotent_on_inline_models():
             },
         )
 
-        loaded = load(main_path)
+        loaded = load_path(main_path)
         before = loaded.models["Inline"]
         # A second pass is a no-op for concrete Model objects.
         resolve_model_refs(loaded, tmp)

@@ -207,7 +207,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                 "metadata" => Dict{String,Any}("name" => "asm"),
                 "models" => Dict{String,Any}("Sub" => Dict{String,Any}("ref" => "clib.esm")),
             )))
-            @test errcode(() -> EarthSciAST.load(asm)) == "subsystem_ref_is_coupling_library"
+            @test errcode(() -> EarthSciAST.load_path(asm)) == "subsystem_ref_is_coupling_library"
 
             # §4.7 nested subsystem ref targeting a library.
             asmn = joinpath(dir, "asmn.esm")
@@ -220,7 +220,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                     "subsystems" => Dict{String,Any}("Sub" => Dict{String,Any}("ref" => "clib.esm")),
                 )),
             )))
-            @test errcode(() -> EarthSciAST.load(asmn)) == "subsystem_ref_is_coupling_library"
+            @test errcode(() -> EarthSciAST.load_path(asmn)) == "subsystem_ref_is_coupling_library"
 
             # §9.7.2 template import (component-scoped) targeting a library.
             asm2 = joinpath(dir, "asm2.esm")
@@ -233,7 +233,7 @@ _sc(e) = EarthSciAST.serialize_coupling_entry(e)
                     "equations" => Any[],
                 )),
             )))
-            @test errcode(() -> EarthSciAST.load(asm2)) == "template_import_is_coupling_library"
+            @test errcode(() -> EarthSciAST.load_path(asm2)) == "template_import_is_coupling_library"
         end
     end
 

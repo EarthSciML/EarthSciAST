@@ -73,7 +73,7 @@ use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load};
+use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -433,7 +433,7 @@ fn final_value(sol: &Solution, name: &str) -> f64 {
 
 /// Build the coupled `ArrayCompiled` (flatten → `from_flattened` seam).
 fn build_compiled() -> ArrayCompiled {
-    let file = load(COUPLED_FORCED_JSON).expect("load coupled forced model");
+    let file = load_string(COUPLED_FORCED_JSON).expect("load coupled forced model");
     let flat = flatten(&file).expect("flatten coupled forced model");
     ArrayCompiled::from_flattened(&flat).expect("from_flattened compiles coupled forced model")
 }

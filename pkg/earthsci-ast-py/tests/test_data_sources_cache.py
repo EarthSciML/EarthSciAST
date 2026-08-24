@@ -293,10 +293,10 @@ def _strip_comments(data):
 
 def _load_fixture_loader(fixture_name: str, loader_name: str):
     import json
-    from earthsci_ast import load
+    from earthsci_ast import load_string
 
     raw = json.loads((FIXTURES_DIR / fixture_name).read_text())
-    esm = load(json.dumps(_strip_comments(raw)))
+    esm = load_string(json.dumps(_strip_comments(raw)))
     return esm.data_sources[loader_name]
 
 

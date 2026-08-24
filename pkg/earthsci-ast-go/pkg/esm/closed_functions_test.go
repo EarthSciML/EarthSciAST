@@ -38,8 +38,8 @@ func TestClosedFunctionsConformance(t *testing.T) {
 			// Step 1: load the canonical.esm. We only need the parser to
 			// accept it — every fixture's RHS is a single `fn` invocation
 			// of the function we're testing.
-			if _, err := Load(e.canonical); err != nil {
-				t.Fatalf("Load(%s): %v", e.canonical, err)
+			if _, err := LoadPath(e.canonical); err != nil {
+				t.Fatalf("LoadPath(%s): %v", e.canonical, err)
 			}
 
 			// Step 2 + 3: drive expected.json against EvaluateClosedFunction.

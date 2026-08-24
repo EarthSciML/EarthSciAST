@@ -412,7 +412,7 @@ function mtk2esm(sys::ModelingToolkit.AbstractSystem; metadata=(;))
 
     # 6. Wrap in EsmFile-shaped Dict ----------------------------------------
     out = Dict{String,Any}(
-        "esm" => EarthSciAST.ESM_FORMAT_VERSION,
+        "esm" => EarthSciAST.SCHEMA_VERSION,
         "metadata" => _esm_file_metadata(metadata, sys_name),
         "models" => Dict{String,Any}(sys_name => model_dict),
     )

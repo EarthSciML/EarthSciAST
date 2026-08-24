@@ -13,7 +13,7 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast.esm_types import ExprNode
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path, load_string
 from earthsci_ast.lower_expression_templates import (
     ExpressionTemplateError,
     expand_document,
@@ -256,7 +256,7 @@ def test_coupling_transform_expression_conformance_fixture_matches_expanded_form
 
 def test_load_end_to_end_produces_inline_rate_in_typed_object():
     """The full ``load`` path should expand templates and surface inline ASTs."""
-    file = load(json.dumps(ARRHENIUS_FIXTURE))
+    file = load_string(json.dumps(ARRHENIUS_FIXTURE))
     rs = file.reaction_systems["chem"]
     rate = rs.reactions[0].rate_constant  # python binding stores rate as `rate_constant`
     # Walk the typed expression: should be `*` with three args, no apply op.
@@ -361,7 +361,7 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
     from earthsci_ast.simulation import simulate
 
     # (a) Loads clean.
-    f = load(os.path.join(_conf_dir("unlowered_operator"), "fixture.esm"))
+    f = load_path(os.path.join(_conf_dir("unlowered_operator"), "fixture.esm"))
     assert "m" in f.models
 
     # (b) Reaching evaluation surfaces `unlowered_operator` (the fixture's RHS is a
@@ -399,7 +399,7 @@ def test_unlowered_integral_loads_but_errors_before_evaluation():
     from earthsci_ast.simulation import simulate
 
     # (a) Loads clean — the surviving `integral` is tolerated.
-    f = load(os.path.join(_conf_dir("unlowered_integral"), "fixture.esm"))
+    f = load_path(os.path.join(_conf_dir("unlowered_integral"), "fixture.esm"))
     assert "m" in f.models
 
     # (b) Reaching evaluation surfaces the uniform code.

@@ -10,7 +10,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::aggregate::resolve_aggregate_ranges;
-use earthsci_ast::{EsmFile, load};
+use earthsci_ast::{EsmFile, load_string};
 use std::collections::HashMap;
 
 mod common;
@@ -25,7 +25,7 @@ fn fixture(rel: &str) -> String {
 #[test]
 fn aggregate_fixture_index_sets_is_document_scoped_and_round_trips() {
     let json = fixture("valid/aggregate/aggregate_semiring_indexset.esm");
-    let file = load(&json).unwrap_or_else(|e| panic!("load: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load: {e}"));
 
     // (1) Document-scoped: the registry is on the file, not on any model.
     let sets = file
@@ -68,7 +68,7 @@ fn aggregate_fixture_index_sets_is_document_scoped_and_round_trips() {
 #[test]
 fn regrid_fixture_index_sets_is_document_scoped_and_round_trips() {
     let json = fixture("valid/geometry/conservative_regrid_overlap_join.esm");
-    let file = load(&json).unwrap_or_else(|e| panic!("load: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load: {e}"));
 
     let sets = file
         .index_sets

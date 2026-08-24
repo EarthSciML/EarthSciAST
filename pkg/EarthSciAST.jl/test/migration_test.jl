@@ -3,7 +3,7 @@
 #
 # A migration is a pure version-MARKER bump, sound only along an ADDITIVE line —
 # a run of releases whose changes were additive, so an older file already loads
-# under the newer schema. The current line is `1.0.0 … ESM_FORMAT_VERSION`.
+# under the newer schema. The current line is `1.0.0 … SCHEMA_VERSION`.
 #
 # Nothing crosses the 1.0.0 boundary. esm 1.0.0 is a clean break: the five
 # declared variable types collapse to two, an observed variable's `expression`
@@ -24,7 +24,7 @@ using JSON3
 
 include("testutils.jl")  # shared prelude: TESTUTILS_REPO_ROOT, _require_fixture
 
-const _MIG_SCHEMA_VERSION = EarthSciAST.ESM_FORMAT_VERSION
+const _MIG_SCHEMA_VERSION = EarthSciAST.SCHEMA_VERSION
 
 # A minimal in-memory document at a chosen declared version. Built directly
 # rather than loaded, because most of these versions are ones `load` REFUSES —
@@ -158,7 +158,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         fixture = joinpath(TESTUTILS_REPO_ROOT, "tests", "version_compatibility",
                            "version_1_0_0_baseline.esm")
         if _require_fixture(fixture)
-            source = EarthSciAST.load(fixture)
+            source = EarthSciAST.load_path(fixture)
             @test source.esm == "1.0.0"
 
             migrated = migrate(source, _MIG_SCHEMA_VERSION)
@@ -233,7 +233,7 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                 # to the current schema is the identity no-op.
                 @test tgt_version == _MIG_SCHEMA_VERSION
                 @test can_migrate(tgt_version, _MIG_SCHEMA_VERSION) == true
-                target_file = EarthSciAST.load(tgt_path)
+                target_file = EarthSciAST.load_path(tgt_path)
                 @test migrate(target_file, _MIG_SCHEMA_VERSION).esm == _MIG_SCHEMA_VERSION
             end
         end

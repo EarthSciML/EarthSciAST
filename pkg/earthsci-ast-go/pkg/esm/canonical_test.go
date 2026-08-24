@@ -88,7 +88,7 @@ func TestSaveEmitsIntegerFormForIntegralFloat(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Serialize(file)
+	jsonStr, err := ToJSON(file)
 	require.NoError(t, err)
 
 	// Re-parse as a generic tree to inspect raw tokens precisely. UseNumber
@@ -147,7 +147,7 @@ func TestRoundTripNormalizesIntegralFloats(t *testing.T) {
 	parsed, err := LoadString(input)
 	require.NoError(t, err)
 
-	jsonStr, err := Serialize(parsed)
+	jsonStr, err := ToJSON(parsed)
 	require.NoError(t, err)
 
 	reparsed, err := LoadString(jsonStr)
@@ -196,7 +196,7 @@ func TestSaveTypedFloatFields(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Serialize(file)
+	jsonStr, err := ToJSON(file)
 	require.NoError(t, err)
 
 	// *float64 factor of 2.0 is an integral value → serializes as "2" per
@@ -222,7 +222,7 @@ func TestSaveRejectsNonFiniteFloat(t *testing.T) {
 		},
 	}
 
-	_, err := Serialize(file)
+	_, err := ToJSON(file)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "E_CANONICAL_NONFINITE")
 }

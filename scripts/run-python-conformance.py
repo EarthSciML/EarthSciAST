@@ -92,7 +92,7 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
         # subsystem refs and §9.7 template imports at the file's own directory) --
         esm_data = None
         try:
-            esm_data = earthsci_ast.load(path)
+            esm_data = earthsci_ast.load_path(path)
             record["resolve_ok"] = True
         except Exception as exc:
             record["resolve_ok"] = False
@@ -107,7 +107,7 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 # Raw document, so a load-phase rejection still yields whatever
                 # structured findings the binding is able to enumerate. Anchor
                 # relative §4.7 subsystem / §9.7 template refs at the fixture's
-                # OWN directory (exactly as the `load(path)` phase above does):
+                # OWN directory (exactly as the `load_path(path)` phase above does):
                 # without it a ref that resolves to a multi-system file degrades
                 # to `unresolved_subsystem_ref` (target not found relative to the
                 # CWD) instead of its true `ambiguous_subsystem_ref`.

@@ -14,7 +14,7 @@ import jsonschema
 import pytest
 from conftest import REPO_ROOT, VALID_DIR
 
-from earthsci_ast import load, save
+from earthsci_ast import load_string, to_json
 
 _VALID = VALID_DIR
 
@@ -25,7 +25,7 @@ def _schema():
 
 def _roundtrip(fixture: Path) -> dict:
     """load → save → validate against schema → parse back to a dict."""
-    saved = save(load(fixture.read_text()))
+    saved = to_json(load_string(fixture.read_text()))
     data = json.loads(saved)
     jsonschema.validate(instance=data, schema=_schema())
     return data
@@ -97,7 +97,7 @@ def test_roundtrip_preserves_constraint_equations():
             }
         },
     }
-    data = json.loads(save(load(json.dumps(doc))))
+    data = json.loads(to_json(load_string(json.dumps(doc))))
     rs = data["reaction_systems"]["rs"]
     assert rs["constraint_equations"] == [{"lhs": "A", "rhs": {"op": "*", "args": [2, "k"]}}]
 

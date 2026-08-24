@@ -26,7 +26,7 @@ const _ESS_BO = EarthSciAST
 
         # (a) flatten: area/darea are observeds (materialized/inlined), not ODE
         # state slots — only `Field.u` is a state.
-        flat = _ESS_BO.flatten(_ESS_BO.load(fixture))
+        flat = _ESS_BO.flatten(_ESS_BO.load_path(fixture))
         obs = Set(String.(keys(flat.observed_variables)))
         @test "Field.area" in obs
         @test "Field.darea" in obs

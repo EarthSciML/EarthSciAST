@@ -497,12 +497,12 @@ class TestDispatch:
     def test_resolve_files_for_real_fixture(self):
         import json
         from pathlib import Path
-        from earthsci_ast import load
+        from earthsci_ast import load_string
 
         fixture = Path(__file__).parent / "fixtures" / "data_sources" / "geosfp.esm"
         raw = json.loads(fixture.read_text())
         raw.pop("_comment", None)
-        esm = load(json.dumps(raw))
+        esm = load_string(json.dumps(raw))
         dl = esm.data_sources["GEOSFP"]
         urls = resolve_files(
             dl,

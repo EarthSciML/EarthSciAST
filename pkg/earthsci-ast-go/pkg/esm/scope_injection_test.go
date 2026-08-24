@@ -105,7 +105,7 @@ func siCompareSansMetadata(t *testing.T, f *ESMFile, goldenPath string) {
 func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	dir := tiConfDir(t, "inject_subsystem_ref")
 
-	f, err := Load(filepath.Join(dir, "fixture.esm"))
+	f, err := LoadPath(filepath.Join(dir, "fixture.esm"))
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	siCompareSansMetadata(t, f, filepath.Join(dir, "expanded.esm"))
 
 	// The leaf loads standalone with its D intact (agnostic; unlowered).
-	leaf, err := Load(filepath.Join(dir, "leaf.esm"))
+	leaf, err := LoadPath(filepath.Join(dir, "leaf.esm"))
 	if err != nil {
 		t.Fatalf("load leaf: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestScopeInjection_FormA_SubsystemRef(t *testing.T) {
 	// Negative twin: mounting WITHOUT injection loads cleanly (the D survives —
 	// the op namespace is open); the unlowered_operator gate is an evaluation-
 	// time concern, not a load error (N/A for this parse/serialize binding).
-	ni, err := Load(filepath.Join(dir, "no_inject.esm"))
+	ni, err := LoadPath(filepath.Join(dir, "no_inject.esm"))
 	if err != nil {
 		t.Fatalf("load no_inject: %v", err)
 	}
@@ -208,14 +208,14 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 	}
 
 	// Diagnostics (esm-spec §9.6.6).
-	if _, err := Load(filepath.Join(dir, "neg_target_unknown.esm")); tiErrCode(t, err) != "template_inject_target_unknown" {
+	if _, err := LoadPath(filepath.Join(dir, "neg_target_unknown.esm")); tiErrCode(t, err) != "template_inject_target_unknown" {
 		t.Errorf("neg_target_unknown code = %s; want template_inject_target_unknown", tiErrCode(t, err))
 	}
 	// `template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source
 	// is not a component and cannot be a coupling endpoint, so a key naming one
 	// falls to `template_inject_target_not_component` — which is what it is. The
 	// fixture's own description pins that expectation.
-	if _, err := Load(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "template_inject_target_not_component" {
+	if _, err := LoadPath(filepath.Join(dir, "neg_target_is_loader.esm")); tiErrCode(t, err) != "template_inject_target_not_component" {
 		t.Errorf("neg_target_is_loader code = %s; want template_inject_target_not_component", tiErrCode(t, err))
 	}
 }
@@ -227,7 +227,7 @@ func TestScopeInjection_FormB_CouplingEntry(t *testing.T) {
 func TestScopeInjection_FormC_TestBlock(t *testing.T) {
 	dir := tiConfDir(t, "inject_test_block")
 
-	f, err := Load(filepath.Join(dir, "fixture.esm"))
+	f, err := LoadPath(filepath.Join(dir, "fixture.esm"))
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}

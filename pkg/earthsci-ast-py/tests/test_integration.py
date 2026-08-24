@@ -10,11 +10,11 @@ import json
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast import (
-    load,
+    load_string,
     ode_states,
     observed_definitions,
     observed_unknowns,
-    save,
+    to_json,
     substitute,
     validate,
 )
@@ -64,7 +64,7 @@ class TestFullWorkflowIntegration:
 
         # 2. Load and validate initial model
         esm_json = json.dumps(esm_data)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         assert loaded_model is not None
 
         validation_result = validate(loaded_model)
@@ -92,8 +92,8 @@ class TestFullWorkflowIntegration:
         assert substituted_rhs == 0.5
 
         # 5. Test save/load roundtrip
-        saved_json = save(loaded_model)
-        reloaded_model = load(saved_json)
+        saved_json = to_json(loaded_model)
+        reloaded_model = load_string(saved_json)
         final_validation = validate(reloaded_model)
         assert final_validation.is_valid
 
@@ -135,7 +135,7 @@ class TestFullWorkflowIntegration:
 
         # 2. Load and validate
         esm_json = json.dumps(esm_data)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
@@ -151,8 +151,8 @@ class TestFullWorkflowIntegration:
         assert "k_2" in latex_rate and "B" in latex_rate
 
         # 4. Save and re-validate (verify roundtrip)
-        saved_json = save(loaded_model)
-        reloaded_model = load(saved_json)
+        saved_json = to_json(loaded_model)
+        reloaded_model = load_string(saved_json)
         final_validation = validate(reloaded_model)
         assert final_validation.is_valid
 
@@ -193,13 +193,13 @@ class TestFullWorkflowIntegration:
 
         # Full workflow test
         esm_json = json.dumps(esm_data)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
         # Save and re-validate
-        saved_json = save(loaded_model)
-        reloaded_model = load(saved_json)
+        saved_json = to_json(loaded_model)
+        reloaded_model = load_string(saved_json)
         final_validation = validate(reloaded_model)
         assert final_validation.is_valid
 
@@ -221,7 +221,7 @@ class TestFullWorkflowIntegration:
             content = f.read()
 
         # Full workflow
-        loaded_model = load(content)
+        loaded_model = load_string(content)
         validation_result = validate(loaded_model)
         # Schema validation should pass (structural warnings may exist)
         assert len(validation_result.schema_errors) == 0
@@ -231,8 +231,8 @@ class TestFullWorkflowIntegration:
         assert rendered
 
         # Save and reload
-        saved_content = save(loaded_model)
-        reloaded_model = load(saved_content)
+        saved_content = to_json(loaded_model)
+        reloaded_model = load_string(saved_content)
 
         # Should be equivalent
         assert reloaded_model.version == loaded_model.version
@@ -253,7 +253,7 @@ class TestFullWorkflowIntegration:
 
         # This should parse and then we validate
         esm_json = json.dumps(invalid_esm)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
 
         # Validation might pass (undefined_var treated as external reference) or fail
@@ -269,7 +269,7 @@ class TestWorkflowRobustness:
         minimal_esm = {"esm": "1.0.0", "metadata": {"name": "Minimal Test"}, "models": {}}
 
         esm_json = json.dumps(minimal_esm)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
 
         # Empty models may or may not be considered valid depending on validation rules
@@ -306,13 +306,13 @@ class TestWorkflowRobustness:
 
         # Test workflow
         esm_json = json.dumps(large_model)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
         # Save and re-validate roundtrip
-        saved_json = save(loaded_model)
-        reloaded_model = load(saved_json)
+        saved_json = to_json(loaded_model)
+        reloaded_model = load_string(saved_json)
         final_validation = validate(reloaded_model)
         assert final_validation.is_valid
 
@@ -341,7 +341,7 @@ class TestWorkflowRobustness:
 
         # Full workflow
         esm_json = json.dumps(nested_model)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
@@ -370,7 +370,7 @@ class TestWorkflowRobustness:
 
         # Should handle Unicode gracefully
         esm_json = json.dumps(unicode_model, ensure_ascii=False)
-        loaded_model = load(esm_json)
+        loaded_model = load_string(esm_json)
         validation_result = validate(loaded_model)
         assert validation_result.is_valid
 
@@ -387,7 +387,7 @@ class TestWorkflowErrorHandling:
         invalid_json = '{"esm": "1.0.0", "metadata": {"name": "Test"'  # Missing closing braces
 
         with pytest.raises((json.JSONDecodeError, ValueError)):
-            load(invalid_json)
+            load_string(invalid_json)
 
     def test_schema_violation_handling(self):
         """Test handling of schema violations."""
@@ -398,7 +398,7 @@ class TestWorkflowErrorHandling:
         }
 
         with pytest.raises((SchemaValidationError, Exception)):
-            load(json.dumps(schema_violation))
+            load_string(json.dumps(schema_violation))
 
     def test_substitution_error_handling(self):
         """Test error handling in substitution phase."""
@@ -413,7 +413,7 @@ class TestWorkflowErrorHandling:
             },
         }
 
-        loaded_model = load(json.dumps(esm_data))
+        loaded_model = load_string(json.dumps(esm_data))
 
         # Try substitution with invalid value
         try:
@@ -422,7 +422,7 @@ class TestWorkflowErrorHandling:
             substituted_model = substitute(loaded_model, bad_substitutions)
 
             # If substitution succeeds, validation might catch it
-            substituted_json = save(substituted_model)
+            substituted_json = to_json(substituted_model)
             validation_result = validate(substituted_json)
             # Either validation should fail or it should be considered valid
             assert validation_result.is_valid or not validation_result.is_valid
@@ -450,7 +450,7 @@ class TestWorkflowErrorHandling:
             assert latex_result is not None
 
     def test_roundtrip_consistency(self):
-        """Test that load(save(load(content))) gives consistent results."""
+        """Test that load(to_json(load(content))) gives consistent results."""
         original_esm = {
             "esm": "1.0.0",
             "metadata": {"name": "Roundtrip Test"},
@@ -464,10 +464,10 @@ class TestWorkflowErrorHandling:
 
         # Roundtrip test
         original_json = json.dumps(original_esm)
-        loaded1 = load(original_json)
-        saved1 = save(loaded1)
-        loaded2 = load(saved1)
-        saved2 = save(loaded2)
+        loaded1 = load_string(original_json)
+        saved1 = to_json(loaded1)
+        loaded2 = load_string(saved1)
+        saved2 = to_json(loaded2)
 
         # Second save should be identical to first save
         assert saved1 == saved2

@@ -1404,7 +1404,7 @@ mod forcing_channel_tests {
     //! loader's regridded field; here it is driven by hand (no I/O), exactly the
     //! "testable with a hand-built buffer" contract the plan (PR-1) specifies.
     use super::*;
-    use crate::parse::load;
+    use crate::parse::load_string;
 
     fn arr1(v: &[f64]) -> ArrayD<f64> {
         ArrayD::from_shape_vec(IxDyn(&[v.len()]), v.to_vec()).unwrap()
@@ -1486,7 +1486,7 @@ mod forcing_channel_tests {
               }
             }
             "#;
-        let file = load(json).expect("parse forcing model");
+        let file = load_string(json).expect("parse forcing model");
         ArrayCompiled::from_file(&file).expect("compile forcing model")
     }
 
@@ -1646,7 +1646,7 @@ mod forcing_channel_tests {
               }
             }
             "#;
-        let file = load(json).expect("parse param model");
+        let file = load_string(json).expect("parse param model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile param model");
         let mut params = HashMap::new();
         params.insert("k".to_string(), 2.0);
@@ -1781,7 +1781,7 @@ mod forcing_channel_tests {
               }
             }
             "#;
-        let file = load(json).expect("parse fn model");
+        let file = load_string(json).expect("parse fn model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile fn model");
         let mut params = HashMap::new();
         params.insert("code".to_string(), 2.0);

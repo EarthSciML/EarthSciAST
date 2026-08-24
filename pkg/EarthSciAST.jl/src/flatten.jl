@@ -555,7 +555,7 @@ name) and run the full flattener. This is the call path used by
 `ModelingToolkit.System(::Model)` in the Julia extension (see gt-fpw).
 """
 function flatten(model::Model; name::String="anonymous")::FlattenedSystem
-    file = EsmFile(ESM_FORMAT_VERSION, Metadata(name);
+    file = EsmFile(SCHEMA_VERSION, Metadata(name);
                    models=Dict{String, Model}(name => model))
     return flatten(file)
 end
@@ -566,7 +566,7 @@ end
 Convenience: wrap a ReactionSystem in a synthetic EsmFile and flatten.
 """
 function flatten(rsys::ReactionSystem; name::String="anonymous")::FlattenedSystem
-    file = EsmFile(ESM_FORMAT_VERSION, Metadata(name);
+    file = EsmFile(SCHEMA_VERSION, Metadata(name);
                    reaction_systems=Dict{String, ReactionSystem}(name => rsys))
     return flatten(file)
 end
@@ -576,7 +576,7 @@ end
 # ========================================
 
 """
-    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=ESM_FORMAT_VERSION) -> Dict{String,Any}
+    flattened_to_esm(flat::FlattenedSystem; name="Flattened", esm_version=SCHEMA_VERSION) -> Dict{String,Any}
 
 Reconstitute a `FlattenedSystem` into a single-model native ESM **document**
 (`Dict{String,Any}`) that can be run directly: `build_evaluator(doc)` for a 0-D /
@@ -714,7 +714,7 @@ end
 
 function flattened_to_esm(flat::FlattenedSystem;
                           name::AbstractString="Flattened",
-                          esm_version::AbstractString=ESM_FORMAT_VERSION)::Dict{String,Any}
+                          esm_version::AbstractString=SCHEMA_VERSION)::Dict{String,Any}
     sname = String(name)
 
     variables = Dict{String,Any}()

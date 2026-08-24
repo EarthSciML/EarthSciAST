@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from earthsci_ast.errors import AmbiguousParameterError, UnknownParameterError
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "override_key_diagnostics"
@@ -41,7 +41,7 @@ def _fixture() -> dict:
 
 
 def _load_fixture():
-    return load(str(_ROOT / _fixture()["path"]))
+    return load_path(str(_ROOT / _fixture()["path"]))
 
 
 def test_manifest_shape() -> None:

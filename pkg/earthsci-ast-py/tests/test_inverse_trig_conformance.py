@@ -26,7 +26,7 @@ import numpy as np
 import pytest
 from conftest import VALID_DIR
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 
@@ -106,7 +106,7 @@ def test_inverse_trig_fixture_present() -> None:
 def test_inverse_trig_fixture_conformance(fixture_path: Path) -> None:
     """Run every inline test in a scalar-leaf inverse-trig fixture."""
     raw = json.loads(fixture_path.read_text())
-    esm_file = load(fixture_path)
+    esm_file = load_path(fixture_path)
 
     any_assertions = False
     for model_name, model_raw in (raw.get("models") or {}).items():

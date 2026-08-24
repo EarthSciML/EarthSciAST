@@ -18,7 +18,7 @@ import pytest
 from conftest import CONFORMANCE_DIR, REPO_ROOT, VALID_DIR
 
 from earthsci_ast import classification as C
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_document
 
 MANIFEST = CONFORMANCE_DIR / "classification" / "manifest.json"
 
@@ -117,7 +117,7 @@ def test_classification_agrees_across_the_dict_and_dataclass_spellings(case):
     representation; ONE derivation must serve both, or the two paths can
     silently disagree about which nodes fold."""
     _entry, doc, _golden = case
-    parsed = load(doc)
+    parsed = load_document(doc)
     for name, model in parsed.models.items():
         assert _classify(model) == _classify(doc["models"][name]), name
 

@@ -134,7 +134,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "15_discretized_1d_heat.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["Heat1D"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -158,7 +158,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "16_discretized_2d_heat.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["Heat2D"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -182,7 +182,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "17_discretized_latlon_heat.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["HeatLatLon"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -206,7 +206,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "18_interface_bc_2domain.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["TwoDomainHeat"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -230,7 +230,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "19_einsum_1d_stencil.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["Heat1DEinsum"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -257,7 +257,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "20_arrayop_contraction_embedded.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["ContractionEmbedded"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -280,7 +280,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "09_makearray_block_assembly.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["MakeArrayBlocks"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -368,7 +368,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "24_arrayop_makearray_region_dispatch.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["MakeArrayLoopRegions"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)
@@ -426,7 +426,7 @@ _arrayop2d(body, i, ilo, ihi, j, jlo, jhi) = OpExpr("arrayop", ESM.ASTExpr[];
         path = joinpath(_REPO_ROOT, "tests", "fixtures", "arrayop",
                         "23_arrayop_pure_matvec_contraction.esm")
         @test isfile(path)
-        file = load(path)
+        file = load_path(path)
         model = file.models["PureMatVecContraction"]
         t = model.tests[1]
         ics = Dict(String(k) => Float64(v) for (k, v) in t.initial_conditions)

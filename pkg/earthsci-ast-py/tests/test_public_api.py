@@ -15,7 +15,7 @@ import pytest
 from conftest import VALID_DIR
 
 import earthsci_ast
-from earthsci_ast import load, to_ascii, to_latex, to_unicode
+from earthsci_ast import load_string, to_ascii, to_latex, to_unicode
 
 _FIXTURE = VALID_DIR / "events_all_types.esm"
 
@@ -104,7 +104,7 @@ def test_data_sources_module_replaces_data_loaders():
 
 def test_display_formats_on_real_file():
     """to_unicode/to_latex/to_ascii must render a real non-empty EsmFile."""
-    esm_file = load(_FIXTURE.read_text())
+    esm_file = load_string(_FIXTURE.read_text())
     assert esm_file.models or esm_file.reaction_systems
     for fmt in (to_unicode, to_latex, to_ascii):
         rendered = fmt(esm_file)
@@ -113,5 +113,5 @@ def test_display_formats_on_real_file():
 
 def test_repr_latex_on_real_file():
     """The _repr_latex_ hook patched onto EsmFile must work on real files."""
-    esm_file = load(_FIXTURE.read_text())
+    esm_file = load_string(_FIXTURE.read_text())
     assert esm_file._repr_latex_()

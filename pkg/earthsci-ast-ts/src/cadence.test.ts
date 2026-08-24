@@ -24,7 +24,7 @@ import { CadenceSeeder, joinCadence, expressionCadence, CadenceCycleError } from
 import { fixturesDir } from './test-helpers.js'
 import type { EsmFile, Model, ExpressionNode } from './types.js'
 
-/** Parse the fixture WITHOUT `load()`, which its unit defect currently trips. */
+/** Parse the fixture WITHOUT `loadString()`, which its unit defect currently trips. */
 function readEsm(...segments: string[]): EsmFile {
   return JSON.parse(readFileSync(join(fixturesDir(), ...segments), 'utf-8'))
 }

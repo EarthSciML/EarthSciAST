@@ -116,7 +116,7 @@ end
     @testset "compile-once fixture (7³, one equation)" begin
         # Single equation: no cross-equation sharing possible — the hoist must
         # be a pure no-op (same variant count, same bits).
-        build() = ESM.build_evaluator(ESM.flatten(ESM.load(FIX)))
+        build() = ESM.build_evaluator(ESM.flatten(ESM.load_path(FIX)))
         on, off = _xeq_oracle(build)
         @test length(on[2]) == 343
         @test on[5].variants == 15
@@ -126,7 +126,7 @@ end
 
     @testset "two equations sharing template roots" begin
         FIX2 = _xeq_two_eq_fixture(FIX)
-        build() = ESM.build_evaluator(ESM.flatten(ESM.load(FIX2)))
+        build() = ESM.build_evaluator(ESM.flatten(ESM.load_path(FIX2)))
         on, off = _xeq_oracle(build)
         @test length(on[2]) == 2 * 343
         # THE A3 property: the second equation reuses the first's 15 compiled
@@ -160,7 +160,7 @@ end
         P27 = joinpath(TESTUTILS_REPO_ROOT, "scripts", "bench", "fixtures",
                        "proxy27.esm")
         if isfile(P27)
-            build() = ESM.build_evaluator(ESM.load(P27))
+            build() = ESM.build_evaluator(ESM.load_path(P27))
             _xeq_oracle(build)
         else
             @info "proxy27.esm not found; skipping" P27

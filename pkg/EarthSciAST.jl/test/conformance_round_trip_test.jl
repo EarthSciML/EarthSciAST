@@ -21,14 +21,14 @@ re-saved JSON values (parsed) for equality comparison. If the binding's
 serializer is deterministic, these must be equal.
 """
 function _idempotent_roundtrip(path::String)
-    original = EarthSciAST.load(path)
+    original = EarthSciAST.load_path(path)
 
     first_path = tempname() * ".esm"
     second_path = tempname() * ".esm"
     try
-        EarthSciAST.save(original, first_path)
-        reloaded = EarthSciAST.load(first_path)
-        EarthSciAST.save(reloaded, second_path)
+        EarthSciAST.write_path(original, first_path)
+        reloaded = EarthSciAST.load_path(first_path)
+        EarthSciAST.write_path(reloaded, second_path)
 
         first_json  = JSON3.read(read(first_path, String))
         second_json = JSON3.read(read(second_path, String))

@@ -38,7 +38,7 @@ _ESS_SL.provider_sample(p::_SubsysLoaderStub, ::Real) = p.field
         # by the provider seam, not computed). In 0.x these were observed
         # variables synthesized from a mounted loader subsystem; in 1.0.0 the
         # declaration is a parameter on the consuming model and stays one.
-        model = _ESS_SL.load(fixture)
+        model = _ESS_SL.load_path(fixture)
         flat = _ESS_SL.flatten(model)
         params = Set(String.(keys(flat.parameters)))
         @test "Box.k" in params

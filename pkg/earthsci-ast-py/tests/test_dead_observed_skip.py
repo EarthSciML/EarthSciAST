@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 
 import earthsci_ast.parse as _parse
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_string
 from earthsci_ast.simulation import BuildInspection, simulate
 
 
@@ -52,7 +52,7 @@ def _load_unvalidated(doc_json: str):
     original = _parse._validate_structural
     _parse._validate_structural = lambda *a, **k: None
     try:
-        return _parse.load(doc_json)
+        return _parse.load_string(doc_json)
     finally:
         _parse._validate_structural = original
 
@@ -192,5 +192,5 @@ def test_dead_observed_doc_is_rejected_by_load() -> None:
     from earthsci_ast.parse import SchemaValidationError
 
     with pytest.raises(SchemaValidationError) as exc:
-        load(json.dumps(_doc(_DEAD_BODY)))
+        load_string(json.dumps(_doc(_DEAD_BODY)))
     assert "NY" in str(exc.value)

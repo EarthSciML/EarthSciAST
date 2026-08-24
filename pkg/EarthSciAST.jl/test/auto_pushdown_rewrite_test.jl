@@ -280,7 +280,7 @@ end
     # ============================================================
     # ASSERTION 2 — the invented member set == the L1 support set [1,2,4,9].
     # ============================================================
-    f = EA.load(td; base_path=pwd())
+    f = EA.load_document(td; base_path=pwd())
     model = EA._select_model(f, "ISRM")
     vi = EA.materialize_value_invention(model, f.index_sets,
         Dict{String,Any}("X"=>X, "Y"=>Y, "W"=>W, "S"=>Sv, "E"=>Ev, "N"=>Nv),

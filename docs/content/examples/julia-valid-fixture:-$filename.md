@@ -4,7 +4,7 @@
 
 ```julia
 try
-                            esm_data = EarthSciAST.load(filepath)
+                            esm_data = EarthSciAST.load_path(filepath)
                             @test esm_data isa EarthSciAST.EsmFile
                             @test !isnothing(esm_data.esm)
                             @test !isnothing(esm_data.metadata)

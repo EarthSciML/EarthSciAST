@@ -129,7 +129,7 @@ def _assert_json_export(actual: dict, expected: dict) -> None:
 
 def _load(case: dict):
     name = case["input_file"].removeprefix("tests/valid/")
-    return esm.load((VALID_DIR / name).read_text())
+    return esm.load_string((VALID_DIR / name).read_text())
 
 
 #: Each corpus target kind, mapped to the parser that turns its inline JSON

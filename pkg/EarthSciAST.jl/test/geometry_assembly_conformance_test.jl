@@ -312,7 +312,7 @@ end
 
     @testset "fixture loads (schema + structural)" begin
         @test isfile(_ASM_FIXTURE)
-        @test (ESS.load(_ASM_FIXTURE); true)
+        @test (ESS.load_path(_ASM_FIXTURE); true)
     end
 
     # A_ij PROVENANCE — the fixture must DECLARE the weights from geometry in-file via

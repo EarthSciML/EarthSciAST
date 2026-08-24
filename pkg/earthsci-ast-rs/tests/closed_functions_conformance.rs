@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::registered_functions::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
@@ -176,7 +176,7 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
     // Parser must accept the fixture (i.e. the `fn` op AST is valid under
     // the current schema).
     let json_str = fs::read_to_string(&canonical).expect("read canonical.esm");
-    let file = load(&json_str).unwrap_or_else(|e: earthsci_ast::EsmError| {
+    let file = load_string(&json_str).unwrap_or_else(|e: earthsci_ast::EsmError| {
         panic!("parse failed for {}: {e}", canonical.display())
     });
     assert_eq!(

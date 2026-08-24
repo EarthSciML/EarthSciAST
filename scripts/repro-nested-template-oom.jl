@@ -102,7 +102,7 @@ function main()
     depth = isempty(ARGS) ? 16 : parse(Int, ARGS[1])
     path = joinpath(mktempdir(), "nested_d$(depth).esm")
     gen(depth, path)
-    t = @elapsed file = EarthSciAST.load(path)
+    t = @elapsed file = EarthSciAST.load_path(path)
     rate = file.reaction_systems["chem"].reactions[1].rate
     println("depth=$depth  file_size=$(filesize(path))B  " *
             "expanded_rate_nodes=$(count_nodes(rate))  " *

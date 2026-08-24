@@ -18,7 +18,7 @@
 //!     which from esm 1.0.0 are where the file-variable bindings and the units
 //!     live.
 
-use earthsci_ast::{DataSourceKind, EsmFile, load, save};
+use earthsci_ast::{DataSourceKind, EsmFile, load_string, to_json};
 
 struct Fixture {
     /// Short name used in assertion messages.
@@ -76,7 +76,7 @@ const FIXTURES: &[Fixture] = &[
 ];
 
 fn load_fixture(fx: &Fixture) -> EsmFile {
-    load(fx.content).unwrap_or_else(|e| {
+    load_string(fx.content).unwrap_or_else(|e| {
         panic!(
             "EarthSciData fixture '{}' failed to load against the DataSource \
              schema. This indicates the new schema cannot express this loader \
@@ -99,9 +99,9 @@ fn every_earthscidata_loader_round_trips_without_loss() {
     for fx in FIXTURES {
         let parsed = load_fixture(fx);
         let serialized =
-            save(&parsed).unwrap_or_else(|e| panic!("{}: serialize failed: {}", fx.name, e));
-        let reparsed: EsmFile =
-            load(&serialized).unwrap_or_else(|e| panic!("{}: reparse failed: {}", fx.name, e));
+            to_json(&parsed).unwrap_or_else(|e| panic!("{}: serialize failed: {}", fx.name, e));
+        let reparsed: EsmFile = load_string(&serialized)
+            .unwrap_or_else(|e| panic!("{}: reparse failed: {}", fx.name, e));
 
         let loaders1 = parsed
             .data_sources

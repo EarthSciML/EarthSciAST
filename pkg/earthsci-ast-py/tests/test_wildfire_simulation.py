@@ -35,7 +35,7 @@ from conftest import VALID_DIR
 
 pytest.importorskip("scipy")
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 
@@ -70,7 +70,7 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
     tests = ocean.get("tests") or []
     assert tests, "fixture OceanDynamics model carries no inline tests block"
 
-    file = load(FIXTURE)
+    file = load_path(FIXTURE)
 
     passed = 0
     total = 0
@@ -118,7 +118,7 @@ def test_wildfire_constant_and_regrid_states() -> None:
     derivative), and the regridded SST trajectory matches the closed form
     SST(t)=290 + t*surface_heat_flux/4.18e6 with the inline conservative
     weights giving surface_heat_flux=[100, 283.333, 350]."""
-    file = load(FIXTURE)
+    file = load_path(FIXTURE)
     result = simulate(file, tspan=(0.0, 3600.0), rtol=1e-10, atol=1e-12)
     assert result.success, result.message
 

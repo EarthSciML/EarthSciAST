@@ -28,7 +28,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 
 /// The squared-Euclidean distance FAQ `(px[i]-gx[g])² + (py[i]-gy[g])²`, the
@@ -111,7 +111,7 @@ fn opts() -> SimulateOptions {
 /// correct, non-NaN buffer `[1, 2, 2, 3]` (integrated into `u` over `t ∈ [0,1]`).
 #[test]
 fn argmin_nearest_generator_simulates_end_to_end() {
-    let file = load(&argmin_model()).expect("argmin model loads");
+    let file = load_string(&argmin_model()).expect("argmin model loads");
     let ics: HashMap<String, f64> = ["u[1]", "u[2]", "u[3]", "u[4]"]
         .into_iter()
         .map(|k| (k.to_string(), 0.0))
@@ -555,7 +555,7 @@ fn centroid_model() -> &'static str {
 /// centroid simulate end-to-end to the correct, non-NaN buffer `[0, 1.125, 2]`.
 #[test]
 fn scvt_centroid_group_aggregate_simulates_end_to_end() {
-    let file = load(centroid_model()).expect("centroid model loads");
+    let file = load_string(centroid_model()).expect("centroid model loads");
     let ics: HashMap<String, f64> = ["cu[1]", "cu[2]", "cu[3]"]
         .into_iter()
         .map(|k| (k.to_string(), 0.0))

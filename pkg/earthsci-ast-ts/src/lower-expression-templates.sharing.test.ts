@@ -8,7 +8,7 @@
  * canonical serialized bytes are unchanged, which the small-depth test pins.
  */
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
+import { loadDocument } from './parse.js'
 
 function applyNode(name: string) {
   return { op: 'apply_expression_template', args: [], name, bindings: {} }
@@ -86,7 +86,7 @@ function expandedRate(file: unknown): unknown {
 
 describe('nested-template expansion uses structural sharing (no exponential blow-up)', () => {
   it('expands a doubling chain of depth 14 as a shared DAG with O(depth) unique nodes', () => {
-    const file = load(buildDoublingChainDoc(14))
+    const file = loadDocument(buildDoublingChainDoc(14))
     const { logical, unique } = countNodes(expandedRate(file))
     // Semantics: the expansion is still the full 2^14-leaf sum...
     expect(logical).toBeGreaterThan(2 ** 14)
@@ -95,7 +95,7 @@ describe('nested-template expansion uses structural sharing (no exponential blow
   })
 
   it('shares the two operands of each doubling level by object identity', () => {
-    const file = load(buildDoublingChainDoc(14))
+    const file = loadDocument(buildDoublingChainDoc(14))
     let node = expandedRate(file) as { op: string; args: unknown[] }
     let levels = 0
     while (node.op === '+') {
@@ -108,14 +108,14 @@ describe('nested-template expansion uses structural sharing (no exponential blow
   })
 
   it('handles the spec-maximum 32-template chain (depth 31) with flat memory', () => {
-    const file = load(buildDoublingChainDoc(31))
+    const file = loadDocument(buildDoublingChainDoc(31))
     const { logical, unique } = countNodes(expandedRate(file))
     expect(logical).toBeGreaterThan(2 ** 31)
     expect(unique).toBeLessThan(200)
   })
 
   it('serializes byte-identically to the fully-inlined (unshared) expansion', () => {
-    const file = load(buildDoublingChainDoc(3))
+    const file = loadDocument(buildDoublingChainDoc(3))
     // Build the expected expansion the naive way: an actual tree.
     const inline = (d: number): unknown =>
       d === 0 ? LEAF_BODY : { op: '+', args: [inline(d - 1), inline(d - 1)] }

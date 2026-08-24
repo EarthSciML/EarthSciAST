@@ -42,7 +42,7 @@ from conftest import CONFORMANCE_DIR, VALID_DIR
 pytest.importorskip("scipy")
 
 from earthsci_ast.flatten import flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 
@@ -105,13 +105,13 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
     # manifest covers exactly the document's data-fed parameters, so a fixture
     # that gains or renames one cannot silently fall back off the seam.
     providers = {name: _StubLoaderProvider(field) for name, field in inputs.items()}
-    declared = {f.name for f in flatten(load(FIXTURE)).loader_fields}
+    declared = {f.name for f in flatten(load_path(FIXTURE)).loader_fields}
     assert set(providers) == declared, (
         f"manifest inputs {sorted(providers)} do not match the document's "
         f"data-fed parameters {sorted(declared)}"
     )
 
-    file = load(FIXTURE)
+    file = load_path(FIXTURE)
 
     passed = 0
     total = 0

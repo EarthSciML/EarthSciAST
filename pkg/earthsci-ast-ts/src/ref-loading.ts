@@ -45,8 +45,8 @@ import {
   readFileSyncNode,
 } from './path-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import { load, validateSchema, ROOT_PATH } from './parse.js'
-import { save } from './serialize.js'
+import { loadString, validateSchema, ROOT_PATH } from './parse.js'
+import { toJson } from './serialize.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -709,7 +709,7 @@ export async function ephemeralInjectedFile(
     const fs = await import('node:fs/promises')
     raw = JSON.parse(await fs.readFile(sourcePath, 'utf-8')) as Record<string, unknown>
   } else if (file !== null) {
-    raw = JSON.parse(save(file)) as Record<string, unknown>
+    raw = JSON.parse(toJson(file)) as Record<string, unknown>
   } else {
     // Caller/API precondition (not a document-level §9.6.6 diagnostic), so this
     // stays a plain `Error` rather than a coded `EsmMachineryError`.
@@ -739,7 +739,7 @@ export async function ephemeralInjectedFile(
     )
   }
 
-  const f = load(JSON.stringify(raw), { basePath: baseDir })
+  const f = loadString(JSON.stringify(raw), { basePath: baseDir })
   await resolveSubsystemRefs(f, baseDir)
   return f
 }

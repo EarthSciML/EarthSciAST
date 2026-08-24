@@ -19,10 +19,10 @@
 //! ## Usage
 //!
 //! ```no_run
-//! use earthsci_ast::{load, simulate, SimulateOptions};
+//! use earthsci_ast::{load_string, simulate, SimulateOptions};
 //! use std::collections::HashMap;
 //!
-//! let file = load(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();
+//! let file = load_string(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();
 //! let params = HashMap::new();
 //! let ic = HashMap::new();
 //! let opts = SimulateOptions::default();
@@ -2652,7 +2652,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let err = Compiled::from_file(&file).expect_err("cycle must be rejected");
         let msg = err.to_string();
         assert!(msg.contains("Cyclic"), "expected cycle error, got: {msg}");
@@ -2741,7 +2741,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
             output_times: Some(vec![0.0, 1.0]),
@@ -2824,7 +2824,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
             output_times: Some(vec![0.0, 1.0]),
@@ -2849,7 +2849,7 @@ mod tests {
     /// t=0 must be reconciled before integration starts (esm-0kt).
     /// Flatten a fixture and report its algebraic states, sorted for comparison.
     fn algebraic_names_of(json: &str) -> Vec<String> {
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let flat = crate::flatten(&file).expect("flatten fixture");
         let mut names = algebraic_state_names(&flat);
         names.sort();
@@ -3081,7 +3081,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
             output_times: Some(vec![0.0, 1.0]),
@@ -3158,7 +3158,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let err = compiled
             .simulate(
@@ -3236,7 +3236,7 @@ mod tests {
               }
             }
             "#;
-        let file = crate::parse::load(json).expect("parse fixture");
+        let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let opts = SimulateOptions {
             output_times: Some(vec![0.0, 1.0]),

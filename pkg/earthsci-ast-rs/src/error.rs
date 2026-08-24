@@ -34,6 +34,15 @@ pub enum EsmError {
         source: std::io::Error,
     },
 
+    /// Failed to write a file to disk (I/O error with the offending path).
+    #[error("failed to write {path}: {source}")]
+    FileWrite {
+        /// Path of the file that could not be written.
+        path: String,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
     /// Generic error with message
     #[error("{0}")]
     Other(String),

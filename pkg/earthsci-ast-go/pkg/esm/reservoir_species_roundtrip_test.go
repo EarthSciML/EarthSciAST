@@ -18,7 +18,7 @@ func TestReservoirSpeciesConstantRoundTrip(t *testing.T) {
 	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
 	path := filepath.Join(repoRoot, "tests", "valid", "reservoir_species_constant.esm")
 
-	parsed, err := Load(path)
+	parsed, err := LoadPath(path)
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
 

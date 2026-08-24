@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { EsmFile, Model, Expr, DiscreteEventTrigger } from './index.js'
-import { VERSION } from './index.js'
+import { SCHEMA_VERSION } from './index.js'
 
 describe('ESM Format Types', () => {
-  it('should have correct package version', () => {
+  it('should have correct schema version', () => {
     // esm-spec §6.3.1: the unified variable model arrives at esm 1.0.0; the
-    // embedded schema `$id` (and therefore VERSION) tracks it.
-    expect(VERSION).toBe('1.0.0')
+    // embedded schema `$id` (and therefore SCHEMA_VERSION) tracks it. The npm
+    // package version is a different number and lives in LIBRARY_VERSION.
+    expect(SCHEMA_VERSION).toBe('1.0.0')
   })
 
   it('should handle Expr type correctly', () => {

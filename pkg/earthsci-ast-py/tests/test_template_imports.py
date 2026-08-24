@@ -23,8 +23,8 @@ from earthsci_ast.lower_expression_templates import (
     expand_document,
     lower_expression_templates,
 )
-from earthsci_ast.parse import SchemaValidationError, load
-from earthsci_ast.serialize import _serialize_esm_file, emit_esm_string, save
+from earthsci_ast.parse import SchemaValidationError, load_path, load_string
+from earthsci_ast.serialize import _serialize_esm_file, emit_esm_string, to_json
 from earthsci_ast.template_imports import (
     MAX_TEMPLATE_EXPANSION_DEPTH,
     _substitute_metaparams,
@@ -140,7 +140,7 @@ def test_import_conformance_matches_golden(group, fixture, golden):
 def test_import_smoke_typed_load():
     """§9.7.7 four-file layering: index sets merged and folded at the edge
     bindings; D(c, wrt: lon) lowered to the makearray rule body."""
-    f = load(os.path.join(CONF, "import_smoke", "fixture.esm"))
+    f = load_path(os.path.join(CONF, "import_smoke", "fixture.esm"))
     assert f.index_sets["lon"]["size"] == 288
     assert f.index_sets["lat"]["size"] == 181
     eq = f.models["Advection"].equations[0]
@@ -149,7 +149,7 @@ def test_import_smoke_typed_load():
 
 
 def test_import_diamond_dedups_at_first_occurrence():
-    f = load(os.path.join(CONF, "import_diamond", "fixture.esm"))
+    f = load_path(os.path.join(CONF, "import_diamond", "fixture.esm"))
     assert f.index_sets["cells"]["size"] == 10  # NC default, deduped once
 
 
@@ -182,7 +182,7 @@ def test_valid_suite_library_file_loads_clean():
     index_sets}` — none of the five top-level payload keys — which the schema's
     top-level `anyOf` rejects, so a conforming library was unrepresentable.
     """
-    lib = load(os.path.join(VALID_DIR, "template_import_lib.esm"))
+    lib = load_path(os.path.join(VALID_DIR, "template_import_lib.esm"))
     assert not lib.models
     assert lib.expression_templates, "the template registry is a declaration; it survives"
     assert lib.metaparameters, "the metaparameter block is a declaration; it survives"
@@ -193,12 +193,12 @@ def test_valid_suite_library_file_loads_clean():
 
     # But a loader-API binding (§9.7.6 site 4) is a request to INSTANTIATE the
     # library at a size, so there the fold is exactly what was asked for.
-    lib12 = load(os.path.join(VALID_DIR, "template_import_lib.esm"), metaparameters={"N": 12})
+    lib12 = load_path(os.path.join(VALID_DIR, "template_import_lib.esm"), metaparameters={"N": 12})
     assert lib12.index_sets["cells"]["size"] == 12
 
 
 def test_valid_suite_minimal_consumer():
-    m = load(os.path.join(VALID_DIR, "template_import_minimal.esm"))
+    m = load_path(os.path.join(VALID_DIR, "template_import_minimal.esm"))
     assert m.index_sets["cells"]["size"] == 8  # §9.7.5 merge into consumer
     y = _defining_typed(m.models["M"], "y")
     assert y.op == "*"
@@ -215,7 +215,7 @@ def test_valid_suite_minimal_consumer():
     [("wrapper_n4.esm", "expanded_n4.esm", 4), ("wrapper_n8.esm", "expanded_n8.esm", 8)],
 )
 def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
-    f = load(os.path.join(CONF, "metaparameter_resolutions", wrapper))
+    f = load_path(os.path.join(CONF, "metaparameter_resolutions", wrapper))
     sub = f.models["Sweep"].subsystems["Problem"]
     # Expression position: bare "N" substituted as an integer literal.
     assert _defining_typed(sub, "npts") == n
@@ -238,14 +238,14 @@ def test_metaparameter_resolutions_subsystem_bindings(wrapper, golden, n):
 def test_loader_api_bindings_and_defaults():
     """§9.7.6 binding sites 4 (loader API) and 5 (defaults, last)."""
     problem = os.path.join(CONF, "metaparameter_resolutions", "problem.esm")
-    fdef = load(problem)
+    fdef = load_path(problem)
     assert _defining_typed(fdef.models["Problem"], "npts") == 2  # default
-    fapi = load(problem, metaparameters={"N": 6})
+    fapi = load_path(problem, metaparameters={"N": 6})
     assert _defining_typed(fapi.models["Problem"], "npts") == 6  # API > default
     assert _defining_typed(fapi.models["Problem"], "ramp").ranges == {"i": [1, 3]}
     # Binding a name the document does not declare is an error.
     assert (
-        _err_code(lambda: load(problem, metaparameters={"Q": 1})) == "template_import_unknown_name"
+        _err_code(lambda: load_path(problem, metaparameters={"Q": 1})) == "template_import_unknown_name"
     )
 
 
@@ -259,13 +259,13 @@ def test_round_trip_emits_expanded_folded_form():
     contrast ``test_template_library_round_trips_to_itself``. NLON / NLAT are
     declared by the IMPORTED grid and closed at the edge, so they fold away.
     """
-    f = load(os.path.join(CONF, "import_smoke", "fixture.esm"))
-    text = save(f)
+    f = load_path(os.path.join(CONF, "import_smoke", "fixture.esm"))
+    text = to_json(f)
     assert "expression_template_imports" not in text
     assert "metaparameters" not in text
     assert "expression_templates" not in text
     assert "apply_expression_template" not in text
-    reloaded = load(text)
+    reloaded = load_string(text)
     assert reloaded.index_sets["lon"]["size"] == 288
     assert reloaded.models["Advection"].equations[0].rhs.args[1].op == "makearray"
 
@@ -315,10 +315,10 @@ def test_template_library_round_trips_to_itself(lib):
         k in emitted
         for k in ("models", "reaction_systems", "data_sources", "operators", "expression_templates")
     ), f"{lib}: emitted form carries none of the five top-level payload keys"
-    load(emit_esm_string(emitted), base_path=os.path.dirname(path))
+    load_string(emit_esm_string(emitted), base_path=os.path.dirname(path))
 
     # ...and the typed load -> save surface.
-    typed = json.loads(save(load(path)))
+    typed = json.loads(to_json(load_path(path)))
     assert typed["expression_templates"] == on_disk["expression_templates"]
     assert typed["metaparameters"] == on_disk["metaparameters"]
 
@@ -358,7 +358,7 @@ def test_import_where_rename_carries_where_shape():
     assert va["args"][0]["op"] == "/" and va["args"][0]["args"][1] == 16
     assert vb["args"][0]["op"] == "/" and vb["args"][0]["args"][1] == 8
     assert va["args"][1] == "F_A" and vb["args"][1] == "F_B"
-    f = load(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
+    f = load_path(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
     assert f.index_sets["meshA.x"]["size"] == 16
     assert f.index_sets["meshB.x"]["size"] == 8
 
@@ -368,7 +368,7 @@ def test_import_where_rename_unknown_index_set_rejected():
     rename as spelled and is rejected at rule registration (esm-spec §9.6.6)."""
     assert (
         _err_code(
-            lambda: load(os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm"))
+            lambda: load_path(os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm"))
         )
         == "template_constraint_unknown_index_set"
     )
@@ -406,7 +406,7 @@ def test_invalid_template_import_fixture(fname):
     assert entry["resolver_only"] is True
     want = entry["resolver_error_code"]
     with pytest.raises(ExpressionTemplateError) as excinfo:
-        load(os.path.join(INVALID_DIR, fname))
+        load_path(os.path.join(INVALID_DIR, fname))
     assert excinfo.value.code == want
 
 
@@ -469,10 +469,10 @@ def _model_json(extra_model_fields: str = "", top_fields: str = "") -> str:
 def test_template_import_unresolved_missing_and_unparsable_ref(tmp_path):
     p = tmp_path / "m.esm"
     p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./nope.esm"}],'))
-    assert _err_code(lambda: load(str(p))) == "template_import_unresolved"
+    assert _err_code(lambda: load_path(str(p))) == "template_import_unresolved"
     (tmp_path / "junk.esm").write_text("{not json")
     p.write_text(_model_json('\n"expression_template_imports": [{"ref": "./junk.esm"}],'))
-    assert _err_code(lambda: load(str(p))) == "template_import_unresolved"
+    assert _err_code(lambda: load_path(str(p))) == "template_import_unresolved"
 
 
 def test_only_filters_visibility_not_internal_wiring(tmp_path):
@@ -540,7 +540,7 @@ def test_only_filters_visibility_not_internal_wiring(tmp_path):
             '"name": "t_drop", "bindings": {}}}},'
         )
     )
-    assert _err_code(lambda: load(str(p2))) == "apply_expression_template_unknown_template"
+    assert _err_code(lambda: load_path(str(p2))) == "apply_expression_template_unknown_template"
 
 
 def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
@@ -563,7 +563,7 @@ def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
             '{"ref": "./grid.esm", "bindings": {"NC": 8}}],'
         )
     )
-    assert _err_code(lambda: load(str(p))) in (
+    assert _err_code(lambda: load_path(str(p))) in (
         "template_import_name_conflict",
         "template_import_index_set_conflict",
     )
@@ -575,7 +575,7 @@ def test_diamond_with_conflicting_edge_bindings_rejected(tmp_path):
             '{"ref": "./grid.esm", "bindings": {"NC": 4}}],'
         )
     )
-    f = load(str(p))
+    f = load_path(str(p))
     assert f.index_sets["cells"]["size"] == 4
 
 
@@ -596,7 +596,7 @@ def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
             '\n"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],'
         )
     )
-    assert _err_code(lambda: load(str(p))) == "template_import_unknown_name"
+    assert _err_code(lambda: load_path(str(p))) == "template_import_unknown_name"
     # A non-integer binding is schema-invalid (TemplateImport.bindings is
     # integer-typed), so `load` rejects at schema validation; the
     # resolver-level backstop still reports metaparameter_type_error.
@@ -606,7 +606,7 @@ def test_edge_bindings_unknown_names_and_non_integers(tmp_path):
         )
     )
     with pytest.raises(SchemaValidationError):
-        load(str(p))
+        load_path(str(p))
     raw = json.loads(p.read_text())
     assert (
         _err_code(lambda: resolve_template_machinery(raw, str(tmp_path)))
@@ -664,7 +664,7 @@ def test_metaparameter_fold_ranges_regions_size_exact(tmp_path):
             }
         )
     )
-    f = load(str(p))
+    f = load_path(str(p))
     assert f.index_sets["cells"]["size"] == 12
     m = f.models["M"]
     assert _defining_typed(m, "agg").ranges == {"i": [1, 5]}
@@ -697,7 +697,7 @@ def test_expression_position_substitution_never_folds(tmp_path):
             }
         )
     )
-    f = load(str(p))
+    f = load_path(str(p))
     dlon = _defining_typed(f.models["M"], "dlon")
     assert dlon.op == "/"
     assert dlon.args == [360, 144]
@@ -851,11 +851,11 @@ def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
     behavior, where inlined-closed library bodies counted as depth-1 leaves; the
     Julia reference dropped the old assertion for the same reason.)"""
     # 31-deep library + head reference = 32 templates on the chain → accepted.
-    f = load(_chainlib_consumer(tmp_path / "ok", MAX_TEMPLATE_EXPANSION_DEPTH - 1))
+    f = load_path(_chainlib_consumer(tmp_path / "ok", MAX_TEMPLATE_EXPANSION_DEPTH - 1))
     assert "M" in f.models
     # 32-deep library + head reference = 33 → rejected in the consuming scope.
     assert (
-        _err_code(lambda: load(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH)))
+        _err_code(lambda: load_path(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH)))
         == "template_body_expansion_too_deep"
     )
 
@@ -923,7 +923,7 @@ def test_effective_order_beats_sorted_name_order(tmp_path):
             }
         )
     )
-    f = load(str(p))
+    f = load_path(str(p))
     y = _defining_typed(f.models["M"], "y")
     assert y.op == "*"
     assert y.args == [2, "x"]  # the FIRST import's rule wins the tie
@@ -1030,9 +1030,9 @@ def test_makearray_empty_region_min_extent_loads_and_rebind_rejects():
     N = 2 folds to the canonical EMPTY bound [2, 1] and loads clean; re-binding
     N = 1 at the loader API folds it to [2, 0] — INVERTED — and is rejected."""
     path = os.path.join(VALID_DIR, "makearray_empty_region_min_extent.esm")
-    load(path)  # N = 2 (default) → empty bound, loads clean
+    load_path(path)  # N = 2 (default) → empty bound, loads clean
     with pytest.raises(ExpressionTemplateError) as exc:
-        load(path, metaparameters={"N": 1})
+        load_path(path, metaparameters={"N": 1})
     assert exc.value.code == "makearray_region_inverted"
 
 
@@ -1040,7 +1040,7 @@ def test_subsystem_index_set_merge_brings_axes_into_registry():
     """§4.7: a mounted subsystem file's top-level index_sets merge into the
     importing document's registry. The host redeclares cells deep-equal
     (idempotent) and gains vertices from the mesh file."""
-    f = load(os.path.join(VALID_DIR, "subsystem_index_set_merge.esm"))
+    f = load_path(os.path.join(VALID_DIR, "subsystem_index_set_merge.esm"))
     assert f.index_sets["cells"]["size"] == 5
     assert f.index_sets["vertices"]["size"] == 4
 

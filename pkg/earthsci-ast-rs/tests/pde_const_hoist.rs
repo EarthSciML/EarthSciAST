@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 
 /// A 1-D advection-ish tendency carrying a `k`-dependent geometry factor built
@@ -79,7 +79,7 @@ fn geom_json(n: usize) -> String {
 }
 
 fn compile(n: usize) -> ArrayCompiled {
-    let file = load(&geom_json(n)).expect("load json model");
+    let file = load_string(&geom_json(n)).expect("load json model");
     ArrayCompiled::from_file(&file).expect("compile json model")
 }
 

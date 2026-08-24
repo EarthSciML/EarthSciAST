@@ -78,10 +78,10 @@ def test_scalar_ic_seeding_precedence() -> None:
     explicit ``initial_conditions`` entry wins, else the state's own ``ic``
     equation (parameters bound to their override-or-default values, §6.6.5),
     else the declared ``default``."""
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_path
     from earthsci_ast.simulation import simulate
 
-    esm = load(str(_ROOT / "fixtures" / "scalar_ic.esm"))
+    esm = load_path(str(_ROOT / "fixtures" / "scalar_ic.esm"))
 
     def at0(result, name: str) -> float:
         idx = {n: k for k, n in enumerate(result.vars)}
@@ -117,10 +117,10 @@ def test_scalar_ic_inside_an_array_model_routes_through_the_numpy_path() -> None
     """The mixed-rank fixture must reach the ARRAY runtime — otherwise the
     second fixture would be a duplicate of the first rather than independent
     coverage of the pathway that folded only array-shaped ic targets."""
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_path
     from earthsci_ast.simulation import simulate
 
-    esm = load(str(_ROOT / "fixtures" / "scalar_ic_in_array_model.esm"))
+    esm = load_path(str(_ROOT / "fixtures" / "scalar_ic_in_array_model.esm"))
     res = simulate(esm, tspan=(0.0, 1.0), method="RK45", rtol=1e-12, atol=1e-14)
     assert res.success, res.message
     # Per-cell names are the array runtime's signature; the scalar-SymPy path

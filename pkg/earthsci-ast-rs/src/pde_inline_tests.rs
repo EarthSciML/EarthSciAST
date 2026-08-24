@@ -813,7 +813,7 @@ pub fn ephemeral_injected_file(
         base_path: Some(base_dir.to_path_buf()),
         metaparameters: std::collections::BTreeMap::new(),
     };
-    crate::parse::load_with_options(&text, &options)
+    crate::parse::load_string_with_options(&text, &options)
 }
 
 /// Run every inline test of one model, appending per-assertion results.
@@ -1025,7 +1025,7 @@ pub fn run_pde_tests_with_base_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::load;
+    use crate::parse::load_string;
     use crate::simulate::SolverChoice;
     use crate::types::ExpressionNode;
     use serde_json::json;
@@ -1103,7 +1103,7 @@ mod tests {
 
     #[test]
     fn assertion_reduce_reference_parse_and_roundtrip() {
-        let file = load(&decay_doc().to_string()).expect("decay doc loads");
+        let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
         let models = file.models.as_ref().unwrap();
         let a = &models["M"].tests.as_ref().unwrap()[0].assertions[0];
         assert_eq!(a.reduce.as_deref(), Some("L2_error"));
@@ -1130,7 +1130,7 @@ mod tests {
         let mut doc = decay_doc();
         doc["models"]["M"]["tests"][0]["assertions"][0]["reference"] =
             json!({"type": "from_file", "path": "ref.nc", "format": "netcdf"});
-        let file = load(&doc.to_string()).expect("from_file reference parses");
+        let file = load_string(&doc.to_string()).expect("from_file reference parses");
         let models = file.models.as_ref().unwrap();
         let a = &models["M"].tests.as_ref().unwrap()[0].assertions[0];
         match a.reference.as_ref().expect("reference parsed") {
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn evaluate_cellwise_grid_geometry() {
-        let file = load(&decay_doc().to_string()).expect("decay doc loads");
+        let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
         let models = file.models.as_ref().unwrap();
         let a = &models["M"].tests.as_ref().unwrap()[0].assertions[0];
         let Some(AssertionReference::Expression(expr)) = &a.reference else {
@@ -1266,7 +1266,7 @@ mod tests {
 
     #[test]
     fn run_pde_tests_decay_field() {
-        let file = load(&decay_doc().to_string()).expect("decay doc loads");
+        let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(
             results.iter().map(|r| r.assertion_idx).collect::<Vec<_>>(),
@@ -1303,7 +1303,7 @@ mod tests {
              "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
              "reference": cos_pi_x()},
         ]);
-        let file = load(&doc.to_string()).expect("doc loads");
+        let file = load_string(&doc.to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         let r = &results[0];
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn coordinate_expression_ic_seeds_grid() {
         // The §11.4.1 case-3 seeding path in isolation: u(0) = cos(pi x_i).
-        let file = load(&decay_doc().to_string()).expect("decay doc loads");
+        let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
         let mut opts = tight_opts();
         opts.output_times = Some(vec![0.0]);
         let sol =
@@ -1382,7 +1382,7 @@ mod tests {
 
     #[test]
     fn state_free_array_observed_assertions_evaluate_directly() {
-        let file = load(&observed_assert_doc().to_string()).expect("doc loads");
+        let file = load_string(&observed_assert_doc().to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         // g = [1, 4, 9] (index arithmetic, exact): max and min pass with the
@@ -1437,7 +1437,7 @@ mod tests {
                 a["tolerance"] = json!({"abs": 1e-8});
                 a
             });
-        let file = load(&doc.to_string()).expect("doc loads");
+        let file = load_string(&doc.to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 6);
         for r in &results {
@@ -1449,7 +1449,7 @@ mod tests {
 
     #[test]
     fn run_pde_tests_coords_validation_rejections() {
-        let file = load(
+        let file = load_string(
             &decay_doc_with(json!([
                 coords_assert(json!({"y": 1.0}), 0.0, 0.0),
                 coords_assert(json!({"x": 0.4}), 0.0, 0.0), // → index 0
@@ -1489,7 +1489,7 @@ mod tests {
                 }],
             }},
         });
-        let file = load(&doc.to_string()).expect("doc loads");
+        let file = load_string(&doc.to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
@@ -1508,7 +1508,7 @@ mod tests {
             {"variable": "u", "time": 0.0, "expected": 0.0,
              "coords": {"x": 1}, "reduce": "mean"},
         ]));
-        assert!(load(&doc.to_string()).is_err(), "schema must reject");
+        assert!(load_string(&doc.to_string()).is_err(), "schema must reject");
     }
 
     /// du_ij/dt = 1 with u(0) = 0, so u(t) = t everywhere: pins the
@@ -1547,13 +1547,13 @@ mod tests {
 
     #[test]
     fn coords_strict_subset_requires_singleton_remainder() {
-        let ok_file = load(&doc_2d(1).to_string()).expect("doc loads");
+        let ok_file = load_string(&doc_2d(1).to_string()).expect("doc loads");
         let ok = run_pde_tests(&ok_file, Some("M"), &tight_opts());
         assert_eq!(ok.len(), 1);
         assert!(ok[0].passed, "{}", ok[0].message);
         assert!((ok[0].actual.unwrap() - 1.0).abs() < 1e-8);
 
-        let bad_file = load(&doc_2d(3).to_string()).expect("doc loads");
+        let bad_file = load_string(&doc_2d(3).to_string()).expect("doc loads");
         let bad = run_pde_tests(&bad_file, Some("M"), &tight_opts());
         assert_eq!(bad.len(), 1);
         assert!(!bad[0].passed);
@@ -1599,7 +1599,7 @@ mod tests {
                 "Linf_error"
             ),
         ]));
-        let file = load(&doc.to_string()).expect("doc loads");
+        let file = load_string(&doc.to_string()).expect("doc loads");
         let results =
             run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
         assert_eq!(results.len(), 2);
@@ -1619,7 +1619,7 @@ mod tests {
             serde_json::to_string(&vals[..7]).unwrap(),
         )
         .unwrap();
-        let file = load(
+        let file = load_string(
             &decay_doc_with(json!([from_file_assert(
                 json!({"type": "from_file", "path": "short.json"}),
                 "L2_error"
@@ -1643,7 +1643,7 @@ mod tests {
             serde_json::to_string(&nested).unwrap(),
         )
         .unwrap();
-        let file = load(
+        let file = load_string(
             &decay_doc_with(json!([from_file_assert(
                 json!({"type": "from_file", "path": "deep.json"}),
                 "L2_error"
@@ -1663,7 +1663,7 @@ mod tests {
     #[test]
     fn from_file_reference_missing_file_and_format() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let file = load(
+        let file = load_string(
             &decay_doc_with(json!([from_file_assert(
                 json!({"type": "from_file", "path": "nope.json"}),
                 "L2_error"
@@ -1680,7 +1680,7 @@ mod tests {
         );
 
         std::fs::write(dir.path().join("ref.json"), "[1,2,3,4,5,6,7,8]").unwrap();
-        let file = load(
+        let file = load_string(
             &decay_doc_with(json!([from_file_assert(
                 json!({"type": "from_file", "path": "ref.json", "format": "netcdf"}),
                 "L2_error"
@@ -1707,7 +1707,7 @@ mod tests {
             .join("../../tests/spatial/pde_inline_assertions_exec.esm");
         assert!(fixture.is_file(), "missing shared fixture {fixture:?}");
         let text = std::fs::read_to_string(&fixture).expect("fixture reads");
-        let file = load(&text).expect("fixture loads");
+        let file = load_string(&text).expect("fixture loads");
         let results =
             run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
         assert_eq!(results.len(), 7);
@@ -1784,7 +1784,7 @@ mod tests {
     /// failed; the qualified-first two-pass resolver reads `M2.k`.
     #[test]
     fn run_pde_tests_scalar_observed_tracks_parameter_overrides() {
-        let file = load(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
+        let file = load_string(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M2"), &tight_opts());
         let by_id: HashMap<&str, &PdeAssertionResult> =
             results.iter().map(|r| (r.test_id.as_str(), r)).collect();

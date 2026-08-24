@@ -4,9 +4,9 @@
 
 #[cfg(feature = "wasm")]
 use crate::{
-    EsmFile, graph::component_graph as rust_component_graph, load as rust_load,
-    performance::CompactExpr, save as rust_save, stoichiometric_matrix, substitute_in_model,
-    substitute_in_reaction_system, validate as rust_validate,
+    EsmFile, graph::component_graph as rust_component_graph, load_string as rust_load_string,
+    performance::CompactExpr, stoichiometric_matrix, substitute_in_model,
+    substitute_in_reaction_system, to_json as rust_to_json, validate as rust_validate,
 };
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
@@ -64,20 +64,20 @@ fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) ->
 /// Load an ESM file from JSON string (WASM version)
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
-pub fn load(json_str: &str) -> Result<JsValue, JsValue> {
+pub fn load_string(json_str: &str) -> Result<JsValue, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
     to_js(&esm_file)
 }
 
-/// Save an ESM file to JSON string (WASM version)
+/// Serialize an ESM file to a JSON string (WASM version)
 #[cfg(feature = "wasm")]
 #[wasm_bindgen]
-pub fn save(esm_file_js: &JsValue) -> Result<String, JsValue> {
+pub fn to_json(esm_file_js: &JsValue) -> Result<String, JsValue> {
     let esm_file: EsmFile = serde_wasm_bindgen::from_value(esm_file_js.clone())
         .map_err(|e| JsValue::from_str(&format!("Deserialization error: {e}")))?;
 
-    match rust_save(&esm_file) {
+    match rust_to_json(&esm_file) {
         Ok(json) => Ok(json),
         Err(e) => Err(JsValue::from_str(&format!("Save error: {e}"))),
     }
@@ -88,7 +88,7 @@ pub fn save(esm_file_js: &JsValue) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let result = rust_validate(&esm_file);
     to_js(&result)
@@ -102,7 +102,7 @@ pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     Ok(render_expressions(&esm_file, crate::display::to_unicode))
 }
 
@@ -112,7 +112,7 @@ pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     Ok(render_expressions(&esm_file, crate::display::to_latex))
 }
 
@@ -123,7 +123,7 @@ pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub fn to_ascii(json_str: &str) -> Result<String, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     Ok(render_expressions(&esm_file, crate::display::to_ascii))
 }
 
@@ -134,7 +134,7 @@ pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue>
     use crate::Expr;
 
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     // Parse bindings as JSON object
     let bindings: serde_json::Value = serde_json::from_str(bindings_str)
@@ -189,7 +189,7 @@ pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue>
     }
 
     // Convert back to JSON string
-    match rust_save(&result_file) {
+    match rust_to_json(&result_file) {
         Ok(json) => Ok(json),
         Err(e) => Err(JsValue::from_str(&format!("Save error: {e}"))),
     }
@@ -238,7 +238,7 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
     use indexmap::IndexMap;
 
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     let flat =
         crate::flatten(&esm_file).map_err(|e| JsValue::from_str(&format!("Flatten error: {e}")))?;
 
@@ -334,7 +334,7 @@ pub fn simulate(
     use std::collections::HashMap;
 
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let parse_map = |s: &str, what: &str| -> Result<HashMap<String, f64>, JsValue> {
         let s = s.trim();
@@ -453,7 +453,7 @@ pub fn simulate(
 #[wasm_bindgen]
 pub fn tape_report(json_str: &str) -> Result<JsValue, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     let compiled = match crate::simulate_array::ArrayCompiled::from_file(&esm_file) {
         Ok(c) => c,
         // Not an array model: no tape, nothing to report.
@@ -479,7 +479,7 @@ pub fn tape_report(json_str: &str) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
     let esm_file =
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
     let graph = rust_component_graph(&esm_file);
     to_js(&graph)
@@ -528,7 +528,7 @@ pub fn intersect_polygon(a_json: &str, b_json: &str, manifold: &str) -> Result<S
 #[wasm_bindgen]
 pub fn get_version_info() -> JsValue {
     let info = serde_json::json!({
-        "version": crate::VERSION,
+        "library_version": crate::LIBRARY_VERSION,
         "schema_version": crate::SCHEMA_VERSION,
     });
     to_js(&info).unwrap_or(JsValue::NULL)
@@ -541,7 +541,7 @@ pub fn benchmark_parsing(json_str: &str, iterations: u32) -> Result<f64, JsValue
     let start = js_sys::Date::now();
 
     for _ in 0..iterations {
-        rust_load(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
     }
 
     let end = js_sys::Date::now();
@@ -599,7 +599,7 @@ mod tests {
             "#;
 
         // Test that the core functions work (without WASM feature for regular tests)
-        let esm_file = rust_load(json).expect("Should load valid ESM file");
+        let esm_file = rust_load_string(json).expect("Should load valid ESM file");
         let graph = rust_component_graph(&esm_file);
 
         assert_eq!(graph.nodes.len(), 1, "Should have 1 model node");

@@ -6,7 +6,7 @@
  * The TypeScript binding is parse-only (no ODE solver), so this runner does
  * not execute assertions numerically. Instead it closes the schema-vs-binding
  * gap by parsing every tests/simulation/ fixture, round-tripping it through
- * save -> load, and validating the shape of every inline `tests` block.
+ * toJson -> loadString, and validating the shape of every inline `tests` block.
  *
  * When a JS-side ODE backend lands, this runner is the place to wire
  * numerical execution in — the fixture walk is already here.
@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { load, save } from './index.js'
+import { loadString, toJson } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
 const simulationDir = fixturesDir('simulation')
@@ -71,9 +71,9 @@ describe('tests/simulation/ inline tests blocks', () => {
     const path = join(simulationDir, name)
     const text = readFileSync(path, 'utf-8')
 
-    const file = load(text)
-    const serialized = save(file)
-    const reloaded = load(serialized)
+    const file = loadString(text)
+    const serialized = toJson(file)
+    const reloaded = loadString(serialized)
     expect(reloaded).toEqual(file)
 
     const raw = JSON.parse(text)

@@ -31,7 +31,7 @@ function _eval_aggregate_fixture(filename::AbstractString, model_name::AbstractS
                                  elements::Vector{<:AbstractString})
     path = joinpath(_AGG_REPO_ROOT, "tests", "valid", "aggregate", filename)
     @test isfile(path)
-    file = EarthSciAST.load(path)
+    file = EarthSciAST.load_path(path)
     ics = Dict(e => 0.0 for e in elements)
     f!, u0, p, _, vmap = build_evaluator(file; model_name=model_name,
                                          initial_conditions=ics)
@@ -107,7 +107,7 @@ end
     path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "aggregate",
                     "undeclared_from_name.esm")
     @test isfile(path)
-    file = EarthSciAST.load(path)   # schema-valid: load must succeed
+    file = EarthSciAST.load_path(path)   # schema-valid: load must succeed
     err = try
         build_evaluator(file; model_name="UndeclaredFrom")
         nothing
@@ -168,7 +168,7 @@ end
             path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "aggregate",
                             "build_time", filename)
             @test isfile(path)
-            file = EarthSciAST.load(path)
+            file = EarthSciAST.load_path(path)
             try
                 build_evaluator(file; model_name=model_name,
                                 initial_conditions=Dict("count" => 0.0))

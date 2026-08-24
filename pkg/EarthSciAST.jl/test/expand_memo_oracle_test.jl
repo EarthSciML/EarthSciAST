@@ -17,7 +17,7 @@
 
 using Test
 using EarthSciAST
-using EarthSciAST: load, flatten, build_evaluator
+using EarthSciAST: load_path, flatten, build_evaluator
 
 include("testutils.jl")
 const ESM = EarthSciAST
@@ -34,7 +34,7 @@ const ESM = EarthSciAST
     # Expand-at-load hatch takes effect) and return (du probes, u0, var_map).
     function build_and_probe(fix::AbstractString; env=(), form::Symbol=:inplace)
         withenv(env...) do
-            flat = flatten(load(fix))
+            flat = flatten(load_path(fix))
             f, u0, p, _, vmap = build_evaluator(flat; form=form)
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), probe_states(length(u0)))

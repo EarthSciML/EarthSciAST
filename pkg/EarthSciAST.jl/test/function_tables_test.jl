@@ -61,7 +61,7 @@ const FUNCTION_TABLES_FIXTURE = """
 """
 
 @testset "function_tables block + table_lookup AST op (esm-spec §9.5)" begin
-    file = EarthSciAST.load(IOBuffer(FUNCTION_TABLES_FIXTURE))
+    file = EarthSciAST.load_string(IOBuffer(FUNCTION_TABLES_FIXTURE))
 
     @testset "function_tables typed map" begin
         @test file.function_tables !== nothing
@@ -101,7 +101,7 @@ const FUNCTION_TABLES_FIXTURE = """
     end
 
     @testset "round-trip preserves both blocks" begin
-        out = sprint(io -> EarthSciAST.save(file, io))
+        out = EarthSciAST.to_json(file)
         reloaded = JSON3.read(out)
         @test sort(collect(keys(reloaded.function_tables))) == [:F_actinic, :sigma_O3]
         @test reloaded.function_tables.F_actinic.outputs == ["NO2", "O3"]
@@ -115,8 +115,8 @@ const FUNCTION_TABLES_FIXTURE = """
 
         # Round-trip is a fixed point: re-load and re-save yields the same bytes
         # (modulo JSON3 ordering — compare structurally).
-        file2 = EarthSciAST.load(IOBuffer(out))
-        out2 = sprint(io -> EarthSciAST.save(file2, io))
+        file2 = EarthSciAST.load_string(IOBuffer(out))
+        out2 = EarthSciAST.to_json(file2)
         @test JSON3.read(out2) == JSON3.read(out)
     end
 end

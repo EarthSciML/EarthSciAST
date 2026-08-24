@@ -12,6 +12,6 @@
 
         @test_throws EarthSciAST.SchemaValidationError begin
             io = IOBuffer(invalid_json)
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
 ```
 

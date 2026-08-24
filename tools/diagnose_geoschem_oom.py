@@ -17,7 +17,7 @@ Pipeline phases instrumented (all via the canonical pathway —
 parse → flatten → lambdify → simulate from earthsci_ast):
 
   1. imports_loaded             import earthsci_ast + sympy + scipy stack
-  2. esm_loaded                 earthsci_ast.load(geoschem_fullchem.esm)
+  2. esm_loaded                 earthsci_ast.load_path(geoschem_fullchem.esm)
   3. flatten_done               earthsci_ast.flatten(esm_file)
   4. lambdify_no_cse            _flat_to_sympy_rhs + sp.lambdify(cse=False),
                                 stashed onto flat._simulate_compile_cache
@@ -152,7 +152,7 @@ ESM_PATH = _find_esm()
 
 # ----- 2. esm_loaded -----------------------------------------------------
 _arm()
-esm_file = ek.load(str(ESM_PATH))
+esm_file = ek.load_path(str(ESM_PATH))
 _disarm()
 phase("esm_loaded")
 

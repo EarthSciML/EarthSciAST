@@ -226,7 +226,7 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 // a set the library never declares survives the rename as spelled and is
 // rejected at rule registration — the fix does not paper over genuine typos.
 func TestTemplateImports_WhereRenameUnknownIndexSet(t *testing.T) {
-	_, err := Load(tiConfDir(t, "import_where_rename_unknown_index_set", "fixture.esm"))
+	_, err := LoadPath(tiConfDir(t, "import_where_rename_unknown_index_set", "fixture.esm"))
 	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
 		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
 	}
@@ -236,7 +236,7 @@ func TestTemplateImports_WhereRenameUnknownIndexSet(t *testing.T) {
 // diagnostic: a `where` shape naming an index set absent from the consuming
 // document's registry is rejected at load.
 func TestMatchScoping_ConstraintUnknownIndexSet(t *testing.T) {
-	_, err := Load(tiConfDir(t, "constraint_unknown_index_set", "fixture.esm"))
+	_, err := LoadPath(tiConfDir(t, "constraint_unknown_index_set", "fixture.esm"))
 	if code := tiErrCode(t, err); code != "template_constraint_unknown_index_set" {
 		t.Errorf("code = %s; want template_constraint_unknown_index_set", code)
 	}
@@ -249,11 +249,11 @@ func TestMatchScoping_ConstraintUnknownIndexSet(t *testing.T) {
 func TestMakearrayRegions_EmptyLoadsInvertedRejected(t *testing.T) {
 	valid := filepath.Join(tiRepoRoot(t), "tests", "valid", "makearray_empty_region_min_extent.esm")
 	// Default N = 2 folds the interior region [2, N-1] to the empty bound [2, 1].
-	if _, err := Load(valid); err != nil {
+	if _, err := LoadPath(valid); err != nil {
 		t.Fatalf("empty-bound makearray must load at default N=2: %v", err)
 	}
 	// N = 1 folds the interior region to [2, 0] — inverted (stop < start - 1).
-	_, err := Load(valid, WithMetaparameters(map[string]int64{"N": 1}))
+	_, err := LoadPath(valid, WithMetaparameters(map[string]int64{"N": 1}))
 	if code := tiErrCode(t, err); code != "makearray_region_inverted" {
 		t.Errorf("N=1 code = %s; want makearray_region_inverted", code)
 	}
@@ -265,9 +265,9 @@ func TestMakearrayRegions_EmptyLoadsInvertedRejected(t *testing.T) {
 // is subsystem_index_set_conflict (exercised by the invalid-fixture loop).
 func TestSubsystemIndexSetMerge(t *testing.T) {
 	valid := filepath.Join(tiRepoRoot(t), "tests", "valid", "subsystem_index_set_merge.esm")
-	f, err := Load(valid)
+	f, err := LoadPath(valid)
 	if err != nil {
-		t.Fatalf("Load(merge): %v", err)
+		t.Fatalf("LoadPath(merge): %v", err)
 	}
 	// `vertices` is not declared by the host; the mount brings it in (size 4).
 	if f.IndexSets["vertices"].Size == nil || *f.IndexSets["vertices"].Size != 4 {
@@ -280,7 +280,7 @@ func TestSubsystemIndexSetMerge(t *testing.T) {
 }
 
 func TestTemplateImports_ImportSmokeTypedLoad(t *testing.T) {
-	f, err := Load(tiConfDir(t, "import_smoke", "fixture.esm"))
+	f, err := LoadPath(tiConfDir(t, "import_smoke", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestTemplateImports_ImportSmokeTypedLoad(t *testing.T) {
 }
 
 func TestTemplateImports_DiamondDedupsAtFirstOccurrence(t *testing.T) {
-	f, err := Load(tiConfDir(t, "import_diamond", "fixture.esm"))
+	f, err := LoadPath(tiConfDir(t, "import_diamond", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -324,9 +324,9 @@ func TestTemplateImports_ValidSuiteLibraryFile(t *testing.T) {
 	libPath := filepath.Join(tiRepoRoot(t), "tests", "valid", "template_import_lib.esm")
 	// A model-less template-library document loads (esm-spec §9.7.1);
 	// round-trip strips every §9.7 construct, leaving the folded registry.
-	lib, err := Load(libPath)
+	lib, err := LoadPath(libPath)
 	if err != nil {
-		t.Fatalf("Load(lib): %v", err)
+		t.Fatalf("LoadPath(lib): %v", err)
 	}
 	if len(lib.Models) != 0 {
 		t.Errorf("library file has models: %v", lib.Models)
@@ -335,9 +335,9 @@ func TestTemplateImports_ValidSuiteLibraryFile(t *testing.T) {
 		t.Errorf("cells size = %v; want 8 (size \"N\" folded by default)", lib.IndexSets["cells"].Size)
 	}
 	// Loader-API binding overrides the default on the library itself.
-	lib12, err := Load(libPath, WithMetaparameters(map[string]int64{"N": 12}))
+	lib12, err := LoadPath(libPath, WithMetaparameters(map[string]int64{"N": 12}))
 	if err != nil {
-		t.Fatalf("Load(lib, N=12): %v", err)
+		t.Fatalf("LoadPath(lib, N=12): %v", err)
 	}
 	if lib12.IndexSets["cells"].Size == nil || *lib12.IndexSets["cells"].Size != 12 {
 		t.Errorf("cells size = %v; want 12 (API > default)", lib12.IndexSets["cells"].Size)
@@ -345,9 +345,9 @@ func TestTemplateImports_ValidSuiteLibraryFile(t *testing.T) {
 }
 
 func TestTemplateImports_ValidSuiteMinimalConsumer(t *testing.T) {
-	m, err := Load(filepath.Join(tiRepoRoot(t), "tests", "valid", "template_import_minimal.esm"))
+	m, err := LoadPath(filepath.Join(tiRepoRoot(t), "tests", "valid", "template_import_minimal.esm"))
 	if err != nil {
-		t.Fatalf("Load(minimal): %v", err)
+		t.Fatalf("LoadPath(minimal): %v", err)
 	}
 	if m.IndexSets["cells"].Size == nil || *m.IndexSets["cells"].Size != 8 {
 		t.Errorf("cells size = %v; want 8 (§9.7.5 merge into consumer)", m.IndexSets["cells"].Size)
@@ -385,7 +385,7 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.wrapper, func(t *testing.T) {
-			f, err := Load(tiConfDir(t, "metaparameter_resolutions", tc.wrapper))
+			f, err := LoadPath(tiConfDir(t, "metaparameter_resolutions", tc.wrapper))
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
@@ -457,9 +457,9 @@ func TestTemplateImports_MetaparameterResolutions(t *testing.T) {
 
 func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	problem := tiConfDir(t, "metaparameter_resolutions", "problem.esm")
-	fdef, err := Load(problem)
+	fdef, err := LoadPath(problem)
 	if err != nil {
-		t.Fatalf("Load(problem): %v", err)
+		t.Fatalf("LoadPath(problem): %v", err)
 	}
 	// `npts` is an observed unknown defined by `npts ~ N`; the folded
 	// metaparameter shows up in its defining EQUATION.
@@ -475,15 +475,15 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 	if got := mustJSON(t, nptsDef(fdef)); got != "2" {
 		t.Errorf("default npts = %s; want 2", got)
 	}
-	fapi, err := Load(problem, WithMetaparameters(map[string]int64{"N": 6}))
+	fapi, err := LoadPath(problem, WithMetaparameters(map[string]int64{"N": 6}))
 	if err != nil {
-		t.Fatalf("Load(problem, N=6): %v", err)
+		t.Fatalf("LoadPath(problem, N=6): %v", err)
 	}
 	if got := mustJSON(t, nptsDef(fapi)); got != "6" {
 		t.Errorf("API npts = %s; want 6 (API > default)", got)
 	}
 	// Binding a name the document does not declare is an error.
-	_, err = Load(problem, WithMetaparameters(map[string]int64{"Q": 1}))
+	_, err = LoadPath(problem, WithMetaparameters(map[string]int64{"Q": 1}))
 	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
 		t.Errorf("unknown API binding code = %s; want template_import_unknown_name", code)
 	}
@@ -499,7 +499,7 @@ func TestTemplateImports_LoaderAPIBindingsAndDefaults(t *testing.T) {
 // are declared by the IMPORTED grid and closed at the edge (`bindings`), so they
 // are folded away and must not reappear in the consumer's scope.
 func TestTemplateImports_RoundTripEmitsExpandedFoldedForm(t *testing.T) {
-	f, err := Load(tiConfDir(t, "import_smoke", "fixture.esm"))
+	f, err := LoadPath(tiConfDir(t, "import_smoke", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -559,11 +559,11 @@ func TestTemplateImports_LibraryRoundTripsToItself(t *testing.T) {
 			}
 
 			// ...and the typed Load → Serialize surface.
-			loaded, err := Load(path)
+			loaded, err := LoadPath(path)
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			typedText, err := Serialize(loaded)
+			typedText, err := ToJSON(loaded)
 			if err != nil {
 				t.Fatalf("Serialize: %v", err)
 			}
@@ -688,7 +688,7 @@ func TestTemplateImports_InvalidFixtures(t *testing.T) {
 			// The fixtures are SCHEMA-VALID (the §9.7 constructs are legal
 			// schema); with the §9.7 resolver in the Go load path they are
 			// rejected at load with the stable diagnostic code.
-			_, err := Load(path)
+			_, err := LoadPath(path)
 			if err == nil {
 				t.Fatalf("expected %s to be rejected, but it loaded", name)
 			}
@@ -747,14 +747,14 @@ func TestTemplateImports_UnresolvedMissingAndUnparsableRef(t *testing.T) {
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
 		`"expression_template_imports": [{"ref": "./nope.esm"}],`, ""))
-	_, err := Load(p)
+	_, err := LoadPath(p)
 	if code := tiErrCode(t, err); code != "template_import_unresolved" {
 		t.Errorf("missing ref code = %s; want template_import_unresolved", code)
 	}
 	writeFileString(t, filepath.Join(dir, "junk.esm"), "{not json")
 	writeFileString(t, p, tiModelJSON(
 		`"expression_template_imports": [{"ref": "./junk.esm"}],`, ""))
-	_, err = Load(p)
+	_, err = LoadPath(p)
 	if code := tiErrCode(t, err); code != "template_import_unresolved" {
 		t.Errorf("junk ref code = %s; want template_import_unresolved", code)
 	}
@@ -811,7 +811,7 @@ func TestTemplateImports_OnlyFiltersVisibilityNotInternalWiring(t *testing.T) {
 		`"expression_template_imports": [{"ref": "./lib.esm", "only": ["t_keep"]}],
          "expression_templates": {"local_uses_drop": {"params": [],
            "body": {"op": "apply_expression_template", "args": [], "name": "t_drop", "bindings": {}}}},`, ""))
-	_, err := Load(p2)
+	_, err := LoadPath(p2)
 	if code := tiErrCode(t, err); code != "apply_expression_template_unknown_template" {
 		t.Errorf("filtered-out reference code = %s; want apply_expression_template_unknown_template", code)
 	}
@@ -830,7 +830,7 @@ func TestTemplateImports_DiamondWithConflictingEdgeBindings(t *testing.T) {
 		`"expression_template_imports": [
            {"ref": "./grid.esm", "bindings": {"NC": 4}},
            {"ref": "./grid.esm", "bindings": {"NC": 8}}],`, ""))
-	_, err := Load(p)
+	_, err := LoadPath(p)
 	code := tiErrCode(t, err)
 	if code != "template_import_name_conflict" && code != "template_import_index_set_conflict" {
 		t.Errorf("conflicting diamond code = %s; want a §9.7.4/§9.7.5 conflict", code)
@@ -840,7 +840,7 @@ func TestTemplateImports_DiamondWithConflictingEdgeBindings(t *testing.T) {
 		`"expression_template_imports": [
            {"ref": "./grid.esm", "bindings": {"NC": 4}},
            {"ref": "./grid.esm", "bindings": {"NC": 4}}],`, ""))
-	f, err := Load(p)
+	f, err := LoadPath(p)
 	if err != nil {
 		t.Fatalf("equal-binding diamond should load: %v", err)
 	}
@@ -859,7 +859,7 @@ func TestTemplateImports_EdgeBindingUnknownNameAndNonInteger(t *testing.T) {
 	p := filepath.Join(dir, "m.esm")
 	writeFileString(t, p, tiModelJSON(
 		`"expression_template_imports": [{"ref": "./lib.esm", "bindings": {"Q": 1}}],`, ""))
-	_, err := Load(p)
+	_, err := LoadPath(p)
 	if code := tiErrCode(t, err); code != "template_import_unknown_name" {
 		t.Errorf("unknown edge binding code = %s; want template_import_unknown_name", code)
 	}
@@ -927,7 +927,7 @@ func TestTemplateImports_FoldRangesRegionsSizeExact(t *testing.T) {
 		t.Errorf("ma regions = %s; want [[[3,6]]]", got)
 	}
 	// The typed load also succeeds.
-	if _, err := Load(p); err != nil {
+	if _, err := LoadPath(p); err != nil {
 		t.Fatalf("typed Load: %v", err)
 	}
 }
@@ -1109,7 +1109,7 @@ func TestTemplateImports_CrossFileChainsAccumulateDepth(t *testing.T) {
 		`"expression_template_imports": [{"ref": "./chainlib.esm"}],
          "expression_templates": {"uses_head": {"params": [],
            "body": {"op": "apply_expression_template", "args": [], "name": "c_01", "bindings": {}}}},`, ""))
-	_, err = Load(p)
+	_, err = LoadPath(p)
 	if code := tiErrCode(t, err); code != "template_body_expansion_too_deep" {
 		t.Errorf("33-deep cross-file chain code = %s; want template_body_expansion_too_deep", code)
 	}

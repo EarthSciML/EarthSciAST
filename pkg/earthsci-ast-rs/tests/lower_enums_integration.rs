@@ -9,7 +9,8 @@ use serde_json::Value;
 #[test]
 fn enums_categorical_lookup_fixture_lowers_enum_ops() {
     let fixture = include_str!("../../../tests/valid/enums_categorical_lookup.esm");
-    let file: EsmFile = load(fixture).expect("Failed to load enums_categorical_lookup fixture");
+    let file: EsmFile =
+        load_string(fixture).expect("Failed to load enums_categorical_lookup fixture");
 
     let enums = file.enums.as_ref().expect("enums block should round-trip");
     assert_eq!(enums["season"]["summer"], 3);
@@ -49,9 +50,9 @@ fn enums_categorical_lookup_fixture_lowers_enum_ops() {
 #[test]
 fn enums_block_round_trips_through_save_reload() {
     let fixture = include_str!("../../../tests/valid/enums_categorical_lookup.esm");
-    let file: EsmFile = load(fixture).expect("load");
-    let serialized = save(&file).expect("save");
-    let reloaded: EsmFile = load(&serialized).expect("reload");
+    let file: EsmFile = load_string(fixture).expect("load");
+    let serialized = to_json(&file).expect("save");
+    let reloaded: EsmFile = load_string(&serialized).expect("reload");
     assert_eq!(file.enums, reloaded.enums);
 }
 
@@ -91,7 +92,7 @@ fn unknown_enum_rejected_at_load() {
           }
         }
         "#;
-    let err = load(bad).expect_err("expected unknown_enum diagnostic");
+    let err = load_string(bad).expect_err("expected unknown_enum diagnostic");
     let msg = format!("{err}");
     assert!(
         msg.contains("unknown_enum"),
@@ -135,7 +136,7 @@ fn unknown_enum_symbol_rejected_at_load() {
           }
         }
         "#;
-    let err = load(bad).expect_err("expected unknown_enum_symbol diagnostic");
+    let err = load_string(bad).expect_err("expected unknown_enum_symbol diagnostic");
     let msg = format!("{err}");
     assert!(
         msg.contains("unknown_enum_symbol"),

@@ -20,7 +20,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 
 /// A pass-through allocator that counts heap allocations (and reallocations,
@@ -178,7 +178,7 @@ fn latlon_heat_json(nlon: usize, nlat: usize) -> String {
 }
 
 fn compile_json(json: &str) -> ArrayCompiled {
-    let file = load(json).expect("load json model");
+    let file = load_string(json).expect("load json model");
     ArrayCompiled::from_file(&file).expect("compile json model")
 }
 

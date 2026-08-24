@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.flatten import flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation_array import BuildInspection, _simulate_with_numpy
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "refresh"
@@ -55,7 +55,7 @@ def _anchor_key(by_anchor: dict, anchor: float) -> str:
 
 
 def test_flatten_strips_discrete_and_keeps_regrid_observeds() -> None:
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     # `flatten` drops the loader-fed `discrete` decls (the simulate-view strip is
     # free); the in-model regrid observeds and coupled states survive.
     for obs in ("M.W", "M.F_tgt", "M.scale_tgt"):
@@ -69,7 +69,7 @@ def test_flatten_strips_discrete_and_keeps_regrid_observeds() -> None:
 def test_refresh_regrid_band_matches_golden() -> None:
     """The in-model regrid reproduces the golden regridded fields (regrid band)."""
     golden = _golden()
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     scale_native = np.asarray(golden["native_fields"][_SKEY]["values"], dtype=float)
     fsrc_by = golden["native_fields"][_FKEY]["by_anchor"]
     ftgt_by = golden["regridded_fields"]["M.F_tgt"]["by_anchor"]
@@ -103,7 +103,7 @@ def test_refresh_regrid_band_matches_golden() -> None:
 def test_refresh_trajectory_band_matches_golden() -> None:
     """Segmented refresh solve reproduces the golden trajectory (trajectory band)."""
     golden = _golden()
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     scale_native = np.asarray(golden["native_fields"][_SKEY]["values"], dtype=float)
     fsrc_by = golden["native_fields"][_FKEY]["by_anchor"]
 

@@ -23,12 +23,12 @@ pub fn repo_fixture(rel: &str) -> PathBuf {
     repo_tests_dir().join(rel)
 }
 
-/// Read and `load()` a fixture given its repo-root-relative `tests/` path,
+/// Read and `load_string()` a fixture given its repo-root-relative `tests/` path,
 /// panicking with the offending path on failure.
 pub fn load_repo_fixture(rel: &str) -> earthsci_ast::EsmFile {
     let path = repo_fixture(rel);
     let content = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
-    earthsci_ast::load(&content)
+    earthsci_ast::load_string(&content)
         .unwrap_or_else(|e| panic!("fixture {} does not load: {e}", path.display()))
 }

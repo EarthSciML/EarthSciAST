@@ -37,7 +37,7 @@ func TestShippedLibraryValidatesClean(t *testing.T) {
 				t.Skipf("%s predates the lib dimensional repair (found %s); this test arms itself "+
 					"as soon as the repaired library lands in this checkout", name, marker)
 			}
-			file, err := Load(path)
+			file, err := LoadPath(path)
 			if err != nil {
 				t.Fatalf("a shipped library must load: %v", err)
 			}

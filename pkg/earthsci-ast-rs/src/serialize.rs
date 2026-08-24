@@ -1,6 +1,7 @@
 //! JSON serialization for ESM files
 
 use crate::{EsmFile, error::EsmError};
+use std::path::Path;
 
 /// Serialize an ESM file to JSON string
 ///
@@ -19,7 +20,7 @@ use crate::{EsmFile, error::EsmError};
 /// # Examples
 ///
 /// ```rust
-/// use earthsci_ast::{EsmFile, Metadata, save};
+/// use earthsci_ast::{EsmFile, Metadata, to_json};
 ///
 /// let esm_file = EsmFile {
 ///     coordinates: None,
@@ -51,17 +52,20 @@ use crate::{EsmFile, error::EsmError};
 ///     function_tables: None,
 /// };
 ///
-/// let json = save(&esm_file).expect("Failed to serialize ESM file");
+/// let json = to_json(&esm_file).expect("Failed to serialize ESM file");
 /// assert!(json.contains("\"esm\": \"0.1.0\""));
 /// ```
-pub fn save(esm_file: &EsmFile) -> Result<String, EsmError> {
+pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     serde_json::to_string_pretty(esm_file).map_err(EsmError::JsonParse)
 }
 
 /// Serialize an ESM file to compact JSON string (no pretty printing)
 ///
-/// This function is similar to `save` but produces compact JSON without
-/// extra whitespace, suitable for storage or transmission.
+/// This function is similar to [`to_json`] but produces compact JSON without
+/// extra whitespace, suitable for storage or transmission. It is a separate
+/// function rather than a `to_json(file, opts)` flag because Rust has no
+/// default arguments and a one-field options struct plus a
+/// `to_json_with_options` twin is heavier than the pair.
 ///
 /// # Arguments
 ///
@@ -71,8 +75,23 @@ pub fn save(esm_file: &EsmFile) -> Result<String, EsmError> {
 ///
 /// * `Ok(String)` - Successfully serialized compact JSON string
 /// * `Err(EsmError)` - Serialization error
-pub fn save_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
+pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
     serde_json::to_string(esm_file).map_err(EsmError::JsonParse)
+}
+
+/// Write an ESM file to `path` as pretty-printed JSON.
+///
+/// Returns `Ok(())`, never the payload: no function in this API both writes
+/// and hands back the serialized bytes — call [`to_json`] when you want the
+/// string. (`save` used to return the string here and in TypeScript while
+/// WRITING TO DISK in Julia, under the same name.)
+pub fn write_path<P: AsRef<Path>>(esm_file: &EsmFile, path: P) -> Result<(), EsmError> {
+    let path = path.as_ref();
+    let json = to_json(esm_file)?;
+    std::fs::write(path, json).map_err(|e| EsmError::FileWrite {
+        path: path.display().to_string(),
+        source: e,
+    })
 }
 
 #[cfg(test)]
@@ -115,7 +134,7 @@ mod tests {
             function_tables: None,
         };
 
-        let result = save(&esm_file);
+        let result = to_json(&esm_file);
         assert!(result.is_ok());
 
         let json = result.unwrap();
@@ -195,7 +214,7 @@ mod tests {
             function_tables: None,
         };
 
-        let result = save(&esm_file);
+        let result = to_json(&esm_file);
         assert!(result.is_ok());
 
         let json = result.unwrap();
@@ -238,7 +257,7 @@ mod tests {
             function_tables: None,
         };
 
-        let result = save_compact(&esm_file);
+        let result = to_json_compact(&esm_file);
         assert!(result.is_ok());
 
         let json = result.unwrap();

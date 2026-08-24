@@ -14,7 +14,7 @@ Behavior:
    scope. An explicit `--name` flag overrides the discovery.
 3. Calls `mtk2esm(sys)` → in-memory Dict → writes to a tempfile `.esm`.
 4. Loads the `.esm` back through `esm2mtk` (i.e.
-   `ModelingToolkit.System(load(tempfile).models[name])`).
+   `ModelingToolkit.System(load_path(tempfile).models[name])`).
 5. Simulates both the original and the round-tripped system over the
    declared default timespan and compares trajectories at a dense sample
    of points within the declared tolerance.
@@ -157,7 +157,7 @@ function roundtrip_one(original::MTK.AbstractSystem, name::AbstractString;
     println("✓ Wrote round-trip file: $tmpfile")
 
     # 2. Reverse: load + esm2mtk
-    esm_file = ESM.load(tmpfile)
+    esm_file = ESM.load_path(tmpfile)
 
     name_key = String(name)
     roundtripped = if esm_file.models !== nothing && haskey(esm_file.models, name_key)

@@ -17,7 +17,7 @@
 
 use earthsci_ast::pde_inline_tests::run_pde_tests;
 use earthsci_ast::validate::{StructuralErrorCode, validate};
-use earthsci_ast::{Model, SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{Model, SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -48,7 +48,7 @@ fn read(path: &PathBuf) -> String {
 /// Run one shared fixture's inline §6.6.5 `coords` assertions.
 fn run_shared_fixture(name: &str) {
     let path = common::repo_fixture("valid/array_broadcast").join(name);
-    let file = load(&read(&path)).unwrap_or_else(|e| panic!("{name} does not load: {e}"));
+    let file = load_string(&read(&path)).unwrap_or_else(|e| panic!("{name} does not load: {e}"));
 
     let report = validate(&file);
     assert!(
@@ -104,7 +104,8 @@ fn broadcast_node_mixed_rank_fixture() {
 fn operand_index_set_absent_from_result_is_a_structural_error() {
     let path =
         common::repo_fixture("invalid/array_broadcast").join("operand_index_set_not_in_result.esm");
-    let file = load(&read(&path)).expect("fixture is schema-valid; only the shapes are wrong");
+    let file =
+        load_string(&read(&path)).expect("fixture is schema-valid; only the shapes are wrong");
     let report = validate(&file);
 
     assert!(!report.is_valid, "unalignable operand must not validate");
@@ -135,7 +136,7 @@ fn fixture_with_rhs(name: &str, rhs: serde_json::Value) -> earthsci_ast::EsmFile
     let models = doc["models"].as_object_mut().expect("models");
     let model = models.values_mut().next().expect("one model");
     model["equations"][0]["rhs"] = rhs;
-    load(&doc.to_string()).unwrap_or_else(|e| panic!("{name} (rewritten): {e}"))
+    load_string(&doc.to_string()).unwrap_or_else(|e| panic!("{name} (rewritten): {e}"))
 }
 
 /// Assert two documents integrate to bit-identical trajectories.
@@ -208,7 +209,7 @@ fn broadcast_spelled_unalignable_operand_is_rejected() {
     let model = models.values_mut().next().expect("one model");
     model["equations"][0]["rhs"] =
         serde_json::json!({"op": "broadcast", "fn": "*", "args": ["z1", 1.0]});
-    let file = load(&doc.to_string()).expect("still schema-valid");
+    let file = load_string(&doc.to_string()).expect("still schema-valid");
 
     let report = validate(&file);
     assert!(
@@ -248,7 +249,7 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
     ] {
         let path = common::repo_fixture("valid/array_broadcast").join(fixture);
         let text = read(&path);
-        let bare = load(&text).unwrap_or_else(|e| panic!("{fixture}: {e}"));
+        let bare = load_string(&text).unwrap_or_else(|e| panic!("{fixture}: {e}"));
 
         // Rewrite the single equation's RHS into the equivalent full-map
         // `aggregate` over every axis — a reduction over nothing, so the two
@@ -265,7 +266,8 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
             },
             "expr": serde_json::from_str::<serde_json::Value>(aggregate_rhs).unwrap(),
         });
-        let agg = load(&doc.to_string()).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));
+        let agg =
+            load_string(&doc.to_string()).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));
 
         let a = run(&bare).unwrap_or_else(|e| panic!("{fixture} (bare): {e}"));
         let b = run(&agg).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));
@@ -290,7 +292,7 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
 #[test]
 fn anonymous_shapes_keep_positional_broadcast() {
     let path = common::repo_tests_dir().join("fixtures/arrayop/14_broadcast_elementwise.esm");
-    let file = load(&read(&path)).expect("fixture loads");
+    let file = load_string(&read(&path)).expect("fixture loads");
     let ics: HashMap<String, f64> = [
         ("a[1]", 1.0),
         ("a[2]", 2.0),
@@ -354,8 +356,8 @@ fn array_shaped_observed_broadcasts_by_name() {
         }));
     model["equations"][0]["rhs"] = serde_json::json!("p3");
 
-    let hoisted = load(&doc.to_string()).expect("hoisted document loads");
-    let direct = load(&read(&path)).expect("fixture loads");
+    let hoisted = load_string(&doc.to_string()).expect("hoisted document loads");
+    let direct = load_string(&read(&path)).expect("fixture loads");
 
     let a = run(&direct).expect("direct");
     let b = run(&hoisted).expect("hoisted through an array observed");
@@ -385,7 +387,7 @@ fn shared_fixtures_are_bare_array_level_equations() {
         "broadcast_node_mixed_rank.esm",
     ] {
         let path = common::repo_fixture("valid/array_broadcast").join(name);
-        let file = load(&read(&path)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let file = load_string(&read(&path)).unwrap_or_else(|e| panic!("{name}: {e}"));
         let models = file.models.as_ref().expect("models");
         assert_eq!(models.len(), 1, "{name}");
         let model: &Model = models.values().next().unwrap();

@@ -11,7 +11,7 @@ all four skipped the same 69 fixtures — the entire `aggregate` and
 (audit 2026-07-14, F5; CONFORMANCE_SPEC §2.2.1).
 
 Every validation entry runs the full **load → resolve → validate** pipeline.
-`EarthSciAST.load(path)` resolves §4.7 subsystem refs against the file's own
+`EarthSciAST.load_path(path)` resolves §4.7 subsystem refs against the file's own
 directory; `validate()` does no file I/O in any binding, so without that phase a
 `{ref}` stub reads as unresolved and `tests/valid/lib_*_subsystem_inclusion.esm`
 and `tests/invalid/subsystem_ref_not_found.esm` could not both be satisfied.
@@ -94,7 +94,7 @@ function run_validation(manifest, project_root::String)
         # LOAD + RESOLVE: the only phase that does file I/O.
         esm_data = nothing
         try
-            esm_data = EarthSciAST.load(path)
+            esm_data = EarthSciAST.load_path(path)
             record["resolve_ok"] = true
         catch e
             record["resolve_ok"] = false

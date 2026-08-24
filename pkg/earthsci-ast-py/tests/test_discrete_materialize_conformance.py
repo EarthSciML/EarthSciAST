@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.flatten import flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation_array import _simulate_with_numpy
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "discrete_materialize"
@@ -61,7 +61,7 @@ def _snapshot_at(golden: dict, anchor: float) -> np.ndarray:
 
 
 def test_flatten_keeps_contraction_observeds_and_single_state() -> None:
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     for obs in ("M.W", "M.g", "M.k"):
         assert obs in flat.observed_variables, (
             f"{obs} must be an observed; observeds: {list(flat.observed_variables)}"
@@ -73,7 +73,7 @@ def test_flatten_keeps_contraction_observeds_and_single_state() -> None:
 
 def test_discrete_materialize_trajectory_matches_golden() -> None:
     golden = _golden()
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
 
     t0, t1 = (float(x) for x in golden["cadence"]["tspan"])
     refresh_times = [float(t) for t in golden["cadence"]["refresh_times"]]

@@ -8,7 +8,7 @@ use earthsci_ast::coupling_imports::{CouplingImportOptions, expand_coupling_impo
 use earthsci_ast::diagnostic::DiagnosticError;
 use earthsci_ast::types::{CouplingEntry, EsmFile};
 use earthsci_ast::{
-    LoadOptions, flatten, flatten_with_options, is_coupling_library_doc, load_with_options,
+    LoadOptions, flatten, flatten_with_options, is_coupling_library_doc, load_string_with_options,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -340,7 +340,7 @@ fn subsystem_ref_targeting_a_coupling_library_is_rejected() {
           }
         }
         "#;
-    let e = load_with_options(wrapper, &load_opts(dir.path()))
+    let e = load_string_with_options(wrapper, &load_opts(dir.path()))
         .expect_err("subsystem ref to a coupling library must fail");
     assert!(
         e.to_string()
@@ -398,7 +398,7 @@ fn template_import_targeting_a_coupling_library_is_rejected() {
           }
         }
         "#;
-    let e = load_with_options(wrapper, &load_opts(dir.path()))
+    let e = load_string_with_options(wrapper, &load_opts(dir.path()))
         .expect_err("template import of a coupling library must fail");
     assert!(
         e.to_string()

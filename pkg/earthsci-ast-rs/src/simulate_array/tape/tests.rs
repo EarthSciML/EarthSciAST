@@ -20,7 +20,7 @@ fn typed(doc: serde_json::Value) -> EsmFile {
     // interner, so structurally identical subtrees share one `Arc` — the
     // property the pointer-keyed value numbering exploits (exactly as the
     // production `load_path_with_options` path does).
-    crate::parse::load(&doc.to_string()).expect("fixture document loads")
+    crate::parse::load_string(&doc.to_string()).expect("fixture document loads")
 }
 
 fn compile(doc: serde_json::Value) -> ArrayCompiled {

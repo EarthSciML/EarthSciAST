@@ -18,7 +18,7 @@
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { load, type LoadOptions } from './parse.js'
+import { loadString, type LoadOptions } from './parse.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import type { EsmFile } from './types.js'
 
@@ -60,12 +60,12 @@ export function loadFixture(...segments: string[]): EsmFile {
 }
 
 /**
- * Parse a fixture addressed by an absolute path via {@link load}, defaulting
+ * Parse a fixture addressed by an absolute path via {@link loadString}, defaulting
  * `basePath` to the file's own directory. Any extra {@link LoadOptions} (e.g.
  * `metaparameters`) are merged in and override the defaults.
  */
 export function loadFixtureFile(absPath: string, options?: LoadOptions): EsmFile {
-  return load(fs.readFileSync(absPath, 'utf-8'), {
+  return loadString(fs.readFileSync(absPath, 'utf-8'), {
     basePath: path.dirname(absPath),
     ...options,
   })

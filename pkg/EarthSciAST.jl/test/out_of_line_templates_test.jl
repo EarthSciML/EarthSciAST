@@ -43,7 +43,7 @@ end
     _isapply(x) = x isa AbstractDict && get(x, "op", nothing) == "apply_expression_template"
 
     # -----------------------------------------------------------------------
-    # BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load(fixture)) is
+    # BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load_path(fixture)) is
     # structurally equal to the existing expanded*.esm oracle. The 21 goldens
     # are NOT regenerated — they are the Option-A image `Expand` must reproduce.
     # -----------------------------------------------------------------------
@@ -105,7 +105,7 @@ end
         # Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it
         # only ever raises: a 1.0.0 source keeps 1.0.0 rather than being
         # downgraded to a schema that cannot describe it.
-        @test doc["esm"] == EarthSciAST.ESM_FORMAT_VERSION
+        @test doc["esm"] == EarthSciAST.SCHEMA_VERSION
         @test EarthSciAST._esm_stamp_floor("0.8.0") == "0.9.0"   # below the floor: raised
         @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
         @test !haskey(adv, "expression_template_imports")     # imports consumed
@@ -219,7 +219,7 @@ end
         @test !haskey(root["models"]["B"], "expression_templates")
         # The typed FlattenedSystem carries the same merged registry as a
         # first-class field (esm-libraries-spec §4.7.5 step 4).
-        flat = EarthSciAST.flatten(EarthSciAST.load(conf("flatten_registry_merge", "fixture.esm")))
+        flat = EarthSciAST.flatten(EarthSciAST.load_path(conf("flatten_registry_merge", "fixture.esm")))
         @test Set(keys(flat.template_registry)) == Set(["sten", "A.s", "B.s"])
     end
 
@@ -250,7 +250,7 @@ end
         # The executing path: the typed FlattenedSystem's registry agrees, and
         # every surviving reference resolves against it — `expand_flattened_refs`
         # is the call that threw before the fix.
-        flat = EarthSciAST.flatten(EarthSciAST.load(conf(dir, "fixture.esm")))
+        flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture.esm")))
         @test Set(keys(flat.template_registry)) == Set(keys(merged))
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
     end
@@ -279,7 +279,7 @@ end
                                              "B" => raw["models"]["A"])
             path = joinpath(d, "twins.esm")
             open(io -> JSON3.write(io, doc), path, "w")
-            flat = EarthSciAST.flatten(EarthSciAST.load(path))
+            flat = EarthSciAST.flatten(EarthSciAST.load_path(path))
             @test Set(keys(flat.template_registry)) ==
                   Set(["A.interior_stencil", "A.outer_stencil",
                        "B.interior_stencil", "B.outer_stencil"])
@@ -334,7 +334,7 @@ end
 
         # scoping ∘ merge: the executing flatten renames all four entries, and
         # every surviving reference resolves against the carried registry.
-        flat = EarthSciAST.flatten(EarthSciAST.load(conf(dir, "fixture_twins.esm")))
+        flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture_twins.esm")))
         @test Set(keys(flat.template_registry)) ==
               Set(["A.interior_stencil", "A.outer_stencil",
                    "B.interior_stencil", "B.outer_stencil"])
@@ -366,7 +366,7 @@ end
         for dir in ["emit_materialized_registry", "emit_rename_dotted_keys",
                     "eager_target_bearing", "opacity_negative",
                     "opacity_priority_shadowing"]
-            f = EarthSciAST.load(conf(dir, "fixture.esm"))
+            f = EarthSciAST.load_path(conf(dir, "fixture.esm"))
             @test f.component_templates !== nothing        # registries survive into typed IR
             typed_bytes = emit_esm_string(serialize_esm_file(f))
             raw_bytes = emit_esm_string(emit_document(
@@ -378,14 +378,14 @@ end
         # ESS_TEMPLATE_REF_DISABLE=1 → Expand-at-load: references gone from the
         # typed IR, save reverts to the historical (expanded) form.
         withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            f = EarthSciAST.load(conf("opacity_negative", "fixture.esm"))
+            f = EarthSciAST.load_path(conf("opacity_negative", "fixture.esm"))
             @test f.component_templates === nothing
         end
         # A template-LIBRARY file round-trips to itself (authored declarations
         # survive verbatim, §9.6.4 rule 5): the top-level registry is preserved.
         lib = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "template_import_lib.esm")
         if isfile(lib)
-            lf = EarthSciAST.load(lib)
+            lf = EarthSciAST.load_path(lib)
             @test lf.expression_templates !== nothing
             @test !isempty(lf.expression_templates)
         end
@@ -407,7 +407,7 @@ end
     @testset "gate (d): reference-aware build ≡ Expand build (bit-identical f!)" begin
         F = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", "transport_3axis_7cubed.esm")
         if isfile(F)
-            f = EarthSciAST.load(F)
+            f = EarthSciAST.load_path(F)
             @test f.component_templates !== nothing               # references survive load
             flat_fast = EarthSciAST.flatten(f)                    # references reach the build
             @test !isempty(flat_fast.template_registry)           # merged registry carried
@@ -429,7 +429,7 @@ end
             end
             # And bit-identical to the ESS_TEMPLATE_REF_DISABLE=1 Expand-at-load path.
             fd = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-                EarthSciAST.load(F)
+                EarthSciAST.load_path(F)
             end
             @test fd.component_templates === nothing
             f3!, u03, p3, _t3, _vm3 = EarthSciAST.build_evaluator(
@@ -470,7 +470,7 @@ end
                                                   "wrt" => "t"),
                         "rhs" => Dict{String,Any}("op" => "-", "args" => Any["c"]))])))),
                 path, "w")
-            EarthSciAST.flatten(EarthSciAST.load(path))
+            EarthSciAST.flatten(EarthSciAST.load_path(path))
         end
         @test isempty(base.template_registry)
 

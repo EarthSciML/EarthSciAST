@@ -145,46 +145,22 @@
     }
   },
   "counts": {
-    "symbols": 949,
+    "symbols": 946,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 287,
-      "typescript": 206,
-      "python": 228,
-      "rust": 288,
-      "go": 372,
+      "julia": 291,
+      "typescript": 210,
+      "python": 234,
+      "rust": 291,
+      "go": 374,
       "editor": 71
     },
     "by_tier": {
-      "extension": 700,
-      "stable": 249
+      "extension": 693,
+      "stable": 253
     }
   },
   "planned": [
-    {
-      "canonical": "load",
-      "issue": "`load` has two incompatible contracts. Julia `load(path)` and Go `Load(path)` take a FILE PATH; TypeScript `load(text)` and Rust `load(text)` take JSON TEXT; Python `load(path_or_string_or_dict)` sniffs. A string argument therefore means opposite things in different bindings, with no type error to catch it.",
-      "resolution": "Split into `load_path(path)` and `load_text(json)`; keep `load` only where a binding can dispatch unambiguously (Julia on `::String` vs `::IO`, Python on type).",
-      "affects": [
-        "julia",
-        "typescript",
-        "python",
-        "rust",
-        "go"
-      ]
-    },
-    {
-      "canonical": "save",
-      "issue": "`save` is pure serialization in TypeScript and Rust (returns a string, never touches disk), a write in Julia (`save(file, path)`), and both in Python (`save(file, path=None) -> str`). Go spells the pure half `Serialize` and the writing half `SaveToFile`.",
-      "resolution": "Canonicalise `save(file) -> str` as the pure form everywhere and `save_path(file, path)` as the writing form; Go's `Serialize`/`SaveToFile` become `Save`/`SavePath`.",
-      "affects": [
-        "julia",
-        "typescript",
-        "python",
-        "rust",
-        "go"
-      ]
-    },
     {
       "canonical": "abstol / reltol / saveat / alg",
       "issue": "Python's `simulate` takes scipy's `rtol=` / `atol=` / `method=`; Julia and Rust take SciML's `reltol` / `abstol` and Julia takes `alg` / `saveat`. Rust's `SimulateOptions` spells them `solver` and `output_times`.",
@@ -3078,14 +3054,6 @@
       }
     },
     {
-      "name": "esm_format_version",
-      "kind": "constant",
-      "tier": "extension",
-      "bindings": {
-        "julia": "ESM_FORMAT_VERSION"
-      }
-    },
-    {
       "name": "esm_machinery_error",
       "kind": "error",
       "tier": "extension",
@@ -4457,6 +4425,18 @@
       }
     },
     {
+      "name": "library_version",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "go": "LibraryVersion",
+        "julia": "LIBRARY_VERSION",
+        "python": "LIBRARY_VERSION",
+        "rust": "LIBRARY_VERSION",
+        "typescript": "LIBRARY_VERSION"
+      }
+    },
+    {
       "name": "literal_value",
       "kind": "function",
       "tier": "extension",
@@ -4465,23 +4445,31 @@
       }
     },
     {
-      "name": "load",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "go": "Load",
-        "julia": "load",
-        "python": "load",
-        "rust": "load",
-        "typescript": "load"
-      }
-    },
-    {
       "name": "load_data",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "python": "load_data"
+      }
+    },
+    {
+      "name": "load_document",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "LoadDocument",
+        "julia": "load_document",
+        "python": "load_document",
+        "rust": "load_document",
+        "typescript": "loadDocument"
+      }
+    },
+    {
+      "name": "load_document_with_options",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "load_document_with_options"
       }
     },
     {
@@ -4512,9 +4500,13 @@
     {
       "name": "load_path",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "load_path"
+        "go": "LoadPath",
+        "julia": "load_path",
+        "python": "load_path",
+        "rust": "load_path",
+        "typescript": "loadPath"
       }
     },
     {
@@ -4544,17 +4536,21 @@
     {
       "name": "load_string",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "LoadString"
+        "go": "LoadString",
+        "julia": "load_string",
+        "python": "load_string",
+        "rust": "load_string",
+        "typescript": "loadString"
       }
     },
     {
-      "name": "load_with_options",
+      "name": "load_string_with_options",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "load_with_options"
+        "rust": "load_string_with_options"
       }
     },
     {
@@ -6525,49 +6521,6 @@
       }
     },
     {
-      "name": "save",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "save",
-        "python": "save",
-        "rust": "save",
-        "typescript": "save"
-      }
-    },
-    {
-      "name": "save_compact",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "save_compact"
-      }
-    },
-    {
-      "name": "save_compact_to_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SaveCompactToFile"
-      }
-    },
-    {
-      "name": "save_options",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "SaveOptions"
-      }
-    },
-    {
-      "name": "save_to_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SaveToFile"
-      }
-    },
-    {
       "name": "scatter_grid",
       "kind": "function",
       "tier": "extension",
@@ -6609,6 +6562,8 @@
       "tier": "stable",
       "bindings": {
         "go": "SchemaVersion",
+        "julia": "SCHEMA_VERSION",
+        "python": "SCHEMA_VERSION",
         "rust": "SCHEMA_VERSION",
         "typescript": "SCHEMA_VERSION"
       }
@@ -6654,27 +6609,11 @@
       }
     },
     {
-      "name": "serialize",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "Serialize"
-      }
-    },
-    {
       "name": "serialize_canonical",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "python": "serialize_canonical"
-      }
-    },
-    {
-      "name": "serialize_compact",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SerializeCompact"
       }
     },
     {
@@ -7482,16 +7421,40 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToJSON",
         "julia": "to_json",
-        "python": "to_json"
+        "python": "to_json",
+        "rust": "to_json",
+        "typescript": "toJson"
+      }
+    },
+    {
+      "name": "to_json_compact",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ToJSONCompact",
+        "julia": "to_json_compact",
+        "python": "to_json_compact",
+        "rust": "to_json_compact",
+        "typescript": "toJsonCompact"
       }
     },
     {
       "name": "to_json_graph",
       "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "to_json_graph",
+        "typescript": "toJsonGraph"
+      }
+    },
+    {
+      "name": "to_json_options",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
-        "typescript": "toJsonGraph"
+        "typescript": "ToJsonOptions"
       }
     },
     {
@@ -8296,15 +8259,6 @@
       }
     },
     {
-      "name": "version",
-      "kind": "constant",
-      "tier": "stable",
-      "bindings": {
-        "rust": "VERSION",
-        "typescript": "VERSION"
-      }
-    },
-    {
       "name": "vertex_kind",
       "kind": "type",
       "tier": "stable",
@@ -8360,6 +8314,26 @@
       "tier": "extension",
       "bindings": {
         "julia": "write_junit_xml"
+      }
+    },
+    {
+      "name": "write_path",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "WritePath",
+        "julia": "write_path",
+        "python": "write_path",
+        "rust": "write_path",
+        "typescript": "writePath"
+      }
+    },
+    {
+      "name": "write_path_compact",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "WritePathCompact"
       }
     },
     {

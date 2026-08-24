@@ -3,14 +3,14 @@
  * guesses, and system_kind (gt-ebuq).
  */
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
-import { save } from './serialize.js'
+import { loadString } from './parse.js'
+import { toJson } from './serialize.js'
 import { readFixture } from './test-helpers.js'
 import type { Model } from './types.js'
 
 function loadFixture(name: string) {
   const text = readFixture('valid', name)
-  return { text, parsed: load(text) }
+  return { text, parsed: loadString(text) }
 }
 
 describe('Nonlinear-system additions (gt-ebuq)', () => {
@@ -21,8 +21,8 @@ describe('Nonlinear-system additions (gt-ebuq)', () => {
     expect(model.initialization_equations).toHaveLength(2)
     expect(Object.keys(model.guesses!).sort()).toEqual(['H', 'SO4'])
 
-    const first = save(parsed)
-    const second = save(load(first))
+    const first = toJson(parsed)
+    const second = toJson(loadString(first))
     expect(JSON.parse(first)).toEqual(JSON.parse(second))
   })
 
@@ -33,8 +33,8 @@ describe('Nonlinear-system additions (gt-ebuq)', () => {
     expect(model.initialization_equations).toBeUndefined()
     expect(model.guesses).toBeUndefined()
 
-    const first = save(parsed)
-    const second = save(load(first))
+    const first = toJson(parsed)
+    const second = toJson(loadString(first))
     expect(JSON.parse(first)).toEqual(JSON.parse(second))
   })
 })

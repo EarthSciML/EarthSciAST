@@ -25,7 +25,7 @@
  * Julia reference implementation (`EarthSciAST.jl/src/template_imports.jl`).
  *
  * File access is synchronous (imports resolve inside the synchronous
- * `load()`): under Node the built-in `fs` module is obtained via
+ * the `load*` entry points): under Node the built-in `fs` module is obtained via
  * `process.getBuiltinModule`; other environments must supply a `readFile`
  * hook. Remote (`http(s)://`) template-library refs are not fetchable from a
  * synchronous loader and are rejected as `template_import_unresolved`.
@@ -84,7 +84,7 @@ export interface TemplateResolveOptions {
   /**
    * Schema validator applied to each import target (a target failing schema
    * validation is `template_import_unresolved`, mirroring the Julia
-   * reference). Supplied by `load()`; optional for direct/raw use.
+   * reference). Supplied by the `load*` entry points; optional for direct/raw use.
    */
   validateSchema?: ((raw: unknown) => TemplateSchemaError[]) | undefined
 }

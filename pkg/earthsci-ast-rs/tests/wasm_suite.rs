@@ -21,7 +21,7 @@ use wasm_bindgen_test::*;
 
 use earthsci_ast::{
     Manifold, SimulateOptions, SolverChoice, component_graph, free_variables, intersect_polygon,
-    load, polygon_area, save, shoelace_area, simulate, stoichiometric_matrix, validate,
+    load_string, polygon_area, shoelace_area, simulate, stoichiometric_matrix, to_json, validate,
 };
 
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒
@@ -96,7 +96,7 @@ const REACTIONS: &str = r#"{
 
 #[wasm_bindgen_test]
 fn loads_validates_and_roundtrips() {
-    let file = load(SCALAR_ODE).expect("load scalar ODE");
+    let file = load_string(SCALAR_ODE).expect("load scalar ODE");
     let result = validate(&file);
     assert!(
         result.is_valid,
@@ -105,8 +105,8 @@ fn loads_validates_and_roundtrips() {
     );
 
     // save → load round-trips to an equivalent, still-valid document.
-    let json = save(&file).expect("save");
-    let reloaded = load(&json).expect("reload saved JSON");
+    let json = to_json(&file).expect("save");
+    let reloaded = load_string(&json).expect("reload saved JSON");
     assert!(
         validate(&reloaded).is_valid,
         "round-tripped model must validate"
@@ -115,7 +115,7 @@ fn loads_validates_and_roundtrips() {
 
 #[wasm_bindgen_test]
 fn expression_analysis() {
-    let file = load(SCALAR_ODE).expect("load");
+    let file = load_string(SCALAR_ODE).expect("load");
     let rhs = &file.models.as_ref().unwrap()["Decay"].equations[0].rhs; // k * x
     let fv = free_variables(rhs);
     assert!(
@@ -138,7 +138,7 @@ fn find_state<'a>(sol: &'a earthsci_ast::Solution, name: &str) -> &'a [f64] {
 
 #[wasm_bindgen_test]
 fn scalar_ode_matches_analytic() {
-    let file = load(SCALAR_ODE).expect("load");
+    let file = load_string(SCALAR_ODE).expect("load");
     let opts = SimulateOptions {
         output_times: Some(vec![1.0]),
         ..SimulateOptions::default()
@@ -153,7 +153,7 @@ fn scalar_ode_matches_analytic() {
 
 #[wasm_bindgen_test]
 fn array_pde_heat_matches_analytic() {
-    let file = load(HEAT_1D).expect("load 1D heat");
+    let file = load_string(HEAT_1D).expect("load 1D heat");
     let ic: HashMap<String, f64> = [
         ("u[1]", 0.5877852522924731),
         ("u[2]", 0.9510565162951535),
@@ -243,7 +243,7 @@ fn spherical_clip_runs_natively_on_wasm() {
 
 #[wasm_bindgen_test]
 fn reaction_stoichiometry() {
-    let file = load(REACTIONS).expect("load reactions");
+    let file = load_string(REACTIONS).expect("load reactions");
     let rs = &file.reaction_systems.as_ref().expect("reaction_systems")["Chem"];
     let m = stoichiometric_matrix(rs);
     assert_eq!(m.len(), 2, "2 species rows: {m:?}");
@@ -266,7 +266,7 @@ fn reaction_stoichiometry() {
 
 #[wasm_bindgen_test]
 fn component_graph_and_version() {
-    let file = load(SCALAR_ODE).expect("load");
+    let file = load_string(SCALAR_ODE).expect("load");
     let graph = component_graph(&file);
     assert_eq!(graph.nodes.len(), 1, "one model node");
     assert_eq!(graph.nodes[0].id, "Decay");

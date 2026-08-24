@@ -868,7 +868,7 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
     end
     injected || throw(PdeTestError(
         "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
-    f = load(IOBuffer(JSON3.write(raw)); base_path=String(base_dir))
+    f = load_string(JSON3.write(raw); base_path=String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
     return f
 end
@@ -1099,7 +1099,7 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                        reltol::Float64=DEFAULT_TEST_RELTOL,
                        abstol::Float64=DEFAULT_TEST_ABSTOL,
                        base_dir::Union{Nothing,AbstractString}=nothing)
-    file = input isa AbstractString ? load(String(input)) : input
+    file = input isa AbstractString ? load_path(String(input)) : input
     file isa EsmFile ||
         throw(ArgumentError("run_pde_tests expects a path or EsmFile, got $(typeof(input))"))
     resolved_base = base_dir !== nothing ? String(base_dir) :

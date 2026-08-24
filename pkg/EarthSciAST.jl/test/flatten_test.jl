@@ -713,15 +713,15 @@ end
         @test fev.description == "periodic reset"
     end
 
-    @testset "current-format version defaults (ESM_FORMAT_VERSION)" begin
+    @testset "current-format version defaults (SCHEMA_VERSION)" begin
         E = EarthSciAST
         vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))])
         flat = flatten(model; name="V")
         @test flat isa FlattenedSystem
         doc = E.flattened_to_esm(flat)
-        @test doc["esm"] == E.ESM_FORMAT_VERSION
-        @test E.ESM_FORMAT_VERSION == "1.0.0"
+        @test doc["esm"] == E.SCHEMA_VERSION
+        @test E.SCHEMA_VERSION == "1.0.0"
     end
 
     @testset "Flatten valid fixtures smoke test" begin
@@ -733,7 +733,7 @@ end
         for filename in filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
             filepath = joinpath(valid_fixtures_dir, filename)
             @testset "Flatten fixture: $filename" begin
-                esm_data = EarthSciAST.load(filepath)
+                esm_data = EarthSciAST.load_path(filepath)
                 flat = flatten(esm_data)
                 @test flat isa FlattenedSystem
             end

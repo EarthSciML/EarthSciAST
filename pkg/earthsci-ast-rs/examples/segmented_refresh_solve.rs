@@ -49,7 +49,7 @@ use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load};
+use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -364,7 +364,7 @@ fn buffer_value(forcing: &ForcingBuffer, var: &str) -> Vec<f64> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the coupled, discretized RHS: flatten merges the two components into
     // one namespaced system; the `from_flattened` seam compiles that array system.
-    let file = load(COUPLED_FORCED_JSON)?;
+    let file = load_string(COUPLED_FORCED_JSON)?;
     let flat = flatten(&file)?;
     let compiled = ArrayCompiled::from_flattened(&flat)?;
 

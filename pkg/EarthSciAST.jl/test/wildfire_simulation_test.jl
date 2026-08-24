@@ -55,7 +55,7 @@ end
                        "wildfire_atmosphere_ocean.esm")
     @test isfile(fixture)
 
-    file = _ESS_WF.load(fixture)
+    file = _ESS_WF.load_path(fixture)
     # The trajectory `tests` block lives on the OceanDynamics model.
     ocean = file.models["OceanDynamics"]
     @test !isempty(ocean.tests)

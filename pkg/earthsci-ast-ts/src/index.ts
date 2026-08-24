@@ -26,7 +26,7 @@ export * from './types.js'
 // Every error class this package throws extends `EsmDiagnosticError` (finding
 // H-1), so a consumer can bracket a whole pipeline with one clause:
 //
-//   try { load(text) } catch (e) {
+//   try { loadString(text) } catch (e) {
 //     if (e instanceof EsmDiagnosticError) console.error(e.code, e.message)
 //   }
 //
@@ -37,11 +37,25 @@ export * from './types.js'
 export { EsmDiagnosticError, ERROR_CODES } from './errors.js'
 export type { ErrorCode } from './errors.js'
 
-// Export parsing and serialization functions
-export { load, validateSchema, ParseError, SchemaValidationError } from './parse.js'
+// Export parsing and serialization functions.
+//
+// `load` used to take `string | object` and mean JSON TEXT for a string —
+// while the same call in Julia and Go meant a FILE PATH, and Python sniffed.
+// One name, one argument type, opposite meanings, no type error anywhere.
+// It is replaced by three entry points that say which they are.
+export {
+  loadPath,
+  loadString,
+  loadDocument,
+  validateSchema,
+  ParseError,
+  SchemaValidationError,
+} from './parse.js'
 export type { SchemaError, LoadOptions } from './parse.js'
-export { save } from './serialize.js'
-export type { SaveOptions } from './serialize.js'
+// `save` returned a string here and wrote to disk in Julia. Split: `toJson`
+// is pure, `writePath` writes and returns nothing.
+export { toJson, toJsonCompact, writePath } from './serialize.js'
+export type { ToJsonOptions } from './serialize.js'
 export { validate } from './validate.js'
 export type { ValidationError, ValidationResult } from './validate.js'
 
@@ -322,6 +336,10 @@ export {
 } from './template-imports.js'
 export type { TemplateResolveOptions, TemplateSchemaError } from './template-imports.js'
 
-// Package metadata. Both constants track the embedded schema's version
-// (derived from its $id in parse.ts); package.json is kept in lockstep.
-export { SCHEMA_VERSION, SCHEMA_VERSION as VERSION } from './parse.js'
+// Package metadata — two DIFFERENT numbers, and they used to share a name.
+// `SCHEMA_VERSION` is the `.esm` format version this build implements,
+// derived from the embedded schema's `$id` in parse.ts. `LIBRARY_VERSION` is
+// this npm package's own version. `VERSION` (which aliased the schema
+// version here and the package version in Rust) is gone.
+export { SCHEMA_VERSION } from './parse.js'
+export { LIBRARY_VERSION } from './version.js'

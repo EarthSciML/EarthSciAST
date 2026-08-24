@@ -467,12 +467,12 @@ print(f"PSS Ratio (should ≈ 1): {pss_ratio:.3f}")
 ### TypeScript Visualization
 
 ```typescript
-import { load, validate, toUnicode, toLatex } from '@earthsciml/ast';
+import { loadString, validate, toUnicode, toLatex } from '@earthsciml/ast';
 import * as d3 from 'd3';
 
 // Load and validate model
 const esmData = await fetch('atmospheric_chemistry.esm').then(r => r.text());
-const esmFile = load(esmData);
+const esmFile = loadString(esmData);
 
 console.log('Loaded:', esmFile.metadata.name);
 

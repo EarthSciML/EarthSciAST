@@ -135,7 +135,7 @@ func runValidation(root string, m *manifest) map[string]any {
 			continue
 		}
 
-		file, loadErr := esm.Load(fullPath)
+		file, loadErr := esm.LoadPath(fullPath)
 		if loadErr != nil {
 			record["resolve_ok"] = false
 			record["error"] = loadErr.Error()

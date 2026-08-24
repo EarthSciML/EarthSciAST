@@ -854,7 +854,7 @@ mod tests {
         // pass* (raw JSON), the model declares it `discrete` + `data_ingest` so the
         // executor classifies it DISCRETE. `classify_loader_bindings` reads raw
         // JSON and never typed-parses, so the two coexist on one variable name.
-        use crate::parse::load;
+        use crate::parse::load_string;
         use crate::simulate_array::ArrayCompiled;
 
         // (a) The ArrayCompiled model: `wind` appears only in the RHS, resolved by
@@ -930,7 +930,7 @@ mod tests {
               }
             }
             "#;
-        let file = load(model_json).expect("parse forced model");
+        let file = load_string(model_json).expect("parse forced model");
         let compiled = ArrayCompiled::from_file(&file).expect("compile forced model");
 
         // (b) The cadence-classification view: `wind` is the DISCRETE output of the

@@ -33,7 +33,7 @@ function normj(v: unknown): unknown {
  * Load a fixture under Option B (references preserved), returning the raw
  * loaded document view — the TS counterpart of the Julia test `_load`
  * (resolveTemplateMachinery + lowerExpressionTemplates, NOT the Expand-at-build
- * `load()`).
+ * `loadString()`).
  */
 function loadRefPreserving(dir: string, fixture = 'fixture.esm'): Record<string, unknown> {
   const fp = conf(dir, fixture)
@@ -75,11 +75,11 @@ function definingRhs(model: Record<string, any>, name: string): unknown {
 
 describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => {
   // -------------------------------------------------------------------------
-  // BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load(fixture)) is
+  // BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(loadString(fixture)) is
   // structurally equal to the existing expanded*.esm oracle. The goldens are
   // NOT regenerated — they are the Option-A image `Expand` must reproduce.
   // -------------------------------------------------------------------------
-  describe('bridge: Expand(load) == expanded oracle', () => {
+  describe('bridge: Expand(loadString) == expanded oracle', () => {
     /**
      * A model's `equations` are a SYSTEM, not a sequence: esm assigns no meaning
      * to their order, and from esm 1.0.0 the fixture/golden pairs no longer even
@@ -330,7 +330,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
   // `flattenTemplateRegistries` is the UNION half only, over the un-namespaced
   // component view: identical bodies dedupe under their bare names, and the pair
   // it returns is self-consistent with the un-namespaced document. TypeScript
-  // reaches this surface only from conformance — its load path expands every
+  // reaches this surface only from conformance — its loadString path expands every
   // surviving reference (§9.6.4 rule 2) so `flatten` carries no registry, which
   // is why no scoping step exists here and none is required (§10.7,
   // "Applicability across bindings"). The Julia twin of this test also pins the
@@ -369,7 +369,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
     'eager_target_bearing',
     'opacity_negative',
     'opacity_priority_shadowing',
-  ])('emit ∘ load byte-wise fixed point: %s', (dir) => {
+  ])('emit ∘ loadString byte-wise fixed point: %s', (dir) => {
     const s1 = emit(dir)
     const s2 = emitEsmString(emitDocument(JSON.parse(s1), conf(dir)))
     expect(s1).toBe(s2)

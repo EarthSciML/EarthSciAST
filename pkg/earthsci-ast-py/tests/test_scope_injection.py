@@ -16,7 +16,7 @@ from conftest import CONFORMANCE_DIR
 
 from earthsci_ast.esm_types import Model
 from earthsci_ast.lower_expression_templates import ExpressionTemplateError
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.pde_inline_tests import _ephemeral_injected_file
 from earthsci_ast.serialize import _serialize_esm_file
 
@@ -46,7 +46,7 @@ def _err_code(fn) -> str | None:
 
 
 def test_form_a_subsystem_ref_injection():
-    f = load(_conf("inject_subsystem_ref", "fixture.esm"))
+    f = load_path(_conf("inject_subsystem_ref", "fixture.esm"))
     # The mounted, agnostic leaf's D(c, wrt: lon) is lowered by the injected
     # rule at the mount; the subsystem resolves to a Model (not a ref).
     runoff = f.models["Assembly"].subsystems["Runoff"]
@@ -62,7 +62,7 @@ def test_form_a_subsystem_ref_injection():
 
 def test_form_a_leaf_loads_standalone_with_d_intact():
     # The leaf loads standalone with its D intact (agnostic; unlowered).
-    leaf = load(_conf("inject_subsystem_ref", "leaf.esm"))
+    leaf = load_path(_conf("inject_subsystem_ref", "leaf.esm"))
     assert leaf.models["Advection"].equations[0].rhs.args[1].op == "D"
 
 
@@ -70,7 +70,7 @@ def test_form_a_no_inject_negative_twin_loads_clean():
     # Mounting WITHOUT injection loads cleanly (the D survives — the op
     # namespace is open); the unlowered_operator gate is an evaluation-time
     # concern, not a load error.
-    ni = load(_conf("inject_subsystem_ref", "no_inject.esm"))
+    ni = load_path(_conf("inject_subsystem_ref", "no_inject.esm"))
     runoff = ni.models["Assembly"].subsystems["Runoff"]
     assert isinstance(runoff, Model)
     assert runoff.equations[0].rhs.args[1].op == "D"
@@ -82,7 +82,7 @@ def test_form_a_no_inject_negative_twin_loads_clean():
 
 
 def test_form_b_coupling_entry_injection():
-    f = load(_conf("inject_coupling_entry", "fixture.esm"))
+    f = load_path(_conf("inject_coupling_entry", "fixture.esm"))
     # Advection is discretized by name; its lon-derivative is lowered.
     assert f.models["Advection"].equations[0].rhs.args[1].op == "makearray"
     assert f.index_sets["lon"]["size"] == 288
@@ -96,14 +96,14 @@ def test_form_b_coupling_entry_injection():
 
 def test_form_b_diagnostics():
     assert (
-        _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_unknown.esm")))
+        _err_code(lambda: load_path(_conf("inject_coupling_entry", "neg_target_unknown.esm")))
         == "template_inject_target_unknown"
     )
     # From 1.0.0 a data source is not a component, so a key naming a
     # `data_sources` entry is reported by the general not-a-component code —
     # the separate `template_inject_target_is_loader` diagnostic is retired.
     assert (
-        _err_code(lambda: load(_conf("inject_coupling_entry", "neg_target_is_loader.esm")))
+        _err_code(lambda: load_path(_conf("inject_coupling_entry", "neg_target_is_loader.esm")))
         == "template_inject_target_not_component"
     )
 
@@ -114,7 +114,7 @@ def test_form_b_diagnostics():
 
 
 def test_form_c_round_trip_keeps_component_and_test_imports():
-    f = load(_conf("inject_test_block", "fixture.esm"))
+    f = load_path(_conf("inject_test_block", "fixture.esm"))
     adv = f.models["Advection"]
     # The enclosing component round-trips with its D INTACT (form C does not
     # lower it at load) and each test keeps its import field (survives emit).
@@ -125,7 +125,7 @@ def test_form_c_round_trip_keeps_component_and_test_imports():
 
 
 def test_form_c_ephemeral_builds_lower_independently():
-    f = load(_conf("inject_test_block", "fixture.esm"))
+    f = load_path(_conf("inject_test_block", "fixture.esm"))
     adv = f.models["Advection"]
     # One suite, many schemes: each test builds an INDEPENDENT ephemeral
     # instance with its own grid, with the D lowered in that build only — the

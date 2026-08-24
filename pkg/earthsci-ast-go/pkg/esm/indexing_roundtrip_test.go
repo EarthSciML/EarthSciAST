@@ -29,7 +29,7 @@ func TestIndexOutsideArrayopFixtureParses(t *testing.T) {
 	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
 	fixturePath := filepath.Join(repoRoot, "tests", "indexing", "idx_outside_arrayop.esm")
 
-	parsed, err := Load(fixturePath)
+	parsed, err := LoadPath(fixturePath)
 	require.NoError(t, err, "Load must accept `index` outside arrayop (RFC §5.1)")
 	require.NotNil(t, parsed)
 	require.NotNil(t, parsed.Models)
@@ -81,13 +81,13 @@ func TestIndexOutsideArrayopScalarRoundTrip(t *testing.T) {
 		},
 	}
 
-	first, err := Serialize(original)
+	first, err := ToJSON(original)
 	require.NoError(t, err, "Save must succeed on scalar `index` RHS")
 
 	reparsed, err := LoadString(first)
 	require.NoError(t, err, "LoadString must accept re-serialized scalar `index` RHS")
 
-	second, err := Serialize(reparsed)
+	second, err := ToJSON(reparsed)
 	require.NoError(t, err, "Save must succeed on reparsed payload")
 
 	var firstVal, secondVal any

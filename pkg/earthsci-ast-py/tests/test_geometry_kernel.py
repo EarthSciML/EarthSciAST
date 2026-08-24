@@ -43,8 +43,8 @@ from earthsci_ast.numpy_interpreter import (
     eval_expr,
     expr_contains_array_op,
 )
-from earthsci_ast.parse import load
-from earthsci_ast.serialize import save
+from earthsci_ast.parse import load_path
+from earthsci_ast.serialize import to_json
 from earthsci_ast.validation import validate
 
 
@@ -215,7 +215,7 @@ def test_derived_range_unmaterialized_raises() -> None:
 def test_planar_fixture_clip_and_area_evaluate() -> None:
     """The shared planar fixture's actual clip + area-FAQ AST evaluates to 1.0."""
     fixture = _VALID_GEOM / "intersect_polygon_planar_area.esm"
-    doc = load(str(fixture))
+    doc = load_path(str(fixture))
     model = doc.models["PolygonClipAreaPlanar"]
     ctx = _ctx_with_polys()
     # index_sets is document-scoped: read it from the top-level file.
@@ -506,13 +506,13 @@ def test_tolerance_relative_band_scales_with_reference() -> None:
 
 def test_manifold_and_id_survive_typed_round_trip() -> None:
     fixture = _VALID_GEOM / "intersect_polygon_clip_area.esm"
-    dumped = json.loads(save(load(str(fixture))))
+    dumped = json.loads(to_json(load_path(str(fixture))))
     model = dumped["models"]["PolygonClipArea"]
     clip = next(eq["rhs"] for eq in model["equations"] if eq.get("lhs") == "clip")
     assert clip["manifold"] == "spherical"
     assert clip["id"] == "overlap_clip"
     # idempotent: a second round-trip is byte-identical
-    assert save(load(str(fixture))) == save(load(str(fixture)))
+    assert to_json(load_path(str(fixture))) == to_json(load_path(str(fixture)))
 
 
 def test_parser_rejects_intersect_polygon_without_manifold() -> None:

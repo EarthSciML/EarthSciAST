@@ -11,7 +11,7 @@
  * swept at all (audit 2026-07-14, F5; CONFORMANCE_SPEC §2.2.1).
  *
  * Every validation entry runs the full **load → resolve → validate** pipeline.
- * This producer used to call `load(fileContent)` on the file's TEXT, with no
+ * This producer used to call `loadString(fileContent)` on the file's TEXT, with no
  * base path at all, so no `{ref}` could ever resolve; `validate()` does no file
  * I/O in any binding, so `tests/valid/lib_*_subsystem_inclusion.esm` was
  * structurally unsatisfiable here.
@@ -84,7 +84,7 @@ async function runValidation(manifest) {
         // LOAD + RESOLVE: the only phase that does file I/O.
         let esmData = null
         try {
-            esmData = esm.load(text, { basePath })
+            esmData = esm.loadString(text, { basePath })
             // `load` is synchronous and cannot do the async file I/O a §4.7
             // subsystem `ref` needs; this is the distinct RESOLVE phase.
             await esm.resolveSubsystemRefs(esmData, basePath)

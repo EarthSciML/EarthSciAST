@@ -9,7 +9,7 @@ use earthsci_ast::*;
 fn test_missing_esm_version_schema_error() {
     let fixture = include_str!("../../../tests/invalid/missing_esm_version.esm");
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     assert!(result.is_err());
 
     if let Err(EsmError::SchemaValidation(schema_err)) = result {
@@ -25,7 +25,7 @@ fn test_missing_esm_version_schema_error() {
 fn test_missing_required_fields_schema_error() {
     let fixture = include_str!("../../../tests/invalid/missing_required_fields.esm");
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     assert!(result.is_err());
 
     match result {
@@ -42,7 +42,7 @@ fn test_missing_required_fields_schema_error() {
 fn test_wrong_data_types_schema_error() {
     let fixture = include_str!("../../../tests/invalid/wrong_data_types.esm");
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     assert!(result.is_err());
 
     match result {
@@ -59,7 +59,7 @@ fn test_wrong_data_types_schema_error() {
 fn test_invalid_enum_values_schema_error() {
     let fixture = include_str!("../../../tests/invalid/invalid_enum_values.esm");
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     assert!(result.is_err());
 }
 
@@ -122,7 +122,7 @@ fn test_metadata_validation_errors() {
     ];
 
     for (name, fixture) in fixtures.iter() {
-        let result = load(fixture);
+        let result = load_string(fixture);
         assert!(result.is_err(), "Expected {name} to fail validation");
     }
 }
@@ -172,7 +172,7 @@ fn test_data_source_validation_errors() {
     ];
 
     for (name, fixture) in fixtures.iter() {
-        let result = load(fixture);
+        let result = load_string(fixture);
         assert!(
             result.is_err(),
             "Expected data loader {name} to fail validation"
@@ -203,7 +203,7 @@ fn test_version_compatibility_validation_errors() {
     ];
 
     for (name, fixture) in fixtures.iter() {
-        let result = load(fixture);
+        let result = load_string(fixture);
         // Note: Some version compatibility issues might be warnings rather than hard errors
         // depending on implementation, but generally malformed versions should fail
         if name.contains("malformed") || name.contains("invalid") {
@@ -220,7 +220,7 @@ fn test_major_version_rejection() {
     let ahead =
         include_str!("../../../tests/version_compatibility/version_2_5_1_major_rejection.esm");
     assert!(
-        load(ahead).is_err(),
+        load_string(ahead).is_err(),
         "Expected major version 2.x.x to be rejected"
     );
 
@@ -230,7 +230,7 @@ fn test_major_version_rejection() {
     // anything here.
     let behind = include_str!("../../../tests/version_compatibility/version_0_1_0_pre_break.esm");
     assert!(
-        load(behind).is_err(),
+        load_string(behind).is_err(),
         "Expected major version 0.x.x to be rejected"
     );
 }
@@ -250,7 +250,7 @@ fn test_coupling_validation_errors() {
     ];
 
     for (name, fixture) in fixtures.iter() {
-        let result = load(fixture);
+        let result = load_string(fixture);
         assert!(
             result.is_err(),
             "Expected coupling {name} to fail validation"
@@ -279,7 +279,7 @@ fn test_source_catalog_document_loads() {
         }
     }"#;
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     let esm = result.expect("source-catalog document should validate and load");
     let loaders = esm
         .data_sources
@@ -298,7 +298,7 @@ fn test_source_catalog_document_loads() {
 fn test_complete_error_coverage() {
     let fixture = include_str!("../../../tests/invalid/complete_error_coverage.esm");
 
-    let result = load(fixture);
+    let result = load_string(fixture);
     assert!(
         result.is_err(),
         "Expected complete error coverage fixture to fail"

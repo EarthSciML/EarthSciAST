@@ -102,7 +102,7 @@ end
 # Subsystem-ref bindings (esm-spec §9.7.6 site 3): full typed load, then emit.
 for (wrapper, golden) in [("wrapper_n4.esm", "expanded_n4.esm"),
                           ("wrapper_n8.esm", "expanded_n8.esm")]
-    file = EarthSciAST.load(joinpath(CONF, "metaparameter_resolutions", wrapper))
+    file = EarthSciAST.load_path(joinpath(CONF, "metaparameter_resolutions", wrapper))
     _write_golden(joinpath(CONF, "metaparameter_resolutions", golden),
                   serialize_esm_file(file))
 end

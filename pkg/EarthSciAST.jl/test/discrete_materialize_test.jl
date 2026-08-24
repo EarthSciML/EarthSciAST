@@ -19,7 +19,7 @@ _dm_g(src)     = [sum(_DM_W[i, j] * src[i] for i in 1:2) for j in 1:3]
 _dm_k(offset)  = [sum(_DM_W[i, j] * offset for i in 1:2) for j in 1:3]
 
 @testset "discrete-cadence materialization (DiscreteMaterializer)" begin
-    file = _DM_ESS.load(_dm_fixture())
+    file = _DM_ESS.load_path(_dm_fixture())
     ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
 
     @testset "cut matches the inline baseline; only the param-tainted var is cached" begin

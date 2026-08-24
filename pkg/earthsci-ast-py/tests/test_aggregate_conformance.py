@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 from conftest import INVALID_DIR, VALID_DIR
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.reference_resolution import (
     E_REF_UNDECLARED_INDEX_SET,
     ReferenceResolutionError,
@@ -116,7 +116,7 @@ def test_at_least_four_worked_examples() -> None:
 def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
     """Run every inline test in an aggregate worked-example fixture."""
     raw = json.loads(fixture_path.read_text())
-    esm_file = load(fixture_path)
+    esm_file = load_path(fixture_path)
 
     any_assertions = False
     for model_name, model_raw in (raw.get("models") or {}).items():

@@ -15,7 +15,7 @@
  *    at edge time, innermost-first);
  *  - subsystem / model edge — the referenced document is resolved to concrete
  *    integers at the mount, so the value folds against the mounting document's
- *    already-closed metaparameter environment (in this binding, `load`'s
+ *    already-closed metaparameter environment (in this binding, `loadString`'s
  *    metaparameter substitution closes the parent names into the ref bindings
  *    before `resolveSubsystemRefs` folds them).
  */
@@ -23,7 +23,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { load } from './parse.js'
+import { loadString } from './parse.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import { evalMetaExpr, requireMetaExpr, resolveTemplateMachinery } from './template-imports.js'
 import { errCode, errCodeAsync } from './test-helpers.js'
@@ -196,7 +196,7 @@ function parentMount(bindings: unknown) {
 }
 
 function loadParent(doc: unknown, metaparameters?: Record<string, number>) {
-  return load(JSON.stringify(doc), { basePath: dir, metaparameters }) as any
+  return loadString(JSON.stringify(doc), { basePath: dir, metaparameters }) as any
 }
 
 describe('subsystem-edge metaparameter-expression bindings (§9.7.6 site 3)', () => {

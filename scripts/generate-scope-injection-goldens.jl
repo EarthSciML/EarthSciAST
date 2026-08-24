@@ -71,6 +71,6 @@ for (dir, fixture, golden) in [
     ("inject_coupling_entry", "fixture.esm", "expanded.esm"),
     ("inject_test_block", "fixture.esm", "roundtrip.esm"),
 ]
-    file = EarthSciAST.load(joinpath(CONF, dir, fixture))
+    file = EarthSciAST.load_path(joinpath(CONF, dir, fixture))
     _write_golden(joinpath(CONF, dir, golden), serialize_esm_file(file))
 end

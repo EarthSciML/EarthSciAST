@@ -21,7 +21,7 @@
 //! Julia twin is `pkg/EarthSciAST.jl/test/output_derivation_conformance_test.jl`.
 
 use earthsci_ast::data_output::{OutputPlan, derive_output_plan};
-use earthsci_ast::{EsmFile, load};
+use earthsci_ast::{EsmFile, load_string};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -109,7 +109,7 @@ fn every_corpus_case_derives_the_golden_plan() {
 
     for case in cases {
         let id = case["id"].as_str().expect("case id");
-        let doc: EsmFile = load(&read_text(case["fixture"].as_str().expect("fixture")))
+        let doc: EsmFile = load_string(&read_text(case["fixture"].as_str().expect("fixture")))
             .unwrap_or_else(|e| panic!("{id}: fixture loads: {e}"));
         let slots = strings(&case["slot_names"]);
         let observed = strings(&case["observed"]);
@@ -130,7 +130,7 @@ fn every_corpus_case_derives_the_golden_plan() {
 /// itself rather than showing up as a golden diff (RFC §16.12).
 #[test]
 fn a_scalar_carries_no_synthetic_axis_and_scalars_share_one_grid() {
-    let doc: EsmFile = load(&read_text("fixtures/scalar_0d.esm")).expect("fixture loads");
+    let doc: EsmFile = load_string(&read_text("fixtures/scalar_0d.esm")).expect("fixture loads");
     let slots: Vec<String> = ["Box.T", "Box.C", "Box.E"]
         .iter()
         .map(|s| (*s).to_string())
@@ -149,7 +149,7 @@ fn a_scalar_carries_no_synthetic_axis_and_scalars_share_one_grid() {
 /// literal `"time"` — the `mixed` fixture names it `t`.
 #[test]
 fn the_record_axis_comes_from_the_document() {
-    let doc: EsmFile = load(&read_text("fixtures/mixed.esm")).expect("fixture loads");
+    let doc: EsmFile = load_string(&read_text("fixtures/mixed.esm")).expect("fixture loads");
     let plan = derive_output_plan(&doc, &["Mix.mass".to_string()], &[]).expect("plan derives");
     assert_eq!(plan.grids[0].time_dim, "t");
     assert_eq!(plan.grids[0].vars[0].dims, vec!["t".to_string()]);

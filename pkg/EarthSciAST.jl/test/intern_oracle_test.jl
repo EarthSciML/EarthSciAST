@@ -236,7 +236,7 @@ end
                        "transport_3axis_7cubed_fullrank.esm")
         function bp(env)
             withenv(env...) do
-                flat = ESM.flatten(ESM.load(FIX))
+                flat = ESM.flatten(ESM.load_path(FIX))
                 f, u0, p, _, vmap = ESM.build_evaluator(flat)
                 dus = Vector{Float64}[]
                 for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
@@ -258,7 +258,7 @@ end
         end
         # :oop emitter, both ways
         oop_on = withenv("ESS_INTERN_DISABLE" => nothing) do
-            flat = ESM.flatten(ESM.load(FIX))
+            flat = ESM.flatten(ESM.load_path(FIX))
             f, u0, p, _, _ = ESM.build_evaluator(flat; form=:oop)
             [Vector{Float64}(f(u, p, ti))
              for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))]

@@ -10,7 +10,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::{
-    Flow, Progress, ProgressFn, SimulateError, SimulateOptions, SolverChoice, load, simulate,
+    Flow, Progress, ProgressFn, SimulateError, SimulateOptions, SolverChoice, load_string, simulate,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -209,7 +209,7 @@ fn assert_well_formed(log: &[Progress], t0: f64, t_end: f64) {
 
 #[test]
 fn reports_progress_on_the_natural_step_grid() {
-    let file = load(DECAY).expect("load");
+    let file = load_string(DECAY).expect("load");
     let (obs, log) = recorder();
 
     let sol = simulate(
@@ -236,7 +236,7 @@ fn reports_progress_on_the_natural_step_grid() {
 
 #[test]
 fn reports_progress_on_an_interpolated_output_grid() {
-    let file = load(DECAY).expect("load");
+    let file = load_string(DECAY).expect("load");
     let (obs, log) = recorder();
 
     // The requested output grid is much coarser than the solver's own steps;
@@ -268,7 +268,7 @@ fn reports_progress_on_an_interpolated_output_grid() {
 
 #[test]
 fn reports_progress_from_the_array_runtime() {
-    let file = load(ARRAY).expect("load");
+    let file = load_string(ARRAY).expect("load");
     let (obs, log) = recorder();
 
     let sol = simulate(
@@ -295,7 +295,7 @@ fn reports_progress_from_the_array_runtime() {
 
 #[test]
 fn returning_cancel_stops_the_run() {
-    let file = load(DECAY).expect("load");
+    let file = load_string(DECAY).expect("load");
 
     // Cancel on the 3rd accepted step. The pre-loop report is step 0, so this
     // also pins that the cancel is checked on the step reports and not only on
@@ -328,7 +328,7 @@ fn returning_cancel_stops_the_run() {
 
 #[test]
 fn cancelling_at_step_zero_stops_before_any_work() {
-    let file = load(DECAY).expect("load");
+    let file = load_string(DECAY).expect("load");
     let obs: ProgressFn = Arc::new(|_: &Progress| Flow::Cancel);
 
     let err = simulate(
@@ -354,7 +354,7 @@ fn cancelling_at_step_zero_stops_before_any_work() {
 /// exactly the kind of claim worth pinning rather than asserting in a comment.
 #[test]
 fn observing_does_not_perturb_the_trajectory() {
-    let file = load(DECAY).expect("load");
+    let file = load_string(DECAY).expect("load");
     let grid = Some(vec![0.0, 1.0, 5.0, 20.0]);
 
     let plain = simulate(

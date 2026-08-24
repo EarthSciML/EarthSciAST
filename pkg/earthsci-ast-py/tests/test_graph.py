@@ -53,17 +53,17 @@ CHEMISTRY_FIXTURE = VALID_DIR / "minimal_chemistry.esm"
 
 @pytest.fixture
 def chemistry_file():
-    return esm.load(CHEMISTRY_FIXTURE.read_text())
+    return esm.load_string(CHEMISTRY_FIXTURE.read_text())
 
 
 @pytest.fixture
 def coupled_file():
-    return esm.load((VALID_DIR / "full_coupled.esm").read_text())
+    return esm.load_string((VALID_DIR / "full_coupled.esm").read_text())
 
 
 @pytest.fixture
 def variable_map_file():
-    return esm.load((VALID_DIR / "coupling_variable_map_identity_units_match.esm").read_text())
+    return esm.load_string((VALID_DIR / "coupling_variable_map_identity_units_match.esm").read_text())
 
 
 # ---------------------------------------------------------------------------

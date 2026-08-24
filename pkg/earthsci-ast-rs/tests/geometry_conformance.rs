@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 
 use earthsci_ast::geometry::{self, Manifold};
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 
 mod common;
 
@@ -51,7 +51,7 @@ fn valid_geometry_fixtures_load() {
     );
     for path in &files {
         let json = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-        load(&json).unwrap_or_else(|e| {
+        load_string(&json).unwrap_or_else(|e| {
             panic!(
                 "{} should validate, got: {e}",
                 path.file_name().unwrap().to_string_lossy()
@@ -71,7 +71,7 @@ fn invalid_geometry_fixtures_rejected() {
     for path in &files {
         let json = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         assert!(
-            load(&json).is_err(),
+            load_string(&json).is_err(),
             "{} is a schema violation and must be rejected by the loader",
             path.file_name().unwrap().to_string_lossy()
         );

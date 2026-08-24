@@ -9,7 +9,7 @@
 //! the Julia-generated goldens.
 
 use earthsci_ast::pde_inline_tests::ephemeral_injected_file;
-use earthsci_ast::{load_path, save};
+use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -29,10 +29,10 @@ fn golden(path: &Path) -> Value {
 }
 
 /// Full typed load then re-serialize as a JSON `Value` — the exact contract the
-/// Julia golden generator drives (`serialize_esm_file(load(fixture))`).
+/// Julia golden generator drives (`serialize_esm_file(load_string(fixture))`).
 fn loaded_as_value(fixture: &Path) -> Value {
     let f = load_path(fixture).expect("typed load");
-    let text = save(&f).expect("save");
+    let text = to_json(&f).expect("save");
     serde_json::from_str(&text).expect("parse serialized")
 }
 

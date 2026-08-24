@@ -1,16 +1,16 @@
 /**
- * Round-trip and canonical-form tests for `save()` (esm-cs3).
+ * Round-trip and canonical-form tests for `toJson()` (esm-cs3).
  *
  * Verifies that the serializer:
  *   - Strips `NumericLiteral` tagged leaves to bare JSON numbers
  *   - Round-trips files that traverse `lower_*` passes (enums, expression
- *     templates) via `save(load(file))` → structurally-equal re-parse
+ *     templates) via `toJson(loadString(file))` → structurally-equal re-parse
  *   - In `canonical: true` mode, preserves the integer-vs-float
  *     discriminator per RFC §5.4.6 (e.g. `floatLit(1)` emits as `1.0`)
  */
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
-import { save } from './serialize.js'
+import { loadString } from './parse.js'
+import { toJson } from './serialize.js'
 import { intLit, floatLit, losslessJsonParse } from './numeric-literal.js'
 import { readFixture } from './test-helpers.js'
 
@@ -18,7 +18,7 @@ function fixture(name: string): string {
   return readFixture('valid', name)
 }
 
-describe('save() — NumericLiteral handling', () => {
+describe('toJson() — NumericLiteral handling', () => {
   it('emits bare JSON numbers for tagged literals (default mode)', () => {
     const ef = {
       esm: '0.4.0',
@@ -29,8 +29,8 @@ describe('save() — NumericLiteral handling', () => {
           equations: [{ lhs: 'x', rhs: { op: '*', args: [floatLit(2), 'x'] } }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef)
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef)
     const reparsed = JSON.parse(out)
     expect(reparsed.models.M.variables.x.default).toBe(42)
     expect(reparsed.models.M.equations[0].rhs.args[0]).toBe(2)
@@ -46,8 +46,8 @@ describe('save() — NumericLiteral handling', () => {
           equations: [{ lhs: 'x', rhs: { op: '*', args: [floatLit(1), 'x'] } }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef, { canonical: true })
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef, { canonical: true })
     expect(out).toContain('"default": 1.0')
     expect(out).toContain('1.0')
     // Sanity: parses back as valid JSON.
@@ -64,8 +64,8 @@ describe('save() — NumericLiteral handling', () => {
           equations: [{ lhs: 'x', rhs: 'x' }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef, { canonical: true })
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef, { canonical: true })
     expect(out).toContain('"default": 7')
     expect(out).not.toContain('"default": 7.0')
   })
@@ -80,8 +80,8 @@ describe('save() — NumericLiteral handling', () => {
           equations: [{ lhs: 'x', rhs: 'x' }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    expect(() => save(bad, { canonical: true })).toThrow()
+    } as unknown as Parameters<typeof toJson>[0]
+    expect(() => toJson(bad, { canonical: true })).toThrow()
   })
 
   it('does not mutate the input tree', () => {
@@ -95,8 +95,8 @@ describe('save() — NumericLiteral handling', () => {
           equations: [{ lhs: 'x', rhs: 'x' }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    save(ef)
+    } as unknown as Parameters<typeof toJson>[0]
+    toJson(ef)
     // The input still holds the original tagged literal.
     expect(
       // @ts-expect-error -- traversing through unknown for the test.
@@ -105,35 +105,35 @@ describe('save() — NumericLiteral handling', () => {
   })
 })
 
-describe('save() — round-trip through lower_* passes', () => {
-  it('round-trips the enums fixture (lowerEnums applied at load time)', () => {
+describe('toJson() — round-trip through lower_* passes', () => {
+  it('round-trips the enums fixture (lowerEnums applied at loadString time)', () => {
     const text = fixture('enums_categorical_lookup.esm')
-    const parsed = load(text)
-    const first = save(parsed)
-    const second = save(load(first))
+    const parsed = loadString(text)
+    const first = toJson(parsed)
+    const second = toJson(loadString(first))
     expect(JSON.parse(first)).toEqual(JSON.parse(second))
   })
 
   it('round-trips the expression-templates fixture (lowered to inline AST)', () => {
     const text = fixture('expression_templates_arrhenius.esm')
-    const parsed = load(text)
-    const first = save(parsed)
-    const second = save(load(first))
+    const parsed = loadString(text)
+    const first = toJson(parsed)
+    const second = toJson(loadString(first))
     expect(JSON.parse(first)).toEqual(JSON.parse(second))
   })
 
   it('round-trips canonical-mode parsed input (NumericLiteral leaves present)', () => {
     const text = fixture('enums_categorical_lookup.esm')
-    const parsed = load(text, { canonical: true })
-    const first = save(parsed)
-    // After save + JSON.parse, NumericLiteral leaves have collapsed to bare
+    const parsed = loadString(text, { canonical: true })
+    const first = toJson(parsed)
+    // After toJson + JSON.parse, NumericLiteral leaves have collapsed to bare
     // numbers, so a structural compare to a fresh non-canonical reparse holds.
-    const second = save(load(first))
+    const second = toJson(loadString(first))
     expect(JSON.parse(first)).toEqual(JSON.parse(second))
   })
 })
 
-describe('save() — JSON formatting', () => {
+describe('toJson() — JSON formatting', () => {
   it('uses indent=2 by default to match the Python and Julia serializers', () => {
     const ef = {
       esm: '0.4.0',
@@ -144,8 +144,8 @@ describe('save() — JSON formatting', () => {
           equations: [{ lhs: 'x', rhs: 'x' }],
         },
       },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef)
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef)
     expect(out).toContain('\n  "metadata"')
   })
 
@@ -153,8 +153,8 @@ describe('save() — JSON formatting', () => {
     const ef = {
       esm: '0.4.0',
       metadata: { name: 'compact' },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef, { indent: 0 })
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef, { indent: 0 })
     expect(out).not.toContain('\n')
   })
 
@@ -162,8 +162,8 @@ describe('save() — JSON formatting', () => {
     const ef = {
       esm: '0.4.0',
       metadata: { name: 'drop_undef', description: undefined },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef)
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef)
     expect(JSON.parse(out)).not.toHaveProperty('metadata.description')
   })
 
@@ -171,18 +171,18 @@ describe('save() — JSON formatting', () => {
     const ef = {
       esm: '0.4.0',
       metadata: { name: 'drop_undef_canonical', description: undefined },
-    } as unknown as Parameters<typeof save>[0]
-    const out = save(ef, { canonical: true })
+    } as unknown as Parameters<typeof toJson>[0]
+    const out = toJson(ef, { canonical: true })
     expect(JSON.parse(out)).not.toHaveProperty('metadata.description')
   })
 })
 
-describe('save() — losslessJsonParse compatibility', () => {
+describe('toJson() — losslessJsonParse compatibility', () => {
   it('strips NumericLiterals produced by losslessJsonParse', () => {
     const wire =
       '{"esm":"0.4.0","metadata":{"name":"t"},"models":{"M":{"variables":{"x":{"type":"state","default":3.14}},"equations":[{"lhs":"x","rhs":"x"}]}}}'
-    const tagged = losslessJsonParse(wire) as Parameters<typeof save>[0]
-    const out = save(tagged)
+    const tagged = losslessJsonParse(wire) as Parameters<typeof toJson>[0]
+    const out = toJson(tagged)
     expect(JSON.parse(out)).toEqual(JSON.parse(wire))
   })
 })

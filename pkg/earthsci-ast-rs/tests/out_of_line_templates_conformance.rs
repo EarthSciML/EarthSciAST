@@ -94,7 +94,7 @@ fn is_apply(v: &Value) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load(fixture)) is
+// BRIDGE GATE (esm-spec §9.6.7, RFC §12 gate 1): Expand(load_string(fixture)) is
 // structurally equal to the existing expanded*.esm oracle. The 21 goldens are
 // NOT regenerated — they are the Option-A image `expand` must reproduce.
 // ---------------------------------------------------------------------------

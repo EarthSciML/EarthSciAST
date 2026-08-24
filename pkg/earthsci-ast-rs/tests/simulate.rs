@@ -535,7 +535,7 @@ fn test_round_trip_simple_ode_fixture() {
             return;
         }
     };
-    let file = match earthsci_ast::load(&json) {
+    let file = match earthsci_ast::load_string(&json) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("Skipping fixture round-trip: parse failed ({e})");
@@ -590,7 +590,7 @@ fn test_round_trip_stiff_vdp_fixture() {
             return;
         }
     };
-    let file = match earthsci_ast::load(&json) {
+    let file = match earthsci_ast::load_string(&json) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("Skipping VdP fixture: parse failed ({e})");

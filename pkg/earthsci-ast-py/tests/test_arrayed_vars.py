@@ -5,19 +5,19 @@ from __future__ import annotations
 import pytest
 from conftest import FIXTURES_ROOT
 
-from earthsci_ast import load, save
+from earthsci_ast import load_path, load_string, to_json
 
 FIXTURES = FIXTURES_ROOT / "fixtures" / "arrayed_vars"
 
 
 def _load(name: str):
-    return load(FIXTURES / name)
+    return load_path(FIXTURES / name)
 
 
 def _roundtrip(name: str):
     first = _load(name)
-    reserialized = save(first)
-    second = load(reserialized)
+    reserialized = to_json(first)
+    second = load_string(reserialized)
     return first, second
 
 

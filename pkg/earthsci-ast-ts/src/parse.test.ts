@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { load, save, ParseError, SchemaValidationError, validateSchema } from './index.js'
+import {
+  loadString,
+  loadDocument,
+  toJson,
+  ParseError,
+  SchemaValidationError,
+  validateSchema,
+} from './index.js'
 import { isNumericLiteral, isIntLit, isFloatLit } from './numeric-literal.js'
 import { observedUnknowns, observedDefinitions } from './classification.js'
 import type { Model } from './types.js'
@@ -20,29 +27,29 @@ describe('Parse and Serialize', () => {
 
   const validMinimalEsmJson = JSON.stringify(validMinimalEsm, null, 2)
 
-  describe('load()', () => {
+  describe('loadString()', () => {
     it('should parse valid JSON string', () => {
-      const result = load(validMinimalEsmJson)
+      const result = loadString(validMinimalEsmJson)
       expect(result.esm).toBe('1.0.0')
       expect(result.metadata.name).toBe('test-model')
     })
 
     it('should accept pre-parsed object', () => {
-      const result = load(validMinimalEsm)
+      const result = loadDocument(validMinimalEsm)
       expect(result.esm).toBe('1.0.0')
       expect(result.metadata.name).toBe('test-model')
     })
 
     it('should throw ParseError on invalid JSON', () => {
       expect(() => {
-        load('{ invalid json')
+        loadString('{ invalid json')
       }).toThrow(ParseError)
     })
 
     it('should throw SchemaValidationError on missing required fields', () => {
       const invalid = { esm: '1.0.0' } // missing metadata and models/reaction_systems
       expect(() => {
-        load(invalid)
+        loadDocument(invalid)
       }).toThrow(SchemaValidationError)
     })
 
@@ -52,16 +59,16 @@ describe('Parse and Serialize', () => {
         esm: 'not-a-version',
       }
       expect(() => {
-        load(invalid)
+        loadDocument(invalid)
       }).toThrow(SchemaValidationError)
     })
 
-    it('should load forward-compatible minor version (0.2.0) without error', () => {
+    it('should loadString forward-compatible minor version (0.2.0) without error', () => {
       const forwardCompat = {
         ...validMinimalEsm,
         esm: '1.0.0',
       }
-      const result = load(forwardCompat)
+      const result = loadDocument(forwardCompat)
       expect(result.esm).toBe('1.0.0')
     })
 
@@ -109,7 +116,7 @@ describe('Parse and Serialize', () => {
         },
       }
 
-      const result = load(esmWithExpression)
+      const result = loadDocument(esmWithExpression)
       const testModel = result.models?.['test'] as Model | undefined
       expect(testModel).toBeDefined()
 
@@ -149,7 +156,7 @@ describe('Parse and Serialize', () => {
         ],
       }
 
-      const result = load(esmWithCoupling)
+      const result = loadDocument(esmWithCoupling)
       expect(result.coupling).toBeDefined()
       expect(result.coupling?.[0]?.type).toBe('operator_compose')
     })
@@ -181,7 +188,7 @@ describe('Parse and Serialize', () => {
           },
         }
 
-        load(badDimensions)
+        loadDocument(badDimensions)
 
         expect(warnSpy).toHaveBeenCalled()
         const messages = warnSpy.mock.calls.map((args) => String(args[0]))
@@ -212,7 +219,7 @@ describe('Parse and Serialize', () => {
           },
         }
 
-        load(goodDimensions)
+        loadDocument(goodDimensions)
 
         const unitCalls = warnSpy.mock.calls
           .map((args) => String(args[0]))
@@ -242,7 +249,7 @@ describe('Parse and Serialize', () => {
           },
         }
 
-        load(badDimensions)
+        loadDocument(badDimensions)
 
         // The location is now the JSON Pointer of the offending EQUATION, not
         // the dotted name of the enclosing model — `validate()` uses it verbatim
@@ -269,7 +276,7 @@ describe('Parse and Serialize', () => {
       })
 
       it('returns plain JS numbers by default (backwards compatible)', () => {
-        const plain = load(canonicalEsmJson) as any
+        const plain = loadString(canonicalEsmJson) as any
         const rhs = plain.models.m.equations[0].rhs
         expect(rhs.args[0]).toBe(2)
         expect(rhs.args[1]).toBe(1.5)
@@ -278,7 +285,7 @@ describe('Parse and Serialize', () => {
       })
 
       it('preserves int/float distinction under { canonical: true }', () => {
-        const canon = load(canonicalEsmJson, { canonical: true }) as any
+        const canon = loadString(canonicalEsmJson, { canonical: true }) as any
         const rhs = canon.models.m.equations[0].rhs
         expect(isNumericLiteral(rhs.args[0])).toBe(true)
         expect(isNumericLiteral(rhs.args[1])).toBe(true)
@@ -291,18 +298,18 @@ describe('Parse and Serialize', () => {
 
       it('canonical mode still validates against the schema', () => {
         const invalid = '{"esm": "1.0.0","metadata":{"name":"x"}}' // missing models/reaction_systems
-        expect(() => load(invalid, { canonical: true })).toThrow(SchemaValidationError)
+        expect(() => loadString(invalid, { canonical: true })).toThrow(SchemaValidationError)
       })
 
       it('canonical mode rejects malformed JSON', () => {
-        expect(() => load('{ not json', { canonical: true })).toThrow(ParseError)
+        expect(() => loadString('{ not json', { canonical: true })).toThrow(ParseError)
       })
 
       it('canonical mode with object input strips NumericLiterals for validation', () => {
         // Pre-parsed plain object — canonical mode is a no-op here (no tagged
-        // leaves to preserve), but load() should not error on the plain view.
+        // leaves to preserve), but loadString() should not error on the plain view.
         const obj = JSON.parse(canonicalEsmJson)
-        const result = load(obj, { canonical: true }) as any
+        const result = loadString(obj, { canonical: true }) as any
         expect(result.models.m.equations[0].rhs.args[0]).toBe(2)
       })
     })
@@ -323,15 +330,15 @@ describe('Parse and Serialize', () => {
         },
       }
 
-      const result = load(esmWithOptionalFields)
+      const result = loadDocument(esmWithOptionalFields)
       expect(result.metadata.description).toBe('A test model')
       expect(result.metadata.authors).toBeUndefined()
     })
   })
 
-  describe('save()', () => {
+  describe('toJson()', () => {
     it('should serialize EsmFile to formatted JSON string', () => {
-      const result = save(validMinimalEsm as any)
+      const result = toJson(validMinimalEsm as any)
       expect(typeof result).toBe('string')
 
       // Should be valid JSON
@@ -341,17 +348,17 @@ describe('Parse and Serialize', () => {
     })
 
     it('should produce formatted output with proper indentation', () => {
-      const result = save(validMinimalEsm as any)
+      const result = toJson(validMinimalEsm as any)
       expect(result).toContain('{\n  "esm"')
       expect(result).toContain('  "metadata": {')
     })
   })
 
   describe('round-trip property', () => {
-    it('should satisfy load(save(load(json))) === load(json)', () => {
-      const original = load(validMinimalEsmJson)
-      const serialized = save(original)
-      const reloaded = load(serialized)
+    it('should satisfy loadString(toJson(loadString(json))) === loadString(json)', () => {
+      const original = loadString(validMinimalEsmJson)
+      const serialized = toJson(original)
+      const reloaded = loadString(serialized)
 
       // Objects should be deeply equal
       expect(reloaded).toEqual(original)
@@ -398,9 +405,9 @@ describe('Parse and Serialize', () => {
         ],
       }
 
-      const first = load(complexEsm)
-      const serialized = save(first)
-      const second = load(serialized)
+      const first = loadDocument(complexEsm)
+      const serialized = toJson(first)
+      const second = loadString(serialized)
 
       expect(second).toEqual(first)
     })
@@ -466,7 +473,7 @@ describe('Parse and Serialize', () => {
   describe('error handling', () => {
     it('should preserve original error in ParseError', () => {
       try {
-        load('{ invalid json }')
+        loadString('{ invalid json }')
       } catch (error) {
         if (error instanceof ParseError) {
           expect(error.originalError).toBeDefined()
@@ -477,7 +484,7 @@ describe('Parse and Serialize', () => {
 
     it('should include validation errors in SchemaValidationError', () => {
       try {
-        load({ invalid: 'data' })
+        loadDocument({ invalid: 'data' })
       } catch (error) {
         if (error instanceof SchemaValidationError) {
           expect(error.errors).toBeDefined()

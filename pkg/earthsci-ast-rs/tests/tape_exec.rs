@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 
 /// A stencil model whose RHS folds BOTH a CONST-tier observed (`c[i]`,
@@ -69,7 +69,7 @@ fn geom_json(n: usize) -> String {
 }
 
 fn compile(n: usize) -> ArrayCompiled {
-    let file = load(&geom_json(n)).expect("load geom model");
+    let file = load_string(&geom_json(n)).expect("load geom model");
     ArrayCompiled::from_file(&file).expect("compile geom model")
 }
 

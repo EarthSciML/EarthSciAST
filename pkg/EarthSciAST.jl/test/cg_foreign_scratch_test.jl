@@ -173,7 +173,7 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
         built = 0
         for path in esms
             file = try
-                ESM.load(path)
+                ESM.load_path(path)
             catch
                 continue
             end

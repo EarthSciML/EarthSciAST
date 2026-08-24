@@ -250,7 +250,7 @@ end
       }
     }
     """
-    file = load(IOBuffer(doc))
+    file = load_string(IOBuffer(doc))
     model = file.models["M"]
 
     # The handler descriptor is preserved verbatim on the typed parameter
@@ -282,7 +282,7 @@ end
     # (§5.4: a one-element array is invalid, so the length recovers the wire
     # spelling and the round trip is stable).
     buf = IOBuffer()
-    save(file, buf)
+    write(buf, to_json(file))
     first_bytes = String(take!(buf))
     out = JSON3.read(first_bytes)
     upd = out.models.M.variables.K.update
@@ -294,9 +294,9 @@ end
 
     # Idempotence: the saved form reloads and re-saves byte-equivalently
     # (parsed-JSON equality, matching the conformance round-trip contract).
-    reloaded = load(IOBuffer(first_bytes))
+    reloaded = load_string(IOBuffer(first_bytes))
     buf2 = IOBuffer()
-    save(reloaded, buf2)
+    write(buf2, to_json(reloaded))
     @test JSON3.read(String(take!(buf2))) == out
 
     # Two or more rules take the ARRAY form; one rule never does. Both spellings
@@ -332,7 +332,7 @@ end
                       NumExpr(0.5))];
         discrete_events = [DiscreteEvent(PeriodicTrigger(1.5),
                                          [AffectEquation("K", NumExpr(0.5))])])
-    bad_file = EsmFile(ESM.ESM_FORMAT_VERSION, ESM.Metadata("bad_event");
+    bad_file = EsmFile(ESM.SCHEMA_VERSION, ESM.Metadata("bad_event");
                        models = Dict("M" => bad_model))
     codes = [e.error_type for e in validate(bad_file).structural_errors]
     @test "event_affects_parameter" in codes
@@ -365,7 +365,7 @@ end
       }
     }
     """
-    file = load(IOBuffer(doc))
+    file = load_string(IOBuffer(doc))
     event = only(file.models["M"].discrete_events)
     @test length(event.affects) == 1
     @test event.affects[1].lhs == "x"
@@ -379,13 +379,13 @@ end
 
     # Full save → load idempotence (the saved form must itself be schema-valid).
     buf = IOBuffer()
-    save(file, buf)
+    write(buf, to_json(file))
     first_bytes = String(take!(buf))
     out = JSON3.read(first_bytes)
     @test out.models.M.discrete_events[1].affects[1].lhs == "x"
     @test out.models.M.discrete_events[1].affects[1].rhs == 0.5
     buf2 = IOBuffer()
-    save(load(IOBuffer(first_bytes)), buf2)
+    write(buf2, to_json(load_string(IOBuffer(first_bytes))))
     @test JSON3.read(String(take!(buf2))) == out
 end
 
@@ -408,7 +408,7 @@ end
       }
     }
     """
-    file = load(IOBuffer(doc))
+    file = load_string(IOBuffer(doc))
 
     fips = file.index_sets["fips"]
     @test fips.members == ["8031", "8005", "8059"]  # stringified convenience view
@@ -426,8 +426,8 @@ end
     # Full save → load: the reloaded registry deep-equals the original
     # (this previously failed: members came back as strings).
     buf = IOBuffer()
-    save(file, buf)
-    reloaded = load(IOBuffer(String(take!(buf))))
+    write(buf, to_json(file))
+    reloaded = load_string(IOBuffer(String(take!(buf))))
     @test reloaded.index_sets["fips"].members_raw == Any[8031, 8005, 8059]
     @test ESM._index_set_deep_equal(reloaded.index_sets["fips"], fips)
     @test ESM._index_set_deep_equal(reloaded.index_sets["fuel"], fuel)

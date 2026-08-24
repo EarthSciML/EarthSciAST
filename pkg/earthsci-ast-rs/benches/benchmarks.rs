@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use earthsci_ast::{
     EsmFile, Expr, ExpressionNode, Metadata, Model, Reaction, ReactionSystem, Species,
-    StoichiometricEntry, load, performance::CompactExpr, save, stoichiometric_matrix, validate,
+    StoichiometricEntry, load_string, performance::CompactExpr, stoichiometric_matrix, to_json,
+    validate,
 };
 use std::collections::HashMap;
 
@@ -178,12 +179,12 @@ fn benchmark_parsing(c: &mut Criterion) {
 
     for size in [10, 50, 100].iter() {
         let esm_file = create_test_esm(*size, 10);
-        let json_str = save(&esm_file).unwrap();
+        let json_str = to_json(&esm_file).unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("standard_parse", size),
             &json_str,
-            |b, json| b.iter(|| load(black_box(json)).unwrap()),
+            |b, json| b.iter(|| load_string(black_box(json)).unwrap()),
         );
 
         #[cfg(feature = "zero_copy")]

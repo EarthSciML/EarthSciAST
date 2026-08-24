@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
-import { load, save, validate, validateSchema } from './index.js'
+import { loadString, toJson, validate, validateSchema } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
 const testsDir = fixturesDir()
@@ -49,8 +49,8 @@ describe('Aggregate / semiring fixtures', () => {
       expect(result.is_valid).toBe(true)
 
       // parse -> serialize -> parse is a fixed point on the typed view.
-      const original = load(content)
-      const reloaded = load(save(original))
+      const original = loadString(content)
+      const reloaded = loadString(toJson(original))
       expect(reloaded).toEqual(original)
     })
   })

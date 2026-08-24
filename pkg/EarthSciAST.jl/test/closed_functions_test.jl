@@ -69,8 +69,8 @@ end
                     # valid under the current schema). The shared corpus tracks
                     # the format version, so pin it against the constant rather
                     # than a frozen string.
-                    file = EarthSciAST.load(canonical)
-                    @test file.esm == EarthSciAST.ESM_FORMAT_VERSION
+                    file = EarthSciAST.load_path(canonical)
+                    @test file.esm == EarthSciAST.SCHEMA_VERSION
 
                     spec = JSON3.read(read(expected, String))
                     fn_name = String(spec.function)
