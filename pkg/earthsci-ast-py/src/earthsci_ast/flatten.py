@@ -47,6 +47,10 @@ from .index_ranges import expand_range as _expand_range
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
+#: The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel: it is
+#: never namespaced, and it is exempt from ``translate``-endpoint qualification.
+PLACEHOLDER_VAR = "_var"
+
 # ============================================================================
 # Errors (spec §4.7.5 + §4.7.6 — names mirror Rust's FlattenError enum
 # variants for cross-language error-name parity)
@@ -982,7 +986,7 @@ def _collect_model(
             component.observed[namespaced] = flat_var
 
     # _var is a placeholder used by operator_compose; never namespace it.
-    leave_alone = {"t", "_var"}
+    leave_alone = {"t", PLACEHOLDER_VAR}
     # Subsystem keys mounted on this model (nested models): references rooted at
     # one of these are subsystem-LOCAL and must be qualified with the model
     # prefix to match the lowered subsystem name (see _namespace_expr).
@@ -1042,7 +1046,7 @@ def _collect_reaction_system(
     if has_reactions:
         derived = derive_odes(rs)
 
-    leave_alone = {"t", "_var"}
+    leave_alone = {"t", PLACEHOLDER_VAR}
 
     for species in rs.species:
         namespaced = f"{full_prefix}.{species.name}"
@@ -1108,7 +1112,37 @@ def _collect_reaction_system(
 # ============================================================================
 
 
-def _build_translate_map(entry: OperatorComposeCoupling) -> dict[str, tuple[str, float]]:
+def _qualify_translate_endpoint(name: str, system: str) -> str:
+    """Put one ``translate`` endpoint into the namespaced form the matcher uses.
+
+    ``translate`` endpoints are authored in either form -- bare (``"O3"``) or
+    fully namespaced (``"ChemistrySystem.O3"``) -- but matching runs against the
+    NAMESPACED dependent variable of a flattened equation. An endpoint left bare
+    can therefore never match, which is why a correctly spelled bare map was a
+    silent no-op: the lookup missed, and the bare-name fallback then searched A
+    for the wrong short name (B's spelling, not A's) and missed too.
+
+    A bare endpoint is qualified with the system it belongs to, per §10.2's
+    direction rule: a KEY belongs to ``systems[0]``, a VALUE to ``systems[1]``.
+    An endpoint that already carries a dot is left ALONE -- it is either already
+    namespaced or names a subsystem path, and re-prefixing it would break it.
+
+    ``_var`` is exempt in both forms. It is a GLOBAL sentinel (esm-spec §6.4),
+    never namespaced; a value of ``"B._var"`` is the redundant spelling §10.2
+    requires to stay harmless, and it stays harmless here because placeholder
+    expansion has already turned that equation into a DIRECT match, which takes
+    precedence over this map.
+    """
+    if not name or name == PLACEHOLDER_VAR or name.endswith("." + PLACEHOLDER_VAR):
+        return name
+    if "." in name or not system:
+        return name
+    return f"{system}.{name}"
+
+
+def _build_translate_map(
+    entry: OperatorComposeCoupling,
+) -> dict[str, tuple[str, float]]:
     """Normalize the operator_compose ``translate`` dict, INVERTED for matching.
 
     The authored direction is normative and is not symmetric (esm-spec §10.2,
@@ -1120,18 +1154,25 @@ def _build_translate_map(entry: OperatorComposeCoupling) -> dict[str, tuple[str,
     ``{b_name: (a_name, factor)}``. Indexing the authored (A-keyed) map by B's
     dependent variable is the bug this function exists to prevent -- it makes a
     correctly spelled ``translate`` map match nothing at all.
+
+    Both endpoints are put into namespaced form first; see
+    :func:`_qualify_translate_endpoint`.
     """
     out: dict[str, tuple[str, float]] = {}
     if not entry.translate:
         return out
+    systems = list(entry.systems or [])
+    a_sys = systems[0] if len(systems) > 0 else ""
+    b_sys = systems[1] if len(systems) > 1 else ""
     for a_name, v in entry.translate.items():
+        a_q = _qualify_translate_endpoint(a_name, a_sys)
         if isinstance(v, dict):
             b_name = v.get("to") or v.get("target") or v.get("var")
             factor = float(v.get("factor", 1.0))
             if b_name:
-                out[b_name] = (a_name, factor)
+                out[_qualify_translate_endpoint(b_name, b_sys)] = (a_q, factor)
         elif isinstance(v, str):
-            out[v] = (a_name, 1.0)
+            out[_qualify_translate_endpoint(v, b_sys)] = (a_q, 1.0)
     return out
 
 
@@ -1163,6 +1204,8 @@ def _apply_operator_compose(
             a_index[dep] = i
 
     surviving_b: list[FlattenedEquation] = []
+    # b_dep -> target_dep for every match that RENAMED the dependent variable.
+    merged_away: dict[str, str] = {}
 
     for b_eq in b.equations:
         b_dep = _lhs_dependent_var(b_eq.lhs)
@@ -1205,10 +1248,49 @@ def _apply_operator_compose(
                 rhs=new_rhs,
                 source_system=a_eq.source_system,
             )
+            if target_dep != b_dep:
+                merged_away[b_dep] = target_dep
         else:
             surviving_b.append(b_eq)
 
     b.equations = surviving_b
+
+    # A renaming match CONSUMES B's defining equation, so B's declaration of that
+    # name is left with nothing to constrain it -- an algebraic unknown with no
+    # equation, which is exactly the structurally singular system step 4 exists
+    # to prevent. §10.2 says the pair names ONE quantity, so the name does not
+    # survive the merge: every remaining reference to it is retargeted at A's
+    # spelling and the stranded declaration is dropped.
+    #
+    # The retarget is document-wide, not B-local: a third system is free to
+    # reference `B.x` by its scoped name, and pruning the declaration while
+    # leaving that reference dangling would trade one broken system for another.
+    if merged_away:
+        _retarget_merged_names(components, merged_away)
+        for gone in merged_away:
+            b.state_vars.pop(gone, None)
+            b.observed.pop(gone, None)
+
+
+def _retarget_merged_names(
+    components: OrderedDict[str, _ComponentSystem],
+    renames: dict[str, str],
+) -> None:
+    """Rewrite every reference to a merged-away dependent variable, everywhere.
+
+    Applied after an ``operator_compose`` translation match folds ``B.x`` into
+    ``A.y``: the two spellings named one quantity, only ``A.y`` still exists, so
+    every equation side in the whole document is rewritten off the dead name.
+    An observed variable's defining expression is one of those equations (it is
+    not carried on :class:`FlattenedVariable`), so this covers it too.
+    """
+    for comp in components.values():
+        for i, eq in enumerate(comp.equations):
+            comp.equations[i] = FlattenedEquation(
+                lhs=substitute(eq.lhs, renames),
+                rhs=substitute(eq.rhs, renames),
+                source_system=eq.source_system,
+            )
 
 
 def _add_exprs(left: Expr, right: Expr) -> Expr:

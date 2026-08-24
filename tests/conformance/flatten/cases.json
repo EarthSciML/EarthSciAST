@@ -2575,6 +2575,189 @@
       "lifted_shapes": {}
     },
     {
+      "id": "operator_compose_translate",
+      "tier": "operator_compose",
+      "fixture": "coupling/operator_compose_resolution_fixtures.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t",
+        "x",
+        "y"
+      ],
+      "state_variables": [
+        {
+          "name": "ChemistrySystem.O3",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.NO",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.NO2",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 2e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "ChemistrySystem.k1",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 1e-05,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.k2",
+          "role": "parameter",
+          "units": "cm^3/molec/s",
+          "default": 1.8e-12,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "AdvectionSystem.u",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "name": "AdvectionSystem.v",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 4.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "name": "DiffusionSystem.kh",
+          "role": "parameter",
+          "units": "m^2/s",
+          "default": 10.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiffusionSystem"
+        },
+        {
+          "name": "DiffusionSystem.kv",
+          "role": "parameter",
+          "units": "m^2/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiffusionSystem"
+        },
+        {
+          "name": "DepositionSystem.deposition_velocity",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 0.01,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "DepositionSystem.surface_flux",
+          "role": "observed",
+          "units": "mol/m^2/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "D(ChemistrySystem.O3)/Dt",
+          "rhs": "-1 * ChemistrySystem.k1 * ChemistrySystem.O3 + DiffusionSystem.kh * laplacian(ChemistrySystem.O3) + DiffusionSystem.kv * D(ChemistrySystem.O3)/Dz",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(ChemistrySystem.NO)/Dt",
+          "rhs": "ChemistrySystem.k2 * ChemistrySystem.NO2 + DiffusionSystem.kh * laplacian(ChemistrySystem.NO) + DiffusionSystem.kv * D(ChemistrySystem.NO)/Dz",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(ChemistrySystem.NO2)/Dt",
+          "rhs": "-1 * ChemistrySystem.k2 * ChemistrySystem.NO2",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(AdvectionSystem.u)/Dt",
+          "rhs": "(-AdvectionSystem.u) * grad(AdvectionSystem.u) + (-AdvectionSystem.v) * grad(AdvectionSystem.u)",
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "lhs": "DepositionSystem.surface_flux",
+          "rhs": "DepositionSystem.deposition_velocity * DepositionSystem.O3",
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "ChemistrySystem",
+          "AdvectionSystem",
+          "DiffusionSystem",
+          "DepositionSystem"
+        ],
+        "coupling_rules": [
+          "operator_compose(ChemistrySystem + AdvectionSystem)",
+          "operator_compose(ChemistrySystem + DiffusionSystem) [translate: O3->ozone_conc*1.0, NO->nitrogen_oxide*1.0]",
+          "operator_compose(ChemistrySystem + AdvectionSystem) [translate: O3->O3*1.0, NO->NO*0.5, NO2->NO2*2.0]",
+          "operator_compose(DiffusionSystem + DepositionSystem) [translate: ozone_conc->O3*1.0]"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "edge_enumeration_area_eff",
       "tier": "arrayed",
       "fixture": "valid/aggregate/edge_enumeration_area_eff.esm",

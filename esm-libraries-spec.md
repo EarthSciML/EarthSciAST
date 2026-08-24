@@ -536,6 +536,24 @@ order; the application sequence and the reporting sequence are separate.
    composition into an over-determination error. Translation lookup MUST use B's dependent
    variable **as authored**, before placeholder expansion.
 
+   **Endpoints are matched in namespaced form.** A `translate` endpoint may be authored either
+   bare (`"O3"`) or fully scoped (`"ChemistrySystem.O3"`); esm-spec §10.10.2 lists both key and
+   value as scoped-reference occurrence sites. Matching, however, runs against the **namespaced**
+   dependent variable of a flattened equation. An implementation MUST therefore qualify a bare
+   endpoint before matching — a KEY against `systems[0]`, a VALUE against `systems[1]` — and MUST
+   leave an endpoint that already carries a dot alone, since it is either already namespaced or
+   names a subsystem path.
+
+   This is the second half of the direction rule above and fails the same way. A map authored
+   `{"O3": {"var": "ozone_conc"}}` under `"systems": ["ChemistrySystem", "DiffusionSystem"]` is
+   correctly spelled, but compared against B's dependent variable `DiffusionSystem.ozone_conc` it
+   misses; the bare-name fallback then searches A for B's short name and misses too, and the entry
+   silently no-ops. Direction and name-form must BOTH be right for the branch to run at all.
+
+   `_var` is exempt in either position: it is a global sentinel (esm-spec §6.4), never namespaced,
+   and a value of `"B._var"` is the redundant spelling the invariant above requires to stay
+   harmless.
+
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
    - **Translation match:** The translate map maps A's variable to B's variable.
@@ -555,6 +573,20 @@ order; the application sequence and the reporting sequence are separate.
      already substituted, so in both cases this rewrite is the identity. Step 4 introduces no
      renaming of its own beyond it.
    - Variables from system B that appear in the combined RHS are added to the merged system's variable list.
+   - **The merged-away name does not survive.** When a match renames the dependent variable — a
+     translation match, or the bare-name fallback, which is a name-based translation — B's
+     declaration of that variable is left with nothing to constrain it: the equation that defined
+     it has just been consumed by the merge. An implementation MUST drop that stranded declaration
+     from the flattened variable tables, and MUST first retarget every surviving reference to it at
+     A's spelling. The retarget is **document-wide**, not local to B: a third system may reference
+     `B.x` by its scoped name, and pruning the declaration while leaving that reference dangling
+     trades one broken system for another.
+
+     Keeping the declaration is not a harmless conservatism. An unknown with no defining equation
+     classifies as an *algebraic* unknown (§6.3.1), so the flattened system gains a state with no
+     constraint — structurally singular, and rejected by the solver rather than by the coupling
+     that caused it. Avoiding exactly that is what the rewrite in the previous bullet is for; the
+     prune is its other half.
 
 5. **Preserve unmatched equations.** Equations in either system that have no match are included in the merged system unchanged.
 

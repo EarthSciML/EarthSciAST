@@ -157,6 +157,22 @@ CASES: list[tuple[str, str, str]] = [
         "bare_reference_resolution",
         "scoping/bare_reference_resolution.esm",
     ),
+    # Added later the same day, once the three above were driven from every
+    # binding and the translation branch was MEASURED rather than read: across
+    # all 34 `operator_compose` entries in the shared tree, 19 matched directly
+    # and ZERO matched through `translate` -- the branch was dead everywhere,
+    # even after the direction fix, because `translate` endpoints are authored
+    # bare (`"O3"`) while matching runs on the NAMESPACED dependent variable
+    # (`"DiffusionSystem.ozone_conc"`) and no binding qualified them. This is the
+    # one fixture in the tree that pins a real translation match, so it is what
+    # makes §4.7.1 step 2's name-form rule and step 4's prune observable at all:
+    # `ChemistrySystem.O3` and `DiffusionSystem.ozone_conc` are one quantity
+    # under two names, each carrying its own tendency.
+    (
+        "operator_compose",
+        "operator_compose_translate",
+        "coupling/operator_compose_resolution_fixtures.esm",
+    ),
     # --- arrayed model exercising index_sets ---------------------------------
     (
         "arrayed",

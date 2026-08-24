@@ -3842,6 +3842,20 @@ consults it backwards, and a correctly spelled `translate` map then matches noth
 MUST produce the same flattened system as omitting it — see §4.7.1 step 2's redundancy invariant for
 the specific way this goes wrong when translation is applied after expansion rather than before.
 
+**Either name form is admitted, and both mean the scoped name.** An endpoint may be written bare
+(`"O3"`) or fully scoped (`"ChemistrySystem.O3"`); §10.10.2 lists both key and value as
+scoped-reference sites. A bare endpoint is resolved against the system it belongs to under the
+direction rule above — a key against `systems[0]`, a value against `systems[1]` — so the two
+spellings denote the same variable and MUST produce the same flattened system. An endpoint that
+already contains a `.` is taken as written. `_var` is exempt in either position, being a global
+sentinel (§6.4) that is never namespaced.
+
+**A translation match consumes the merged-away name.** Because a `translate` pair names one physical
+quantity under two spellings, only `A`'s spelling survives the composition: `B`'s declaration of the
+translated variable is removed from the flattened system and every remaining reference to it —
+anywhere in the document, not only inside `B` — is retargeted at `A`'s name. See
+`esm-libraries-spec.md` §4.7.1 step 4.
+
 ### 10.3 The `connector` Field
 
 For `couple`, `connector` defines the `ConnectorSystem` — the set of equations that link two systems. Each equation is explicitly provided by the user and specifies which variable is affected and how:
