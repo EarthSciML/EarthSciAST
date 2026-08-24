@@ -714,7 +714,13 @@ impl ExpressionGraphInput for crate::Expr {
         // NON_EQUATION_INDEX: a bare expression has no positional equation to
         // index, which is exactly what the sentinel is for. (The Equation and
         // Reaction overloads DO number their single target 0.)
-        process_expression(&mut b, self, "expr_result", NON_EQUATION_INDEX, DEFAULT_SYSTEM);
+        process_expression(
+            &mut b,
+            self,
+            "expr_result",
+            NON_EQUATION_INDEX,
+            DEFAULT_SYSTEM,
+        );
         b.finish()
     }
 }

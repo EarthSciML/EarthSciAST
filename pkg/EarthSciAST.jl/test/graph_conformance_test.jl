@@ -10,8 +10,11 @@
 # Node and edge ORDER is not a conformance property: each binding iterates its
 # own maps. Every list is compared as a SORTED MULTISET.
 #
-# The DOT and Mermaid BYTES are not pinned and are not asserted here — §4.8.3
-# requires both formats and specifies neither. See the corpus README.
+# The DOT and Mermaid HEADER lines are pinned (§4.8.3 requires both formats and
+# specifies neither, so the tie-break is the majority of the five bindings). The
+# rest of their bytes is not: every node line carries a label run through the
+# chemical-subscript formatter, which two of the five bindings do not have. See
+# the corpus README.
 
 using Test
 using JSON3

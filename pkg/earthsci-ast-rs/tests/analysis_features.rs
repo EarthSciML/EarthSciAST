@@ -179,7 +179,7 @@ fn test_analysis_features_integration() {
 
     let mermaid_export = comp_graph.to_mermaid();
     assert!(!mermaid_export.is_empty());
-    assert!(mermaid_export.contains("graph LR"));
+    assert!(mermaid_export.contains("graph TD"));
 
     let json_export = comp_graph.to_json_graph();
     assert!(!json_export.is_empty());

@@ -221,4 +221,7 @@ not that it wins arguments.
 | Rust | `pkg/earthsci-ast-rs/tests/graph_conformance.rs` |
 | Julia | `pkg/EarthSciAST.jl/test/graph_conformance_test.jl` |
 
-None of them carries a skip, xfail, mask or `@test_broken` any more.
+None of them carries a skip, xfail, mask or `@test_broken` for a *conformance*
+question any more. Julia's `testutils._require_fixture` still records a
+`@test_skip` when a fixture file is absent from the checkout; that is
+infrastructural and unrelated.
