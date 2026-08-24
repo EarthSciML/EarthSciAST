@@ -143,9 +143,50 @@ function eventRecord(e: ContinuousEvent | DiscreteEvent): EventCase {
   }
 }
 
+/**
+ * Normalize one `metadata.coupling_rules` entry for comparison.
+ *
+ * The prose is compared EXACTLY — order, kind and wording — with exactly one
+ * carve-out: a `variable_map` whose §10.4 `transform` is an **Expression**.
+ * There the oracle's `_describe_coupling` interpolates the transform with a
+ * Python f-string, so what lands in the corpus is the `repr()` of Python's
+ * `ExprNode` dataclass, tail of `wrt=None, dim=None, …` and all:
+ *
+ *     variable_map(Chemistry.O3 -> Surface.surface_resistance,
+ *       transform=ExprNode(op='*', args=[100.0, ExprNode(op='+', …,
+ *       wrt=None, dim=None, var=None, lower=None, …)])
+ *
+ * That string is a private detail of one binding's data model. No other binding
+ * can produce it, and no spec text fixes it: esm-libraries-spec §4.7.5 asks only
+ * for "metadata recording … which coupling rules were applied", and the corpus's
+ * own `spec` pointer says nothing more. Julia and Rust already treat this field
+ * as unpinned free text for the same reason (Julia compares the coupling KIND
+ * only; Rust does not compare it at all). This binding stays STRICTER than both:
+ * everything up to and including `transform=` is still compared byte for byte,
+ * so the entry's kind, its `from`, its `to` and its position all remain pinned —
+ * only the un-portable repr tail is dropped.
+ */
+function couplingRuleKey(rule: string): string {
+  const marker = ', transform=ExprNode('
+  const i = rule.indexOf(marker)
+  if (rule.startsWith('variable_map(') && i !== -1) {
+    return `${rule.slice(0, i)}, transform=<expression>)`
+  }
+  const j = rule.indexOf(', transform=expression)')
+  if (rule.startsWith('variable_map(') && j !== -1) {
+    return `${rule.slice(0, j)}, transform=<expression>)`
+  }
+  return rule
+}
+
 describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () => {
   it('covers every corpus case', () => {
-    expect(corpus.cases.length).toBe(19)
+    // 22 = the 19 of the previous recording plus the new `operator_compose`
+    // tier (minimal_chemistry, metadata_inheritance_coupled,
+    // bare_reference_resolution) — the three shared fixtures whose operator
+    // model is really spelled with `_var`, which is what makes a composition
+    // observable at all.
+    expect(corpus.cases.length).toBe(22)
     expect(corpus.refusals.length).toBe(2)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
@@ -252,7 +293,9 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
         expect(flat.domain.array_type ?? null).toBe(expected.domain.array_type)
       }
       expect(flat.metadata.sourceSystems).toEqual(expected.metadata.source_systems)
-      expect(flat.metadata.couplingRules).toEqual(expected.metadata.coupling_rules)
+      expect(flat.metadata.couplingRules.map(couplingRuleKey)).toEqual(
+        expected.metadata.coupling_rules.map(couplingRuleKey),
+      )
       expect(flat.metadata.operatorApplies).toEqual(expected.metadata.operator_applies)
       expect(flat.metadata.callbacks).toEqual(expected.metadata.callbacks)
     })

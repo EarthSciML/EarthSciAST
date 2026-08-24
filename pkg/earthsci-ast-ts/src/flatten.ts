@@ -76,7 +76,7 @@ import {
   updateRules,
   type SystemKind,
 } from './classification.js'
-import { EsmDiagnosticError } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
@@ -107,6 +107,29 @@ export class ConflictingDerivativeError extends FlattenError {
   constructor(message: string) {
     super(message, 'conflicting_derivative')
     this.name = 'ConflictingDerivativeError'
+  }
+}
+
+/**
+ * A `couple` connector equation with `transform: "multiplicative"` targets
+ * something with no tendency to multiply.
+ *
+ * esm-spec §10.3 and esm-libraries-spec §4.7.2 define `multiplicative` against
+ * the target's EXISTING ODE right-hand side. When `to` names a parameter, an
+ * observed, an algebraic unknown, or an undefined name, there is no `D(to)` and
+ * the operation has no meaning.
+ *
+ * Silently dropping the connector equation — what this binding did before — is
+ * the one outcome a coupling mis-specification must not have: the document
+ * declares a coupling and the flattened system carries no trace of it.
+ *
+ * `additive` has no counterpart error because zero is the additive identity, so
+ * an additive term against an absent tendency simply becomes the tendency.
+ */
+export class CoupleMultiplicativeNoTendencyError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.COUPLE_MULTIPLICATIVE_NO_TENDENCY)
+    this.name = 'CoupleMultiplicativeNoTendencyError'
   }
 }
 
@@ -1062,19 +1085,33 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
 // Coupling resolution
 // ---------------------------------------------------------------------------
 
-/** Normalize an `operator_compose` `translate` entry to `(target, factor)`. */
+/**
+ * Normalize an `operator_compose` `translate` map, INVERTED for matching.
+ *
+ * The authored direction is normative and is NOT symmetric (esm-spec §10.2,
+ * esm-libraries-spec §4.7.1 step 2): for `"systems": [A, B]` every KEY names a
+ * variable of `A` (`systems[0]`) and every VALUE names a variable of `B`
+ * (`systems[1]`).
+ *
+ * The matching loop in {@link applyOperatorCompose} walks *B's* equations, so it
+ * needs the map the other way round. This returns the INVERSE,
+ * `{ b_name: [a_name, factor] }`. Indexing the authored (A-keyed) map by B's
+ * dependent variable is the bug this function exists to prevent: a correctly
+ * spelled `translate` map then matches nothing at all, and the whole coupling
+ * entry becomes a silent no-op.
+ */
 function buildTranslateMap(entry: CouplingEntry): Record<string, [string, number]> {
   const out: Record<string, [string, number]> = {}
   const translate = (entry as unknown as Record<string, unknown>).translate
   if (translate === null || typeof translate !== 'object') return out
-  for (const [k, v] of Object.entries(translate as Record<string, unknown>)) {
+  for (const [aName, v] of Object.entries(translate as Record<string, unknown>)) {
     if (typeof v === 'string') {
-      out[k] = [v, 1]
+      out[v] = [aName, 1]
     } else if (v !== null && typeof v === 'object') {
       const rec = v as Record<string, unknown>
-      const target = rec.to ?? rec.target ?? rec.var
-      if (typeof target === 'string') {
-        out[k] = [target, typeof rec.factor === 'number' ? rec.factor : 1]
+      const bName = rec.to ?? rec.target ?? rec.var
+      if (typeof bName === 'string') {
+        out[bName] = [aName, typeof rec.factor === 'number' ? rec.factor : 1]
       }
     }
   }
@@ -1147,9 +1184,21 @@ function applyOperatorCompose(
       continue
     }
 
+    // Resolve A's target for this dependent variable. §4.7.1 step 3 lists the
+    // match kinds in PRECEDENCE order: DIRECT first, then TRANSLATION, then the
+    // bare-name fallback. Direct-first is load-bearing, not cosmetic:
+    // placeholder expansion has already rewritten `_var` to A's own variable
+    // name, so an expanded equation IS a direct match. Consulting `translate`
+    // first lets a map keyed by A's names hit spuriously on that rewritten name
+    // and redirect the match to a target that does not exist — turning a working
+    // composition into a spurious ConflictingDerivativeError. That is exactly
+    // the `translate: { "A.x": "B._var" }` redundancy invariant of §10.2: naming
+    // `_var` explicitly asks for something automatic, and MUST stay harmless.
     let targetDep = bDep
     let factor = 1
-    if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
+    if (Object.prototype.hasOwnProperty.call(aIndex, bDep)) {
+      // Direct match — `targetDep` is already right.
+    } else if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
       const mapped = translate[bDep]
       targetDep = mapped[0]
       factor = mapped[1]
@@ -1167,6 +1216,15 @@ function applyOperatorCompose(
     if (Object.prototype.hasOwnProperty.call(aIndex, targetDep)) {
       const i = aIndex[targetDep]
       const aEq = a.equations[i]
+      // §4.7.1 step 4: on a TRANSLATION match, B's dependent variable is
+      // rewritten to A's target throughout `rhs_B` before summing — a
+      // `translate` pair names two spellings of the SAME quantity (§10.2), and
+      // B's own defining equation was just consumed by this merge, so leaving
+      // B's spelling behind would strand it as an unknown nothing defines. Only
+      // the dependent variable is rewritten; B's parameters and observeds keep
+      // their names. On a direct match the two names are equal and on a
+      // placeholder match the expansion already substituted, so in both cases
+      // this is the identity.
       let rhs = substitute(bEq.rhs, { [bDep]: targetDep }) as Expression
       if (factor !== 1) rhs = { op: '*', args: [factor, rhs] }
       a.equations[i] = {
@@ -1199,10 +1257,32 @@ function applyCouple(components: Record<string, ComponentSystem>, entry: Couplin
     })
   }
 
+  // Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME defining
+  // equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2),
+  // so an observed or algebraic equation for `x` does not qualify.
+  const tendencies = new Set<string>()
+  for (const comp of Object.values(components)) {
+    for (const eq of comp.equations) {
+      if (isNode(eq.lhs) && eq.lhs.op === 'D') {
+        const dep = lhsDependentVar(eq.lhs)
+        if (dep !== undefined) tendencies.add(dep)
+      }
+    }
+  }
+
   for (const raw of connectorEquations) {
     const ceq = raw as { to?: string; from?: string; transform?: string; expression?: Expression }
     const target = ceq.to
-    if (target === undefined || !Object.prototype.hasOwnProperty.call(eqIndex, target)) continue
+    if (target === undefined) continue
+    if (ceq.transform === 'multiplicative' && !tendencies.has(target)) {
+      throw new CoupleMultiplicativeNoTendencyError(
+        `couple connector 'multiplicative' transform targets '${target}', ` +
+          `which has no tendency (D(${target})) to multiply (esm-spec §10.3). ` +
+          `To scale a constant parameter by a factor, use a variable_map ` +
+          `entry with an Expression transform (esm-spec §10.4) instead.`,
+      )
+    }
+    if (!Object.prototype.hasOwnProperty.call(eqIndex, target)) continue
     const [sysName, i] = eqIndex[target]
     const comp = components[sysName]
     const existing = comp.equations[i]
@@ -1891,6 +1971,9 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
  *   when a variable carries a type esm 1.0.0 removed.
  * @throws {ConflictingDerivativeError} when two source systems define
  *   non-additive equations for the same dependent variable.
+ * @throws {CoupleMultiplicativeNoTendencyError} when a `couple` connector
+ *   equation with `transform: "multiplicative"` targets something with no
+ *   `D(to)` tendency to multiply (esm-spec §10.3).
  * @throws {DomainUnitMismatchError} when an `identity` `variable_map` bridges two
  *   variables whose declared, non-empty units differ.
  */

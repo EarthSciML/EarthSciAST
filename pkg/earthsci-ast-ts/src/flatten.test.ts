@@ -12,7 +12,7 @@
  * strings — so these assertions read `Object.keys(...)` and compare ASTs.
  */
 import { describe, it, expect } from 'vitest'
-import { flatten, FlattenError } from './flatten.js'
+import { flatten, CoupleMultiplicativeNoTendencyError, FlattenError } from './flatten.js'
 import { toAscii } from './pretty-print.js'
 import type { EsmFile } from './types.js'
 
@@ -272,5 +272,168 @@ describe('flatten', () => {
     const file = { esm: '1.0.0', metadata: { name: 'empty' } } satisfies EsmFile
     expect(() => flatten(file)).toThrow(FlattenError)
     expect(() => flatten(file)).toThrow(/no models or reaction systems/)
+  })
+})
+
+/**
+ * The `operator_compose` `translate` map, in the direction esm-spec §10.2 and
+ * esm-libraries-spec §4.7.1 step 2 fix: for `"systems": [A, B]` every KEY names
+ * a variable of A and every VALUE names a variable of B.
+ *
+ * These are the two failure modes the corpus's new `operator_compose` tier
+ * exists to catch, reduced to the smallest documents that show them.
+ */
+describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () => {
+  /** A: one ODE state `x`. B: one ODE on a DIFFERENTLY named `y`. */
+  function differentlyNamed(translate: Record<string, unknown>): EsmFile {
+    return {
+      esm: '1.0.0',
+      metadata: { name: 'translate-direction' },
+      models: {
+        A: {
+          variables: { x: { type: 'unknown' }, k: { type: 'parameter' } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } }],
+        },
+        B: {
+          variables: { y: { type: 'unknown' }, u: { type: 'parameter' } },
+          equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: { op: '*', args: ['u', 'y'] } }],
+        },
+      },
+      coupling: [{ type: 'operator_compose', systems: ['A', 'B'], translate }],
+    } as unknown as EsmFile
+  }
+
+  it('composes with the AUTHORED direction: keys in A, values in B', () => {
+    const flat = flatten(differentlyNamed({ 'A.x': 'B.y' }))
+    // One merged equation, not two: B's `D(y)` was consumed into A's `D(x)`.
+    expect(flat.equations).toHaveLength(1)
+    expect(toAscii(flat.equations[0]!.lhs)).toBe('D(A.x)/Dt')
+    // §4.7.1 step 4: B's dependent variable is rewritten to A's target
+    // throughout `rhs_B`. Leaving `B.y` here would strand it as an unknown
+    // nothing defines — its defining equation was just consumed.
+    expect(toAscii(flat.equations[0]!.rhs)).toBe('A.k * A.x + B.u * A.x')
+    // `B.y` stays a DECLARED state with no remaining equation — the oracle
+    // agrees (`states: ['A.x', 'B.y']` on this exact document), so it is the
+    // shared answer, not a TypeScript divergence. Step 4's rewrite is what
+    // keeps `B.y` out of the merged RHS; whether a now-equationless
+    // DECLARATION should also be pruned is a separate question no spec text
+    // settles, and this test only pins that the two bindings answer alike.
+    expect(Object.keys(flat.stateVariables)).toEqual(['A.x', 'B.y'])
+  })
+
+  it('applies the translate conversion factor to B`s RHS only', () => {
+    const flat = flatten(differentlyNamed({ 'A.x': { var: 'B.y', factor: 2 } }))
+    expect(flat.equations).toHaveLength(1)
+    // `*` is left-associative and flat in the printer, so the factor node reads
+    // without parentheses; the TREE is `2 * (B.u * A.x)`.
+    expect(toAscii(flat.equations[0]!.rhs)).toBe('A.k * A.x + 2 * B.u * A.x')
+  })
+
+  it('keeps a redundant `B._var` translate value harmless (§10.2)', () => {
+    // Placeholder expansion is automatic, so naming `_var` in `translate` asks
+    // for something that already happens: the flattened system MUST equal the
+    // one produced with no `translate` at all. Consulting an A-keyed map with
+    // B's POST-expansion dependent variable made this a spurious
+    // ConflictingDerivativeError — bug (b) of the operator_compose defect.
+    const withPlaceholder = (translate?: Record<string, unknown>): EsmFile =>
+      ({
+        esm: '1.0.0',
+        metadata: { name: 'redundant-translate' },
+        models: {
+          A: {
+            variables: { x: { type: 'unknown' }, k: { type: 'parameter' } },
+            equations: [
+              { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } },
+            ],
+          },
+          B: {
+            variables: { u: { type: 'parameter' } },
+            equations: [
+              { lhs: { op: 'D', args: ['_var'], wrt: 't' }, rhs: { op: '*', args: ['u', '_var'] } },
+            ],
+          },
+        },
+        coupling: [
+          translate === undefined
+            ? { type: 'operator_compose', systems: ['A', 'B'] }
+            : { type: 'operator_compose', systems: ['A', 'B'], translate },
+        ],
+      }) as unknown as EsmFile
+
+    const bare = flatten(withPlaceholder())
+    const redundant = flatten(withPlaceholder({ 'A.x': 'B._var' }))
+    expect(toAscii(redundant.equations[0]!.lhs)).toBe(toAscii(bare.equations[0]!.lhs))
+    expect(toAscii(redundant.equations[0]!.rhs)).toBe(toAscii(bare.equations[0]!.rhs))
+    expect(toAscii(bare.equations[0]!.rhs)).toBe('A.k * A.x + B.u * A.x')
+    expect(bare.equations).toHaveLength(1)
+    expect(redundant.equations).toHaveLength(1)
+  })
+})
+
+/**
+ * `couple` + `transform: "multiplicative"` against a target with no tendency
+ * (esm-spec §10.3, esm-libraries-spec §4.7.2), and the deliberate asymmetry
+ * with `additive`.
+ */
+describe('couple multiplicative requires an existing tendency (§10.3)', () => {
+  function coupled(to: string, transform: string): EsmFile {
+    return {
+      esm: '1.0.0',
+      metadata: { name: 'multiplicative-tendency' },
+      models: {
+        A: {
+          variables: { x: { type: 'unknown' }, s: { type: 'parameter', default: 3 } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'x' }],
+        },
+        B: {
+          variables: { y: { type: 'unknown' } },
+          equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: 'y' }],
+        },
+      },
+      coupling: [
+        {
+          type: 'couple',
+          systems: ['A', 'B'],
+          connector: { equations: [{ from: 'B.y', to, transform, expression: 'B.y' }] },
+        },
+      ],
+    } as unknown as EsmFile
+  }
+
+  it('raises when `to` names a PARAMETER — it is never silently dropped', () => {
+    expect(() => flatten(coupled('A.s', 'multiplicative'))).toThrow(
+      CoupleMultiplicativeNoTendencyError,
+    )
+    try {
+      flatten(coupled('A.s', 'multiplicative'))
+      expect.unreachable('flatten should have raised')
+    } catch (err) {
+      expect(err).toBeInstanceOf(FlattenError)
+      expect((err as CoupleMultiplicativeNoTendencyError).code).toBe(
+        'couple_multiplicative_no_tendency',
+      )
+      // The diagnostic must NAME the target (§4.7.2).
+      expect((err as Error).message).toContain('A.s')
+    }
+  })
+
+  it('raises when `to` names nothing at all', () => {
+    expect(() => flatten(coupled('A.nope', 'multiplicative'))).toThrow(
+      CoupleMultiplicativeNoTendencyError,
+    )
+  })
+
+  it('multiplies normally when `to` DOES carry a tendency', () => {
+    const flat = flatten(coupled('A.x', 'multiplicative'))
+    const eq = flat.equations.find((e) => toAscii(e.lhs) === 'D(A.x)/Dt')
+    expect(eq).toBeDefined()
+    expect(toAscii(eq!.rhs)).toBe('A.x * B.y')
+  })
+
+  it('does NOT raise for `additive` against an absent tendency', () => {
+    // The asymmetry is deliberate: zero is the additive identity, so an
+    // additive term against an absent tendency has an obvious reading. There is
+    // no multiplicative counterpart, which is why only one of the two errors.
+    expect(() => flatten(coupled('A.s', 'additive'))).not.toThrow()
   })
 })

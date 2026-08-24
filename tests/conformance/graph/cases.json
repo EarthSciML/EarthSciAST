@@ -892,6 +892,12 @@
             "system": "Transport"
           },
           {
+            "name": "Transport._var",
+            "kind": "state",
+            "units": null,
+            "system": "Transport"
+          },
+          {
             "name": "AtmosphericChemistry.O3",
             "kind": "species",
             "units": "mol/mol",
@@ -937,31 +943,37 @@
         "edges": [
           {
             "source": "Transport.u",
-            "target": "Transport.u",
+            "target": "Transport._var",
+            "relationship": "additive",
+            "equation_index": 0
+          },
+          {
+            "source": "Transport._var",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.v",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.w",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.K_h",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.K_v",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
@@ -1017,8 +1029,54 @@
         "closure": {
           "Transport.u": {
             "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.v": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.w": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.K_h": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.K_v": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport._var": {
+            "adjacency": [
               "Transport.K_h",
               "Transport.K_v",
+              "Transport._var",
               "Transport.u",
               "Transport.v",
               "Transport.w"
@@ -1026,48 +1084,13 @@
             "predecessors": [
               "Transport.K_h",
               "Transport.K_v",
+              "Transport._var",
               "Transport.u",
               "Transport.v",
               "Transport.w"
             ],
             "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.v": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.w": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.K_h": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.K_v": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
+              "Transport._var"
             ]
           },
           "AtmosphericChemistry.O3": {
@@ -1163,6 +1186,7 @@
           "Transport.w",
           "Transport.K_h",
           "Transport.K_v",
+          "Transport._var",
           "AtmosphericChemistry.O3",
           "AtmosphericChemistry.NO",
           "AtmosphericChemistry.NO2",
@@ -1174,23 +1198,27 @@
         "edges": [
           {
             "source": "Transport.u",
-            "target": "Transport.u"
+            "target": "Transport._var"
+          },
+          {
+            "source": "Transport._var",
+            "target": "Transport._var"
           },
           {
             "source": "Transport.v",
-            "target": "Transport.u"
+            "target": "Transport._var"
           },
           {
             "source": "Transport.w",
-            "target": "Transport.u"
+            "target": "Transport._var"
           },
           {
             "source": "Transport.K_h",
-            "target": "Transport.u"
+            "target": "Transport._var"
           },
           {
             "source": "Transport.K_v",
-            "target": "Transport.u"
+            "target": "Transport._var"
           },
           {
             "source": "AtmosphericChemistry.T",
@@ -1227,23 +1255,27 @@
         ],
         "adjacency": {
           "Transport.u": [
+            "Transport._var"
+          ],
+          "Transport.v": [
+            "Transport._var"
+          ],
+          "Transport.w": [
+            "Transport._var"
+          ],
+          "Transport.K_h": [
+            "Transport._var"
+          ],
+          "Transport.K_v": [
+            "Transport._var"
+          ],
+          "Transport._var": [
             "Transport.K_h",
             "Transport.K_v",
+            "Transport._var",
             "Transport.u",
             "Transport.v",
             "Transport.w"
-          ],
-          "Transport.v": [
-            "Transport.u"
-          ],
-          "Transport.w": [
-            "Transport.u"
-          ],
-          "Transport.K_h": [
-            "Transport.u"
-          ],
-          "Transport.K_v": [
-            "Transport.u"
           ],
           "AtmosphericChemistry.O3": [
             "AtmosphericChemistry.M",
@@ -1310,6 +1342,12 @@
             "system": "Transport"
           },
           {
+            "name": "Transport._var",
+            "kind": "state",
+            "units": null,
+            "system": "Transport"
+          },
+          {
             "name": "AtmosphericChemistry.O3",
             "kind": "species",
             "units": "mol/mol",
@@ -1355,31 +1393,37 @@
         "edges": [
           {
             "source": "Transport.u",
-            "target": "Transport.u",
+            "target": "Transport._var",
+            "relationship": "additive",
+            "equation_index": 0
+          },
+          {
+            "source": "Transport._var",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.v",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.w",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.K_h",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
           {
             "source": "Transport.K_v",
-            "target": "Transport.u",
+            "target": "Transport._var",
             "relationship": "additive",
             "equation_index": 0
           },
@@ -1435,8 +1479,54 @@
         "closure": {
           "Transport.u": {
             "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.v": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.w": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.K_h": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport.K_v": {
+            "adjacency": [
+              "Transport._var"
+            ],
+            "predecessors": [],
+            "successors": [
+              "Transport._var"
+            ]
+          },
+          "Transport._var": {
+            "adjacency": [
               "Transport.K_h",
               "Transport.K_v",
+              "Transport._var",
               "Transport.u",
               "Transport.v",
               "Transport.w"
@@ -1444,48 +1534,13 @@
             "predecessors": [
               "Transport.K_h",
               "Transport.K_v",
+              "Transport._var",
               "Transport.u",
               "Transport.v",
               "Transport.w"
             ],
             "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.v": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.w": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.K_h": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
-            ]
-          },
-          "Transport.K_v": {
-            "adjacency": [
-              "Transport.u"
-            ],
-            "predecessors": [],
-            "successors": [
-              "Transport.u"
+              "Transport._var"
             ]
           },
           "AtmosphericChemistry.O3": {

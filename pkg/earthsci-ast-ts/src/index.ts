@@ -262,6 +262,7 @@ export {
   // (§4.7.6's taxonomy) so a caller catching by name behaves uniformly.
   FlattenError,
   ConflictingDerivativeError,
+  CoupleMultiplicativeNoTendencyError,
   DomainUnitMismatchError,
   DimensionPromotionError,
 } from './flatten.js'

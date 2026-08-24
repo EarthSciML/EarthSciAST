@@ -746,6 +746,7 @@ reading that as a gap.
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
+| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
 | `coupling_role` | type | – | – | – | `CouplingRole` | `CouplingRole` |
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
