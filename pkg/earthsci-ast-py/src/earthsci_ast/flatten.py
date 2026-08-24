@@ -697,10 +697,25 @@ def _describe_coupling(entry: CouplingEntry) -> str:
             def _tr(v: object) -> str:
                 # Same leak as the transform above, latent: an object-valued
                 # translate entry would otherwise render as a Python dict repr.
+                #
+                # The factor is coerced to float rather than interpolated as
+                # authored. This text is NORMATIVE cross-language corpus content,
+                # and interpolating the raw JSON value makes it depend on the
+                # value's JSON TYPE: a factor written `2` would render "2" while
+                # `2.0` renders "2.0", for the same number. Every other binding
+                # renders a float. No fixture in the tree authors an integer
+                # factor today, so this is a no-op on the current corpus and a
+                # landmine removed rather than a change.
                 if isinstance(v, dict):
                     target = v.get("to") or v.get("target") or v.get("var") or "?"
                     factor = v.get("factor")
-                    return f"{target}" if factor is None else f"{target}*{factor}"
+                    if factor is None:
+                        return f"{target}"
+                    try:
+                        factor = float(factor)
+                    except (TypeError, ValueError):
+                        pass  # a non-numeric factor is a validation error, not ours
+                    return f"{target}*{factor}"
                 return str(v)
 
             rule += (
