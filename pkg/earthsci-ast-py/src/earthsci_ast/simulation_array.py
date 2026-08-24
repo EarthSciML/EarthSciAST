@@ -41,10 +41,13 @@ from .numpy_interpreter import (
 from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
-    SimulationResult,
+    Solution,
     _failure_result,
+    _limit_iters,
     _observed_rows,
     _resolve_override,
+    _retcode_for_error,
+    _retcode_from_scipy,
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
@@ -69,11 +72,14 @@ def _linear_pos(shape: tuple[int, ...], one_based: list[int]) -> int:
 
 
 def _densify_solution(
-    sol: Any, tspan: tuple[float, float], min_points: int = DENSE_OUTPUT_MIN_POINTS
+    sol: Any,
+    tspan: tuple[float, float],
+    min_points: int = DENSE_OUTPUT_MIN_POINTS,
+    saveat: Any = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Resample a ``solve_ivp`` result onto a dense uniform grid.
 
-    The fixture runners consume ``SimulationResult`` via linear
+    The fixture runners consume ``Solution`` via linear
     interpolation (``np.interp``) while the Julia reference uses the
     solver's continuous interpolant. SciPy's native step points are too
     sparse for ``np.interp`` to hit fixture tolerances on smooth curves,
@@ -84,6 +90,20 @@ def _densify_solution(
     if not sol.success or getattr(sol, "sol", None) is None:
         return sol.t, sol.y
     t0, t1 = float(tspan[0]), float(tspan[1])
+    if saveat is not None:
+        # ``saveat`` (API_SPEC §4) names the output times explicitly: either the
+        # times themselves, or a scalar output STEP measured from ``tspan[0]``.
+        # The caller asked for these nodes, so the dense-grid heuristic below is
+        # bypassed entirely rather than unioned with them.
+        arr = np.atleast_1d(np.asarray(saveat, dtype=float))
+        if arr.size == 1 and float(arr[0]) > 0.0:
+            step = float(arr[0])
+            n_steps = int(np.floor((t1 - t0) / step + 1e-9))
+            arr = t0 + step * np.arange(n_steps + 1, dtype=float)
+        arr = np.unique(arr[(arr >= t0) & (arr <= t1)])
+        if arr.size == 0:
+            return np.asarray([], dtype=float), np.empty((sol.y.shape[0], 0), dtype=float)
+        return arr, sol.sol(arr)
     # Resample onto at least ``min_points`` nodes, but scale to 4× the solver's own
     # step count so a stiff / eventful run (many native steps) gets proportionally
     # denser output than the flat ``min_points`` floor would give — enough
@@ -503,7 +523,7 @@ def _apply_equation_to_dy(
     if isinstance(lhs, ExprNode) and lhs.op == "ic":
         return
     warnings.warn(
-        f"simulate: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
+        f"solve: unrecognized algebraic equation with LHS {eq.lhs!r} was not "
         f"applied to the ODE RHS; any state it constrains stays frozen at its "
         f"initial value",
         RuntimeWarning,
@@ -728,7 +748,7 @@ class BuildInspection:
     Julia binding's ``BuildInspection`` (``build_evaluator(...; inspect=…)``).
 
     Pass one via the ``inspect`` keyword
-    (``simulate(file, tspan, inspect=BuildInspection())``) and the NumPy
+    (``esm_problem(file, tspan, inspect=BuildInspection())``) and the NumPy
     array/PDE pathway fills it with named BUILD-TIME products that are
     otherwise internal to the evaluator:
 
@@ -755,7 +775,7 @@ class BuildInspection:
       ``params`` exposes the same map for the reference / ``ic`` positions.
 
     Filling the record never changes the simulation: the returned
-    :class:`SimulationResult` is identical with or without ``inspect``
+    :class:`Solution` is identical with or without ``inspect``
     (nothing downstream consults the record). Only the NumPy array-op pathway
     fills it; the scalar SymPy pathway accepts and ignores it.
     """
@@ -809,6 +829,11 @@ class _NumpyRhsBuild:
     # envelope factors through. Threaded into every EvalContext this build spawns.
     var_index_sets: dict[str, str] = field(default_factory=dict)
     # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
+    # Did this system declare value-invention producer states (broad-phase bins /
+    # candidate-set membership)? Such a system legitimately has an EMPTY ODE state
+    # vector — the producers are materialized at setup and dropped from the ODE —
+    # so `solve` must not read `total_size == 0` as "nothing to integrate".
+    has_value_invention_states: bool = False
     # aggregate's `id` (the `from_faq` target): the build-time skolem/distinct/rank
     # front-door's distinct-set cardinality, materialized ONCE at setup by
     # :func:`value_invention.materialize_value_invention` and threaded into every
@@ -2377,6 +2402,7 @@ def _build_numpy_rhs(
         static_observed_values=static_observed_values,
         static_derived_rings=static_derived_rings,
         static_skip_reasons=static_skip_reasons,
+        has_value_invention_states=bool(vi_var_names),
         join_key_buffers=join_key_buffers,
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
@@ -2423,8 +2449,12 @@ def _simulate_with_numpy(
     atol: float = 1e-12,
     loader_arrays: dict[str, np.ndarray] | None = None,
     inspect: BuildInspection | None = None,
-) -> SimulationResult:
-    """Simulate a flattened system containing array ops via the NumPy interpreter.
+    prebuilt: _NumpyRhsBuild | None = None,
+    maxiters: int | None = None,
+    saveat: Any = None,
+    callback: Any = None,
+) -> Solution:
+    """Integrate a flattened system containing array ops via the NumPy interpreter.
 
     ``loader_arrays`` maps each loaded field's flattened parameter name
     (``<ModelPath>.<param>``) to
@@ -2434,13 +2464,34 @@ def _simulate_with_numpy(
 
     ``inspect`` is the optional :class:`BuildInspection` observability sink,
     filled right after the RHS build (see :func:`_fill_build_inspection`);
-    nothing downstream consults it, so results are identical either way."""
+    nothing downstream consults it, so results are identical either way.
+
+    ``prebuilt`` is the :class:`_NumpyRhsBuild` a :class:`Problem` already
+    compiled at construction (esm-libraries-spec §2.5.2 puts the compile in
+    construction, not in the run). When given, the build is REUSED verbatim —
+    no second compile, and no second provider sample — and ``inspect`` was
+    already filled by the constructor. ``None`` builds here, exactly as before.
+
+    ``maxiters`` caps right-hand-side evaluations (``ReturnCode.MaxIters`` when
+    spent); ``saveat`` names the output times; ``callback`` is the run's
+    :class:`~earthsci_ast.problem.CallbackSet`, fired at every output node."""
     try:
-        build = _build_numpy_rhs(flat, parameters, initial_conditions, loader_arrays=loader_arrays)
-        if inspect is not None:
-            _fill_build_inspection(
-                inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
+        if prebuilt is not None:
+            build = prebuilt
+        else:
+            build = _build_numpy_rhs(
+                flat, parameters, initial_conditions, loader_arrays=loader_arrays
             )
+            if inspect is not None:
+                _fill_build_inspection(
+                    inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
+                )
+        if build.total_size == 0 and not build.has_value_invention_states:
+            # Parity with the pre-Problem build guard: a system with no ODE
+            # states has nothing to integrate. Construction still succeeds (the
+            # observed graph is exactly what `observed_field` reads back); it is
+            # the RUN that has no content.
+            raise SimulationError("Flattened system has no state variables to integrate")
         shapes = build.shapes
         state_names = build.state_names
         state_layout = build.state_layout
@@ -2450,7 +2501,7 @@ def _simulate_with_numpy(
         rhs_function = build.rhs_function
 
         sol = solve_ivp(
-            fun=rhs_function,
+            fun=_limit_iters(rhs_function, maxiters),
             t_span=tspan,
             y0=y0,
             method=method,
@@ -2460,7 +2511,7 @@ def _simulate_with_numpy(
         )
 
         elem_names = _element_names(state_names, shapes)
-        t_out, y_out = _densify_solution(sol, tspan)
+        t_out, y_out = _densify_solution(sol, tspan, saveat=saveat)
 
         # Expose scalar observed trajectories alongside the states (parity with
         # the scalar SymPy path) so callers / conformance fixtures can assert on
@@ -2557,12 +2608,15 @@ def _simulate_with_numpy(
                 # sample could not be evaluated.
                 out_vars = list(elem_names)
 
-        return SimulationResult(
+        retcode, message = _retcode_from_scipy(sol)
+        if callback is not None:
+            callback(t_out, y_out)
+        return Solution(
             t=t_out,
             y=y_out,
             vars=out_vars,
-            success=sol.success,
-            message=sol.message,
+            retcode=retcode,
+            message=message,
             nfev=sol.nfev,
             njev=sol.njev,
             nlu=sol.nlu,
@@ -2571,4 +2625,4 @@ def _simulate_with_numpy(
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
-        return _failure_result(f"Simulation failed: {e}")
+        return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))

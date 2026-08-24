@@ -9,7 +9,8 @@ so a caller can run the loader seam through EarthSciIO's transport + content-
 addressed cache (+ CDS, etc.)::
 
     from earthsci_ast.data_sources.esio_provider import esio_provider_factory
-    simulate(flat, tspan, provider_factory=esio_provider_factory)
+    prob = esm_problem(flat, tspan, provider_factory=esio_provider_factory)
+    sol = solve(prob)
 
 It is intentionally NOT the default factory: EarthSciIO is an optional dependency
 and currently registers readers only for ``netcdf`` / ``csv`` (a loader whose
@@ -405,7 +406,7 @@ class _RecordTable:
     than one per variable, which also means the 69 MB FF10 zip is unzipped and
     parsed once for all eight of its columns instead of eight times.
 
-    Decoded lazily on first use and then held: ``prepare`` samples the
+    Decoded lazily on first use and then held: Problem construction samples the
     providers one after another, and the second one must not re-read.
     """
 
@@ -612,7 +613,7 @@ class EsioDocumentProvider:
     """One document-declared loader VARIABLE, served through EarthSciIO.
 
     The Python peer of the Rust ``EsioProvider``: it carries the loader's
-    declared §8.9 semantics so that ``prepare`` sees a plain array, already
+    declared §8.9 semantics so that the build sees a plain array, already
     decoded (``reader_options``), coded (``codes``), filtered (``record_filter``)
     and selected (``select``) — and can ask it for the metaparameter its own
     delivered extent binds.
@@ -683,7 +684,7 @@ class EsioDocumentProvider:
     @property
     def gate_spec(self) -> dict[str, Any] | None:
         """A declared ``select`` carrying a ``gated_by`` axis IS a
-        provider-declared gate: ``prepare`` defers it past value-invention and
+        provider-declared gate: the build defers it past value-invention and
         fetches it pre-sliced to the materialised members."""
         axes = self._engine_axes
         if axes is None or not any(isinstance(a, dict) and "gated_by" in a for a in axes):
@@ -883,7 +884,7 @@ def providers_from_document(
     hand-constructs providers — it asks the document.
 
     One provider PER CONSUMING PARAMETER (keyed ``"<Source>.<parameter>"``),
-    matching (a) ``prepare``'s providers contract (one provider per consumer
+    matching (a) ``esm_problem``'s providers contract (one provider per consumer
     variable), (b) the single-variable sample the provider seam expects, and (c)
     the per-key gate the record-derived pushdown path attaches. All of a source's
     providers share one ``Cache`` (a per-source subdir under ``cache_root``) so a
@@ -1041,8 +1042,8 @@ def esio_provider_factory(
 ) -> Any:
     """A ``provider_factory`` building a real ``earthsciio.Provider`` for ``field``.
 
-    Pass to ``simulate(..., provider_factory=esio_provider_factory)``. ``simulate``
-    threads the domain ``target`` in (it introspects this ``target`` kwarg), which
+    Pass to ``esm_problem(..., provider_factory=esio_provider_factory)``. The
+    build threads the domain ``target`` in (it introspects this ``target`` kwarg), which
     the loader projection needs for the GeoTIFF bbox / ERA5 CDS ``area``. Requires
     ``earthsciio`` installed; the EarthSciIO ``Cache`` honours ``EARTHSCIDATADIR``
     and the ``cds`` transport reads ``~/.cdsapirc`` for ERA5.

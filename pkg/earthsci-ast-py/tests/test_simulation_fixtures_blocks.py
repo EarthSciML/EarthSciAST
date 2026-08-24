@@ -40,7 +40,7 @@ from conftest import FIXTURES_ROOT
 pytest.importorskip("scipy")
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 SIMULATION_DIR = str(FIXTURES_ROOT / "simulation")
@@ -109,7 +109,7 @@ def _resolve_tol(
 
 
 def _single_model_subset(file, model_name: str):
-    """Build a file containing only ``model_name`` so simulate() runs the
+    """Build a file containing only ``model_name`` so the build runs the
     model in isolation — Python's simulate flattens every model/reaction
     system into one combined system, which couples unrelated dynamics and
     corrupts results for multi-component fixtures.
@@ -156,13 +156,8 @@ def _execute_component_tests(
         params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
         ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
 
-        result = simulate(
-            file_subset,
-            tspan=tspan,
-            parameters=params,
-            initial_conditions=ics,
-        )
-        assert result.success, f"{label}/{test['id']}: simulate() failed: {result.message}"
+        result = solve(esm_problem(file_subset, tspan, p=params, u0=ics))
+        assert (result.retcode is ReturnCode.Success), f"{label}/{test['id']}: solve() did not succeed: {result.message}"
 
         test_tol = test.get("tolerance")
         for a in test["assertions"]:
@@ -219,7 +214,7 @@ def _fixture_params():
 @pytest.mark.parametrize("fixture", _fixture_params())
 def test_simulation_fixture_tests_blocks(fixture: str) -> None:
     """For every model/reaction_system with a tests block in
-    ``tests/simulation/<fixture>``, run simulate() and verify assertions.
+    ``tests/simulation/<fixture>``, build + solve, and verify assertions.
 
     Fixtures in ``SIMULATION_SKIP`` are xfail-marked (strict) — the bead ID in
     the map value identifies the blocker.

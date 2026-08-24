@@ -27,7 +27,7 @@ from earthsci_ast.numpy_interpreter import (
     eval_expr,
 )
 from earthsci_ast.parse import _parse_expression, load_document
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 def _ctx(
@@ -503,7 +503,7 @@ def test_interval_keys_join_on_integer_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: the join is applied through the full simulate() pipeline
+# End-to-end: the join is applied through the full esm_problem()/solve() pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -544,12 +544,8 @@ def _join_count_model(with_join: bool) -> dict:
 def test_join_resolved_through_simulate_pipeline() -> None:
     """A join aggregate RHS keeps its join semantics through ``simulate`` — the
     diagonal join yields du/dt=2, vs du/dt=4 with the join removed."""
-    res_join = simulate(
-        load_document(_join_count_model(with_join=True)), (0.0, 1.0), initial_conditions={"u": 0.0}
-    )
-    res_full = simulate(
-        load_document(_join_count_model(with_join=False)), (0.0, 1.0), initial_conditions={"u": 0.0}
-    )
+    res_join = solve(esm_problem(load_document(_join_count_model(with_join=True)), (0.0, 1.0), u0={"u": 0.0}))
+    res_full = solve(esm_problem(load_document(_join_count_model(with_join=False)), (0.0, 1.0), u0={"u": 0.0}))
 
     def final_u(res) -> float:
         # The state may be namespaced (e.g. "M.u"); match by bare name.

@@ -191,7 +191,7 @@ class TestIfElseAndBool:
 
 
 class TestEndToEndSimulation:
-    """Drive .simulate() on small models that exercise the new ops."""
+    """Drive solve() on small models that exercise the new ops."""
 
     def test_clamp_decay_via_simulate(self):
         """dx/dt = -k * (x + abs(x)) / 2 — only positive x decays.
@@ -207,7 +207,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.simulation import simulate
+        from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
         rhs = ExprNode(
             op="*",
@@ -239,7 +239,7 @@ class TestEndToEndSimulation:
         )
         esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"ClampDecay": model})
 
-        result = simulate(esm, tspan=(0.0, 1.0))
+        result = solve(esm_problem(esm, (0.0, 1.0)))
         # Final value: x(1) = 2 * e^{-1} ≈ 0.7357...
         x_idx = next(i for i, v in enumerate(result.vars) if v.endswith(".x"))
         x_final = result.y[x_idx, -1]
@@ -254,7 +254,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.simulation import simulate
+        from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
         rhs = ExprNode(op="min", args=[0.0, ExprNode(op="-", args=["x"])])
         model = Model(
@@ -268,7 +268,7 @@ class TestEndToEndSimulation:
         )
         esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"MinClamp": model})
 
-        result = simulate(esm, tspan=(0.0, 1.0))
+        result = solve(esm_problem(esm, (0.0, 1.0)))
         x_idx = next(i for i, v in enumerate(result.vars) if v.endswith(".x"))
         x_final = result.y[x_idx, -1]
         assert x_final == pytest.approx(2.0 * math.exp(-1.0), rel=1e-3)
@@ -285,7 +285,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.simulation import simulate
+        from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
         rhs = ExprNode(op="-", args=[ExprNode(op="pow", args=["x", 2])])
         model = Model(
@@ -299,7 +299,7 @@ class TestEndToEndSimulation:
         )
         esm = EsmFile(version="1.0.0", metadata=Metadata(title="t"), models={"PowDecay": model})
 
-        result = simulate(esm, tspan=(0.0, 1.0))
+        result = solve(esm_problem(esm, (0.0, 1.0)))
         x_idx = next(i for i, v in enumerate(result.vars) if v.endswith(".x"))
         x_final = result.y[x_idx, -1]
         assert x_final == pytest.approx(0.5, rel=1e-3)

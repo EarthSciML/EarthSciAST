@@ -1,7 +1,7 @@
 """The cadence-aware **Provider** the loader-consumer driver builds and queries.
 
 This is the ESS-side realisation of the EarthSciIO **Provider** contract
-(earthsciio bead ``esio-9nb.3``): a per-loader object that ``simulate()``'s
+(earthsciio bead ``esio-9nb.3``): a per-loader object that ``solve()``'s
 segmented driver constructs **once at setup** and queries at cadence
 boundaries —
 
@@ -18,7 +18,7 @@ any object conforming to the :class:`Provider` protocol. The in-tree
 is the default, and a real EarthSciIO ``Provider`` (whose
 ``materialize`` / ``refresh`` / ``refresh_times`` signatures match this protocol
 exactly, per the ``esio-9nb.3`` gate) can be dropped in via
-``simulate(..., provider_factory=...)`` with no change to ESS code.
+``esm_problem(..., provider_factory=...)`` with no change to ESS code.
 
 The provider returns **raw native-grid data**; variable-name remap and regrid
 stay in ESS (the C4 driver runs in the consumer, between the provider's native

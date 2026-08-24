@@ -1,4 +1,4 @@
-"""Tests for scalar algebraic-equation elimination in simulate() (esm-y3n).
+"""Tests for scalar algebraic-equation elimination on the solve() path (esm-y3n).
 
 esm 1.0.0 declares only ``unknown`` and ``parameter``; whether an unknown is
 an ODE state, an observed quantity or an algebraic one is DERIVED from the
@@ -10,7 +10,7 @@ exercises. The canonical Python simulation runner must:
   the variable, so the integrator's RHS depends only on the ODE states
   (the equivalent of MTK's structural_simplify scalar pass).
 * Reconstruct the derived value at every output time so the
-  SimulationResult exposes correct trajectories for both ODE-state and
+  Solution exposes correct trajectories for both ODE-state and
   non-differential unknowns.
 * Reject cyclic algebraic systems with a clear error message.
 * Leave pure-ODE models numerically identical to the previous behaviour.
@@ -34,7 +34,8 @@ from earthsci_ast.esm_types import (
     ReactionSystem,
     Species,
 )
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
+from earthsci_ast.sympy_bridge import SimulationError
 
 
 def _diameter_growth_model() -> EsmFile:
@@ -91,14 +92,8 @@ def _diameter_growth_model() -> EsmFile:
 def test_simulate_eliminates_algebraic_states_diameter_growth():
     """``D_p[end]`` must be within 1% of the analytical 6.538e-7 m target."""
     file = _diameter_growth_model()
-    result = simulate(
-        file,
-        tspan=(0.0, 1200.0),
-        parameters={},
-        initial_conditions={"D_p": 2.0e-7},
-        method="LSODA",
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 1200.0), p={}, u0={"D_p": 2.0e-7}), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     dp_idx = result.vars.index("DiameterGrowthRate.D_p")
     final_dp = result.y[dp_idx, -1]
@@ -112,14 +107,8 @@ def test_simulate_eliminates_algebraic_states_diameter_growth():
 def test_simulate_recovers_algebraic_values_at_output():
     """Algebraic states must track their formula along the trajectory."""
     file = _diameter_growth_model()
-    result = simulate(
-        file,
-        tspan=(0.0, 1200.0),
-        parameters={},
-        initial_conditions={"D_p": 2.0e-7},
-        method="LSODA",
-    )
-    assert result.success
+    result = solve(esm_problem(file, (0.0, 1200.0), p={}, u0={"D_p": 2.0e-7}), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success)
 
     a_idx = result.vars.index("DiameterGrowthRate.A")
     id_idx = result.vars.index("DiameterGrowthRate.I_D")
@@ -166,16 +155,13 @@ def test_simulate_rejects_cyclic_algebraic_equations():
         models={"Cyclic": model},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 1.0),
-        parameters={},
-        initial_conditions={},
-        method="LSODA",
-    )
-    assert not result.success
-    assert "Cyclic observed equations detected" in result.message
-    assert "Cyclic.X" in result.message and "Cyclic.Y" in result.message
+    # The compile happens at CONSTRUCTION (esm-libraries-spec §2.5.2), so a
+    # cyclic observed graph is a build error — there is no run to give a return
+    # code to.
+    with pytest.raises(SimulationError) as exc:
+        esm_problem(file, (0.0, 1.0), p={}, u0={})
+    assert "Cyclic observed equations detected" in str(exc.value)
+    assert "Cyclic.X" in str(exc.value) and "Cyclic.Y" in str(exc.value)
 
 
 def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
@@ -207,13 +193,8 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
         models={"Eq": model},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 1.0),
-        parameters={"T": 298.0, "H_plus": 1.0e-4},
-        initial_conditions={},
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     k_idx = result.vars.index("Eq.K_w")
     oh_idx = result.vars.index("Eq.OH_minus")
@@ -245,14 +226,8 @@ def test_simulate_pure_ode_model_unaffected_by_algebraic_pass():
         reaction_systems={"Decay": rs},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 5.0),
-        parameters={},
-        initial_conditions={"A": 1.0, "B": 0.0},
-        method="RK45",
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 5.0), p={}, u0={"A": 1.0, "B": 0.0}), alg="RK45")
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     a_idx = result.vars.index("Decay.A")
     b_idx = result.vars.index("Decay.B")
@@ -314,13 +289,8 @@ def test_simulate_observed_only_model_emits_observed_trajectories():
         models={"CloudAlbedo": model},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 1.0),
-        parameters={"tau_c": 10.0, "g": 0.85},
-        initial_conditions={},
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 1.0), p={"tau_c": 10.0, "g": 0.85}, u0={}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     assert "CloudAlbedo.gamma" in result.vars
     assert "CloudAlbedo.R_c" in result.vars
@@ -363,13 +333,8 @@ def test_simulate_state_plus_observed_emits_observed_alongside_states():
         models={"Decay": model},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 2.0),
-        parameters={"k": 0.5},
-        initial_conditions={"C": 1.0},
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 2.0), p={"k": 0.5}, u0={"C": 1.0}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     c_idx = result.vars.index("Decay.C")
     a_idx = result.vars.index("Decay.C_analytical")
@@ -410,13 +375,8 @@ def test_simulate_observed_referenced_in_diff_rhs_no_namespace_leak():
         models={"Decay": model},
     )
 
-    result = simulate(
-        file,
-        tspan=(0.0, 1.0),
-        parameters={"k0": 2.0, "T": 300.0},
-        initial_conditions={"NO2": 1.0},
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 1.0), p={"k0": 2.0, "T": 300.0}, u0={"NO2": 1.0}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     no2_idx = result.vars.index("Decay.NO2")
     j_idx = result.vars.index("Decay.j_NO2")
@@ -466,8 +426,8 @@ def test_simulate_deep_algebraic_chain_sequential_evaluation():
         models={"Chain": model},
     )
 
-    result = simulate(file, tspan=(0.0, 1.0), parameters={}, initial_conditions={"x": 1.0})
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 1.0), p={}, u0={"x": 1.0}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
     x_idx = result.vars.index("Chain.x")
     c_idx = result.vars.index("Chain.C")

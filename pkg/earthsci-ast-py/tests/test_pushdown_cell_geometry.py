@@ -23,7 +23,7 @@ import json
 import numpy as np
 import pytest
 
-from earthsci_ast.prepare import observed_field, prepare
+from earthsci_ast.problem import esm_problem, observed_field
 from earthsci_ast.pushdown_rewrite import PushdownRewriteError, desugar_pushdown
 
 NV = 5  # a closed unit square: four corners and the repeat
@@ -364,7 +364,7 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
     which is on the full receptor axis, exactly."""
     ca = _const_arrays()
 
-    dense_prep = prepare(copy.deepcopy(_doc()), const_arrays=dict(ca, **{"Binned.SR_PM25": SR}))
+    dense_prep = esm_problem(copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=dict(ca, **{"Binned.SR_PM25": SR}))
     dense = {v: np.asarray(observed_field(dense_prep, v)) for v in ("E_PM25", "conc_PM25")}
     # The dense arm is itself checked against a hand oracle, so a shared bug in
     # both arms cannot pass this test by agreeing with itself.
@@ -372,12 +372,7 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
     assert np.allclose(dense["conc_PM25"], np.asarray(EXPECT_E) @ SR)
 
     gated = MockGated(SR)
-    push_prep = prepare(
-        copy.deepcopy(_doc()),
-        const_arrays=ca,
-        providers={"Binned.SR_PM25": gated},
-        pushdown_rewrite=True,
-    )
+    push_prep = esm_problem(copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=ca, providers={"Binned.SR_PM25": gated}, pushdown_rewrite=True)
     push = {v: np.asarray(observed_field(push_prep, v)) for v in ("E_PM25", "conc_PM25")}
 
     mf = np.asarray(push_prep.const_arrays["pd_member_factor__src_cells"], dtype=int)

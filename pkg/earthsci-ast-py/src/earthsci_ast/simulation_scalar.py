@@ -1,6 +1,6 @@
 """Scalar-SymPy simulation pathway (0-D / non-array ODE systems).
 
-Implements the scalar-only branch of :func:`earthsci_ast.simulation.simulate`:
+Implements the scalar-only branch of :func:`earthsci_ast.problem.solve`:
 the flattened system is lowered to a lambdified SymPy RHS (via
 :func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated with
 :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and observed
@@ -9,11 +9,13 @@ when the flattened system contains no array ops, no data-loader fields, and no
 top-level provider injections. It also owns :func:`_create_event_functions`,
 the scalar continuous-event helper that builds SciPy root-finding callbacks
 from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
-this module's API and routes to :func:`_simulate_scalar`.
+this module's API and :func:`earthsci_ast.problem.solve` routes to
+:func:`_simulate_scalar`.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
@@ -26,10 +28,14 @@ from .flatten import (
 )
 from .simulation_array import _densify_solution, resolve_scalar_ic, scalar_ic_equations
 from .simulation_common import (
-    SimulationResult,
+    ReturnCode,
+    Solution,
     _failure_result,
+    _limit_iters,
     _observed_rows,
     _resolve_override,
+    _retcode_for_error,
+    _retcode_from_scipy,
     solve_ivp,
 )
 from .sympy_bridge import (
@@ -147,7 +153,7 @@ def _resolve_parameter_values(
     parameter_names: list[str],
     parameter_overrides: dict[str, float],
 ) -> list[float]:
-    """Resolve parameter values for a scalar simulate() call.
+    """Resolve parameter values for a scalar solve() call.
 
     Caller overrides win (dot-namespaced first, then bare name), then the
     flattened parameter metadata default, then 0. The returned list is
@@ -160,6 +166,132 @@ def _resolve_parameter_values(
     return values
 
 
+@dataclass
+class _ScalarRhsBuild:
+    """The compiled product of a scalar (non-array) flattened system.
+
+    This is the scalar pathway's half of what esm-libraries-spec §2.5.2 calls
+    "the compile": the lambdified SymPy right-hand side, the resolved parameter
+    vector, the initial state, and the continuous-event root functions. A
+    :class:`~earthsci_ast.problem.Problem` builds one at construction and both
+    :func:`_simulate_scalar` and the stepping integrator run it.
+
+    ``rhs_function`` is ``None`` for an observed-only system (no ODE states):
+    there is nothing to integrate, but the observed bodies are still samplable.
+    """
+
+    compiled: Any
+    param_values: Any
+    state_names: list[str]
+    y0: np.ndarray
+    rhs_function: Callable | None
+    event_functions: list[Callable]
+
+
+def _build_scalar_rhs(
+    flat: FlattenedSystem,
+    parameters: dict[str, float],
+    initial_conditions: dict[str, float],
+    cse: bool = True,
+) -> _ScalarRhsBuild:
+    """Lower a scalar flattened system to a lambdified NumPy right-hand side.
+
+    Extracted verbatim from :func:`_simulate_scalar` so the compile can happen
+    once, at Problem construction, and be reused by both the one-shot solve and
+    the stepping integrator. Pure code motion: the values it produces are the
+    ones the inline version produced.
+    """
+    compiled = _compile_flat_rhs(flat, cse=cse)
+    state_names = compiled.state_names
+    param_values = _resolve_parameter_values(flat, compiled.parameter_names, parameters)
+
+    if not state_names:
+        return _ScalarRhsBuild(
+            compiled=compiled,
+            param_values=param_values,
+            state_names=[],
+            y0=np.empty(0, dtype=float),
+            rhs_function=None,
+            event_functions=[],
+        )
+
+    # Initial conditions, in the esm-spec §11.4 precedence: an explicit
+    # ``initial_conditions`` override (dot-namespaced key, then bare name)
+    # wins; else this state's own ``ic`` equation; else the declared
+    # ``default``; else 0.
+    #
+    # The ``ic`` tier used to be MISSING on this pathway. `_compile_flat_rhs`
+    # lowers only `D(x)/dt = …` / algebraic equations, so an `ic`-LHS
+    # equation reached neither the RHS nor u0 and was dropped without a
+    # word: `ic(u) ~ 3.0` still started the run at `u`'s declared default.
+    # A silent wrong answer, and — since §6.6.5 puts model PARAMETERS in the
+    # build-time scope of an `ic` RHS — one a `parameter_overrides` could
+    # not move either.
+    eq_ics = {
+        target: resolve_scalar_ic(
+            target,
+            rhs,
+            param_values=dict(zip(compiled.parameter_names, param_values)),
+            index_sets=flat.index_sets,
+        )
+        for target, rhs in scalar_ic_equations(flat)
+    }
+    y0_list: list[float] = []
+    for name in state_names:
+        default = eq_ics.get(name, flat.state_variables[name].default)
+        y0_list.append(_resolve_override(name, initial_conditions, default))
+    y0 = np.array(y0_list)
+
+    # Override y0 for algebraic states so the t=0 sample is consistent.
+    algebraic_vector_func = compiled.algebraic_vector_func
+    if algebraic_vector_func is not None:
+        try:
+            alg_vals_at_0 = np.asarray(algebraic_vector_func(*y0, *param_values), dtype=float)
+            for i, name in enumerate(compiled.algebraic_state_names):
+                idx = state_names.index(name)
+                y0[idx] = float(alg_vals_at_0[i])
+        except Exception:
+            # If the algebraic body can't be evaluated at the supplied IC
+            # (e.g. division by zero from a missing differential IC), keep
+            # the user-supplied / default value rather than crashing.
+            pass
+
+    # Clip only chemical species to non-negative before RHS evaluation;
+    # generic state variables (position, velocity, etc.) may legitimately
+    # be negative and must not be mutated.
+    species_mask = np.array(
+        [flat.state_variables[name].type == "species" for name in state_names],
+        dtype=bool,
+    )
+    rhs_vector_func = compiled.rhs_vector_func
+
+    def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
+        if species_mask.any():
+            y_eval = y.copy()
+            y_eval[species_mask] = np.maximum(y_eval[species_mask], 0.0)
+        else:
+            y_eval = y
+        dydt = np.asarray(rhs_vector_func(*y_eval, *param_values), dtype=float)
+        if not np.all(np.isfinite(dydt)):
+            raise SimulationError("Non-finite derivatives encountered")
+        return dydt
+
+    event_functions: list[Callable] = []
+    if flat.continuous_events:
+        event_functions = _create_event_functions(
+            flat.continuous_events, compiled.symbol_map, state_names
+        )
+
+    return _ScalarRhsBuild(
+        compiled=compiled,
+        param_values=param_values,
+        state_names=state_names,
+        y0=y0,
+        rhs_function=rhs_function,
+        event_functions=event_functions,
+    )
+
+
 def _simulate_scalar(
     flat: FlattenedSystem,
     tspan: tuple[float, float],
@@ -169,26 +301,34 @@ def _simulate_scalar(
     rtol: float,
     atol: float,
     cse: bool,
-) -> SimulationResult:
+    prebuilt: _ScalarRhsBuild | None = None,
+    maxiters: int | None = None,
+    saveat: Any = None,
+    callback: Any = None,
+) -> Solution:
     """Integrate a scalar (non-array) flattened system via lambdified SymPy + SciPy.
 
-    See :func:`earthsci_ast.simulation.simulate` for the full parameter contract;
-    this is the extracted scalar pathway it routes to when the system has no
-    array ops / loader fields / provider injections. Behaviour (and the public
-    ``simulate()`` result) is identical to the previous inline implementation.
+    See :func:`earthsci_ast.problem.esm_problem` / :func:`earthsci_ast.problem.solve`
+    for the full argument contract; this is the pathway a Problem routes to when
+    its system has no array ops, loader fields, or provider injections.
+
+    ``prebuilt`` is the :class:`_ScalarRhsBuild` the Problem compiled at
+    construction; ``None`` compiles here (the SymPy lambdify is cached on the
+    flattened system either way, so the numbers are identical).
     """
     try:
-        compiled = _compile_flat_rhs(flat, cse=cse)
-        state_names = compiled.state_names
-        parameter_names = compiled.parameter_names
-        symbol_map = compiled.symbol_map
+        build = (
+            prebuilt
+            if prebuilt is not None
+            else _build_scalar_rhs(flat, parameters, initial_conditions, cse=cse)
+        )
+        compiled = build.compiled
+        state_names = build.state_names
         algebraic_state_names = compiled.algebraic_state_names
-        rhs_vector_func = compiled.rhs_vector_func
         algebraic_vector_func = compiled.algebraic_vector_func
         observed_names = compiled.observed_names
         observed_vector_func = compiled.observed_vector_func
-
-        param_values = _resolve_parameter_values(flat, parameter_names, parameters)
+        param_values = build.param_values
 
         # Observed-only path: no state variables to integrate, but the model
         # has observed bindings whose values we still need to expose to the
@@ -205,94 +345,37 @@ def _simulate_scalar(
                 y_out = _observed_rows(obs_vals, t_out.size)
             else:
                 y_out = np.empty((0, t_out.size), dtype=float)
-            return SimulationResult(
+            if callback is not None:
+                callback(t_out, y_out)
+            return Solution(
                 t=t_out,
                 y=y_out,
                 vars=list(observed_names),
-                success=True,
+                retcode=ReturnCode.Success,
                 message="The solver successfully reached the end of the integration interval.",
                 nfev=0,
                 njev=0,
                 nlu=0,
             )
 
-        # Initial conditions, in the esm-spec §11.4 precedence: an explicit
-        # ``initial_conditions`` override (dot-namespaced key, then bare name)
-        # wins; else this state's own ``ic`` equation; else the declared
-        # ``default``; else 0.
-        #
-        # The ``ic`` tier used to be MISSING on this pathway. `_compile_flat_rhs`
-        # lowers only `D(x)/dt = …` / algebraic equations, so an `ic`-LHS
-        # equation reached neither the RHS nor u0 and was dropped without a
-        # word: `ic(u) ~ 3.0` still started the run at `u`'s declared default.
-        # A silent wrong answer, and — since §6.6.5 puts model PARAMETERS in the
-        # build-time scope of an `ic` RHS — one a `parameter_overrides` could
-        # not move either.
-        eq_ics = {
-            target: resolve_scalar_ic(
-                target,
-                rhs,
-                param_values=dict(zip(parameter_names, param_values)),
-                index_sets=flat.index_sets,
-            )
-            for target, rhs in scalar_ic_equations(flat)
-        }
-        y0_list: list[float] = []
-        for name in state_names:
-            default = eq_ics.get(name, flat.state_variables[name].default)
-            y0_list.append(_resolve_override(name, initial_conditions, default))
-        y0 = np.array(y0_list)
-
-        # Override y0 for algebraic states so the t=0 sample is consistent.
-        if algebraic_vector_func is not None:
-            try:
-                alg_vals_at_0 = np.asarray(algebraic_vector_func(*y0, *param_values), dtype=float)
-                for i, name in enumerate(algebraic_state_names):
-                    idx = state_names.index(name)
-                    y0[idx] = float(alg_vals_at_0[i])
-            except Exception:
-                # If the algebraic body can't be evaluated at the supplied IC
-                # (e.g. division by zero from a missing differential IC), keep
-                # the user-supplied / default value rather than crashing.
-                pass
-
-        # Clip only chemical species to non-negative before RHS evaluation;
-        # generic state variables (position, velocity, etc.) may legitimately
-        # be negative and must not be mutated.
-        species_mask = np.array(
-            [flat.state_variables[name].type == "species" for name in state_names],
-            dtype=bool,
-        )
-
-        def rhs_function(t: float, y: np.ndarray) -> np.ndarray:
-            if species_mask.any():
-                y_eval = y.copy()
-                y_eval[species_mask] = np.maximum(y_eval[species_mask], 0.0)
-            else:
-                y_eval = y
-            dydt = np.asarray(rhs_vector_func(*y_eval, *param_values), dtype=float)
-            if not np.all(np.isfinite(dydt)):
-                raise SimulationError("Non-finite derivatives encountered")
-            return dydt
-
-        event_functions: list[Callable] = []
-        if flat.continuous_events:
-            event_functions = _create_event_functions(
-                flat.continuous_events, symbol_map, state_names
-            )
-
+        y0 = build.y0
         solver_options: dict[str, Any] = {
             "method": method,
             "rtol": rtol,
             "atol": atol,
             "dense_output": True,
         }
-        if event_functions:
-            solver_options["events"] = event_functions
+        if build.event_functions:
+            solver_options["events"] = build.event_functions
 
-        sol = solve_ivp(fun=rhs_function, t_span=tspan, y0=y0, **solver_options)
+        sol = solve_ivp(
+            fun=_limit_iters(build.rhs_function, maxiters),
+            t_span=tspan,
+            y0=y0,
+            **solver_options,
+        )
 
-        t_out, y_out = _densify_solution(sol, tspan)
+        t_out, y_out = _densify_solution(sol, tspan, saveat=saveat)
 
         # Recover algebraic-only state values along the entire output trajectory.
         # The integrator does not advance them (their derivative is 0), so the
@@ -322,12 +405,15 @@ def _simulate_scalar(
             y_out = np.vstack([y_out, obs_block])
             out_vars.extend(observed_names)
 
-        return SimulationResult(
+        retcode, message = _retcode_from_scipy(sol)
+        if callback is not None:
+            callback(t_out, y_out)
+        return Solution(
             t=t_out,
             y=y_out,
             vars=out_vars,
-            success=sol.success,
-            message=sol.message,
+            retcode=retcode,
+            message=message,
             nfev=sol.nfev,
             njev=sol.njev,
             nlu=sol.nlu,
@@ -338,4 +424,4 @@ def _simulate_scalar(
         # Spec contract: PDE rejection is a hard error, never a result code.
         raise
     except Exception as e:
-        return _failure_result(f"Simulation failed: {e}")
+        return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))

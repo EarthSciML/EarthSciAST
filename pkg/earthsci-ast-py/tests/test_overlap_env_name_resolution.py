@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.numpy_interpreter import _same_binding, _scoped_array_name
-from earthsci_ast.prepare import observed_field, prepare
+from earthsci_ast.problem import esm_problem, observed_field
 from earthsci_ast.simulation_array import BuildInspection
 
 from test_prepare_pushdown import (  # noqa: F401 — `oracle` is a fixture
@@ -159,7 +159,7 @@ def test_mirror_arm_resolves_its_envelope_factors(oracle, rect_keys):  # noqa: F
         providers[f"MockSR.{v}"] = MockGated(oracle["full_sr"][v])
 
     insp = BuildInspection()
-    prep = prepare(doc, providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True)
+    prep = esm_problem(doc, (0.0, 1.0), providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True)
 
     # Nothing was dropped by the tolerant hoist.
     assert not getattr(prep.build, "static_skip_reasons", {})

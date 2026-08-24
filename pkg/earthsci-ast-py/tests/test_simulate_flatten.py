@@ -1,6 +1,6 @@
-"""End-to-end tests for simulate() consuming a FlattenedSystem.
+"""End-to-end tests for esm_problem() consuming a FlattenedSystem.
 
-These cover the new spec-§4.7.5 contract: simulate() routes through flatten()
+These cover the spec-§4.7.5 contract: esm_problem() routes through flatten()
 and rejects *undiscretized* spatial operators (a spatial independent variable
 surviving into the flattened system) with UnsupportedDimensionalityError.
 Discretized PDEs simulate normally.
@@ -9,7 +9,7 @@ Discretized PDEs simulate normally.
 import numpy as np
 import pytest
 
-pytest.importorskip("scipy")  # the simulate path requires scipy
+pytest.importorskip("scipy")  # the solve() path requires scipy
 
 from earthsci_ast.esm_types import (
     EsmFile,
@@ -27,7 +27,7 @@ from earthsci_ast.flatten import (
     UnsupportedDimensionalityError,
     flatten,
 )
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.sympy_bridge import _compile_flat_rhs
 
 
@@ -55,20 +55,14 @@ def _decay_file() -> EsmFile:
 
 
 # ----------------------------------------------------------------------------
-# simulate(esm_file) routes through flatten()
+# esm_problem(esm_file, …) routes through flatten()
 # ----------------------------------------------------------------------------
 
 
 def test_simulate_esm_file_runs_through_flatten():
     file = _decay_file()
-    result = simulate(
-        file,
-        tspan=(0.0, 5.0),
-        parameters={},
-        initial_conditions={"A": 1.0, "B": 0.0},
-        method="RK45",
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 5.0), p={}, u0={"A": 1.0, "B": 0.0}), alg="RK45")
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
     # State variables are dot-namespaced.
     assert "Decay.A" in result.vars
     assert "Decay.B" in result.vars
@@ -82,7 +76,7 @@ def test_simulate_esm_file_runs_through_flatten():
 
 
 # ----------------------------------------------------------------------------
-# simulate(flatten(esm_file)) gives the same result
+# esm_problem(flatten(esm_file), …) gives the same result
 # ----------------------------------------------------------------------------
 
 
@@ -90,21 +84,17 @@ def test_simulate_flatten_round_trip_matches_esm_file_path():
     file = _decay_file()
     initial = {"A": 1.0, "B": 0.0}
 
-    via_file = simulate(
-        file, tspan=(0.0, 5.0), parameters={}, initial_conditions=initial, method="RK45"
-    )
-    via_flat = simulate(
-        flatten(file), tspan=(0.0, 5.0), parameters={}, initial_conditions=initial, method="RK45"
-    )
+    via_file = solve(esm_problem(file, (0.0, 5.0), p={}, u0=initial), alg="RK45")
+    via_flat = solve(esm_problem(flatten(file), (0.0, 5.0), p={}, u0=initial), alg="RK45")
 
-    assert via_file.success and via_flat.success
+    assert (via_file.retcode is ReturnCode.Success) and (via_flat.retcode is ReturnCode.Success)
     assert via_file.vars == via_flat.vars
     # Same final state to numerical tolerance — both paths use the same RHS.
     assert np.allclose(via_file.y[:, -1], via_flat.y[:, -1], atol=1e-9)
 
 
 # ----------------------------------------------------------------------------
-# Undiscretized-operator rejection: simulate() raises on a surviving spatial independent variable
+# Undiscretized-operator rejection: esm_problem() raises on a surviving spatial independent variable
 # ----------------------------------------------------------------------------
 
 
@@ -121,7 +111,7 @@ def test_simulate_rejects_pde_systems():
     file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Adv": model})
 
     with pytest.raises(UnsupportedDimensionalityError) as excinfo:
-        simulate(file, tspan=(0.0, 1.0))
+        solve(esm_problem(file, (0.0, 1.0)))
 
     msg = str(excinfo.value)
     assert excinfo.value.code == "unlowered_operator"
@@ -145,20 +135,15 @@ def test_simulate_works_for_pure_ode_model():
     model = Model(name="Decay", variables={"x": var_x, "k": var_k}, equations=[eq])
     file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Decay": model})
 
-    result = simulate(
-        file,
-        tspan=(0.0, 5.0),
-        initial_conditions={"x": 2.0},
-        method="RK45",
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(file, (0.0, 5.0), u0={"x": 2.0}), alg="RK45")
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
     idx = result.vars.index("Decay.x")
     # Analytical solution: x(t) = 2*exp(-0.3*t); at t=5 → 2*exp(-1.5) ≈ 0.4463.
     assert abs(result.y[idx, -1] - 2.0 * np.exp(-1.5)) < 1e-3
 
 
 # ----------------------------------------------------------------------------
-# Compile cache: repeated simulate() on the same FlattenedSystem reuses the
+# Compile cache: repeated builds on the same FlattenedSystem reuse the
 # lambdified RHS instead of recompiling. Different parameter overrides hit
 # the cache because parameters are runtime args, not inlined into expressions.
 # ----------------------------------------------------------------------------
@@ -169,14 +154,14 @@ def test_simulate_caches_compiled_rhs_across_calls():
 
     # First call populates the cache.
     assert getattr(flat, "_simulate_compile_cache", None) is None
-    r1 = simulate(flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0})
-    assert r1.success
+    r1 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    assert (r1.retcode is ReturnCode.Success)
     cache_after_first = flat._simulate_compile_cache
     assert cache_after_first is not None
 
     # Second call must reuse the same compiled functions (identity check).
-    r2 = simulate(flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0})
-    assert r2.success
+    r2 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    assert (r2.retcode is ReturnCode.Success)
     assert flat._simulate_compile_cache is cache_after_first
     assert flat._simulate_compile_cache.rhs_vector_func is cache_after_first.rhs_vector_func
 
@@ -195,14 +180,14 @@ def test_simulate_cache_survives_parameter_overrides():
     flat = flatten(file)
 
     # Prime the cache with one set of parameters.
-    r1 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 0.5}, initial_conditions={"x": 1.0})
+    r1 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 0.5}, u0={"x": 1.0}))
     compile1 = flat._simulate_compile_cache
-    assert r1.success and compile1 is not None
+    assert (r1.retcode is ReturnCode.Success) and compile1 is not None
 
     # A different parameter override must not invalidate the compiled RHS:
     # parameter values are passed as runtime arguments, not inlined.
-    r2 = simulate(flat, tspan=(0.0, 1.0), parameters={"k": 2.0}, initial_conditions={"x": 1.0})
-    assert r2.success
+    r2 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 2.0}, u0={"x": 1.0}))
+    assert (r2.retcode is ReturnCode.Success)
     assert flat._simulate_compile_cache is compile1
 
     # And the parameter change must actually affect the trajectory.
@@ -230,22 +215,17 @@ def test_compile_flat_rhs_returns_parametric_form():
 
 # ----------------------------------------------------------------------------
 # Public ``cse`` kwarg (esm-7tw): downstream consumers (e.g. ESM's inline-test
-# runner) need to drive simulate() with cse=False without hand-building
+# runner) need to build with cse=False without hand-building
 # _CompiledRhs to flip the lambdify flag.
 # ----------------------------------------------------------------------------
 
 
 def test_simulate_accepts_cse_kwarg_and_matches_default():
-    """simulate(..., cse=False) produces the same trajectory as the default."""
+    """esm_problem(..., cse=False) produces the same trajectory as the default."""
     flat = flatten(_decay_file())
-    r_default = simulate(flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0})
-    r_no_cse = simulate(
-        flat,
-        tspan=(0.0, 1.0),
-        initial_conditions={"A": 1.0, "B": 0.0},
-        cse=False,
-    )
-    assert r_default.success and r_no_cse.success
+    r_default = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
+    r_no_cse = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, cse=False))
+    assert (r_default.retcode is ReturnCode.Success) and (r_no_cse.retcode is ReturnCode.Success)
     a_idx = r_default.vars.index("Decay.A")
     assert abs(r_default.y[a_idx, -1] - r_no_cse.y[a_idx, -1]) < 1e-8
 
@@ -254,17 +234,12 @@ def test_simulate_caches_cse_true_and_false_independently():
     """Flipping cse must not invalidate the other compile's cache."""
     flat = flatten(_decay_file())
 
-    simulate(flat, tspan=(0.0, 1.0), initial_conditions={"A": 1.0, "B": 0.0})
+    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
     cse_true_cache = flat._simulate_compile_cache
     assert cse_true_cache is not None
     assert getattr(flat, "_simulate_compile_cache_no_cse", None) is None
 
-    simulate(
-        flat,
-        tspan=(0.0, 1.0),
-        initial_conditions={"A": 1.0, "B": 0.0},
-        cse=False,
-    )
+    solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}, cse=False))
     cse_false_cache = flat._simulate_compile_cache_no_cse
     assert cse_false_cache is not None
     # cse=True cache untouched.

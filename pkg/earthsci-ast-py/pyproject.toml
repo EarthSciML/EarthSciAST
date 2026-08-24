@@ -26,16 +26,21 @@ classifiers = [
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
 
-# scipy / xarray / netcdf4 are required: the simulation and IO tiers (exercised
-# by the test suite) hard-depend on them. matplotlib is genuinely optional — it
-# is used lazily only by SimulationResult.plot behind an import guard — so it
-# lives in the `plot` extra, not here.
+# xarray / netcdf4 are required: the IO tier hard-depends on them.
+#
+# scipy is NOT: esm-libraries-spec §2.5.9 keeps the SOLVER optional in every
+# binding. Building a Problem — load, flatten, provider fetch, compile — never
+# touches it; only `solve` / `init` / `step` / `solve_all` do, and they report a
+# missing SciPy rather than failing at import. It therefore lives in the
+# `simulate` extra (and in `test`, which exercises the solver).
+#
+# matplotlib is optional for the same shape of reason — used lazily only by
+# Solution.plot behind an import guard — so it lives in the `plot` extra.
 dependencies = [
     "jsonschema>=4.0",
     "sympy>=1.9",
     "pint>=0.20",
     "numpy>=1.20",
-    "scipy>=1.7",
     "xarray>=0.20",
     "netcdf4>=1.5",
 ]
@@ -55,7 +60,12 @@ earthsci-cadence-adapter-python = "earthsci_ast.cli.cadence_adapter:main"
 earthsci-pde-sim-adapter-python = "earthsci_ast.cli.pde_simulation_adapter:main"
 
 [project.optional-dependencies]
-# Plotting is optional: only SimulationResult.plot imports matplotlib, lazily and
+# The solver (esm-libraries-spec §2.5.9). `esm_problem` never needs it; `solve`,
+# `init`, `step` and `solve_all` do.
+simulate = [
+    "scipy>=1.7",
+]
+# Plotting is optional: only Solution.plot imports matplotlib, lazily and
 # behind an import guard, so the core toolkit never requires it.
 plot = [
     "matplotlib>=3.5",
@@ -71,6 +81,9 @@ dev = [
 test = [
     "pytest>=6.0",
     "pytest-cov>=3.0",
+    # The test suite integrates real problems end to end (esm-libraries-spec
+    # §2.4.2), so the optional solver is a TEST dependency here.
+    "scipy>=1.7",
     # Required for jsonschema FormatChecker to validate date-time and uri formats
     "rfc3339-validator",
     "rfc3986-validator",

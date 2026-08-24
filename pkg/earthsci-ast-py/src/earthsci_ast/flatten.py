@@ -140,7 +140,7 @@ class CyclicPromotionError(FlattenError):
 class UnsupportedDimensionalityError(FlattenError):
     """The flattened system has a dimensionality the simulator cannot handle.
 
-    Raised by simulate() when the flattened system still contains a spatial
+    Raised by esm_problem() when the flattened system still contains a spatial
     independent variable. Such a system carries an *undiscretized* spatial
     operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
     discretization rule reduced to a stencil, so it surfaces the uniform
@@ -303,7 +303,7 @@ class FlattenedSystem:
     # Data-loader variables lowered to observed arrays (RFC pure-io-data-loaders
     # §4.3). Each is an external input the simulator executes at the loader's
     # cadence and binds into the RHS as a read-only array (see LoaderField).
-    # Empty ⇒ the system has no data-loader subsystems, so simulate() behaves
+    # Empty ⇒ the system has no data-loader subsystems, so solve() behaves
     # exactly as before (no injection path).
     loader_fields: list[LoaderField] = field(default_factory=list)
     # Concrete integer grid shapes assigned by the pointwise spatial lift
@@ -1858,7 +1858,7 @@ def _apply_domain(esm_file: EsmFile, flat: FlattenedSystem) -> None:
     """Pass the file's ``domain`` section through unchanged.
 
     The Python tier does not currently apply dimension-promotion rules from
-    §4.7.6 — only the spatial-rejection check in simulate() distinguishes
+    §4.7.6 — only the spatial-rejection check in esm_problem() distinguishes
     discretized systems (time-only) from an undiscretized spatial operator that
     survived into the flattened system.
     """
@@ -2678,7 +2678,7 @@ def infer_variable_shapes(flat: FlattenedSystem) -> dict[str, tuple[int, ...]]:
             # 1-based: length = max index (under the convention that index 1
             # is the first slot). Offset indices like u[i-1] where i starts at
             # 2 still max out at the highest element. An index below 1 is out of
-            # range under this convention — the max is kept as-is and simulate()
+            # range under this convention — the max is kept as-is and solve()
             # errors later if the variable is ever flat-indexed.
             length = max(per_dim_max[d], 1)
             shape.append(length)

@@ -280,10 +280,8 @@ from .edit import (
 _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below
-        simulate,
         evaluate_rhs,
         BuildInspection,
-        SimulationResult,
         SimulationError,
     )
 
@@ -292,18 +290,31 @@ except ImportError:
     # scipy (a hard dep) missing only in a broken install; skip the sim tier.
     pass
 
-# Build-time public surface (Phase 3 clean consolidation): the Julia-parity
-# prepare()/observed_field() entry points and the raw-dict pushdown desugar.
-_has_prepare = False
+# The simulation Problem surface (esm-libraries-spec §2.5, API_SPEC §5.8): one
+# noun and one verb, plus the raw-dict pushdown desugar. `simulate` / `prepare`
+# / `PreparedModel` are DELETED, not deprecated — Problem construction absorbs
+# what `prepare` did, and `solve` is the run.
+_has_problem = False
 try:
-    from .prepare import (  # noqa: F401 — re-exported via __all__ below
-        PreparedModel,
+    from .problem import (  # noqa: F401 — re-exported via __all__ below
+        CallbackSet,
+        EnsembleProblem,
+        Integrator,
+        Problem,
+        ReturnCode,
+        Solution,
+        callbacks,
+        esm_problem,
+        init,
         observed_field,
-        prepare,
+        remake,
+        solve,
+        solve_all,
+        step,
     )
     from .pushdown_rewrite import desugar_pushdown, pushdown_diagnostics  # noqa: F401
 
-    _has_prepare = True
+    _has_problem = True
 except ImportError:
     pass
 
@@ -662,19 +673,28 @@ __all__ = [
 if _has_simulation:
     __all__.extend(
         [
-            "simulate",
             "evaluate_rhs",
             "BuildInspection",
-            "SimulationResult",
             "SimulationError",
         ]
     )
 
-if _has_prepare:
+if _has_problem:
     __all__.extend(
         [
-            "prepare",
-            "PreparedModel",
+            "esm_problem",
+            "Problem",
+            "solve",
+            "Solution",
+            "ReturnCode",
+            "remake",
+            "callbacks",
+            "CallbackSet",
+            "init",
+            "Integrator",
+            "step",
+            "solve_all",
+            "EnsembleProblem",
             "observed_field",
             "desugar_pushdown",
             "pushdown_diagnostics",

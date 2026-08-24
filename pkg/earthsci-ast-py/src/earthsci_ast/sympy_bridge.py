@@ -7,7 +7,7 @@ via :func:`sympy.lambdify`. This module owns:
   build per-state / per-observed SymPy expressions from a
   :class:`FlattenedSystem` with scalar algebraic-equation elimination.
 * :class:`_CompiledRhs` and :func:`_compile_flat_rhs` — the lambdify +
-  CSE compile that dominates ``simulate()`` wall time on large mechanisms.
+  CSE compile that dominates ``solve()`` wall time on large mechanisms.
 
 The ESM ``Expr`` → SymPy converter itself (:func:`_expr_to_sympy`), the
 NaN-safe abs placeholder (:class:`_ess_numeric_abs`, esm-5gk), and
@@ -103,7 +103,7 @@ def _flat_to_sympy_rhs(
     Parameter values are NOT inlined — parameter symbols remain free in
     ``rhs_exprs`` and ``algebraic_value_exprs`` so the symbolic form (and
     its lambdified counterpart) can be cached and reused across multiple
-    simulate() calls with different parameter overrides. The caller passes
+    Problem builds with different parameter bindings. The caller passes
     parameter values to the lambdified function as runtime arguments
     (see :func:`_compile_flat_rhs`).
 
@@ -401,7 +401,7 @@ class _CompiledRhs:
     state vector instead of one lambdify-per-expression. Each function takes
     state symbols followed by parameter symbols (in the orders given by
     ``state_names`` / ``parameter_names``) so a single compile is reusable
-    across simulate() calls with different parameter overrides.
+    across Problem builds with different parameter bindings.
     """
 
     state_names: list[str]
@@ -418,11 +418,11 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     """Compile (and cache) the RHS of a FlattenedSystem to numpy callables.
 
     The compile step (`_flat_to_sympy_rhs` + vector ``sp.lambdify`` with
-    ``cse=True``) dominates simulate()'s wall time on large mechanisms
+    ``cse=True``) dominates solve()'s wall time on large mechanisms
     (geoschem_fullchem: ~395 s flatten-to-sympy + ~99 s lambdify). The
     result depends only on the symbolic structure of ``flat`` — parameter
     values are runtime arguments — so we cache it as an attribute on the
-    FlattenedSystem object. Repeat simulate() calls on the same ``flat``
+    FlattenedSystem object. Repeat builds on the same ``flat``
     (e.g. an 8-plot scenario sharing one parsed model) hit the cache and
     pay near-zero compile cost.
 
@@ -433,7 +433,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     cse:
         Forwarded to :func:`sympy.lambdify` for the rhs / algebraic / observed
         functions. ``True`` (default) shares common subexpressions across the
-        full vector, which is the production setting and dominates simulate()
+        full vector, which is the production setting and dominates solve()
         cost-wise. ``False`` disables CSE — useful for diagnostics that need
         to bypass SymPy's construction-time canonical rewrites (e.g. the
         ``cse=False`` non-finite-derivative regression captured by esm-5gk).
@@ -444,7 +444,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     -----
     Systems with zero state variables are supported when at least one
     observed variable has an algebraic body — ``rhs_vector_func`` is then
-    ``None`` and only ``observed_vector_func`` is populated. simulate()
+    ``None`` and only ``observed_vector_func`` is populated. solve()
     handles this case by skipping the integrator and sampling the observed
     bodies on a synthetic time grid (cloud_albedo.esm and friends, where
     every variable lands as an observed binding after MTK-style scalar

@@ -7,7 +7,7 @@ RHS referenced ``interp.linear`` / ``interp.bilinear`` (or any other closed
 function with materialized table / axis arguments), so EarthSciModels'
 ``fastjx.esm`` reported 45 ERROR / 0 PASS on the Python runner. The numpy
 interpreter (``numpy_interpreter.py``) already handled both ops — this
-brings the SymPy/lambdify path that ``simulate()`` uses for the ODE RHS up
+brings the SymPy/lambdify path that the scalar build uses for the ODE RHS up
 to parity.
 """
 
@@ -24,7 +24,7 @@ from earthsci_ast.esm_types import (
     ModelVariable,
 )
 from earthsci_ast.expression import ExprNode
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 def _const(value):
@@ -66,8 +66,8 @@ def test_interp_linear_in_ode_rhs_runs_via_sympy_bridge():
         models={"M": model},
     )
 
-    res = simulate(esm, tspan=(0.0, 1.0))
-    assert res.success, res.message
+    res = solve(esm_problem(esm, (0.0, 1.0)))
+    assert (res.retcode is ReturnCode.Success), res.message
 
     x_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".x"))
     x_final = float(res.y[x_idx, -1])
@@ -115,8 +115,8 @@ def test_interp_bilinear_in_ode_rhs_runs_via_sympy_bridge():
         models={"M": model},
     )
 
-    res = simulate(esm, tspan=(0.0, 1.0))
-    assert res.success, res.message
+    res = solve(esm_problem(esm, (0.0, 1.0)))
+    assert (res.retcode is ReturnCode.Success), res.message
 
     x_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".x"))
     x_final = float(res.y[x_idx, -1])
@@ -171,8 +171,8 @@ def test_interp_bilinear_via_observed_variable_substitution():
         models={"M": model},
     )
 
-    res = simulate(esm, tspan=(0.0, 1.0))
-    assert res.success, res.message
+    res = solve(esm_problem(esm, (0.0, 1.0)))
+    assert (res.retcode is ReturnCode.Success), res.message
 
     c_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".c"))
     c_final = float(res.y[c_idx, -1])

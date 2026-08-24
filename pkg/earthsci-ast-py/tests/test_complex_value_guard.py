@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.numpy_interpreter import ComplexValueError, NumpyInterpreterError
-from earthsci_ast.prepare import observed_field, prepare
+from earthsci_ast.problem import esm_problem, observed_field
 
 CUBE_ROOT = 0.333333333
 
@@ -95,7 +95,7 @@ def _pow_x():
 )
 def test_complex_result_is_a_named_error_not_a_plausible_number(label, shape, expression):
     with pytest.raises(ComplexValueError) as exc:
-        prepare(_doc(expression, shape), model_name="M")
+        esm_problem(_doc(expression, shape), (0.0, 1.0), model_name="M")
     msg = str(exc.value)
     assert "COMPLEX" in msg
     # The value the silent cast would have truncated is NAMED in the diagnostic,
@@ -119,15 +119,12 @@ def test_untaken_eager_ifelse_branch_stays_evaluable():
     evaluated but NOT selected costs nothing — the taken branch is real, and a
     complex dtype whose imaginary part is identically zero is projected back
     onto the reals rather than rejected."""
-    prep = prepare(
-        _doc({"op": "ifelse", "args": [{"op": "false", "args": []}, _pow_x(), 1.0]}),
-        model_name="M",
-    )
+    prep = esm_problem(_doc({"op": "ifelse", "args": [{"op": "false", "args": []}, _pow_x(), 1.0]}), (0.0, 1.0), model_name="M")
     assert observed_field(prep, "y") == 1.0
 
 
 def test_real_powers_are_untouched():
-    prep = prepare(_doc({"op": "^", "args": [4.0, 0.5]}), model_name="M")
+    prep = esm_problem(_doc({"op": "^", "args": [4.0, 0.5]}), (0.0, 1.0), model_name="M")
     assert observed_field(prep, "y") == 2.0
 
 
@@ -145,7 +142,7 @@ def test_array_operand_keeps_numpy_nan_semantics():
         shape=["n"],
         extra_vars={"v": {"type": "parameter", "default": 0.0, "shape": ["n"]}},
     )
-    prep = prepare(doc, const_arrays={"M.v": np.array([-2.5, 8.0, -1.0])}, model_name="M")
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays={"M.v": np.array([-2.5, 8.0, -1.0])}, model_name="M")
     got = observed_field(prep, "y")
     assert np.isnan(got[0]) and np.isnan(got[2])
     assert got[1] == pytest.approx(2.0, rel=1e-8)
@@ -165,7 +162,7 @@ def test_scalar_division_by_zero_is_ieee_not_an_exception(num, den, want):
     every binding agrees". Numpy already did this on any array operand, and this
     binding's own `value_invention._vi_eval` already did it for scalars; only
     the numpy interpreter's scalar `/` raised `ZeroDivisionError`."""
-    prep = prepare(_doc({"op": "/", "args": [num, den]}), model_name="M")
+    prep = esm_problem(_doc({"op": "/", "args": [num, den]}), (0.0, 1.0), model_name="M")
     got = observed_field(prep, "y")
     assert np.isnan(got) if np.isnan(want) else got == want
 
@@ -175,13 +172,10 @@ def test_untaken_eager_ifelse_branch_may_divide_by_zero():
     `ifelse(A_j > 0, x/A_j, 0)`. `ifelse` is EAGER, so before this the untaken
     branch aborted the whole build with `ZeroDivisionError` while Julia and Rust
     returned the taken branch."""
-    prep = prepare(
-        _doc(
+    prep = esm_problem(_doc(
             {
                 "op": "ifelse",
                 "args": [{"op": "false", "args": []}, {"op": "/", "args": [1.0, 0.0]}, 1.0],
             }
-        ),
-        model_name="M",
-    )
+        ), (0.0, 1.0), model_name="M")
     assert observed_field(prep, "y") == 1.0

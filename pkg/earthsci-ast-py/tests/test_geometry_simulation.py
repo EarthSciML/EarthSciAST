@@ -1,6 +1,6 @@
-"""Conservative-regridding geometry kernel — simulate()-path ODE conformance.
+"""Conservative-regridding geometry kernel — solve()-path ODE conformance.
 
-Bead ess-my4.4.13 (the Python simulate() driver wiring). RFC
+Bead ess-my4.4.13 (the Python solve() driver wiring). RFC
 ``semiring-faq-unified-ir`` §8.1; ``CONFORMANCE_SPEC.md`` §5.8.
 
 The companion :mod:`test_geometry_kernel` exercises the ``intersect_polygon``
@@ -34,10 +34,10 @@ from conftest import VALID_DIR
 
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.parse import load_path
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,
-    simulate,
 )
 
 _GEOM_DIR = VALID_DIR / "geometry"
@@ -130,10 +130,10 @@ def _passes(actual: float, expected: float, rel: float, ab: float) -> bool:
 
 
 def test_at_least_one_runnable_geometry_fixture() -> None:
-    """At least one geometry fixture must be drivable end-to-end through simulate()."""
+    """At least one geometry fixture must be drivable end-to-end through solve()."""
     assert _collect_fixtures(), (
         f"no executable geometry fixtures (inline `tests`) under {_GEOM_DIR}; "
-        "the simulate()-path geometry ODE is unexercised"
+        "the solve()-path geometry ODE is unexercised"
     )
 
 
@@ -155,8 +155,8 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
-            assert result.success, (
+            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            assert (result.retcode is ReturnCode.Success), (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
@@ -188,8 +188,8 @@ def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
     """
     fixture = _GEOM_DIR / "polygon_intersection_area_planar.esm"
     esm_file = load_path(fixture)
-    result = simulate(esm_file, tspan=(0.0, 1.0))
-    assert result.success, f"simulation failed: {result.message}"
+    result = solve(esm_problem(esm_file, (0.0, 1.0)))
+    assert (result.retcode is ReturnCode.Success), f"simulation failed: {result.message}"
     area_state = _lookup(result, "area_state", 1.0)
     assert abs(area_state - 1.0) <= 1e-9, f"area_state(1.0) = {area_state}, expected 1.0"
 
