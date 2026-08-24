@@ -245,6 +245,29 @@ CASES: list[tuple[str, str, str]] = [
 # changes. `error` is the oracle's exception CLASS NAME; the `reason` is prose
 # and is not asserted by a consuming binding.
 
+# --- a hazard for whoever adds the next translate fixture ----------------------
+# `metadata.coupling_rules` is compared VERBATIM across bindings, and the
+# oracle renders an object-valued `translate` entry as "<target>*<factor>". The
+# factor therefore travels as TEXT, so every binding has to produce the same
+# characters for the same number. Two independent arms hit this while conforming
+# to `operator_compose_translate`:
+#
+#   * Go rendered the decoded map with %v ("map[factor:1 var:ozone_conc]");
+#   * TypeScript rendered it with JSON.stringify, then had to hand-write a
+#     `formatPythonFloat` to reproduce Python's `str(float)` rules.
+#
+# The int-vs-float half of that is closed: the oracle now coerces the factor to
+# float, so a factor authored `2` and one authored `2.0` render identically.
+# What is NOT closed is exotic float spellings -- Python prints `1e-07` where
+# JavaScript prints `1e-7` -- and no fixture in the tree exercises one, so the
+# agreement currently holds by the values that happen to be authored.
+#
+# If you add a fixture whose translate factor is not a plain decimal in
+# [1e-4, 1e16), check the rendering in every binding before trusting a green
+# corpus run. The durable fix, if it ever bites, is to give the factor a
+# canonical rendering in the spec rather than have five bindings reverse-engineer
+# one language's float repr.
+
 REFUSALS: list[dict[str, str]] = [
     {
         "fixture": "valid/template_import_lib.esm",
