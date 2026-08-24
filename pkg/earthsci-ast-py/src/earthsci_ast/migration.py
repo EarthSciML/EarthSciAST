@@ -42,7 +42,7 @@ from dataclasses import replace
 
 from .errors import EarthSciAstError
 from .esm_types import EsmFile
-from .parse import _CURRENT_VERSION
+from .parse import SCHEMA_VERSION, _CURRENT_VERSION
 
 __all__ = [
     "MigrationError",
@@ -52,9 +52,9 @@ __all__ = [
     "supported_migration_targets",
 ]
 
-#: The schema version this library implements, as a string. Derived from
-#: :data:`earthsci_ast.parse._CURRENT_VERSION` so it cannot hand-drift.
-SCHEMA_VERSION: str = ".".join(str(part) for part in _CURRENT_VERSION)
+# `SCHEMA_VERSION` is re-exported from :mod:`earthsci_ast.parse`, which derives
+# it from the bundled schema's `$id`. It used to be defined a SECOND time here,
+# from `parse._CURRENT_VERSION`; one definition is enough.
 
 # The additive line runs from 1.0.0 up to (and including) the current schema
 # version.

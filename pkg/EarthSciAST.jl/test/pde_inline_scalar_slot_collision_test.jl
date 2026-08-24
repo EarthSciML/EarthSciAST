@@ -93,7 +93,7 @@ const _SSC_ESS = EarthSciAST
                          "assertions" => Any[Dict("variable" => "k", "time" => 1.0,
                              "expected" => 100.0, "tolerance" => Dict("rel" => 1e-9))])])))
 
-        file = _SSC_ESS.load(IOBuffer(JSON3.write(doc)))
+        file = _SSC_ESS.load_string(IOBuffer(JSON3.write(doc)))
         results = run_pde_tests(file; alg = OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol = 1e-12, abstol = 1e-14)
         by = Dict((r.model, r.test_id) => r for r in results)

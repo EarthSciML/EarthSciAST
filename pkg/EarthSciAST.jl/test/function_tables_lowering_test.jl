@@ -115,7 +115,7 @@ end
 @testset "table_lookup → interp.* lowering bit-equivalence (esm-spec §9.5.3)" begin
     @testset "linear fixture" begin
         path = joinpath(FUNCTION_TABLES_FIXTURES_ROOT, "linear", "fixture.esm")
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         model = file.models["M"]
         vars = model.variables
 
@@ -132,7 +132,7 @@ end
 
     @testset "bilinear fixture" begin
         path = joinpath(FUNCTION_TABLES_FIXTURES_ROOT, "bilinear", "fixture.esm")
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         model = file.models["M"]
         vars = model.variables
 
@@ -154,7 +154,7 @@ end
 
     @testset "roundtrip fixture (table_lookup vs. inline-const companion)" begin
         path = joinpath(FUNCTION_TABLES_FIXTURES_ROOT, "roundtrip", "fixture.esm")
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         model = file.models["M"]
         vars = model.variables
 

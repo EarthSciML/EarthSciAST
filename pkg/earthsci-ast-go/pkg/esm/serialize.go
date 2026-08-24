@@ -23,11 +23,12 @@ func marshalCanonical(v any, indent bool) ([]byte, error) {
 	return json.Marshal(canonical)
 }
 
-// save is the shared serialization core for the four exported entry points
-// (Serialize/SerializeCompact return the string; SaveToFile/SaveCompactToFile
-// persist it). It validates the file (unlike the raw (*ESMFile).ToJSON) and
-// emits canonical JSON, indented when indent is true and compact otherwise.
-func save(file *ESMFile, indent bool) (string, error) {
+// serializeDocument is the shared serialization core for the four exported
+// entry points (ToJSON/ToJSONCompact return the string; WritePath/
+// WritePathCompact persist it). It validates the file (unlike the raw
+// (*ESMFile).ToJSON METHOD, which is a plain marshal) and emits canonical
+// JSON, indented when indent is true and compact otherwise.
+func serializeDocument(file *ESMFile, indent bool) (string, error) {
 	if file == nil {
 		return "", fmt.Errorf("cannot serialize nil ESM file")
 	}
@@ -45,21 +46,28 @@ func save(file *ESMFile, indent bool) (string, error) {
 	return string(jsonData), nil
 }
 
-// Serialize validates an ESM file and returns it as an indented canonical JSON
-// string. (The Save* verbs write to disk; Serialize* return the string.)
-func Serialize(file *ESMFile) (string, error) {
-	return save(file, true)
+// ToJSON validates an ESM file and returns it as an indented canonical JSON
+// string. PURE — it never touches disk; WritePath is the writer.
+//
+// Go was the only binding whose NAMES already distinguished serializing from
+// writing (Serialize/SaveToFile) — and the only one whose names matched
+// nobody else's. These are those functions under the shared names.
+func ToJSON(file *ESMFile) (string, error) {
+	return serializeDocument(file, true)
 }
 
-// SerializeCompact validates an ESM file and returns it as a compact canonical
-// JSON string (no indentation).
-func SerializeCompact(file *ESMFile) (string, error) {
-	return save(file, false)
+// ToJSONCompact validates an ESM file and returns it as a compact canonical
+// JSON string (no indentation). A separate function rather than a ToJSON
+// option because Go has no default arguments.
+func ToJSONCompact(file *ESMFile) (string, error) {
+	return serializeDocument(file, false)
 }
 
-// SaveToFile saves an ESM file directly to a file path
-func SaveToFile(file *ESMFile, path string) error {
-	jsonStr, err := Serialize(file)
+// WritePath writes an ESM file to path as indented canonical JSON. It returns
+// only an error, never the payload: no function in this API both writes and
+// hands back the serialized bytes — call ToJSON when you want the string.
+func WritePath(file *ESMFile, path string) error {
+	jsonStr, err := ToJSON(file)
 	if err != nil {
 		return err
 	}
@@ -72,9 +80,9 @@ func SaveToFile(file *ESMFile, path string) error {
 	return nil
 }
 
-// SaveCompactToFile saves an ESM file to a file path in compact format
-func SaveCompactToFile(file *ESMFile, path string) error {
-	jsonStr, err := SerializeCompact(file)
+// WritePathCompact writes an ESM file to path in the compact canonical form.
+func WritePathCompact(file *ESMFile, path string) error {
+	jsonStr, err := ToJSONCompact(file)
 	if err != nil {
 		return err
 	}

@@ -2335,7 +2335,7 @@ fn validate_manifolds_in_refs(
 /// producing the Option-A image: every reference replaced by its expansion
 /// (pure substitution to the acyclic fixpoint, §9.6.4 rule 2) and every
 /// per-component `expression_templates` block stripped. Deterministic — the DAG
-/// is acyclic and substitution confluent, so `expand(load(f))` is structurally
+/// is acyclic and substitution confluent, so `expand(load_string(f))` is structurally
 /// equal to the pre-0.9.0 expanded form. Mutates `value` in place. Mirrors the
 /// Julia reference `expand_document` / `Expand`.
 pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {

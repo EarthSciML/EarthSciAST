@@ -87,10 +87,10 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     keys `parameter_overrides` by LOCAL parameter name, while flattening
     qualifies it (``M.A``). Both spellings must reach the coordinate-expression
     `ic` seed; an override naming no parameter is REJECTED (§6.6.2)."""
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_path
     from earthsci_ast.simulation import simulate
 
-    esm = load(str(_ROOT / "fixtures" / "ic_param_override.esm"))
+    esm = load_path(str(_ROOT / "fixtures" / "ic_param_override.esm"))
     cells = [f"M.u[{i}]" for i in range(1, 6)]
 
     for key in ("A", "M.A"):

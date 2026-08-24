@@ -11,7 +11,7 @@ use earthsci_ast::data_output::{
     DTYPE_FLOAT64, OutputError, derive_output_meta, derive_output_plan, parse_cell_key,
 };
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{EsmFile, load};
+use earthsci_ast::{EsmFile, load_string};
 
 /// Wave-3 streaming fixture: one array state `c` over a 3x2 `lon`/`lat` grid
 /// plus a `coordinates` registry keyed BY DIM NAME with inline values — the
@@ -34,7 +34,7 @@ fn slot_names(doc: &EsmFile) -> Vec<String> {
 
 #[test]
 fn grid_fixture_yields_real_axis_names_and_cf_dimension_coordinates() {
-    let doc: EsmFile = load(GRID_COORDS).expect("fixture loads");
+    let doc: EsmFile = load_string(GRID_COORDS).expect("fixture loads");
     let slots = slot_names(&doc);
     assert_eq!(slots.len(), 6, "3x2 grid = 6 flat slots: {slots:?}");
 
@@ -97,7 +97,7 @@ fn grid_fixture_yields_real_axis_names_and_cf_dimension_coordinates() {
 
 #[test]
 fn two_shape_signatures_become_two_grids() {
-    let doc: EsmFile = load(COORDS_REGISTRY).expect("fixture loads");
+    let doc: EsmFile = load_string(COORDS_REGISTRY).expect("fixture loads");
     let slots = slot_names(&doc);
     // tracer over [lon(4), lat(3), lev(2)] = 24 cells + cell_tracer over
     // [cells(5)] = 5 cells.
@@ -157,9 +157,9 @@ fn two_shape_signatures_become_two_grids() {
 /// used to be silently discarded because the Rust `EsmFile` did not model it.
 #[test]
 fn coordinates_registry_round_trips() {
-    let doc: EsmFile = load(COORDS_REGISTRY).expect("fixture loads");
-    let json = earthsci_ast::save(&doc).expect("serializes");
-    let back: EsmFile = load(&json).expect("reparses");
+    let doc: EsmFile = load_string(COORDS_REGISTRY).expect("fixture loads");
+    let json = earthsci_ast::to_json(&doc).expect("serializes");
+    let back: EsmFile = load_string(&json).expect("reparses");
     let a = derive_output_meta(&doc);
     let b = derive_output_meta(&back);
     assert_eq!(a.coordinates, b.coordinates);
@@ -258,7 +258,7 @@ fn observed_slots() -> Vec<String> {
 
 #[test]
 fn observed_fields_are_written_only_when_the_caller_names_them() {
-    let doc: EsmFile = load(OBSERVED_DOC).expect("doc loads");
+    let doc: EsmFile = load_string(OBSERVED_DOC).expect("doc loads");
     let slots = observed_slots();
 
     // State only by default — an observed field is NOT output just because the
@@ -291,7 +291,7 @@ fn observed_fields_are_written_only_when_the_caller_names_them() {
 
 #[test]
 fn an_unavailable_observed_request_is_refused() {
-    let doc: EsmFile = load(OBSERVED_DOC).expect("doc loads");
+    let doc: EsmFile = load_string(OBSERVED_DOC).expect("doc loads");
     // `z` was never evaluated into the flat rows, so asking for it must fail
     // rather than silently produce a store missing the field.
     let err = derive_output_plan(
@@ -308,7 +308,7 @@ fn an_unavailable_observed_request_is_refused() {
 
 #[test]
 fn a_document_state_shape_that_contradicts_the_flat_state_is_refused() {
-    let doc: EsmFile = load(GRID_COORDS).expect("fixture loads");
+    let doc: EsmFile = load_string(GRID_COORDS).expect("fixture loads");
     // The document declares c over [lon(3), lat(2)]; hand the deriver a flat
     // state gridded 3x3 instead. Mislabeling the axis would be silently wrong
     // science, so it must fail loudly.

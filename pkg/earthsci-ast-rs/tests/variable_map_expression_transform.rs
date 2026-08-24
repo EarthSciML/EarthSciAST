@@ -329,7 +329,7 @@ fn factor_with_expression_transform_rejected_by_load() {
             "factor": 3.0
         }]
     });
-    let err = earthsci_ast::load(&doc.to_string())
+    let err = earthsci_ast::load_string(&doc.to_string())
         .expect_err("load must reject factor + expression transform");
     let msg = format!("{err}");
     assert!(

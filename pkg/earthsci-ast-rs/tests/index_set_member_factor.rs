@@ -22,7 +22,7 @@ const FIXTURE: &str = include_str!("fixtures/pushdown/overlap_gate_point_in_rect
 
 #[test]
 fn member_factor_is_parsed_from_a_derived_set() {
-    let file = parse::load(FIXTURE).expect("fixture parses");
+    let file = parse::load_string(FIXTURE).expect("fixture parses");
     let sets = file
         .index_sets
         .as_ref()
@@ -42,12 +42,12 @@ fn member_factor_is_parsed_from_a_derived_set() {
 
 #[test]
 fn member_factor_survives_a_round_trip() {
-    let file = parse::load(FIXTURE).expect("fixture parses");
-    let emitted = serialize::save(&file).expect("serializes");
+    let file = parse::load_string(FIXTURE).expect("fixture parses");
+    let emitted = serialize::to_json(&file).expect("serializes");
 
     // Re-parse rather than string-match, so the assertion is about the DOCUMENT
     // rather than about formatting.
-    let again = parse::load(&emitted).expect("re-parses");
+    let again = parse::load_string(&emitted).expect("re-parses");
     let derived = again
         .index_sets
         .as_ref()
@@ -69,13 +69,13 @@ fn member_factor_survives_a_round_trip() {
 fn a_set_without_member_factor_does_not_gain_one() {
     // `skip_serializing_if` keeps ordinary sets byte-identical: an interval set
     // must not sprout a null `member_factor` key.
-    let file = parse::load(FIXTURE).expect("fixture parses");
+    let file = parse::load_string(FIXTURE).expect("fixture parses");
     let sets = file.index_sets.as_ref().expect("index_sets");
     let pop = sets.get("pop_cells").expect("fixture declares pop_cells");
     assert_eq!(pop.kind, "interval");
     assert!(pop.member_factor.is_none());
 
-    let emitted = serialize::save(&file).expect("serializes");
+    let emitted = serialize::to_json(&file).expect("serializes");
     let doc: serde_json::Value = serde_json::from_str(&emitted).expect("valid JSON");
     assert!(
         doc["index_sets"]["pop_cells"]

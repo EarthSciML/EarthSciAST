@@ -1179,7 +1179,7 @@ func loadInvalidFixtureByPath(t *testing.T, name string) (*ESMFile, string, erro
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}
-	file, loadErr := Load(path)
+	file, loadErr := LoadPath(path)
 	return file, string(content), loadErr
 }
 

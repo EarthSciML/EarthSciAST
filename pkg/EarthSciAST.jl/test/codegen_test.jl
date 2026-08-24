@@ -183,7 +183,7 @@ const _CG = EarthSciAST
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
                         "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
-        file = _CG.load(IOBuffer(JSON3.write(doc)))
+        file = _CG.load_string(IOBuffer(JSON3.write(doc)))
         @test file.component_templates !== nothing       # the reference survived load
         code = to_julia_code(file)
         @test occursin("k * z", code)                     # the Option-A image emitted

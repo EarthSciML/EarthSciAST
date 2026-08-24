@@ -287,7 +287,7 @@ const _SR_REPO_ROOT = TESTUTILS_REPO_ROOT
         path = joinpath(_SR_REPO_ROOT, "tests", "valid", "aggregate",
                         "aggregate_semiring_indexset.esm")
         if isfile(path)
-            file = EarthSciAST.load(path)
+            file = EarthSciAST.load_path(path)
             ics = Dict("u[$i]" => Float64(i) for i in 1:5)
             f!, u0, p, _, vmap = build_evaluator(file; model_name="AggregateDemo",
                                                  initial_conditions=ics)

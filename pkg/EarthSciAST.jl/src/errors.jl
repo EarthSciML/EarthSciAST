@@ -20,7 +20,7 @@ Catching this one type catches them all:
 
 ```julia
 try
-    file = load("model.esm")
+    file = load_path("model.esm")
     flat = flatten(file)
 catch e
     e isa EarthSciASTError || rethrow()

@@ -462,7 +462,7 @@ export function formatNumericLiteral(lit: NumericLiteral, path: string): string 
  * `.0` override when the result is an integer-valued plain-decimal token.
  *
  * NAMING: this is the DOCUMENT-serialization float emitter (used by
- * {@link losslessJsonStringify} and `save()`), which relies on
+ * {@link losslessJsonStringify} and `toJson()`), which relies on
  * `ToString(Number)`'s own exponent formatting. It is deliberately NOT the
  * strict RFC §5.4.6 CANONICAL-FORM emitter — that is the confusingly-similar
  * `formatCanonicalFloat` in `canonicalize.ts`, which additionally normalizes
@@ -489,7 +489,7 @@ export function formatFloatToken(value: number): string {
  * unrelated subtrees stay reference-identical with the input.
  *
  * Single home for a helper that was previously copy-pasted verbatim into both
- * `save()` (to emit bare JSON numbers) and `load()`'s canonical mode (which
+ * `toJson()` (to emit bare JSON numbers) and `loadString()`'s canonical mode (which
  * builds a plain view for Ajv schema validation, since the schema declares
  * `type: number`, which does not match tagged `{kind, value}` objects).
  */

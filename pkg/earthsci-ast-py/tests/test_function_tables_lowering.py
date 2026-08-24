@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from conftest import CONFORMANCE_DIR
 
-from earthsci_ast import load
+from earthsci_ast import load_path
 from earthsci_ast.esm_types import EsmFile, ExprNode, ModelVariable
 from earthsci_ast.registered_functions import evaluate_closed_function
 
@@ -168,7 +168,7 @@ def _first_table_lookup(file: EsmFile, model_id: str, eq_idx: int) -> ExprNode:
 
 
 def test_linear_fixture_lowering_is_bit_equivalent():
-    file = load(FIXTURES_ROOT / "linear" / "fixture.esm")
+    file = load_path(FIXTURES_ROOT / "linear" / "fixture.esm")
     vars = file.models["M"].variables
     node = _first_table_lookup(file, "M", 0)
 
@@ -184,7 +184,7 @@ def test_linear_fixture_lowering_is_bit_equivalent():
 
 
 def test_bilinear_fixture_lowering_is_bit_equivalent():
-    file = load(FIXTURES_ROOT / "bilinear" / "fixture.esm")
+    file = load_path(FIXTURES_ROOT / "bilinear" / "fixture.esm")
     vars = file.models["M"].variables
 
     # Eq 0: output by name "NO2".
@@ -219,7 +219,7 @@ def test_bilinear_fixture_lowering_is_bit_equivalent():
 
 
 def test_roundtrip_fixture_lowering_matches_inline_const_companion():
-    file = load(FIXTURES_ROOT / "roundtrip" / "fixture.esm")
+    file = load_path(FIXTURES_ROOT / "roundtrip" / "fixture.esm")
     model = file.models["M"]
     vars = model.variables
 

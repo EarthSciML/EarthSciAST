@@ -39,7 +39,7 @@ from conftest import FIXTURES_ROOT
 
 pytest.importorskip("scipy")
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 
@@ -227,7 +227,7 @@ def test_simulation_fixture_tests_blocks(fixture: str) -> None:
     path = os.path.join(SIMULATION_DIR, fixture)
     with open(path) as fp:
         raw = json.load(fp)
-    file = load(path)
+    file = load_path(path)
 
     any_executed = False
     xfail_reasons: list[str] = []

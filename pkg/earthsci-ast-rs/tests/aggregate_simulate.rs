@@ -17,7 +17,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::aggregate::resolve_aggregate_ranges;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 
 mod common;
@@ -71,7 +71,7 @@ fn build(
 /// initial condition per element, so we seed both at zero (the RHS is a
 /// constant-rate forcing, so `y[i](t) = rate·t` regardless).
 fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
-    let file = load(model_json).map_err(|e| format!("load: {e}"))?;
+    let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
     let opts = SimulateOptions {
         solver: SolverChoice::Bdf,
         abstol: 1e-10,
@@ -501,7 +501,7 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
           }
         }
         "#;
-    let file = load(model).unwrap_or_else(|e| panic!("load ragged model: {e}"));
+    let file = load_string(model).unwrap_or_else(|e| panic!("load ragged model: {e}"));
     let opts = SimulateOptions {
         solver: SolverChoice::Bdf,
         abstol: 1e-10,

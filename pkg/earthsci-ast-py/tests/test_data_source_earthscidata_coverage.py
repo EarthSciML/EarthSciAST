@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast import load, save
+from earthsci_ast import load_string, to_json
 
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "data_sources"
@@ -60,7 +60,7 @@ def test_earthscidata_fixture_validates(fixture_name):
     cleaned = _strip_comments(raw)
     cleaned_content = json.dumps(cleaned)
 
-    esm = load(cleaned_content)
+    esm = load_string(cleaned_content)
     assert esm.data_sources, f"{fixture_name}: no data_sources parsed"
 
 
@@ -72,8 +72,8 @@ def test_earthscidata_fixture_roundtrips(fixture_name):
     cleaned = _strip_comments(raw)
     cleaned_content = json.dumps(cleaned)
 
-    esm = load(cleaned_content)
-    out = save(esm)
+    esm = load_string(cleaned_content)
+    out = to_json(esm)
     out_data = json.loads(out)
 
     orig_loaders = cleaned["data_sources"]

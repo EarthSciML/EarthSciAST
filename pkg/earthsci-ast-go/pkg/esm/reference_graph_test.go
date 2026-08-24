@@ -427,7 +427,7 @@ func TestReferenceGraphCycle(t *testing.T) {
 // which is the whole point of routing both through the raw JSON view.
 func TestReferenceGraphTypedConveniences(t *testing.T) {
 	path := filepath.Join(repoTestsDir(t), "valid", "aggregate", "node_addressing_from_faq.esm")
-	file, err := Load(path)
+	file, err := LoadPath(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

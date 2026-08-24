@@ -9,8 +9,8 @@ import pytest
 import json
 from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
-from earthsci_ast import load
-from earthsci_ast.serialize import save
+from earthsci_ast import load_path, load_string
+from earthsci_ast.serialize import to_json
 from earthsci_ast.validation import validate, SchemaValidationError
 
 
@@ -31,7 +31,7 @@ class TestStructuralValidation:
                 content = f.read()
 
             with pytest.raises(SchemaValidationError) as exc_info:
-                load(content)
+                load_string(content)
 
             # Check for circular reference error code
             error = exc_info.value
@@ -97,7 +97,7 @@ class TestStructuralValidation:
         }
         # load() runs the structural reference-resolution check; it must NOT
         # raise on the nested `_var` placeholder.
-        load(json.dumps(advection))
+        load_string(json.dumps(advection))
         # And validate() must not surface an undefined-reference error for `_var`.
         result = validate(advection)
         ref_errors = [
@@ -141,7 +141,7 @@ class TestStructuralValidation:
             },
         }
         with pytest.raises(SchemaValidationError) as exc_info:
-            load(json.dumps(bad))
+            load_string(json.dumps(bad))
         assert "Variable 'typo_missing' referenced in equation is not declared" in str(
             exc_info.value
         )
@@ -183,7 +183,7 @@ class TestStructuralValidation:
                 content = f.read()
 
             with pytest.raises((SchemaValidationError, Exception)) as exc_info:
-                load(content)
+                load_string(content)
 
             error = str(exc_info.value).lower()
             assert any(
@@ -331,7 +331,7 @@ class TestStructuralValidation:
         }
 
         with pytest.raises((SchemaValidationError, ValueError)) as exc_info:
-            load(json.dumps(invalid_esm))
+            load_string(json.dumps(invalid_esm))
 
         error = str(exc_info.value).lower()
         assert any(keyword in error for keyword in ["arg", "operator", "expression", "invalid"])
@@ -353,7 +353,7 @@ class TestStructuralValidation:
                     }
                 },
             }
-            assert load(json.dumps(doc)) is not None
+            assert load_string(json.dumps(doc)) is not None
 
     def test_placeholder_expansion_errors(self, fixtures_dir):
         """Test placeholder expansion validation."""
@@ -407,7 +407,7 @@ class TestErrorCodeSpecificity:
 
         for invalid_json, expected_error_type in invalid_cases:
             with pytest.raises((SchemaValidationError, Exception)) as exc_info:
-                load(invalid_json)
+                load_string(invalid_json)
 
             error_msg = str(exc_info.value).lower()
             assert expected_error_type in error_msg or "validation" in error_msg
@@ -435,7 +435,7 @@ class TestErrorCodeSpecificity:
         }
 
         with pytest.raises((SchemaValidationError, Exception)) as exc_info:
-            load(json.dumps(invalid_esm))
+            load_string(json.dumps(invalid_esm))
 
         error_msg = str(exc_info.value)
         # Should include location information
@@ -482,7 +482,7 @@ class TestValidationWithFixtures:
             # rate/stoichiometry consistency) live in validate() only, matching
             # the Julia/Go/Rust contract.
             try:
-                load(content)
+                load_string(content)
             except Exception:
                 continue
             result = validate(content)
@@ -501,7 +501,7 @@ class TestValidationWithFixtures:
             content = f.read()
 
         with pytest.raises(SchemaValidationError) as exc_info:
-            load(content)
+            load_string(content)
 
         msg = str(exc_info.value)
         assert "models/ConstantUnitsModel/variables/gas_law_calculation" in msg
@@ -553,7 +553,7 @@ class TestValidationWithFixtures:
             content = f.read()
 
         # Schema-valid: load() must accept it (rejection is structural, not schema).
-        load(content)
+        load_string(content)
 
         result = validate(content)
         assert not result.is_valid
@@ -620,7 +620,7 @@ class TestValidationWithFixtures:
             try:
                 with open(valid_file) as f:
                     content = f.read()
-                result = load(content)
+                result = load_string(content)
                 # Should successfully load
                 assert result is not None
             except Exception as e:
@@ -1078,7 +1078,7 @@ class TestTemplateLibraryRoundTrip:
         path = valid_dir / name
         original = json.loads(path.read_text())
 
-        emitted = json.loads(save(load(str(path))))
+        emitted = json.loads(to_json(load_path(str(path))))
 
         # The two declarations survive VERBATIM...
         assert emitted.get("expression_templates") == original["expression_templates"]
@@ -1097,10 +1097,10 @@ class TestTemplateLibraryRoundTrip:
         """Rule 4: schema validation runs on the post-expansion form. The emitted
         library must therefore be valid, and re-emitting it must be a fixpoint."""
         valid_dir = FIXTURES_ROOT / "valid"
-        emitted = save(load(str(valid_dir / name)))
+        emitted = to_json(load_path(str(valid_dir / name)))
 
         result = validate(emitted, base_path=str(valid_dir))
         assert result.is_valid, [
             (e.code, e.path) for e in result.structural_errors + result.schema_errors
         ]
-        assert json.loads(save(load(emitted))) == json.loads(emitted)
+        assert json.loads(to_json(load_string(emitted))) == json.loads(emitted)

@@ -33,7 +33,7 @@ import pytest
 from conftest import VALID_DIR
 
 from earthsci_ast.esm_types import ExprNode
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import (
     _order_observed_equations,
     _time_varying_observeds,
@@ -144,7 +144,7 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
     if _needs_spherely(raw) and not _HAVE_SPHERELY:
         pytest.skip(f"{fixture_path.name}: spherical clip needs spherely (S2), absent")
 
-    esm_file = load(fixture_path)
+    esm_file = load_path(fixture_path)
     any_assertions = False
     for model_name, model_raw in (raw.get("models") or {}).items():
         model_tol = model_raw.get("tolerance") or {}
@@ -187,7 +187,7 @@ def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
     fused leaf, to within 1e-9.
     """
     fixture = _GEOM_DIR / "polygon_intersection_area_planar.esm"
-    esm_file = load(fixture)
+    esm_file = load_path(fixture)
     result = simulate(esm_file, tspan=(0.0, 1.0))
     assert result.success, f"simulation failed: {result.message}"
     area_state = _lookup(result, "area_state", 1.0)

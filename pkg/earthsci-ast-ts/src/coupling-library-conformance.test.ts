@@ -2,7 +2,7 @@
  * File-based conformance corpus for the coupling-library / coupling_import
  * feature (docs/content/rfcs/coupling-libraries-role-binding.md §11; esm-spec
  * §10.9–§10.11). The in-memory counterpart is coupling-imports.test.ts; this
- * suite drives the SAME real TS API (`load`, `save`, `flatten`,
+ * suite drives the SAME real TS API (`loadString`, `toJson`, `flatten`,
  * `expandCouplingImports`, `resolveSubsystemRefs`, `validate`, `validateSchema`)
  * over the .esm fixtures under tests/coupling_libraries/, asserting the outcome
  * recorded in that directory's expected_errors.json.
@@ -13,8 +13,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { load, validateSchema } from './parse.js'
-import { save } from './serialize.js'
+import { loadString, validateSchema } from './parse.js'
+import { toJson } from './serialize.js'
 import { flatten } from './flatten.js'
 import { expandCouplingImports } from './coupling-imports.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
@@ -33,7 +33,7 @@ const cl = (...parts: string[]): string => path.join(dir, ...parts)
 const readText = (p: string): string => fs.readFileSync(p, 'utf8')
 const readJson = (p: string): Record<string, unknown> => JSON.parse(readText(p))
 
-/** load() a fixture with the fixtures directory as basePath. */
+/** loadString() a fixture with the fixtures directory as basePath. */
 const loadPath = (p: string): EsmFile => loadFixtureFile(p)
 
 // This file-corpus suite uses the legacy sentinel contract: 'NO_ERROR' on
@@ -61,8 +61,8 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     expect(validateSchema(readJson(p))).toEqual([])
     const loaded = loadPath(p)
     expect((loaded as any).coupling_roles).toBeDefined()
-    // save() -> load() is a fixed point.
-    const reloaded = load(save(loaded), { basePath: dir })
+    // toJson() -> loadString() is a fixed point.
+    const reloaded = loadString(toJson(loaded), { basePath: dir })
     expect(reloaded).toEqual(loaded)
   })
 
@@ -213,7 +213,7 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
 
   it('template import targeting a coupling library -> template_import_is_coupling_library', () => {
     const p = cl('template_import_to_library.esm')
-    expect(errCode(() => load(readText(p), { basePath: path.dirname(p) }))).toBe(
+    expect(errCode(() => loadString(readText(p), { basePath: path.dirname(p) }))).toBe(
       'template_import_is_coupling_library',
     )
   })

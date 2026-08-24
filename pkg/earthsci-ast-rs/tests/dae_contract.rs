@@ -6,12 +6,12 @@
 //! fixture provenance and the rust strategy per
 //! `docs/rfcs/dae-binding-strategies.md`.
 
-use earthsci_ast::{DiscretizeOptions, EsmFile, Expr, apply_dae_contract, discretize, load};
+use earthsci_ast::{DiscretizeOptions, EsmFile, Expr, apply_dae_contract, discretize, load_string};
 
 fn load_fixture(name: &str) -> EsmFile {
     let path = format!("tests/fixtures/dae/{name}.json");
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    load(&src).unwrap_or_else(|e| panic!("parse {path}: {e:?}"))
+    load_string(&src).unwrap_or_else(|e| panic!("parse {path}: {e:?}"))
 }
 
 #[test]

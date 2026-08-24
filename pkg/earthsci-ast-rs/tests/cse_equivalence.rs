@@ -22,11 +22,11 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
 
 fn compile(json: &str) -> ArrayCompiled {
-    let file = load(json).expect("fixture parses");
+    let file = load_string(json).expect("fixture parses");
     ArrayCompiled::from_file(&file).expect("fixture compiles")
 }
 

@@ -26,12 +26,12 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use std::collections::HashMap;
 
 fn compile(json: &str) -> ArrayCompiled {
-    let file = load(json).expect("fixture loads");
+    let file = load_string(json).expect("fixture loads");
     ArrayCompiled::from_file(&file).expect("fixture compiles")
 }
 

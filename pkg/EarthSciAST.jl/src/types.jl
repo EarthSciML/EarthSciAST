@@ -10,15 +10,32 @@ matching the JSON schema definitions for language-agnostic model interchange.
 _maybe(f, x) = x === nothing ? nothing : f(x)
 
 """
-    ESM_FORMAT_VERSION
+    SCHEMA_VERSION
 
-The ESM format version (semver string) this implementation targets — the value
-written into the `esm` field of freshly constructed files. Files loaded from
-disk keep whatever version they declare; this constant is only the default for
-documents the library itself creates (flatten wrappers, MTK/Catalyst export).
-Must track the version on the first line of `esm-spec.md`.
+The `.esm` FORMAT version (semver string) this implementation targets — the
+value written into the `esm` field of freshly constructed files. Files loaded
+from disk keep whatever version they declare; this constant is only the default
+for documents the library itself creates (flatten wrappers, MTK/Catalyst
+export). Must track the version on the first line of `esm-spec.md` and in the
+bundled schema's `\$id`, which the `SCHEMA_VERSION tracks the bundled schema`
+test enforces.
+
+Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
+Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
+NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const ESM_FORMAT_VERSION = "1.0.0"
+const SCHEMA_VERSION = "1.0.0"
+
+"""
+    LIBRARY_VERSION
+
+This package's OWN version, read from its `Project.toml` — NOT the `.esm`
+format version, which is [`SCHEMA_VERSION`](@ref). The two are unrelated
+numbers and used to share the name `VERSION` across bindings: it meant the
+schema version in TypeScript and the package version in Rust. Julia exported
+neither.
+"""
+const LIBRARY_VERSION = string(pkgversion(@__MODULE__))
 
 # ========================================
 # 1. Expression Type Hierarchy
@@ -1201,7 +1218,7 @@ Unresolved reference to an external ESM file used as a subsystem (esm-spec §4.7
 Produced by `coerce_model` for a `{"ref": "..."}` subsystem entry and replaced
 in place by `resolve_subsystem_refs!` with the loaded `Model`.
 A `SubsystemRef` only survives parsing when references are not resolved (e.g.
-`load(::IO)` without a base path); `load(::String)` always resolves them.
+`load_string` without a base path); `load_path` always resolves them.
 `bindings` closes the referenced document's open metaparameters at this edge
 (esm-spec §9.7.6 binding site 3 — e.g. a convergence wrapper instantiating a
 problem file at a given size). `expression_template_imports` are the raw
@@ -1775,7 +1792,7 @@ struct EsmFile
     # materialize into — authored entries first, then the reference closure. The
     # component's equations/variables carry the surviving references as typed
     # `apply_expression_template` `OpExpr`s; `serialize_esm_file` re-injects these
-    # blocks so `save(EsmFile)` emits the reference-preserving form byte-identically
+    # blocks so `to_json(EsmFile)` emits the reference-preserving form byte-identically
     # to `emit_document`. `nothing` under `ESS_TEMPLATE_REF_DISABLE=1` (Expand at
     # load) or for a document with no surviving references.
     component_templates::Union{Dict{String,Any},Nothing}

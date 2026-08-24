@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 
 /// A wrap + ghost stencil with a CONST-tier observed — enough structure that
 /// a genuine divergence between the two paths would be caught.
@@ -169,7 +169,7 @@ const MODEL: &str = r#"
 fn ess_tape_check_runs_both_paths_without_panicking() {
     unsafe { std::env::set_var("ESS_TAPE_CHECK", "5") };
 
-    let file = load(MODEL).expect("load model");
+    let file = load_string(MODEL).expect("load model");
     let compiled = ArrayCompiled::from_file(&file).expect("compile model");
     let n = compiled.state_variable_names().len();
     let params = compiled.debug_resolve_params(&HashMap::new());

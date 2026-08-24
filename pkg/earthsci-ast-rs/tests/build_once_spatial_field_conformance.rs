@@ -20,7 +20,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -78,7 +78,7 @@ fn build_once_field_flatten_keeps_observeds_and_single_state() {
 
     let path = fixture_dir().join("fixtures/build_once_spatial_ode.esm");
     let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
     let flat = flatten(&file).unwrap_or_else(|e| panic!("flatten: {e}"));
 
     assert!(
@@ -110,7 +110,7 @@ fn build_once_spatial_field_trajectory_matches_golden() {
     let golden = read_json(&fixture_dir().join("golden/build_once_spatial_ode.json"));
 
     let json = fs::read_to_string(&fixture).unwrap_or_else(|e| panic!("read {fixture:?}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load {fixture:?}: {e}"));
 
     let tspan = &golden["cadence"]["tspan"];
     let (t0, t1) = (tspan[0].as_f64().unwrap(), tspan[1].as_f64().unwrap());

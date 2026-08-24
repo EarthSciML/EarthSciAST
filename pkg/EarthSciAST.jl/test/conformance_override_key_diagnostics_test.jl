@@ -52,7 +52,7 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
     # `solo` by one: pin the flattened parameter names so a change in
     # flattening cannot quietly defuse it.
     flat_params = sort!(String[String(n) for n in
-                              keys(EarthSciAST.flatten(EarthSciAST.load(esm_path)).parameters)])
+                              keys(EarthSciAST.flatten(EarthSciAST.load_path(esm_path)).parameters)])
     @test flat_params == sort!(String[String(p) for p in fixture.parameters])
 
     run(params) = EarthSciAST.simulate(esm_path, (0.0, 1.0);

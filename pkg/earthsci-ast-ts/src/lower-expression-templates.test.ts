@@ -5,7 +5,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
+import { loadString, loadDocument } from './parse.js'
 import {
   lowerExpressionTemplates,
   expandDocument,
@@ -17,7 +17,7 @@ import {
 import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import { fixturesDir, REPO_ROOT } from './test-helpers.js'
-import { save } from './serialize.js'
+import { toJson } from './serialize.js'
 import { validate } from './validate.js'
 import type { ReactionSystem } from './types.js'
 
@@ -109,8 +109,8 @@ function inlineArrhenius(A: number, Ea: number) {
 }
 
 describe('expression_templates / apply_expression_template (esm-giy)', () => {
-  it('expands apply_expression_template at load time and strips the templates block', () => {
-    const file = load(JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE)))
+  it('expands apply_expression_template at loadString time and strips the templates block', () => {
+    const file = loadString(JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE)))
     const sys = file.reaction_systems!.chem as unknown as Record<string, unknown>
     expect('expression_templates' in sys).toBe(false)
     // Both reactions should have a rate AST identical to the inline form.
@@ -144,15 +144,15 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
         },
       },
     }
-    const file = load(JSON.parse(JSON.stringify(noTemplates)))
+    const file = loadString(JSON.parse(JSON.stringify(noTemplates)))
     expect((file.reaction_systems!.chem as ReactionSystem).reactions[0].rate).toBe('k')
   })
 
   it('rejects apply_expression_template when esm < 0.4.0', () => {
     // The §9.6.5 gate itself, exercised DIRECTLY. From esm 1.0.0 no 0.x document
-    // reaches it through `load()` any more — the parser rejects an unsupported
+    // reaches it through `loadString()` any more — the parser rejects an unsupported
     // major version first ("Unsupported major version 0") — so driving this
-    // through `load` would only re-pin the major-version check and say nothing
+    // through `loadString` would only re-pin the major-version check and say nothing
     // about the template gate. The gate is still live for any caller that
     // inspects a legacy document, and this is what pins it.
     const oldVersion = {
@@ -169,19 +169,19 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   it('rejects unknown template name', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.name = 'unknown_form'
-    expect(() => load(fixture)).toThrow(/unknown_template/)
+    expect(() => loadString(fixture)).toThrow(/unknown_template/)
   })
 
   it('rejects bindings with extra params', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.bindings.bogus = 99
-    expect(() => load(fixture)).toThrow(/bindings_mismatch/)
+    expect(() => loadString(fixture)).toThrow(/bindings_mismatch/)
   })
 
   it('rejects bindings missing a param', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     delete fixture.reaction_systems.chem.reactions[0].rate.bindings.Ea
-    expect(() => load(fixture)).toThrow(/bindings_mismatch/)
+    expect(() => loadString(fixture)).toThrow(/bindings_mismatch/)
   })
 
   it('rejects nested apply_expression_template inside a template body', () => {
@@ -193,7 +193,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       name: 'arrhenius',
       bindings: { A_pre: 1, Ea: 1 },
     }
-    expect(() => load(fixture)).toThrow(/recursive_body/)
+    expect(() => loadString(fixture)).toThrow(/recursive_body/)
   })
 
   it('expansion accepts AST-valued bindings (not just scalars)', () => {
@@ -202,7 +202,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
       op: '*',
       args: [3, 'T'],
     }
-    const file = load(fixture)
+    const file = loadString(fixture)
     const rate = (file.reaction_systems!.chem as ReactionSystem).reactions[0].rate as Record<
       string,
       unknown
@@ -219,7 +219,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     const expandedPath = fixturesDir(
       'conformance/expression_templates/arrhenius_smoke/expanded.esm',
     )
-    const file = load(fs.readFileSync(fixturePath, 'utf8'))
+    const file = loadString(fs.readFileSync(fixturePath, 'utf8'))
     const expanded = JSON.parse(fs.readFileSync(expandedPath, 'utf8'))
     expect((file.reaction_systems!.chem as ReactionSystem).reactions).toEqual(
       expanded.reaction_systems.chem.reactions,
@@ -229,9 +229,9 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
   it('coupling_transform_expression conformance fixture matches expanded form (esm-spec §10.4)', () => {
     // The v0.8.0 variable_map expression-transform widening: a coupling
     // `transform` invoking a template declared by the RECEIVING component
-    // expands at load against that component's registry (§9.6.4).
+    // expands at loadString against that component's registry (§9.6.4).
     const casedir = fixturesDir('conformance/expression_templates/coupling_transform_expression')
-    const file = load(
+    const file = loadString(
       fs.readFileSync(path.join(casedir, 'fixture.esm'), 'utf8'),
     ) as unknown as Record<string, unknown>
     const expanded = JSON.parse(fs.readFileSync(path.join(casedir, 'expanded.esm'), 'utf8'))
@@ -243,7 +243,7 @@ describe('expression_templates / apply_expression_template (esm-giy)', () => {
     const fixture = JSON.parse(JSON.stringify(ARRHENIUS_FIXTURE))
     fixture.reaction_systems.chem.reactions[0].rate.name = 'missing'
     try {
-      load(fixture)
+      loadString(fixture)
       throw new Error('expected error')
     } catch (e) {
       expect(e).toBeInstanceOf(EsmMachineryError)
@@ -282,7 +282,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
       { op: 'grad', args: ['c'], dim: 'x' },
     )
     const out = lowerExpressionTemplates(file) as any
-    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at load.
+    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
     expect('expression_templates' in out.models.M).toBe(true)
     // f → "c" (operand); dx unbound by `match`, so it stays a bare ref.
     expect(out.models.M.equations[0].rhs).toEqual({
@@ -397,7 +397,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
 
   it('rejects a self-reintroducing rule via the pass bound (rewrite_rule_nonterminating)', () => {
     // 0.8.0: nontermination is caught by the MAX_REWRITE_PASSES=64 bound at
-    // load time, NOT by a static pre-check. A rule whose body wraps its own
+    // loadString time, NOT by a static pre-check. A rule whose body wraps its own
     // pattern grows the tree every pass and never converges.
     const file = gradModel(
       {
@@ -445,7 +445,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
     expect(out.models.M.equations[1].rhs).toEqual({ op: 'grad', args: ['c'], dim: 'y' })
   })
 
-  it('accepts the `match` field through load() and auto-applies the rule', () => {
+  it('accepts the `match` field through loadString() and auto-applies the rule', () => {
     const fixture = {
       esm: '1.0.0',
       metadata: { name: 'match_load', authors: ['t'] },
@@ -471,7 +471,7 @@ describe('match rewrite rules (esm-spec §9.6 auto-applied lowering)', () => {
         },
       },
     }
-    const file = load(fixture)
+    const file = loadDocument(fixture)
     expect((file.reaction_systems!.chem as ReactionSystem).reactions[0].rate).toEqual({
       op: '+',
       args: ['T', 'num_density'],
@@ -496,7 +496,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
   const fixtureText = (name: string) =>
     fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8')
   // Mirror the Julia driver `_lower_conf`: parse the fixture and run the
-  // load-time lowering directly.
+  // loadString-time lowering directly.
   const lowerFixture = (name: string) =>
     lowerExpressionTemplates(JSON.parse(fixtureText(name))) as any
   const expandedModel = (name: string) =>
@@ -554,15 +554,15 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     }
     expect(err).toBeInstanceOf(EsmMachineryError)
     expect((err as EsmMachineryError).code).toBe('rewrite_rule_nonterminating')
-    // Also fires through the full load() pipeline (stage: "load").
-    expect(() => load(fixtureText('nonterminating_rewrite'))).toThrow(/rewrite_rule_nonterminating/)
+    // Also fires through the full loadString() pipeline (stage: "loadString").
+    expect(() => loadString(fixtureText('nonterminating_rewrite'))).toThrow(/rewrite_rule_nonterminating/)
     expect((err as EsmMachineryError).code).toBe(goldenError('nonterminating_rewrite').code)
   })
 
   it('unlowered spatial D loads clean, then errors `unlowered_operator` at evaluation', () => {
     // Open namespace (esm-spec §4.2): the file LOADS fine — the gate is deferred
     // to evaluation, mirroring the Julia `_compile` gate (stage: "evaluate").
-    const file = load(fixtureText('unlowered_operator')) as any
+    const file = loadString(fixtureText('unlowered_operator')) as any
     const rhs = file.models.m.equations[0].rhs
     expect(rhs).toEqual({ op: 'D', args: ['u'], wrt: 'x' })
     // Reaching evaluation yields the uniform `unlowered_operator` diagnostic.
@@ -622,7 +622,7 @@ describe('0.8.0 outermost-first + fixpoint rewrite engine (conformance fixtures)
     }
     const out = lowerExpressionTemplates(JSON.parse(JSON.stringify(src))) as any
     expect(definingRhs(out.models.m, 'y')).toEqual({ op: '*', args: [1.4, 'u'] })
-    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at load.
+    // Option B (esm-spec §9.6.4 rule 1): the registry is RETAINED at loadString.
     expect('expression_templates' in out.models.m).toBe(true)
   })
 })
@@ -669,15 +669,15 @@ describe('coupling variable_map expression transforms (receiving-component rewri
     args: [{ op: '*', args: [2.0, 'Src.F'] }, 'Sink.offset'],
   }
 
-  it('expands apply_expression_template in a coupling transform at load time', () => {
-    const file = load(couplingFixture()) as any
+  it('expands apply_expression_template in a coupling transform at loadString time', () => {
+    const file = loadDocument(couplingFixture()) as any
     expect(file.coupling[0].transform).toEqual(expandedTransform)
     expect('expression_templates' in file.models.Sink).toBe(false)
   })
 
   it('expands the transform in the receiving component scope (lowering pass)', () => {
     // Option B: the target-free reference survives the lowering pass; Expand
-    // (the Expand-at-build load strategy, §9.6.4 rule 2) inlines it.
+    // (the Expand-at-build loadString strategy, §9.6.4 rule 2) inlines it.
     const lowered = lowerExpressionTemplates(couplingFixture()) as any
     expect(lowered.coupling[0].transform.op).toBe('apply_expression_template')
     const out = expandDocument(lowered) as any
@@ -972,7 +972,7 @@ describe('match-scoping `where` constraints (esm-spec §9.6.1)', () => {
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'fixture.esm'), 'utf8'))
   const golden = (name: string) =>
     JSON.parse(fs.readFileSync(path.join(confDir, name, 'expanded.esm'), 'utf8'))
-  // Option B: Expand the reference-preserving load to the Option-A image the
+  // Option B: Expand the reference-preserving loadString to the Option-A image the
   // `expanded.esm` goldens pin (the match-only `where` fixtures carry no
   // surviving references, so Expand only strips the retained registry block).
   const lower = (name: string) => expandDocument(lowerExpressionTemplates(fixture(name))) as any
@@ -1147,12 +1147,12 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
   it('empty bound [start, start-1] loads clean at the minimum extent', () => {
     // tests/valid/makearray_empty_region_min_extent.esm folds the interior
     // region [2, N-1] to [2, 1] at the default N = 2 — the canonical empty
-    // bound, which contributes no elements and MUST load.
+    // bound, which contributes no elements and MUST loadString.
     const text = fs.readFileSync(
       path.join(validDir, 'makearray_empty_region_min_extent.esm'),
       'utf8',
     )
-    const f = load(text, { basePath: validDir }) as any
+    const f = loadString(text, { basePath: validDir }) as any
     const regions = f.models.Advection.equations[0].rhs.regions
     expect(regions[0][0]).toEqual([2, 1])
   })
@@ -1166,7 +1166,7 @@ describe('makearray region bounds validation (esm-spec §4.3.2, Pin 1)', () => {
     )
     let caught: unknown
     try {
-      load(text, { basePath: validDir, metaparameters: { N: 1 } })
+      loadString(text, { basePath: validDir, metaparameters: { N: 1 } })
     } catch (e) {
       caught = e
     }
@@ -1251,7 +1251,7 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     const dir = path.dirname(file)
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>
     const emitted = JSON.parse(
-      save(load(fs.readFileSync(file, 'utf-8'), { basePath: dir })),
+      toJson(loadString(fs.readFileSync(file, 'utf-8'), { basePath: dir })),
     ) as Record<string, unknown>
 
     // The two DECLARATION blocks survive VERBATIM — not folded, not stripped.
@@ -1266,11 +1266,11 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     expect(validate(JSON.stringify(emitted), { basePath: dir }).is_valid).toBe(true)
   })
 
-  it.each(libraries)('%s is a fixed point of load -> save -> load', (rel) => {
+  it.each(libraries)('%s is a fixed point of loadString -> toJson -> loadString', (rel) => {
     const file = path.join(REPO_ROOT, rel)
     const dir = path.dirname(file)
-    const once = load(fs.readFileSync(file, 'utf-8'), { basePath: dir })
-    const twice = load(save(once), { basePath: dir })
+    const once = loadString(fs.readFileSync(file, 'utf-8'), { basePath: dir })
+    const twice = loadString(toJson(once), { basePath: dir })
     expect(twice).toEqual(once)
   })
 
@@ -1284,7 +1284,7 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     // against the component registry — a malformed node would be turned away by
     // schema validation first and this would pin nothing about the scan.
     const stray = () =>
-      load({
+      loadDocument({
         esm: '1.0.0',
         metadata: { name: 'stray' },
         models: {

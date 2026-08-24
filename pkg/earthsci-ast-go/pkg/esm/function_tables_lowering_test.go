@@ -322,7 +322,7 @@ func firstTableLookup(t *testing.T, file *ESMFile, modelID string, eqIdx int) Ex
 
 func TestFunctionTablesLinearLoweringIsBitEquivalent(t *testing.T) {
 	root := functionTablesFixturesRoot(t)
-	file, err := Load(filepath.Join(root, "linear", "fixture.esm"))
+	file, err := LoadPath(filepath.Join(root, "linear", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("load linear fixture: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestFunctionTablesLinearLoweringIsBitEquivalent(t *testing.T) {
 
 func TestFunctionTablesBilinearLoweringIsBitEquivalent(t *testing.T) {
 	root := functionTablesFixturesRoot(t)
-	file, err := Load(filepath.Join(root, "bilinear", "fixture.esm"))
+	file, err := LoadPath(filepath.Join(root, "bilinear", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("load bilinear fixture: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestFunctionTablesBilinearLoweringIsBitEquivalent(t *testing.T) {
 
 func TestFunctionTablesRoundtripLoweringMatchesInlineConstCompanion(t *testing.T) {
 	root := functionTablesFixturesRoot(t)
-	file, err := Load(filepath.Join(root, "roundtrip", "fixture.esm"))
+	file, err := LoadPath(filepath.Join(root, "roundtrip", "fixture.esm"))
 	if err != nil {
 		t.Fatalf("load roundtrip fixture: %v", err)
 	}

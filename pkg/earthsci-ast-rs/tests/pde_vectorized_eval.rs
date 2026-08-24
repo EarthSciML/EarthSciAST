@@ -17,7 +17,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -29,7 +29,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn compile_fixture(name: &str) -> ArrayCompiled {
     let text = std::fs::read_to_string(fixture(name)).expect("read fixture");
-    let file = load(&text).expect("load fixture");
+    let file = load_string(&text).expect("load fixture");
     ArrayCompiled::from_file(&file).expect("compile fixture")
 }
 
@@ -84,7 +84,7 @@ fn heat1d_json(n: usize) -> String {
 }
 
 fn compile_json(json: &str) -> ArrayCompiled {
-    let file = load(json).expect("load json model");
+    let file = load_string(json).expect("load json model");
     ArrayCompiled::from_file(&file).expect("compile json model")
 }
 
@@ -241,7 +241,7 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
     let n = 40usize;
     let c = 20.0f64;
     let json = advection1d_json(n, c);
-    let file = load(&json).expect("load advection model");
+    let file = load_string(&json).expect("load advection model");
 
     // Gaussian-ish pulse centred at cell 8, well clear of the i=n outflow so
     // negligible mass leaves the domain over the integration window.
@@ -986,7 +986,7 @@ fn array_valued_filter_is_a_per_cell_mask_on_both_paths() {
 fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
     let path = fixture("27_broadcast_unary.esm");
     let text = std::fs::read_to_string(&path).expect("read fixture");
-    let file = load(&text).expect("load fixture");
+    let file = load_string(&text).expect("load fixture");
 
     // The fixture's own initial conditions and expectations, kept in one place
     // so a drift in the fixture shows up as a mismatch here rather than being

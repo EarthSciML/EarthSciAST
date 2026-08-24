@@ -416,7 +416,7 @@ func TestGraphConformanceFiles(t *testing.T) {
 
 	for _, c := range corpus.Files {
 		t.Run(c.Name, func(t *testing.T) {
-			file, err := Load(filepath.Join(repoRoot, c.InputFile))
+			file, err := LoadPath(filepath.Join(repoRoot, c.InputFile))
 			if err != nil {
 				t.Fatalf("load %s: %v", c.InputFile, err)
 			}

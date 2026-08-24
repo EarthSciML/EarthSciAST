@@ -33,7 +33,7 @@ func TestGeometryValidFixtures(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			if _, err := Load(path); err != nil {
+			if _, err := LoadPath(path); err != nil {
 				t.Fatalf("expected %s to validate, got error: %v", name, err)
 			}
 		})
@@ -75,7 +75,7 @@ func TestGeometryInvalidFixtures(t *testing.T) {
 	for _, path := range files {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			_, err := Load(path)
+			_, err := LoadPath(path)
 			if err == nil {
 				t.Fatalf("expected %s to be rejected, but it validated", name)
 			}

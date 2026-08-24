@@ -36,7 +36,7 @@ func TestSave(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := Serialize(esmFile)
+	jsonStr, err := ToJSON(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
@@ -72,7 +72,7 @@ func TestSaveCompact(t *testing.T) {
 		},
 	}
 
-	jsonStr, err := SerializeCompact(esmFile)
+	jsonStr, err := ToJSONCompact(esmFile)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, jsonStr)
 
@@ -86,7 +86,7 @@ func TestSaveCompact(t *testing.T) {
 }
 
 func TestSaveNilFile(t *testing.T) {
-	_, err := Serialize(nil)
+	_, err := ToJSON(nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot serialize nil ESM file")
 }
@@ -102,7 +102,7 @@ func TestSaveInvalidFile(t *testing.T) {
 		// Missing both Models and ReactionSystems
 	}
 
-	_, err := Serialize(esmFile)
+	_, err := ToJSON(esmFile)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed before serialization")
 }
@@ -134,7 +134,7 @@ func TestSaveToFile(t *testing.T) {
 	tmpFile := filepath.Join(tmpDir, "test_output.esm")
 	defer func() { _ = os.Remove(tmpFile) }()
 
-	err := SaveToFile(esmFile, tmpFile)
+	err := WritePath(esmFile, tmpFile)
 	assert.NoError(t, err)
 
 	// Verify file was created and contains expected content
@@ -170,7 +170,7 @@ func TestSaveCompactToFile(t *testing.T) {
 	tmpFile := filepath.Join(tmpDir, "test_output_compact.esm")
 	defer func() { _ = os.Remove(tmpFile) }()
 
-	err := SaveCompactToFile(esmFile, tmpFile)
+	err := WritePathCompact(esmFile, tmpFile)
 	assert.NoError(t, err)
 
 	// Verify file was created
@@ -343,7 +343,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	}
 
 	// Serialize
-	jsonStr, err := Serialize(originalFile)
+	jsonStr, err := ToJSON(originalFile)
 	require.NoError(t, err)
 
 	// Deserialize

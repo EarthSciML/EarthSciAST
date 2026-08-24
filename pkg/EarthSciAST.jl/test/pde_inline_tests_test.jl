@@ -70,7 +70,7 @@ function _pit_decay_doc(assertions::Vector)
                 "assertions" => Any[assertions...])])))
 end
 
-_pit_load(doc) = _PIT_ESS.load(IOBuffer(JSON3.write(doc)))
+_pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
 
 _pit_run(file; kwargs...) = run_pde_tests(file; model_name="M",
     alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14, kwargs...)

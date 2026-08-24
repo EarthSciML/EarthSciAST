@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.flatten import LoaderField, flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import (
     _provider_array,
     simulate,
@@ -125,7 +125,7 @@ def _make_factory(calls: Dict[str, List], *, anchors_seconds: Optional[List[floa
 
 
 def test_provider_object_path_refreshes_at_cadence() -> None:
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
         esm,
@@ -147,7 +147,7 @@ def test_provider_object_path_refreshes_at_cadence() -> None:
 
 
 def test_const_materialized_once_discrete_refreshed_per_boundary() -> None:
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
         esm,
@@ -173,7 +173,7 @@ def test_boundaries_come_from_refresh_times_not_frequency() -> None:
     # only interior boundary at t=1. Override refresh_times() with a 0.5 s/1.5 s
     # schedule: if the driver honours the provider, the discrete loader refreshes
     # at exactly those instants (seed + 0.5 + 1.5), not at t=1.
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
     result = simulate(
         esm,
@@ -188,7 +188,7 @@ def test_boundaries_come_from_refresh_times_not_frequency() -> None:
 def test_provider_factory_ignored_when_callable_given() -> None:
     # Legacy precedence: an explicit loader_provider callable wins over a
     # provider_factory, so existing offline-stub call sites keep their behaviour.
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     factory_calls: Dict[str, List] = {}
     callable_calls: List[str] = []
 
@@ -216,7 +216,7 @@ def test_provider_factory_ignored_when_callable_given() -> None:
 
 
 def test_load_data_provider_refresh_times_from_temporal() -> None:
-    flat = flatten(load(_FIXTURE))
+    flat = flatten(load_path(_FIXTURE))
     u_field = next(f for f in flat.loader_fields if f.var == "U")
     z0_field = next(f for f in flat.loader_fields if f.var == "Z0")
 
@@ -235,7 +235,7 @@ def test_load_data_provider_refresh_times_from_temporal() -> None:
 
 
 def test_load_data_provider_refresh_times_needs_window() -> None:
-    flat = flatten(load(_FIXTURE))
+    flat = flatten(load_path(_FIXTURE))
     u_field = next(f for f in flat.loader_fields if f.var == "U")
     # Unbounded (no window) → no enumerable schedule (falls back to freq math).
     assert build_default_provider(u_field, None).refresh_times() == []

@@ -248,10 +248,10 @@ fn manifest_names_resolve() {
         ModelVariable,
         ReactionSystem,
         // Versions.
+        LIBRARY_VERSION,
         SCHEMA_VERSION,
         SchemaError,
         StructuralError,
-        VERSION,
         ValidationResult,
         // Classification (esm-spec §6.3.1).
         algebraic_unknowns,
@@ -261,17 +261,21 @@ fn manifest_names_resolve() {
         // Expression operations.
         free_variables,
         is_ode_state,
-        load,
+        load_document,
+        load_path,
+        load_string,
         observed_unknowns,
         ode_states,
         parse_expression,
-        save,
         simplify,
         substitute,
         system_kind,
         to_ascii,
+        to_json,
+        to_json_compact,
         to_latex,
         to_unicode,
         validate,
+        write_path,
     };
 }

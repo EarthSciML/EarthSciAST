@@ -87,7 +87,7 @@ export function normalizeRef(ref: string, baseDir?: string): string {
 
 /**
  * Read a file synchronously under Node via `process.getBuiltinModule('node:fs')`
- * (the §9.7 loaders resolve inside the synchronous `load()`, so they cannot use
+ * (the §9.7 loaders resolve inside the synchronous `load*` entry points, so they cannot use
  * `await import`). Throws in environments without `getBuiltinModule` — such
  * hosts must supply their own `readFile` hook to the caller. Mirrors the
  * `defaultReadFile` dance from `template-imports.ts` / `ref-loading.ts`.
@@ -103,5 +103,41 @@ export function readFileSyncNode(path: string): string {
   }
   throw new Error(
     'synchronous file access is unavailable in this environment; supply a readFile hook',
+  )
+}
+
+/**
+ * Directory portion of a filesystem path, POSIX-style, for anchoring the
+ * relative refs inside a document loaded from that path. Unlike
+ * `template-imports.ts`'s local `dirName`, a path with no separator yields
+ * `'.'` (the current directory) rather than `'/'` — `loadPath('a.esm')` must
+ * anchor at the cwd, not at the filesystem root.
+ */
+export function dirnameOf(p: string): string {
+  const norm = p.replace(/\\/g, '/')
+  const lastSlash = norm.lastIndexOf('/')
+  if (lastSlash < 0) return '.'
+  if (lastSlash === 0) return '/'
+  return norm.substring(0, lastSlash)
+}
+
+/**
+ * Write a file synchronously under Node via `process.getBuiltinModule('node:fs')`,
+ * the write-side twin of {@link readFileSyncNode}. Throws in environments
+ * without `getBuiltinModule` — a browser host has no disk to write to and
+ * should call `toJson` and route the string itself.
+ */
+export function writeFileSyncNode(path: string, contents: string): void {
+  const proc = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process
+  const getBuiltin = proc?.getBuiltinModule
+  if (typeof getBuiltin === 'function') {
+    const fs = getBuiltin.call(proc, 'node:fs') as {
+      writeFileSync: (p: string, data: string, enc: string) => void
+    }
+    fs.writeFileSync(path, contents, 'utf8')
+    return
+  }
+  throw new Error(
+    'synchronous file access is unavailable in this environment; use toJson() and write the string yourself',
   )
 }

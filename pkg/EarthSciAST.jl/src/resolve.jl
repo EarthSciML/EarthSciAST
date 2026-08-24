@@ -52,27 +52,33 @@ function _reject_ic_in_reaction_system(raw_data)
 end
 
 """
-    load(path::String; metaparameters=Dict{String,Int}()) -> EsmFile
+    load_path(path::AbstractString; metaparameters=Dict{String,Int}()) -> EsmFile
 
-Load and parse an ESM file from a file path.
+Read and parse an ESM document from a filesystem path.
 Automatically resolves any subsystem references (local or remote) relative
 to the directory containing the file. `metaparameters` binds the ROOT
 document's open metaparameters at the loader API (esm-spec §9.7.6 binding
 site 4): already-closed edge bindings win, API bindings beat `default`s.
+
+One of THREE load entry points, replacing the single `load` whose `String`
+argument meant a FILE PATH here and in Go but JSON TEXT in TypeScript and
+Rust — same name, same argument type, opposite meanings, and no type error
+anywhere to catch it. See also [`load_string`](@ref) and
+[`load_document`](@ref).
 """
-function load(path::String;
-              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
-    base_path = dirname(abspath(path))
-    raw_data = _read_json_document(read(path, String))
+function load_path(path::AbstractString;
+                   metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+    base_path = dirname(abspath(String(path)))
+    raw_data = _read_json_document(read(String(path), String))
     return _load_document(raw_data, base_path; metaparameters=metaparameters)
 end
 
 """
-    load(doc::AbstractDict; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_document(doc::AbstractDict; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
 
-Load and parse an ESM document held in memory as a native Julia dict — the same
+Parse an ESM document held in memory as a native Julia dict — the same
 document a `.esm` file holds, just already parsed. Runs the identical pipeline
-`load(::String)` runs (top-level `{ref}` inlining, schema validation,
+[`load_path`](@ref) runs (top-level `{ref}` inlining, schema validation,
 expression-template lowering, coercion, subsystem-ref resolution); `base_path`
 anchors the relative refs a file input anchors at its own directory.
 
@@ -81,7 +87,7 @@ validate, and it leaves a `{ref}` subsystem as an unresolved `SubsystemRef`
 that [`flatten`](@ref) then SKIPS — so a dict must come through here, not
 through `coerce_esm_file`, before it is flattened and run.
 """
-function load(doc::AbstractDict;
+function load_document(doc::AbstractDict;
               base_path::AbstractString=pwd(),
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Wire boundary for the in-memory path: normalize the caller's dict (which
@@ -93,7 +99,7 @@ end
 """
     _load_document(raw_data, base_path; metaparameters) -> EsmFile
 
-The document pipeline shared by every `load` method: top-level `{ref}` inlining
+The document pipeline shared by every `load_*` entry point: top-level `{ref}` inlining
 → `_load_parsed` (version gates, schema validation, template lowering,
 coercion) → nested subsystem-ref resolution. `raw_data` is the post-wire
 native document (`_read_json_document` / the normalized in-memory dict).
@@ -132,27 +138,39 @@ function _load_document(raw_data, base_path::String;
 end
 
 """
-    load(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(json::AbstractString; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
+    load_string(io::IO; base_path=pwd(), metaparameters=Dict{String,Int}()) -> EsmFile
 
-Load and parse an ESM file from an IO stream. Runs the SAME pipeline
-`load(::String)` and `load(::AbstractDict)` run — `_load_document`: top-level
-`{ref}` inlining, version gates, schema validation, template lowering,
-coercion, and nested subsystem-ref resolution. (Before this was shared, a
-stream-loaded document kept its subsystem refs as unresolved `SubsystemRef`s,
-which `flatten` silently SKIPS: the same document loaded from a stream
-flattened to a strictly smaller system, with no error.) `base_path` anchors
-relative `expression_template_imports` refs and nested `{ref}`s (esm-spec
-§9.7.2, §4.7); `metaparameters` binds the document's open metaparameters at
-the loader API (esm-spec §9.7.6).
+Parse an ESM document from JSON TEXT — held as a `String`, or streamed from an
+`IO` the method reads to a string first (the `::IO` method is a sanctioned
+Julia decoration on the canonical `load_string`, not a fourth entry point:
+`JSON3.read` and `read` accept both shapes too).
+
+Runs the SAME pipeline [`load_path`](@ref) and [`load_document`](@ref) run —
+`_load_document`: top-level `{ref}` inlining, version gates, schema
+validation, template lowering, coercion, and nested subsystem-ref resolution.
+(Before that was shared, a stream-loaded document kept its subsystem refs as
+unresolved `SubsystemRef`s, which `flatten` silently SKIPS: the same document
+loaded from a stream flattened to a strictly smaller system, with no error.)
+`base_path` anchors relative `expression_template_imports` refs and nested
+`{ref}`s (esm-spec §9.7.2, §4.7); `metaparameters` binds the document's open
+metaparameters at the loader API (esm-spec §9.7.6).
 """
-function load(io::IO; base_path::AbstractString=pwd(),
-              metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-              injected_imports::AbstractVector=Any[])::EsmFile
-    json_string = read(io, String)
-    raw_data = _read_json_document(json_string)
+function load_string(json::AbstractString; base_path::AbstractString=pwd(),
+                     metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                     injected_imports::AbstractVector=Any[])::EsmFile
+    raw_data = _read_json_document(json)
     return _load_document(raw_data, String(base_path);
                           metaparameters=metaparameters,
                           injected_imports=injected_imports)
+end
+
+function load_string(io::IO; base_path::AbstractString=pwd(),
+                     metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                     injected_imports::AbstractVector=Any[])::EsmFile
+    return load_string(read(io, String); base_path=base_path,
+                       metaparameters=metaparameters,
+                       injected_imports=injected_imports)
 end
 
 """
@@ -199,7 +217,7 @@ end
 
 Shared typed-load pipeline over an already-JSON-parsed document: version
 gates → schema validation → raw structural checks → §9.7 machinery →
-template lowering → typed coercion. Reached by every public `load*` entry
+template lowering → typed coercion. Reached by every public `load_*` entry
 point through `_load_document`, which wraps it with the top-level `{ref}`
 inlining and nested subsystem-ref resolution that make a loaded document
 complete; `_load_local_ref` calls it directly because it drives the nested
@@ -452,8 +470,8 @@ referenced component's model (and its `function_tables` / `enums` /
 `data_sources` merged in), or `nothing` when `raw_data` has no such stub.
 The stub path copies the document (`_to_ordered`, order-preserving) so the
 in-place worker never mutates the caller's tree; the reaction-system inliner
-composes on the same copy, and `load(::AbstractDict)` resolves stubs exactly
-as `load(::String)` does.
+composes on the same copy, and `load_document` resolves stubs exactly
+as `load_path` does.
 """
 function _inline_toplevel_model_refs(raw_data, base_path::String)
     models = _get_field(raw_data, :models, nothing)
@@ -703,7 +721,7 @@ turn the warning into a schema-level hard error.
 """
 function _warn_deprecated_domain_bc(raw_data)
     # Through `_get_field` / `_has_field`, not a symbol-keyed `get`: the document
-    # also arrives here as a string-keyed native dict (`load(::AbstractDict)`),
+    # also arrives here as a string-keyed native dict (`load_document`),
     # for which a symbol lookup silently finds nothing and skips the check.
     domains = _get_field(raw_data, :domains, nothing)
     domains === nothing && return
@@ -1147,7 +1165,7 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
 
     # Parse the referenced file with the typed pipeline ONLY — deliberately not
-    # a public `load*` entry point, which would resolve nested refs with a
+    # a public `load_*` entry point, which would resolve nested refs with a
     # FRESH `visited` set and defeat cycle detection. This function drives the
     # nested walk itself, below, carrying the shared `visited` through. The
     # ref's directory anchors its template imports, the edge's `bindings` close

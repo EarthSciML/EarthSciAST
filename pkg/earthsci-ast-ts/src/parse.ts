@@ -22,6 +22,7 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import { schema } from './embedded-schema.js'
+import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
@@ -269,7 +270,7 @@ function checkVersionCompatibility(
 }
 
 /**
- * Options controlling how `load()` parses and represents an ESM file.
+ * Options controlling how the `load*` entry points parse and represent an ESM file.
  */
 export interface LoadOptions {
   /**
@@ -344,15 +345,63 @@ export interface LoadOptions {
 }
 
 /**
- * Load an ESM file from a JSON string or pre-parsed object
+ * Read and parse an ESM document from a filesystem path.
  *
- * @param input - JSON string or pre-parsed JavaScript object
+ * The file's own directory anchors relative `expression_template_imports`
+ * refs and `{ref}` subsystem refs unless `options.basePath` overrides it.
+ * Requires synchronous file access (Node); browser hosts should read the
+ * bytes themselves and call {@link loadString}.
+ *
+ * @param path - Filesystem path to the `.esm` document
  * @param options - Optional load-time settings (see {@link LoadOptions})
  * @returns Typed EsmFile object
  * @throws {ParseError} When JSON parsing fails or version is incompatible
  * @throws {SchemaValidationError} When schema validation fails
  */
-export function load(input: string | object, options?: LoadOptions): EsmFile {
+export function loadPath(path: string, options?: LoadOptions): EsmFile {
+  const text = (options?.readFile ?? readFileSyncNode)(path)
+  const basePath = options?.basePath ?? dirnameOf(path)
+  return loadInput(text, { ...options, basePath })
+}
+
+/**
+ * Parse an ESM document from JSON TEXT.
+ *
+ * @param json - The document as a JSON string
+ * @param options - Optional load-time settings (see {@link LoadOptions})
+ * @returns Typed EsmFile object
+ * @throws {ParseError} When JSON parsing fails or version is incompatible
+ * @throws {SchemaValidationError} When schema validation fails
+ */
+export function loadString(json: string, options?: LoadOptions): EsmFile {
+  return loadInput(json, options)
+}
+
+/**
+ * Parse an ESM document that is ALREADY a JavaScript object — the same
+ * document a `.esm` file holds, just already `JSON.parse`d.
+ *
+ * `options.canonical` has no effect here: canonical mode tags numeric
+ * literals during JSON decoding, and this entry point does no decoding.
+ * Callers who want tagged leaves should run `losslessJsonParse` on the text
+ * themselves, or use {@link loadString}.
+ *
+ * @param doc - The already-parsed document
+ * @param options - Optional load-time settings (see {@link LoadOptions})
+ * @returns Typed EsmFile object
+ * @throws {SchemaValidationError} When schema validation fails
+ */
+export function loadDocument(doc: object, options?: LoadOptions): EsmFile {
+  return loadInput(doc, options)
+}
+
+/**
+ * The shared pipeline behind {@link loadPath}, {@link loadString} and
+ * {@link loadDocument}. NOT exported: `load(stringOrObject)` was the whole
+ * bug — the same name and argument type meant "file path" in Julia and Go
+ * and "JSON text" here, with no type error anywhere to catch the difference.
+ */
+function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   const canonical = options?.canonical === true
 
   // Step 1: JSON parsing. In canonical mode, decode tagged numeric

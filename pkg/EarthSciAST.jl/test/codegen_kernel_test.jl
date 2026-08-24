@@ -244,7 +244,7 @@ end
         if !isfile(FIX)
             @test_skip "bench fixture transport_3axis_7cubed_fullrank.esm missing"
         else
-            flat = ESM.flatten(ESM.load(FIX))
+            flat = ESM.flatten(ESM.load_path(FIX))
             build(codegen) = withenv("ESS_CODEGEN_DISABLE" => (codegen ? nothing : "1")) do
                 ESM._reset_cascade_tally!()
                 f!, u0, p, _, _ = ESM.build_evaluator(flat)

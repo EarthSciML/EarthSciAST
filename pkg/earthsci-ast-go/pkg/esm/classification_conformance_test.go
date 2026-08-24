@@ -105,7 +105,7 @@ func TestClassificationConformanceGoldens(t *testing.T) {
 	for _, fx := range man.Fixtures {
 		fx := fx
 		t.Run(fx.ID, func(t *testing.T) {
-			file, err := Load(filepath.Join(base, fx.Fixture))
+			file, err := LoadPath(filepath.Join(base, fx.Fixture))
 			if err != nil {
 				t.Fatalf("load fixture: %v", err)
 			}

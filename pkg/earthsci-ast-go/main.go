@@ -79,7 +79,7 @@ func printUsage() {
 func parseFile(filename string) {
 	fmt.Printf("Parsing file: %s\n", filename)
 
-	esmFile, err := esm.Load(filename)
+	esmFile, err := esm.LoadPath(filename)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}
@@ -105,7 +105,7 @@ func parseFile(filename string) {
 func validateFile(filename string) {
 	fmt.Printf("Validating file: %s\n", filename)
 
-	esmFile, err := esm.Load(filename)
+	esmFile, err := esm.LoadPath(filename)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}
@@ -126,7 +126,7 @@ func validateFile(filename string) {
 func prettyPrintFile(filename, format string) {
 	fmt.Printf("Pretty-printing file: %s (format: %s)\n", filename, format)
 
-	esmFile, err := esm.Load(filename)
+	esmFile, err := esm.LoadPath(filename)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}
@@ -166,7 +166,7 @@ func renderExpression(expr esm.Expression, format string) string {
 func substituteFile(filename string, substitutions []string) {
 	fmt.Printf("Substituting variables in file: %s\n", filename)
 
-	esmFile, err := esm.Load(filename)
+	esmFile, err := esm.LoadPath(filename)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}
@@ -196,7 +196,7 @@ func substituteFile(filename string, substitutions []string) {
 	}
 
 	// Serialize and print the result
-	jsonStr, err := esm.Serialize(&newFile)
+	jsonStr, err := esm.ToJSON(&newFile)
 	if err != nil {
 		fatalf("Failed to serialize result: %v", err)
 	}
@@ -208,12 +208,12 @@ func substituteFile(filename string, substitutions []string) {
 func saveFile(inputFile, outputFile string) {
 	fmt.Printf("Saving file: %s → %s\n", inputFile, outputFile)
 
-	esmFile, err := esm.Load(inputFile)
+	esmFile, err := esm.LoadPath(inputFile)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}
 
-	err = esm.SaveToFile(esmFile, outputFile)
+	err = esm.WritePath(esmFile, outputFile)
 	if err != nil {
 		fatalf("Failed to save file: %v", err)
 	}
@@ -222,7 +222,7 @@ func saveFile(inputFile, outputFile string) {
 }
 
 func summaryFile(filename string) {
-	esmFile, err := esm.Load(filename)
+	esmFile, err := esm.LoadPath(filename)
 	if err != nil {
 		fatalf("Failed to load ESM file: %v", err)
 	}

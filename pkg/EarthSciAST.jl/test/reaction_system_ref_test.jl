@@ -36,7 +36,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 "reaction_systems": {"Chem": {"ref": "./chem_leaf.esm"}}
             }""")
             # No "no models block" error — the ref resolves to a reaction system.
-            loaded = ESM_RR.load(refasm)
+            loaded = ESM_RR.load_path(refasm)
             @test haskey(loaded.reaction_systems, "Chem")
             rs = loaded.reaction_systems["Chem"]
             @test rs isa ESM_RR.ReactionSystem
@@ -61,8 +61,8 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
 
                 # The inlined baseline: chem_leaf.esm IS a valid assembly whose
                 # `reaction_systems` block holds "Chem" inline.
-                inl = ESM_RR.load(chem_leaf)
-                ref = ESM_RR.load(refasm)
+                inl = ESM_RR.load_path(chem_leaf)
+                ref = ESM_RR.load_path(refasm)
 
                 flat_inl = ESM_RR.flatten(inl)
                 flat_ref = ESM_RR.flatten(ref)
@@ -117,7 +117,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                     "coupling": [{"type": "operator_compose", "systems": ["Chem", "Extra"],
                                   "translate": {"Extra.A": "Chem.A"}}]
                 }""")
-                loaded = ESM_RR.load(asm)
+                loaded = ESM_RR.load_path(asm)
                 @test haskey(loaded.reaction_systems, "Chem")
                 flat = ESM_RR.flatten(loaded)
                 @test haskey(flat.state_variables, "Chem.A")
@@ -163,14 +163,14 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm"}}
             }""")
-            @test_throws ESM_RR.SubsystemRefError ESM_RR.load(main_path)
+            @test_throws ESM_RR.SubsystemRefError ESM_RR.load_path(main_path)
             # `reaction_system` selects one.
             write(main_path, """{
                 "esm": "0.8.0",
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm", "reaction_system": "Y"}}
             }""")
-            loaded = ESM_RR.load(main_path)
+            loaded = ESM_RR.load_path(main_path)
             @test any(s -> s.name == "B", loaded.reaction_systems["Sel"].species)
             @test !any(s -> s.name == "A", loaded.reaction_systems["Sel"].species)
             # A selector naming a missing reaction system errors.
@@ -179,7 +179,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Sel": {"ref": "./two.esm", "reaction_system": "Z"}}
             }""")
-            @test_throws ESM_RR.SubsystemRefError ESM_RR.load(main_path)
+            @test_throws ESM_RR.SubsystemRefError ESM_RR.load_path(main_path)
         finally
             rm(tmp, recursive=true, force=true)
         end
@@ -200,7 +200,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "reaction_systems": {"Chem": {"ref": "./modelonly.esm"}}
             }""")
-            @test_throws ESM_RR.SubsystemRefError ESM_RR.load(main_path)
+            @test_throws ESM_RR.SubsystemRefError ESM_RR.load_path(main_path)
         finally
             rm(tmp, recursive=true, force=true)
         end
@@ -219,7 +219,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                 "metadata": {"name": "b", "authors": ["Test"]},
                 "reaction_systems": {"A": {"ref": "./a.esm"}}
             }""")
-            @test_throws ESM_RR.SubsystemRefError ESM_RR.load(joinpath(tmp, "a.esm"))
+            @test_throws ESM_RR.SubsystemRefError ESM_RR.load_path(joinpath(tmp, "a.esm"))
         finally
             rm(tmp, recursive=true, force=true)
         end
@@ -239,7 +239,7 @@ _rr_uses_var(::EarthSciAST.ASTExpr, ::String) = false
                     "metadata": {"name": "sf_assembly", "authors": ["Test"]},
                     "reaction_systems": {"SuperFast": {"ref": "$(superfast)"}}
                 }""")
-                loaded = ESM_RR.load(asm)
+                loaded = ESM_RR.load_path(asm)
                 @test haskey(loaded.reaction_systems, "SuperFast")
                 @test loaded.reaction_systems["SuperFast"] isa ESM_RR.ReactionSystem
                 @test length(loaded.reaction_systems["SuperFast"].species) == 15

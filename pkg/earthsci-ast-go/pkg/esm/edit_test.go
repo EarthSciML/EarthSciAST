@@ -20,7 +20,7 @@ const editFixtureRel = "valid/events_all_types.esm"
 
 func loadEditFixture(t *testing.T) *ESMFile {
 	t.Helper()
-	file, err := Load(filepath.Join(repoTestsDir(t), filepath.FromSlash(editFixtureRel)))
+	file, err := LoadPath(filepath.Join(repoTestsDir(t), filepath.FromSlash(editFixtureRel)))
 	if err != nil {
 		t.Fatalf("load %s: %v", editFixtureRel, err)
 	}
@@ -565,7 +565,7 @@ func TestCouplingOps(t *testing.T) {
 
 func TestMerge(t *testing.T) {
 	a := loadEditFixture(t)
-	b, err := Load(filepath.Join(repoTestsDir(t), "valid", "minimal_chemistry.esm"))
+	b, err := LoadPath(filepath.Join(repoTestsDir(t), "valid", "minimal_chemistry.esm"))
 	if err != nil {
 		t.Fatalf("load minimal_chemistry: %v", err)
 	}
@@ -658,7 +658,7 @@ func TestExtractDoesNotOfferDataSources(t *testing.T) {
 	// From esm 1.0.0 a data source is not a COMPONENT: it declares no variables
 	// and cannot be a coupling endpoint or a subsystem, so there is no standalone
 	// document to extract it into. TypeScript refuses; Julia still offers it.
-	file, err := Load(filepath.Join(repoTestsDir(t), "valid", "data_sources_only.esm"))
+	file, err := LoadPath(filepath.Join(repoTestsDir(t), "valid", "data_sources_only.esm"))
 	if err != nil {
 		t.Fatalf("load data_sources_only: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestEditOpsRoundTripOverValidCorpus(t *testing.T) {
 		path := path
 		rel, _ := filepath.Rel(validDir, path)
 		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
-			file, err := Load(path)
+			file, err := LoadPath(path)
 			if err != nil {
 				// Loading is not what is under test here; a fixture this
 				// binding cannot load has nothing to say about editing.
@@ -789,7 +789,7 @@ func TestEditOpsRoundTripOverValidCorpus(t *testing.T) {
 // RenameVariableInFile rewrites it. RemoveVariable's guard counts the scoped
 // read as a use either way, which is the safe direction.
 func TestRenameVariableScopeAwareVsModelScoped(t *testing.T) {
-	file, err := Load(filepath.Join(repoTestsDir(t), "valid", "scoped_refs_nested.esm"))
+	file, err := LoadPath(filepath.Join(repoTestsDir(t), "valid", "scoped_refs_nested.esm"))
 	if err != nil {
 		t.Fatalf("load scoped_refs_nested: %v", err)
 	}

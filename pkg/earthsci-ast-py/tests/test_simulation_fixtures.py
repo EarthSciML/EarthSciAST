@@ -28,8 +28,8 @@ from earthsci_ast.esm_types import (
     Reaction,
 )
 from earthsci_ast.classification import is_ode_state
-from earthsci_ast.parse import load
-from earthsci_ast.serialize import save
+from earthsci_ast.parse import load_string
+from earthsci_ast.serialize import to_json
 
 
 class TestEarthSciASTIntegration:
@@ -65,8 +65,8 @@ class TestEarthSciASTIntegration:
         )
 
         # Serialize and deserialize
-        json_str = save(esm_file)
-        reconstructed = load(json_str)
+        json_str = to_json(esm_file)
+        reconstructed = load_string(json_str)
 
         # Verify simulation-relevant properties
         assert len(reconstructed.models) == 1
@@ -102,8 +102,8 @@ class TestEarthSciASTIntegration:
         )
 
         # Test serialization
-        json_str = save(esm_file)
-        reconstructed = load(json_str)
+        json_str = to_json(esm_file)
+        reconstructed = load_string(json_str)
 
         # Verify reaction system for simulation
         assert len(reconstructed.reaction_systems) == 1

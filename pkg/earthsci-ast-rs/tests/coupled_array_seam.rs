@@ -22,7 +22,7 @@
 use earthsci_ast::flatten::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::types::Expr;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 
 /// Two coupled array-shaped models.
@@ -220,7 +220,7 @@ fn expr_references(expr: &Expr, name: &str) -> bool {
 
 #[test]
 fn flatten_preserves_arrayop_structure_and_namespaces_body() {
-    let file = load(COUPLED_ARRAY_JSON).expect("load coupled array file");
+    let file = load_string(COUPLED_ARRAY_JSON).expect("load coupled array file");
     let flat = flatten(&file).expect("flatten coupled array file");
 
     // Variables from both components are present and dot-namespaced.
@@ -283,7 +283,7 @@ fn flatten_preserves_arrayop_structure_and_namespaces_body() {
 fn coupled_array_from_file_still_rejects_raw_multimodel() {
     // The raw single-model convenience guard stays intact: the seam is reached
     // by flattening first, not by relaxing `from_file`.
-    let file = load(COUPLED_ARRAY_JSON).expect("load coupled array file");
+    let file = load_string(COUPLED_ARRAY_JSON).expect("load coupled array file");
     let err = match ArrayCompiled::from_file(&file) {
         Ok(_) => panic!("from_file must reject a multi-model file"),
         Err(e) => e,
@@ -297,7 +297,7 @@ fn coupled_array_from_file_still_rejects_raw_multimodel() {
 
 #[test]
 fn coupled_array_compiles_and_evaluates_via_from_flattened() {
-    let file = load(COUPLED_ARRAY_JSON).expect("load coupled array file");
+    let file = load_string(COUPLED_ARRAY_JSON).expect("load coupled array file");
     let flat = flatten(&file).expect("flatten");
     let compiled = ArrayCompiled::from_flattened(&flat).expect("from_flattened compiles coupled");
 
@@ -348,7 +348,7 @@ fn coupled_array_compiles_and_evaluates_via_from_flattened() {
 fn coupled_array_evaluates_via_top_level_dispatcher() {
     // The user-facing `simulate()` entry point routes a coupled array file
     // through flatten + from_flattened instead of hitting the :579 rejection.
-    let file = load(COUPLED_ARRAY_JSON).expect("load coupled array file");
+    let file = load_string(COUPLED_ARRAY_JSON).expect("load coupled array file");
     let ics: HashMap<String, f64> = [
         ("Src.u[1]", 1.0),
         ("Src.u[2]", 2.0),
@@ -453,7 +453,7 @@ fn single_model_array_path_unchanged() {
           }
         }
         "#;
-    let file = load(json).expect("load single-model array file");
+    let file = load_string(json).expect("load single-model array file");
 
     // The single-model file is NOT namespaced (one component) and builds via
     // the unchanged raw entry point.

@@ -32,6 +32,7 @@ Layer boundary (what lives where):
 
 from __future__ import annotations
 
+import os
 import math
 import traceback
 from dataclasses import dataclass
@@ -42,7 +43,7 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from .classification import observed_definitions, observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
-from .parse import SchemaValidationError, SubsystemRefError, load
+from .parse import SchemaValidationError, SubsystemRefError, load_document, load_path, load_string
 
 
 @dataclass
@@ -175,10 +176,21 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
     Returns:
         ValidationResult containing schema_errors, structural_errors, unit_warnings, and is_valid flag
     """
-    # Handle JSON string or dict input by parsing first
+    # Handle JSON string or dict input by parsing first.
+    #
+    # `validate` documents accepting EITHER a file path OR the JSON content
+    # itself (a conformance harness holds the fixture text, not its path).
+    # The loader no longer sniffs its argument, so the sniff that this
+    # function's own contract requires lives here, in the open, instead of
+    # being an invisible property of `load`.
     if isinstance(esm_file, (str, dict)):
         try:
-            esm_file = load(esm_file, base_path=base_path)
+            if isinstance(esm_file, dict):
+                esm_file = load_document(esm_file, base_path=base_path)
+            elif os.path.exists(esm_file):
+                esm_file = load_path(esm_file, base_path=base_path)
+            else:
+                esm_file = load_string(esm_file, base_path=base_path)
         except SchemaValidationError as e:
             # A STRUCTURAL failure (StructuralValidationError subclasses
             # SchemaValidationError) carries machine-readable records — a stable

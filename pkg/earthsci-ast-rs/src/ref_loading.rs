@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 /// loader-API `api_meta` bindings (esm-spec §9.7.6 sites 4-5). This is the
 /// scope against which a §4.7 subsystem-edge binding EXPRESSION folds at the
 /// mount (e.g. `NTGT = NX*NY`), captured BEFORE the root template-machinery
-/// pass consumes the `metaparameters` block. Mirrors the Python `load()`
+/// pass consumes the `metaparameters` block. Mirrors the Python `load_string()`
 /// `root_meta_env`.
 fn root_metaparameter_env(
     value: &Value,
@@ -619,7 +619,7 @@ fn read_edge_bindings(
 /// lowered to the §9.6.3 fixpoint, before the single component is extracted.
 /// Template-import diagnostics propagate as
 /// [`crate::lower_expression_templates::ExpressionTemplateError`] (a
-/// [`DiagnosticError`]), carrying their stable `code`, matching how `load()`
+/// [`DiagnosticError`]), carrying their stable `code`, matching how `load_string()`
 /// surfaces them.
 fn resolve_value(
     value: Value,

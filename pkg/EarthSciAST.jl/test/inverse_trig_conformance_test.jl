@@ -34,7 +34,7 @@ function _eval_invtrig_fixture(filename::AbstractString, model_name::AbstractStr
                                elements::Vector{<:AbstractString})
     path = joinpath(_INVTRIG_REPO_ROOT, "tests", "valid", "scalar_leaves", filename)
     @test isfile(path)
-    file = EarthSciAST.load(path)
+    file = EarthSciAST.load_path(path)
     ics = Dict(e => 0.0 for e in elements)
     f!, u0, p, _, vmap = build_evaluator(file; model_name=model_name,
                                          initial_conditions=ics)

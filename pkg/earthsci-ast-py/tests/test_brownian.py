@@ -13,8 +13,8 @@ import pytest
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast import brownian_parameters, system_kind
-from earthsci_ast.parse import load, SchemaValidationError
-from earthsci_ast.serialize import save
+from earthsci_ast.parse import load_path, SchemaValidationError
+from earthsci_ast.serialize import to_json
 
 
 SDE_DIR = FIXTURES_ROOT / "fixtures" / "sde"
@@ -28,7 +28,7 @@ def _assert_wiener(var):
 
 
 def test_ornstein_uhlenbeck_round_trip(tmp_path):
-    parsed = load(str(SDE_DIR / "ornstein_uhlenbeck.esm"))
+    parsed = load_path(str(SDE_DIR / "ornstein_uhlenbeck.esm"))
     model = parsed.models["OU"]
     _assert_wiener(model.variables["Bw"])
     assert brownian_parameters(model) == ["Bw"]
@@ -36,8 +36,8 @@ def test_ornstein_uhlenbeck_round_trip(tmp_path):
     assert system_kind(model) == "sde"
 
     out_path = tmp_path / "ou.esm"
-    save(parsed, str(out_path))
-    reparsed = load(str(out_path))
+    to_json(parsed, str(out_path))
+    reparsed = load_path(str(out_path))
     remodel = reparsed.models["OU"]
     _assert_wiener(remodel.variables["Bw"])
     assert brownian_parameters(remodel) == ["Bw"]
@@ -48,7 +48,7 @@ def test_correlated_noise_round_trip(tmp_path):
     """Correlated noise is ONE vector-valued wiener parameter with an explicit
     covariance matrix — the 0.x ``correlation_group`` tag is gone, and the
     correlation it only named is now stated as ``distribution.cov``."""
-    parsed = load(str(SDE_DIR / "correlated_noise.esm"))
+    parsed = load_path(str(SDE_DIR / "correlated_noise.esm"))
     model = parsed.models["TwoBody"]
     noise = model.variables["B"]
     _assert_wiener(noise)
@@ -58,8 +58,8 @@ def test_correlated_noise_round_trip(tmp_path):
     assert system_kind(model) == "sde"
 
     out_path = tmp_path / "cn.esm"
-    save(parsed, str(out_path))
-    reparsed = load(str(out_path))
+    to_json(parsed, str(out_path))
+    reparsed = load_path(str(out_path))
     remodel = reparsed.models["TwoBody"]
     renoise = remodel.variables["B"]
     _assert_wiener(renoise)
@@ -85,7 +85,7 @@ def test_schema_rejects_wiener_update_without_distribution(tmp_path):
     bad_path = tmp_path / "bad.esm"
     bad_path.write_text(json.dumps(bad))
     with pytest.raises(SchemaValidationError):
-        load(str(bad_path))
+        load_path(str(bad_path))
 
 
 def test_schema_rejects_update_on_an_unknown(tmp_path):
@@ -110,4 +110,4 @@ def test_schema_rejects_update_on_an_unknown(tmp_path):
     bad_path = tmp_path / "bad.esm"
     bad_path.write_text(json.dumps(bad))
     with pytest.raises(SchemaValidationError):
-        load(str(bad_path))
+        load_path(str(bad_path))

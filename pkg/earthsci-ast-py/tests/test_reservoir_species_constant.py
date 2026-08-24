@@ -4,7 +4,7 @@ import json
 
 from conftest import VALID_DIR
 
-from earthsci_ast import load, save
+from earthsci_ast import load_path, to_json
 
 
 FIXTURE_PATH = VALID_DIR / "reservoir_species_constant.esm"
@@ -14,7 +14,7 @@ def test_reservoir_species_constant_round_trip():
     assert FIXTURE_PATH.is_file(), f"fixture missing: {FIXTURE_PATH}"
 
     original_json = json.loads(FIXTURE_PATH.read_text())
-    parsed = load(str(FIXTURE_PATH))
+    parsed = load_path(str(FIXTURE_PATH))
 
     rs = parsed.reaction_systems["SuperFastSubset"]
     species_by_name = {sp.name: sp for sp in rs.species}
@@ -24,7 +24,7 @@ def test_reservoir_species_constant_round_trip():
     for name in ("O3", "OH", "HO2"):
         assert species_by_name[name].constant is None, f"{name} should have no constant flag"
 
-    reserialized = json.loads(save(parsed))
+    reserialized = json.loads(to_json(parsed))
     # Scope the equality check to the species map — the Python binding has
     # unrelated key-ordering quirks on parameter objects and drops
     # `element_type` from domain (tracked separately).

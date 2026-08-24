@@ -93,7 +93,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
     @testset "fixture: padded rings, area_state(1.0) == 1.0" begin
         path = joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_padded_ring.esm")
         @test isfile(path)
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         f!, u0, p, tspan, vmap =
             build_evaluator(file; model_name="PolygonIntersectionAreaPaddedRing")
         du = similar(u0)
@@ -111,7 +111,7 @@ const _PIA_SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
     @testset "fixture: area_state(1.0) == 1.0 (build_evaluator → solve)" begin
         path = joinpath(_PIA_VALID_GEOM, "polygon_intersection_area_planar.esm")
         @test isfile(path)
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
 
         f!, u0, p, tspan, vmap =
             build_evaluator(file; model_name="PolygonIntersectionAreaPlanar")

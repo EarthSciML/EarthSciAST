@@ -9,11 +9,11 @@ use earthsci_ast::*;
 fn test_minimal_chemistry_round_trip() {
     let fixture = include_str!("../../../tests/valid/minimal_chemistry.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse minimal chemistry fixture");
-    let serialized = save(&parsed).expect("Failed to serialize back to JSON");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse minimal chemistry fixture");
+    let serialized = to_json(&parsed).expect("Failed to serialize back to JSON");
 
     // Parse again to ensure roundtrip works
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse serialized output");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse serialized output");
 
     // Basic structural checks
     assert_eq!(parsed.esm, reparsed.esm);
@@ -33,10 +33,10 @@ fn test_metadata_variations_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse metadata fixture {i}: {e}"));
-        let serialized = save(&parsed)
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse metadata fixture {i}: {e}"));
+        let serialized = to_json(&parsed)
             .unwrap_or_else(|e| panic!("Failed to serialize metadata fixture {i}: {e}"));
-        let reparsed: EsmFile = load(&serialized)
+        let reparsed: EsmFile = load_string(&serialized)
             .unwrap_or_else(|e| panic!("Failed to reparse metadata fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
@@ -49,10 +49,10 @@ fn test_metadata_variations_round_trip() {
 fn test_coupled_atmospheric_system_round_trip() {
     let fixture = include_str!("../../../tests/end_to_end/coupled_atmospheric_system.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse coupled atmospheric system");
-    let serialized = save(&parsed).expect("Failed to serialize coupled atmospheric system");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse coupled atmospheric system");
+    let serialized = to_json(&parsed).expect("Failed to serialize coupled atmospheric system");
     let reparsed: EsmFile =
-        load(&serialized).expect("Failed to reparse coupled atmospheric system");
+        load_string(&serialized).expect("Failed to reparse coupled atmospheric system");
 
     assert_eq!(parsed.esm, reparsed.esm);
     if let (Some(models1), Some(models2)) = (&parsed.models, &reparsed.models) {
@@ -68,9 +68,9 @@ fn test_coupled_atmospheric_system_round_trip() {
 fn test_comprehensive_events_round_trip() {
     let fixture = include_str!("../../../tests/events/comprehensive_events.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse comprehensive events");
-    let serialized = save(&parsed).expect("Failed to serialize comprehensive events");
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse comprehensive events");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse comprehensive events");
+    let serialized = to_json(&parsed).expect("Failed to serialize comprehensive events");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse comprehensive events");
 
     assert_eq!(parsed.esm, reparsed.esm);
     // Check that events are preserved
@@ -103,10 +103,10 @@ fn test_spatial_operators_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse spatial fixture {i}: {e}"));
-        let serialized = save(&parsed)
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse spatial fixture {i}: {e}"));
+        let serialized = to_json(&parsed)
             .unwrap_or_else(|e| panic!("Failed to serialize spatial fixture {i}: {e}"));
-        let reparsed: EsmFile = load(&serialized)
+        let reparsed: EsmFile = load_string(&serialized)
             .unwrap_or_else(|e| panic!("Failed to reparse spatial fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
@@ -128,10 +128,10 @@ fn test_coupling_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse coupling fixture {i}: {e}"));
-        let serialized = save(&parsed)
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse coupling fixture {i}: {e}"));
+        let serialized = to_json(&parsed)
             .unwrap_or_else(|e| panic!("Failed to serialize coupling fixture {i}: {e}"));
-        let reparsed: EsmFile = load(&serialized)
+        let reparsed: EsmFile = load_string(&serialized)
             .unwrap_or_else(|e| panic!("Failed to reparse coupling fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
@@ -147,9 +147,9 @@ fn test_coupling_round_trip() {
 fn test_data_sources_round_trip() {
     let fixture = include_str!("../../../tests/valid/data_sources_comprehensive.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse data loaders");
-    let serialized = save(&parsed).expect("Failed to serialize data loaders");
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse data loaders");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse data loaders");
+    let serialized = to_json(&parsed).expect("Failed to serialize data loaders");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse data loaders");
 
     assert_eq!(parsed.esm, reparsed.esm);
     if let (Some(loaders1), Some(loaders2)) = (&parsed.data_sources, &reparsed.data_sources) {
@@ -174,10 +174,10 @@ fn test_version_compatibility_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse version fixture {i}: {e}"));
-        let serialized = save(&parsed)
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse version fixture {i}: {e}"));
+        let serialized = to_json(&parsed)
             .unwrap_or_else(|e| panic!("Failed to serialize version fixture {i}: {e}"));
-        let reparsed: EsmFile = load(&serialized)
+        let reparsed: EsmFile = load_string(&serialized)
             .unwrap_or_else(|e| panic!("Failed to reparse version fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
@@ -196,11 +196,11 @@ fn test_mathematical_correctness_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse math fixture {i}: {e}"));
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse math fixture {i}: {e}"));
         let serialized =
-            save(&parsed).unwrap_or_else(|e| panic!("Failed to serialize math fixture {i}: {e}"));
+            to_json(&parsed).unwrap_or_else(|e| panic!("Failed to serialize math fixture {i}: {e}"));
         let reparsed: EsmFile =
-            load(&serialized).unwrap_or_else(|e| panic!("Failed to reparse math fixture {i}: {e}"));
+            load_string(&serialized).unwrap_or_else(|e| panic!("Failed to reparse math fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
     }
@@ -215,17 +215,17 @@ fn test_mathematical_correctness_round_trip() {
 fn test_index_outside_arrayop_round_trip() {
     let fixture = include_str!("../../../tests/indexing/idx_outside_arrayop.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse idx_outside_arrayop");
-    let serialized = save(&parsed).expect("Failed to serialize idx_outside_arrayop");
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse idx_outside_arrayop");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse idx_outside_arrayop");
+    let serialized = to_json(&parsed).expect("Failed to serialize idx_outside_arrayop");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse idx_outside_arrayop");
 
     assert_eq!(parsed.esm, reparsed.esm);
     assert_eq!(parsed.metadata.name, reparsed.metadata.name);
 
     // Idempotency: a second save→load cycle must be a fixed point on the
     // JSON value (modulo map key ordering).
-    let serialized_again = save(&reparsed).expect("second serialize");
-    let reparsed_again: EsmFile = load(&serialized_again).expect("second reparse");
+    let serialized_again = to_json(&reparsed).expect("second serialize");
+    let reparsed_again: EsmFile = load_string(&serialized_again).expect("second reparse");
     assert_eq!(
         serde_json::to_value(&reparsed).expect("reparsed as value"),
         serde_json::to_value(&reparsed_again).expect("reparsed_again as value"),
@@ -243,10 +243,10 @@ fn test_scoping_round_trip() {
 
     for (i, fixture) in fixtures.iter().enumerate() {
         let parsed: EsmFile =
-            load(fixture).unwrap_or_else(|e| panic!("Failed to parse scoping fixture {i}: {e}"));
-        let serialized = save(&parsed)
+            load_string(fixture).unwrap_or_else(|e| panic!("Failed to parse scoping fixture {i}: {e}"));
+        let serialized = to_json(&parsed)
             .unwrap_or_else(|e| panic!("Failed to serialize scoping fixture {i}: {e}"));
-        let reparsed: EsmFile = load(&serialized)
+        let reparsed: EsmFile = load_string(&serialized)
             .unwrap_or_else(|e| panic!("Failed to reparse scoping fixture {i}: {e}"));
 
         assert_eq!(parsed.esm, reparsed.esm);
@@ -258,9 +258,9 @@ fn test_scoping_round_trip() {
 fn test_metadata_inheritance_round_trip() {
     let fixture = include_str!("../../../tests/valid/metadata_inheritance_coupled.esm");
 
-    let parsed: EsmFile = load(fixture).expect("Failed to parse metadata inheritance");
-    let serialized = save(&parsed).expect("Failed to serialize metadata inheritance");
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse metadata inheritance");
+    let parsed: EsmFile = load_string(fixture).expect("Failed to parse metadata inheritance");
+    let serialized = to_json(&parsed).expect("Failed to serialize metadata inheritance");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse metadata inheritance");
 
     assert_eq!(parsed.esm, reparsed.esm);
     assert_eq!(parsed.metadata.name, reparsed.metadata.name);
@@ -275,7 +275,7 @@ fn test_metadata_inheritance_round_trip() {
 fn test_model_tests_tolerance_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/arrayop/01_pure_ode_analytical.esm");
 
-    let parsed: EsmFile = load(fixture).expect("load fixture with tests/tolerance");
+    let parsed: EsmFile = load_string(fixture).expect("load fixture with tests/tolerance");
 
     // The fixture has one model (PureODE) with a tolerance and one test.
     let models = parsed.models.as_ref().expect("fixture has models");
@@ -304,8 +304,8 @@ fn test_model_tests_tolerance_round_trip() {
     assert!((t.assertions[0].expected - 0.36787944117144233).abs() < 1e-15);
 
     // Round-trip: save and reload, confirm typed fields survive.
-    let serialized = save(&parsed).expect("serialize model with tests/tolerance");
-    let reparsed: EsmFile = load(&serialized).expect("reparse serialized fixture");
+    let serialized = to_json(&parsed).expect("serialize model with tests/tolerance");
+    let reparsed: EsmFile = load_string(&serialized).expect("reparse serialized fixture");
     let rmodel = reparsed
         .models
         .as_ref()
@@ -327,8 +327,8 @@ fn test_model_tests_tolerance_round_trip() {
     // ryu's shortest-round-trip float formatting may differ from the
     // original fixture's textual representation while preserving the
     // underlying f64 values.
-    let serialized_again = save(&reparsed).expect("second serialize");
-    let reparsed_again: EsmFile = load(&serialized_again).expect("second reparse");
+    let serialized_again = to_json(&reparsed).expect("second serialize");
+    let reparsed_again: EsmFile = load_string(&serialized_again).expect("second reparse");
     assert_eq!(
         serde_json::to_value(&reparsed).expect("reparsed as value"),
         serde_json::to_value(&reparsed_again).expect("reparsed_again as value"),
@@ -343,7 +343,7 @@ fn test_model_tests_tolerance_round_trip() {
 fn test_ornstein_uhlenbeck_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/ornstein_uhlenbeck.esm");
 
-    let parsed: EsmFile = load(fixture).expect("failed to parse OU SDE fixture");
+    let parsed: EsmFile = load_string(fixture).expect("failed to parse OU SDE fixture");
     let model = parsed
         .models
         .as_ref()
@@ -365,8 +365,8 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         earthsci_ast::SystemKind::Sde
     );
 
-    let serialized = save(&parsed).expect("failed to serialize OU SDE");
-    let reparsed: EsmFile = load(&serialized).expect("failed to reparse OU SDE");
+    let serialized = to_json(&parsed).expect("failed to serialize OU SDE");
+    let reparsed: EsmFile = load_string(&serialized).expect("failed to reparse OU SDE");
 
     // Serialization must preserve the distribution and the wiener update.
     let rbw = reparsed
@@ -380,13 +380,13 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
     assert_eq!(rbw.update, bw.update);
 
     // Idempotency.
-    let serialized_again = save(&reparsed).expect("second serialize");
+    let serialized_again = to_json(&reparsed).expect("second serialize");
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
         serde_json::to_value(&reparsed).expect("reparsed as value"),
         "typed OU SDE round-trip must be a fixed point"
     );
-    let reparsed_again: EsmFile = load(&serialized_again).expect("second reparse");
+    let reparsed_again: EsmFile = load_string(&serialized_again).expect("second reparse");
     assert_eq!(
         serde_json::to_value(&reparsed).expect("reparsed as value"),
         serde_json::to_value(&reparsed_again).expect("reparsed_again as value"),
@@ -400,7 +400,7 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
 fn test_correlated_noise_sde_round_trip() {
     let fixture = include_str!("../../../tests/fixtures/sde/correlated_noise.esm");
 
-    let parsed: EsmFile = load(fixture).expect("failed to parse correlated-noise fixture");
+    let parsed: EsmFile = load_string(fixture).expect("failed to parse correlated-noise fixture");
     let model = parsed
         .models
         .as_ref()
@@ -421,8 +421,8 @@ fn test_correlated_noise_sde_round_trip() {
         ["B"]
     );
 
-    let serialized = save(&parsed).expect("failed to serialize");
-    let reparsed: EsmFile = load(&serialized).expect("failed to reparse");
+    let serialized = to_json(&parsed).expect("failed to serialize");
+    let reparsed: EsmFile = load_string(&serialized).expect("failed to reparse");
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
         serde_json::to_value(&reparsed).expect("reparsed as value"),
@@ -441,9 +441,9 @@ fn test_correlated_noise_sde_round_trip() {
 #[test]
 fn test_nonlinear_isorropia_shape_round_trip() {
     let fixture = include_str!("../../../tests/valid/nonlinear_isorropia_shape.esm");
-    let parsed: EsmFile = load(fixture).expect("load isorropia fixture");
-    let serialized = save(&parsed).expect("save isorropia fixture");
-    let reparsed: EsmFile = load(&serialized).expect("reload isorropia fixture");
+    let parsed: EsmFile = load_string(fixture).expect("load isorropia fixture");
+    let serialized = to_json(&parsed).expect("save isorropia fixture");
+    let reparsed: EsmFile = load_string(&serialized).expect("reload isorropia fixture");
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
         serde_json::to_value(&reparsed).expect("reparsed as value"),
@@ -474,9 +474,9 @@ fn test_nonlinear_isorropia_shape_round_trip() {
 #[test]
 fn test_nonlinear_mogi_shape_round_trip() {
     let fixture = include_str!("../../../tests/valid/nonlinear_mogi_shape.esm");
-    let parsed: EsmFile = load(fixture).expect("load mogi fixture");
-    let serialized = save(&parsed).expect("save mogi fixture");
-    let reparsed: EsmFile = load(&serialized).expect("reload mogi fixture");
+    let parsed: EsmFile = load_string(fixture).expect("load mogi fixture");
+    let serialized = to_json(&parsed).expect("save mogi fixture");
+    let reparsed: EsmFile = load_string(&serialized).expect("reload mogi fixture");
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
         serde_json::to_value(&reparsed).expect("reparsed as value"),
@@ -496,9 +496,9 @@ fn test_nonlinear_mogi_shape_round_trip() {
 #[test]
 fn test_reservoir_species_constant_round_trip() {
     let fixture = include_str!("../../../tests/valid/reservoir_species_constant.esm");
-    let parsed: EsmFile = load(fixture).expect("load reservoir fixture");
-    let serialized = save(&parsed).expect("save reservoir fixture");
-    let reparsed: EsmFile = load(&serialized).expect("reload reservoir fixture");
+    let parsed: EsmFile = load_string(fixture).expect("load reservoir fixture");
+    let serialized = to_json(&parsed).expect("save reservoir fixture");
+    let reparsed: EsmFile = load_string(&serialized).expect("reload reservoir fixture");
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
         serde_json::to_value(&reparsed).expect("reparsed as value"),
@@ -530,9 +530,9 @@ fn test_reservoir_species_constant_round_trip() {
 #[test]
 fn test_fractional_stoichiometry_round_trip() {
     let fixture = include_str!("../../../tests/valid/fractional_stoichiometry.esm");
-    let parsed: EsmFile = load(fixture).expect("load fractional_stoichiometry fixture");
-    let serialized = save(&parsed).expect("save fractional_stoichiometry fixture");
-    let reparsed: EsmFile = load(&serialized).expect("reload fractional_stoichiometry fixture");
+    let parsed: EsmFile = load_string(fixture).expect("load fractional_stoichiometry fixture");
+    let serialized = to_json(&parsed).expect("save fractional_stoichiometry fixture");
+    let reparsed: EsmFile = load_string(&serialized).expect("reload fractional_stoichiometry fixture");
 
     assert_eq!(
         serde_json::to_value(&parsed).expect("parsed as value"),
@@ -569,10 +569,10 @@ fn test_fractional_stoichiometry_round_trip() {
 fn test_tests_analyses_comprehensive_round_trip() {
     let fixture = include_str!("../../../tests/valid/tests_analyses_comprehensive.esm");
 
-    let parsed: EsmFile = load(fixture)
+    let parsed: EsmFile = load_string(fixture)
         .expect("tests_analyses_comprehensive.esm must load (schema accepts array-form plots.y)");
-    let serialized = save(&parsed).expect("serialize comprehensive fixture");
-    let reparsed: EsmFile = load(&serialized).expect("re-load serialized comprehensive fixture");
+    let serialized = to_json(&parsed).expect("serialize comprehensive fixture");
+    let reparsed: EsmFile = load_string(&serialized).expect("re-load serialized comprehensive fixture");
 
     assert_eq!(parsed.esm, reparsed.esm);
     assert_eq!(parsed.metadata.name, reparsed.metadata.name);
@@ -666,6 +666,6 @@ fn test_inline_multi_y_schema_validation() {
         }
         "#;
 
-    let parsed: EsmFile = load(esm).expect("inline array-form plots.y must pass schema validation");
+    let parsed: EsmFile = load_string(esm).expect("inline array-form plots.y must pass schema validation");
     assert_eq!(parsed.esm, "1.0.0");
 }

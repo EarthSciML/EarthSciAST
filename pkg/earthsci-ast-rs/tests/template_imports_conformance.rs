@@ -17,7 +17,7 @@ use earthsci_ast::lower_expression_templates::{
 };
 use earthsci_ast::template_imports::{reject_template_imports_pre_v08, resolve_template_machinery};
 use earthsci_ast::types::Expr;
-use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_with_options};
+use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn conf(parts: &[&str]) -> PathBuf {
 }
 
 /// Raw §9.7 pipeline (resolve → lower → Expand), mirroring the Julia bridge
-/// oracle `Expand(load(fixture))`: Option-B load preserves references, then
+/// oracle `Expand(load_string(fixture))`: Option-B load preserves references, then
 /// `expand` reproduces the Option-A `expanded*.esm` golden the fixtures are
 /// pinned against (RFC out-of-line-expression-templates §12 gate 1).
 fn expand_raw(fixture_path: &Path) -> Value {
@@ -385,8 +385,8 @@ fn json_float_literals_round_trip_bit_exact() {
         }
         "#
     .to_string();
-    let f = earthsci_ast::load(&doc).expect("load ulp doc");
-    let text = earthsci_ast::save(&f).expect("save ulp doc");
+    let f = earthsci_ast::load_string(&doc).expect("load ulp doc");
+    let text = earthsci_ast::to_json(&f).expect("save ulp doc");
     assert!(
         text.contains("-104.52369275835723"),
         "longitude literal must survive verbatim: {text}"
@@ -526,10 +526,10 @@ fn valid_suite_library_and_minimal_consumer() {
 #[test]
 fn consumer_round_trip_emits_expanded_folded_form() {
     let f = load_path(conf(&["import_smoke", "fixture.esm"])).expect("load");
-    let text = earthsci_ast::save(&f).expect("save");
+    let text = earthsci_ast::to_json(&f).expect("save");
     assert!(!text.contains("expression_template_imports"));
     assert!(!text.contains("apply_expression_template"));
-    let reloaded = earthsci_ast::load(&text).expect("reload");
+    let reloaded = earthsci_ast::load_string(&text).expect("reload");
     assert_eq!(
         reloaded.index_sets.as_ref().expect("index_sets")["lon"].size,
         Some(288)
@@ -563,7 +563,7 @@ fn template_library_round_trips_to_itself() {
 
         let loaded = load_path(&path).unwrap_or_else(|e| panic!("{lib} must load: {e:?}"));
         let emitted: serde_json::Value =
-            serde_json::from_str(&earthsci_ast::save(&loaded).expect("save")).expect("parse emit");
+            serde_json::from_str(&earthsci_ast::to_json(&loaded).expect("save")).expect("parse emit");
 
         for key in ["expression_templates", "metaparameters"] {
             assert!(
@@ -593,7 +593,7 @@ fn template_library_round_trips_to_itself() {
         );
 
         // And it must re-load: legal on disk MUST mean legal after a round-trip.
-        earthsci_ast::load(&earthsci_ast::save(&loaded).expect("save"))
+        earthsci_ast::load_string(&earthsci_ast::to_json(&loaded).expect("save"))
             .unwrap_or_else(|e| panic!("{lib} must re-load after emit: {e:?}"));
     }
 }
@@ -602,7 +602,7 @@ fn template_library_round_trips_to_itself() {
 /// diagnostic code pinned in tests/invalid/expected_errors.json
 /// (`resolver_error_code`). The codes are embedded as `[<code>]` in the
 /// error string — the crate's established surfacing convention for
-/// `ExpressionTemplateError` through `load()`.
+/// `ExpressionTemplateError` through `load_string()`.
 #[test]
 fn invalid_fixtures_fail_with_exact_codes() {
     let invalid_dir = repo_root().join("tests/invalid/template_imports");
@@ -687,7 +687,7 @@ fn load_in(dir: &Path, text: &str) -> Result<earthsci_ast::EsmFile, earthsci_ast
         base_path: Some(dir.to_path_buf()),
         metaparameters: BTreeMap::new(),
     };
-    load_with_options(text, &options)
+    load_string_with_options(text, &options)
 }
 
 fn load_err_code(dir: &Path, text: &str) -> String {
@@ -856,7 +856,7 @@ fn edge_bindings_unknown_names_and_non_integer_values() {
 
     // A non-integer binding is rejected at the resolver level
     // (metaparameter_type_error); the schema also rejects it in the full
-    // load() pipeline (TemplateImport.bindings is integer-typed).
+    // load_string() pipeline (TemplateImport.bindings is integer-typed).
     let raw: Value = serde_json::from_str(&model_json(
         r#"
       "expression_template_imports": [{"ref": "./lib.esm", "bindings": {"N": 2.5}}],"#,
@@ -1209,7 +1209,7 @@ fn version_gate_flags_every_9_7_construct() {
     ] {
         // A genuinely pre-0.8.0 version string: this drives the GATE FUNCTION
         // directly, which is the only way left to reach it. A document this old
-        // never survives `load()` under esm 1.0.0 — the major-version gate
+        // never survives `load_string()` under esm 1.0.0 — the major-version gate
         // refuses it first — which is why the fixture for
         // `template_import_version_too_old` was retired as unreachable.
         let doc: Value = serde_json::from_str(&format!(

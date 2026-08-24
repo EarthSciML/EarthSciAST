@@ -3,7 +3,8 @@ ESM Format - Earth System Model Serialization Format
 
 A Python package for handling Earth System Model serialization and mathematical expressions.
 This is the core implementation of the ESM Library Specification (see ``esm-spec.md``);
-the supported format version is tracked by ``earthsci_ast.parse._CURRENT_VERSION``.
+the supported format version is ``earthsci_ast.SCHEMA_VERSION``, and this
+package's own version is ``earthsci_ast.LIBRARY_VERSION``.
 """
 
 from __future__ import annotations
@@ -49,9 +50,19 @@ from .esm_types import (
     FunctionTableAxis,
 )
 
-# Core parsing and serialization
+# Core parsing and serialization.
+#
+# `load(path_or_string_or_dict)` sniffed its argument -- `os.path.exists(s)`
+# decided whether a string was a path or JSON text -- while the SAME name meant
+# a path in Julia and Go and JSON text in TypeScript and Rust. It is replaced
+# by three entry points that say which they are. `save(file, path=None)`
+# likewise both returned the payload and (optionally) wrote it; `to_json` is
+# now pure and `write_path` writes.
 from .parse import (
-    load,
+    SCHEMA_VERSION,
+    load_document,
+    load_path,
+    load_string,
     SchemaValidationError,
     UnsupportedVersionError,
     CircularReferenceError,
@@ -59,7 +70,7 @@ from .parse import (
     resolve_subsystem_refs,
     resolve_model_refs,
 )
-from .serialize import save
+from .serialize import to_json, to_json_compact, write_path
 
 # Expression-template expansion (esm-spec §9.6) and template-library imports
 # + load-time metaparameters (esm-spec §9.7 /
@@ -308,7 +319,7 @@ from .graph import (
     component_type,
     expression_graph,
     to_dot,
-    to_json,
+    to_json as to_json_graph,
     to_mermaid,
 )
 
@@ -385,6 +396,12 @@ try:
 except PackageNotFoundError:  # pragma: no cover - source-tree import
     __version__ = "0.0.0+unknown"
 
+#: This package's OWN version -- the cross-binding spelling of ``__version__``.
+#: Distinct from :data:`SCHEMA_VERSION`, the `.esm` FORMAT version. The two are
+#: unrelated numbers; `VERSION` used to mean the schema version in TypeScript
+#: and the package version in Rust, so the name is retired everywhere.
+LIBRARY_VERSION: str = __version__
+
 # Streamlined public API - only Core + Analysis + Simulation tier functionality
 __all__ = [
     # The esm 1.0.0 classification API (esm-spec §6.3.1)
@@ -437,8 +454,14 @@ __all__ = [
     "FunctionTable",
     "FunctionTableAxis",
     # Core parsing and serialization
-    "load",
-    "save",
+    "load_path",
+    "load_string",
+    "load_document",
+    "to_json",
+    "to_json_compact",
+    "write_path",
+    "SCHEMA_VERSION",
+    "LIBRARY_VERSION",
     "resolve_subsystem_refs",
     "resolve_model_refs",
     # Expression templates (esm-spec §9.6) + template-library imports and
@@ -580,7 +603,7 @@ __all__ = [
     "component_type",
     "to_dot",
     "to_mermaid",
-    "to_json",
+    "to_json_graph",
     # Version migration (esm-libraries-spec §8.3)
     "migrate",
     "can_migrate",

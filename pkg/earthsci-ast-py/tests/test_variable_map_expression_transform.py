@@ -12,7 +12,7 @@ import json
 import jsonschema
 import pytest
 
-from earthsci_ast import load, save
+from earthsci_ast import load_string, to_json
 from earthsci_ast.esm_types import (
     EsmFile,
     Equation,
@@ -122,7 +122,7 @@ def test_parse_serialize_roundtrip_expression_transform():
     """A variable_map with an expression transform survives parse -> serialize
     with the coupling entry byte-equal at the dict level."""
     doc = _doc()
-    esm_file = load(json.dumps(doc))
+    esm_file = load_string(json.dumps(doc))
 
     coupling = esm_file.coupling[0]
     assert isinstance(coupling, VariableMapCoupling)
@@ -130,11 +130,11 @@ def test_parse_serialize_roundtrip_expression_transform():
     assert coupling.transform == _transform_expr()
     assert coupling.factor is None
 
-    reloaded = json.loads(save(esm_file))
+    reloaded = json.loads(to_json(esm_file))
     assert reloaded["coupling"][0] == doc["coupling"][0]
 
     # Second cycle stays stable (lossless round-trip).
-    again = json.loads(save(load(json.dumps(reloaded))))
+    again = json.loads(to_json(load_string(json.dumps(reloaded))))
     assert again["coupling"][0] == doc["coupling"][0]
 
 
@@ -269,7 +269,7 @@ def test_coupling_transform_expands_with_receiving_component_templates():
 
 
 def test_coupling_transform_template_expansion_through_load():
-    esm_file = load(json.dumps(_template_doc()))
+    esm_file = load_string(json.dumps(_template_doc()))
     coupling = esm_file.coupling[0]
     assert isinstance(coupling, VariableMapCoupling)
     assert coupling.transform == _transform_expr()
@@ -300,7 +300,7 @@ def test_simulate_expression_transform_end_to_end():
     import numpy as np
     from earthsci_ast.simulation import simulate
 
-    esm_file = load(json.dumps(_doc()))
+    esm_file = load_string(json.dumps(_doc()))
     result = simulate(
         esm_file,
         tspan=(0.0, 1.0),

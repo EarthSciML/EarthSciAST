@@ -164,7 +164,7 @@ end
 
 # Run every inline test inside every model found in the given .esm file.
 function _run_fixture(path::AbstractString)
-    file = EarthSciAST.load(path)
+    file = EarthSciAST.load_path(path)
     models_dict = file.models
     @assert models_dict !== nothing "Fixture $path has no models"
     for (mname, model) in models_dict
@@ -528,7 +528,7 @@ end
         mname = "CumulativePrefixReduction"
         path = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures",
                         "arrayop", "25_cumulative_prefix_reduction.esm")
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         model = file.models[mname]
 
         # No registry reachable from a bare `Model` ⇒ ArgumentError, not MethodError.

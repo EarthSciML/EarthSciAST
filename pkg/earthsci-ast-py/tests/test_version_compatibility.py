@@ -19,18 +19,17 @@ import re
 
 import pytest
 from conftest import FIXTURES_ROOT, load_fixture as _load_fixture
-from earthsci_ast import load, __version__ as VERSION
+from earthsci_ast import LIBRARY_VERSION, SCHEMA_VERSION, load_document
 from earthsci_ast.parse import (
     _CURRENT_VERSION,
     SchemaValidationError,
     UnsupportedVersionError,
 )
 
-# The package version (__version__, from distribution metadata) is kept in
-# lockstep with the supported ESM format version (parse._CURRENT_VERSION).
-# Derive the expectation from the latter so this test never re-hardcodes a
-# literal that goes stale on the next version bump.
-_EXPECTED_VERSION = ".".join(str(v) for v in _CURRENT_VERSION)
+# The `.esm` FORMAT version, as a string. Derived from the constant rather than
+# re-hardcoded so this test never goes stale on the next version bump. The
+# PACKAGE version is a different number and lives in LIBRARY_VERSION.
+_EXPECTED_VERSION = SCHEMA_VERSION
 
 # Path to version compatibility test fixtures
 FIXTURES_DIR = FIXTURES_ROOT / "version_compatibility"
@@ -60,7 +59,7 @@ class TestVersionCompatibility:
         assert fixture["esm"] == _EXPECTED_VERSION == "1.0.0"
 
         with no_version_warning():
-            result = load(fixture)
+            result = load_document(fixture)
 
         assert result.esm == _EXPECTED_VERSION
 
@@ -68,24 +67,24 @@ class TestVersionCompatibility:
         """A 0.x document is REJECTED: 1.0.0 is a clean break, so there is no
         backward-compatible read of the previous major version."""
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 0"):
-            load(load_fixture("version_0_1_0_pre_break.esm"))
+            load_document(load_fixture("version_0_1_0_pre_break.esm"))
 
     def test_major_version_zero_rejection_oldest(self):
         """The oldest published version is refused like any other 0.x — age
         earns no leniency."""
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 0"):
-            load(load_fixture("version_0_0_1_pre_break.esm"))
+            load_document(load_fixture("version_0_0_1_pre_break.esm"))
 
     def test_major_version_zero_rejection_last_0x_release(self):
         """Even the immediately preceding release (0.9.0) is rejected — the
         clean break has no deprecation window."""
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 0"):
-            load(load_fixture("version_0_9_0_last_pre_break.esm"))
+            load_document(load_fixture("version_0_9_0_last_pre_break.esm"))
 
     def test_backward_compatibility_newer_patch(self):
         """A newer patch of the current minor loads with no warning."""
         with no_version_warning():
-            result = load(load_fixture("version_1_0_5_patch_upgrade.esm"))
+            result = load_document(load_fixture("version_1_0_5_patch_upgrade.esm"))
 
         assert result.esm == "1.0.5"
         assert result.metadata.name == "Version_1_0_5_PatchUpgrade"
@@ -93,7 +92,7 @@ class TestVersionCompatibility:
     def test_forward_compatibility_warning(self):
         """A newer MINOR loads, but warns that it postdates the library."""
         with pytest.warns(UserWarning, match="1.1.0 is newer than"):
-            result = load(load_fixture("version_1_1_0_minor_upgrade.esm"))
+            result = load_document(load_fixture("version_1_1_0_minor_upgrade.esm"))
 
         assert result.esm == "1.1.0"
         assert result.metadata.name == "Version_1_1_0_MinorUpgrade"
@@ -115,7 +114,7 @@ class TestVersionCompatibility:
         assert {"performance_hints", "validation_metadata"} <= set(fixture)
 
         with pytest.raises(SchemaValidationError, match="performance_hints"):
-            load(fixture)
+            load_document(fixture)
 
     def test_forward_compatibility_unknown_key_in_a_modelled_block_is_rejected(self):
         """The same refusal one level down. The schema closes EVERY object, so
@@ -125,22 +124,22 @@ class TestVersionCompatibility:
         fixture["metadata"]["speculative_1_1_field"] = "ignored"
 
         with pytest.raises(SchemaValidationError, match="speculative_1_1_field"):
-            load(fixture)
+            load_document(fixture)
 
     def test_major_version_rejection_2_5_1(self):
         """A FUTURE major is rejected in the other direction."""
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 2"):
-            load(load_fixture("version_2_5_1_major_rejection.esm"))
+            load_document(load_fixture("version_2_5_1_major_rejection.esm"))
 
     def test_invalid_version_string(self):
         """Should reject invalid version string format."""
         with pytest.raises(SchemaValidationError):
-            load(load_fixture("invalid_version_string.esm"))
+            load_document(load_fixture("invalid_version_string.esm"))
 
     def test_missing_version_field(self):
         """Should reject a document with no version field."""
         with pytest.raises(SchemaValidationError):
-            load(load_fixture("missing_version_field.esm"))
+            load_document(load_fixture("missing_version_field.esm"))
 
     def test_prerelease_identifier_is_rejected(self):
         """The semver pattern admits major.minor.patch only. The fixture carries
@@ -149,27 +148,27 @@ class TestVersionCompatibility:
         assert fixture["esm"].startswith(f"{_CURRENT_VERSION[0]}.")
 
         with pytest.raises(SchemaValidationError):
-            load(fixture)
+            load_document(fixture)
 
     def test_double_digit_version_parsing(self):
         """1.10.0 is a NEWER minor than 1.2.0 — numerically, not
         lexicographically."""
         with pytest.warns(UserWarning, match="1.10.0 is newer than"):
-            result = load(load_fixture("version_1_10_0_double_digit.esm"))
+            result = load_document(load_fixture("version_1_10_0_double_digit.esm"))
 
         assert result.esm == "1.10.0"
 
     def test_large_patch_version(self):
         """A three-digit patch is a patch, not a minor bump: no warning."""
         with no_version_warning():
-            result = load(load_fixture("version_1_0_100_large_patch.esm"))
+            result = load_document(load_fixture("version_1_0_100_large_patch.esm"))
 
         assert result.esm == "1.0.100"
 
     def test_large_version_numbers_rejection(self):
         """Should reject files with large version numbers."""
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 12"):
-            load(load_fixture("version_12_34_56_large_numbers.esm"))
+            load_document(load_fixture("version_12_34_56_large_numbers.esm"))
 
 
 class TestVersionParsing:
@@ -222,11 +221,11 @@ class TestMigrationExample:
         assert new_version["esm"] == _EXPECTED_VERSION
 
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 0"):
-            load(old_version)
+            load_document(old_version)
         # …and the migrated form is a document this library actually reads. The
         # 0.x target this pair used to carry was itself unloadable, which made
         # it a poor demonstration of a migration TARGET.
-        migrated = load(new_version)
+        migrated = load_document(new_version)
         assert migrated.esm == _EXPECTED_VERSION
 
         # Check that CH4 units were migrated from ppbv to mol/mol
@@ -254,21 +253,22 @@ class TestLibraryVersionInfo:
     def test_current_library_version(self):
         """Should expose a well-formed package version.
 
-        The PACKAGE version (``__version__``) and the esm FORMAT version
-        (``parse._CURRENT_VERSION``) are independent: the format version is what
+        The PACKAGE version (``LIBRARY_VERSION``) and the esm FORMAT version
+        (``SCHEMA_VERSION``) are independent: the format version is what
         a document carries in its ``esm`` field, while the package version
         tracks releases of this binding. They happened to coincide while both
         read 1.0.0, and asserting lockstep turned that coincidence into a rule --
         which broke as soon as the bindings were released as 0.1.0 against the
         1.0.0 format.
 
-        ``__version__`` falls back to ``0.0.0+unknown`` when the package is
+        ``LIBRARY_VERSION`` falls back to ``0.0.0+unknown`` when the package is
         imported straight from the source tree (no installed distribution
         metadata).
         """
-        if VERSION.startswith("0.0.0+"):
+        assert SCHEMA_VERSION == _EXPECTED_VERSION
+        if LIBRARY_VERSION.startswith("0.0.0+"):
             pytest.skip("source-tree import: no distribution metadata to check")
-        assert re.match(r"^\d+\.\d+\.\d+", VERSION), VERSION
+        assert re.match(r"^\d+\.\d+\.\d+", LIBRARY_VERSION), LIBRARY_VERSION
 
     def test_compatibility_info(self):
         """Should provide version compatibility information."""

@@ -107,7 +107,7 @@ end
 
     @testset "fixture loads (schema + structural)" begin
         @test isfile(_OJ_FIXTURE)
-        @test (ESS.load(_OJ_FIXTURE); true)
+        @test (ESS.load_path(_OJ_FIXTURE); true)
     end
 
     # (1) BROAD PHASE — the bin-Skolem candidate set is materialised through the

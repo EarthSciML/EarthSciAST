@@ -623,17 +623,17 @@ loading it.
 An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
 pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
 `/models/<M>/subsystems/<S>` with `details` — but Julia could only ever raise it
-as an exception out of `load`, so `validate(load(path))` never ran and the
+as an exception out of the loader, so `validate(load_path(path))` never ran and the
 finding was unreportable in the shape everyone else reports it (finding (f)).
 
-`load` still throws: a document whose mount does not resolve genuinely cannot be
+`load_path` still throws: a document whose mount does not resolve genuinely cannot be
 built, and callers that want the exception keep it. This entry point is the one
 the conformance harness wants — it renders the throw as the structural error it
 always was.
 """
 function validate(path::AbstractString)::ValidationResult
     file = try
-        load(path)
+        load_path(path)
     catch e
         err = load_failure_structural_error(e)
         err === nothing && rethrow()

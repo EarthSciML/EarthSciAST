@@ -24,9 +24,9 @@ fn test_basic_round_trip() {
     }
     "#;
 
-    let parsed: EsmFile = load(json).expect("Failed to parse basic JSON");
-    let serialized = save(&parsed).expect("Failed to serialize back to JSON");
-    let reparsed: EsmFile = load(&serialized).expect("Failed to reparse serialized output");
+    let parsed: EsmFile = load_string(json).expect("Failed to parse basic JSON");
+    let serialized = to_json(&parsed).expect("Failed to serialize back to JSON");
+    let reparsed: EsmFile = load_string(&serialized).expect("Failed to reparse serialized output");
 
     assert_eq!(parsed.esm, reparsed.esm);
     assert_eq!(parsed.metadata.name, reparsed.metadata.name);
@@ -43,7 +43,7 @@ fn test_missing_esm_version() {
     }
     "#;
 
-    let result = load(json);
+    let result = load_string(json);
     assert!(
         result.is_err(),
         "Expected parsing to fail for missing ESM version"
@@ -68,7 +68,7 @@ fn test_wrong_data_types() {
     }
     "#;
 
-    let result = load(json);
+    let result = load_string(json);
     assert!(
         result.is_err(),
         "Expected parsing to fail for wrong data type"

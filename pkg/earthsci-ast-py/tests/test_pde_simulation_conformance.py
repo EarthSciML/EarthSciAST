@@ -45,7 +45,7 @@ def _ids(fx):
 @pytest.mark.parametrize("fixture", _FIXTURES, ids=_ids)
 def test_pde_rhs_matches_analytic(fixture):
     """evaluate_rhs reproduces the independent L·u + b anchor at every probe."""
-    esm = et.load(str(_MANIFEST.parent / fixture["path"]))
+    esm = et.load_path(str(_MANIFEST.parent / fixture["path"]))
     rtol, atol = _TOL["rhs_rtol"], _TOL["rhs_atol"]
     for probe in fixture["rhs_probes"]:
         got = {
@@ -63,7 +63,7 @@ def test_pde_rhs_matches_analytic(fixture):
 def test_pde_trajectory_matches_analytic(fixture):
     """simulate reproduces the exact matrix-exponential trajectory at the
     declared output times."""
-    esm = et.load(str(_MANIFEST.parent / fixture["path"]))
+    esm = et.load_path(str(_MANIFEST.parent / fixture["path"]))
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
     result = simulate(

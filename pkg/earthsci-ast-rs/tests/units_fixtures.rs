@@ -29,7 +29,7 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
 #[test]
 fn units_fixtures_parse() {
     for (name, content) in UNITS_FIXTURES {
-        let file: EsmFile = load(content).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
+        let file: EsmFile = load_string(content).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
         let models = file
             .models
             .as_ref()
@@ -47,7 +47,7 @@ fn units_fixtures_variable_units_parse_or_log() {
     // they appear in `cargo test -- --nocapture` and become a paper
     // trail when the registry is extended.
     for (fname, content) in UNITS_FIXTURES {
-        let file: EsmFile = load(content).expect("fixture parses");
+        let file: EsmFile = load_string(content).expect("fixture parses");
         let models = file.models.as_ref().expect("fixture has models");
         for (mname, model) in models {
             for (vname, var) in &model.variables {

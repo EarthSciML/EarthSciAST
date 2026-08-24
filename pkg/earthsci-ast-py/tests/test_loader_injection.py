@@ -33,7 +33,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.flatten import LoaderField, flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_document, load_path
 from earthsci_ast.simulation import simulate
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "loader_injection" / "loader_consumer.esm"
@@ -79,7 +79,7 @@ def _c_at(result, t: float) -> float:
 
 
 def test_flatten_records_a_field_per_data_fed_parameter() -> None:
-    flat = flatten(load(_FIXTURE))
+    flat = flatten(load_path(_FIXTURE))
 
     by_name = {lf.name: lf for lf in flat.loader_fields}
     assert set(by_name) == {"Plume.wind", "Plume.rough"}, (
@@ -123,7 +123,7 @@ def test_flatten_without_data_sources_has_empty_loader_fields() -> None:
             }
         },
     }
-    assert flatten(load(doc)).loader_fields == []
+    assert flatten(load_document(doc)).loader_fields == []
 
 
 def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
@@ -162,7 +162,7 @@ def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
         },
     }
     with pytest.raises(Exception) as excinfo:
-        load(doc)
+        load_document(doc)
     records = getattr(excinfo.value, "records", [])
     assert any(r["code"] == "data_source_undefined" for r in records), records
     finding = next(r for r in records if r["code"] == "data_source_undefined")
@@ -177,7 +177,7 @@ def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
 
 
 def test_discrete_and_const_cadence_injection() -> None:
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
         esm,
@@ -200,7 +200,7 @@ def test_discrete_and_const_cadence_injection() -> None:
 
 
 def test_const_source_read_once_discrete_per_segment() -> None:
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
         esm,
@@ -227,7 +227,7 @@ def test_injected_values_not_constant_defaults() -> None:
     # and the RHS saw the defaults, the forcing would be 0 and c would stay 0.
     # A constant non-zero provider drives c toward its injected steady state
     # F = wind[2] + rough[2], proving real array values reach the RHS.
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
 
     def steady_provider(field: LoaderField, t: float) -> np.ndarray:
         if field.var == "U":
@@ -252,7 +252,7 @@ def test_the_parameter_name_is_what_resolves_at_the_rhs() -> None:
     # substitute and no coupling edge to resolve. The run succeeding AND
     # tracking the injected value confirms the parameter's namespaced name binds
     # to the injected array at the RHS rather than to its declared default.
-    esm = load(_FIXTURE)
+    esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
     result = simulate(
         esm,

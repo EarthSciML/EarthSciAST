@@ -104,7 +104,7 @@ using JSON3
 
         try
             # Test loading
-            esm_file = load(temp_file)
+            esm_file = load_path(temp_file)
 
             @test esm_file.esm == "0.1.0"
             @test esm_file.metadata.name == "test_model"
@@ -158,11 +158,11 @@ using JSON3
 
         try
             # Save
-            save(original_file, temp_file)
+            write_path(original_file, temp_file)
             @test isfile(temp_file)
 
             # Load
-            loaded_file = load(temp_file)
+            loaded_file = load_path(temp_file)
 
             # Check basic properties
             @test loaded_file.esm == original_file.esm
@@ -217,7 +217,7 @@ using JSON3
 
         # Test loading from IOBuffer
         input_buffer = IOBuffer(test_json)
-        esm_file = load(input_buffer)
+        esm_file = load_string(input_buffer)
 
         @test esm_file.metadata.name == "stream_test"
         @test haskey(esm_file.models, "stream_model")
@@ -226,7 +226,7 @@ using JSON3
 
         # Test saving to IOBuffer
         output_buffer = IOBuffer()
-        save(esm_file, output_buffer)
+        write(output_buffer, to_json(esm_file))
 
         # Parse the output to verify
         output_json = String(take!(output_buffer))
@@ -239,16 +239,16 @@ using JSON3
 
     @testset "Error Handling" begin
         # Test invalid JSON
-        @test_throws ParseError load(IOBuffer("invalid json"))
+        @test_throws ParseError load_string(IOBuffer("invalid json"))
 
         # Test missing required fields
         invalid_esm = """{"esm": "0.1.0"}"""  # Missing metadata
-        @test_throws SchemaValidationError load(IOBuffer(invalid_esm))
+        @test_throws SchemaValidationError load_string(IOBuffer(invalid_esm))
 
         # The schema-validation diagnostic uses REAL newlines (a regression
         # once emitted literal backslash-n characters).
         err = try
-            load(IOBuffer(invalid_esm))
+            load_string(IOBuffer(invalid_esm))
             nothing
         catch e
             e
@@ -349,13 +349,13 @@ using JSON3
             Dict{String,Any}("esm" => "0.8.0"))
     end
 
-    # `load(::AbstractDict)` — a document held in memory is the SAME document a
+    # `load_path(::AbstractDict)` — a document held in memory is the SAME document a
     # `.esm` file holds, so it runs the identical pipeline (`_load_document`):
     # schema validation and `{ref}` resolution, neither of which `coerce_esm_file`
     # does. That distinction is load-bearing: `flatten` SILENTLY SKIPS an
     # unresolved `SubsystemRef` (`_collect_model!`), so a merely-coerced document
     # with a `{ref}` would flatten to a system missing that whole subsystem.
-    @testset "load(::AbstractDict) matches load(::String) on the same document" begin
+    @testset "load_path(::AbstractDict) matches load_path(::String) on the same document" begin
         leaf = Dict{String,Any}(
             "esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "leaf"),
             "models" => Dict{String,Any}("Inner" => Dict{String,Any}(
@@ -374,8 +374,8 @@ using JSON3
             ppath = joinpath(dir, "parent.esm")
             write(ppath, JSON3.write(parent))
 
-            from_path = EarthSciAST.load(ppath)
-            from_dict = EarthSciAST.load(parent; base_path = dir)
+            from_path = EarthSciAST.load_path(ppath)
+            from_dict = EarthSciAST.load_document(parent; base_path = dir)
 
             # The `{ref}` resolved in BOTH: the leaf's model came through.
             for f in (from_path, from_dict)
@@ -395,7 +395,7 @@ using JSON3
             "models" => Dict{String,Any}("M" => Dict{String,Any}(
                 "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "nope")),
                 "equations" => Any[])))
-        @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load(bad)
+        @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_document(bad)
     end
 
     @testset "v0.5.0 inline multi-series y (plots.y array form)" begin
@@ -435,7 +435,7 @@ using JSON3
         }
         """
         # Schema validation must accept array-form y (v0.5.0 widening).
-        esm = load(IOBuffer(esm_json))
+        esm = load_string(IOBuffer(esm_json))
         @test esm isa EarthSciAST.EsmFile
         @test esm.esm == "0.5.0"
     end
@@ -476,7 +476,7 @@ using JSON3
         }
         """
         # Schema validation must accept the object-form transform (0.8.0 widening).
-        esm = load(IOBuffer(esm_json))
+        esm = load_string(IOBuffer(esm_json))
         @test esm isa EarthSciAST.EsmFile
         entry = esm.coupling[1]
         @test entry isa CouplingVariableMap
@@ -486,7 +486,7 @@ using JSON3
 
         # Round-trip: the expression transform re-serializes losslessly.
         buf = IOBuffer()
-        save(esm, buf)
+        write(buf, to_json(esm))
         reparsed = JSON3.read(String(take!(buf)))
         rt = reparsed.coupling[1].transform
         @test rt.op == "+"
@@ -498,7 +498,7 @@ using JSON3
         bad = replace(esm_json,
             "\"transform\": { \"op\": \"+\"" =>
             "\"factor\": 2.0, \"transform\": { \"op\": \"+\"")
-        @test_throws Exception load(IOBuffer(bad))
+        @test_throws Exception load_string(IOBuffer(bad))
     end
 
     @testset "Integer ratio inside aggregate stays integer (§5.5.3.1)" begin
@@ -545,7 +545,7 @@ using JSON3
         # `load` narrows integral floats at the AST-literal boundary, so every
         # integer ratio — inside the aggregate AND the standalone `dx` — is an
         # IntExpr and re-serializes as a bare integer.
-        file = load(IOBuffer(doc))
+        file = load_string(IOBuffer(doc))
         s = JSON3.write(EarthSciAST.serialize_esm_file(file))
         @test occursin("[1,8]", s)                 # ratios preserved as integers
         @test !occursin("[1.0,8.0]", s)            # NO float promotion survives

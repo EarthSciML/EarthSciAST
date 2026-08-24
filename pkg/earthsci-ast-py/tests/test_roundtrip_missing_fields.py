@@ -18,7 +18,7 @@ from earthsci_ast.esm_types import (
     ContinuousEvent,
     AffectEquation,
 )
-from earthsci_ast.serialize import save
+from earthsci_ast.serialize import to_json
 
 
 def test_roundtrip_preserves_data_sources():
@@ -96,7 +96,7 @@ def test_roundtrip_preserves_data_sources():
     )
 
     # Serialize to JSON
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     data = json.loads(json_str)
 
     # Verify data_sources field is present
@@ -155,7 +155,7 @@ def test_roundtrip_preserves_operators():
     )
 
     # Serialize to JSON
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     data = json.loads(json_str)
 
     # Verify operators field is present
@@ -202,7 +202,7 @@ def test_roundtrip_preserves_couplings():
     )
 
     # Serialize to JSON
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     data = json.loads(json_str)
 
     # Verify coupling field is present
@@ -249,7 +249,7 @@ def test_roundtrip_preserves_events():
     )
 
     # Serialize to JSON
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     data = json.loads(json_str)
 
     # Verify events are present
@@ -332,7 +332,7 @@ def test_roundtrip_preserves_all_missing_fields():
     )
 
     # Serialize to JSON
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     data = json.loads(json_str)
 
     # Verify all fields are present
@@ -386,7 +386,7 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
     per-run discretization injected for an analysis) is authored per-run config
     and MUST survive load → _serialize_esm_file, exactly like a Test's does.
     Regression: the Python binding previously dropped it on parse → emit."""
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_string
     from earthsci_ast.serialize import _serialize_esm_file
 
     imports = [{"ref": "./upwind1.esm", "bindings": {"N": 100}}]
@@ -409,7 +409,7 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
         },
     }
 
-    f = load(json.dumps(doc))
+    f = load_string(json.dumps(doc))
 
     # The parsed Analysis carries the imports on its dataclass field.
     analysis = f.models["M"].analyses[0]
@@ -423,7 +423,7 @@ def test_roundtrip_preserves_analysis_expression_template_imports():
 def test_analysis_without_imports_omits_key():
     """An Analysis with no `expression_template_imports` must not emit the key
     (empty-list default stays backward-compatible / off the wire)."""
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_string
     from earthsci_ast.serialize import _serialize_esm_file
 
     decay = {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": {"op": "*", "args": [-1, "u"]}}
@@ -444,7 +444,7 @@ def test_analysis_without_imports_omits_key():
         },
     }
 
-    f = load(json.dumps(doc))
+    f = load_string(json.dumps(doc))
     assert f.models["M"].analyses[0].expression_template_imports == []
     ser = _serialize_esm_file(f)["models"]["M"]["analyses"][0]
     assert "expression_template_imports" not in ser

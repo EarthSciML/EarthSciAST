@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::{SimulateOptions, load, simulate};
+use earthsci_ast::{SimulateOptions, load_string, simulate};
 
 /// `k` is an array-valued `const` observed, which the whole-array overlay does
 /// not cover (`vec_coverage_frontier::frontier_array_valued_const_falls_back`),
@@ -195,7 +195,7 @@ const TAPED_MODEL: &str = r#"
     "#;
 
 fn run(json: &str) -> earthsci_ast::Solution {
-    let file = load(json).expect("fixture loads");
+    let file = load_string(json).expect("fixture loads");
     let opts = SimulateOptions::default();
     simulate(&file, (0.0, 0.1), &HashMap::new(), &HashMap::new(), &opts).expect("fixture simulates")
 }

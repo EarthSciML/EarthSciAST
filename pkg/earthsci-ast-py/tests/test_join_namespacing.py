@@ -26,7 +26,7 @@ import os
 import numpy as np
 
 from earthsci_ast.flatten import flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_document
 from earthsci_ast.value_invention import materialize_value_invention
 
 FIXTURE = os.path.normpath(
@@ -69,7 +69,7 @@ def l1_geometry(prefix: str = "") -> dict[str, np.ndarray]:
 
 
 def flatten_doc(doc: dict):
-    return flatten(load(doc))
+    return flatten(load_document(doc))
 
 
 def producer(flat):

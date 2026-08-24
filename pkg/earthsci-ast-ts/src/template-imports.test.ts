@@ -1,6 +1,6 @@
 /**
  * Tests for esm-spec §9.7 — template-library files,
- * `expression_template_imports`, and load-time `metaparameters`
+ * `expression_template_imports`, and loadString-time `metaparameters`
  * (docs/content/rfcs/template-library-imports.md; esm-libraries-spec §2.1c).
  *
  * Drives the shared conformance fixtures under
@@ -12,8 +12,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { load, validateSchema } from './parse.js'
-import { save } from './serialize.js'
+import { loadString, validateSchema } from './parse.js'
+import { toJson } from './serialize.js'
 import { resolveSubsystemRefs } from './ref-loading.js'
 import {
   MAX_TEMPLATE_EXPANSION_DEPTH,
@@ -93,7 +93,7 @@ function definingRhs(component: Record<string, any>, name: string): any {
   return eq.rhs
 }
 
-/** load() from a fixture path with the fixture's directory as basePath. */
+/** loadString() from a fixture path with the fixture's directory as basePath. */
 function loadPath(p: string, metaparameters?: Record<string, number>) {
   return loadFixtureFile(p, { metaparameters })
 }
@@ -233,7 +233,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // A model-less template-library document loads (esm-spec §9.7.1).
     //
     // This test used to ASSERT THE BUG: that `expression_templates` and
-    // `metaparameters` came back `undefined`, i.e. that load had deleted the
+    // `metaparameters` came back `undefined`, i.e. that loadString had deleted the
     // library's entire payload. esm-spec §9.6.4 rule 5 says the opposite —
     // Option A expands CALL SITES, it does not delete DECLARATIONS — because a
     // library stripped of its registry emits as `{esm, metadata, index_sets}`,
@@ -272,7 +272,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
       expect(definingRhs(sub, 'ramp').op).toBe('aggregate')
       expect(definingRhs(sub, 'ramp').ranges.i).toEqual([1, n / 2])
       // Typed round-trip matches the golden, fully structurally.
-      const emitted = JSON.parse(save(f))
+      const emitted = JSON.parse(toJson(f))
       expect(canonEqs(emitted)).toEqual(
         canonEqs(golden(conf('metaparameter_resolutions', goldenName))),
       )
@@ -292,12 +292,12 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
 
   it('round-trip emits the expanded, folded form (§9.7.6)', () => {
     const f = loadPath(conf('import_smoke', 'fixture.esm'))
-    const text = save(f)
+    const text = toJson(f)
     expect(text).not.toContain('expression_template_imports')
     expect(text).not.toContain('metaparameters')
     expect(text).not.toContain('expression_templates')
     expect(text).not.toContain('apply_expression_template')
-    const reloaded = load(text) as any
+    const reloaded = loadString(text) as any
     expect(reloaded.index_sets.lon.size).toBe(288)
     expect(reloaded.models.Advection.equations[0].rhs.args[1].op).toBe('makearray')
   })
@@ -331,7 +331,7 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     // The fixture set exercises the §9.6.6 §9.7 code table, less two codes no
     // fixture can reach: template_import_unresolved (exercised below — a
     // missing file cannot be committed) and template_import_version_too_old,
-    // which esm 1.0.0 makes unreachable THROUGH load(). That gate rejects a
+    // which esm 1.0.0 makes unreachable THROUGH loadString(). That gate rejects a
     // document declaring below 0.8.0, but a 1.x library rejects every 0.x
     // document on its major version at parse, before the resolver runs, and
     // every document it accepts declares >= 1.0.0 > 0.8.0. The gate helper
@@ -384,7 +384,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
   `
 
   const loadStr = (text: string, metaparameters?: Record<string, number>) =>
-    load(text, { basePath: tmpDir, metaparameters })
+    loadString(text, { basePath: tmpDir, metaparameters })
 
   // `errCode` is shared from module scope (defined once, above).
 
@@ -511,7 +511,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     ).toBe('template_import_unknown_name')
     // A non-integer binding is rejected at the resolver level
     // (metaparameter_type_error); note the schema also rejects it earlier
-    // in the full load() pipeline (TemplateImport.bindings is
+    // in the full loadString() pipeline (TemplateImport.bindings is
     // integer-typed).
     const raw = JSON.parse(
       modelJson(`
@@ -662,9 +662,9 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
     }
   }
 
-  it('body composition: acyclic DAG survives load, Expand inlines; depth bound is exact', () => {
+  it('body composition: acyclic DAG survives loadString, Expand inlines; depth bound is exact', () => {
     // A 3-deep local chain: under Option B (esm-spec §9.6.4) the target-free
-    // references survive load and `Expand` reproduces the inlined chain.
+    // references survive loadString and `Expand` reproduces the inlined chain.
     const doc = {
       esm: '1.0.0',
       metadata: { name: 'chain3' },
@@ -704,7 +704,7 @@ describe('template imports: unit-level behavior (esm-spec §9.7)', () => {
       },
     }
     const out = lowerExpressionTemplates(doc) as any
-    // Option B: the target-free reference survives load (leaf); Expand inlines.
+    // Option B: the target-free reference survives loadString (leaf); Expand inlines.
     expect(definingRhs(out.models.M, 'y')).toEqual({
       op: 'apply_expression_template',
       args: [],

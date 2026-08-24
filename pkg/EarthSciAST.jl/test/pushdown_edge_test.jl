@@ -268,7 +268,7 @@ end
         "applies_to" => PATHS)
     mock = MockSR(fullSR, gate, Any[])
 
-    f = EA.load(doc; base_path=pwd())
+    f = EA.load_document(doc; base_path=pwd())
 
     # ============================================================
     # ASSERTION 1 — the invented member set == hand-computed containing cells

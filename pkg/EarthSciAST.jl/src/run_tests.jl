@@ -557,7 +557,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
                          stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
     local esm_file
     try
-        esm_file = load(String(path))
+        esm_file = load_path(String(path))
     catch err
         push!(results, AssertionResult(
             path, :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,

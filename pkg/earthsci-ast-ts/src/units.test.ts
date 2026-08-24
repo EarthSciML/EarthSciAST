@@ -8,7 +8,7 @@ import {
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
-import { load } from './parse.js'
+import { loadString } from './parse.js'
 import { validate } from './validate.js'
 import { readFixture } from './test-helpers.js'
 import type { Expression, EsmFile } from './types.js'
@@ -194,7 +194,7 @@ describe('Unit parsing and dimensional analysis', () => {
       expect(unknownVarResult.warnings).toEqual(['Unknown variable: unknown'])
     })
 
-    // The literal rules, stated as tests because they are the load-bearing part
+    // The literal rules, stated as tests because they are the loadString-bearing part
     // of "a literal is indeterminate".
     describe('numeric literals', () => {
       it('is neutral in additive position — it adopts its sibling dimension', () => {
@@ -820,7 +820,7 @@ describe('Unit parsing and dimensional analysis', () => {
     for (const fname of fixtures) {
       it(`finds no dimensional inconsistency in ${fname}`, () => {
         const content = readFixture('valid', fname)
-        const file = load(content) as EsmFile
+        const file = loadString(content) as EsmFile
         expect(file.models).toBeDefined()
         expect(Object.keys(file.models ?? {}).length).toBeGreaterThan(0)
 

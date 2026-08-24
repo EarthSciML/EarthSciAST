@@ -10,8 +10,8 @@
  * tag the 0.x schema used and never supplied a matrix for.
  */
 import { describe, it, expect } from 'vitest'
-import { load } from './parse.js'
-import { save } from './serialize.js'
+import { loadString } from './parse.js'
+import { toJson } from './serialize.js'
 import { flatten } from './flatten.js'
 import { brownianParameters, parameterClass, systemKind } from './classification.js'
 import { readFixture } from './test-helpers.js'
@@ -20,7 +20,7 @@ import type { Model } from './types.js'
 describe('Brownian (SDE) support', () => {
   it('round-trips the Ornstein–Uhlenbeck fixture preserving the wiener parameter', () => {
     const fixture = readFixture('fixtures', 'sde', 'ornstein_uhlenbeck.esm')
-    const parsed = load(fixture)
+    const parsed = loadString(fixture)
     const model = parsed.models!.OU as Model
     const bw = model.variables.Bw
 
@@ -34,14 +34,14 @@ describe('Brownian (SDE) support', () => {
     // One wiener parameter is what makes the enclosing model an SDE.
     expect(systemKind(model)).toBe('sde')
 
-    const out = save(parsed)
-    const reparsed = load(out)
+    const out = toJson(parsed)
+    const reparsed = loadString(out)
     expect((reparsed.models!.OU as Model).variables.Bw).toEqual(bw)
   })
 
   it('does not mistake the other parameters for noise sources', () => {
     const fixture = readFixture('fixtures', 'sde', 'ornstein_uhlenbeck.esm')
-    const model = load(fixture).models!.OU as Model
+    const model = loadString(fixture).models!.OU as Model
 
     // `sigma` carries the noise AMPLITUDE and is an ordinary constant; only the
     // parameter with the `wiener` update is Brownian.
@@ -51,7 +51,7 @@ describe('Brownian (SDE) support', () => {
 
   it('flatten surfaces brownian parameters in a dedicated collection', () => {
     const fixture = readFixture('fixtures', 'sde', 'correlated_noise.esm')
-    const parsed = load(fixture)
+    const parsed = loadString(fixture)
     const flat = flatten(parsed)
     expect(flat.brownianVariables.sort()).toEqual(['TwoBody.B'])
   })
@@ -76,7 +76,7 @@ describe('Brownian (SDE) support', () => {
         },
       },
     })
-    expect(() => load(bad)).toThrow()
+    expect(() => loadString(bad)).toThrow()
   })
 
   it('schema rejects a wiener update with no distribution to resample', () => {
@@ -93,6 +93,6 @@ describe('Brownian (SDE) support', () => {
         },
       },
     })
-    expect(() => load(bad)).toThrow()
+    expect(() => loadString(bad)).toThrow()
   })
 })

@@ -15,8 +15,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import {
-  load,
-  save,
+  loadString,
+  toJson,
   validate,
   toUnicode,
   toLatex,
@@ -67,7 +67,7 @@ function findEsmFiles(dir: string): string[] {
 }
 
 /**
- * Helper to load JSON fixture files
+ * Helper to loadString JSON fixture files
  */
 function loadJsonFixture<T>(path: string): T {
   const content = readFileSync(path, 'utf-8')
@@ -104,7 +104,7 @@ describe('Conformance Test Suite', () => {
    * ASSERTED VALID, not merely round-tripped.
    *
    * This assertion did not exist. The valid half of the corpus was only ever fed
-   * through `load → save → load` and compared for fidelity, so a fixture could
+   * through `loadString → toJson → loadString` and compared for fidelity, so a fixture could
    * be riddled with undefined variables, dimensional nonsense, or unresolvable
    * references and still sail through — `validate()` was never called on it. The
    * suite therefore could not fail on the valid corpus, which is the very
@@ -117,7 +117,7 @@ describe('Conformance Test Suite', () => {
    * be fetched. A fixture is therefore brought to a validatable state exactly as
    * a real consumer would: LOAD (with `basePath`, which anchors template
    * imports, §9.7.2) → RESOLVE `{ref}` stubs → VALIDATE. That resolution step is
-   * genuinely load-bearing and not a way of dodging the assertion:
+   * genuinely loadString-bearing and not a way of dodging the assertion:
    * `tests/invalid/subsystem_ref_not_found.esm` still fails AT resolution, and
    * the invalid-corpus sweep below still runs `validate()` on raw text.
    */
@@ -158,7 +158,7 @@ describe('Conformance Test Suite', () => {
       // expression_template_imports refs (esm-spec §9.7.2).
       const originalContent = readFileSync(filePath, 'utf-8')
       const basePath = dirname(filePath)
-      const original = load(originalContent, { basePath })
+      const original = loadString(originalContent, { basePath })
 
       // NO BAIL-OUT HERE. A template-library file used to be waved through with
       // `expect(original).toBeDefined()` — an assertion that cannot fail, guarding
@@ -170,14 +170,14 @@ describe('Conformance Test Suite', () => {
       // exactly like every other fixture.
 
       // Save and reload
-      const serialized = save(original)
-      const reloaded = load(serialized, { basePath })
+      const serialized = toJson(original)
+      const reloaded = loadString(serialized, { basePath })
 
       // Second round-trip to ensure stability
-      const secondSerialized = save(reloaded)
-      const secondReloaded = load(secondSerialized, { basePath })
+      const secondSerialized = toJson(reloaded)
+      const secondReloaded = loadString(secondSerialized, { basePath })
 
-      // Verify load(save(load(file))) produces identical parsed result
+      // Verify loadString(toJson(loadString(file))) produces identical parsed result
       expect(secondReloaded).toEqual(original)
     })
   })
@@ -221,12 +221,12 @@ describe('Conformance Test Suite', () => {
       }
 
       const firstText = JSON.stringify(original)
-      const parsed = load(firstText)
-      const serialized = save(parsed)
-      const reparsed = load(serialized)
+      const parsed = loadString(firstText)
+      const serialized = toJson(parsed)
+      const reparsed = loadString(serialized)
 
-      // Idempotence: a second save→load cycle must be a fixed point.
-      const serializedAgain = save(reparsed)
+      // Idempotence: a second toJson→loadString cycle must be a fixed point.
+      const serializedAgain = toJson(reparsed)
       expect(JSON.parse(serializedAgain)).toEqual(JSON.parse(serialized))
 
       // Semantic anchor: both `index` nodes survive with their arg shapes.
@@ -554,7 +554,7 @@ describe('Conformance Test Suite', () => {
 
       // 1. Load MinimalChemAdvection
       const content = readFileSync(filePath, 'utf-8')
-      const model = load(content)
+      const model = loadString(content)
 
       // 2. Validate
       const validationResult = validate(content)
@@ -580,7 +580,7 @@ describe('Conformance Test Suite', () => {
         // Create substitution for the reaction rate expression
         const rateExpr = simpleOzone.reactions[0].rate
         if (typeof rateExpr === 'object') {
-          // load() (non-canonical) yields plain-number leaves, so the
+          // loadString() (non-canonical) yields plain-number leaves, so the
           // substituted tree stays within the schema Expression type.
           const substitutedRate = substitute(rateExpr, { T: 300 }) as Expression
 
@@ -605,7 +605,7 @@ describe('Conformance Test Suite', () => {
       }
 
       // 5. Re-validate after substitution
-      const serializedSubstituted = save(substitutedModel)
+      const serializedSubstituted = toJson(substitutedModel)
       const revalidationResult = validate(serializedSubstituted)
       expect(revalidationResult.is_valid).toBe(true)
 
@@ -626,11 +626,11 @@ describe('Conformance Test Suite', () => {
     it.each(versionFiles)('should round-trip version compatibility file %s', (filePath) => {
       try {
         const originalContent = readFileSync(filePath, 'utf-8')
-        const original = load(originalContent)
+        const original = loadString(originalContent)
 
         // Save and reload
-        const serialized = save(original)
-        const reloaded = load(serialized)
+        const serialized = toJson(original)
+        const reloaded = loadString(serialized)
 
         // Verify structure is preserved
         expect(reloaded.esm).toBe(original.esm)
@@ -647,7 +647,7 @@ describe('Conformance Test Suite', () => {
 
     // The SAME defect as the valid-corpus sweep, in a second place: this called
     // `validate()`, `console.warn`ed whatever came back, and then asserted only
-    // that `load()` does not throw — so an end-to-end system could fail every
+    // that `loadString()` does not throw — so an end-to-end system could fail every
     // structural check in the book and the test stayed green. Assert the result.
     it.each(endToEndFiles)('should validate complex system %s', (filePath) => {
       const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })

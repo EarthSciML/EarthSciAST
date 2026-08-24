@@ -22,7 +22,7 @@ func TestFractionalStoichiometryRoundTrip(t *testing.T) {
 	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
 	path := filepath.Join(repoRoot, "tests", "valid", "fractional_stoichiometry.esm")
 
-	parsed, err := Load(path)
+	parsed, err := LoadPath(path)
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
 

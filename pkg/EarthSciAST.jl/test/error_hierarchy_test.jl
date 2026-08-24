@@ -58,7 +58,7 @@ include("testutils.jl")
             path = tempname() * ".esm"
             write(path, "{not json")
             try
-                load(path)
+                load_path(path)
             finally
                 rm(path; force=true)
             end
@@ -87,7 +87,7 @@ include("testutils.jl")
     # A caller that also wants I/O failures still needs `catch e` on its own.
     @testset "known boundary: a missing file is an I/O error, not an ESM one" begin
         e = try
-            load("/nonexistent/definitely_not_here.esm")
+            load_path("/nonexistent/definitely_not_here.esm")
             nothing
         catch err
             err

@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
-  load,
+  loadString,
   migrate,
   canMigrate,
   MigrationError,
-  VERSION,
+  LIBRARY_VERSION,
   SCHEMA_VERSION,
   SchemaValidationError,
 } from './index.js'
@@ -52,7 +52,7 @@ describe('Version Compatibility', () => {
 
   describe('Current major', () => {
     it('loads the current schema version without warnings', () => {
-      const { result, warnings } = captureWarnings(() => load(atVersion(SCHEMA_VERSION)))
+      const { result, warnings } = captureWarnings(() => loadString(atVersion(SCHEMA_VERSION)))
 
       expect(result.esm).toBe(SCHEMA_VERSION)
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
@@ -60,7 +60,7 @@ describe('Version Compatibility', () => {
 
     it('loads the 1.0.0 baseline fixture as committed, without warnings', () => {
       const fixture = JSON.parse(readFixture('version_compatibility', 'version_1_0_0_baseline.esm'))
-      const { result, warnings } = captureWarnings(() => load(fixture))
+      const { result, warnings } = captureWarnings(() => loadString(fixture))
 
       expect(result.esm).toBe('1.0.0')
       expect(result.metadata.name).toBe('Version_1_0_0_Baseline')
@@ -71,7 +71,7 @@ describe('Version Compatibility', () => {
       const fixture = JSON.parse(
         readFixture('version_compatibility', 'version_1_0_5_patch_upgrade.esm'),
       )
-      const { result, warnings } = captureWarnings(() => load(fixture))
+      const { result, warnings } = captureWarnings(() => loadString(fixture))
 
       expect(result.esm).toBe('1.0.5')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(false)
@@ -80,7 +80,7 @@ describe('Version Compatibility', () => {
 
   describe('Forward Compatibility', () => {
     it('warns when loading a newer minor version', () => {
-      const { result, warnings } = captureWarnings(() => load(atVersion('1.10.0')))
+      const { result, warnings } = captureWarnings(() => loadString(atVersion('1.10.0')))
 
       expect(result.esm).toBe('1.10.0')
       expect(
@@ -101,7 +101,7 @@ describe('Version Compatibility', () => {
       const { result } = captureWarnings(() =>
         (() => {
           try {
-            load(withUnknownField)
+            loadString(withUnknownField)
             return null
           } catch (e) {
             return e
@@ -117,13 +117,13 @@ describe('Version Compatibility', () => {
     // loads", it is a file written to a format this parser no longer speaks.
     it('rejects the 0.x line outright', () => {
       for (const version of ['0.0.1', '0.1.0', '0.8.0', '0.9.0', '0.10.0']) {
-        expect(() => load(atVersion(version))).toThrow('Unsupported major version 0')
+        expect(() => loadString(atVersion(version))).toThrow('Unsupported major version 0')
       }
     })
 
     it('rejects a newer major version', () => {
-      expect(() => load(atVersion('2.5.1'))).toThrow('Unsupported major version 2')
-      expect(() => load(atVersion('12.34.56'))).toThrow('Unsupported major version 12')
+      expect(() => loadString(atVersion('2.5.1'))).toThrow('Unsupported major version 2')
+      expect(() => loadString(atVersion('12.34.56'))).toThrow('Unsupported major version 12')
     })
   })
 
@@ -131,13 +131,13 @@ describe('Version Compatibility', () => {
     it('should reject invalid version string format', () => {
       const fixture = JSON.parse(readFixture('version_compatibility', 'invalid_version_string.esm'))
 
-      expect(() => load(fixture)).toThrow(SchemaValidationError)
+      expect(() => loadString(fixture)).toThrow(SchemaValidationError)
     })
 
     it('should reject missing version field', () => {
       const fixture = JSON.parse(readFixture('version_compatibility', 'missing_version_field.esm'))
 
-      expect(() => load(fixture)).toThrow(SchemaValidationError)
+      expect(() => loadString(fixture)).toThrow(SchemaValidationError)
     })
   })
 
@@ -185,7 +185,13 @@ describe('Version Compatibility', () => {
     // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
     it('exposes the schema version, derived from the embedded schema $id', () => {
       expect(SCHEMA_VERSION).toBe('1.0.0')
-      expect(VERSION).toBe(SCHEMA_VERSION)
+    })
+
+    it('exposes the package version separately, under its own name', () => {
+      // `VERSION` used to alias SCHEMA_VERSION here and CARGO_PKG_VERSION in
+      // Rust -- one name, two meanings. It is gone; the two numbers now have
+      // two names in every binding.
+      expect(LIBRARY_VERSION).toMatch(/^\d+\.\d+\.\d+/)
     })
   })
 })

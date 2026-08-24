@@ -20,7 +20,7 @@ func loadNonlinearFixture(t *testing.T, rel string) *ESMFile {
 	require.NoError(t, err)
 	repoRoot := filepath.Join(wd, "..", "..", "..", "..")
 	path := filepath.Join(repoRoot, "tests", "valid", rel)
-	parsed, err := Load(path)
+	parsed, err := LoadPath(path)
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
 	return parsed

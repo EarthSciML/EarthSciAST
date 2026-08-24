@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { load, save } from './index.js'
+import { loadString, toJson } from './index.js'
 import { loadFixture as loadEsmFixture } from './test-helpers.js'
 import type { EsmFile, Model, ModelVariable } from './types.js'
 
@@ -9,8 +9,8 @@ function loadFixture(name: string): EsmFile {
 
 function roundtrip(name: string): { first: EsmFile; second: EsmFile } {
   const first = loadFixture(name)
-  const serialized = save(first)
-  const second = load(serialized)
+  const serialized = toJson(first)
+  const second = loadString(serialized)
   return { first, second }
 }
 

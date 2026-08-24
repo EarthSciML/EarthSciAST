@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.flatten import LoaderField, flatten
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "subsystem_loader"
@@ -54,7 +54,7 @@ def _provider(golden: dict):
 
 def test_flatten_records_a_field_per_source_fed_parameter() -> None:
     golden = _golden()
-    flat = flatten(load(str(_FIXTURE)))
+    flat = flatten(load_path(str(_FIXTURE)))
     by_name = {lf.name: lf for lf in flat.loader_fields}
     # The golden names the fields by the PARAMETERS that read the source.
     assert set(by_name) == set(golden["loaders"])
@@ -77,7 +77,7 @@ def test_flatten_records_a_field_per_source_fed_parameter() -> None:
 
 def test_subsystem_loader_trajectory_matches_golden() -> None:
     golden = _golden()
-    esm = load(str(_FIXTURE))
+    esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
     result = simulate(
         esm, tspan=(float(t0), float(t1)), method="LSODA", loader_provider=_provider(golden)

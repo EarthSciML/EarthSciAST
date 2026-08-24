@@ -85,7 +85,7 @@ include("template_imports.jl")
 include("parse.jl")
 include("serialize.jl")
 # Version-marker migration (esm-libraries-spec §8.3). Needs only `EsmFile` and
-# `ESM_FORMAT_VERSION` from types.jl; placed beside the wire I/O it belongs
+# `SCHEMA_VERSION` from types.jl; placed beside the wire I/O it belongs
 # with. The TS twin is pkg/earthsci-ast-ts/src/migration.ts.
 include("migration.jl")
 # Document load pipeline + subsystem-ref linker (RFC-3986 URL machinery,
@@ -196,11 +196,21 @@ export
     # System types
     Domain, Reference, Metadata, EsmFile,
     FunctionTable, FunctionTableAxis,
-    # JSON functionality
-    load, save, ParseError, SchemaValidationError, SchemaError, validate_schema,
-    expression_from_json, ESM_FORMAT_VERSION,
+    # JSON functionality. `load` took a `String` that meant a FILE PATH here
+    # and in Go but JSON TEXT in TypeScript and Rust — one name, one argument
+    # type, opposite meanings — and `save` WROTE here while returning the
+    # payload and touching nothing in TypeScript and Rust. Both are split into
+    # entry points that say which they are; no function both writes and returns
+    # the payload. `to_json` is listed with the graph exports below, which it
+    # shares by dispatch. `SCHEMA_VERSION` is the old `ESM_FORMAT_VERSION`
+    # under the name the other four bindings already used; `LIBRARY_VERSION` is
+    # this package's own version, which Julia did not expose at all.
+    load_path, load_string, load_document,
+    to_json_compact, write_path,
+    ParseError, SchemaValidationError, SchemaError, validate_schema,
+    expression_from_json, SCHEMA_VERSION, LIBRARY_VERSION,
     # Version-marker migration (esm-libraries-spec §8.3). `migrate` is a pure
-    # `esm`-field bump along the ADDITIVE line `1.0.0 … ESM_FORMAT_VERSION`;
+    # `esm`-field bump along the ADDITIVE line `1.0.0 … SCHEMA_VERSION`;
     # nothing crosses the 1.0.0 clean break, so every 0.x source has no
     # supported target. `supported_migration_targets` drops the `get` prefix
     # its TypeScript twin carries.
@@ -227,7 +237,10 @@ export
     # Graph analysis (Section 4.8)
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
-    to_dot, to_mermaid, to_json,
+    to_dot, to_mermaid,
+    # `to_json` carries BOTH the graph method (graph.jl) and the document
+    # serializer (serialize.jl); they dispatch on their argument type.
+    to_json,
     # Chemical subscript rendering
     render_chemical_formula, format_node_label,
     # Unit validation

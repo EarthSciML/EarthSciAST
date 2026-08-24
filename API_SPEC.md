@@ -99,7 +99,7 @@ new canonical symbol:
 
 It does not settle argument lists, argument order, keyword-vs-positional,
 mutation, or error channel. Those are §4 and §5. A binding can satisfy §2
-perfectly and still be wildly incompatible — `load` is, today.
+perfectly and still be wildly incompatible — `load` was, until §5.1 split it.
 
 ---
 
@@ -224,48 +224,124 @@ the canonical contract is the target, not a description of current behaviour.
 
 ### 5.1 Document I/O
 
-#### `load_path` / `load_text` — read a document
+#### `load_path` / `load_string` / `load_document` — read a document
 
-**Canonical.** `load_path(path, *, metaparameters, base_path) -> EsmFile` reads
-from the filesystem. `load_text(json, *, metaparameters, base_path) -> EsmFile`
-parses in-memory JSON text. Raises `ParseError` on malformed input,
-`SchemaValidationError` on a schema violation, `SubsystemRefError` on an
-unresolvable `{ref}`.
+**Canonical, and landed.** Three entry points, one per input shape, each
+saying which it is:
 
-**Today — `load`, and it means two different things:**
+| Canonical | Takes | Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|---|---|
+| `load_path` | a filesystem path | `load_path` | `loadPath` | `load_path` | `load_path` | `LoadPath` |
+| `load_string` | JSON text | `load_string` | `loadString` | `load_string` | `load_string` | `LoadString` |
+| `load_document` | an already-parsed native document | `load_document` | `loadDocument` | `load_document` | `load_document` | `LoadDocument` |
 
-| Binding | Signature | A `String` argument is |
+All three raise `ParseError` on malformed input, `SchemaValidationError` on a
+schema violation, and `SubsystemRefError` on an unresolvable `{ref}`, and all
+three run the SAME pipeline — top-level `{ref}` inlining, version gates, schema
+validation, §9.7 template machinery, typed coercion, and nested subsystem-ref
+resolution. `load_path` anchors relative refs at the file's own directory; the
+other two take `base_path`.
+
+Options ride on the entry points they apply to: `metaparameters` and
+`base_path` on all three; TypeScript's `canonical` (tagged numeric literals,
+decided during JSON DECODING) on `loadPath` and `loadString` only — a
+`loadDocument` caller has already decoded and should run `losslessJsonParse`
+itself.
+
+Per-binding decorations, sanctioned under §2.2:
+
+- **Rust** keeps its `*_with_options` twins — `load_string_with_options`,
+  `load_document_with_options`, `load_path_with_options` — because it has no
+  default arguments.
+- **Julia** gives `load_string` an `::IO` method alongside `::AbstractString`;
+  it reads the stream to a string and parses that. This is a method on the
+  canonical entry point, not a fourth one — `JSON3.read` and `read` accept both
+  shapes too.
+
+**What it replaced — `load`, which meant two different things:**
+
+| Binding | Old signature | A `String` argument was |
 |---|---|---|
-| Julia | `load(path::String; metaparameters, base_path)`, plus `::IO` and `::AbstractDict` methods | **a path** |
-| Go | `Load(path string, opts ...LoadOption)`; `LoadString(json string, ...)` | **a path** |
+| Julia | `load(path::String; …)`, plus `::IO` and `::AbstractDict` methods | **a path** |
+| Go | `Load(path string, opts ...LoadOption)`; `LoadString(json string, …)` | **a path** |
 | TypeScript | `load(input: string \| object, options?: LoadOptions)` | **JSON text** |
-| Rust | `load(json_str: &str)`; `load_path(path)`, `load_with_options`, `load_path_with_options` | **JSON text** |
-| Python | `load(path_or_string: str \| Path \| dict, *, metaparameters, base_path)` | **either — it sniffs** |
+| Rust | `load(json_str: &str)`; `load_path(path)`, `load_with_options` | **JSON text** |
+| Python | `load(path_or_string: str \| Path \| dict, *, …)` | **either — it sniffed** |
 
-> **⚠ The most dangerous divergence in the surface.** One name, one argument
-> type, opposite meanings, and no type error anywhere to catch it. A user who
-> ports `load(s)` from Julia to TypeScript gets a parse error on a path string,
-> or — worse, if the path happens to be valid JSON — silence.
+> **⚠ This was the most dangerous divergence in the surface.** One name, one
+> argument type, opposite meanings, and no type error anywhere to catch it. A
+> user who ported `load(s)` from Julia to TypeScript got a parse error on a
+> path string — or, if the path happened to be valid JSON, silence. Python's
+> sniff was worse still: `os.path.exists(s)` decided, so the same program could
+> change meaning when a file appeared or vanished.
+>
+> `load` is **deleted**, not deprecated, in all five. A deprecation shim would
+> have to keep the sniff, which is the defect.
 
-#### `save` / `save_path` — write a document
+#### `to_json` / `write_path` — serialize and write a document
 
-**Canonical.** `save(file) -> str` is pure serialization and never touches disk.
-`save_path(file, path) -> None` writes. `save_compact(file) -> str` is the
-unindented form.
+**Canonical, and landed.** `to_json(file, opts) -> string` is PURE and never
+touches disk. `write_path(file, path)` writes and returns nothing (or the
+binding's idiomatic empty/error result). **No function in this API both writes
+and returns the payload.**
 
-**Today:**
+| Canonical | Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|---|
+| `to_json` | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
+| `to_json_compact` | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
+| `write_path` | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
 
-| Binding | Signature | Writes to disk? |
+`to_json_compact` exists in all five rather than being an option, because Rust
+and Go have no default arguments and so cannot express `to_json(file,
+indent=0)`. Where a binding *does* have defaults it also takes the option —
+Julia `to_json(file; indent=2)`, Python `to_json(file, *, indent=2)`,
+TypeScript `toJson(file, {indent, canonical})` — and `to_json_compact` is a
+one-line wrapper over it. Go additionally keeps `WritePathCompact` (extension
+tier), the rename of its `SaveCompactToFile`.
+
+Julia's `to_json` shares its name with the graph serializer (`to_json(::Graph)`,
+graph.jl) and dispatches on argument type. Python's graph serializer is
+re-exported as `to_json_graph`, matching the `toJsonGraph` / `to_json_graph`
+that TypeScript and Rust already used.
+
+**What it replaced:**
+
+| Binding | Old signature | Wrote to disk? |
 |---|---|---|
 | TypeScript | `save(file: EsmFile, options?: SaveOptions): string` | no |
 | Rust | `save(&EsmFile) -> Result<String, EsmError>`; `save_compact` | no |
 | Julia | `save(file::EsmFile, path::String)`; `save(file::EsmFile, io::IO)` | **yes** |
 | Python | `save(esm_file, path=None) -> str` | **optionally** |
-| Go | `Serialize(file) (string, error)`; `SaveToFile(file, path) error`; `SerializeCompact`; `SaveCompactToFile` | split by name |
+| Go | `Serialize`; `SerializeCompact`; `SaveToFile`; `SaveCompactToFile` | split by name |
 
-> **⚠ `save` is a side-effecting write in two bindings and a pure function in
-> two others.** Go is the only binding whose *names* make the distinction; it is
-> also the only binding whose names do not match anyone else's.
+> **⚠ `save` was a side-effecting write in two bindings and a pure function in
+> two others.** Go was the only binding whose *names* made the distinction —
+> and the only binding whose names matched nobody else's.
+
+#### `SCHEMA_VERSION` / `LIBRARY_VERSION` — the two version constants
+
+**Canonical, and landed.** Two public **string** constants in every binding:
+
+| Canonical | Meaning | Julia | TypeScript | Python | Rust | Go |
+|---|---|---|---|---|---|---|
+| `schema_version` | the `.esm` FORMAT version | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
+| `library_version` | the package's OWN version | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LibraryVersion` |
+
+Each is derived from that binding's existing source of truth, never a second
+hand-kept copy: `SCHEMA_VERSION` comes from the bundled schema's `$id` in
+TypeScript, Python and Go, and is a literal pinned to that `$id` by a test in
+Julia and Rust. `LIBRARY_VERSION` comes from `CARGO_PKG_VERSION` (Rust),
+`pkgversion` (Julia), `importlib.metadata` (Python), and package.json pinned by
+a test (TypeScript). Go has no in-tree version manifest — a module's version is
+its git tag — so `LibraryVersion` is a maintained constant with nothing to
+derive from or pin against; that is documented at the constant.
+
+**What it replaced:** `VERSION` meant the SCHEMA version in TypeScript and the
+PACKAGE version in Rust — one name, two meanings. Julia exported only
+`ESM_FORMAT_VERSION` (the schema version, under a name nobody else used).
+Python kept the format version PRIVATE as `parse._CURRENT_VERSION`, and as a
+`(major, minor, patch)` TUPLE rather than a string. Go exposed neither
+publicly. `VERSION` is **deleted** in TypeScript and Rust.
 
 ### 5.2 Validation
 
@@ -512,7 +588,10 @@ reading that as a gap.
 | `flattened_system` | type | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` |
 | `free_variables` | function | `free_variables` | `freeVariables` | `free_variables` | `free_variables` | `FreeVariables` |
 | `is_ode_state` | function | `is_ode_state` | `isOdeState` | `is_ode_state` | `is_ode_state` | `IsODEState` |
-| `load` | function | `load` | `load` | `load` | `load` | `Load` |
+| `library_version` | constant | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LibraryVersion` |
+| `load_document` | function | `load_document` | `loadDocument` | `load_document` | `load_document` | `LoadDocument` |
+| `load_path` | function | `load_path` | `loadPath` | `load_path` | `load_path` | `LoadPath` |
+| `load_string` | function | `load_string` | `loadString` | `load_string` | `load_string` | `LoadString` |
 | `migrate` | function | `migrate` | `migrate` | `migrate` | `migrate` | `Migrate` |
 | `migration_error` | error | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
@@ -522,15 +601,19 @@ reading that as a gap.
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
 | `resolve_subsystem_refs` | function | `resolve_subsystem_refs!` | `resolveSubsystemRefs` | `resolve_subsystem_refs` | `resolve_subsystem_refs` | `ResolveSubsystemRefs` |
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
+| `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
 | `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToAscii` |
+| `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
+| `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
+| `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
 
 #### Exported by four of the five
 
@@ -585,7 +668,6 @@ reading that as a gap.
 | `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | `RemoveVariable` |
 | `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
-| `save` | function | `save` | `save` | `save` | `save` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
@@ -630,7 +712,6 @@ reading that as a gap.
 | `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
 | `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
-| `schema_version` | constant | – | `SCHEMA_VERSION` | – | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simulate` | function | `simulate` | – | `simulate` | `simulate` | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
@@ -730,7 +811,7 @@ reading that as a gap.
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_json` | function | `to_json` | – | `to_json` | – | – |
+| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
@@ -751,7 +832,6 @@ reading that as a gap.
 | `var_plan` | type | `VarPlan` | – | – | `VarPlan` | – |
 | `variable_in_use_error` | error | – | `VariableInUseError` | – | – | `VariableInUseError` |
 | `variable_kind` | type | – | `VariableKind` | – | `VariableKind` | – |
-| `version` | constant | – | `VERSION` | – | `VERSION` | – |
 
 #### Editor package
 
@@ -806,8 +886,9 @@ deprecated alias for one minor, then removed at the next major (§10).
 
 | # | Canonical | Problem | Resolution | Affects |
 |---|---|---|---|---|
-| 1 | `load` | Julia and Go take a **file path**; TypeScript and Rust take **JSON text**; Python sniffs. Same name, same argument type, opposite meanings. | Split into `load_path` and `load_text`. Keep `load` only where a binding can dispatch unambiguously (Julia on `::String` vs `::IO`, Python on type). | all five |
-| 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguishes them by name, using nobody else's names. | `save(file) -> str` pure everywhere; `save_path(file, path)` writes. Go's `Serialize`/`SaveToFile` become `Save`/`SavePath`. | all five |
+| 1 | `load` | Julia and Go took a **file path**; TypeScript and Rust took **JSON text**; Python sniffed. Same name, same argument type, opposite meanings. | **DONE.** Split into `load_path` / `load_string` / `load_document`; `load` deleted (a deprecation shim would have to keep the sniff). See §5.1. | all five |
+| 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguished them by name, using nobody else's names. | **DONE.** `to_json(file, opts) -> string` pure everywhere; `write_path(file, path)` writes and returns nothing; `to_json_compact` in all five. See §5.1. | all five |
+| 2b | `VERSION` | Meant the SCHEMA version in TypeScript and the PACKAGE version in Rust. Julia exported only `ESM_FORMAT_VERSION`; Python kept the format version private as a tuple; Go exposed neither. | **DONE.** `SCHEMA_VERSION` and `LIBRARY_VERSION`, both public strings, in all five; `VERSION` deleted. See §5.1. | all five |
 | 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | SciML spelling everywhere (§4). Python gains `reltol`/`abstol`/`alg`; Rust renames `solver`→`alg`, `output_times`→`saveat`; Rust's defaults align to `1e-10`/`1e-14`. | Python, Rust |
 | 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | TypeScript adds `closedFunctionNames()`; the constant becomes a deprecated alias. | TypeScript |
 | 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | Rename to `deriveOdes`. | TypeScript |

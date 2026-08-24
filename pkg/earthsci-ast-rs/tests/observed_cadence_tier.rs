@@ -13,7 +13,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::load;
+use earthsci_ast::load_string;
 use earthsci_ast::simulate_array::ArrayCompiled;
 
 /// A model with two algebraic (eliminated) array observeds, plus the state
@@ -220,7 +220,7 @@ fn has(v: &[String], name: &str) -> bool {
 
 #[test]
 fn forcing_derived_state_free_observed_is_discrete_not_continuous() {
-    let file = load(MODEL).expect("load model");
+    let file = load_string(MODEL).expect("load model");
     let compiled = ArrayCompiled::from_file(&file).expect("compile model");
 
     // `f` is the discrete (refreshed) forcing field.

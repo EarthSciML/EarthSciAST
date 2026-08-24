@@ -45,7 +45,7 @@ func TestLoad(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	// Test loading
-	esmFile, err := Load(tmpFile.Name())
+	esmFile, err := LoadPath(tmpFile.Name())
 	assert.NoError(t, err)
 	assert.NotNil(t, esmFile)
 	assert.Equal(t, "0.1.0", esmFile.ESM)
@@ -123,7 +123,7 @@ func TestLoadStringMissingRequiredFields(t *testing.T) {
 }
 
 func TestLoadNonExistentFile(t *testing.T) {
-	_, err := Load("non_existent_file.esm")
+	_, err := LoadPath("non_existent_file.esm")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to read file")
 }

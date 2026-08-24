@@ -22,7 +22,7 @@ import pytest
 import jsonschema
 from jsonschema import ValidationError
 
-from earthsci_ast import load
+from earthsci_ast import load_document, load_string
 from earthsci_ast.parse import _get_schema
 
 
@@ -932,7 +932,7 @@ class TestVersionConstraintValidation:
         # Incompatible major version - rejected by library. The current major is
         # 1, and the 1.0.0 break has NO deprecation path: a 0.x document is
         # rejected exactly as a 2.x one is.
-        from earthsci_ast.parse import UnsupportedVersionError, load
+        from earthsci_ast.parse import UnsupportedVersionError, load_document, load_string
 
         for version in ("0.9.0", "2.0.0"):
             invalid_data = {
@@ -941,7 +941,7 @@ class TestVersionConstraintValidation:
                 "models": {"test": {"variables": {}, "equations": []}},
             }
             with pytest.raises(UnsupportedVersionError):
-                load(invalid_data)
+                load_document(invalid_data)
 
 
 class TestEdgeCaseValidation:
@@ -1094,11 +1094,11 @@ class TestIntegrationValidationScenarios:
 
         # Invalid JSON structure
         with pytest.raises(SchemaValidationError):
-            load('{"esm": "invalid"}')
+            load_string('{"esm": "invalid"}')
 
         # Valid JSON but invalid schema
         with pytest.raises(SchemaValidationError):
-            load('{"wrong": "structure"}')
+            load_string('{"wrong": "structure"}')
 
         # Test specific schema violations through the load function
         invalid_esm_json = json.dumps(
@@ -1109,7 +1109,7 @@ class TestIntegrationValidationScenarios:
             }
         )
         with pytest.raises(SchemaValidationError):
-            load(invalid_esm_json)
+            load_string(invalid_esm_json)
 
     def test_valid_minimal_examples_for_regression(self):
         """Test minimal valid examples to ensure they still work."""

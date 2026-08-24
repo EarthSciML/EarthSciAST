@@ -96,7 +96,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
             path = joinpath(dir, "authored.esm")
             write(path, JSON3.write(esm))
             rp = ESM_S.simulate(path, (0.0, 1.0); alg = Tsit5())
-            rf = ESM_S.simulate(ESM_S.load(path), (0.0, 1.0); alg = Tsit5())
+            rf = ESM_S.simulate(ESM_S.load_path(path), (0.0, 1.0); alg = Tsit5())
             @test rp["Chem.A"][end] == r["Chem.A"][end]
             @test rf["Chem.A"][end] == r["Chem.A"][end]
         end
@@ -158,7 +158,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         esm = additive_couple_esm()
         @test isempty(ESM_S.validate_schema(esm))
 
-        sys = ESM_S.flatten(ESM_S.load(IOBuffer(JSON3.write(esm))))
+        sys = ESM_S.flatten(ESM_S.load_string(IOBuffer(JSON3.write(esm))))
         @test Set(keys(sys.state_variables)) == Set(["Chem.A", "Chem.B"])
 
         r = ESM_S.simulate(sys, (0.0, 1.0); alg = Tsit5())
@@ -188,10 +188,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
                        "transport_3axis_7cubed_fullrank.esm")
         # The env hatch acts at LOAD, so it wraps the load call.
         fatload = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            ESM_S.load(fix)
+            ESM_S.load_path(fix)
         end
         rf = ESM_S.simulate(fatload, (0.0, 0.5); alg = Tsit5(), saveat = [0.0, 0.5])
-        rt = ESM_S.simulate(ESM_S.load(fix), (0.0, 0.5); alg = Tsit5(),
+        rt = ESM_S.simulate(ESM_S.load_path(fix), (0.0, 0.5); alg = Tsit5(),
                             saveat = [0.0, 0.5])
         @test rf.success && rt.success
         @test length(rf.u[end]) == 343

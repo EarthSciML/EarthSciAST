@@ -29,7 +29,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # `serialize_esm_file` is reference-preserving. The `expanded.esm` golden
         # is the Option-A image, so this pins it via `ESS_TEMPLATE_REF_DISABLE=1`.
         f = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load(conf("inject_subsystem_ref", "fixture.esm"))
+            EarthSciAST.load_path(conf("inject_subsystem_ref", "fixture.esm"))
         end
         # The mounted, agnostic leaf's D(c, wrt: lon) is lowered by the injected
         # rule at the mount; the subsystem resolves to a Model (not a ref).
@@ -45,13 +45,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
               _golden(conf("inject_subsystem_ref", "expanded.esm"))
 
         # The leaf loads standalone with its D intact (agnostic; unlowered).
-        leaf = EarthSciAST.load(conf("inject_subsystem_ref", "leaf.esm"))
+        leaf = EarthSciAST.load_path(conf("inject_subsystem_ref", "leaf.esm"))
         @test leaf.models["Advection"].equations[1].rhs.args[2].op == "D"
 
         # Negative twin: mounting WITHOUT injection loads cleanly (the D
         # survives — the op namespace is open); the unlowered_operator gate is
         # an evaluation-time concern, not a load error.
-        ni = EarthSciAST.load(conf("inject_subsystem_ref", "no_inject.esm"))
+        ni = EarthSciAST.load_path(conf("inject_subsystem_ref", "no_inject.esm"))
         @test ni.models["Assembly"].subsystems["Runoff"] isa EarthSciAST.Model
         @test ni.models["Assembly"].subsystems["Runoff"].equations[1].rhs.args[2].op == "D"
     end
@@ -59,7 +59,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
     @testset "form B — coupling-entry injection (§10.8 / §9.7.10)" begin
         # Option B: pin the Option-A `expanded.esm` golden via the disable hatch.
         f = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load(conf("inject_coupling_entry", "fixture.esm"))
+            EarthSciAST.load_path(conf("inject_coupling_entry", "fixture.esm"))
         end
         # Advection is discretized by name; its lon-derivative is lowered.
         @test f.models["Advection"].equations[1].rhs.args[2].op == "makearray"
@@ -72,7 +72,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test _normj(ser) == _golden(conf("inject_coupling_entry", "expanded.esm"))
 
         # Diagnostics.
-        @test _err_code(() -> EarthSciAST.load(
+        @test _err_code(() -> EarthSciAST.load_path(
             conf("inject_coupling_entry", "neg_target_unknown.esm"))) ==
               "template_inject_target_unknown"
         # esm 1.0.0 retires `template_inject_target_is_loader`: a data source is
@@ -80,14 +80,14 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # and a key naming one is reported as `template_inject_target_unknown`
         # or `..._not_component` like any other non-component key (the schema's
         # `expression_template_imports` description states this).
-        @test _err_code(() -> EarthSciAST.load(
+        @test _err_code(() -> EarthSciAST.load_path(
             conf("inject_coupling_entry", "neg_target_is_loader.esm"))) in
               ("template_inject_target_not_component",
                "template_inject_target_unknown")
     end
 
     @testset "form C — test/analysis injection (§6.6.6 / §9.7.10)" begin
-        f = EarthSciAST.load(conf("inject_test_block", "fixture.esm"))
+        f = EarthSciAST.load_path(conf("inject_test_block", "fixture.esm"))
         adv = f.models["Advection"]
         # The enclosing component round-trips with its D INTACT (form C does not
         # lower it at load) and each test keeps its import field (survives emit).

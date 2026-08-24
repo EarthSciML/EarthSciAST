@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { load } from './parse.js'
+import { loadString } from './parse.js'
 import {
   odeStates,
   observedUnknowns,
@@ -60,7 +60,7 @@ describe('classification conformance (esm-spec §6.3.1)', () => {
 
   for (const entry of manifest.fixtures) {
     describe(entry.id, () => {
-      const doc = load(readFileSync(join(classificationDir, entry.fixture), 'utf-8')) as {
+      const doc = loadString(readFileSync(join(classificationDir, entry.fixture), 'utf-8')) as {
         models: { [k: string]: unknown }
       }
       const golden: { models: { [k: string]: GoldenEntry } } = JSON.parse(

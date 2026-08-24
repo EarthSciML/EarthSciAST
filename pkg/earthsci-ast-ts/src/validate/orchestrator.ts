@@ -9,7 +9,7 @@
 
 import {
   validateSchema,
-  load,
+  loadDocument,
   ParseError,
   SchemaValidationError,
   ROOT_PATH,
@@ -303,7 +303,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
 }
 
 /**
- * Structured error code for an exception thrown by load(). Explicit mapping
+ * Structured error code for an exception thrown by a load* entry point. Explicit mapping
  * (rather than deriving a code from the constructor name) so the codes are
  * stable strings that renames cannot silently change.
  */
@@ -383,10 +383,10 @@ export function validate(data: string | object, options: ValidateOptions = {}): 
     let parsedData: object
 
     // Parse JSON if string, routing through the same `losslessJsonParse`
-    // machinery `load()` uses rather than a divergent bare `JSON.parse`. The
+    // machinery `loadString()` uses rather than a divergent bare `JSON.parse`. The
     // tagged int/float leaves it produces are immediately stripped back to
     // plain JS numbers (`stripNumericLiterals`) so this non-canonical surface
-    // (schema validation + `load(object)` below both expect plain numbers) is
+    // (schema validation + `loadDocument(object)` below both expect plain numbers) is
     // unchanged from the previous `JSON.parse` result. A parse failure is
     // mapped to the historical `json_parse_error` envelope below — same `code`,
     // `path`, `details` shape, and `Invalid JSON: ` prefix — so the emitted
@@ -424,7 +424,7 @@ export function validate(data: string | object, options: ValidateOptions = {}): 
       try {
         // Schema validation already ran above; collect unit warnings
         // from the load pipeline instead of re-running validateUnits.
-        const esmFile = load(parsedData, {
+        const esmFile = loadDocument(parsedData, {
           assumeValid: true,
           basePath: options.basePath,
           onUnitWarning: (warning) => unit_warnings.push(warning),

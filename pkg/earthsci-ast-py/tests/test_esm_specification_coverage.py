@@ -83,7 +83,7 @@ class TestSection01Overview:
         # Incompatible major versions should fail at library level. 1.0.0 is a
         # CLEAN BREAK with no deprecation path, so major version 0 is rejected
         # exactly as an unreleased future major is.
-        from earthsci_ast.parse import UnsupportedVersionError, load
+        from earthsci_ast.parse import UnsupportedVersionError, load_document
 
         for version in ["0.1.0", "0.9.0", "2.0.0"]:
             invalid_data = {
@@ -92,7 +92,7 @@ class TestSection01Overview:
                 "models": {"test": {"variables": {}, "equations": []}},
             }
             with pytest.raises(UnsupportedVersionError):
-                load(invalid_data)
+                load_document(invalid_data)
 
     def test_file_extension_mime_type_constants(self):
         """Test that spec constants are documented (non-validating test)."""

@@ -222,12 +222,12 @@ end
                  "ptx"=>"X", "pty"=>"Y", "tot"=>"emis_annual", "frac"=>isp])
         end
 
-        file = EA.load(doc)
+        file = EA.load_document(doc)
         @test file.component_templates !== nothing
         @test haskey(file.component_templates, "models.ISRM")
         EA.flatten(file)                                # the guard must NOT fire
 
-        raw = EA.serialize_esm_file(EA.load(doc))        # the `prepare` input form
+        raw = EA.serialize_esm_file(EA.load_document(doc))        # the `prepare` input form
         r = EA.desugar_pushdown(raw; model_name="ISRM")
         @test r !== raw
         rec = r["metadata"]["x_esd"]["pushdown"]

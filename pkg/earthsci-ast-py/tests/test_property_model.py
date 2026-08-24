@@ -8,7 +8,7 @@ small valid scalar ODE models and assert:
   1. Flatten is deterministic — ``flatten(m)`` called twice on the same input
      produces the same :class:`FlattenedSystem`.
   2. Flatten is stable under the JSON round-trip —
-     ``flatten(m) == flatten(load(save(m)))`` structurally.
+     ``flatten(m) == flatten(load(to_json(m)))`` structurally.
   3. Flatten is idempotent (the phase-3 invariant). Because ``flatten`` has
      signature ``EsmFile -> FlattenedSystem``, we express the property by
      reconstructing a single-model EsmFile from the flattened output and
@@ -56,8 +56,8 @@ from earthsci_ast.esm_types import (
 )
 from earthsci_ast.classification import ode_states
 from earthsci_ast.flatten import FlattenedSystem, flatten
-from earthsci_ast.parse import load
-from earthsci_ast.serialize import _serialize_expression, save
+from earthsci_ast.parse import load_path
+from earthsci_ast.serialize import _serialize_expression, to_json
 from earthsci_ast.simulation import simulate
 
 
@@ -392,7 +392,7 @@ def test_flatten_deterministic(esm_file: EsmFile) -> None:
 @_settings
 def test_flatten_stable_under_json_round_trip(esm_file: EsmFile) -> None:
     """Serializing + reloading a model must not change its flattened form."""
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
     try:
         reloaded = load(json_str)
     except Exception:  # pragma: no cover — surface as a Hypothesis shrink case

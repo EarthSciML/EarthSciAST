@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from conftest import FIXTURES_ROOT
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.simulation import simulate
 
 
@@ -99,7 +99,7 @@ def test_arrayop_fixture_conformance(fixture_path: Path) -> None:
     with open(fixture_path, "r") as fh:
         raw = json.load(fh)
 
-    esm_file = load(fixture_path)
+    esm_file = load_path(fixture_path)
 
     # Walk models — inline ``tests`` lives at the model level in the raw JSON
     # (the Model dataclass doesn't carry tests yet, so we read them from the

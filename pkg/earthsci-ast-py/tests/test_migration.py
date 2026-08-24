@@ -43,7 +43,7 @@ VERSION_DIR = FIXTURES_ROOT / "version_compatibility"
 
 @pytest.fixture
 def baseline_file():
-    return esm.load((VERSION_DIR / "version_1_0_0_baseline.esm").read_text())
+    return esm.load_string((VERSION_DIR / "version_1_0_0_baseline.esm").read_text())
 
 
 def _at_version(file, version):
@@ -209,16 +209,16 @@ class TestSharedFixtures:
         source_doc = json.loads((VERSION_DIR / "migration_test_from_0_0_5.esm").read_text())
         assert source_doc["esm"] == "0.0.5"
         with pytest.raises(esm.UnsupportedVersionError):
-            esm.load(json.dumps(source_doc))
+            esm.load_string(json.dumps(source_doc))
 
-        target = esm.load((VERSION_DIR / "migration_test_to_1_0_0.esm").read_text())
+        target = esm.load_string((VERSION_DIR / "migration_test_to_1_0_0.esm").read_text())
         assert target.esm == "1.0.0"
         # And the library declines to produce that target automatically.
         assert supported_migration_targets("0.0.5") == []
         assert not can_migrate("0.0.5", "1.0.0")
 
     def test_the_baseline_fixture_migrates_to_current(self):
-        file = esm.load((VERSION_DIR / "version_1_0_0_baseline.esm").read_text())
+        file = esm.load_string((VERSION_DIR / "version_1_0_0_baseline.esm").read_text())
         assert can_migrate(file.esm, SCHEMA_VERSION)
         assert migrate(file, SCHEMA_VERSION).esm == SCHEMA_VERSION
 

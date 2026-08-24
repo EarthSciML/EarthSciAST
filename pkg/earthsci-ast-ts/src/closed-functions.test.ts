@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
-import { load } from './parse.js'
+import { loadString } from './parse.js'
 import { evaluateExpression } from './codegen.js'
 import {
   ClosedFunctionError,
@@ -134,14 +134,14 @@ describe('Closed function registry — cross-binding conformance', () => {
       }
 
       it('parses the canonical .esm without error', () => {
-        const parsed = load(fileText)
+        const parsed = loadString(fileText)
         expect(parsed).toBeDefined()
         expect((parsed as any).esm).toBeDefined()
       })
 
       // Pull the RHS template from the parsed file so we exercise the
       // fn-op evaluator path end-to-end.
-      const parsed = load(fileText) as any
+      const parsed = loadString(fileText) as any
       const probe = parsed.models?.Probe ?? Object.values(parsed.models)[0]
       const rhsTemplate = probe.equations[0].rhs
 

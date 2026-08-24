@@ -27,7 +27,7 @@ use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::{ArrayCompiled, BuildInspection};
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load};
+use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -186,7 +186,7 @@ fn refresh_regrid_band_matches_golden() {
     let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
     let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
 
-    let file = load(&simulate_view(&raw)).expect("load simulate view");
+    let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
     let compiled = ArrayCompiled::from_flattened(&flat).expect("from_flattened");
     let forcing: ForcingBuffer = compiled.forcing_handle();
@@ -252,7 +252,7 @@ fn refresh_trajectory_band_matches_golden() {
     let raw = read_json(&fixture_dir().join("fixtures/coupled_refresh_regrid.esm"));
     let golden = read_json(&fixture_dir().join("golden/coupled_refresh_regrid.json"));
 
-    let file = load(&simulate_view(&raw)).expect("load simulate view");
+    let file = load_string(&simulate_view(&raw)).expect("load simulate view");
     let flat = flatten(&file).expect("flatten");
     let compiled = ArrayCompiled::from_flattened(&flat).expect("from_flattened");
     let forcing: ForcingBuffer = compiled.forcing_handle();

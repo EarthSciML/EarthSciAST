@@ -36,7 +36,7 @@ import numpy as np
 
 from .esm_types import EsmFile
 from .flatten import FlattenedSystem, flatten
-from .parse import load
+from .parse import load_document, load_path
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
     _pushdown_coupling_pairs,
@@ -272,13 +272,17 @@ def prepare(
             )
 
     if pushdown_rewrite:
-        file = load(rewritten, metaparameters=metaparameters, base_path=base_path)
+        file = load_document(rewritten, metaparameters=metaparameters, base_path=base_path)
     elif isinstance(input_, FlattenedSystem):
         file = None
     elif isinstance(input_, EsmFile):
         file = input_
     else:
-        file = load(input_, metaparameters=metaparameters)
+        file = (
+            load_document(input_, metaparameters=metaparameters)
+            if isinstance(input_, dict)
+            else load_path(input_, metaparameters=metaparameters)
+        )
 
     flat = input_ if isinstance(input_, FlattenedSystem) else flatten(file)
     check_parameter_override_keys(flat.parameters, parameters)

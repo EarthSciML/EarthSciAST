@@ -122,13 +122,13 @@ func TestDataSourceFixturesCoverage(t *testing.T) {
 
 			// 3. Round-trip: serialize, re-parse, and compare the canonicalized
 			// JSON trees.
-			serialized, err := Serialize(esmFile)
+			serialized, err := ToJSON(esmFile)
 			if err != nil {
 				t.Fatalf("Serialize failed for %s: %v", tc.fixture, err)
 			}
 			roundTripped, err := LoadString(serialized)
 			if err != nil {
-				t.Fatalf("LoadString(Serialize()) failed for %s: %v", tc.fixture, err)
+				t.Fatalf("LoadString(ToJSON()) failed for %s: %v", tc.fixture, err)
 			}
 			origNorm, err := normalizeESMJSON(esmFile)
 			if err != nil {

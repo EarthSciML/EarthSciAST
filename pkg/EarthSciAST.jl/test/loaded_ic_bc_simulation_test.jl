@@ -97,7 +97,7 @@ end
                        "advection_reaction_loaded_ic_bc.esm")
     @test isfile(fixture)
 
-    file = _ESS_IC.load(fixture)
+    file = _ESS_IC.load_path(fixture)
     # The lifted reaction network's `tests` block lives on the reaction system.
     chem = file.reaction_systems["Chemistry"]
     @test !isempty(chem.tests)

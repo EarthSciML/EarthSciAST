@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_path
 from earthsci_ast.template_imports import (
     ExpressionTemplateError,
     eval_meta_expr,
@@ -195,7 +195,7 @@ def test_mount_edge_product_binding_folds_to_concrete(tmp_path):
         "parent_mount.esm",
         _parent_mount({"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}),
     )
-    esm = load(path, metaparameters={"NX": 18, "NY": 20})
+    esm = load_path(path, metaparameters={"NX": 18, "NY": 20})
     sizes = _sizes(esm)
     assert sizes["tgt_cells"] == 360  # NX*NY, derived — not a hand-supplied literal
     assert sizes["gx"] == 18
@@ -210,7 +210,7 @@ def test_mount_edge_folds_against_parent_defaults(tmp_path):
         "parent_mount.esm",
         _parent_mount({"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}),
     )
-    esm = load(path)  # no API bindings -> parent defaults NX=18, NY=20
+    esm = load_path(path)  # no API bindings -> parent defaults NX=18, NY=20
     assert _sizes(esm)["tgt_cells"] == 360
 
 
@@ -218,7 +218,7 @@ def test_mount_edge_plain_integer_bindings_regression(tmp_path):
     d = str(tmp_path)
     _write(d, "child_regrid.esm", _child_regrid())
     path = _write(d, "parent_plain.esm", _parent_mount({"NX": 5, "NY": 6, "NTGT": 30}))
-    esm = load(path)
+    esm = load_path(path)
     sizes = _sizes(esm)
     assert sizes["tgt_cells"] == 30 and sizes["gx"] == 5 and sizes["gy"] == 6
 
@@ -231,4 +231,4 @@ def test_mount_edge_unknown_parent_name_is_loud(tmp_path):
         "parent_bad.esm",
         _parent_mount({"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}),
     )
-    assert _err(lambda: load(path, metaparameters={"NX": 18})) == "template_import_unknown_name"
+    assert _err(lambda: load_path(path, metaparameters={"NX": 18})) == "template_import_unknown_name"

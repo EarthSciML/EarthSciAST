@@ -3,7 +3,7 @@
 import json
 import pytest
 
-from earthsci_ast import load
+from earthsci_ast import load_string
 from earthsci_ast.parse import _parse_expression, SchemaValidationError
 from earthsci_ast.esm_types import ExprNode, EsmFile
 
@@ -12,14 +12,14 @@ def test_load_invalid_json():
     """Test that invalid JSON raises JSONDecodeError."""
     invalid_json = '{"invalid": json,}'
     with pytest.raises(json.JSONDecodeError):
-        load(invalid_json)
+        load_string(invalid_json)
 
 
 def test_load_invalid_schema():
     """Test that JSON not matching schema raises SchemaValidationError."""
     invalid_esm = '{"invalid": "schema"}'
     with pytest.raises(SchemaValidationError):
-        load(invalid_esm)
+        load_string(invalid_esm)
 
 
 def test_parse_simple_expression():
@@ -68,7 +68,7 @@ def test_load_minimal_valid_esm():
     }
 
     json_str = json.dumps(minimal_esm)
-    esm_file = load(json_str)
+    esm_file = load_string(json_str)
 
     assert isinstance(esm_file, EsmFile)
     assert esm_file.version == "1.0.0"
@@ -109,7 +109,7 @@ def test_load_reaction_system():
     }
 
     json_str = json.dumps(rs_esm)
-    esm_file = load(json_str)
+    esm_file = load_string(json_str)
 
     assert len(esm_file.reaction_systems) == 1
     rs = esm_file.reaction_systems["test_reactions"]
@@ -269,7 +269,7 @@ def test_load_comprehensive_fields():
     }
 
     json_str = json.dumps(comprehensive_esm)
-    esm_file = load(json_str)
+    esm_file = load_string(json_str)
 
     # Verify all fields are parsed correctly
     assert len(esm_file.events) == 2

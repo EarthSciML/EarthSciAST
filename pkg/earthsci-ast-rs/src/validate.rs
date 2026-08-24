@@ -14,7 +14,7 @@
 //! shared input both submodules consume.
 
 use crate::EsmFile;
-use crate::parse::{LoadOptions, load, load_with_options};
+use crate::parse::{LoadOptions, load_string, load_string_with_options};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -269,7 +269,7 @@ impl std::fmt::Display for StructuralErrorCode {
 /// # Examples
 ///
 /// ```rust
-/// use earthsci_ast::{validate, load, EsmFile, Metadata};
+/// use earthsci_ast::{validate, load_string, EsmFile, Metadata};
 ///
 /// let json_str = r#"
 /// {
@@ -280,7 +280,7 @@ impl std::fmt::Display for StructuralErrorCode {
 /// "#;
 ///
 /// // First load and parse (includes schema validation)
-/// let esm_file = load(json_str).unwrap();
+/// let esm_file = load_string(json_str).unwrap();
 ///
 /// // Then do structural validation
 /// let result = validate(&esm_file);
@@ -377,14 +377,14 @@ pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) ->
     // First try to parse the JSON and ESM file, anchoring relative refs at the
     // caller-provided base directory (mirrors Python's `validate(base_path=…)`).
     let loaded = match base_path {
-        Some(base) => load_with_options(
+        Some(base) => load_string_with_options(
             json_str,
             &LoadOptions {
                 base_path: Some(base.to_path_buf()),
                 ..Default::default()
             },
         ),
-        None => load(json_str),
+        None => load_string(json_str),
     };
     match loaded {
         Ok(esm_file) => {
@@ -1969,12 +1969,12 @@ mod tests {
         )
     }
 
-    /// Deserialize DIRECTLY, bypassing `load()`'s schema pass, and return the
+    /// Deserialize DIRECTLY, bypassing `load_string()`'s schema pass, and return the
     /// `invalid_broadcast_fn` findings `validate()` reports.
     ///
     /// The bypass is deliberate. The schema already requires `fn` to be PRESENT
     /// on a `broadcast` node (`$defs/ExpressionNode/allOf`), so a missing-`fn`
-    /// document cannot reach `validate()` through `load()` — but a document
+    /// document cannot reach `validate()` through `load_string()` — but a document
     /// built programmatically, or parsed by a caller that skipped schema
     /// validation, can, and `validate()` must not wave it through. What the
     /// schema CANNOT express is the value constraint (§4.3.4: `fn` must name a
@@ -1995,9 +1995,9 @@ mod tests {
     #[test]
     fn unregistered_broadcast_fn_is_a_structural_error() {
         let expr = r#"{"op": "broadcast", "fn": "not_a_real_op", "args": ["x"]}"#;
-        // Through the real `load()` — the schema accepts any `fn` STRING, so
+        // Through the real `load_string()` — the schema accepts any `fn` STRING, so
         // this is exactly the document the issue reported as `is_valid: true`.
-        let file = crate::parse::load(&doc_with_observed_expr(expr)).expect("fixture loads");
+        let file = crate::parse::load_string(&doc_with_observed_expr(expr)).expect("fixture loads");
         let result = validate(&file);
         assert!(
             !result.is_valid,
@@ -2020,7 +2020,7 @@ mod tests {
     fn missing_broadcast_fn_is_rejected_at_both_layers() {
         let expr = r#"{"op": "broadcast", "args": ["x", "x"]}"#;
         assert!(
-            crate::parse::load(&doc_with_observed_expr(expr)).is_err(),
+            crate::parse::load_string(&doc_with_observed_expr(expr)).is_err(),
             "the schema requires `fn` on a `broadcast` node"
         );
         let found = broadcast_findings(expr);

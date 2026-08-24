@@ -14,7 +14,7 @@ import pytest
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.esm_types import ExprNode, Tolerance
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_string
 from earthsci_ast.pde_inline_tests import (
     _check_assertion,
     _resolve_tolerance,
@@ -124,7 +124,7 @@ def _decay_doc() -> dict:
 
 
 def test_assertion_reduce_reference_parse_and_roundtrip():
-    f = load(json.dumps(_decay_doc()))
+    f = load_string(json.dumps(_decay_doc()))
     a = f.models["M"].tests[0].assertions[0]
     assert a.reduce == "L2_error"
     assert isinstance(a.reference, ExprNode)
@@ -146,7 +146,7 @@ def test_assertion_from_file_reference_roundtrips_verbatim():
         "path": "ref.nc",
         "format": "netcdf",
     }
-    f = load(json.dumps(doc))
+    f = load_string(json.dumps(doc))
     a = f.models["M"].tests[0].assertions[0]
     assert a.reference == {"type": "from_file", "path": "ref.nc", "format": "netcdf"}
     ser = _serialize_esm_file(f)["models"]["M"]["tests"][0]["assertions"][0]
@@ -159,7 +159,7 @@ def test_assertion_from_file_reference_roundtrips_verbatim():
 
 
 def test_evaluate_cellwise_grid_geometry():
-    f = load(json.dumps(_decay_doc()))
+    f = load_string(json.dumps(_decay_doc()))
     expr = f.models["M"].tests[0].assertions[0].reference
     cells = [[i] for i in range(1, N + 1)]
     vals = evaluate_cellwise(expr, cells, index_sets=f.index_sets)
@@ -229,7 +229,7 @@ def test_tolerance_precedence_and_isapprox_semantics():
 
 
 def test_run_pde_tests_decay_field():
-    f = load(json.dumps(_decay_doc()))
+    f = load_string(json.dumps(_decay_doc()))
     results = run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
     assert [r.assertion_idx for r in results] == [1, 2, 3]
     by_idx = {r.assertion_idx: r for r in results}
@@ -258,7 +258,7 @@ def test_run_pde_tests_reports_failing_assertion_with_actual():
         },
     ]
     results = run_pde_tests(
-        load(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
+        load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
     )
     assert len(results) == 1
     r = results[0]
@@ -271,7 +271,7 @@ def test_coordinate_expression_ic_seeds_grid(tmp_path):
     """The §11.4.1 case-3 seeding path in isolation: u(0) = cos(pi x_i)."""
     from earthsci_ast.pde_inline_tests import simulate_states
 
-    f = load(json.dumps(_decay_doc()))
+    f = load_string(json.dumps(_decay_doc()))
     sim = simulate_states(f, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
     cells = state_cells(sim.var_map, "u", "M")
     got = [sim.states[0][slot] for _, slot in cells]
@@ -296,7 +296,7 @@ def _coords_assert(coords, *, time=0.0, expected=0.0, abs_tol=1e-9, var="u"):
 
 
 def _run(doc_or_file, **kwargs):
-    f = load(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) else doc_or_file
+    f = load_string(json.dumps(doc_or_file)) if isinstance(doc_or_file, dict) else doc_or_file
     return run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14, **kwargs)
 
 
@@ -369,7 +369,7 @@ def test_coords_and_reduce_are_mutually_exclusive_at_load():
         {"variable": "u", "time": 0.0, "expected": 0.0, "coords": {"x": 1}, "reduce": "mean"},
     ]
     with pytest.raises(SchemaValidationError):
-        load(json.dumps(doc))
+        load_string(json.dumps(doc))
 
 
 def _doc_2d(ny):
@@ -451,7 +451,7 @@ def test_from_file_reference_happy_path(tmp_path):
 
     # The binding's own evaluated ic field, so the diff is exactly 0 (the
     # loaded array is used exactly like an evaluated reference field).
-    f0 = load(json.dumps(_decay_doc()))
+    f0 = load_string(json.dumps(_decay_doc()))
     sim0 = simulate_states(f0, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
     vals = [float(sim0.states[0][slot]) for _, slot in state_cells(sim0.var_map, "u", "M")]
     (tmp_path / "ref.json").write_text(json.dumps(vals))
@@ -612,7 +612,7 @@ def _scalar_observed_doc() -> dict:
 
 
 def test_run_pde_tests_scalar_observed_tracks_parameter_overrides():
-    f = load(json.dumps(_scalar_observed_doc()))
+    f = load_string(json.dumps(_scalar_observed_doc()))
     results = run_pde_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
     by_id = {r.test_id: r for r in results}
     assert set(by_id) == {"t_lo", "t_hi"}

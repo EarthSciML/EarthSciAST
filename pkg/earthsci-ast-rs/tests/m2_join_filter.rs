@@ -19,7 +19,7 @@
 //!   value-equality engine is M3), rather than silently producing the wrong sum.
 
 use earthsci_ast::types::Expr;
-use earthsci_ast::{EsmFile, SimulateOptions, SolverChoice, load, save, simulate};
+use earthsci_ast::{EsmFile, SimulateOptions, SolverChoice, load_string, to_json, simulate};
 use std::collections::HashMap;
 
 /// Build a `D(y[i]) = aggregate over j of body` contraction model. `rhs_extra`
@@ -54,7 +54,7 @@ fn contraction_model(rhs_extra: &str) -> String {
 /// Simulate from t=0 to t=1 and return `y[slot]` at t=1. The RHS is a constant
 /// forcing, so `y[i](1)` equals that constant rate.
 fn sim_y(model_json: &str, slot: &str) -> Result<f64, String> {
-    let file = load(model_json).map_err(|e| format!("load: {e}"))?;
+    let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
     let opts = SimulateOptions {
         solver: SolverChoice::Bdf,
         abstol: 1e-10,
@@ -99,7 +99,7 @@ fn rhs_join_on(file: &EsmFile) -> (bool, bool, Vec<[String; 2]>) {
 fn join_filter_fixture_round_trips_both_m2_fields() {
     // The committed M2 schema fixture carries both a `join` and a `filter`.
     let fixture = include_str!("../../../tests/valid/aggregate/join_filter.esm");
-    let parsed = load(fixture).expect("parse join_filter.esm");
+    let parsed = load_string(fixture).expect("parse join_filter.esm");
 
     // Parsed AST carries both additive M2 fields with their full structure —
     // without the ExpressionNode wiring they would be dropped as unknown fields.
@@ -118,7 +118,7 @@ fn join_filter_fixture_round_trips_both_m2_fields() {
     // They survive serialize → reparse intact (string idempotence is not
     // asserted: the document's `index_sets`/`variables` are HashMap-backed and
     // serialize in arbitrary order — a pre-existing property unrelated to M2).
-    let serialized = save(&parsed).expect("serialize");
+    let serialized = to_json(&parsed).expect("serialize");
     assert!(
         serialized.contains("\"join\""),
         "join field lost on serialize"
@@ -127,7 +127,7 @@ fn join_filter_fixture_round_trips_both_m2_fields() {
         serialized.contains("\"filter\""),
         "filter field lost on serialize"
     );
-    let reparsed = load(&serialized).expect("reparse");
+    let reparsed = load_string(&serialized).expect("reparse");
     let (has_join2, has_filter2, on2) = rhs_join_on(&reparsed);
     assert!(has_join2 && has_filter2, "join/filter lost on round-trip");
     assert_eq!(on, on2, "join.on changed across round-trip");

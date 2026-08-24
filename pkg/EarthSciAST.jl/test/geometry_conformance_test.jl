@@ -47,7 +47,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         @test isdir(_VALID_GEOM)
         for f in readdir(_VALID_GEOM)
             endswith(f, ".esm") || continue
-            @test (EarthSciAST.load(joinpath(_VALID_GEOM, f)); true)
+            @test (EarthSciAST.load_path(joinpath(_VALID_GEOM, f)); true)
         end
     end
 
@@ -86,7 +86,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     @testset "planar fixture clip + area FAQ evaluate to 1.0 (build_evaluator)" begin
         path = joinpath(_VALID_GEOM, "intersect_polygon_planar_area.esm")
         @test isfile(path)
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         # The clip runs at setup: src_poly / tgt_poly are supplied as const_arrays
         # (RFC App. B.1). tracer IC = 1 so d(tracer)/dt = −area·tracer = −area.
         f!, u0, p, _, vmap = build_evaluator(
@@ -258,7 +258,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     # --- manifold / id parse + serialize round-trip ---
     @testset "manifold + id survive the typed round-trip" begin
         path = joinpath(_VALID_GEOM, "intersect_polygon_clip_area.esm")
-        file = EarthSciAST.load(path)
+        file = EarthSciAST.load_path(path)
         # esm 1.0.0 (§5.4/§6.3.1): a variable carries no `expression`; the clip's
         # definition is its bare-variable-LHS EQUATION, reached through
         # `observed_definition`.

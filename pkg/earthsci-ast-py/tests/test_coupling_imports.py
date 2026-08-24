@@ -9,7 +9,7 @@ import json
 import os
 
 
-from earthsci_ast import flatten, is_coupling_library_doc, load
+from earthsci_ast import flatten, is_coupling_library_doc, load_document, load_path
 from earthsci_ast.coupling_imports import (
     _rewrite_entry_in_place,
     _rewrite_scoped_ref,
@@ -46,7 +46,7 @@ LIB = {
 
 def _assembly(coupling):
     """An assembly mounting the two components the library wires."""
-    return load(
+    return load_document(
         {
             "esm": "1.0.0",
             "metadata": {"name": "wildfire"},
@@ -448,7 +448,7 @@ def test_subsystem_ref_to_coupling_library_is_rejected(tmp_path):
         "models": {"M": _param_model(subsystems={"Sub": {"ref": "couplib.esm"}})},
     }
     path = _write(str(tmp_path), "assembly.esm", assembly)
-    assert _err_code(lambda: load(path)) == "subsystem_ref_is_coupling_library"
+    assert _err_code(lambda: load_path(path)) == "subsystem_ref_is_coupling_library"
 
 
 def test_template_import_of_coupling_library_is_rejected(tmp_path):
@@ -461,4 +461,4 @@ def test_template_import_of_coupling_library_is_rejected(tmp_path):
         "models": {"M": _param_model(expression_template_imports=[{"ref": "couplib.esm"}])},
     }
     path = _write(str(tmp_path), "assembly.esm", assembly)
-    assert _err_code(lambda: load(path)) == "template_import_is_coupling_library"
+    assert _err_code(lambda: load_path(path)) == "template_import_is_coupling_library"

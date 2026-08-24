@@ -74,7 +74,7 @@ end
         # the Option-A image, so it loads under `ESS_TEMPLATE_REF_DISABLE=1` —
         # the escape hatch that Expands at load — where the rate is the inline `*`.
         file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load(IOBuffer(ARRHENIUS_FIXTURE_JSON))
+            EarthSciAST.load_string(IOBuffer(ARRHENIUS_FIXTURE_JSON))
         end
         rs = file.reaction_systems["chem"]
         # Sanity: expanded rate is a `*` with three args.
@@ -114,14 +114,14 @@ end
         }
         """
         io = IOBuffer(no_templates)
-        file = EarthSciAST.load(io)
+        file = EarthSciAST.load_string(io)
         @test file.reaction_systems["chem"].reactions[1].rate.name == "k"
     end
 
     @testset "rejects apply_expression_template when esm < 0.4.0" begin
         old_version = replace(ARRHENIUS_FIXTURE_JSON, "\"esm\": \"0.4.0\"" => "\"esm\": \"0.3.5\"")
         io = IOBuffer(old_version)
-        @test_throws ExpressionTemplateError EarthSciAST.load(io)
+        @test_throws ExpressionTemplateError EarthSciAST.load_string(io)
     end
 
     @testset "rejects unknown template name" begin
@@ -129,7 +129,7 @@ end
         io = IOBuffer(bad)
         err = nothing
         try
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
         catch e
             err = e
         end
@@ -144,7 +144,7 @@ end
         io = IOBuffer(bad)
         err = nothing
         try
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
         catch e
             err = e
         end
@@ -159,7 +159,7 @@ end
         io = IOBuffer(bad)
         err = nothing
         try
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
         catch e
             err = e
         end
@@ -203,7 +203,7 @@ end
         io = IOBuffer(nested)
         err = nothing
         try
-            EarthSciAST.load(io)
+            EarthSciAST.load_string(io)
         catch e
             err = e
         end
@@ -244,7 +244,7 @@ end
         @test _normj(expanded_via_pass["models"]) ==
               _normj(expanded_dict.models)
         # Typed load: the expanded transform arrives as an ASTExpr operator node.
-        f = EarthSciAST.load(joinpath(case, "fixture.esm"))
+        f = EarthSciAST.load_path(joinpath(case, "fixture.esm"))
         entry = f.coupling[1]
         @test entry isa CouplingVariableMap
         @test entry.transform isa OpExpr
@@ -259,7 +259,7 @@ end
         # Option B: references survive by default; pin the Option-A expanded image
         # via the `ESS_TEMPLATE_REF_DISABLE=1` hatch.
         file = withenv("ESS_TEMPLATE_REF_DISABLE" => "1") do
-            EarthSciAST.load(IOBuffer(ast_bound))
+            EarthSciAST.load_string(IOBuffer(ast_bound))
         end
         rate = file.reaction_systems["chem"].reactions[1].rate
         @test rate isa OpExpr
@@ -343,7 +343,7 @@ end
         # evaluation") and driven end-to-end for this fixture by the simulate
         # conformance harness.
         io = IOBuffer(read(joinpath(_conf("unlowered_operator"), "fixture.esm")))
-        f = EarthSciAST.load(io)
+        f = EarthSciAST.load_string(io)
         @test f isa EarthSciAST.EsmFile
     end
 
@@ -359,7 +359,7 @@ end
         # core, and runs today — see the cumulative-reduction fixtures
         # tests/fixtures/arrayop/25_* and 26_*.
         io = IOBuffer(read(joinpath(_conf("unlowered_integral"), "fixture.esm")))
-        f = EarthSciAST.load(io)
+        f = EarthSciAST.load_string(io)
         @test f isa EarthSciAST.EsmFile
     end
 
@@ -794,7 +794,7 @@ end
           }
         }
         """)
-        f = EarthSciAST.load(model_path)
+        f = EarthSciAST.load_path(model_path)
         m = f.models["m"]
         @test (observed_definition(m, "d_edge")::OpExpr).op == "*"    # constrained rule fired
         @test (observed_definition(m, "d_cell")::OpExpr).op == "div"  # excluded, survives load

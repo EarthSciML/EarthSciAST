@@ -15,7 +15,7 @@ import (
 //go:embed esm-schema.json
 var embeddedSchema []byte
 
-// LoadOption configures a Load / LoadString call.
+// LoadOption configures a LoadPath / LoadString / LoadDocument call.
 type LoadOption func(*loadOptions)
 
 type loadOptions struct {
@@ -32,8 +32,8 @@ func WithMetaparameters(m map[string]int64) LoadOption {
 }
 
 // WithBasePath anchors relative `expression_template_imports` refs (esm-spec
-// §9.7.2) for LoadString input. Load derives it from the file's directory
-// automatically; an explicit WithBasePath overrides that.
+// §9.7.2) for LoadString / LoadDocument input. LoadPath derives it from the
+// file's directory automatically; an explicit WithBasePath overrides that.
 func WithBasePath(dir string) LoadOption {
 	return func(o *loadOptions) { o.basePath = dir }
 }
@@ -46,9 +46,15 @@ func applyLoadOptions(opts []LoadOption) loadOptions {
 	return o
 }
 
-// Load loads an ESM file from the specified path and validates it against the JSON schema.
-// After parsing, it resolves any subsystem references relative to the file's directory.
-func Load(path string, opts ...LoadOption) (*ESMFile, error) {
+// LoadPath reads an ESM document from the specified filesystem path and
+// validates it against the JSON schema. After parsing, it resolves any
+// subsystem references relative to the file's directory.
+//
+// It was called Load, which took a path here and in Julia but meant JSON TEXT
+// in TypeScript and Rust — same name, same argument type, opposite meanings,
+// and no type error anywhere. The three LoadPath / LoadString / LoadDocument
+// entry points say which they are.
+func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	// Read the file
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -81,7 +87,18 @@ func Load(path string, opts ...LoadOption) (*ESMFile, error) {
 	return esmFile, nil
 }
 
-// LoadString parses an ESM file from JSON string and validates it against the JSON schema
+// LoadDocument parses an ESM document that is ALREADY decoded into a Go map
+// — the same document a `.esm` file holds, just already unmarshalled. It runs
+// the identical pipeline LoadString runs.
+func LoadDocument(document map[string]any, opts ...LoadOption) (*ESMFile, error) {
+	jsonBytes, err := json.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-encode document: %w", err)
+	}
+	return LoadString(string(jsonBytes), opts...)
+}
+
+// LoadString parses an ESM file from JSON TEXT and validates it against the JSON schema
 func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	o := applyLoadOptions(opts)
 

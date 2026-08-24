@@ -15,7 +15,7 @@ func TestCadenceValidFixtures(t *testing.T) {
 	for _, path := range cadenceFixturePaths(t) {
 		name := filepath.Base(path)
 		t.Run(name, func(t *testing.T) {
-			if _, err := Load(path); err != nil {
+			if _, err := LoadPath(path); err != nil {
 				t.Fatalf("expected %s to validate, got error: %v", name, err)
 			}
 		})
@@ -52,7 +52,7 @@ func TestCadenceExpectAnnotationsAgree(t *testing.T) {
 	for _, path := range cadenceFixturePaths(t) {
 		path := path
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			file, err := Load(path)
+			file, err := LoadPath(path)
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
@@ -114,7 +114,7 @@ func TestCadenceObservedLeafSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	file, err := Load(filepath.Join(repoRoot, "tests", "valid", "cadence", "observed_leaf_seeds.esm"))
+	file, err := LoadPath(filepath.Join(repoRoot, "tests", "valid", "cadence", "observed_leaf_seeds.esm"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestCadenceDataSourceTemporalRefinement(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.fixture, func(t *testing.T) {
-			file, err := Load(filepath.Join(repoRoot, "tests", "valid", "cadence", tc.fixture))
+			file, err := LoadPath(filepath.Join(repoRoot, "tests", "valid", "cadence", tc.fixture))
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}

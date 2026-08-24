@@ -66,7 +66,7 @@ fn get_schema_value() -> &'static Value {
 /// # Examples
 ///
 /// ```rust
-/// use earthsci_ast::load;
+/// use earthsci_ast::load_string;
 ///
 /// let json = r#"
 /// {
@@ -83,20 +83,39 @@ fn get_schema_value() -> &'static Value {
 /// }
 /// "#;
 ///
-/// let esm_file = load(json).expect("Failed to load ESM file");
+/// let esm_file = load_string(json).expect("Failed to load ESM file");
 /// assert_eq!(esm_file.esm, "1.0.0");
 /// ```
-pub fn load(json_str: &str) -> Result<EsmFile, EsmError> {
-    load_with_options(json_str, &LoadOptions::default())
+pub fn load_string(json_str: &str) -> Result<EsmFile, EsmError> {
+    load_string_with_options(json_str, &LoadOptions::default())
 }
 
-/// Options controlling how [`load_with_options`] /
-/// [`load_path_with_options`] parse an ESM file (esm-spec §9.7).
+/// Load and parse an ESM document that is ALREADY parsed as a
+/// [`serde_json::Value`] — the same document a `.esm` file holds, just
+/// already decoded. Runs the identical pipeline [`load_string`] runs
+/// (subsystem-ref resolution, version gates, schema validation, §9.7
+/// template machinery, typed deserialization).
+pub fn load_document(document: &Value) -> Result<EsmFile, EsmError> {
+    load_document_with_options(document, &LoadOptions::default())
+}
+
+/// [`load_document`] with explicit [`LoadOptions`] (base path for relative
+/// refs, loader-API metaparameter bindings; esm-spec §9.7.6).
+pub fn load_document_with_options(
+    document: &Value,
+    options: &LoadOptions,
+) -> Result<EsmFile, EsmError> {
+    load_value(document.clone(), options)
+}
+
+/// Options controlling how [`load_string_with_options`] /
+/// [`load_document_with_options`] / [`load_path_with_options`] parse an ESM
+/// file (esm-spec §9.7).
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
     /// Directory anchoring relative subsystem refs and
     /// `expression_template_imports` refs (esm-spec §9.7.2). Defaults to the
-    /// current working directory for string input; `load_path` uses the
+    /// current working directory for string / document input; `load_path` uses the
     /// file's own directory.
     pub base_path: Option<std::path::PathBuf>,
 
@@ -110,9 +129,21 @@ pub struct LoadOptions {
 /// Load and parse an ESM file from a JSON string with explicit
 /// [`LoadOptions`] (base path for relative refs, loader-API metaparameter
 /// bindings; esm-spec §9.7.6).
-pub fn load_with_options(json_str: &str, options: &LoadOptions) -> Result<EsmFile, EsmError> {
-    // First, parse the JSON
-    let mut json_value: Value = serde_json::from_str(json_str).map_err(EsmError::JsonParse)?;
+pub fn load_string_with_options(
+    json_str: &str,
+    options: &LoadOptions,
+) -> Result<EsmFile, EsmError> {
+    let json_value: Value = serde_json::from_str(json_str).map_err(EsmError::JsonParse)?;
+    load_value(json_value, options)
+}
+
+/// The pipeline shared by every `load_*` entry point, over an
+/// already-decoded document. Split out so a path, a JSON string and a
+/// pre-parsed `Value` cannot drift apart: `load` used to be ONE function
+/// whose `&str` meant JSON text here and a FILE PATH in Julia and Go, with
+/// no type error anywhere to catch the difference.
+fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmError> {
+    let mut json_value = json_value;
 
     let base = options.base_path.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -242,7 +273,7 @@ pub fn load_path_with_options<P: AsRef<std::path::Path>>(
         base_path: Some(base),
         metaparameters: metaparameters.clone(),
     };
-    load_with_options(&json_str, &options)
+    load_string_with_options(&json_str, &options)
 }
 
 /// Validate a JSON value against the ESM schema
@@ -577,14 +608,14 @@ fn compile_branch<'c>(
 // in all three, per §2.1a cross-language parity.
 //
 // RELATIONSHIP TO `crate::validate` / `crate::structural`: this is the
-// LOAD-TIME stack — it runs on raw JSON inside `load()`, gates whether a file
+// LOAD-TIME stack — it runs on raw JSON inside `load_string()`, gates whether a file
 // parses at all, and its String messages are pinned cross-binding. The typed
 // stack (`validate()` → structural.rs/coupling.rs) runs on demand over the
 // deserialized `EsmFile` and reports structured `StructuralError`s. Several
 // rules intentionally exist in BOTH layers (event variable references,
 // discrete-parameter declarations, circular model dependencies): this layer
 // rejects files that must not load; the typed layer re-checks documents that
-// were constructed or edited in memory and never passed through `load()`.
+// were constructed or edited in memory and never passed through `load_string()`.
 // If you change a shared rule, change it in both layers (and the sibling
 // bindings).
 
@@ -1500,7 +1531,7 @@ mod tests {
         }
         "#;
 
-        let result = load(json);
+        let result = load_string(json);
         assert!(result.is_ok());
 
         let esm_file = result.unwrap();
@@ -1511,7 +1542,7 @@ mod tests {
     #[test]
     fn test_load_invalid_json() {
         let json = r#"{ invalid json }"#;
-        let result = load(json);
+        let result = load_string(json);
         assert!(result.is_err());
         match result.unwrap_err() {
             EsmError::JsonParse(_) => {} // Expected
@@ -1530,7 +1561,7 @@ mod tests {
         }
         "#;
 
-        let result = load(json);
+        let result = load_string(json);
         assert!(result.is_err());
         match result.unwrap_err() {
             EsmError::SchemaValidation(_) => {} // Expected
@@ -1550,7 +1581,7 @@ mod tests {
         }
         "#;
 
-        let result = load(json);
+        let result = load_string(json);
         assert!(result.is_err());
         match result.unwrap_err() {
             EsmError::SchemaValidation(_) => {} // Expected
@@ -1569,7 +1600,7 @@ mod tests {
         }
         "#;
 
-        let result = load(json);
+        let result = load_string(json);
         assert!(result.is_err());
         match result.unwrap_err() {
             EsmError::SchemaValidation(_) => {} // Expected
@@ -1579,7 +1610,7 @@ mod tests {
 
     #[test]
     fn test_round_trip() {
-        use crate::save;
+        use crate::to_json;
 
         let json = r#"
         {
@@ -1597,13 +1628,13 @@ mod tests {
         "#;
 
         // Load the JSON
-        let esm_file = load(json).expect("Failed to load ESM file");
+        let esm_file = load_string(json).expect("Failed to load ESM file");
 
         // Save it back to JSON
-        let serialized_json = save(&esm_file).expect("Failed to save ESM file");
+        let serialized_json = to_json(&esm_file).expect("Failed to save ESM file");
 
         // Load it again
-        let round_trip_file = load(&serialized_json).expect("Failed to load round-trip ESM file");
+        let round_trip_file = load_string(&serialized_json).expect("Failed to load round-trip ESM file");
 
         // Verify the structure is preserved
         assert_eq!(esm_file.esm, round_trip_file.esm);

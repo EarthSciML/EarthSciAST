@@ -1935,7 +1935,7 @@ func (s *structuralScan) addUndefinedSystem(system, ref, path, direction string,
 // validateSubsystemRefs reports every subsystem entry that is still an
 // UNRESOLVED `{"ref": …}` object at validation time.
 //
-// Load() resolves refs (and fails loudly with `unresolved_subsystem_ref` /
+// LoadPath() resolves refs (and fails loudly with `unresolved_subsystem_ref` /
 // `ambiguous_subsystem_ref` when it cannot), so a ref that survives to
 // validation means the document was never resolved against a base path — the
 // reference is, as far as the validator can see, unresolved. Mirrors TS

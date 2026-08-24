@@ -440,7 +440,7 @@ function emitNodeJson(n: Node): string {
  * emitted as bare JSON integers by {@link canonicalJson} directly.
  *
  * NAMING: distinct from `formatFloatToken` in `./numeric-literal` (the
- * document-serialization emitter used by `save()` / `losslessJsonStringify`).
+ * document-serialization emitter used by `toJson()` / `losslessJsonStringify`).
  * This canonical version additionally NORMALIZES exponent notation — it strips
  * the leading `+` (RFC §5.4.6: "no leading + on the exponent") so `1e25` emits
  * as `1e25`, not `1e+25`, and forces the §5.4.6 exponent thresholds. Use this

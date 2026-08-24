@@ -48,7 +48,7 @@ end
 @testset "join namespacing under flattening (§5.5.6)" begin
 
     @testset "overlap envelope factors follow the variable registry" begin
-        flat = ESS.flatten(ESS.load(OVERLAP_FIXTURE))
+        flat = ESS.flatten(ESS.load_path(OVERLAP_FIXTURE))
         node = producer(flat)
         clause = node.join[1]
         @test clause isa ESS._OverlapJoinSpec
@@ -68,7 +68,7 @@ end
     end
 
     @testset "the flattened producer materialises the golden support set" begin
-        flat = ESS.flatten(ESS.load(OVERLAP_FIXTURE))
+        flat = ESS.flatten(ESS.load_path(OVERLAP_FIXTURE))
         # The ISRM L1 geometry, keyed by the FLATTENED names.
         ca = Dict{String, Any}(
             "ISRM.W" => [0.0, 2.0, 4.0, 0.0, 2.0, 4.0, 0.0, 2.0, 4.0],
@@ -80,7 +80,7 @@ end
         )
         # Round-trip the flattened system back into a document (the front door
         # the value-invention engine consumes) and materialise it.
-        reconstituted = ESS.load(ESS.flattened_to_esm(flat))
+        reconstituted = ESS.load_document(ESS.flattened_to_esm(flat))
         model = first(values(reconstituted.models))
         vi = ESS.materialize_value_invention(model, reconstituted.index_sets, ca,
                                              Dict{String, Float64}())
@@ -92,7 +92,7 @@ end
         # `ranges`) against two DOCUMENT-scoped index sets. Neither kind is a
         # component-local variable, so the declared-local gate leaves all four
         # alone — the case that makes "namespace every bare string" wrong.
-        flat = ESS.flatten(ESS.load(JOIN_FILTER_FIXTURE))
+        flat = ESS.flatten(ESS.load_path(JOIN_FILTER_FIXTURE))
         node = producer(flat)
         @test node.join[1] == [("src", "sourceType"), ("fuel", "fuelType")]
     end
@@ -104,7 +104,7 @@ end
         m["variables"]["tgt_bin"] = Dict("type" => "parameter")
         m["equations"][1]["rhs"]["join"] = Any[Dict("on" => Any[
             Any["src_bin", "tgt_bin"], Any["src", "sourceType"]])]
-        node = producer(ESS.flatten(ESS.load(d)))
+        node = producer(ESS.flatten(ESS.load_document(d)))
         @test node.join[1] == [
             ("EmissionsAggregate.src_bin", "EmissionsAggregate.tgt_bin"),
             ("src", "sourceType"),
@@ -125,7 +125,7 @@ end
                                  "from" => "EDGE.src_W",
                                  "to" => "ISRM.W",
                                  "transform" => "param_to_var")]
-        flat = ESS.flatten(ESS.load(d))
+        flat = ESS.flatten(ESS.load_document(d))
         @test !haskey(flat.parameters, "ISRM.W")
         clause = producer(flat).join[1]
         @test clause.tgt_env[1] == "EDGE.src_W"
@@ -143,7 +143,7 @@ end
         d = JSON3.read(read(JOIN_FILTER_FIXTURE, String), Dict{String, Any})
         d["models"]["EmissionsAggregate"]["variables"]["src"] =
             Dict("type" => "parameter")
-        node = producer(ESS.flatten(ESS.load(d)))
+        node = producer(ESS.flatten(ESS.load_document(d)))
         @test node.join[1] == [("src", "sourceType"), ("fuel", "fuelType")]
     end
 
@@ -156,7 +156,7 @@ end
         m["equations"][1]["rhs"]["output_idx"] = Any["o", 1]
         m["equations"][1]["rhs"]["join"] = Any[Dict("on" => Any[
             Any["o", "sourceType"], Any["src", "sourceType"]])]
-        node = producer(ESS.flatten(ESS.load(d)))
+        node = producer(ESS.flatten(ESS.load_document(d)))
         @test node.join[1] == [("o", "sourceType"), ("src", "sourceType")]
     end
 

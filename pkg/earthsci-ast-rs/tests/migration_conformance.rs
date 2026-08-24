@@ -13,7 +13,7 @@
 //! expectations hold in TypeScript, Python and Go.
 
 use earthsci_ast::{
-    EsmFile, SCHEMA_VERSION, can_migrate, get_supported_migration_targets, load, migrate,
+    EsmFile, SCHEMA_VERSION, can_migrate, get_supported_migration_targets, load_string, migrate,
 };
 use serde_json::Value;
 
@@ -139,7 +139,7 @@ fn the_matrix_migration_pair_is_a_rewrite_not_an_automated_migration() {
     // The source is also unloadable by this 1.x library — the asymmetry the
     // matrix calls "the point".
     assert!(
-        load(MIGRATION_SOURCE).is_err(),
+        load_string(MIGRATION_SOURCE).is_err(),
         "the 0.0.5 source must be rejected by a 1.x loader"
     );
 
@@ -147,7 +147,7 @@ fn the_matrix_migration_pair_is_a_rewrite_not_an_automated_migration() {
     // current schema is the identity no-op.
     assert_eq!(target_version, SCHEMA_VERSION);
     assert!(can_migrate(target_version, SCHEMA_VERSION));
-    let target_file = load(MIGRATION_TARGET).expect("the 1.0.0 target loads");
+    let target_file = load_string(MIGRATION_TARGET).expect("the 1.0.0 target loads");
     assert_eq!(
         migrate(&target_file, SCHEMA_VERSION)
             .expect("identity no-op")
@@ -163,7 +163,7 @@ fn the_matrix_migration_pair_is_a_rewrite_not_an_automated_migration() {
 /// structural rewrite of `migrate`.
 #[test]
 fn migration_is_a_marker_only_bump_over_a_real_document() {
-    let source = load(BASELINE).expect("baseline fixture loads");
+    let source = load_string(BASELINE).expect("baseline fixture loads");
     assert_eq!(source.esm, "1.0.0");
 
     let migrated = migrate(&source, SCHEMA_VERSION).expect("additive-line bump");

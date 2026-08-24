@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use earthsci_ast::data_output::{GridPlan, OutputPlan};
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{EsmFile, derive_output_plan, load};
+use earthsci_ast::{EsmFile, derive_output_plan, load_string};
 use earthsciio::format::{
     ArrayData, NativeField, OutputSchema, WriteCoord, WriteVar, write_zarr_v3,
 };
@@ -98,7 +98,7 @@ fn to_schema(grid: &GridPlan, times: &[f64], flat_states: &[Vec<f64>]) -> Output
 
 #[test]
 fn a_derived_plan_writes_and_reads_back_through_zarr_v3() {
-    let doc: EsmFile = load(GRID_COORDS).expect("fixture loads");
+    let doc: EsmFile = load_string(GRID_COORDS).expect("fixture loads");
     let slots = ArrayCompiled::from_file(&doc)
         .expect("compiles")
         .state_variable_names()

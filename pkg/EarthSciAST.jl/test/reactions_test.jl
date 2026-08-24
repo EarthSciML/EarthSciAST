@@ -434,7 +434,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         # before the §7.4 fix that gave the reservoir a live, growing ODE.
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
                         "reservoir_species_constant.esm")
-        flat = flatten(load(path))
+        flat = flatten(load_path(path))
 
         for r in ("O2", "CH4", "H2O")
             @test haskey(flat.parameters, "SuperFastSubset.$r")

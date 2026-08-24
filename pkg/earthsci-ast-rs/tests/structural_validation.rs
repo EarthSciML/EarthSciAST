@@ -9,7 +9,7 @@ use earthsci_ast::*;
 fn test_unknown_variable_reference() {
     let fixture = include_str!("../../../tests/invalid/unknown_variable_ref.esm");
 
-    let parsed_result = load(fixture);
+    let parsed_result = load_string(fixture);
 
     match parsed_result {
         Ok(esm_file) => {
@@ -50,7 +50,7 @@ fn test_undefined_species() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -96,7 +96,7 @@ fn test_undefined_parameter() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -142,7 +142,7 @@ fn test_equation_count_mismatch() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -184,7 +184,7 @@ fn test_null_reaction() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -219,8 +219,8 @@ fn test_null_reaction() {
 fn test_ic_in_reaction_system() {
     let fixture = include_str!("../../../tests/invalid/ic_in_reaction_system.esm");
 
-    // Schema-valid: load() must succeed (rejection is structural, not schema).
-    let esm_file = load(fixture).expect("ic_in_reaction_system fixture should load");
+    // Schema-valid: load_string() must succeed (rejection is structural, not schema).
+    let esm_file = load_string(fixture).expect("ic_in_reaction_system fixture should load");
     let validation_result = validate(&esm_file);
     assert!(validation_result.has_errors());
 
@@ -268,7 +268,7 @@ fn test_reaction_system_non_ic_constraint_ok() {
             }
         }
     }"#;
-    let esm_file = load(json).expect("fixture should load");
+    let esm_file = load_string(json).expect("fixture should load");
     let validation_result = validate(&esm_file);
     assert!(
         !validation_result
@@ -306,7 +306,7 @@ fn test_unknown_without_equation() {
     ];
 
     for (name, fixture) in fixtures {
-        let esm_file = load(fixture).unwrap_or_else(|e| panic!("{name} must load: {e}"));
+        let esm_file = load_string(fixture).unwrap_or_else(|e| panic!("{name} must load: {e}"));
         let validation_result = validate(&esm_file);
         let finding = validation_result
             .structural_errors
@@ -345,7 +345,7 @@ fn test_unresolved_scoped_reference() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -391,7 +391,7 @@ fn test_event_variable_undeclared() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -433,7 +433,7 @@ fn test_invalid_discrete_parameter() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -477,7 +477,7 @@ fn test_undefined_variable_contexts() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load(fixture);
+        let parsed_result = load_string(fixture);
 
         match parsed_result {
             Ok(esm_file) => {
@@ -509,7 +509,7 @@ fn test_undefined_variable_contexts() {
 fn test_undefined_system() {
     let fixture = include_str!("../../../tests/invalid/undefined_system.esm");
 
-    let parsed_result = load(fixture);
+    let parsed_result = load_string(fixture);
 
     match parsed_result {
         Ok(esm_file) => {
@@ -534,7 +534,7 @@ fn test_undefined_system() {
 fn test_multiple_errors_combined() {
     let fixture = include_str!("../../../tests/invalid/multiple_errors_combined.esm");
 
-    let parsed_result = load(fixture);
+    let parsed_result = load_string(fixture);
 
     match parsed_result {
         Ok(esm_file) => {
@@ -558,7 +558,7 @@ fn test_multiple_errors_combined() {
 fn test_event_error_conditions() {
     let fixture = include_str!("../../../tests/invalid/event_error_conditions.esm");
 
-    let parsed_result = load(fixture);
+    let parsed_result = load_string(fixture);
 
     match parsed_result {
         Ok(esm_file) => {
@@ -573,9 +573,9 @@ fn test_event_error_conditions() {
 
 /// Test circular dependency detection.
 ///
-/// Accepts either outcome: `load()` may reject the fixture at parse time
+/// Accepts either outcome: `load_string()` may reject the fixture at parse time
 /// (the current behavior after cross-language conformance tightening in
-/// gt-sac), or `load()` may succeed and the `validate()` pass must find a
+/// gt-sac), or `load_string()` may succeed and the `validate()` pass must find a
 /// `CircularDependency` structural error. Both paths are valid realizations
 /// of the spec §3.2 rule; the stricter parse-time rejection matches Julia
 /// and Python.
@@ -583,7 +583,7 @@ fn test_event_error_conditions() {
 fn test_circular_dependency_detection() {
     let fixture = include_str!("../../../tests/invalid/circular_coupling.esm");
 
-    match load(fixture) {
+    match load_string(fixture) {
         Ok(esm_file) => {
             let validation_result = validate(&esm_file);
             assert!(
@@ -619,11 +619,11 @@ fn test_circular_dependency_detection() {
             let msg = e.to_string();
             assert!(
                 msg.contains("cycle") || msg.contains("circular"),
-                "Expected load() failure to mention a cycle, got: {msg}"
+                "Expected load_string() failure to mention a cycle, got: {msg}"
             );
             assert!(
                 msg.contains("ModelA") && msg.contains("ModelB"),
-                "Expected load() failure to name both models, got: {msg}"
+                "Expected load_string() failure to name both models, got: {msg}"
             );
         }
     }
@@ -699,7 +699,7 @@ fn test_valid_cross_model_references() {
         }
         "#;
 
-    let parsed_result = load(json_str);
+    let parsed_result = load_string(json_str);
 
     match parsed_result {
         Ok(esm_file) => {
@@ -741,7 +741,7 @@ fn test_valid_cross_model_references() {
 #[test]
 fn test_reaction_rate_units_mismatch_fixture_rejected() {
     let fixture = include_str!("../../../tests/invalid/units_reaction_rate_mismatch.esm");
-    let esm_file = load(fixture).expect("fixture should parse and schema-validate");
+    let esm_file = load_string(fixture).expect("fixture should parse and schema-validate");
     let result = validate(&esm_file);
     let err = result
         .structural_errors
@@ -773,7 +773,7 @@ fn test_reaction_rate_units_mismatch_fixture_rejected() {
 #[test]
 fn test_physical_constant_dimensional_error_fixture_rejected() {
     let fixture = include_str!("../../../tests/invalid/units_dimensional_constant_error.esm");
-    let esm_file = load(fixture).expect("fixture should parse and schema-validate");
+    let esm_file = load_string(fixture).expect("fixture should parse and schema-validate");
     let result = validate(&esm_file);
     let err = result
         .structural_errors.clone()
@@ -1119,7 +1119,7 @@ fn discrete_parameter_loads_and_is_derived() {
     assert!(r.is_valid, "and validate: {:?}", r.structural_errors);
 
     // DECLARED `parameter`; DERIVED discrete.
-    let esm = earthsci_ast::load(doc).expect("load");
+    let esm = earthsci_ast::load_string(doc).expect("load");
     let model = &esm.models.as_ref().expect("models")["M"];
     assert_eq!(
         model.variables["held"].var_type,
@@ -1256,7 +1256,7 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
 /// Assert `validate()` emits exactly the pinned (code, path) somewhere in its
 /// structural errors, and the document is invalid.
 fn assert_structural(fixture: &str, code: StructuralErrorCode, path: &str) {
-    let esm = load(fixture).expect("F-6 fixtures are schema-valid and must load");
+    let esm = load_string(fixture).expect("F-6 fixtures are schema-valid and must load");
     let result = validate(&esm);
     assert!(!result.is_valid, "expected rejection, got valid");
     assert!(
@@ -1340,7 +1340,7 @@ fn test_f6_positive_controls_stay_valid() {
         include_str!("../../../tests/valid/coupling_variable_map_identity_units_match.esm"),
         include_str!("../../../tests/valid/cadence/pure_topology.esm"),
     ] {
-        let esm = load(fixture).expect("positive control loads");
+        let esm = load_string(fixture).expect("positive control loads");
         let result = validate(&esm);
         assert!(
             result.is_valid,

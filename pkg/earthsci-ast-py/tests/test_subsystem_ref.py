@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from earthsci_ast import DataSource, load
+from earthsci_ast import DataSource, load_path
 from earthsci_ast.parse import (
     CircularReferenceError,
     SubsystemRefError,
@@ -65,7 +65,7 @@ def test_load_resolves_local_subsystem_ref():
             },
         )
 
-        loaded = load(main_path)
+        loaded = load_path(main_path)
         outer = loaded.models["Outer"]
         assert "Inner" in outer.subsystems
         inner = outer.subsystems["Inner"]
@@ -95,7 +95,7 @@ def test_load_raises_for_missing_local_ref():
         )
 
         with pytest.raises(SubsystemRefError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_circular_reference_detection():
@@ -148,7 +148,7 @@ def test_circular_reference_detection():
         )
 
         with pytest.raises(CircularReferenceError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_loader_only_file_loads_and_validates():
@@ -165,7 +165,7 @@ def test_loader_only_file_loads_and_validates():
             },
         )
 
-        loaded = load(path)
+        loaded = load_path(path)
         assert loaded.models == {} or not loaded.models
         assert "Met" in loaded.data_sources
         assert isinstance(loaded.data_sources["Met"], DataSource)
@@ -208,7 +208,7 @@ def test_subsystem_ref_to_source_only_file_raises():
         )
 
         with pytest.raises(SubsystemRefError, match="does not contain a model"):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_inline_source_is_not_a_valid_subsystem():
@@ -233,7 +233,7 @@ def test_inline_source_is_not_a_valid_subsystem():
         )
 
         with pytest.raises(SchemaValidationError):
-            load(main_path)
+            load_path(main_path)
 
 
 def test_load_raises_for_ref_without_model_or_loader():
@@ -268,4 +268,4 @@ def test_load_raises_for_ref_without_model_or_loader():
         )
 
         with pytest.raises(SubsystemRefError):
-            load(main_path)
+            load_path(main_path)

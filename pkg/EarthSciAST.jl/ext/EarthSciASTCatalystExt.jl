@@ -361,7 +361,7 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
 
     # Top-level EsmFile-shaped dict
     out = Dict{String,Any}(
-        "esm" => EarthSciAST.ESM_FORMAT_VERSION,
+        "esm" => EarthSciAST.SCHEMA_VERSION,
         "metadata" => _esm_file_metadata(metadata, sys_name),
         "reaction_systems" => Dict{String,Any}(sys_name => rs_dict),
     )

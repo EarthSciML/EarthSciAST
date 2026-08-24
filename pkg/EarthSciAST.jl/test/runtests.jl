@@ -27,6 +27,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # the Julia mirror of pkg/earthsci-ast-ts/src/migration.test.ts, pinned
     # against tests/version_compatibility/compatibility_matrix.json.
     include("migration_test.jl")
+    # The two public version constants (SCHEMA_VERSION / LIBRARY_VERSION) and
+    # the schema-$id pin that keeps the first from hand-drifting.
+    include("version_constants_test.jl")
     include("validate_test.jl")
     include("structural_validation_test.jl")
     include("expression_test.jl")
@@ -270,7 +273,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
             @test isdir(valid_dir)
             for filename in filter(f -> endswith(f, ".esm"), readdir(valid_dir))
                 @testset "load: $filename" begin
-                    esm_data = EarthSciAST.load(joinpath(valid_dir, filename))
+                    esm_data = EarthSciAST.load_path(joinpath(valid_dir, filename))
                     @test esm_data isa EarthSciAST.EsmFile
                     @test !isnothing(esm_data.esm)
                     @test !isnothing(esm_data.metadata)
@@ -289,7 +292,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                     # exception propagates with its full stack trace.
                     rejected = try
                         result = EarthSciAST.validate(
-                            EarthSciAST.load(filepath))
+                            EarthSciAST.load_path(filepath))
                         !result.is_valid
                     catch e
                         (e isa EarthSciAST.ParseError ||

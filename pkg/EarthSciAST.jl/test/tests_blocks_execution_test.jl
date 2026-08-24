@@ -91,7 +91,7 @@ end
 # a single .esm fixture. Shared by the comprehensive fixture and the
 # tests/simulation/ physics fixtures (gt-l5b).
 function _execute_fixture_tests(fpath::AbstractString; label::AbstractString=basename(fpath))
-    file = _ESM_TB.load(fpath)
+    file = _ESM_TB.load_path(fpath)
     ran = false
     if file.models !== nothing
         for (mname, model) in file.models
@@ -210,7 +210,7 @@ end
     fpath = joinpath(@__DIR__, "..", "..", "..",
                      "tests", "simulation", "bouncing_ball.esm")
     @test isfile(fpath)
-    model = _ESM_TB.load(fpath).models["BallDynamics"]
+    model = _ESM_TB.load_path(fpath).models["BallDynamics"]
 
     # 1. It BUILDS. This alone is the J2 regression guard: before the fix this
     #    line threw a MethodError for every model with a continuous event.

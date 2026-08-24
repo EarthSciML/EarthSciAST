@@ -8,7 +8,7 @@ backward-compatible fields, so an older file already loads under the newer
 schema without any mechanical transform.
 
 The current additive line is `1.0.0 … <current schema version>`
-(`ESM_FORMAT_VERSION`).
+(`SCHEMA_VERSION`).
 
 **There is no migration across the 1.0.0 boundary.** esm 1.0.0 is a clean break
 with no deprecation path: the five declared variable types collapse to two, an
@@ -69,7 +69,7 @@ function _migration_compare_versions(a::NTuple{3,Int}, b::NTuple{3,Int})::Int
 end
 
 # The additive line runs from 1.0.0 up to (and including) the current schema
-# version, read from the library's own `ESM_FORMAT_VERSION` so this never
+# version, read from the library's own `SCHEMA_VERSION` so this never
 # hand-drifts from the version the rest of the package targets.
 #
 # The floor is 1.0.0, not 0.1.0: the 0.x line ended at a clean break, so no 0.x
@@ -78,10 +78,10 @@ end
 # the floor is stated at 1.0.0 as well so the intent survives the next major.
 const _MIGRATION_ADDITIVE_FLOOR = (1, 0, 0)
 
-# `ESM_FORMAT_VERSION` is a literal in types.jl, so this parse cannot fail; the
+# `SCHEMA_VERSION` is a literal in types.jl, so this parse cannot fail; the
 # assert is a tripwire for a future edit that makes it non-semver.
-const _MIGRATION_CURRENT_VERSION = let v = _migration_parse_version(ESM_FORMAT_VERSION)
-    v === nothing && error("ESM_FORMAT_VERSION is not a semver string: $(ESM_FORMAT_VERSION)")
+const _MIGRATION_CURRENT_VERSION = let v = _migration_parse_version(SCHEMA_VERSION)
+    v === nothing && error("SCHEMA_VERSION is not a semver string: $(SCHEMA_VERSION)")
     v
 end
 
@@ -99,7 +99,7 @@ end
 The schema versions `source_version` can be migrated to.
 
 - A version on the additive line `1.0.0 … <current schema version>` →
-  `[ESM_FORMAT_VERSION]` (a no-op marker bump to the current schema).
+  `[SCHEMA_VERSION]` (a no-op marker bump to the current schema).
 - Everything else — including EVERY 0.x version, which 1.0.0's clean break puts
   out of reach of a marker bump, plus newer-than-current, other majors, and
   malformed strings — → `String[]`.
@@ -118,7 +118,7 @@ supported_migration_targets("1.0")     # String[]  — malformed
 function supported_migration_targets(source_version::AbstractString)::Vector{String}
     parsed = _migration_parse_version(source_version)
     if parsed !== nothing && _on_additive_line(parsed)
-        return String[ESM_FORMAT_VERSION]
+        return String[SCHEMA_VERSION]
     end
     return String[]
 end

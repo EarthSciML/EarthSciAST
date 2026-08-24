@@ -1,10 +1,10 @@
-"""Tests for round-trip functionality: load(save(load(json))) == load(json)."""
+"""Tests for round-trip functionality: load(to_json(load(json))) == load(json)."""
 
 import json
 
 from conftest import FIXTURES_ROOT, VALID_DIR
 
-from earthsci_ast import load, save
+from earthsci_ast import load_string, to_json
 from earthsci_ast.esm_types import EsmFile, Metadata, Model, ModelVariable, Equation
 
 
@@ -25,16 +25,16 @@ def test_roundtrip_minimal():
     json_str = json.dumps(original_json)
 
     # First load
-    esm_file1 = load(json_str)
+    esm_file1 = load_string(json_str)
 
     # Save to JSON string
-    json_str2 = save(esm_file1)
+    json_str2 = to_json(esm_file1)
 
     # Second load
-    esm_file2 = load(json_str2)
+    esm_file2 = load_string(json_str2)
 
     # Third save (should be identical to second)
-    json_str3 = save(esm_file2)
+    json_str3 = to_json(esm_file2)
 
     # Compare the final two JSON strings - they should be identical
     data2 = json.loads(json_str2)
@@ -91,10 +91,10 @@ def test_roundtrip_reaction_system():
     json_str = json.dumps(original_json)
 
     # First round-trip
-    esm_file1 = load(json_str)
-    json_str2 = save(esm_file1)
-    esm_file2 = load(json_str2)
-    json_str3 = save(esm_file2)
+    esm_file1 = load_string(json_str)
+    json_str2 = to_json(esm_file1)
+    esm_file2 = load_string(json_str2)
+    json_str3 = to_json(esm_file2)
 
     # Compare final two JSON outputs
     data2 = json.loads(json_str2)
@@ -148,10 +148,10 @@ def test_roundtrip_complex_expression():
     json_str = json.dumps(original_json)
 
     # Double round-trip
-    esm_file1 = load(json_str)
-    json_str2 = save(esm_file1)
-    esm_file2 = load(json_str2)
-    json_str3 = save(esm_file2)
+    esm_file1 = load_string(json_str)
+    json_str2 = to_json(esm_file1)
+    esm_file2 = load_string(json_str2)
+    json_str3 = to_json(esm_file2)
 
     # Parse final JSON
     data2 = json.loads(json_str2)
@@ -209,8 +209,8 @@ def test_roundtrip_preserves_metadata():
     json_str = json.dumps(original_json)
 
     # Round-trip
-    esm_file = load(json_str)
-    json_str2 = save(esm_file)
+    esm_file = load_string(json_str)
+    json_str2 = to_json(esm_file)
     data = json.loads(json_str2)
 
     # Check all metadata is preserved
@@ -239,10 +239,10 @@ def test_roundtrip_index_outside_arrayop():
     fixture_path = FIXTURES_ROOT / "indexing" / "idx_outside_arrayop.esm"
     json_str = fixture_path.read_text()
 
-    esm1 = load(json_str)
-    json_str2 = save(esm1)
-    esm2 = load(json_str2)
-    json_str3 = save(esm2)
+    esm1 = load_string(json_str)
+    json_str2 = to_json(esm1)
+    esm2 = load_string(json_str2)
+    json_str3 = to_json(esm2)
 
     # Idempotence: second save must equal third save under parsed JSON comparison.
     assert json.loads(json_str2) == json.loads(json_str3)
@@ -292,8 +292,8 @@ def test_roundtrip_normalizes_integral_floats_keeps_fractional():
     }
 
     json_str = json.dumps(original_json)
-    esm_file = load(json_str)
-    json_str2 = save(esm_file)
+    esm_file = load_string(json_str)
+    json_str2 = to_json(esm_file)
     data = json.loads(json_str2)
 
     eqs = data["models"]["m"]["equations"]
@@ -323,10 +323,10 @@ def test_roundtrip_tests_and_analyses_fixture():
     original = fixture_path.read_text()
     orig_obj = json.loads(original)
 
-    esm = load(original)
-    dumped = save(esm)
-    esm2 = load(dumped)
-    dumped2 = save(esm2)
+    esm = load_string(original)
+    dumped = to_json(esm)
+    esm2 = load_string(dumped)
+    dumped2 = to_json(esm2)
 
     # Idempotence under re-save (spec §2.1a).
     assert json.loads(dumped) == json.loads(dumped2)
@@ -443,7 +443,7 @@ def test_roundtrip_typed_test_assertion():
         },
     )
 
-    dumped = save(esm)
+    dumped = to_json(esm)
     data = json.loads(dumped)
     t = data["models"]["M"]["tests"][0]
     assert t["id"] == "t1"
@@ -457,9 +457,9 @@ def test_roundtrip_nonlinear_isorropia_shape():
     """Round-trip fixture for Model.initialization_equations + guesses + system_kind (gt-ebuq)."""
     fixture = VALID_DIR / "nonlinear_isorropia_shape.esm"
     original_text = fixture.read_text()
-    first = load(original_text)
-    second = load(save(first))
-    assert json.loads(save(first)) == json.loads(save(second))
+    first = load_string(original_text)
+    second = load_string(to_json(first))
+    assert json.loads(to_json(first)) == json.loads(to_json(second))
 
     model = first.models["IsorropiaEq"]
     assert model.system_kind == "nonlinear"
@@ -470,9 +470,9 @@ def test_roundtrip_nonlinear_isorropia_shape():
 def test_roundtrip_nonlinear_mogi_shape():
     """Round-trip fixture for algebraic Mogi-shape model (gt-ebuq)."""
     fixture = VALID_DIR / "nonlinear_mogi_shape.esm"
-    first = load(fixture.read_text())
-    second = load(save(first))
-    assert json.loads(save(first)) == json.loads(save(second))
+    first = load_string(fixture.read_text())
+    second = load_string(to_json(first))
+    assert json.loads(to_json(first)) == json.loads(to_json(second))
 
     model = first.models["MogiModel"]
     assert model.system_kind == "nonlinear"
@@ -486,10 +486,10 @@ def test_roundtrip_fractional_stoichiometry():
     coefficients coexist with fractional products."""
     fixture = VALID_DIR / "fractional_stoichiometry.esm"
     original_text = fixture.read_text()
-    first = load(original_text)
-    second = load(save(first))
-    first_json = json.loads(save(first))
-    second_json = json.loads(save(second))
+    first = load_string(original_text)
+    second = load_string(to_json(first))
+    first_json = json.loads(to_json(first))
+    second_json = json.loads(to_json(second))
     assert first_json == second_json
 
     rs = first.reaction_systems["SuperFastLike"]

@@ -1,7 +1,7 @@
 //! Roundtrip tests for the v0.4.0 function_tables block + table_lookup AST op
 //! (esm-spec §9.5).
 
-use earthsci_ast::{EsmFile, Expr, load};
+use earthsci_ast::{EsmFile, Expr, load_string};
 
 const FIXTURE: &str = r#"
     {
@@ -163,7 +163,7 @@ const FIXTURE: &str = r#"
 
 #[test]
 fn function_tables_block_loads() {
-    let file: EsmFile = load(FIXTURE).expect("load function_tables fixture");
+    let file: EsmFile = load_string(FIXTURE).expect("load function_tables fixture");
     let fts = file
         .function_tables
         .as_ref()
@@ -185,7 +185,7 @@ fn function_tables_block_loads() {
 
 #[test]
 fn table_lookup_node_loads() {
-    let file: EsmFile = load(FIXTURE).expect("load function_tables fixture");
+    let file: EsmFile = load_string(FIXTURE).expect("load function_tables fixture");
     let model = &file.models.as_ref().unwrap()["M"];
     let eqs = &model.equations;
     assert_eq!(eqs.len(), 2);
@@ -210,7 +210,7 @@ fn table_lookup_node_loads() {
 
 #[test]
 fn round_trip_preserves_authored_form() {
-    let file: EsmFile = load(FIXTURE).expect("load function_tables fixture");
+    let file: EsmFile = load_string(FIXTURE).expect("load function_tables fixture");
     let out = serde_json::to_string(&file).expect("serialize");
     let reloaded: serde_json::Value = serde_json::from_str(&out).expect("re-parse");
     let fts = reloaded["function_tables"].as_object().unwrap();
@@ -225,7 +225,7 @@ fn round_trip_preserves_authored_form() {
     assert_eq!(rhs1["output"], "NO2");
 
     // Round-trip is a fixed point: re-load and re-save yields the same JSON.
-    let file2: EsmFile = load(&out).expect("reload");
+    let file2: EsmFile = load_string(&out).expect("reload");
     let out2 = serde_json::to_string(&file2).expect("re-serialize");
     let reloaded2: serde_json::Value = serde_json::from_str(&out2).expect("re-parse 2");
     assert_eq!(reloaded2, reloaded);

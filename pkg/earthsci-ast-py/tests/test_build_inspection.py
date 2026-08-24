@@ -33,7 +33,7 @@ from earthsci_ast.numpy_interpreter import (
     eval_expr,
     ragged_factor_scope,
 )
-from earthsci_ast.parse import load
+from earthsci_ast.parse import load_string
 from earthsci_ast.pde_inline_tests import run_pde_tests, simulate_states
 from earthsci_ast.simulation import BuildInspection, simulate
 
@@ -227,7 +227,7 @@ _RAGGED_DOC = {
 def test_ragged_csr_simulation_namespaced_factors() -> None:
     """The flattened doc namespaces nedges -> Rag.nedges; the ragged bound and
     the values gather still evaluate (keyed factors bind by bare name)."""
-    file = load(json.dumps(_RAGGED_DOC))
+    file = load_string(json.dumps(_RAGGED_DOC))
     sim = simulate_states(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12, saveat=[1.0])
     u = [sim.states[-1][sim.var_map[f"Rag.u[{i}]"]] for i in (1, 2)]
     np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
@@ -236,7 +236,7 @@ def test_ragged_csr_simulation_namespaced_factors() -> None:
 def test_run_pde_tests_observed_array_assertions() -> None:
     """§6.6.5 assertions on a state-free ARRAY OBSERVED evaluate through the
     build-inspection setup arrays (max/min of `gathered`)."""
-    file = load(json.dumps(_RAGGED_DOC))
+    file = load_string(json.dumps(_RAGGED_DOC))
     results = run_pde_tests(file, model_name="Rag", method="LSODA", rtol=1e-10, atol=1e-12)
     assert len(results) == 3
     for r in results:
@@ -252,7 +252,7 @@ def test_run_pde_tests_observed_array_assertions() -> None:
 
 
 def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
-    file = load(json.dumps(_RAGGED_DOC))
+    file = load_string(json.dumps(_RAGGED_DOC))
     insp = BuildInspection()
     result = simulate(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12, inspect=insp)
     assert result.success
@@ -267,10 +267,10 @@ def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
 
 def test_build_inspection_never_changes_the_simulation() -> None:
     """The returned trajectory is bit-identical with and without `inspect`."""
-    file = load(json.dumps(_RAGGED_DOC))
+    file = load_string(json.dumps(_RAGGED_DOC))
     plain = simulate(file, (0.0, 1.0), method="LSODA", rtol=1e-10, atol=1e-12)
     inspected = simulate(
-        load(json.dumps(_RAGGED_DOC)),
+        load_string(json.dumps(_RAGGED_DOC)),
         (0.0, 1.0),
         method="LSODA",
         rtol=1e-10,

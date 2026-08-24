@@ -13,7 +13,7 @@
 //! `pressure_drop` fix from gt-p3v — must cause this suite to fail.
 
 use earthsci_ast::{
-    EsmFile, Expr, Model, ModelTest, Tolerance, VariableType, fold_constant_expr, load,
+    EsmFile, Expr, Model, ModelTest, Tolerance, VariableType, fold_constant_expr, load_string,
 };
 use std::collections::HashMap;
 
@@ -121,7 +121,7 @@ fn check_assertion(label: &str, actual: f64, expected: f64, rel: f64, abs_: f64)
 fn units_fixtures_inline_tests_execute() {
     let mut total_tests = 0usize;
     for (fname, content) in UNITS_FIXTURES {
-        let file: EsmFile = load(content).unwrap_or_else(|e| panic!("failed to load {fname}: {e}"));
+        let file: EsmFile = load_string(content).unwrap_or_else(|e| panic!("failed to load {fname}: {e}"));
         let models = file
             .models
             .as_ref()

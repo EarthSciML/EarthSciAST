@@ -29,7 +29,7 @@
 
 use earthsci_ast::simulate::Solution;
 use earthsci_ast::{
-    EsmFile, Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load,
+    EsmFile, Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load_string,
     simulate,
 };
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ fn collect_runnable_fixtures() -> Vec<PathBuf> {
     paths.sort();
     for path in paths {
         let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-        let file = load(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
+        let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
         if model_iter(&file)
             .iter()
             .any(|(_, m)| m.tests.as_ref().is_some_and(|t| !t.is_empty()))
@@ -211,7 +211,7 @@ fn geometry_fixtures_simulate_conformance() {
     for path in collect_runnable_fixtures() {
         let fixture = path.file_name().unwrap().to_string_lossy().into_owned();
         let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-        let file = load(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
+        let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
         for (model_name, model) in model_iter(&file) {
             let Some(tests) = model.tests.as_ref() else {
                 continue;
@@ -238,7 +238,7 @@ fn geometry_fixtures_simulate_conformance() {
 fn polygon_intersection_area_planar_fixture_area_is_one() {
     let path = geometry_dir().join("polygon_intersection_area_planar.esm");
     let json = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let file = load(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
+    let file = load_string(&json).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
     let (model_name, model) = model_iter(&file)
         .into_iter()
         .next()
@@ -304,7 +304,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         });
 
     let json = fs::read_to_string(planar_ode).expect("read planar_ode fixture");
-    let file = load(&json).expect("load planar_ode fixture");
+    let file = load_string(&json).expect("load planar_ode fixture");
     let (model_name, model) = model_iter(&file)
         .into_iter()
         .next()

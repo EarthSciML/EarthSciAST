@@ -2,7 +2,7 @@
  * Bit-equivalent table_lookup → interp.* lowering harness (esm-lhm).
  *
  * For each conformance fixture under `tests/conformance/function_tables/`,
- * load the file, walk the model equations, lower every `table_lookup`
+ * loadString the file, walk the model equations, lower every `table_lookup`
  * node to the structurally-equivalent inline-`const` `interp.linear` /
  * `interp.bilinear` invocation prescribed by esm-spec §9.5.3, and assert
  * IEEE-754 binary64 agreement with the equivalent hand-written

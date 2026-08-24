@@ -65,7 +65,7 @@ const _CLS = ClassificationConformanceAdapter
     end
 
     @testset "is_ode_state agrees with ode_states" begin
-        file = EarthSciAST.load(joinpath(_CLS_DIR, "fixtures", "basic_partition.esm"))
+        file = EarthSciAST.load_path(joinpath(_CLS_DIR, "fixtures", "basic_partition.esm"))
         m = file.models["M"]
         states = Set(ode_states(m))
         for name in keys(m.variables)
@@ -84,7 +84,7 @@ const _CLS = ClassificationConformanceAdapter
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
                         "observed_leaf_seeds.esm")
         if _require_fixture(path)
-            m = EarthSciAST.load(path).models["ObservedLeafSeeds"]
+            m = EarthSciAST.load_path(path).models["ObservedLeafSeeds"]
             @test ode_states(m) == ["u"]
             @test observed_unknowns(m) == ["geom", "geom_chain", "k_scaled", "u_scaled"]
             @test algebraic_unknowns(m) == String[]
@@ -95,7 +95,7 @@ const _CLS = ClassificationConformanceAdapter
 
     @testset "observed_definitions resolves out of declaration order" begin
         path = joinpath(_CLS_DIR, "fixtures", "observed_chain.esm")
-        m = EarthSciAST.load(path).models["M"]
+        m = EarthSciAST.load_path(path).models["M"]
         defs = observed_definitions(m)
         @test sort!(collect(keys(defs))) == ["y", "z"]
         # `z ~ y*2` is declared FIRST and resolved LAST; the definition it maps
@@ -106,7 +106,7 @@ const _CLS = ClassificationConformanceAdapter
     end
 
     @testset "system_kind derivation: order is sde → pde → nonlinear → ode" begin
-        pde = EarthSciAST.load(joinpath(_CLS_DIR, "fixtures", "system_kind_pde.esm"))
+        pde = EarthSciAST.load_path(joinpath(_CLS_DIR, "fixtures", "system_kind_pde.esm"))
         # A spatial `D` (wrt an axis) and the grad/div/laplacian sugar are both
         # the pde signal; neither spelling is canonical.
         @test system_kind(pde.models["Transient"]) == "pde"
@@ -125,7 +125,7 @@ const _CLS = ClassificationConformanceAdapter
     end
 
     @testset "system_kind_mismatch fires only on a contradicting field" begin
-        variants = EarthSciAST.load(
+        variants = EarthSciAST.load_path(
             joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm"))
         # `Declared` carries a field that AGREES — no mismatch.
         @test declared_system_kind_mismatch(variants.models["Declared"]) === nothing
@@ -142,7 +142,7 @@ const _CLS = ClassificationConformanceAdapter
     end
 
     @testset "a distribution alone is NOT Brownian; an update alone is not either" begin
-        m = EarthSciAST.load(
+        m = EarthSciAST.load_path(
             joinpath(_CLS_DIR, "fixtures", "parameter_cadences.esm")).models["M"]
         # The two easy mistakes the fixture is built to catch.
         @test !("p_sampled" in brownian_parameters(m))

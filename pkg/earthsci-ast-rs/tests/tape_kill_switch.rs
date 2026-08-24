@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 
 const MODEL: &str = r#"
     {
@@ -93,7 +93,7 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
     // in this binary, so nothing has queried it yet).
     unsafe { std::env::set_var("ESS_TAPE_DISABLE", "1") };
 
-    let file = load(MODEL).expect("load model");
+    let file = load_string(MODEL).expect("load model");
     let compiled = ArrayCompiled::from_file(&file).expect("compile model");
 
     // The taped debug scratch honors the switch: no tape is installed…

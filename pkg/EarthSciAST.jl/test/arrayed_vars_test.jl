@@ -6,10 +6,10 @@ using EarthSciAST
 
     function roundtrip(name::String)
         path = joinpath(fixture_dir, name)
-        first = EarthSciAST.load(path)
+        first = EarthSciAST.load_path(path)
         tmp = tempname() * ".esm"
-        EarthSciAST.save(first, tmp)
-        second = EarthSciAST.load(tmp)
+        EarthSciAST.write_path(first, tmp)
+        second = EarthSciAST.load_path(tmp)
         rm(tmp; force=true)
         return first, second
     end

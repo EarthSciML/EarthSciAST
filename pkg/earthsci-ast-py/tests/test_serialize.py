@@ -4,7 +4,7 @@ import json
 import tempfile
 import os
 
-from earthsci_ast import save
+from earthsci_ast import to_json
 from earthsci_ast.serialize import _serialize_expression
 from earthsci_ast.esm_types import (
     EsmFile,
@@ -67,7 +67,7 @@ def test_save_minimal_esm():
 
     esm_file = EsmFile(version="1.0.0", metadata=metadata, models={"test_model": model})
 
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
 
     # Parse back to verify
     data = json.loads(json_str)
@@ -108,7 +108,7 @@ def test_save_reaction_system():
 
     esm_file = EsmFile(version="1.0.0", metadata=metadata, reaction_systems={"test_reactions": rs})
 
-    json_str = save(esm_file)
+    json_str = to_json(esm_file)
 
     # Parse back to verify
     data = json.loads(json_str)
@@ -146,7 +146,7 @@ def test_save_to_file():
 
     try:
         # Save to file
-        json_str = save(esm_file, tmp_path)
+        json_str = to_json(esm_file, tmp_path)
 
         # Verify file exists and has content
         assert os.path.exists(tmp_path)

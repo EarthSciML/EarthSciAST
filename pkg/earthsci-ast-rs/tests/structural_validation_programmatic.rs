@@ -312,7 +312,7 @@ fn test_fixture_based_validation() {
     let fixture_result = std::fs::read_to_string("../../../tests/invalid/unknown_variable_ref.esm");
 
     if let Ok(fixture) = fixture_result {
-        let parsed_result = load(&fixture);
+        let parsed_result = load_string(&fixture);
 
         match parsed_result {
             Ok(esm_file) => {

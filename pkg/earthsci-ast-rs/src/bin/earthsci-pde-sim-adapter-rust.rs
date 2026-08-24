@@ -24,7 +24,7 @@ use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
 
 use earthsci_ast::flatten::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
 
@@ -65,7 +65,7 @@ fn state_vec(names: &[String], state: &Map<String, Value>) -> Vec<f64> {
 fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> {
     let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
     let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
-    let file = load(&json_str).map_err(|e| format!("load: {e:?}"))?;
+    let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
     let params: HashMap<String, f64> = HashMap::new();
 
     // --- RHS via the vectorized arrayop evaluator -------------------------
@@ -183,7 +183,7 @@ fn json_to_field(v: &Value) -> Result<ArrayD<f64>, String> {
 fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> {
     let rel = fx["path"].as_str().ok_or("fixture.path missing")?;
     let json_str = fs::read_to_string(base.join(rel)).map_err(|e| e.to_string())?;
-    let file = load(&json_str).map_err(|e| format!("load: {e:?}"))?;
+    let file = load_string(&json_str).map_err(|e| format!("load: {e:?}"))?;
     let flat = flatten(&file).map_err(|e| format!("flatten: {e:?}"))?;
     let compiled = ArrayCompiled::from_flattened(&flat).map_err(|e| format!("compile: {e:?}"))?;
 

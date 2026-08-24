@@ -334,7 +334,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Invalid fixture units_reaction_rate_mismatch.esm is rejected" begin
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_reaction_rate_mismatch.esm")
             if _require_fixture(fixture_path)
-                esm_data = EarthSciAST.load(fixture_path)
+                esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
                 @test any(e -> e.error_type == "unit_inconsistency", result.structural_errors)
@@ -366,7 +366,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         @testset "Invalid fixture units_dimensional_constant_error.esm is rejected" begin
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_dimensional_constant_error.esm")
             if _require_fixture(fixture_path)
-                esm_data = EarthSciAST.load(fixture_path)
+                esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
                 matching = filter(e -> e.error_type == "unit_inconsistency" &&
@@ -482,7 +482,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
                                     "units_conversion_factor_error.esm")
             if _require_fixture(fixture_path)
-                esm_data = EarthSciAST.load(fixture_path)
+                esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
                 matching = filter(e -> e.error_type == "unit_inconsistency" &&
@@ -550,7 +550,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             # the one regressing — CONFORMANCE_SPEC §7.1.2 note).
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "units_gradient_operator_mismatch.esm")
             if _require_fixture(fixture_path)
-                esm_data = EarthSciAST.load(fixture_path)
+                esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
                 bad_sum = filter(e -> e.error_type == "unit_inconsistency" &&
@@ -571,7 +571,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
                                     "undefined_variable_in_aggregate_expr.esm")
             if _require_fixture(fixture_path)
-                esm_data = EarthSciAST.load(fixture_path)
+                esm_data = EarthSciAST.load_path(fixture_path)
                 result = EarthSciAST.validate(esm_data)
                 @test !result.is_valid
                 undefs = filter(e -> e.error_type == "undefined_variable", result.structural_errors)

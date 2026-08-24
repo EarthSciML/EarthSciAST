@@ -2162,7 +2162,7 @@ mod tests {
         let vi =
             materialize_value_invention(&mj, &const_arrays, &HashMap::new(), &no_bounds()).unwrap();
 
-        let file = crate::parse::load(EDGE_FIXTURE).expect("fixture loads");
+        let file = crate::parse::load_string(EDGE_FIXTURE).expect("fixture loads");
         // v0.8.0: the `index_sets` registry is document-scoped, so it is threaded
         // in and rewritten in place rather than living on the model.
         let mut registry = file

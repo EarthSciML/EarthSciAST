@@ -110,8 +110,8 @@ func TestSimulationFixturesBlocksExecution(t *testing.T) {
 			// 1. Load via Go's schema-validated loader. We only need the
 			//    side effect (schema + subsystem-ref resolution); the Go
 			//    struct does not yet expose the `tests` block.
-			if _, err := Load(path); err != nil {
-				t.Fatalf("Load(%s): %v", name, err)
+			if _, err := LoadPath(path); err != nil {
+				t.Fatalf("LoadPath(%s): %v", name, err)
 			}
 
 			// 2. Walk raw JSON to find inline `tests` blocks. The Go struct

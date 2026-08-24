@@ -181,7 +181,8 @@ def _count_top_level_systems(parsed) -> int:
 # / regrid machinery with `aggregate` FAQ nodes; 0.4.0 added the
 # sampled-function-tables block + `table_lookup`; 0.5.0 widened `plots.y`; 0.6.0
 # added the `integral` AST op.
-_CURRENT_VERSION = (1, 0, 0)
+# `SCHEMA_VERSION` / `_CURRENT_VERSION` are defined just below `_get_schema`,
+# derived from the bundled schema's `$id` so they cannot hand-drift from it.
 
 
 def _check_version_compatibility(version_string: str) -> None:
@@ -235,6 +236,30 @@ def _get_schema() -> dict[str, Any]:
 
     with open(schema_path) as f:
         return json.load(f)
+
+
+def _bundled_schema_version() -> str:
+    """The `.esm` format version this build implements, read out of the
+    bundled schema's ``$id``
+    (``https://earthsciml.org/schemas/esm/<version>/esm.schema.json``) so it
+    cannot hand-drift from the canonical ``esm-schema.json``. Same derivation
+    TypeScript and Go use for their `SCHEMA_VERSION`."""
+    schema_id = str(_get_schema().get("$id", ""))
+    match = re.search(r"/esm/(\d+\.\d+\.\d+)/", schema_id)
+    if not match:
+        raise ValueError(f"Bundled ESM schema $id does not carry a version: {schema_id!r}")
+    return match.group(1)
+
+
+#: The `.esm` FORMAT version this library implements — NOT the version of the
+#: library itself, which is ``earthsci_ast.LIBRARY_VERSION``. This used to be
+#: the PRIVATE ``_CURRENT_VERSION`` tuple, unreadable by consumers and spelled
+#: differently from every other binding.
+SCHEMA_VERSION: str = _bundled_schema_version()
+
+#: `SCHEMA_VERSION` as a (major, minor, patch) tuple, for the comparisons in
+#: `_check_version_compatibility` and `migration`.
+_CURRENT_VERSION = tuple(int(part) for part in SCHEMA_VERSION.split("."))
 
 
 def _parse_expression(
@@ -2070,26 +2095,16 @@ from .structural_checks import (  # noqa: E402
 )
 
 
-def load(
-    path_or_string: str | Path | dict,
-    *,
-    metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
-) -> EsmFile:
-    """
-    Load an ESM file from a file path, JSON string, or dict.
-
+_LOAD_ARGS_DOC = """
     Args:
-        path_or_string: File path to JSON file, JSON string, or parsed dict
         metaparameters: Optional name → integer bindings closing the ROOT
             document's open metaparameters at the loader API (esm-spec §9.7.6
             binding site 4): already-closed edge bindings win, API bindings
             beat ``default``\\ s. Binding a name the document does not declare
             raises ``template_import_unknown_name``.
         base_path: Optional directory anchoring relative
-            ``expression_template_imports`` refs (esm-spec §9.7.2) for JSON
-            string / dict input. Defaults to the file's directory for path
-            input, the current working directory otherwise.
+            ``expression_template_imports`` refs and ``{ref}`` subsystem refs
+            (esm-spec §9.7.2, §4.7).
 
     Returns:
         EsmFile object with parsed data
@@ -2098,29 +2113,93 @@ def load(
         json.JSONDecodeError: If the JSON is malformed
         SchemaValidationError: If the JSON doesn't match the schema (raised in
             place of the underlying ``jsonschema.ValidationError``)
-        FileNotFoundError: If the file path doesn't exist
+"""
+
+
+def load_path(
+    path: str | Path,
+    *,
+    metaparameters: dict[str, int] | None = None,
+    base_path: str | None = None,
+) -> EsmFile:
+    """Read and parse an ESM document from a filesystem path.
+
+    ``base_path`` defaults to the file's own directory.
+
+    Args:
+        path: Filesystem path to the ``.esm`` document.
+        metaparameters: See :func:`load_string`.
+        base_path: Overrides the file's own directory as the ref anchor.
+
+    Raises:
+        FileNotFoundError: If the file path doesn't exist.
     """
-    # Handle dict input directly
-    resolved_base = base_path if base_path is not None else os.getcwd()
-    file_path = None
-    if isinstance(path_or_string, dict):
-        # Shallow-copy so the top-level ``data.pop(...)`` of the schema-forbidden
-        # ``continuous_events`` / ``discrete_events`` keys below does not mutate a
-        # caller's dict as a side effect.
-        data = dict(path_or_string)
-    elif isinstance(path_or_string, Path) or (
-        isinstance(path_or_string, str) and os.path.exists(path_or_string)
-    ):
-        # It's a file path
-        file_path = Path(path_or_string)
-        if base_path is None:
-            resolved_base = str(file_path.parent.resolve())
-        with open(path_or_string) as f:
-            data = json.load(f)
-    else:
-        # It's a JSON string
-        data = json.loads(path_or_string)
-    base_path = resolved_base
+    file_path = Path(path)
+    resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
+    with open(file_path) as f:
+        data = json.load(f)
+    return _load_data(data, resolved_base, metaparameters, file_path)
+
+
+def load_string(
+    json_text: str,
+    *,
+    metaparameters: dict[str, int] | None = None,
+    base_path: str | None = None,
+) -> EsmFile:
+    """Parse an ESM document from JSON TEXT.
+
+    Args:
+        json_text: The document as a JSON string.
+    """
+    data = json.loads(json_text)
+    return _load_data(data, base_path if base_path is not None else os.getcwd(), metaparameters, None)
+
+
+def load_document(
+    document: dict,
+    *,
+    metaparameters: dict[str, int] | None = None,
+    base_path: str | None = None,
+) -> EsmFile:
+    """Parse an ESM document that is ALREADY a Python ``dict`` — the same
+    document a ``.esm`` file holds, just already ``json.load``ed.
+
+    Args:
+        document: The already-parsed document.
+    """
+    # Shallow-copy so the top-level ``data.pop(...)`` of the schema-forbidden
+    # ``continuous_events`` / ``discrete_events`` keys below does not mutate a
+    # caller's dict as a side effect.
+    return _load_data(
+        dict(document),
+        base_path if base_path is not None else os.getcwd(),
+        metaparameters,
+        None,
+    )
+
+
+load_path.__doc__ = (load_path.__doc__ or "") + _LOAD_ARGS_DOC
+load_string.__doc__ = (load_string.__doc__ or "") + _LOAD_ARGS_DOC
+load_document.__doc__ = (load_document.__doc__ or "") + _LOAD_ARGS_DOC
+
+
+def _load_data(
+    data: dict,
+    base_path: str,
+    metaparameters: dict[str, int] | None,
+    file_path: Path | None,
+) -> EsmFile:
+    """The pipeline shared by :func:`load_path`, :func:`load_string` and
+    :func:`load_document`.
+
+    There used to be ONE ``load(path_or_string_or_dict)`` that sniffed its
+    argument: ``os.path.exists(s)`` decided whether a string was a path or
+    JSON text. The same call meant a PATH in Julia and Go, JSON TEXT in
+    TypeScript and Rust, and here it depended on the filesystem — so the same
+    program could change meaning when a file appeared or vanished. The three
+    entry points above say which they are.
+    """
 
     # Strip top-level events (not allowed by schema, but accepted for tooling roundtrip)
     top_continuous_events = data.pop("continuous_events", None) if isinstance(data, dict) else None
@@ -2304,3 +2383,4 @@ def load(
             esm_file.events.append(_parse_discrete_event(ev))
 
     return esm_file
+

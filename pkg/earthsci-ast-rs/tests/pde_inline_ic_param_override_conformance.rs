@@ -25,7 +25,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::pde_inline_tests::run_pde_tests_with_base_dir;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -87,7 +87,7 @@ fn ic_param_override_matches_golden() {
         let text =
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
         let file =
-            load(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
+            load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
             run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 
@@ -126,7 +126,7 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
     let dir = category_dir();
     let path = dir.join("fixtures/ic_param_override.esm");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let file = load(&text).expect("fixture loads");
+    let file = load_string(&text).expect("fixture loads");
     let mut opts = SimulateOptions {
         solver: SolverChoice::Erk,
         reltol: 1e-12,

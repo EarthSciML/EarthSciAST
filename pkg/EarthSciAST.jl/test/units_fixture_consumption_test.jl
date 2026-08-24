@@ -105,7 +105,7 @@ end
         @testset "$fname" begin
             fpath = joinpath(fixtures_root, fname)
             @test isfile(fpath)
-            file = _ESM_UF.load(fpath)
+            file = _ESM_UF.load_path(fpath)
             @test file.models !== nothing
 
             any_model_tests = false

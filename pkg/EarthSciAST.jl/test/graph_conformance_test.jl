@@ -152,7 +152,7 @@ function _parse_target_expression(payload)
                                "variables" => Dict{String,Any}(),
                                "equations" => Any[Dict{String,Any}(
                                    "lhs" => "sink", "rhs" => payload)])))
-    return load(doc; base_path=_VALID_DIR).models["T"].equations[1].rhs
+    return load_document(doc; base_path=_VALID_DIR).models["T"].equations[1].rhs
 end
 
 """
@@ -170,17 +170,17 @@ function _build_target(case)
     if kind == "model"
         doc = Dict{String,Any}("esm" => "1.0.0", "metadata" => _TARGET_METADATA,
                                "models" => Dict{String,Any}("T" => payload))
-        return load(doc; base_path=_VALID_DIR).models["T"]
+        return load_document(doc; base_path=_VALID_DIR).models["T"]
     elseif kind == "reaction_system"
         doc = Dict{String,Any}("esm" => "1.0.0", "metadata" => _TARGET_METADATA,
                                "reaction_systems" => Dict{String,Any}("T" => payload))
-        return load(doc; base_path=_VALID_DIR).reaction_systems["T"]
+        return load_document(doc; base_path=_VALID_DIR).reaction_systems["T"]
     elseif kind == "equation"
         doc = Dict{String,Any}("esm" => "1.0.0", "metadata" => _TARGET_METADATA,
                                "models" => Dict{String,Any}("T" => Dict{String,Any}(
                                    "variables" => Dict{String,Any}(),
                                    "equations" => Any[payload])))
-        return load(doc; base_path=_VALID_DIR).models["T"].equations[1]
+        return load_document(doc; base_path=_VALID_DIR).models["T"].equations[1]
     elseif kind == "reaction"
         rxn = copy(payload)
         # Julia's `Reaction` requires an `id`; the corpus payload carries none
@@ -203,7 +203,7 @@ function _build_target(case)
                                    "species" => species,
                                    "parameters" => parameters,
                                    "reactions" => Any[rxn])))
-        return load(doc; base_path=_VALID_DIR).reaction_systems["T"].reactions[1]
+        return load_document(doc; base_path=_VALID_DIR).reaction_systems["T"].reactions[1]
     elseif kind == "expression"
         return _parse_target_expression(payload)
     end
@@ -245,7 +245,7 @@ if _require_fixture(_GRAPH_CORPUS_PATH)
             name = String(case["name"])
             fixture = joinpath(TESTUTILS_REPO_ROOT, String(case["input_file"]))
             _require_fixture(fixture) || continue
-            file = load(fixture)
+            file = load_path(fixture)
 
             @testset "$name" begin
                 # The COMPONENT graph is asserted strictly for every fixture:

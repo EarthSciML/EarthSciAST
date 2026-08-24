@@ -218,7 +218,7 @@ import Symbolics
                     Dict{String,Any}(
                         "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
                         "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
-        flat = EarthSciAST.flatten(EarthSciAST.load(IOBuffer(JSON3.write(doc))))
+        flat = EarthSciAST.flatten(EarthSciAST.load_string(IOBuffer(JSON3.write(doc))))
         @test !isempty(flat.template_registry)     # references reached the boundary
         sys = ModelingToolkit.System(flat; name=:TplRef)
         eqs = ModelingToolkit.equations(sys)

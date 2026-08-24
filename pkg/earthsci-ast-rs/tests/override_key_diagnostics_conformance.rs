@@ -21,7 +21,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::simulate::SimulateError;
-use earthsci_ast::{SimulateOptions, SolverChoice, load, simulate};
+use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -68,7 +68,7 @@ fn override_key_outcomes_match_the_manifest() {
     let fx = &manifest["fixtures"][0];
     let esm_path = dir.join(fx["path"].as_str().expect("path"));
     let text = fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-    let file = load(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
+    let file = load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
 
     let rtol = manifest["tolerances"]["trajectory_rtol"]
         .as_f64()

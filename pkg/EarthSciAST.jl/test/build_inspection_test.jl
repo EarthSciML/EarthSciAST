@@ -235,7 +235,7 @@ end
     # §6.6.5 end to end (flatten prefixes every name with "Div.", so this also
     # exercises the model-scope suffix resolution of the registry's bare
     # "nEdgesOnCell" offsets factor) — including the DIRECT observed assertion.
-    file = EarthSciAST.load(IOBuffer(JSON3.write(doc)))
+    file = EarthSciAST.load_string(IOBuffer(JSON3.write(doc)))
     results = run_pde_tests(file; model_name="Div", alg=OrdinaryDiffEqTsit5.Tsit5(),
                             reltol=1e-10, abstol=1e-12)
     @test length(results) == 3

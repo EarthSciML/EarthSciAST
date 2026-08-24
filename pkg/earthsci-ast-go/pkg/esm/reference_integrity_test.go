@@ -236,7 +236,7 @@ func TestInvalidCorpusStructuralPins(t *testing.T) {
 		swept++
 
 		t.Run(name, func(t *testing.T) {
-			file, loadErr := Load(path)
+			file, loadErr := LoadPath(path)
 			gotCodes := map[string]bool{}
 			gotPaths := []string{}
 			if loadErr == nil {
@@ -352,7 +352,7 @@ func TestValidCorpusIsAccepted(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			file, err := Load(fixtures[name])
+			file, err := LoadPath(fixtures[name])
 			if err != nil {
 				t.Fatalf("a VALID fixture failed to load: %v", err)
 			}
@@ -529,7 +529,7 @@ func TestCallbackVariablesAreADeclarationSite(t *testing.T) {
 		t.Fatalf("resolve repo root: %v", err)
 	}
 	path := filepath.Join(repoRoot, "tests", "coupling", "callback_examples.esm")
-	file, err := Load(path)
+	file, err := LoadPath(path)
 	if err != nil {
 		t.Fatalf("load callback_examples.esm: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 				t.Fatalf("read: %v", err)
 			}
 
-			file, err := Load(path)
+			file, err := LoadPath(path)
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
@@ -621,7 +621,7 @@ func TestTemplateLibraryRoundTripsToItself(t *testing.T) {
 					"not a call site, and must survive verbatim (§9.6.4 rule 5)")
 			}
 
-			emitted, err := Serialize(file)
+			emitted, err := ToJSON(file)
 			if err != nil {
 				t.Fatalf("a library file failed to serialize: %v", err)
 			}

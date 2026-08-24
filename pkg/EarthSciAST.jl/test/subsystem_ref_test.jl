@@ -123,7 +123,7 @@
         end
     end
 
-    @testset "load() with path calls resolve_subsystem_refs!" begin
+    @testset "load_path() with path calls resolve_subsystem_refs!" begin
         # Create a minimal valid ESM file
         tmp_dir = mktempdir()
         esm_content = """{
@@ -149,7 +149,7 @@
             # This should call resolve_subsystem_refs! automatically. The
             # minimal fixture is schema-valid, so load must succeed; any
             # exception propagates as a genuine failure.
-            loaded = EarthSciAST.load(esm_path)
+            loaded = EarthSciAST.load_path(esm_path)
             @test loaded isa EsmFile
             @test loaded.metadata.name == "Test File"
         finally
@@ -179,7 +179,7 @@
                 "metadata": {"name": "loader only", "authors": ["Test"]},
                 "data_sources": {"Met": $loader_json}
             }""")
-            loaded = EarthSciAST.load(path)
+            loaded = EarthSciAST.load_path(path)
             @test loaded isa EsmFile
             @test loaded.data_sources !== nothing
             @test haskey(loaded.data_sources, "Met")
@@ -209,7 +209,7 @@
                     "subsystems": {"Met": $loader_json}
                 }}
             }""")
-            @test_throws Exception EarthSciAST.load(path)
+            @test_throws Exception EarthSciAST.load_path(path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -237,7 +237,7 @@
                     "equations": []
                 }}
             }""")
-            loaded = EarthSciAST.load(path)
+            loaded = EarthSciAST.load_path(path)
             m = loaded.models["Regridder"]
             @test isempty(m.subsystems)
             @test discrete_parameters(m) == ["emis"]
@@ -283,7 +283,7 @@
                     "subsystems": {"Met": {"ref": "./loader.esm"}}
                 }}
             }""")
-            @test_throws SubsystemRefError EarthSciAST.load(main_path)
+            @test_throws SubsystemRefError EarthSciAST.load_path(main_path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -308,7 +308,7 @@
                     "subsystems": {"Bad": {"ref": "./two_loaders.esm"}}
                 }}
             }""")
-            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load(main_path)
+            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(main_path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -316,7 +316,7 @@
 
     # --- Top-level model {ref} stubs (schema §4.7: models.* = oneOf [Model, {ref}]) ---
 
-    @testset "top-level model {ref} stub resolves on load()" begin
+    @testset "top-level model {ref} stub resolves on load_path()" begin
         tmp_dir = mktempdir()
         try
             write(joinpath(tmp_dir, "child.esm"), """{
@@ -334,7 +334,7 @@
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "models": {"Comp": {"ref": "./child.esm"}}
             }""")
-            loaded = EarthSciAST.load(main_path)
+            loaded = EarthSciAST.load_path(main_path)
             # Named by the parent model key; the ref stub is replaced by the model.
             @test haskey(loaded.models, "Comp")
             m = loaded.models["Comp"]
@@ -370,7 +370,7 @@
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "models": {"Comp": {"ref": "./child.esm"}}
             }""")
-            loaded = EarthSciAST.load(main_path)
+            loaded = EarthSciAST.load_path(main_path)
             # The table_lookup the spliced model references resolves at the parent.
             @test loaded.function_tables !== nothing
             @test haskey(loaded.function_tables, "sig")
@@ -410,7 +410,7 @@
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "models": {"Comp": {"ref": "./components/comp.esm"}}
             }""")
-            loaded = EarthSciAST.load(main_path)
+            loaded = EarthSciAST.load_path(main_path)
             met = loaded.models["Comp"].subsystems["Met"]
             @test met isa Model
             @test !(met isa SubsystemRef)
@@ -437,7 +437,7 @@
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "models": {"Comp": {"ref": "./two_models.esm"}}
             }""")
-            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load(main_path)
+            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(main_path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -456,7 +456,7 @@
                 "metadata": {"name": "b", "authors": ["Test"]},
                 "models": {"A": {"ref": "./a.esm"}}
             }""")
-            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load(joinpath(tmp_dir, "a.esm"))
+            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(joinpath(tmp_dir, "a.esm"))
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -479,7 +479,7 @@
                 "metadata": {"name": "main", "authors": ["Test"]},
                 "models": {"Pick": {"ref": "./lib.esm", "model": "KernelB"}}
             }""")
-            loaded = EarthSciAST.load(main_path)
+            loaded = EarthSciAST.load_path(main_path)
             @test haskey(loaded.models, "Pick")
             @test haskey(loaded.models["Pick"].variables, "b")
             @test !haskey(loaded.models["Pick"].variables, "a")
@@ -490,7 +490,7 @@
                 "metadata": {"name": "bad", "authors": ["Test"]},
                 "models": {"Pick": {"ref": "./lib.esm", "model": "KernelZ"}}
             }""")
-            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load(bad_path)
+            @test_throws EarthSciAST.SubsystemRefError EarthSciAST.load_path(bad_path)
         finally
             rm(tmp_dir, recursive=true, force=true)
         end
@@ -513,7 +513,7 @@
                     "Second": {"ref": "./child.esm"}
                 }
             }""")
-            loaded = EarthSciAST.load(main_path)
+            loaded = EarthSciAST.load_path(main_path)
             # Path-scoped cycle detection allows the same file in sibling slots.
             @test haskey(loaded.models["First"].variables, "u")
             @test haskey(loaded.models["Second"].variables, "u")
@@ -576,7 +576,7 @@
                     """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
                 # The child's index sets merge into the importing document's
                 # registry (§4.7); their sizes come from the folded bindings.
-                f = EarthSciAST.load(p; metaparameters=Dict("NX" => 18, "NY" => 20))
+                f = EarthSciAST.load_path(p; metaparameters=Dict("NX" => 18, "NY" => 20))
                 @test f.index_sets["tgt_cells"].size == 360   # derived NX*NY
                 @test f.index_sets["gx"].size == 18
                 @test f.index_sets["gy"].size == 20
@@ -593,7 +593,7 @@
                 p = joinpath(tmp, "parent.esm")
                 write(p, _parent(
                     """{"NX": "NX", "NY": "NY", "NTGT": {"op": "*", "args": ["NX", "NY"]}}"""))
-                f = EarthSciAST.load(p)   # parent defaults NX=18, NY=20
+                f = EarthSciAST.load_path(p)   # parent defaults NX=18, NY=20
                 @test f.index_sets["tgt_cells"].size == 360
             finally
                 rm(tmp, recursive=true, force=true)
@@ -606,7 +606,7 @@
                 write(joinpath(tmp, "child_regrid.esm"), _child)
                 p = joinpath(tmp, "parent.esm")
                 write(p, _parent("""{"NX": 5, "NY": 6, "NTGT": 30}"""))
-                f = EarthSciAST.load(p)
+                f = EarthSciAST.load_path(p)
                 @test f.index_sets["tgt_cells"].size == 30
                 @test f.index_sets["gx"].size == 5
                 @test f.index_sets["gy"].size == 6
@@ -622,7 +622,7 @@
                 p = joinpath(tmp, "parent.esm")
                 write(p, _parent(
                     """{"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}"""))
-                @test _err(() -> EarthSciAST.load(p; metaparameters=Dict("NX" => 18))) ==
+                @test _err(() -> EarthSciAST.load_path(p; metaparameters=Dict("NX" => 18))) ==
                       "template_import_unknown_name"
             finally
                 rm(tmp, recursive=true, force=true)
@@ -630,8 +630,8 @@
         end
     end
 
-    @testset "load(::IO) runs the same pipeline as load(::String)" begin
-        # REGRESSION: `load(::IO)` used to call the typed pipeline directly,
+    @testset "load_path(::IO) runs the same pipeline as load_path(::String)" begin
+        # REGRESSION: `load_path(::IO)` used to call the typed pipeline directly,
         # skipping top-level `{ref}` inlining AND `resolve_subsystem_refs!`.
         # A stream-loaded document therefore kept its subsystem refs as
         # unresolved `SubsystemRef`s — which `flatten` SILENTLY SKIPS. Same
@@ -662,9 +662,9 @@
             }"""
             write(main_path, main_json)
 
-            from_path = EarthSciAST.load(main_path)
-            from_io = EarthSciAST.load(IOBuffer(main_json); base_path=tmp_dir)
-            from_dict = EarthSciAST.load(JSON3.read(main_json, Dict{String,Any});
+            from_path = EarthSciAST.load_path(main_path)
+            from_io = EarthSciAST.load_string(IOBuffer(main_json); base_path=tmp_dir)
+            from_dict = EarthSciAST.load_document(JSON3.read(main_json, Dict{String,Any});
                                          base_path=tmp_dir)
 
             # The ref is linked, not left as a stub, on every entry point.

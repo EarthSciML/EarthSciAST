@@ -7,7 +7,7 @@
 //! in [`crate::coupling`].
 //!
 //! A parallel LOAD-TIME stack lives in `crate::parse`
-//! (`validate_structural_json`): it runs on raw JSON inside `load()` with
+//! (`validate_structural_json`): it runs on raw JSON inside `load_string()` with
 //! cross-binding-pinned String messages, and some rules deliberately exist in
 //! both layers — see the note in parse.rs before changing a shared rule.
 
