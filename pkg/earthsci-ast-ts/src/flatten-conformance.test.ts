@@ -239,15 +239,17 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     })
 
     it('domain and metadata', () => {
-      // PRESENCE and `independent_variable` are compared against the corpus.
-      // `element_type` / `array_type` are NOT — see the ORACLE GAP test below:
-      // the corpus records them as null for every case because the Python
-      // oracle's `Domain` dataclass has no such fields, while three of these
-      // fixtures declare `element_type: "Float64"`. Asserting them here would
-      // pin an oracle omission into this binding.
+      // The FULL domain record is compared. `element_type` / `array_type` were
+      // exempted while the oracle could not represent them — Python's `Domain`
+      // dataclass carried neither field, so `load` dropped them and the corpus
+      // recorded null for every case. That gap is CLOSED (the oracle now parses
+      // AND serializes both; its round trip had been lossy too), so these are
+      // compared like any other field.
       expect(flat.domain === null).toBe(expected.domain === null)
       if (flat.domain !== null && expected.domain !== null) {
         expect(flat.domain.independent_variable ?? null).toBe(expected.domain.independent_variable)
+        expect(flat.domain.element_type ?? null).toBe(expected.domain.element_type)
+        expect(flat.domain.array_type ?? null).toBe(expected.domain.array_type)
       }
       expect(flat.metadata.sourceSystems).toEqual(expected.metadata.source_systems)
       expect(flat.metadata.couplingRules).toEqual(expected.metadata.coupling_rules)
@@ -278,36 +280,24 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     })
   })
 
-  // --- a KNOWN ORACLE GAP, pinned so it cannot be forgotten -----------------
+  // --- domain pass-through, pinned independently of the corpus --------------
 
-  it('ORACLE GAP: the corpus cannot express Domain.element_type / array_type', () => {
-    // esm-libraries-spec §4.7.5 step 4 says `domain` is "The file's `domain`
-    // section, unchanged", and the schema's `element_type` selects Float32 vs
-    // Float64 — a real numerical property of the assembled problem. But the
-    // Python oracle's `Domain` dataclass declares only `name`,
-    // `independent_variable` and `temporal`, so the generator's
-    // `getattr(domain, "element_type", None)` records null for EVERY case, even
-    // where the fixture declares Float64. TypeScript passes the section through
-    // unchanged, so it disagrees with the corpus on three fixtures.
+  it('carries Domain.element_type through flatten unchanged', () => {
+    // esm-libraries-spec §4.7.5 step 4: `domain` is "The file's `domain`
+    // section, unchanged". `element_type` selects Float32 vs Float64 — a real
+    // numerical property of the assembled problem — and `array_type` selects
+    // the array backend (e.g. "CuArray").
     //
-    // This test pins the gap rather than the workaround: when Python's Domain
-    // grows the two fields and the corpus is regenerated, this fails and the
-    // comparison above can be tightened to the full domain record.
-    for (const c of corpus.cases) {
-      if (c.domain === null) continue
-      expect(c.domain.element_type).toBeNull()
-      expect(c.domain.array_type).toBeNull()
-    }
-    const declaresFloat64 = [
-      'full_coupled',
-      'complete_coupling_types',
-      'coupled_atmospheric_system',
-    ]
-    for (const id of declaresFloat64) {
-      const c = corpus.cases.find((x) => x.id === id) as FlattenCase
-      const flat = flatten(load(c.fixture))
-      expect(flat.domain?.element_type).toBe('Float64')
-    }
+    // These were once null for EVERY corpus case: the Python oracle's `Domain`
+    // dataclass carried neither field, so `load` dropped them before flatten ran
+    // and the generator recorded null. TypeScript was right and the oracle was
+    // wrong. The oracle was fixed on 2026-08-24 and the corpus regenerated, so
+    // the per-case comparison above now covers both fields.
+    //
+    // This keeps the corpus-INDEPENDENT half: `model_only.esm` declares Float32,
+    // so the pass-through stays pinned even if no corpus fixture declares it.
+    const flat = flatten(load('valid/model_only.esm'))
+    expect(flat.domain?.element_type).toBe('Float32')
   })
 
   // --- refusals -------------------------------------------------------------

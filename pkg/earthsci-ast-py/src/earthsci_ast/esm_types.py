@@ -1034,6 +1034,14 @@ class Domain:
     independent_variable: str | None = None
     temporal: TemporalDomain | None = None
 
+    # esm-schema.json $defs/Domain. `element_type` selects the floating point
+    # precision of the assembled problem and `array_type` its array backend
+    # (e.g. "CuArray"). Both were absent here until 2026-08-24, so `load` DROPPED
+    # them and a document asking for Float32 or a GPU backend silently got the
+    # defaults -- and `to_json` round-tripped the loss back out.
+    element_type: str | None = None
+    array_type: str | None = None
+
     # Legacy support for backwards compatibility
     dimensions: dict[str, Any] | None = None
     coordinates: dict[str, list[float]] = field(default_factory=dict)

@@ -482,10 +482,11 @@ func TestFlattenConformance(t *testing.T) {
 
 // diffDomain compares the flattened domain against the corpus.
 //
-// `element_type` and `array_type` are compared only when the corpus records a
-// value, because the ORACLE CANNOT REPRESENT THEM -- see the KNOWN ORACLE GAP
-// documented on TestFlattenDomainOracleGap, which asserts BOTH halves of that
-// gap so this exemption cannot outlive it silently.
+// `element_type` and `array_type` are compared UNCONDITIONALLY. They were
+// exempted while the oracle could not represent them (Python's Domain dataclass
+// carried neither field, so load dropped them and the corpus recorded null
+// everywhere). That gap is CLOSED: the oracle now parses and serializes both,
+// and the corpus records the authored values.
 func diffDomain(t *testing.T, got, want *flattenDomainRecord) {
 	t.Helper()
 	if (got == nil) != (want == nil) {
@@ -499,11 +500,11 @@ func diffDomain(t *testing.T, got, want *flattenDomainRecord) {
 		t.Errorf("domain.independent_variable = %v, want %v",
 			showStr(got.IndependentVariable), showStr(want.IndependentVariable))
 	}
-	if want.ElementType != nil && !sameStrPtr(got.ElementType, want.ElementType) {
+	if !sameStrPtr(got.ElementType, want.ElementType) {
 		t.Errorf("domain.element_type = %v, want %v",
 			showStr(got.ElementType), showStr(want.ElementType))
 	}
-	if want.ArrayType != nil && !sameStrPtr(got.ArrayType, want.ArrayType) {
+	if !sameStrPtr(got.ArrayType, want.ArrayType) {
 		t.Errorf("domain.array_type = %v, want %v",
 			showStr(got.ArrayType), showStr(want.ArrayType))
 	}
@@ -590,123 +591,47 @@ func diffEvents(t *testing.T, field string, got, want []flattenEventRecord) {
 	}
 }
 
-// TestFlattenDomainOracleGap pins a KNOWN GAP IN THE ORACLE, from both sides, so
-// that fixing the oracle FAILS THIS TEST and forces the exemption in diffDomain
-// to be deleted in the same change.
+// TestFlattenDomainPassthrough pins that a document's float-precision and
+// array-backend selection survives Flatten.
 //
-// THE GAP. esm-schema.json declares two fields on Domain that the flatten corpus
-// records as null for every single case:
+// esm-schema.json declares two fields on Domain that select real numerical
+// behaviour:
 //
 //	element_type : enum ["Float32","Float64"], default "Float64" -- float precision
 //	array_type   : string, default "Array"    -- array backend, e.g. "CuArray" (GPU)
 //
-// The Python oracle's Domain dataclass (esm_types.py) declares only `name`,
-// `independent_variable`, `temporal` and the legacy `dimensions` / `coordinates`
-// / `boundaries`. It has NEITHER field, so load_path DROPS them before flatten
-// runs, and scripts/generate-flatten-corpus.py's
-// getattr(flat.domain, "element_type", None) then records null everywhere. The
-// null is a parse loss in the oracle, not a statement about flatten.
+// esm-libraries-spec §4.7.5 step 4 says the flattened `domain` is "the file's
+// `domain` section, UNCHANGED", so both must pass through.
 //
-// WHY GO DOES NOT MATCH IT. esm-libraries-spec §4.7.5 step 4 says the flattened
-// `domain` is "the file's `domain` section, UNCHANGED". Passing both fields
-// through is the conforming behaviour; dropping or nulling them in Go to make a
-// corpus comparison pass would silently discard a document's float-precision and
-// array-backend selection -- a real regression to satisfy a bug.
+// HISTORY, because it explains why this is pinned separately from the corpus
+// comparison. Both fields used to be recorded as null for EVERY corpus case:
+// the Python oracle's Domain dataclass carried neither, so load dropped them
+// before flatten ran and the generator's getattr(..., None) recorded null. Go
+// was correct and the ORACLE was wrong, so diffDomain carried an exemption and
+// this test asserted the gap from both sides. The oracle was fixed on
+// 2026-08-24 (Domain now parses AND serializes both fields; the round trip had
+// been lossy too), the corpus regenerated, and the exemption deleted --
+// diffDomain now compares both fields unconditionally for all 19 cases.
 //
-// WHAT THIS ASSERTS. For every corpus fixture whose authored `domain` declares
-// either field: (a) the corpus still records null -- so when the oracle is fixed
-// and the corpus regenerated, THIS assertion fails and points at diffDomain; and
-// (b) Go carries the authored value through flatten. Plus one
-// corpus-independent case (tests/valid/model_only.esm declares Float32) so the
-// pass-through is pinned even if the corpus fixture set changes.
-func TestFlattenDomainOracleGap(t *testing.T) {
+// What survives is the corpus-INDEPENDENT half: tests/valid/model_only.esm
+// declares Float32, so the pass-through stays pinned even if no corpus fixture
+// declares either field.
+func TestFlattenDomainPassthrough(t *testing.T) {
 	root := flattenCorpusRoot(t)
-	corpus := loadFlattenCorpus(t)
 
-	// (b) corpus-independent: the authored value survives flatten.
-	t.Run("go_preserves_element_type", func(t *testing.T) {
-		file, err := LoadPath(filepath.Join(root, "tests", "valid", "model_only.esm"))
-		if err != nil {
-			t.Fatalf("load model_only.esm: %v", err)
-		}
-		flat, err := Flatten(file)
-		if err != nil {
-			t.Fatalf("flatten model_only.esm: %v", err)
-		}
-		if flat.Domain == nil {
-			t.Fatal("flattened domain is nil; step 4 passes the file's domain section through unchanged")
-		}
-		if flat.Domain.ElementType == nil || *flat.Domain.ElementType != "Float32" {
-			t.Errorf("domain.element_type = %v, want Float32 (the authored value must survive flatten)",
-				showStr(flat.Domain.ElementType))
-		}
-	})
-
-	authored := func(fixture string) map[string]any {
-		raw, err := os.ReadFile(filepath.Join(root, "tests", filepath.FromSlash(fixture)))
-		if err != nil {
-			t.Fatalf("read %s: %v", fixture, err)
-		}
-		var doc struct {
-			Domain map[string]any `json:"domain"`
-		}
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			t.Fatalf("parse %s: %v", fixture, err)
-		}
-		return doc.Domain
+	file, err := LoadPath(filepath.Join(root, "tests", "valid", "model_only.esm"))
+	if err != nil {
+		t.Fatalf("load model_only.esm: %v", err)
 	}
-
-	checked := 0
-	for _, want := range corpus.Cases {
-		dom := authored(want.Fixture)
-		elem, hasElem := dom["element_type"].(string)
-		arr, hasArr := dom["array_type"].(string)
-		if !hasElem && !hasArr {
-			continue
-		}
-		checked++
-		t.Run(want.ID, func(t *testing.T) {
-			// (a) the gap is still there. When the oracle grows the fields and
-			// the corpus is regenerated, this fails -- delete the element_type /
-			// array_type exemption in diffDomain and this whole test with it.
-			if want.Domain == nil {
-				t.Fatalf("%s authors a domain but the corpus records none", want.Fixture)
-			}
-			if hasElem && want.Domain.ElementType != nil {
-				t.Errorf("ORACLE GAP CLOSED: the corpus now records domain.element_type=%q for %s. "+
-					"Delete the element_type/array_type exemption in diffDomain and delete this test.",
-					*want.Domain.ElementType, want.ID)
-			}
-			if hasArr && want.Domain.ArrayType != nil {
-				t.Errorf("ORACLE GAP CLOSED: the corpus now records domain.array_type=%q for %s. "+
-					"Delete the element_type/array_type exemption in diffDomain and delete this test.",
-					*want.Domain.ArrayType, want.ID)
-			}
-
-			// (b) ...and Go reads the real value meanwhile.
-			file, err := LoadPath(filepath.Join(root, "tests", filepath.FromSlash(want.Fixture)))
-			if err != nil {
-				t.Fatalf("load %s: %v", want.Fixture, err)
-			}
-			flat, err := Flatten(file)
-			if err != nil {
-				t.Fatalf("flatten %s: %v", want.Fixture, err)
-			}
-			if flat.Domain == nil {
-				t.Fatal("flattened domain is nil; step 4 passes the file's domain section through unchanged")
-			}
-			if hasElem && (flat.Domain.ElementType == nil || *flat.Domain.ElementType != elem) {
-				t.Errorf("domain.element_type = %v, want %q (authored); Go must not drop it to match the oracle",
-					showStr(flat.Domain.ElementType), elem)
-			}
-			if hasArr && (flat.Domain.ArrayType == nil || *flat.Domain.ArrayType != arr) {
-				t.Errorf("domain.array_type = %v, want %q (authored); Go must not drop it to match the oracle",
-					showStr(flat.Domain.ArrayType), arr)
-			}
-		})
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatalf("flatten model_only.esm: %v", err)
 	}
-	if checked == 0 {
-		t.Fatal("no corpus fixture declares domain.element_type / domain.array_type any more; " +
-			"the exemption in diffDomain is now unjustified and should be deleted with this test")
+	if flat.Domain == nil {
+		t.Fatal("flattened domain is nil; step 4 passes the file's domain section through unchanged")
+	}
+	if flat.Domain.ElementType == nil || *flat.Domain.ElementType != "Float32" {
+		t.Errorf("domain.element_type = %v, want Float32 (the authored value must survive flatten)",
+			showStr(flat.Domain.ElementType))
 	}
 }

@@ -1198,6 +1198,13 @@ def _parse_domain(domain_data: dict[str, Any]) -> Domain:
     if "independent_variable" in domain_data:
         domain.independent_variable = domain_data["independent_variable"]
 
+    # Precision / array backend (esm-schema $defs/Domain). Carried through
+    # unchanged per esm-libraries-spec §4.7.5 step 4.
+    if "element_type" in domain_data:
+        domain.element_type = domain_data["element_type"]
+    if "array_type" in domain_data:
+        domain.array_type = domain_data["array_type"]
+
     # Parse temporal domain
     if "temporal" in domain_data:
         temporal_data = domain_data["temporal"]
