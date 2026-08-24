@@ -861,7 +861,7 @@ func describeCoupling(entry CouplingEntry, file *ESMFile, index int) string {
 		if len(c.Translate) > 0 {
 			parts := make([]string, 0, len(c.Translate))
 			for _, k := range orderedKeys(c.Translate, file.declarationOrder(fmt.Sprintf("/coupling/%d/translate", index))) {
-				parts = append(parts, fmt.Sprintf("%s->%v", k, c.Translate[k]))
+				parts = append(parts, fmt.Sprintf("%s->%s", k, describeTranslateTarget(c.Translate[k])))
 			}
 			rule += " [translate: " + strings.Join(parts, ", ") + "]"
 		}
@@ -885,6 +885,31 @@ func describeCoupling(entry CouplingEntry, file *ESMFile, index int) string {
 	default:
 		return fmt.Sprintf("unknown(%T)", entry)
 	}
+}
+
+// describeTranslateTarget renders one `translate` VALUE for the metadata line.
+// An object-valued entry renders as `target` or `target*factor`; a string-valued
+// one renders as itself. Without this an object entry leaked its decoded
+// representation (Go's `map[factor:1 var:ozone_conc]`, Python's dict repr) into
+// what is a cross-binding surface. The AUTHORED spellings are rendered, not the
+// namespace-qualified ones the matcher uses: this line reports the document.
+func describeTranslateTarget(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	target := "?"
+	for _, key := range []string{"to", "target", "var"} {
+		if s, ok := m[key].(string); ok && s != "" {
+			target = s
+			break
+		}
+	}
+	f, ok := exprNumber(m["factor"])
+	if !ok {
+		return target
+	}
+	return target + "*" + formatFactor(f)
 }
 
 // formatFactor renders a coupling `factor` for the metadata line. An
@@ -1307,11 +1332,13 @@ type translateEntry struct {
 // no-op.
 func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry {
 	out := map[string]translateEntry{}
+	aSys, bSys := entry.Systems[0], entry.Systems[1]
 	for aName, v := range entry.Translate {
+		aQ := qualifyTranslateEndpoint(aName, aSys)
 		switch t := v.(type) {
 		case string:
 			if t != "" {
-				out[t] = translateEntry{target: aName, factor: 1.0}
+				out[qualifyTranslateEndpoint(t, bSys)] = translateEntry{target: aQ, factor: 1.0}
 			}
 		case map[string]any:
 			bName := ""
@@ -1326,11 +1353,41 @@ func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry 
 				factor = f
 			}
 			if bName != "" {
-				out[bName] = translateEntry{target: aName, factor: factor}
+				out[qualifyTranslateEndpoint(bName, bSys)] = translateEntry{target: aQ, factor: factor}
 			}
 		}
 	}
 	return out
+}
+
+// qualifyTranslateEndpoint puts one `translate` endpoint into the NAMESPACED
+// form the matcher uses (esm-spec §10.2, esm-libraries-spec §4.7.1 step 2).
+//
+// An endpoint may be authored either bare ("O3") or fully scoped
+// ("ChemistrySystem.O3"), but matching runs against the namespaced dependent
+// variable of a flattened equation, so a bare endpoint left as written can
+// never match. That was the second half of the direction defect and it fails
+// the same silent way: the lookup misses, the bare-name fallback then searches
+// A for B's short name and misses too, and the whole entry no-ops.
+//
+// A bare endpoint is qualified with the system it belongs to under the
+// direction rule — a KEY against systems[0], a VALUE against systems[1]. An
+// endpoint that already carries a dot is left ALONE: it is either already
+// namespaced or names a subsystem path, and re-prefixing it would break it.
+//
+// `_var` is exempt in either position. It is a GLOBAL sentinel (esm-spec §6.4),
+// never namespaced; a value of "B._var" is the redundant spelling §10.2
+// requires to stay harmless, and it stays harmless here because placeholder
+// expansion has already turned that equation into a DIRECT match, which takes
+// precedence over this map.
+func qualifyTranslateEndpoint(name, system string) string {
+	if name == "" || name == operatorPlaceholderVar || strings.HasSuffix(name, "."+operatorPlaceholderVar) {
+		return name
+	}
+	if system == "" || strings.Contains(name, ".") {
+		return name
+	}
+	return system + "." + name
 }
 
 // expandOperatorComposePlaceholders expands `_var` placeholders in B's equations
@@ -1389,6 +1446,9 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	}
 
 	var surviving []FlattenedEquation
+	// bDep -> targetDep for every match that RENAMED the dependent variable.
+	mergedAway := map[string]string{}
+	var mergedAwayOrder []string
 	for _, bEq := range b.equations {
 		bDep := lhsDependentVar(bEq.LHS)
 		if bDep == "" {
@@ -1451,8 +1511,58 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			RHS:          addExprs(aEq.RHS, rhs),
 			SourceSystem: aEq.SourceSystem,
 		}
+		if targetDep != bDep {
+			if _, seen := mergedAway[bDep]; !seen {
+				mergedAwayOrder = append(mergedAwayOrder, bDep)
+			}
+			mergedAway[bDep] = targetDep
+		}
 	}
 	b.equations = surviving
+
+	// §4.7.1 step 4, "the merged-away name does not survive": a RENAMING match
+	// (a translation match, or the bare-name fallback, which is a name-based
+	// translation) has just consumed B's defining equation, so B's declaration
+	// of that name is left constraining nothing — an unknown with no equation,
+	// which classifies as ALGEBRAIC (§6.3.1) and makes the flattened system
+	// structurally singular. §10.2 says the pair names ONE quantity, so only A's
+	// spelling survives: every remaining reference is retargeted at it and the
+	// stranded declaration is dropped.
+	//
+	// The retarget runs FIRST and is DOCUMENT-WIDE, not B-local: a third system
+	// may reference `B.x` by its scoped name, and pruning the declaration while
+	// leaving that reference dangling would trade one broken system for another.
+	if len(mergedAway) > 0 {
+		retargetMergedNames(components, mergedAway)
+		for _, gone := range mergedAwayOrder {
+			b.stateVars.remove(gone)
+			b.observed.remove(gone)
+		}
+	}
+}
+
+// retargetMergedNames rewrites every reference to a merged-away dependent
+// variable, everywhere in the document.
+//
+// Applied after an `operator_compose` renaming match folds `B.x` into `A.y`:
+// the two spellings named one quantity, only `A.y` still exists, so every
+// equation side in every component is rewritten off the dead name. An observed
+// variable's defining expression is one of those equations (it is not carried
+// on FlattenedVariable), so this covers it too.
+func retargetMergedNames(components map[string]*componentSystem, renames map[string]string) {
+	bindings := make(map[string]Expression, len(renames))
+	for from, to := range renames {
+		bindings[from] = to
+	}
+	for _, comp := range components {
+		for i, eq := range comp.equations {
+			comp.equations[i] = FlattenedEquation{
+				LHS:          substituteExpr(eq.LHS, bindings),
+				RHS:          substituteExpr(eq.RHS, bindings),
+				SourceSystem: eq.SourceSystem,
+			}
+		}
+	}
 }
 
 // applyCouple resolves a `couple` connector by injecting source/sink terms: each
