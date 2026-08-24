@@ -729,6 +729,12 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     params = OrderedDict{String, ModelVariable}()
     observeds = OrderedDict{String, ModelVariable}()
     equations = Equation[]
+    # Parallel to `equations`: which component AUTHORED each one. §4.7.1 step 4
+    # sums `rhs_A + factor * rhs_B`, so the merge has to tell A's equations from
+    # B's, and after namespacing that is no longer readable off the equation —
+    # an operator component may write `D(Chemistry.O3, t) = …` itself. See
+    # `_attribute_equations!`.
+    eq_owners = String[]
     continuous_events = ContinuousEvent[]
     discrete_events = DiscreteEvent[]
     # esm-spec v0.8.0: index sets are a single document-scoped registry, seeded
@@ -761,6 +767,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                             continuous_events, discrete_events,
                             model, name;
                             tpl_rename=get(template_rename, name, nothing))
+            _attribute_equations!(eq_owners, equations, name)
             _collect_loader_fields!(loader_fields, model, name, file.data_sources)
         end
     end
@@ -776,6 +783,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
             _collect_reaction_system!(states, params, equations,
                                       rsys, name; templates=rs_templates)
+            _attribute_equations!(eq_owners, equations, name)
         end
     end
 
@@ -795,7 +803,11 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     for entry in file.coupling
         push!(coupling_rules_applied, describe_coupling_entry(entry))
         if entry isa CouplingOperatorCompose
-            _apply_operator_compose!(equations, entry)
+            # Equations a previous coupling rule introduced belong to no
+            # component; `_attribute_equations!` marks them so before the merge
+            # reads the vector.
+            _attribute_equations!(eq_owners, equations, "")
+            _apply_operator_compose!(equations, entry, states, eq_owners)
         elseif entry isa CouplingCouple
             _apply_couple!(equations, entry, opaque_refs)
         elseif entry isa CouplingVariableMap
