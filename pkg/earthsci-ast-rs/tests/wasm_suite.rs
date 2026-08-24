@@ -21,7 +21,7 @@ use wasm_bindgen_test::*;
 
 use earthsci_ast::{
     Manifold, SimulateOptions, SolverChoice, component_graph, free_variables, intersect_polygon,
-    load_string, polygon_area, to_json, shoelace_area, simulate, stoichiometric_matrix, validate,
+    load_string, polygon_area, shoelace_area, simulate, stoichiometric_matrix, to_json, validate,
 };
 
 /// Scalar exponential-decay ODE: `dx/dt = k·x`, `k = -1`, `x(0) = 1` ⇒

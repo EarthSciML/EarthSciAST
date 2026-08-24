@@ -133,10 +133,10 @@ def main() -> None:
     doc = build_doc(depth)
     print(f"depth={depth} doc bytes={len(json.dumps(doc))}")
 
-    from earthsci_ast.parse import load
+    from earthsci_ast.parse import load_document
 
     t0 = time.perf_counter()
-    esm = load(doc)
+    esm = load_document(doc)
     dt = time.perf_counter() - t0
 
     rate = esm.reaction_systems["chem"].reactions[0].rate_constant

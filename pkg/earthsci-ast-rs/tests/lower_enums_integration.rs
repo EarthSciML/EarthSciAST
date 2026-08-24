@@ -9,7 +9,8 @@ use serde_json::Value;
 #[test]
 fn enums_categorical_lookup_fixture_lowers_enum_ops() {
     let fixture = include_str!("../../../tests/valid/enums_categorical_lookup.esm");
-    let file: EsmFile = load_string(fixture).expect("Failed to load enums_categorical_lookup fixture");
+    let file: EsmFile =
+        load_string(fixture).expect("Failed to load enums_categorical_lookup fixture");
 
     let enums = file.enums.as_ref().expect("enums block should round-trip");
     assert_eq!(enums["season"]["summer"], 3);

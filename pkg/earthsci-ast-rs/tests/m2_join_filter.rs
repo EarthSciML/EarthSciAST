@@ -19,7 +19,7 @@
 //!   value-equality engine is M3), rather than silently producing the wrong sum.
 
 use earthsci_ast::types::Expr;
-use earthsci_ast::{EsmFile, SimulateOptions, SolverChoice, load_string, to_json, simulate};
+use earthsci_ast::{EsmFile, SimulateOptions, SolverChoice, load_string, simulate, to_json};
 use std::collections::HashMap;
 
 /// Build a `D(y[i]) = aggregate over j of body` contraction model. `rhs_extra`

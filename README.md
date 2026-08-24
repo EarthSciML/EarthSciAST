@@ -18,21 +18,21 @@ The format is language-agnostic (Julia, TypeScript, Python, Rust, Go), human-rea
 **Julia:**
 ```julia
 using EarthSciAST
-esm_file = load("model.esm")
+esm_file = load_path("model.esm")
 println("Model has $(length(esm_file.models)) components")
 ```
 
 **TypeScript/Node.js:**
 ```typescript
-import { load, validate } from '@earthsciml/ast';
-const esmFile = load('model.esm');
+import { loadPath, validate } from '@earthsciml/ast';
+const esmFile = loadPath('model.esm');
 const result = validate(esmFile);
 ```
 
 **Python:**
 ```python
 import earthsci_ast
-esm_file = earthsci_ast.load("model.esm")
+esm_file = earthsci_ast.load_path("model.esm")
 print(f"Model has {len(esm_file.models)} components")
 ```
 

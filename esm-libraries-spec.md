@@ -928,9 +928,9 @@ Julia is the primary language for EarthSciML and has the richest integration sto
 ```julia
 using EarthSciAST
 
-# Load and save
-file = EarthSciAST.load("model.esm")
-EarthSciAST.save(file, "model_v2.esm")
+# Read and write
+file = EarthSciAST.load_path("model.esm")
+EarthSciAST.write_path(file, "model_v2.esm")
 
 # Pretty-print a model
 display(file.models["SuperFast"])
@@ -1674,9 +1674,9 @@ earthsci_ast/
 ```python
 import earthsci_ast as esm
 
-# Load and save
-file = esm.load("model.esm")
-esm.save(file, "model_v2.esm")
+# Read and write
+file = esm.load_path("model.esm")
+esm.write_path(file, "model_v2.esm")
 
 # Pretty-print (uses sympy.pretty or LaTeX)
 print(esm.to_unicode(file.models["SuperFast"]))

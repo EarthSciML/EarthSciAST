@@ -114,23 +114,23 @@ expect(warnings).toContain('1.1.0 is newer')
 ```julia
 using EarthSciAST
 
-file1 = EarthSciAST.load("version_1_0_0_baseline.esm")
-@test_throws VersionError EarthSciAST.load("version_0_1_0_pre_break.esm")
+file1 = EarthSciAST.load_path("version_1_0_0_baseline.esm")
+@test_throws VersionError EarthSciAST.load_path("version_0_1_0_pre_break.esm")
 
-file3 = EarthSciAST.load("version_1_1_0_minor_upgrade.esm")   # warns
+file3 = EarthSciAST.load_path("version_1_1_0_minor_upgrade.esm")   # warns
 ```
 
 ### Python
 ```python
 import earthsci_ast as esm
 
-file1 = esm.load(load_fixture('version_1_0_0_baseline.esm'))
+file1 = esm.load_document(load_fixture('version_1_0_0_baseline.esm'))
 
 with pytest.raises(esm.UnsupportedVersionError):
-    esm.load(load_fixture('version_0_1_0_pre_break.esm'))
+    esm.load_document(load_fixture('version_0_1_0_pre_break.esm'))
 
 with pytest.warns(UserWarning, match="1.1.0 is newer"):
-    file3 = esm.load(load_fixture('version_1_1_0_minor_upgrade.esm'))
+    file3 = esm.load_document(load_fixture('version_1_1_0_minor_upgrade.esm'))
 ```
 
 ## Conformance Testing

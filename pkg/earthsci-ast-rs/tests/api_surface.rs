@@ -243,12 +243,12 @@ fn manifest_names_resolve() {
         ExpressionParseError,
         // Flatten / validate / display / canonicalize.
         FlattenedSystem,
+        // Versions.
+        LIBRARY_VERSION,
         Metadata,
         Model,
         ModelVariable,
         ReactionSystem,
-        // Versions.
-        LIBRARY_VERSION,
         SCHEMA_VERSION,
         SchemaError,
         StructuralError,

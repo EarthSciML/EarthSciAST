@@ -29,8 +29,8 @@
 
 use earthsci_ast::simulate::Solution;
 use earthsci_ast::{
-    EsmFile, Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance, load_string,
-    simulate,
+    EsmFile, Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance,
+    load_string, simulate,
 };
 use std::collections::HashMap;
 use std::fs;

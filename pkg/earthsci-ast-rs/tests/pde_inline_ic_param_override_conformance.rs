@@ -86,8 +86,8 @@ fn ic_param_override_matches_golden() {
 
         let text =
             fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
-        let file =
-            load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
+        let file = load_string(&text)
+            .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
             run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 

@@ -223,7 +223,7 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
     println("   esm: $esm_path")
     flush(stdout)
     t0 = time()
-    doc = EA.load(esm_path)
+    doc = EA.load_path(esm_path)
     load_s = time() - t0
     built, b1 = timed_build(doc; const_arrays)
     f!, u0, p, tspan, _ = built

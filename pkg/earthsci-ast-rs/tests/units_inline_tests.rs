@@ -121,7 +121,8 @@ fn check_assertion(label: &str, actual: f64, expected: f64, rel: f64, abs_: f64)
 fn units_fixtures_inline_tests_execute() {
     let mut total_tests = 0usize;
     for (fname, content) in UNITS_FIXTURES {
-        let file: EsmFile = load_string(content).unwrap_or_else(|e| panic!("failed to load {fname}: {e}"));
+        let file: EsmFile =
+            load_string(content).unwrap_or_else(|e| panic!("failed to load {fname}: {e}"));
         let models = file
             .models
             .as_ref()

@@ -249,29 +249,11 @@ CAPABILITY_PROFILES = {
 }
 
 PLANNED = [
-    {
-        "canonical": "load",
-        "issue": "`load` has two incompatible contracts. Julia `load(path)` and Go "
-                 "`Load(path)` take a FILE PATH; TypeScript `load(text)` and Rust "
-                 "`load(text)` take JSON TEXT; Python `load(path_or_string_or_dict)` "
-                 "sniffs. A string argument therefore means opposite things in "
-                 "different bindings, with no type error to catch it.",
-        "resolution": "Split into `load_path(path)` and `load_text(json)`; keep `load` "
-                      "only where a binding can dispatch unambiguously (Julia on "
-                      "`::String` vs `::IO`, Python on type).",
-        "affects": ["julia", "typescript", "python", "rust", "go"],
-    },
-    {
-        "canonical": "save",
-        "issue": "`save` is pure serialization in TypeScript and Rust (returns a "
-                 "string, never touches disk), a write in Julia (`save(file, path)`), "
-                 "and both in Python (`save(file, path=None) -> str`). Go spells the "
-                 "pure half `Serialize` and the writing half `SaveToFile`.",
-        "resolution": "Canonicalise `save(file) -> str` as the pure form everywhere "
-                      "and `save_path(file, path)` as the writing form; Go's "
-                      "`Serialize`/`SaveToFile` become `Save`/`SavePath`.",
-        "affects": ["julia", "typescript", "python", "rust", "go"],
-    },
+    # `load`, `save` and `VERSION` used to live here. All three landed in the
+    # phase-2 I/O split: `load_path` / `load_string` / `load_document`,
+    # `to_json` / `to_json_compact` / `write_path`, and `SCHEMA_VERSION` /
+    # `LIBRARY_VERSION` — each 5/5 in the manifest above, with the old names
+    # deleted rather than deprecated. See API_SPEC.md §5.1.
     {
         "canonical": "abstol / reltol / saveat / alg",
         "issue": "Python's `simulate` takes scipy's `rtol=` / `atol=` / `method=`; "

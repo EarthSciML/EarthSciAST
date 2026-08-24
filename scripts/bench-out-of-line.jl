@@ -61,7 +61,7 @@ function build_once(fix::AbstractString, disable::Bool)
         # load already expanded, so no references reach flatten and the build
         # fuses the expanded spine. Both are bit-identical (gate 3); this
         # measures the build cost.
-        build_evaluator(flatten(load(fix)))
+        build_evaluator(flatten(load_path(fix)))
     end
 end
 

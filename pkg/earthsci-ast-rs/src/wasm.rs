@@ -5,8 +5,8 @@
 #[cfg(feature = "wasm")]
 use crate::{
     EsmFile, graph::component_graph as rust_component_graph, load_string as rust_load_string,
-    performance::CompactExpr, to_json as rust_to_json, stoichiometric_matrix, substitute_in_model,
-    substitute_in_reaction_system, validate as rust_validate,
+    performance::CompactExpr, stoichiometric_matrix, substitute_in_model,
+    substitute_in_reaction_system, to_json as rust_to_json, validate as rust_validate,
 };
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;

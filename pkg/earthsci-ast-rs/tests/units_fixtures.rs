@@ -29,7 +29,8 @@ const UNITS_FIXTURES: &[(&str, &str)] = &[
 #[test]
 fn units_fixtures_parse() {
     for (name, content) in UNITS_FIXTURES {
-        let file: EsmFile = load_string(content).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
+        let file: EsmFile =
+            load_string(content).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
         let models = file
             .models
             .as_ref()

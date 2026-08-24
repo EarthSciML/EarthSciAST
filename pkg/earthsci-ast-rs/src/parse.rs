@@ -1634,7 +1634,8 @@ mod tests {
         let serialized_json = to_json(&esm_file).expect("Failed to save ESM file");
 
         // Load it again
-        let round_trip_file = load_string(&serialized_json).expect("Failed to load round-trip ESM file");
+        let round_trip_file =
+            load_string(&serialized_json).expect("Failed to load round-trip ESM file");
 
         // Verify the structure is preserved
         assert_eq!(esm_file.esm, round_trip_file.esm);

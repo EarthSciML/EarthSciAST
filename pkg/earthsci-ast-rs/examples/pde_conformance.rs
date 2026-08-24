@@ -40,7 +40,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use earthsci_ast::evaluate;
-use earthsci_ast::parse::{LoadOptions, load_path, load_path_with_options, load_with_options};
+use earthsci_ast::parse::{
+    LoadOptions, load_path, load_path_with_options, load_string_with_options,
+};
 use earthsci_ast::pde_inline_tests::{evaluate_cellwise, field_reduce, run_pde_tests, state_cells};
 use earthsci_ast::simulate::{SimulateOptions, SolverChoice, simulate, simulate_with_inspection};
 use earthsci_ast::simulate_array::BuildInspection;
@@ -401,7 +403,7 @@ fn reproj_expressions(lib: &Path, params: &Value) -> Result<HashMap<String, Expr
         base_path: Some(lib.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()),
         ..Default::default()
     };
-    let file = load_with_options(&doc.to_string(), &options)
+    let file = load_string_with_options(&doc.to_string(), &options)
         .map_err(|e| format!("wrapper doc load: {e}"))?;
     let model = file
         .models

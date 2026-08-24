@@ -1,6 +1,6 @@
 //! Example demonstrating unit validation functionality
 
-use earthsci_ast::{load, validate};
+use earthsci_ast::{load_string, validate};
 
 fn main() {
     // Test data with dimensional inconsistency
@@ -42,7 +42,7 @@ fn main() {
         "#;
 
     println!("Testing dimensionally inconsistent model...");
-    let esm_file = load(test_data_inconsistent).expect("Should parse successfully");
+    let esm_file = load_string(test_data_inconsistent).expect("Should parse successfully");
     let result = validate(&esm_file);
 
     println!("Validation result:");
@@ -105,7 +105,7 @@ fn main() {
         "#;
 
     println!("Testing dimensionally consistent model...");
-    let esm_file = load(test_data_consistent).expect("Should parse successfully");
+    let esm_file = load_string(test_data_consistent).expect("Should parse successfully");
     let result = validate(&esm_file);
 
     println!("Validation result:");

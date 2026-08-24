@@ -563,7 +563,8 @@ fn template_library_round_trips_to_itself() {
 
         let loaded = load_path(&path).unwrap_or_else(|e| panic!("{lib} must load: {e:?}"));
         let emitted: serde_json::Value =
-            serde_json::from_str(&earthsci_ast::to_json(&loaded).expect("save")).expect("parse emit");
+            serde_json::from_str(&earthsci_ast::to_json(&loaded).expect("save"))
+                .expect("parse emit");
 
         for key in ["expression_templates", "metaparameters"] {
             assert!(

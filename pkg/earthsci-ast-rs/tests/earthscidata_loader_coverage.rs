@@ -100,8 +100,8 @@ fn every_earthscidata_loader_round_trips_without_loss() {
         let parsed = load_fixture(fx);
         let serialized =
             to_json(&parsed).unwrap_or_else(|e| panic!("{}: serialize failed: {}", fx.name, e));
-        let reparsed: EsmFile =
-            load_string(&serialized).unwrap_or_else(|e| panic!("{}: reparse failed: {}", fx.name, e));
+        let reparsed: EsmFile = load_string(&serialized)
+            .unwrap_or_else(|e| panic!("{}: reparse failed: {}", fx.name, e));
 
         let loaders1 = parsed
             .data_sources

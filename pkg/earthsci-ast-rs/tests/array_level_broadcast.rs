@@ -104,7 +104,8 @@ fn broadcast_node_mixed_rank_fixture() {
 fn operand_index_set_absent_from_result_is_a_structural_error() {
     let path =
         common::repo_fixture("invalid/array_broadcast").join("operand_index_set_not_in_result.esm");
-    let file = load_string(&read(&path)).expect("fixture is schema-valid; only the shapes are wrong");
+    let file =
+        load_string(&read(&path)).expect("fixture is schema-valid; only the shapes are wrong");
     let report = validate(&file);
 
     assert!(!report.is_valid, "unalignable operand must not validate");
@@ -265,7 +266,8 @@ fn bare_and_aggregate_spellings_are_bit_identical() {
             },
             "expr": serde_json::from_str::<serde_json::Value>(aggregate_rhs).unwrap(),
         });
-        let agg = load_string(&doc.to_string()).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));
+        let agg =
+            load_string(&doc.to_string()).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));
 
         let a = run(&bare).unwrap_or_else(|e| panic!("{fixture} (bare): {e}"));
         let b = run(&agg).unwrap_or_else(|e| panic!("{fixture} (aggregate): {e}"));

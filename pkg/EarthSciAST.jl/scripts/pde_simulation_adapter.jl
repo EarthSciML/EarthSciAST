@@ -213,7 +213,7 @@ end
 # integrate the declared `initial_conditions` over `time_span`.
 function discretized_fixture(fx, base, reltol, abstol)
     path = joinpath(base, String(fx.path))
-    file = load(path)
+    file = load_path(path)
     model = file.models[String(fx.model)]
 
     rhs = Dict{String,Any}()

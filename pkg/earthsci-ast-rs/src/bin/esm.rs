@@ -3266,8 +3266,8 @@ mod tests {
             ("coupling", TEMPLATE_COUPLING),
         ] {
             let content = template.replace("{name}", "demo_project");
-            let esm_file =
-                load_string(&content).unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
+            let esm_file = load_string(&content)
+                .unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
             let result = validate(&esm_file);
             assert!(
                 result.is_valid,

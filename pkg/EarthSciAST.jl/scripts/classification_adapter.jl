@@ -76,7 +76,7 @@ function classify_document(file::EsmFile)
 end
 
 classify_fixture(path::AbstractString) =
-    Dict{String,Any}("models" => classify_document(EarthSciAST.load(String(path))))
+    Dict{String,Any}("models" => classify_document(EarthSciAST.load_path(String(path))))
 
 function parse_args(argv)
     manifest_path = nothing
