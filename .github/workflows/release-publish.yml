@@ -55,35 +55,62 @@ jobs:
       || (github.event_name == 'release' && github.event.action == 'published')
       || startsWith(github.ref, 'refs/tags/v')
     steps:
-      # Julia General registration is NOT automated here, deliberately.
+      # Julia General registration, automated via a JuliaRegistrator comment.
       #
-      # The previous implementation called julia-actions/RegisterAction with
-      # `registry:` and `package_dir:` inputs -- neither of which that action
-      # accepts (it takes only `token` and `registrator`), so both were silently
-      # ignored. Since EarthSciAST.jl lives in a subdirectory, Registrator would
-      # have looked for a Project.toml at the repo root and registered the wrong
-      # package, or nothing at all.
+      # History worth keeping: an earlier implementation called
+      # julia-actions/RegisterAction with `registry:` and `package_dir:` inputs,
+      # neither of which that action accepts (its action.yml declares only
+      # `token` and `registrator`), so both were silently ignored. Since
+      # EarthSciAST.jl lives in a subdirectory, Registrator would have looked for
+      # a Project.toml at the repo root and registered the wrong package, or
+      # nothing at all. That much was correct.
       #
-      # Registering a subdirectory package requires the `subdir=` argument, which
-      # is only expressible through a JuliaRegistrator comment. So the release
-      # prints the exact comment to post; see RELEASING.md.
-      - name: Julia registration instructions
+      # The conclusion drawn from it -- that registration therefore cannot be
+      # automated -- was NOT correct, and this job used to only print
+      # instructions. Registering a subdirectory package does require the
+      # `subdir=` argument and that argument is only expressible in a
+      # registration comment, but a workflow can simply post that comment.
+      # Registrator whitelists the default Actions identity BEFORE its
+      # collaborator check:
+      #
+      #     # Registrator.jl src/commentbot/github_utils.jl:36 and :44
+      #     user == "github-actions[bot]" && return true
+      #
+      # (JuliaRegistries/Registrator.jl#250, "Allow GitHub Actions to trigger the
+      # Registrator GitHub app".) The GITHUB_TOKEN recursion rule that shaped the
+      # rest of this pipeline does NOT apply: it suppresses new *workflow runs*,
+      # while Registrator is a GitHub App consuming a `commit_comment` webhook.
+      # Live proof of this exact shape -- roualdes/bridgestan registers
+      # `subdir=julia` from a github-actions[bot] commit comment.
+      #
+      # The one prerequisite CI cannot satisfy is the JuliaRegistrator GitHub App
+      # being installed on the repository. See RELEASING.md.
+      - name: Trigger JuliaRegistrator
+        uses: peter-evans/commit-comment@v4
+        with:
+          # The release commit: what the pipeline tagged, and so what the
+          # registry entry must point at.
+          sha: ${{ github.sha }}
+          # Just the trigger. Registrator treats anything under a `Release
+          # notes:` heading as the registry PR's release notes, so boilerplate
+          # there is worse than no heading at all.
+          body: '@JuliaRegistrator register subdir=pkg/EarthSciAST.jl'
+
+      - name: Note what happens next
         run: |
           VERSION="${{ inputs.version || github.event.release.tag_name || github.ref_name }}"; VERSION="${VERSION#v}"
           {
-            echo "## Julia registration (manual step)"
+            echo "## Julia registration"
             echo ""
-            echo "EarthSciAST.jl v$VERSION is ready to register."
+            echo "Posted \`@JuliaRegistrator register subdir=pkg/EarthSciAST.jl\` on"
+            echo "[the release commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
+            echo "for EarthSciAST.jl v$VERSION. Registrator opens a PR against the"
+            echo "General registry within a minute."
             echo ""
-            echo "Comment the following on the release commit"
-            echo "(https://github.com/${{ github.repository }}/commit/${{ github.sha }}):"
-            echo ""
-            echo '```'
-            echo "@JuliaRegistrator register subdir=pkg/EarthSciAST.jl"
-            echo '```'
-            echo ""
-            echo "This requires the JuliaRegistrator GitHub App to be installed on the repository."
-            echo "New packages sit in a 3-day AutoMerge waiting period in the General registry."
+            echo "A NEW package (not a new version) then sits in a 3-day AutoMerge"
+            echo "waiting period. If no PR appears at all, check that the"
+            echo "JuliaRegistrator GitHub App is still installed on this repository"
+            echo "— that is the one prerequisite this workflow cannot satisfy."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
