@@ -6,7 +6,7 @@ A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
 field — ``reduce: L2_error | Linf_error`` against an analytic ``reference``
 expression, or the pure collapsers ``integral | mean | max | min`` — or
 point-sample it via ``coords``. This module drives the official NumPy
-tree-walk pipeline (:func:`earthsci_ast.simulation.simulate` over the
+tree-walk pipeline (:func:`earthsci_ast.problem.solve` over the
 array-op interpreter) and collapses fields per assertion.
 
 Cross-binding pinned conventions (identical in the Julia / Python / Rust
@@ -66,7 +66,9 @@ import numpy as np
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .flatten import flatten
 from .parse import load_path, load_string
-from .simulation import BuildInspection, _eval_buildtime_field, simulate
+from .problem import esm_problem, solve
+from .simulation import BuildInspection, _eval_buildtime_field
+from .simulation_common import ReturnCode
 
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
 # nor the model declares one (same constant as the Julia run_tests reference).
@@ -436,7 +438,7 @@ def _scope_to_component(
 
     esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
     name — local to the *enclosing component*, since a test "exercises one model
-    in isolation" (§6.6). The runner hands them to :func:`simulate`, which
+    in isolation" (§6.6). The runner hands them to :func:`~earthsci_ast.problem.esm_problem`, which
     resolves against the WHOLE flattened document, where that locality is gone:
     two mounted components that each declare a `T` flatten to `M1.T` / `M2.T`,
     and the bare `T` in `M2`'s test is then ambiguous document-wide even though
@@ -446,13 +448,13 @@ def _scope_to_component(
     ``<model>.<key>`` form names a real variable of the flattened system is
     rewritten to it. A key that does not (already qualified, a scoped reference
     the prefix would double up, or simply wrong) is passed through untouched, so
-    `simulate` reports on it exactly as it would have.
+    `esm_problem` reports on it exactly as it would have.
     """
     if not overrides:
         return {}
     try:
         flat = flatten(file)
-    except Exception:  # noqa: BLE001 — let `simulate` report the real failure
+    except Exception:  # noqa: BLE001 — let `esm_problem` report the real failure
         return dict(overrides)
     known = set(flat.parameters) | set(flat.state_variables)
     out: dict[str, float] = {}
@@ -474,28 +476,27 @@ def simulate_states(
     initial_conditions: dict[str, float] | None = None,
     inspect: BuildInspection | None = None,
 ) -> SimulatedStates:
-    """Run the official :func:`earthsci_ast.simulation.simulate` pathway
+    """Run the official :func:`earthsci_ast.problem.solve` pathway
     and sample the trajectory at each time of ``saveat`` (which must lie on
     the solver's output grid to within ``1e-9 · max(1, |t|)`` — trajectory
     output is dense over ``tspan``, so span endpoints always qualify).
-    Raises :class:`RuntimeError` when the solve fails.
+    Raises :class:`RuntimeError` when the solve does not return
+    :attr:`~earthsci_ast.simulation_common.ReturnCode.Success`.
 
-    ``inspect`` is forwarded to :func:`simulate` — an optional
-    :class:`~earthsci_ast.simulation.BuildInspection` sink the NumPy
+    ``inspect`` is forwarded to :func:`~earthsci_ast.problem.esm_problem` — an
+    optional :class:`~earthsci_ast.simulation.BuildInspection` sink the NumPy
     pathway fills with the build-time setup arrays / observed map (results
     are identical with or without it)."""
-    result = simulate(
+    prob = esm_problem(
         file,
         tspan,
-        parameters=dict(parameters or {}),
-        initial_conditions=dict(initial_conditions or {}),
-        method=method,
-        rtol=rtol,
-        atol=atol,
+        p=dict(parameters or {}),
+        u0=dict(initial_conditions or {}),
         inspect=inspect,
     )
-    if not result.success:
-        raise RuntimeError(f"simulate failed: {result.message}")
+    result = solve(prob, alg=method, reltol=rtol, abstol=atol)
+    if result.retcode is not ReturnCode.Success:
+        raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
     times: list[float] = []
     states: list[np.ndarray] = []
@@ -798,7 +799,7 @@ def run_pde_tests(
                         inspect=insp,
                     )
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
-                    sim_err = f"simulate failed: {err}"
+                    sim_err = f"solve failed: {err}"
                     sim = None
             eval_file = file if run_file is None else run_file
             for i, a in enumerate(t.assertions, start=1):

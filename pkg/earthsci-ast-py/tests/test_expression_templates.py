@@ -358,7 +358,7 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
         UnreachableSpatialOperatorError,
         eval_expr,
     )
-    from earthsci_ast.simulation import simulate
+    from earthsci_ast.problem import esm_problem
 
     # (a) Loads clean.
     f = load_path(os.path.join(_conf_dir("unlowered_operator"), "fixture.esm"))
@@ -378,10 +378,13 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
         eval_expr(ExprNode(op="D", args=["u"], wrt="x"), ctx)
     assert excinfo.value.code == "unlowered_operator"
 
-    # (c) End-to-end: the loaded fixture surfaces the same token when simulated.
-    res = simulate(f, tspan=(0.0, 1.0))
-    assert res.success is False
-    assert "unlowered_operator" in (res.message or "")
+    # (c) End-to-end: the loaded fixture surfaces the same token when BUILT.
+    # Construction is where the right-hand side is compiled (esm-libraries-spec
+    # §2.5.2), so an unlowerable operator is a build error, not a return code —
+    # `ReturnCode` describes runs that happened.
+    with pytest.raises(UnreachableSpatialOperatorError) as build_exc:
+        esm_problem(f, (0.0, 1.0))
+    assert "unlowered_operator" in str(build_exc.value)
 
 
 def test_unlowered_integral_loads_but_errors_before_evaluation():
@@ -396,16 +399,18 @@ def test_unlowered_integral_loads_but_errors_before_evaluation():
     with a monotone ``filter``, is evaluable core, and runs today — see
     ``test_cumulative_prefix_scan.py`` and esm-spec §4.3.1.
     """
-    from earthsci_ast.simulation import simulate
+    from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
+    from earthsci_ast.problem import esm_problem
 
     # (a) Loads clean — the surviving `integral` is tolerated.
     f = load_path(os.path.join(_conf_dir("unlowered_integral"), "fixture.esm"))
     assert "m" in f.models
 
-    # (b) Reaching evaluation surfaces the uniform code.
-    res = simulate(f, tspan=(0.0, 1.0))
-    assert res.success is False
-    assert "unlowered_operator" in (res.message or "")
+    # (b) Reaching the BUILD surfaces the uniform code (the compile is part of
+    # Problem construction, esm-libraries-spec §2.5.2).
+    with pytest.raises(UnreachableSpatialOperatorError) as exc:
+        esm_problem(f, (0.0, 1.0))
+    assert "unlowered_operator" in str(exc.value)
 
 
 def test_attrs_match_binds_scalar_metavariable():

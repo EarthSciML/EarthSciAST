@@ -121,12 +121,11 @@ def to_python_code(file: dict[str, Any]) -> str:
     # Generate simulation stub
     lines.append("# Simulation setup (TODO: Configure parameters)")
     lines.append("tspan = (0, 10)  # time span")
-    lines.append("parameters = {}  # parameter values")
-    lines.append("initial_conditions = {}  # initial values")
+    lines.append("p = {}  # parameter values")
+    lines.append("u0 = {}  # initial state")
     lines.append("")
-    lines.append(
-        "# result = esm.simulate(tspan=tspan, parameters=parameters, initial_conditions=initial_conditions)"
-    )
+    lines.append("# prob = esm.esm_problem(file, tspan, p=p, u0=u0)")
+    lines.append("# sol = esm.solve(prob)")
     lines.append("")
 
     # Generate placeholders for features whose codegen is not yet implemented

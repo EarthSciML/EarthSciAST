@@ -62,7 +62,7 @@ from conftest import VALID_DIR  # noqa: E402
 from earthsci_ast.data_sources.esio_provider import (  # noqa: E402
     providers_from_document,
 )
-from earthsci_ast.prepare import prepare  # noqa: E402
+from earthsci_ast.problem import esm_problem  # noqa: E402
 from earthsci_ast.sympy_bridge import SimulationError  # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -253,12 +253,7 @@ def test_prepare_discovers_n_rec_and_the_graph_is_sized_by_it(doc_and_tmp):
     _requires_zarr_store()
     # NOTE the absent metaparameters: the caller passes NO N_REC. The document
     # declares that the loader knows it.
-    prep = prepare(
-        doc,
-        providers=_providers(doc, tmp_path),
-        metaparameters=None,
-        pushdown_rewrite=True,
-    )
+    prep = esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), metaparameters=None, pushdown_rewrite=True)
     assert list(_field(prep, "is_NOx")) == [1.0, 1.0, 0.0], (
         "the observed graph is evaluated over the 3 SURVIVING records"
     )
@@ -270,12 +265,7 @@ def test_prepare_discovers_n_rec_and_the_graph_is_sized_by_it(doc_and_tmp):
 def test_a_caller_binding_that_contradicts_the_discovered_extent_is_an_error(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
     with pytest.raises(SimulationError) as e:
-        prepare(
-            doc,
-            providers=_providers(doc, tmp_path),
-            metaparameters={"N_REC": 5},  # the RAW row count, a stale guess
-            pushdown_rewrite=True,
-        )
+        esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), metaparameters={"N_REC": 5}, pushdown_rewrite=True)
     assert "N_REC" in str(e.value)
     assert "discovers 3" in str(e.value)
 
@@ -288,7 +278,7 @@ def test_loader_variables_that_disagree_on_the_count_are_an_error(doc_and_tmp, m
     short = provs["Ingest.lat"]
     monkeypatch.setattr(short, "sample", lambda t=0.0, selection=None: np.zeros(2))
     with pytest.raises(SimulationError) as e:
-        prepare(doc, providers=provs, pushdown_rewrite=True)
+        esm_problem(doc, (0.0, 1.0), providers=provs, pushdown_rewrite=True)
     msg = str(e.value)
     assert "Ingest.lat" in msg and "Ingest.annual" in msg
     assert "not aligned on one record axis" in msg
@@ -427,7 +417,7 @@ def test_a_truncated_table_re_discovers_its_own_smaller_extent(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
     _requires_zarr_store()
     doc["data_sources"]["EGU_Emis"]["select"] = {"axes": [{"range": {"start": 0, "stop": 2}}]}
-    prep = prepare(doc, providers=_providers(doc, tmp_path), pushdown_rewrite=True)
+    prep = esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), pushdown_rewrite=True)
     assert float(_field(prep, "E_NOx")) == 107.0
     assert len(_field(prep, "is_NOx")) == 2, (
         "N_REC follows the DELIVERED records, so a reduced run needs no other knob"
@@ -437,7 +427,7 @@ def test_a_truncated_table_re_discovers_its_own_smaller_extent(doc_and_tmp):
 def test_the_selected_prefix_reaches_the_model_as_its_own_axis(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
     _requires_zarr_store()
-    prep = prepare(doc, providers=_providers(doc, tmp_path), pushdown_rewrite=True)
+    prep = esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), pushdown_rewrite=True)
     w = _field(prep, "src_width")
     assert w.shape == (4,), (
         "src_W is delivered on src_cells (N_SRC), not on the full pop_cells axis"

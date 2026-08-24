@@ -15,8 +15,8 @@ small valid scalar ODE models and assert:
      asserting that a second flatten pass reproduces the same system
      structurally. (See :func:`_flat_to_esm` for the reconstruction.)
   4. Simulation equivalence — for a curated subset of generated models that
-     simulate without numerical blow-up, ``simulate(m)`` and
-     ``simulate(flatten(m))`` agree within solver tolerance. This confirms the
+     simulate without numerical blow-up, ``esm_problem(m, …)`` and
+     ``esm_problem(flatten(m), …)`` agree within solver tolerance. This confirms the
      two entry points into the simulation pipeline remain interchangeable.
 
 Scope (matches the gt-3aql brief): scalar-only models, 1-3 ODE-state unknowns,
@@ -40,7 +40,7 @@ from typing import List
 import pytest
 
 hypothesis = pytest.importorskip("hypothesis")
-pytest.importorskip("scipy")  # simulate() path needs scipy
+pytest.importorskip("scipy")  # the solve() path needs scipy
 
 import numpy as np
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
@@ -58,7 +58,7 @@ from earthsci_ast.classification import ode_states
 from earthsci_ast.flatten import FlattenedSystem, flatten
 from earthsci_ast.parse import load_path
 from earthsci_ast.serialize import _serialize_expression, to_json
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ _ident = st.from_regex(r"\A[a-z][a-z0-9]{0,3}\Z", fullmatch=True).filter(lambda 
 # variable space so we never accidentally alias a variable and its parent model.
 _model_name = st.from_regex(r"\A[A-Z][a-z]{1,4}\Z", fullmatch=True)
 
-# Finite numeric literals small enough to keep simulate() in a well-behaved
+# Finite numeric literals small enough to keep the solve in a well-behaved
 # regime. The phase-1 strategy uses [-1e9, 1e9]; that range is fine for
 # parse/serialize round-trips, but larger magnitudes invite overflow once the
 # expression is fed to a stiff solver.
@@ -423,8 +423,8 @@ def test_flatten_idempotent(esm_file: EsmFile) -> None:
 @given(_scalar_model_file())
 @_settings
 def test_simulate_matches_simulate_via_flatten(esm_file: EsmFile) -> None:
-    """For numerically tame generated models, ``simulate(m)`` and
-    ``simulate(flatten(m))`` agree within solver tolerance.
+    """For numerically tame generated models, ``esm_problem(m, …)`` and
+    ``esm_problem(flatten(m), …)`` agree within solver tolerance.
 
     The sim equivalence is a curated-subset invariant. Hypothesis will
     occasionally produce a combination of constants, trigonometrics, and
@@ -441,14 +441,14 @@ def test_simulate_matches_simulate_via_flatten(esm_file: EsmFile) -> None:
         f"{m.name}.{vname}": 1.0 for m in esm_file.models.values() for vname in ode_states(m)
     }
 
-    via_file = simulate(esm_file, tspan=tspan, initial_conditions=initial, method="RK45")
-    via_flat = simulate(flatten(esm_file), tspan=tspan, initial_conditions=initial, method="RK45")
+    via_file = solve(esm_problem(esm_file, tspan, u0=initial), alg="RK45")
+    via_flat = solve(esm_problem(flatten(esm_file), tspan, u0=initial), alg="RK45")
 
-    # Both paths must agree on success. If simulate() fails on one side it
-    # must fail on the other — divergent success would be a real bug.
-    assert via_file.success == via_flat.success
+    # Both paths must agree on the outcome. If one side does not reach the end
+    # of tspan the other must not either — a divergent retcode would be a bug.
+    assert (via_file.retcode is ReturnCode.Success) == (via_flat.retcode is ReturnCode.Success)
 
-    assume(via_file.success and via_flat.success)
+    assume((via_file.retcode is ReturnCode.Success) and (via_flat.retcode is ReturnCode.Success))
     # Drop trajectories that integrated into overflow territory. The comparison
     # is meaningless if either side diverged.
     assume(np.all(np.isfinite(via_file.y)))
@@ -525,14 +525,10 @@ def test_simulate_matches_simulate_via_flatten_linear_decay() -> None:
         models={"Decay": model},
     )
 
-    via_file = simulate(
-        esm_file, tspan=(0.0, 2.0), initial_conditions={"Decay.x": 1.0}, method="RK45"
-    )
-    via_flat = simulate(
-        flatten(esm_file), tspan=(0.0, 2.0), initial_conditions={"Decay.x": 1.0}, method="RK45"
-    )
+    via_file = solve(esm_problem(esm_file, (0.0, 2.0), u0={"Decay.x": 1.0}), alg="RK45")
+    via_flat = solve(esm_problem(flatten(esm_file), (0.0, 2.0), u0={"Decay.x": 1.0}), alg="RK45")
 
-    assert via_file.success and via_flat.success
+    assert (via_file.retcode is ReturnCode.Success) and (via_flat.retcode is ReturnCode.Success)
     idx = via_file.vars.index("Decay.x")
     # Analytical: x(2) = exp(-1) ≈ 0.3679.
     assert abs(via_file.y[idx, -1] - math.exp(-1.0)) < 1e-3

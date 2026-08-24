@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 import numpy as np
-from earthsci_ast.simulation import simulate, SimulationResult
+from earthsci_ast.problem import ReturnCode, Solution, esm_problem, solve
 from earthsci_ast.sympy_bridge import _expr_to_sympy
 from earthsci_ast.numpy_interpreter import UnreachableSpatialOperatorError
 from earthsci_ast.esm_types import (
@@ -42,9 +42,9 @@ def _reaction_file(
     events: list[ContinuousEvent] | None = None,
 ) -> EsmFile:
     """Wrap a reaction system in an :class:`EsmFile` for the production
-    ``simulate()`` path.
+    ``solve()`` path.
 
-    The modern engine (:func:`earthsci_ast.simulation.simulate`) consumes an
+    The modern engine (:func:`earthsci_ast.problem.esm_problem`) consumes an
     :class:`EsmFile` / ``FlattenedSystem`` and lowers reactions to mass-action
     ODEs through the same ``reactions`` machinery the analysis tier uses. State
     variables come back dot-namespaced as ``"<system_name>.<species>"``; any
@@ -170,10 +170,10 @@ class TestSimpleReactionSystems:
         file = _reaction_file("Decay", [species_A], [reaction], parameters=[k])
 
         # Simulate
-        result = simulate(file, tspan=(0, 10), initial_conditions={"A": 1.0})
+        result = solve(esm_problem(file, (0, 10), u0={"A": 1.0}))
 
         # Check result
-        assert result.success, f"Simulation failed: {result.message}"
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
         assert len(result.t) > 1
         assert result.y.shape[0] == 1  # One species
 
@@ -206,10 +206,10 @@ class TestSimpleReactionSystems:
         initial = {"A": 1.0, "B": 0.0}
 
         # Simulate
-        result = simulate(file, tspan=(0, 20), initial_conditions=initial)
+        result = solve(esm_problem(file, (0, 20), u0=initial))
 
         # Check success
-        assert result.success, f"Simulation failed: {result.message}"
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
         # Check conservation: A + B should be approximately constant
         a_idx = result.vars.index("Rev.A")
@@ -230,10 +230,10 @@ class TestSimpleReactionSystems:
         """
         file = _reaction_file("Empty", [], [])
 
-        result = simulate(file, tspan=(0, 1), initial_conditions={})
+        result = solve(esm_problem(file, (0, 1), u0={}))
 
         # Should handle empty system gracefully: a no-op success, no states.
-        assert result.success, f"Simulation failed: {result.message}"
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
         assert list(result.vars) == []
 
     def test_simulation_with_events(self):
@@ -254,10 +254,10 @@ class TestSimpleReactionSystems:
         file = _reaction_file("Ev", [species_A], [reaction], events=[event])
 
         # Simulate with event
-        result = simulate(file, tspan=(0, 20), initial_conditions={"A": 1.0})
+        result = solve(esm_problem(file, (0, 20), u0={"A": 1.0}))
 
         # Check that simulation stopped early due to event
-        assert result.success or "event" in result.message.lower()
+        assert (result.retcode is ReturnCode.Success) or "event" in result.message.lower()
 
 
 class TestSimulationErrors:
@@ -271,9 +271,9 @@ class TestSimulationErrors:
         file = _reaction_file("Miss", [species_A], [reaction])
 
         # Missing initial condition should default to the species default (0).
-        result = simulate(file, tspan=(0, 1), initial_conditions={})
+        result = solve(esm_problem(file, (0, 1), u0={}))
         # This should still work, just with zero initial conditions.
-        assert isinstance(result, SimulationResult)
+        assert isinstance(result, Solution)
 
     def test_invalid_time_span(self):
         """Test handling of invalid time spans."""
@@ -283,14 +283,14 @@ class TestSimulationErrors:
         file = _reaction_file("Back", [species_A], [reaction])
 
         # Backwards time span
-        result = simulate(file, tspan=(10, 0), initial_conditions={"A": 1.0})
+        result = solve(esm_problem(file, (10, 0), u0={"A": 1.0}))
 
         # SciPy should handle this or return an error
         # We just check that we get a result (success or failure)
-        assert isinstance(result, SimulationResult)
+        assert isinstance(result, Solution)
 
     def test_species_default_used_as_initial_value(self):
-        """simulate() seeds y0 from each species' `default`.
+        """The build seeds y0 from each species' `default`.
 
         When an initial condition is omitted, the species' declared scalar
         `default` (here 3.0) must be used instead of 0.0; an explicit override
@@ -308,15 +308,15 @@ class TestSimulationErrors:
         file = _reaction_file("Def", [species_A, species_B], [reaction])
 
         # No initial conditions: A starts at its declared default, B at 0.0.
-        result = simulate(file, tspan=(0.0, 1.0), initial_conditions={})
-        assert result.success, f"Simulation failed: {result.message}"
+        result = solve(esm_problem(file, (0.0, 1.0), u0={}))
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
         idx = {name: i for i, name in enumerate(result.vars)}
         assert result.y[idx["Def.A"], 0] == pytest.approx(3.0)
         assert result.y[idx["Def.B"], 0] == pytest.approx(0.0)
 
         # An explicit override still wins over the species default.
-        result2 = simulate(file, tspan=(0.0, 1.0), initial_conditions={"A": 0.5})
-        assert result2.success, f"Simulation failed: {result2.message}"
+        result2 = solve(esm_problem(file, (0.0, 1.0), u0={"A": 0.5}))
+        assert (result2.retcode is ReturnCode.Success), f"solve() did not succeed: {result2.message}"
         idx2 = {name: i for i, name in enumerate(result2.vars)}
         assert result2.y[idx2["Def.A"], 0] == pytest.approx(0.5)
 

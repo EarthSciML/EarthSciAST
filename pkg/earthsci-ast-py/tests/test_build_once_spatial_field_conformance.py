@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "build_once_spatial_field"
 _FIXTURE = _ROOT / "fixtures" / "build_once_spatial_ode.esm"
@@ -53,8 +53,8 @@ def test_build_once_spatial_field_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = simulate(esm, tspan=(float(t0), float(t1)), method="LSODA", rtol=1e-10, atol=1e-12)
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (float(t0), float(t1))), alg="LSODA", reltol=1e-10, abstol=1e-12)
+    assert (result.retcode is ReturnCode.Success), result.message
 
     idx = {name: k for k, name in enumerate(result.vars)}
     traj = golden["trajectory"]

@@ -1,8 +1,8 @@
 """Shared building blocks for the simulation pathways.
 
 Holds the pieces every simulation pathway needs — the
-:class:`SimulationResult` container, the optional SciPy import guard, and the
-dense-output point budget — so the pathway submodules
+:class:`Solution` container and its :class:`ReturnCode`, the optional SciPy
+import guard, and the dense-output point budget — so the pathway submodules
 (:mod:`.simulation_array`, :mod:`.simulation_loaders`,
 :mod:`.simulation_scalar`) can share them without importing each other.
 ``earthsci_ast.simulation`` re-exports this module's API.
@@ -13,6 +13,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -37,19 +38,118 @@ except (ImportError, ValueError):
 DENSE_OUTPUT_MIN_POINTS = 10001
 
 
+class ReturnCode(str, Enum):
+    """The SciML ``ReturnCode`` vocabulary (API_SPEC §4, esm-libraries-spec
+    §2.5.3), which is how a run reports its outcome in every simulating
+    binding.
+
+    It REPLACES the ``success`` boolean / free-text ``message`` pair the Python
+    binding used to carry: a caller distinguishes "ran to ``tspan[2]``" from
+    "stopped early, here is why" by comparing ``retcode``, never by reading
+    prose.
+
+    * ``Success`` — the integration reached the end of ``tspan``.
+    * ``MaxIters`` — the ``maxiters`` budget on right-hand-side evaluations ran
+      out first.
+    * ``Unstable`` — the trajectory left the domain the model can evaluate
+      (a non-finite derivative or state).
+    * ``Terminated`` — a continuous event stopped the run early.
+    * ``Failure`` — the solver, the build, or the model reported an error.
+
+    Subclassing :class:`str` keeps a code printable and JSON-serializable
+    (``str(ReturnCode.Success) == "ReturnCode.Success"``, ``.value ==
+    "Success"``) without making it a bare string at comparison sites.
+    """
+
+    Success = "Success"
+    MaxIters = "MaxIters"
+    Unstable = "Unstable"
+    Terminated = "Terminated"
+    Failure = "Failure"
+
+
 @dataclass
-class SimulationResult:
-    """Result of a simulation run."""
+class Solution:
+    """What :func:`earthsci_ast.problem.solve` returns.
+
+    Indexed **by variable name** (esm-libraries-spec §2.5.7): ``sol["Chem.O3"]``
+    is that variable's trajectory over :attr:`t`. The flattened state ordering
+    is an implementation detail coupling can change, so the positional
+    :attr:`y` / :attr:`vars` pair remains available but is not the documented
+    path.
+
+    :attr:`retcode` is the run's outcome. :attr:`message`, :attr:`nfev`,
+    :attr:`njev` and :attr:`nlu` are informative extras (§2.5.3 permits solver
+    statistics beside the code); ``message`` carries the solver's or the
+    failure's own prose and is a diagnostic, never the channel a caller decides
+    success on.
+    """
 
     t: np.ndarray
     y: np.ndarray
     vars: list[str]  # Variable names corresponding to y rows
-    success: bool
-    message: str
-    nfev: int
-    njev: int
-    nlu: int
+    retcode: ReturnCode
+    message: str = ""
+    nfev: int = 0
+    njev: int = 0
+    nlu: int = 0
     events: list[np.ndarray] | None = None
+
+    # ---- name-keyed access (esm-libraries-spec §2.5.7) --------------------
+    def __getitem__(self, key: str | int) -> np.ndarray:
+        """``sol[name]`` — the named variable's trajectory; ``sol[i]`` — row i.
+
+        A name resolves exactly first, then by its trailing segment against the
+        flattened names (``"O3"`` finds ``"Chem.O3"``), and finally against an
+        array state's element spellings (``"u"`` finds the rows ``u[1]``,
+        ``u[2]``, ... stacked in element order).
+        """
+        if isinstance(key, (int, np.integer)):
+            return np.asarray(self.y[int(key)])
+        name = str(key)
+        idx = self._row_index(name)
+        if idx is not None:
+            return np.asarray(self.y[idx])
+        rows = self._element_rows(name)
+        if rows:
+            return np.asarray(self.y[rows])
+        raise KeyError(
+            f"{name!r} is not a variable of this solution (have: {', '.join(self.vars)})"
+        )
+
+    def _row_index(self, name: str) -> int | None:
+        if name in self.vars:
+            return self.vars.index(name)
+        tails = [i for i, v in enumerate(self.vars) if v.rsplit(".", 1)[-1] == name]
+        if len(tails) == 1:
+            return tails[0]
+        return None
+
+    def _element_rows(self, name: str) -> list[int]:
+        """Row indices of the element spellings of an array state ``name``."""
+        out: list[int] = []
+        for i, v in enumerate(self.vars):
+            base = v.split("[", 1)[0]
+            if base == name or base.rsplit(".", 1)[-1] == name:
+                out.append(i)
+        return out
+
+    def __contains__(self, name: object) -> bool:
+        try:
+            self[str(name)]
+        except KeyError:
+            return False
+        return True
+
+    def keys(self) -> list[str]:
+        """The variable names this solution is indexed by."""
+        return list(self.vars)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            return default
 
     def plot(self, variables: list[str] | None = None, **kwargs):
         """
@@ -78,8 +178,10 @@ class SimulationResult:
                 "matplotlib is required for plotting. Install with: pip install matplotlib"
             ) from exc
 
-        if not self.success:
-            raise RuntimeError(f"Cannot plot failed simulation: {self.message}")
+        if self.retcode is not ReturnCode.Success:
+            raise RuntimeError(
+                f"Cannot plot a run that returned {self.retcode.value}: {self.message}"
+            )
 
         # Determine which variables to plot
         if variables is None:
@@ -136,25 +238,86 @@ def _failure_result(
     nfev: int = 0,
     njev: int = 0,
     nlu: int = 0,
-) -> SimulationResult:
-    """Build the uniform failure :class:`SimulationResult` (empty trajectory).
+    retcode: ReturnCode = ReturnCode.Failure,
+) -> Solution:
+    """Build the uniform non-Success :class:`Solution` (empty trajectory).
 
-    Every simulation pathway reports a failure with the same shape: empty ``t``
-    and ``y`` (``[[]]``), no variables, ``success=False`` and the given
-    ``message``. ``nfev`` / ``njev`` / ``nlu`` default to 0 (nothing ran); the
-    cadence-segmented loader path passes its accumulated solver counts so a
-    failure mid-run still reports the work already done.
+    Every simulation pathway reports a failed run with the same shape: empty
+    ``t`` and ``y`` (``[[]]``), no variables, the given ``retcode`` (default
+    :attr:`ReturnCode.Failure`) and the diagnostic ``message``. ``nfev`` /
+    ``njev`` / ``nlu`` default to 0 (nothing ran); the cadence-segmented loader
+    path passes its accumulated solver counts so a failure mid-run still
+    reports the work already done.
     """
-    return SimulationResult(
+    return Solution(
         t=np.array([]),
         y=np.array([[]]),
         vars=[],
-        success=False,
+        retcode=retcode,
         message=message,
         nfev=nfev,
         njev=njev,
         nlu=nlu,
     )
+
+
+class MaxItersExceeded(Exception):
+    """Raised inside a wrapped right-hand side when the ``maxiters`` budget of
+    right-hand-side evaluations is spent. Caught by the pathway, which reports
+    :attr:`ReturnCode.MaxIters`. Private to the simulation pathways."""
+
+
+def _limit_iters(fn: Any, maxiters: int | None) -> Any:
+    """Wrap ``fn(t, y)`` so that the ``maxiters + 1``-th call raises
+    :class:`MaxItersExceeded`. ``None`` (the default) returns ``fn`` unchanged,
+    so an unbudgeted run keeps today's call path exactly."""
+    if maxiters is None:
+        return fn
+    budget = int(maxiters)
+    seen = [0]
+
+    def limited(t: float, y: Any) -> Any:
+        seen[0] += 1
+        if seen[0] > budget:
+            raise MaxItersExceeded(
+                f"maxiters={budget} right-hand-side evaluations exhausted before "
+                f"the end of tspan (reached t={t})"
+            )
+        return fn(t, y)
+
+    return limited
+
+
+def _retcode_from_scipy(sol: Any) -> tuple[ReturnCode, str]:
+    """Map a ``scipy.integrate.solve_ivp`` result onto the SciML vocabulary.
+
+    SciPy's ``status`` is the authoritative field: ``0`` reached the end of the
+    interval, ``1`` stopped on a termination event, ``-1`` is a solver-reported
+    failure.
+    """
+    status = int(getattr(sol, "status", 0 if getattr(sol, "success", False) else -1))
+    message = str(getattr(sol, "message", ""))
+    if status == 0:
+        return ReturnCode.Success, message
+    if status == 1:
+        return ReturnCode.Terminated, message
+    return ReturnCode.Failure, message
+
+
+def _retcode_for_error(exc: BaseException) -> ReturnCode:
+    """Classify a pathway exception into the SciML vocabulary.
+
+    A non-finite derivative or state is the model leaving the domain it can be
+    evaluated on, which is exactly what :attr:`ReturnCode.Unstable` names; a
+    spent ``maxiters`` budget is :attr:`ReturnCode.MaxIters`; anything else is
+    a :attr:`ReturnCode.Failure`.
+    """
+    if isinstance(exc, MaxItersExceeded):
+        return ReturnCode.MaxIters
+    text = str(exc).lower()
+    if "non-finite" in text or "not finite" in text or "overflow" in text:
+        return ReturnCode.Unstable
+    return ReturnCode.Failure
 
 
 def _observed_rows(vals, n: int) -> np.ndarray:

@@ -1,38 +1,26 @@
-"""
-Python simulation tier with SciPy integration.
+"""Python simulation tier with SciPy integration — the pathway facade.
 
-This module implements Python simulation capabilities as specified in libraries spec Section 5.3.5.
-It provides a simulate() function with SciPy backend that:
-- Resolves coupling to single ODE system
-- Converts expressions to SymPy
-- Generates mass-action ODEs from reactions
-- Lambdifies for fast NumPy RHS function
-- Calls scipy.integrate.solve_ivp()
+The PUBLIC simulation surface is :mod:`earthsci_ast.problem`: one noun
+(:class:`~earthsci_ast.problem.Problem`) and one verb
+(:func:`~earthsci_ast.problem.solve`). There is no ``simulate`` here any more;
+esm-libraries-spec §2.5.1 deletes it in every binding, because it conflated the
+per-document build with the per-run integration.
 
-Event handling via SciPy events parameter and manual stepping.
-Discretized PDEs simulate through this entry point too: once spatial
-operators are rewritten to `arrayop` stencils, the spatial axis folds
-into array dimensions (`independent_variables == ["t"]`) and the array pathway
-integrates the system. The guard rejects only *undiscretized* spatial operators,
-not PDEs. Remaining limitation: limited event support.
-This enables atmospheric chemistry and discretized-PDE simulation in Python.
+This module remains the facade over the three pathway submodules
+(:mod:`.simulation_scalar`, :mod:`.simulation_array`, :mod:`.simulation_loaders`),
+re-exporting the public simulation types plus the handful of underscore-private
+names consumed elsewhere — the CLI PDE adapter, the PDE inline-test runner, and
+a few targeted unit tests import them through ``earthsci_ast.simulation``.
+
+Discretized PDEs run through the array pathway: once spatial operators are
+rewritten to ``arrayop`` stencils, the spatial axis folds into array dimensions
+(``independent_variables == ["t"]``). The guard in
+:func:`~earthsci_ast.problem.esm_problem` rejects only *undiscretized* spatial
+operators, not PDEs.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
-
-import numpy as np
-
-from .esm_types import (
-    EsmFile,
-)
-from .flatten import (
-    FlattenedSystem,
-    UnsupportedDimensionalityError,
-    _has_array_op,
-    flatten,
-)
 from .simulation_array import (  # noqa: F401
     BuildInspection,
     _build_numpy_rhs,
@@ -51,7 +39,8 @@ from .simulation_array import (  # noqa: F401
 from .simulation_common import (  # noqa: F401
     DENSE_OUTPUT_MIN_POINTS,
     SCIPY_AVAILABLE,
-    SimulationResult,
+    ReturnCode,
+    Solution,
     _failure_result,
     check_parameter_override_keys,
     solve_ivp,
@@ -75,228 +64,9 @@ from .simulation_loaders import (  # noqa: F401
     _simulate_with_loaders,
 )
 from .simulation_scalar import (  # noqa: F401
+    _build_scalar_rhs,
     _simulate_scalar,
 )
 from .sympy_bridge import (
     SimulationError,  # noqa: F401 — re-exported (earthsci_ast.__init__ imports it here)
 )
-
-
-def simulate(
-    file_or_flat: EsmFile | FlattenedSystem,
-    tspan: tuple[float, float],
-    parameters: dict[str, float] | None = None,
-    initial_conditions: dict[str, float] | None = None,
-    method: str = "LSODA",
-    rtol: float = 1e-10,
-    atol: float = 1e-14,
-    cse: bool = True,
-    loader_provider: LoaderProvider | None = None,
-    provider_factory: Callable | None = None,
-    providers: dict[str, Any] | None = None,
-    inspect: BuildInspection | None = None,
-) -> SimulationResult:
-    """Simulate an ESM model via the flattened representation (spec §4.7.5).
-
-    The flattened system is the canonical input. As a convenience, ``simulate``
-    also accepts a raw :class:`EsmFile`; in that case it routes through
-    :func:`flatten` internally so user-facing behaviour is unchanged.
-
-    Parameters
-    ----------
-    file_or_flat:
-        Either an :class:`EsmFile` (which is flattened internally) or an
-        already-flattened :class:`FlattenedSystem`.
-    tspan:
-        ``(t_start, t_end)``.
-    parameters:
-        Parameter overrides keyed by either the dot-namespaced name
-        (e.g. ``"Chem.k1"``) or the bare name (``"k1"``).
-    initial_conditions:
-        Initial values keyed by either the dot-namespaced or bare name. Falls
-        back to the variable's default when not provided.
-    method:
-        SciPy ODE solver method (default ``'LSODA'``).
-    rtol, atol:
-        Relative and absolute solver tolerances forwarded to
-        :func:`scipy.integrate.solve_ivp`. Defaults are ``1e-10`` / ``1e-14``,
-        matching Julia's ``reltol`` / ``abstol`` so fixture assertions calibrated
-        against the Julia reference hold under the Python backend.
-    cse:
-        Forwarded to :func:`sympy.lambdify` when compiling the rhs / algebraic /
-        observed functions. ``True`` (default) shares common subexpressions
-        across the full vector and is the production setting. Pass ``False``
-        to bypass SymPy's CSE pass — diagnostic / regression code paths
-        (e.g. the cse=False non-finite-derivative case in esm-5gk) need this
-        to compare lambdified output against an un-CSE'd reference. Compiles
-        for ``cse=True`` and ``cse=False`` are cached separately on the
-        FlattenedSystem so flipping the flag does not invalidate the other.
-    loader_provider:
-        Optional **legacy** per-call callable ``(LoaderField, t) -> ndarray``
-        used to execute the system's data-loader fields (RFC
-        pure-io-data-loaders §4.3). Only consulted when the flattened system has
-        loader fields; the returned array is bound into the RHS as a read-only
-        input, refreshed at the loader's cadence (const loaders once, discrete
-        loaders per segment) with boundaries from local frequency arithmetic.
-        Tests / offline runs inject a deterministic stub here. Ignored for
-        systems without data loaders.
-    provider_factory:
-        Optional factory ``(LoaderField, window) -> Provider`` building one
-        cadence-aware
-        :class:`~earthsci_ast.data_sources.provider.Provider` per loader
-        field (the EarthSciIO Provider contract: ``materialize`` / ``refresh`` /
-        ``refresh_times``). When omitted (and no ``loader_provider`` is given)
-        the in-tree
-        :func:`~earthsci_ast.data_sources.provider.build_default_provider`
-        is used, so the default path GETs + REFRESHes loader arrays through the
-        provider and takes its segment boundaries from ``refresh_times()``.
-        Inject a real EarthSciIO provider here. Ignored for systems without data
-        loaders, and superseded by ``loader_provider`` when both are given.
-    providers:
-        Optional ``{"<ModelPath>.<param>": provider}`` map — the loaded-data injection
-        seam for TOP-LEVEL ``data_sources`` bound through ``variable_map`` /
-        scoped-reference ``ic`` (DESIGN pde_simulation_pipeline §2). Each provider
-        is either a callable ``(t) -> array_like`` or an object exposing
-        ``sample(t)`` / ``provider_sample(t)``; it is sampled ONCE at build time
-        (``t = tspan[0]``) and its array is bound under the loader-qualified name.
-        The scoped-``ic`` fold reads it into u0 and the lifted consumer gather
-        resolves from it. No field is injected by internal consumer name.
-    inspect:
-        Optional :class:`BuildInspection` observability sink. When supplied,
-        the NumPy array/PDE pathway fills it with the named build-time
-        products (state-free setup arrays, the const-array registry, and the
-        observed substitution map) — see :class:`BuildInspection`. Filling it
-        never changes the simulation; the scalar SymPy pathway and the
-        cadence-segmented loader pathway accept and ignore it.
-
-    Raises
-    ------
-    UnsupportedDimensionalityError
-        If the flattened system still has a spatial independent variable — a
-        spatial operator that was never discretized into an ``arrayop`` stencil
-        (spec §4.7.6.12). Discretized PDEs fold the spatial axis into array
-        dimensions, leaving ``independent_variables == ["t"]``,
-        and simulate normally through the array pathway.
-
-    Notes
-    -----
-    Other failures (SciPy errors, missing scipy, malformed expressions) are
-    captured and reported via ``SimulationResult.success = False`` so the
-    function remains usable from interactive workflows that prefer error codes
-    over exceptions.
-    """
-    if isinstance(file_or_flat, FlattenedSystem):
-        flat = file_or_flat
-    else:
-        flat = flatten(file_or_flat)
-
-    # Spec §4.7.6.12: ODE backends MUST reject systems with spatial dims. A
-    # spatial independent variable means an unlowered spatial operator survived
-    # into evaluation, so this surfaces the uniform `unlowered_operator` code.
-    if len(flat.independent_variables) > 1:
-        spatial = [v for v in flat.independent_variables if v != "t"]
-        raise UnsupportedDimensionalityError(
-            f"unlowered_operator: simulate() integrates systems whose only "
-            f"independent variable is time (['t']), but the flattened system "
-            f"still has spatial independent variables {spatial} — a spatial "
-            f"operator that was not discretized. Apply the discretization "
-            f"template (an `expression_templates` `match` rewrite) that lowers "
-            f"it to an `arrayop` stencil, then simulate; discretized "
-            f"PDEs run natively here."
-        )
-
-    parameters = parameters or {}
-    initial_conditions = initial_conditions or {}
-
-    # esm-spec §6.6.2 "Unrecognized override keys": a `parameter_overrides` key
-    # that names no single parameter is an ERROR, raised here at the one front
-    # door every pathway routes through (scalar-SymPy, array-NumPy, loader- and
-    # provider-segmented) so the three executing bindings agree. Ignoring it
-    # silently — which is what `_resolve_override` did by simply never finding
-    # the key — leaves every parameter at its default, so the author's override
-    # does nothing and the run still reports a verdict: a wrong answer, not a
-    # missing one. An AMBIGUOUS bare name gets its own diagnostic.
-    check_parameter_override_keys(flat.parameters, parameters)
-
-    if not SCIPY_AVAILABLE:
-        return _failure_result("SciPy is required for simulation but not available.")
-
-    # Provider injection for top-level ``data_sources`` bound through
-    # ``variable_map`` / scoped-reference ``ic`` (DESIGN pde_simulation_pipeline
-    # §2). Loaded fields enter ONLY through the data-Provider seam, keyed by their
-    # consuming parameter's flattened name — never as raw arrays keyed around
-    # consumer name. Each provider is materialized ONCE at build time (t0),
-    # reachable when a scoped-``ic`` folds ``Loader.*`` into u0 (R2) and when a
-    # loader→consumer ``variable_map`` routes a lifted gather to the loader name.
-    if providers:
-        t0 = float(tspan[0])
-        # Cadence-aware injection: if any provider is DISCRETE (non-empty
-        # ``refresh_times``), segment the integration on its refresh boundaries so
-        # a time-varying loader (hourly ERA5 met) changes in-sim, re-sampling the
-        # provider's cadence record per segment. With NO discrete provider this is
-        # byte-for-byte the historic materialize-once path (CONST providers only).
-        if any(_provider_is_discrete(prov) for prov in providers.values()):
-            return _simulate_with_discrete_providers(
-                flat,
-                tspan,
-                parameters,
-                initial_conditions,
-                method,
-                rtol,
-                atol,
-                providers,
-                inspect,
-            )
-        loaded_arrays = {
-            name: np.asarray(_provider_sample_field(prov, t0), dtype=float)
-            for name, prov in providers.items()
-        }
-        return _simulate_with_numpy(
-            flat,
-            tspan,
-            parameters,
-            initial_conditions,
-            method,
-            rtol=rtol,
-            atol=atol,
-            loader_arrays=loaded_arrays,
-            inspect=inspect,
-        )
-
-    # Data-loader injection (RFC pure-io-data-loaders §4.3): if the system has
-    # loader fields, execute them at their cadence and bind the resulting arrays
-    # into the RHS. Routes through the NumPy path (loader values are arrays).
-    # Empty loader_fields ⇒ skipped entirely, so existing models are unaffected.
-    if flat.loader_fields:
-        return _simulate_with_loaders(
-            flat,
-            tspan,
-            parameters,
-            initial_conditions,
-            method,
-            rtol=rtol,
-            atol=atol,
-            loader_provider=loader_provider,
-            provider_factory=provider_factory,
-        )
-
-    # Array-op detection: if any equation contains an array op, route through
-    # the NumPy AST interpreter path. The legacy SymPy path handles scalar-only
-    # models and is left untouched.
-    has_array = any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations)
-    if has_array:
-        return _simulate_with_numpy(
-            flat,
-            tspan,
-            parameters,
-            initial_conditions,
-            method,
-            rtol=rtol,
-            atol=atol,
-            inspect=inspect,
-        )
-
-    # Scalar-only models: route to the scalar-SymPy pathway submodule
-    # (:mod:`simulation_scalar`). No array ops, loader fields, or provider
-    # injections reach here, so this is the plain lambdified-RHS + SciPy path.
-    return _simulate_scalar(flat, tspan, parameters, initial_conditions, method, rtol, atol, cse)

@@ -32,6 +32,7 @@ import pytest
 
 from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_path
+from earthsci_ast.problem import ReturnCode
 from earthsci_ast.simulation_array import BuildInspection, _simulate_with_numpy
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "refresh"
@@ -90,7 +91,7 @@ def test_refresh_regrid_band_matches_golden() -> None:
             loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
             inspect=insp,
         )
-        assert res.success, res.message
+        assert (res.retcode is ReturnCode.Success), res.message
         ftgt_want = ftgt_by[_anchor_key(ftgt_by, anchor)]
         got_ftgt = np.asarray(insp.setup_arrays["M.F_tgt"]).ravel()
         assert np.allclose(got_ftgt, ftgt_want, rtol=_FIELD_RTOL, atol=_FIELD_ATOL), (
@@ -125,7 +126,7 @@ def test_refresh_trajectory_band_matches_golden() -> None:
             atol=1e-12,
             loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
         )
-        assert res.success, res.message
+        assert (res.retcode is ReturnCode.Success), res.message
         idx = {n: k for k, n in enumerate(res.vars)}
         ics = {s: float(res.y[idx[s if s in idx else s.split(".")[-1]]][-1]) for s in _STATES}
         states[b] = dict(ics)

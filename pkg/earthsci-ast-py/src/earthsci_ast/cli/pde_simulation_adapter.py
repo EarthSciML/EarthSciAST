@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 import earthsci_ast as et
-from earthsci_ast import evaluate_rhs, simulate
+from earthsci_ast import ReturnCode, esm_problem, evaluate_rhs, solve
 from earthsci_ast.cli._adapter_main import adapter_main
 from earthsci_ast.simulation import _build_numpy_rhs, _provider_sample_field
 
@@ -54,7 +54,7 @@ def _time_key(t: float) -> str:
 
 
 def _sample_trajectory(result, out_times) -> dict[str, dict[str, float]]:
-    """Interpolate every state element of a SimulationResult at each output
+    """Interpolate every state element of a Solution at each output
     time, keyed by bare element name."""
     traj: dict[str, dict[str, float]] = {}
     for t in out_times:
@@ -75,13 +75,12 @@ def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
 
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
-    result = simulate(
-        esm,
-        tspan,
-        initial_conditions=dict(tr["initial_conditions"]),
-        method=integ.get("method", "RK45"),
-        rtol=float(integ.get("rtol", 1e-10)),
-        atol=float(integ.get("atol", 1e-12)),
+    prob = esm_problem(esm, tspan, u0=dict(tr["initial_conditions"]))
+    result = solve(
+        prob,
+        alg=integ.get("method", "RK45"),
+        reltol=float(integ.get("rtol", 1e-10)),
+        abstol=float(integ.get("atol", 1e-12)),
     )
     traj = _sample_trajectory(result, tr["output_times"])
     return {"rhs": rhs, "trajectory": traj}
@@ -118,18 +117,17 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
         dy = build.rhs_function(float(probe.get("t", 0.0)), build.y0)
         rhs[probe["id"]] = {_bare(n): float(v) for n, v in zip(build.elem_names, dy)}
 
-    # --- Trajectory via the sanctioned provider-injected simulate path --------
+    # --- Trajectory via the sanctioned provider-injected Problem path --------
     tspan = (checkpoints[0], checkpoints[-1])
-    result = simulate(
-        esm,
-        tspan,
-        providers=providers,
-        method=integ.get("method", "RK45"),
-        rtol=float(integ.get("rtol", 1e-10)),
-        atol=float(integ.get("atol", 1e-12)),
+    prob = esm_problem(esm, tspan, providers=providers)
+    result = solve(
+        prob,
+        alg=integ.get("method", "RK45"),
+        reltol=float(integ.get("rtol", 1e-10)),
+        abstol=float(integ.get("atol", 1e-12)),
     )
-    if not result.success:
-        raise RuntimeError(f"simulate failed: {result.message}")
+    if result.retcode is not ReturnCode.Success:
+        raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     traj = _sample_trajectory(result, checkpoints)
     return {"rhs": rhs, "trajectory": traj}
 

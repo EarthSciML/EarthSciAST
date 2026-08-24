@@ -298,15 +298,10 @@ def test_simulate_expression_transform_end_to_end():
     so u(1) = 9.5 from u(0) = 0."""
     pytest.importorskip("scipy")
     import numpy as np
-    from earthsci_ast.simulation import simulate
+    from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
     esm_file = load_string(json.dumps(_doc()))
-    result = simulate(
-        esm_file,
-        tspan=(0.0, 1.0),
-        parameters={},
-        initial_conditions={"u": 0.0},
-    )
-    assert result.success, f"simulate() failed: {result.message}"
+    result = solve(esm_problem(esm_file, (0.0, 1.0), p={}, u0={"u": 0.0}))
+    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
     u_idx = result.vars.index("Sink.u")
     assert np.isclose(result.y[u_idx, -1], 9.5, rtol=1e-6)

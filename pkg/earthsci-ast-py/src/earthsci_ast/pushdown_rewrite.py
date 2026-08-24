@@ -23,7 +23,7 @@ Python typed parser drops unknown top-level ``metadata`` keys
 record ``metadata.x_esd.pushdown`` would not survive a typed round-trip;
 keeping the whole pass (and every record consumer: ``_pushdown_record``,
 ``_pushdown_provider_gates``) on the raw-dict side means the record never
-needs to. ``prepare`` therefore runs the rewrite BEFORE ``parse.load`` and
+needs to. ``esm_problem`` therefore runs the rewrite BEFORE ``parse.load`` and
 derives the provider gates from the raw rewritten document — the typed
 pipeline downstream only ever sees the generated *constructs* (index set,
 producer equation, member variables), which the parser preserves.
@@ -478,7 +478,7 @@ def _pd_detect_binning(ev: Any, agg: Any, out_set: str, out_is_cell: bool | None
 #
 # Under Option B (§9.6.4) ``load`` PRESERVES ``apply_expression_template``
 # references: they ride to the build boundary, where they are expanded ONCE with
-# site recording (the ~50x node-lowering win). ``prepare`` therefore hands
+# site recording (the ~50x node-lowering win). ``esm_problem`` therefore hands
 # ``desugar_pushdown`` a document whose binning body may be a surviving reference
 # rather than the containment ``ifelse`` the recogniser looks for.
 #
@@ -504,7 +504,7 @@ def _pd_templates(model: dict) -> dict | None:
     is what the Julia reference reads (``coerce_esm_file`` fills
     ``component_templates`` from exactly these blocks) — a top-level authored
     registry is a DECLARATION that load materialises into the components, so on
-    the ``prepare`` input form the per-component block is the registry.
+    the ``esm_problem`` input form the per-component block is the registry.
     """
     tpl = model.get("expression_templates")
     return tpl if isinstance(tpl, dict) and tpl else None
@@ -1679,7 +1679,7 @@ def _pushdown_provider_gates(doc: dict, providers: Any) -> dict[str, dict]:
 def _inject_pushdown_aliases(
     dst: dict[str, Any], run_doc_variables: list[str], coupling_pairs: list[tuple[str, str]]
 ) -> dict[str, Any]:
-    """Alias-key injection for the ``prepare`` pushdown path (same-object
+    """Alias-key injection for the ``esm_problem`` pushdown path (same-object
     references, no copies): surface each array under (a) the coupling ``to``
     name for every ``variable_map`` ``from`` key present, and (b) every
     flattened model-variable name whose final dotted segment matches the key's
