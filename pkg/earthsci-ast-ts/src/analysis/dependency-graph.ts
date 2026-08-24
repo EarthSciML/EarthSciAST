@@ -8,8 +8,7 @@
 
 import type { Model, EsmFile, ReactionSystem, Equation, Expr } from '../types.js'
 import type { DependencyGraph, DependencyNode, DependencyRelation } from './types.js'
-import { freeVariables } from '../expression.js'
-import { buildGraph, lhsTargetName } from '../graph.js'
+import { buildGraph, graphVariableReferences, lhsTargetName } from '../graph.js'
 import { forEachModelVariable, forEachEquation, isReferenceStub } from '../traverse.js'
 import {
   odeStates,
@@ -163,7 +162,7 @@ export function buildDependencyGraph(
 
     if (reactionSystem.reactions) {
       reactionSystem.reactions.forEach((reaction) => {
-        const rateVars = freeVariables(reaction.rate)
+        const rateVars = graphVariableReferences(reaction.rate)
 
         const involvedSpecies = new Set<string>()
         if (reaction.substrates) {
@@ -196,7 +195,7 @@ export function buildDependencyGraph(
     // its DERIVED kind from processModel, and addNode does not overwrite.
     addNode(targetName, 'state', systemId)
 
-    for (const rhsVar of freeVariables(equation.rhs)) {
+    for (const rhsVar of graphVariableReferences(equation.rhs)) {
       addNode(rhsVar, 'parameter', systemId) // Default assumption for undeclared vars.
       addDependency(
         scopedName(rhsVar, systemId),
@@ -210,7 +209,7 @@ export function buildDependencyGraph(
   // Process a single expression: its free variables feed a synthetic result.
   function processExpression(expr: Expr, targetVar: string, systemId: string) {
     addNode(targetVar, 'observed', systemId, undefined, expr)
-    for (const depVar of freeVariables(expr)) {
+    for (const depVar of graphVariableReferences(expr)) {
       addNode(depVar, 'parameter', systemId)
       addDependency(scopedName(depVar, systemId), scopedName(targetVar, systemId), 'direct', expr)
     }
@@ -261,7 +260,7 @@ export function buildDependencyGraph(
   // The base Graph (nodes/edges + adjacency/predecessor/successor lookups) is
   // assembled by the shared graph.ts helper; this builder only layers on the
   // dependency-specific methods below.
-  const base = buildGraph(nodes, edges, (node) => node.name)
+  const base = buildGraph(nodes, edges, (node) => node.name, 'expression')
 
   const getCycles = (): DependencyNode[][] =>
     circularDeps.map((cycle) =>

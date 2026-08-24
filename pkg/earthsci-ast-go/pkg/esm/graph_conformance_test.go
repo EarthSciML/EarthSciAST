@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,12 @@ type graphCorpus struct {
 		ExpressionGraph     corpusExprGraph  `json:"expression_graph"`
 		ExpressionGraphJSON corpusJSONExport `json:"expression_graph_json"`
 		MergeCoupled        corpusExprGraph  `json:"expression_graph_merge_coupled"`
+		// The first line of each §4.8.3 text export. Only the header is pinned;
+		// see tests/conformance/graph/README.md.
+		ComponentDOTHeader      string `json:"component_graph_dot_header"`
+		ComponentMermaidHeader  string `json:"component_graph_mermaid_header"`
+		ExpressionDOTHeader     string `json:"expression_graph_dot_header"`
+		ExpressionMermaidHeader string `json:"expression_graph_mermaid_header"`
 	} `json:"files"`
 	Targets []struct {
 		Name            string          `json:"name"`
@@ -449,6 +456,44 @@ func TestGraphConformanceFiles(t *testing.T) {
 			requireSameMultiset(t, "merge_coupled.nodes", gotMerged.Nodes, c.MergeCoupled.Nodes)
 			requireSameMultiset(t, "merge_coupled.edges", gotMerged.Edges, c.MergeCoupled.Edges)
 			requireSameClosure(t, "merge_coupled.closure", gotMerged.Closure, c.MergeCoupled.Closure)
+
+			// The DOT and Mermaid HEADER lines (§4.8.3). The corpus pins only
+			// the first line of each: the rest carries node labels run through
+			// the chemical-subscript formatter, which this binding does not
+			// have. See tests/conformance/graph/README.md.
+			dot := NewDOTExporter()
+			mermaid := NewMermaidExporter()
+			cgDOT, err := dot.ExportComponentGraph(cg)
+			if err != nil {
+				t.Fatalf("export component graph DOT: %v", err)
+			}
+			cgMermaid, err := mermaid.ExportComponentGraph(cg)
+			if err != nil {
+				t.Fatalf("export component graph Mermaid: %v", err)
+			}
+			egDOT, err := dot.ExportExpressionGraph(eg)
+			if err != nil {
+				t.Fatalf("export expression graph DOT: %v", err)
+			}
+			egMermaid, err := mermaid.ExportExpressionGraph(eg)
+			if err != nil {
+				t.Fatalf("export expression graph Mermaid: %v", err)
+			}
+			for _, h := range []struct {
+				what string
+				text string
+				want string
+			}{
+				{"component_graph DOT", cgDOT, c.ComponentDOTHeader},
+				{"component_graph Mermaid", cgMermaid, c.ComponentMermaidHeader},
+				{"expression_graph DOT", egDOT, c.ExpressionDOTHeader},
+				{"expression_graph Mermaid", egMermaid, c.ExpressionMermaidHeader},
+			} {
+				got, _, _ := strings.Cut(h.text, "\n")
+				if got != h.want {
+					t.Errorf("%s header = %q, corpus pins %q", h.what, got, h.want)
+				}
+			}
 		})
 	}
 }

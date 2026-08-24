@@ -20,8 +20,9 @@ fn sorted_keys<V>(map: &std::collections::HashMap<String, V>) -> Vec<&String> {
 const DEFAULT_SYSTEM: &str = "default";
 
 /// `equation_index` for a dependency that no positionally-numbered equation or
-/// reaction produced — currently only a `variable_map` folded in by
-/// [`ExpressionGraphOptions::merge_coupled`].
+/// reaction produced: a `variable_map` folded in by
+/// [`ExpressionGraphOptions::merge_coupled`], and the synthetic `expr_result`
+/// edges of a bare-expression target.
 const NON_EQUATION_INDEX: i64 = -1;
 
 /// Which incident edges a closure query follows.
@@ -130,8 +131,12 @@ pub struct ComponentGraph {
 /// Summary counts a component node carries (esm-libraries-spec §4.8.1).
 ///
 /// A model reports its declared variables and its equations; a reaction system
-/// reports its reactions as `eq_count` and its species as `species_count` and
-/// declares no `var_count`. Subsystems contribute NOTHING — the counts describe
+/// reports its reactions as `eq_count`, its species as `species_count`, and its
+/// PARAMETERS as `var_count` — the schema forbids a `variables` field there and
+/// `species_count` already carries the species, so `parameters` is the only
+/// thing left for §4.8.1's "variable count" to mean, and it is the exact
+/// analogue of a model's `variables` (which likewise counts unknowns and
+/// parameters together). Subsystems contribute NOTHING — the counts describe
 /// the component's own body, matching the reference implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct ComponentMetadata {
@@ -249,7 +254,7 @@ pub fn component_graph(esm_file: &EsmFile) -> ComponentGraph {
                 component_type: ComponentType::ReactionSystem,
                 name: None,
                 metadata: ComponentMetadata {
-                    var_count: 0,
+                    var_count: rs.parameters.len(),
                     eq_count: rs.reactions.len(),
                     species_count: rs.species.len(),
                 },
@@ -706,7 +711,16 @@ impl ExpressionGraphInput for crate::Expr {
         // into dependency edges" — so the expression's VALUE is a synthetic
         // observed node every free variable feeds.
         let mut b = ExprGraphBuilder::new();
-        process_expression(&mut b, self, "expr_result", 0, DEFAULT_SYSTEM);
+        // NON_EQUATION_INDEX: a bare expression has no positional equation to
+        // index, which is exactly what the sentinel is for. (The Equation and
+        // Reaction overloads DO number their single target 0.)
+        process_expression(
+            &mut b,
+            self,
+            "expr_result",
+            NON_EQUATION_INDEX,
+            DEFAULT_SYSTEM,
+        );
         b.finish()
     }
 }
@@ -1013,17 +1027,73 @@ fn process_coupling(b: &mut ExprGraphBuilder, coupling: &[CouplingEntry]) {
     }
 }
 
-/// Extract all variable names referenced in an expression, sorted and
-/// deduplicated for deterministic node/edge ordering.
+/// Index symbols a node BINDS for its own body: an `aggregate` / `arrayop`'s
+/// `ranges` keys and `output_idx` entries, and an `integral`'s `var`.
 ///
-/// Delegates to the single canonical collector
-/// [`crate::expression::collect_variables`], which walks the full canonical
-/// child set ([`crate::types::ExpressionNode::for_each_child`]) so variables
-/// inside aggregate bodies, `filter` predicates, integral bounds, makearray
-/// `values`, and `table_lookup` axes all contribute graph edges.
+/// Narrower than `structural::bound_index_symbols`, which also treats every bare
+/// name in an `index(A, i, j)` position as bound. Those positions are exactly
+/// where an aggregate's binders appear, and subtracting them THERE rather than
+/// at the binding node would hide a real reference to a declared variable used
+/// as an index. The binder itself is caught at its `aggregate`.
+fn graph_bound_index_symbols(node: &crate::types::ExpressionNode) -> Vec<String> {
+    let mut bound = Vec::new();
+    if let Some(ranges) = &node.ranges {
+        bound.extend(ranges.keys().cloned());
+    }
+    if let Some(idx) = &node.output_idx {
+        bound.extend(idx.iter().cloned());
+    }
+    if let Some(v) = &node.int_var {
+        bound.push(v.clone());
+    }
+    bound
+}
+
+/// Accumulate `expr`'s variable references into `out`, subtracting each node's
+/// own binders at that node.
+fn collect_graph_variables(expr: &crate::Expr, out: &mut std::collections::HashSet<String>) {
+    match expr {
+        crate::Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        crate::Expr::Operator(node) => {
+            // Collect this node's subtree into a LOCAL set, subtract the symbols
+            // this node binds, and only then promote what is left to the caller.
+            let mut local = std::collections::HashSet::new();
+            node.for_each_child(&mut |child| collect_graph_variables(child, &mut local));
+            for symbol in graph_bound_index_symbols(node) {
+                local.remove(&symbol);
+            }
+            out.extend(local);
+        }
+        crate::Expr::Number(_) | crate::Expr::Integer(_) => {}
+    }
+}
+
+/// Extract the variable names an expression REFERENCES, with every locally-bound
+/// index symbol removed, sorted and deduplicated for deterministic node/edge
+/// ordering — the node set §4.8.2 asks for.
+///
+/// Walks the full canonical child set
+/// ([`crate::types::ExpressionNode::for_each_child`]) so variables inside
+/// aggregate bodies, `filter` predicates, integral bounds, makearray `values`,
+/// and `table_lookup` axes all contribute graph edges.
+///
+/// Deliberately NOT [`crate::expression::collect_variables`]. That collector
+/// reports every bare name it reaches, so an `aggregate`'s own range binders
+/// (`sum over a of src[a]`) came back looking like model variables and became
+/// graph nodes with no declaration, no units and no kind. A binder is introduced
+/// by the aggregate's own `ranges` clause and is scoped to it; it is not a
+/// variable of the system, so it is not a node. The subtraction is PER NODE, at
+/// the binder that introduces the symbol, so a name bound inside one reduction
+/// and free outside it is still reported.
+///
+/// `collect_variables` itself is unchanged: it backs the public `free_variables`
+/// and is shared with unit conversion, where "every name the subtree mentions"
+/// is the wanted answer.
 fn extract_variables_from_expr(expr: &crate::Expr) -> Vec<String> {
     let mut set = std::collections::HashSet::new();
-    crate::expression::collect_variables(expr, &mut set);
+    collect_graph_variables(expr, &mut set);
     let mut vars: Vec<String> = set.into_iter().collect();
     vars.sort();
     vars
@@ -1132,7 +1202,14 @@ impl ComponentGraph {
     ///
     /// * `String` - Mermaid representation of the graph
     pub fn to_mermaid(&self) -> String {
-        let mut mermaid = String::from("graph LR\n");
+        // `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and
+        // specifies no syntax for it, so the cross-binding tie-break is the
+        // majority, applied to the keyword and the direction independently:
+        // `graph` beats `flowchart` 4-1 (this binding, Python, Go and Julia
+        // against TypeScript) and `TD` beats `LR` 3-2 (TypeScript, Python and
+        // Julia against Go and this binding). The EXPRESSION graph below
+        // already wrote `graph TD`. tests/conformance/graph/cases.json pins it.
+        let mut mermaid = String::from("graph TD\n");
 
         // Add nodes with types
         for node in &self.nodes {
@@ -1680,7 +1757,9 @@ mod tests {
             graph.edges[0].relationship,
             DependencyRelationship::Multiplicative
         );
-        assert_eq!(graph.edges[0].equation_index, Some(0));
+        // A bare expression has no positional equation to index, so its
+        // `expr_result` edges carry NON_EQUATION_INDEX.
+        assert_eq!(graph.edges[0].equation_index, Some(NON_EQUATION_INDEX));
     }
 
     #[test]
@@ -1714,7 +1793,7 @@ mod tests {
         };
 
         let mermaid = graph.to_mermaid();
-        assert!(mermaid.contains("graph LR"));
+        assert!(mermaid.contains("graph TD"));
         assert!(mermaid.contains("model1(Test Model)"));
     }
 

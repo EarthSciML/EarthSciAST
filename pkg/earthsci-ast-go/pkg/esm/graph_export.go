@@ -130,7 +130,13 @@ func NewMermaidExporter() *MermaidExporter {
 func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, error) {
 	var builder strings.Builder
 
-	builder.WriteString("graph LR\n")
+	// `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and specifies
+	// no syntax for it, so the cross-binding tie-break is the majority, applied
+	// to the keyword and the direction independently: `graph` beats `flowchart`
+	// 4-1 (this binding, Python, Rust and Julia against TypeScript) and `TD`
+	// beats `LR` 3-2 (TypeScript, Python and Julia against this binding and
+	// Rust). tests/conformance/graph/cases.json pins it.
+	builder.WriteString("graph TD\n")
 
 	// Sort nodes for consistent output
 	nodes := make([]ComponentNode, len(graph.Nodes))
@@ -186,7 +192,13 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, error) {
 	var builder strings.Builder
 
-	builder.WriteString("graph LR\n")
+	// `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and specifies
+	// no syntax for it, so the cross-binding tie-break is the majority, applied
+	// to the keyword and the direction independently: `graph` beats `flowchart`
+	// 4-1 (this binding, Python, Rust and Julia against TypeScript) and `TD`
+	// beats `LR` 3-2 (TypeScript, Python and Julia against this binding and
+	// Rust). tests/conformance/graph/cases.json pins it.
+	builder.WriteString("graph TD\n")
 
 	// Sort nodes for consistent output
 	nodes := make([]VariableNode, len(graph.Nodes))

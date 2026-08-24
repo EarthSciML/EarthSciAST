@@ -33,7 +33,9 @@ from earthsci_ast.graph import (
     Graph,
     component_graph,
     expression_graph,
+    to_dot,
     to_json,
+    to_mermaid,
 )
 
 CORPUS = json.loads((CONFORMANCE_DIR / "graph" / "cases.json").read_text())
@@ -148,48 +150,7 @@ def _build_target(case: dict):
     return _TARGET_PARSERS[case["kind"]](case["target"])
 
 
-#: Fixtures whose EXPRESSION-graph node kinds this binding cannot yet match,
-#: with the reason. `wildfire_atmosphere_ocean` declares three unknowns
-#: (`rg_pairs`, `rg_src_bin`, `rg_tgt_bin`) defined by an INDEXED LHS
-#: (`rg_src_bin[a] ~ …`). esm-spec §6.3.1 defines an observed unknown as one
-#: with a "bare-variable LHS", so TypeScript and Go classify these as
-#: `algebraic`; this binding and Rust classify them as `observed`, because
-#: `observed_definitions` deliberately credits the arrayed form — its docstring
-#: records why (an arrayed observed's cadence must resolve through its RHS, and
-#: refusing to credit it would stop a const-backed geometry array folding).
-#:
-#: Narrowing `observed_unknowns` / `algebraic_unknowns` to the strict form would
-#: fix the graph, but `algebraic_unknowns` is also the "solved unknowns" set
-#: `codegen`, `value_invention` and `structural_checks` consume, so the change
-#: reaches well past §4.8 and is not made here. Left as a STRICT xfail so it
-#: cannot rot: the day the classifier is aligned, this fails and must be removed.
-_EXPRESSION_KIND_XFAIL = {
-    "wildfire_atmosphere_ocean": (
-        "observed_unknowns credits an indexed LHS (rg_src_bin[a] ~ ...); §6.3.1 "
-        "and the TypeScript/Go classifiers call that algebraic. Fixing it moves "
-        "algebraic_unknowns, which codegen and value_invention consume."
-    ),
-}
-
-
-def _file_params(*, expression_kinds: bool) -> list:
-    """Corpus file cases as pytest params.
-
-    ``expression_kinds`` marks the cases whose assertion depends on a variable
-    node's derived KIND, so the component-graph tests stay strict.
-    """
-    params = []
-    for case in CORPUS["files"]:
-        marks = []
-        reason = _EXPRESSION_KIND_XFAIL.get(case["name"])
-        if expression_kinds and reason is not None:
-            marks.append(pytest.mark.xfail(strict=True, reason=reason))
-        params.append(pytest.param(case, id=case["name"], marks=marks))
-    return params
-
-
-FILE_CASES = _file_params(expression_kinds=False)
-EXPRESSION_FILE_CASES = _file_params(expression_kinds=True)
+FILE_CASES = [pytest.param(c, id=c["name"]) for c in CORPUS["files"]]
 TARGET_CASES = [pytest.param(c, id=c["name"]) for c in CORPUS["targets"]]
 
 
@@ -205,7 +166,7 @@ def test_component_graph_json_export(case):
     )
 
 
-@pytest.mark.parametrize("case", EXPRESSION_FILE_CASES)
+@pytest.mark.parametrize("case", FILE_CASES)
 def test_expression_graph(case):
     _assert_graph(_actual_expression(expression_graph(_load(case))), case["expression_graph"])
 
@@ -217,7 +178,7 @@ def test_expression_graph_json_export(case):
     )
 
 
-@pytest.mark.parametrize("case", EXPRESSION_FILE_CASES)
+@pytest.mark.parametrize("case", FILE_CASES)
 def test_expression_graph_merge_coupled(case):
     _assert_graph(
         _actual_expression(expression_graph(_load(case), merge_coupled=True)),
@@ -236,3 +197,31 @@ def test_expression_graph_target(case):
     _assert_graph(
         _actual_expression(expression_graph(_build_target(case))), case["expression_graph"]
     )
+
+
+@pytest.mark.parametrize("case", FILE_CASES)
+def test_text_export_headers(case):
+    """The DOT and Mermaid HEADER lines (esm-libraries-spec §4.8.3).
+
+    The corpus pins only the first line of each: the rest carries node labels
+    run through the chemical-subscript formatter, which two of the five bindings
+    do not have. See ``tests/conformance/graph/README.md``.
+    """
+    file = _load(case)
+    component = component_graph(file)
+    expression = expression_graph(file)
+    for what, text, expected in (
+        ("component_graph DOT", to_dot(component), case["component_graph_dot_header"]),
+        (
+            "component_graph Mermaid",
+            to_mermaid(component),
+            case["component_graph_mermaid_header"],
+        ),
+        ("expression_graph DOT", to_dot(expression), case["expression_graph_dot_header"]),
+        (
+            "expression_graph Mermaid",
+            to_mermaid(expression),
+            case["expression_graph_mermaid_header"],
+        ),
+    ):
+        assert text.splitlines()[0] == expected, f"{what} header diverges from the corpus"

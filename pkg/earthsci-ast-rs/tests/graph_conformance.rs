@@ -113,6 +113,10 @@ struct FileCase {
     expression_graph: ExpectedExpressionGraph,
     expression_graph_json: ExpectedJsonExport,
     expression_graph_merge_coupled: ExpectedExpressionGraph,
+    component_graph_dot_header: String,
+    component_graph_mermaid_header: String,
+    expression_graph_dot_header: String,
+    expression_graph_mermaid_header: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -430,80 +434,6 @@ fn assert_json_export(case: &str, what: &str, json: &str, expected: &ExpectedJso
     );
 }
 
-// --- the KNOWN, NAMED expected failure --------------------------------------
-//
-// `wildfire_atmosphere_ocean` declares three unknowns — `rg_pairs`,
-// `rg_src_bin`, `rg_tgt_bin` — whose defining equations have an INDEXED LHS
-// (`rg_src_bin[a] ~ …`). esm-spec §6.3.1 defines an OBSERVED unknown as one
-// with a "bare-variable LHS", so TypeScript (the corpus oracle) and Go classify
-// these `algebraic`; Rust, Python and Julia classify them `observed`, because
-// their `observed_definitions` deliberately credits the ARRAYED form as a bare
-// definition of the whole array.
-//
-// This is an open cross-binding decision for a human to settle, and it is NOT a
-// graph bug: `algebraic_unknowns` is also the "solved unknowns" set that
-// `crate::classification`'s other consumers (DAE structural analysis, index
-// reduction, the simulate front end) read, so flipping it here to satisfy the
-// corpus would change behaviour well outside §4.8. `src/classification.rs` is
-// therefore left alone and exactly the two affected cases are exempted, by
-// name, below — and only for the `kind` of exactly those three variables.
-// Everything else in those two cases, and every other case, is compared
-// strictly.
-
-/// The variables whose derived kind Rust and the oracle disagree about, as
-/// SCOPED graph names.
-const KNOWN_KIND_DISAGREEMENT: &[&str] = &[
-    "OceanDynamics.rg_pairs",
-    "OceanDynamics.rg_src_bin",
-    "OceanDynamics.rg_tgt_bin",
-];
-
-/// The corpus cases that carry the disagreement.
-const KNOWN_KIND_DISAGREEMENT_CASE: &str = "wildfire_atmosphere_ocean";
-
-/// Rewrite the kind of a KNOWN-disagreement node to whatever the other side
-/// says, so the comparison tests everything EXCEPT the open question. Applied
-/// to both sides, so if Rust ever comes to agree with the oracle the test still
-/// passes and the exemption can simply be deleted.
-fn mask_known_kind_disagreement(case: &str, nodes: &mut [VarNode]) {
-    if case != KNOWN_KIND_DISAGREEMENT_CASE {
-        return;
-    }
-    for node in nodes.iter_mut() {
-        if KNOWN_KIND_DISAGREEMENT.contains(&node.name.as_str()) {
-            node.kind = "<known-disagreement>".to_string();
-        }
-    }
-}
-
-/// [`assert_expression_graph`], with the known kind disagreement masked out on
-/// both sides.
-fn assert_expression_graph_exempted(
-    case: &str,
-    what: &str,
-    graph: &ExpressionGraph,
-    expected: &ExpectedExpressionGraph,
-) {
-    let mut got = shape_variable_nodes(graph);
-    let mut want = expected.nodes.clone();
-    mask_known_kind_disagreement(case, &mut got);
-    mask_known_kind_disagreement(case, &mut want);
-
-    assert_multiset_eq(case, &format!("{what}.nodes"), &got, &want);
-    assert_multiset_eq(
-        case,
-        &format!("{what}.edges"),
-        &shape_dependency_edges(graph),
-        &expected.edges,
-    );
-    assert_closure_eq(
-        case,
-        &format!("{what}.closure"),
-        &shape_expression_closure(graph),
-        &expected.closure,
-    );
-}
-
 // --- the tests --------------------------------------------------------------
 
 #[test]
@@ -531,7 +461,7 @@ fn component_graph_json_export_matches_corpus() {
 fn expression_graph_matches_corpus() {
     for case in corpus().files {
         let graph = expression_graph(&fixture(&case.input_file));
-        assert_expression_graph_exempted(
+        assert_expression_graph(
             &case.name,
             "expression_graph",
             &graph,
@@ -560,7 +490,7 @@ fn expression_graph_merge_coupled_matches_corpus() {
     };
     for case in corpus().files {
         let graph = expression_graph_with_options(&fixture(&case.input_file), &options);
-        assert_expression_graph_exempted(
+        assert_expression_graph(
             &case.name,
             "expression_graph_merge_coupled",
             &graph,
@@ -609,5 +539,47 @@ fn expression_graph_targets_match_corpus() {
             &graph,
             &case.expression_graph,
         );
+    }
+}
+
+/// The DOT and Mermaid HEADER lines (esm-libraries-spec §4.8.3). The corpus pins
+/// only the first line of each: the rest carries node labels run through the
+/// chemical-subscript formatter, which this binding does not have. See
+/// `tests/conformance/graph/README.md`.
+#[test]
+fn text_export_headers_match_corpus() {
+    for case in corpus().files {
+        let file = fixture(&case.input_file);
+        let cg = component_graph(&file);
+        let eg = expression_graph(&file);
+        for (what, got, want) in [
+            (
+                "component_graph DOT header",
+                cg.to_dot(),
+                &case.component_graph_dot_header,
+            ),
+            (
+                "component_graph Mermaid header",
+                cg.to_mermaid(),
+                &case.component_graph_mermaid_header,
+            ),
+            (
+                "expression_graph DOT header",
+                eg.to_dot(),
+                &case.expression_graph_dot_header,
+            ),
+            (
+                "expression_graph Mermaid header",
+                eg.to_mermaid(),
+                &case.expression_graph_mermaid_header,
+            ),
+        ] {
+            let first = got.lines().next().unwrap_or("");
+            assert_eq!(
+                first, want,
+                "{}: {what} diverges from the corpus",
+                case.name
+            );
+        }
     }
 }

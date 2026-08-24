@@ -1862,7 +1862,11 @@ fn run_graph(
 
             match format.as_str() {
                 "dot" => {
-                    println!("digraph ESMComponents {{");
+                    // Same headers the library exporters emit: a component
+                    // graph is `digraph ComponentGraph` / `graph TD`
+                    // (esm-libraries-spec §4.8.3). This subcommand rolls its own
+                    // rendering, so it has to say so itself.
+                    println!("digraph ComponentGraph {{");
                     println!("  rankdir=LR;");
                     println!("  node [shape=box];");
                     println!();
@@ -1890,7 +1894,7 @@ fn run_graph(
                     println!("}}");
                 }
                 "mermaid" => {
-                    println!("graph LR");
+                    println!("graph TD");
 
                     for node in &graph.nodes {
                         let label = node.name.as_deref().unwrap_or(&node.id);

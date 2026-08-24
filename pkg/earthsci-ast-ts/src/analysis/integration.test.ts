@@ -160,13 +160,13 @@ describe('Analysis Integration Tests', () => {
 
     // Test DOT export
     const dotOutput = toDot(depGraph)
-    expect(dotOutput).toContain('digraph {')
+    expect(dotOutput).toContain('digraph ExpressionGraph {')
     expect(dotOutput).toContain('->')
     expect(dotOutput).toContain('default.density')
 
     // Test Mermaid export
     const mermaidOutput = toMermaid(depGraph)
-    expect(mermaidOutput).toContain('flowchart TD')
+    expect(mermaidOutput).toContain('graph TD')
     expect(mermaidOutput).toContain('default.density')
   })
 

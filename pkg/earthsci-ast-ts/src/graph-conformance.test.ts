@@ -12,7 +12,7 @@
  * own maps), so every list is compared as a sorted multiset.
  */
 import { describe, expect, it } from 'vitest'
-import { componentGraph, expressionGraph, toJsonGraph } from './graph.js'
+import { componentGraph, expressionGraph, toDot, toJsonGraph, toMermaid } from './graph.js'
 import type { Graph } from './graph.js'
 import { loadFixture, readFixture } from './test-helpers.js'
 import type { EsmFile } from './types.js'
@@ -70,6 +70,11 @@ interface FileCase {
   expression_graph: ExpressionGraphCase
   expression_graph_json: JsonExportCase
   expression_graph_merge_coupled: ExpressionGraphCase
+  /** The first line of each §4.8.3 text export — only the header is pinned. */
+  component_graph_dot_header: string
+  component_graph_mermaid_header: string
+  expression_graph_dot_header: string
+  expression_graph_mermaid_header: string
 }
 interface TargetCase {
   name: string
@@ -199,6 +204,19 @@ describe('graph conformance corpus — whole documents', () => {
           actualExpression(expressionGraph(file(), { mergeCoupled: true })),
           c.expression_graph_merge_coupled,
         )
+      })
+
+      // The corpus pins only the FIRST LINE of the DOT and Mermaid exports: the
+      // rest carries node labels run through the chemical-subscript formatter,
+      // which two of the five bindings do not have. See
+      // tests/conformance/graph/README.md.
+      it('DOT and Mermaid headers', () => {
+        const cg = componentGraph(file())
+        const eg = expressionGraph(file())
+        expect(toDot(cg).split('\n')[0]).toBe(c.component_graph_dot_header)
+        expect(toMermaid(cg).split('\n')[0]).toBe(c.component_graph_mermaid_header)
+        expect(toDot(eg).split('\n')[0]).toBe(c.expression_graph_dot_header)
+        expect(toMermaid(eg).split('\n')[0]).toBe(c.expression_graph_mermaid_header)
       })
     })
   }

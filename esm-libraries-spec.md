@@ -777,7 +777,20 @@ component_graph(file: EsmFile) → Graph<ComponentNode, CouplingEdge>
 | `reaction_system` | Each key in `reaction_systems` |
 | `operator` | Each key in `operators` |
 
-Each node carries its name, type, and summary metadata (variable count, equation count, species count, etc.).
+Each node carries its name, type, and summary metadata: a variable count, an
+equation count and a species count. The three mean different things for the two
+component types, and a binding MUST fill all three:
+
+| | `var_count` | `eq_count` | `species_count` |
+|---|---|---|---|
+| `model` | its `variables` — unknowns and parameters alike | its `equations` | 0 |
+| `reaction_system` | its `parameters` | its `reactions` — the reaction count IS the equation count | its `species` |
+
+A reaction system's `var_count` is its **parameters** because the schema forbids
+a `variables` field there and `species_count` already carries the species: the
+parameters are the only named quantities left, and they are the exact analogue
+of a model's `variables`. Writing 0 would assert that a reaction system declares
+no variables at all.
 
 **Edges:**
 
@@ -894,6 +907,16 @@ Libraries should also support serializing graphs to common interchange formats (
 - **DOT** (Graphviz) — for piping to `dot` or other layout engines
 - **JSON adjacency list** — for web consumption
 - **Mermaid** — for embedding in Markdown documentation
+
+**The first line of the DOT and Mermaid exports is normative**, so a consumer
+can recognise either format without sniffing. A component graph opens
+`digraph ComponentGraph {` and an expression graph `digraph ExpressionGraph {`;
+both Mermaid exports open `graph TD`. (`graph` is Mermaid's legacy spelling of
+`flowchart`; both render, and this is the spelling the bindings converged on.)
+This section specifies nothing else about either format's syntax, so the rest of
+their bytes is a binding's own; `tests/conformance/graph/cases.json` pins the two
+headers and its README records the per-line majority for every element, against
+the day the bindings converge further.
 
 ---
 

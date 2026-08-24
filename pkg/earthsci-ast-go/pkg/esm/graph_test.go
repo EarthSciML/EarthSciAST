@@ -380,7 +380,7 @@ func TestGraphExport(t *testing.T) {
 		t.Errorf("Mermaid export failed: %v", err)
 	}
 
-	if !strings.Contains(mermaidOutput, "graph LR") {
+	if !strings.Contains(mermaidOutput, "graph TD") {
 		t.Errorf("Mermaid output doesn't contain expected header")
 	}
 

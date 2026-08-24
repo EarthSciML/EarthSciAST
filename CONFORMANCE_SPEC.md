@@ -4,8 +4,9 @@
 > two declared types (`unknown`, `parameter`), with ODE-state-ness, observed-ness,
 > noise, and refresh cadence all DERIVED via the classification functions in
 > esm-spec §6.3.1. Where the text below says "observed", it means the derived
-> category — an unknown defined by a bare-variable-LHS equation — not a declared
-> type. See `docs/content/rfcs/unified-variable-model.md`.
+> category — an unknown some equation DEFINES, its LHS naming it either bare
+> (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`) — not a declared type. See esm-spec
+> §6.3.1 and `docs/content/rfcs/unified-variable-model.md`.
 
 **Version 1.0 — Test Fixture Format and Execution Protocol**
 
@@ -1515,7 +1516,8 @@ So an observed leaf resolves to the join of the leaves of **its defining
 equation's RHS**, computed by this same pass and memoised. This is the one place
 where the cadence pass must follow the 1.0.0 relocation: an observed's definition
 used to live in `variables[v].expression` and now lives in the model's
-`equations` array as the bare-variable-LHS equation whose LHS is that name. The
+`equations` array as the defining equation whose LHS names that variable —
+bare (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`, esm-spec §6.3.1). The
 observed sub-DAG is acyclic (§4.9.4 balance plus the DAE contract), so the
 recursion terminates; a cycle is a defect and MUST be reported rather than
 silently seeded.

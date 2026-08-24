@@ -31,15 +31,22 @@
  * export, which esm-libraries-spec §4.8.3 names by structure ("JSON adjacency
  * list").
  *
- * WHAT IS DELIBERATELY NOT PINNED. The DOT and Mermaid BYTES. §4.8.3 requires
- * both formats but specifies neither one's syntax, and the five bindings do not
- * split in a way any rule here resolves: TypeScript emits `digraph {` +
- * `flowchart TD` while Python, Go, Rust and Julia all emit
- * `digraph ComponentGraph` — so the majority rule points AWAY from the oracle —
- * and those four then disagree with each other on the Mermaid header
- * (`graph TD` vs `graph LR`) and on every node/edge line's shapes, colours and
- * label text. Choosing here would be picking a house style, not resolving a
- * conformance question, so the corpus does not pretend to have an answer. See
+ * ALSO PINNED, AND NOT FROM THE ORACLE. The DOT and Mermaid HEADER lines.
+ * §4.8.3 requires both formats but specifies neither one's syntax, so the
+ * tie-break is the majority of the five bindings — and on both headers the
+ * majority is AGAINST TypeScript, which has been moved rather than followed:
+ *   - DOT: `digraph ComponentGraph {` / `digraph ExpressionGraph {`, which
+ *     Python, Go, Rust and Julia all emitted against TypeScript's bare
+ *     `digraph {` (4-1).
+ *   - Mermaid: `graph TD`, majority applied to the keyword and the direction
+ *     independently — `graph` beats `flowchart` 4-1 (everyone but TypeScript)
+ *     and `TD` beats `LR` 3-2 (TypeScript, Python and Julia against Go and
+ *     Rust).
+ * These are the FIRST LINE of each export only. The rest of the DOT and Mermaid
+ * bytes are still not pinned: every node line carries a LABEL run through the
+ * chemical-subscript formatter, which only TypeScript, Python and Julia have
+ * (it is a ~1500-line element-table module in each), so converging Go and Rust
+ * on the per-line format is a port of that feature, not an exporter edit. See
  * tests/conformance/graph/README.md.
  *
  * Regenerate with:  node scripts/generate-graph-corpus.mjs
@@ -54,7 +61,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const TS = join(ROOT, 'pkg/earthsci-ast-ts/dist/esm/index.js')
 const OUT_DIR = join(ROOT, 'tests/conformance/graph')
 
-const { componentGraph, expressionGraph, toJsonGraph, load } = await import(TS)
+const { componentGraph, expressionGraph, toJsonGraph, toDot, toMermaid, load } = await import(TS)
 
 /**
  * Whole-document cases. Each names a fixture under tests/valid/ and the reason
@@ -257,6 +264,12 @@ function shapeJsonExport(json) {
   }
 }
 
+/**
+ * The first line of a text export — the part §4.8.3's two required formats are
+ * pinned at. See the header comment for why the remaining lines are not.
+ */
+const shapeTextExportHeader = (text) => text.split('\n')[0]
+
 function shapeComponentGraph(graph) {
   return {
     nodes: graph.nodes.map(shapeComponentNode),
@@ -299,8 +312,12 @@ for (const c of FILE_CASES) {
     covers: c.covers,
     component_graph: shapeComponentGraph(cg),
     component_graph_json: shapeJsonExport(toJsonGraph(cg)),
+    component_graph_dot_header: shapeTextExportHeader(toDot(cg)),
+    component_graph_mermaid_header: shapeTextExportHeader(toMermaid(cg)),
     expression_graph: shapeExpressionGraph(eg),
     expression_graph_json: shapeJsonExport(toJsonGraph(eg)),
+    expression_graph_dot_header: shapeTextExportHeader(toDot(eg)),
+    expression_graph_mermaid_header: shapeTextExportHeader(toMermaid(eg)),
     // `merge_coupled` (§4.8.2, "Coupled file-level graph"): variable_map
     // entries become cross-system dependency edges.
     expression_graph_merge_coupled: shapeExpressionGraph(merged),
@@ -334,9 +351,9 @@ const corpus = {
     'scripts/generate-graph-corpus.mjs from the TypeScript oracle — do not hand-edit. ' +
     'Pins the SEMANTIC graph model (component nodes/types/counts, coupling edges/types/labels, ' +
     'variable nodes/kinds/units/systems, dependency edges/relationships/equation_index, and the ' +
-    'adjacency closure) plus the JSON adjacency-list export. Node and edge ORDER is not a ' +
-    'conformance property — compare as multisets. The DOT and Mermaid byte formats are NOT ' +
-    'pinned; see README.md for why.',
+    'adjacency closure) plus the JSON adjacency-list export and the DOT / Mermaid HEADER lines. ' +
+    'Node and edge ORDER is not a conformance property — compare as multisets. The DOT and ' +
+    'Mermaid per-line bytes are not pinned; see README.md for why.',
   oracle: '@earthsciml/ast componentGraph / expressionGraph / toJsonGraph',
   spec: 'esm-libraries-spec.md §4.8',
   files,

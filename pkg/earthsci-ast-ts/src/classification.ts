@@ -169,26 +169,41 @@ export function isOdeState(model: Model, name: string): boolean {
 }
 
 /**
- * Unknowns defined by a BARE-VARIABLE LHS (`y ~ f(…)`) — eliminable,
- * materializable. An unknown that is already an ODE state is not observed.
+ * Unknowns an equation DEFINES — its LHS naming them, bare (`y ~ f(…)`) or
+ * indexed (`y[i] ~ f(…)`, which defines the whole array `y`) — eliminable,
+ * materializable (esm-spec §6.3.1). An unknown that is already an ODE state is
+ * not observed.
+ *
+ * The split from {@link algebraicUnknowns} is SEMANTIC, not syntactic: observed
+ * when an equation defines the unknown, algebraic when it is only constrained.
+ * The defining form is read through the LHS's BASE NAME, so an arrayed
+ * definition is observed exactly as its scalar counterpart is; only a genuine
+ * expression LHS, one that names no single variable (`H*H*SO4 ~ Ksp`), is an
+ * implicit constraint. §6.3.1 used to spell the criterion "a bare-variable
+ * LHS", which was written for scalar equations and contradicted the semantic
+ * criterion in the arrayed case.
+ *
+ * Note that *eliminable* is not *inlineable*: a scalar observed is eliminated
+ * by substituting its definition into every consumer, while an arrayed one
+ * materializes into a buffer its consumers index. Both are observed; a caller
+ * that wants the strict inlineable form asks {@link observedDefinitions} for it
+ * with `bareOnly`.
  */
 export function observedUnknowns(model: Model): string[] {
   const declared = new Set(unknowns(model))
   const states = new Set(odeStates(model))
   const found: string[] = []
   for (const eq of equationsOf(model)) {
-    // A bare-variable LHS is a plain string. An EXPRESSION LHS (`H*H*SO4 ~ Ksp`)
-    // is an implicit constraint, not a definition — that is what separates an
-    // observed unknown from an algebraic one.
-    if (typeof eq.lhs !== 'string') continue
-    if (declared.has(eq.lhs) && !states.has(eq.lhs)) found.push(eq.lhs)
+    const name = baseVariableName(eq.lhs)
+    if (name === undefined) continue
+    if (declared.has(name) && !states.has(name)) found.push(name)
   }
   return sortedUnique(found)
 }
 
 /**
- * The DEFINING EXPRESSION of every observed unknown: the RHS of the
- * bare-variable-LHS equation whose LHS is that name.
+ * The DEFINING EXPRESSION of every observed unknown: the RHS of the equation
+ * whose LHS names it, bare (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`).
  *
  * This is the 1.0.0 relocation, in one place. An observed unknown's definition
  * used to live in `variables[v].expression`; it now lives in the model's
@@ -199,21 +214,31 @@ export function observedUnknowns(model: Model): string[] {
  * Only the first equation for a name is recorded: a second one is an unbalanced
  * system, which {@link validateEquationBalance} reports rather than this.
  */
-export function observedDefinitions(model: Model): Map<string, Expression> {
+export function observedDefinitions(
+  model: Model,
+  options?: { bareOnly?: boolean },
+): Map<string, Expression> {
   const observed = new Set(observedUnknowns(model))
+  const bareOnly = options?.bareOnly === true
   const defs = new Map<string, Expression>()
   for (const eq of equationsOf(model)) {
-    if (typeof eq.lhs !== 'string') continue
-    if (!observed.has(eq.lhs) || defs.has(eq.lhs)) continue
-    defs.set(eq.lhs, eq.rhs)
+    // `bareOnly` restricts to the strict `y ~ f(…)` form — the observeds that
+    // are eliminable by INLINING, as opposed to an arrayed definition
+    // (`y[i] ~ f(…)`) which materializes into a buffer its consumers index.
+    if (bareOnly && typeof eq.lhs !== 'string') continue
+    const name = baseVariableName(eq.lhs)
+    if (name === undefined) continue
+    if (!observed.has(name) || defs.has(name)) continue
+    defs.set(name, eq.rhs)
   }
   return defs
 }
 
 /**
- * Unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`) — everything left once
- * the ODE states and the observed unknowns are removed. Defining this set by
- * elimination is what makes the three sets a partition by construction.
+ * Unknowns constrained only implicitly — no equation names them on its LHS
+ * (`H*H*SO4 ~ Ksp`). Everything left once the ODE states and the observed
+ * unknowns are removed; defining this set by elimination is what makes the
+ * three sets a partition by construction.
  */
 export function algebraicUnknowns(model: Model): string[] {
   const states = new Set(odeStates(model))

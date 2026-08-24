@@ -61,6 +61,7 @@ from .esm_types import (
     EsmFile,
     EventCoupling,
     Expr,
+    ExprNode,
     Model,
     OperatorApplyCoupling,
     OperatorComposeCoupling,
@@ -69,7 +70,7 @@ from .esm_types import (
     Reference,
     VariableMapCoupling,
 )
-from .expression import free_variables
+from .expr_walk import iter_children
 
 __all__ = [
     "EXPR_RESULT",
@@ -316,17 +317,15 @@ def component_graph(file: EsmFile) -> Graph[ComponentNode, CouplingEdge]:
                 description=None,
                 reference=None,
                 metadata={
-                    # 0, matching the oracle. A reaction system declares no
-                    # `variables`; its parameters are counted by nothing and its
-                    # species and reactions by the two fields below. This is the
-                    # one corpus field the oracle carries WITHOUT a majority
-                    # behind it (TypeScript writes 0, Julia and an earlier
-                    # revision of this module wrote len(parameters), Go and Rust
-                    # report no variable count for a reaction system at all), so
-                    # it is pinned to keep consumers agreeing rather than because
-                    # the spec settles it — esm-libraries-spec §4.8.1 asks only
-                    # for "summary metadata".
-                    "var_count": 0,
+                    # A reaction system's PARAMETERS are its variable count. The
+                    # schema forbids a `variables` field here, and
+                    # `species_count` below already carries the species, so
+                    # `parameters` is the only thing left for §4.8.1's "variable
+                    # count" to mean — and it is the exact analogue of a model's
+                    # `variables`, which likewise counts unknowns and parameters
+                    # together. This used to be 0, which asserted that a
+                    # reaction system declares no variables at all.
+                    "var_count": len(getattr(rxn_sys, "parameters", {}) or {}),
                     "eq_count": len(getattr(rxn_sys, "reactions", []) or []),
                     "species_count": len(getattr(rxn_sys, "species", []) or []),
                 },
@@ -492,11 +491,69 @@ def lhs_target_name(lhs: Expr) -> str | None:
     return None
 
 
+def _bound_index_symbols(node: ExprNode) -> list[str]:
+    """Index symbols this node BINDS for its own body: an ``aggregate`` /
+    ``arrayop``'s ``ranges`` keys and ``output_idx`` entries, and an
+    ``integral``'s ``var``.
+
+    Narrower than :func:`structural_checks._expression_bound_symbols`, which also
+    treats every bare name in an ``index(A, i, j)`` position as bound. Those
+    positions are exactly where an aggregate's binders appear, and subtracting
+    them THERE rather than at the binding node would hide a real reference to a
+    declared variable used as an index. The binder itself is caught at its
+    ``aggregate``.
+    """
+    bound: list[str] = []
+    ranges = getattr(node, "ranges", None)
+    if isinstance(ranges, dict):
+        bound.extend(ranges.keys())
+    output_idx = getattr(node, "output_idx", None)
+    if isinstance(output_idx, list):
+        bound.extend(idx for idx in output_idx if isinstance(idx, str))
+    int_var = getattr(node, "var", None)
+    if isinstance(int_var, str):
+        bound.append(int_var)
+    return bound
+
+
+def _collect_variable_references(expr: Expr, out: set[str]) -> None:
+    """Accumulate ``expr``'s variable references into ``out``, subtracting each
+    node's own binders at that node."""
+    if isinstance(expr, str):
+        out.add(expr)
+        return
+    if not isinstance(expr, ExprNode):
+        return
+    # Collect this node's subtree into a LOCAL set, subtract the symbols this
+    # node binds, and only then promote what is left to the caller.
+    local: set[str] = set()
+    for child in iter_children(expr):
+        _collect_variable_references(child, local)
+    local.difference_update(_bound_index_symbols(expr))
+    out.update(local)
+
+
 def _sorted_free_variables(expr: Expr | None) -> list[str]:
-    """Free variables of ``expr``, sorted so edge order is deterministic."""
+    """The variables ``expr`` REFERENCES, with every locally-bound index symbol
+    removed, sorted so edge order is deterministic — the node set §4.8.2 asks
+    for.
+
+    Deliberately NOT :func:`expression.free_variables`. That function walks every
+    child and reports every bare name it reaches, so an ``aggregate``'s own range
+    binders (``sum over a of src[a]``) come back looking like model variables and
+    become graph nodes with no declaration, no units and no kind. A binder is
+    introduced by the aggregate's own ``ranges`` clause and is scoped to it; it
+    is not a variable of the system, so it is not a node.
+
+    ``free_variables`` itself is unchanged: it is public API and is shared with
+    validation and unit conversion, where "every name the subtree mentions" is
+    the wanted answer.
+    """
     if expr is None:
         return []
-    return sorted(free_variables(expr))
+    found: set[str] = set()
+    _collect_variable_references(expr, found)
+    return sorted(found)
 
 
 def _variable_kinds(model: Model) -> dict[str, str]:
@@ -705,11 +762,13 @@ def expression_graph(
         result = builder.add_node(EXPR_RESULT, "observed", None, DEFAULT_SYSTEM)
         for name in _sorted_free_variables(target):
             source_key = builder.add_node(name, "parameter", None, DEFAULT_SYSTEM)
-            # equation_index 0, not NON_EQUATION_INDEX: a standalone target is
-            # its own equation 0, the same index the Equation and Reaction
-            # overloads use. (NON_EQUATION_INDEX stays for the coupling maps,
-            # which sit outside any target's numbering.)
-            builder.add_dependency(source_key, result, "multiplicative", 0, target)
+            # NON_EQUATION_INDEX: a bare expression has no positional equation
+            # to index, which is exactly what the sentinel is for. (The Equation
+            # and Reaction overloads DO number their single target 0 — they are
+            # positional statements; a loose expression is not.)
+            builder.add_dependency(
+                source_key, result, "multiplicative", NON_EQUATION_INDEX, target
+            )
 
     return builder.graph()
 
