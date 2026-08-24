@@ -5,6 +5,141 @@ gives the exact before/after spelling in each binding.
 
 ---
 
+## Phase 4 — the simulation surface: `Problem` + `solve`
+
+`simulate` is **deleted** in Julia, Python and Rust — not deprecated, not
+aliased. So are `prepare`, `PreparedModel` / `Prepared`, `SimulateOptions`,
+`SimulationResult` and `SolverChoice`. TypeScript and Go are unaffected: they
+have no simulation surface and gain none.
+
+The normative contract is `esm-libraries-spec.md` §2.5; the surface it implies is
+`API_SPEC.md` §5.8.
+
+### `simulate(...)` → `esm_problem(...)` + `solve(...)`
+
+A run is now two steps, because their costs differ by orders of magnitude and
+their inputs differ in kind. Construction is deterministic per *document* — it
+rewrites, invents values, fetches gated provider data, and compiles the
+right-hand side. `solve` varies only per-*run* knobs.
+
+```
+prob = esm_problem(input, tspan; p, u0, providers, ...)   # build once
+sol  = solve(prob; alg, abstol, reltol, saveat, ...)      # run per knob-set
+```
+
+This is not a new idea being imposed: two of the three bindings had already grown
+a second, `prepare`-shaped entry point beside `simulate` precisely because callers
+needed the split. It was spelled differently in each, and took different
+arguments. `prepare` is *replaced by* construction, not kept beside it.
+
+| Was | Now |
+|---|---|
+| Julia `simulate(input, tspan; ...)` | `solve(esm_problem(input, tspan; ...), alg; ...)` |
+| Julia `simulate(prep, tspan; ...)` | `solve(prob, alg; ...)` |
+| Julia `prepare(input; ...)` → `PreparedModel` | `esm_problem(input, tspan; ...)` → `EsmProblem` |
+| Julia `remake_parameters(prep, overrides)` | `remake(prob; p = overrides)` |
+| Python `simulate(file, tspan, ...)` | `solve(esm_problem(file, tspan, ...))` |
+| Python `prepare(input, ...)` → `PreparedModel` | `esm_problem(input, tspan, ...)` → `EsmProblem` |
+| Rust `simulate(&file, tspan, &p, &u0, &opts)` | `solve(&esm_problem(...)?, &opts)` |
+| Rust `prepare(...)` → `Prepared` | `esm_problem(...)` → `EsmProblem` |
+| Rust `Compiled::simulate` | `Compiled::solve` |
+| Rust wasm export `simulate` | `solve` |
+
+The type is `EsmProblem` in all three, following `EsmFile` — which is prefixed in
+every binding, including the ones with module namespacing.
+
+### Option names are SciML's everywhere
+
+| Canonical | Julia was | Python was | Rust was |
+|---|---|---|---|
+| `alg` | `alg` | `method: str = "LSODA"` | `solver: SolverChoice` |
+| `abstol` | `abstol` | `atol` | `abstol` |
+| `reltol` | `reltol` | `rtol` | `reltol` |
+| `saveat` | `saveat` | *(absent)* | `output_times` |
+| `maxiters` | — | — | `max_steps` |
+
+### Default tolerances changed, in the LOOSE direction
+
+**`reltol = 1e-4`, `abstol = 1e-6`** in every binding — Julia's values.
+
+All three previously differed, spanning six orders of magnitude (Julia
+`1e-4`/`1e-6`, Rust `1e-6`/`1e-8`, Python `1e-10`/`1e-14`), so no two solved the
+same document comparably without the caller naming a tolerance. A default is what
+a document gets when its author has expressed no opinion about accuracy, so it is
+the cheapest of the three rather than the most accurate.
+
+**If you have a test that asserts a trajectory, give it an explicit tolerance.**
+A test that relied on the old default was asserting something about the library's
+default rather than about your model, and it will now fail. Widening the
+assertion's own comparison threshold is the wrong repair. This is not
+hypothetical: 21 tests in this repo were in exactly that position, and all 21
+were fixed by passing the accuracy they actually needed.
+
+### `success` + `message` → `retcode`
+
+A solution carries `retcode` from the SciML `ReturnCode` vocabulary — at minimum
+`Success`, `MaxIters`, `Unstable`, `Terminated`, and a solver-failure code. It
+replaces a `success` boolean beside free-text `message`, and, in Rust, step and
+eval counters that callers were reading as a proxy for whether the run finished.
+Counters remain as informative statistics. A caller must be able to tell "ran to
+the end of `tspan`" from "stopped early, here is why" without parsing prose.
+
+Julia goes further: a solution is now a real `ODESolution`, and
+`SciMLBase.__init` / `__solve` are specialized on `EsmProblem`, so the standard
+SciML entry points work directly.
+
+### A failed BUILD raises
+
+An unlowerable operator, a cyclic observed graph, or an undiscretized spatial
+operator is a *construction* error and is raised as one. `retcode` describes runs
+that happened; a document that never became a Problem has no run to describe.
+`simulate` used to report these as a failed result while `prepare` raised — that
+split is gone.
+
+### Callbacks: a `callback` argument REPLACES the Problem's set
+
+Callbacks are declared on the Problem, because a callback that refreshes provider
+buffers or writes an output stream belongs to the document, not to a particular
+run's tolerances. A `callback` argument to `solve` **replaces** that set — it does
+not append, merge, or wrap.
+
+To extend rather than replace, read the set back and compose explicitly:
+
+```
+solve(prob; callback = compose(callbacks(prob), my_extra_callback))
+```
+
+Solver **stops are unioned, not replaced**: a Problem's refresh and output anchors
+are `tstops` its callbacks need to be correct, and a refresh callback that is
+never stopped at silently interpolates across a data boundary.
+
+### Results are indexed by NAME
+
+`sol["Chem.O3"]`, not `sol.u[3]`. Julia implements `SymbolicIndexingInterface`;
+the others expose name-keyed accessors. The flattened state ordering is an
+implementation detail that coupling can change, so positional access is no longer
+the documented path.
+
+### Also
+
+- `observed_field(prob, name)` — two arguments in all three. Julia's took
+  `(prep, insp::BuildInspection, name)` and required the caller to have threaded
+  the same `BuildInspection` through `prepare`; Rust's was a method on `Prepared`.
+- `init` / `step!` / `solve!` expose the stepping lifecycle. On this path **the
+  caller owns the sink lifecycle** — `solve` brackets the run with sink
+  open/close, and a caller stepping manually is outside that bracket.
+- `EnsembleProblem` is the canonical form for sweeps and Monte Carlo. Go's
+  orphaned `ParameterSweep` / `SweepRange` / `SweepDimension` — a sweep vocabulary
+  in the one binding with no solver to run it — are deleted rather than
+  harmonized.
+- `build_evaluator` **survives unchanged** as a documented extension seam. It has
+  117 real call sites downstream and is not deprecated by any of this.
+- **Solvers are optional.** Constructing a Problem must not require the
+  integrator. Rust's `diffsol` is now behind a `solve` feature; Python's SciPy is
+  a `simulate` extra; Julia's solver stays a package extension.
+
+---
+
 ## Phase 2 — document I/O and version constants
 
 Three symbols changed, in all five bindings, in one release. The old names are
