@@ -132,6 +132,25 @@ halves and the field is compared normally.)
   `models` order, ahead of the reaction system: `[OH, O3, NO, NO2]` against
   Julia's `[O3, NO, NO2, OH]`. Same four equations, same terms. Pinned locally
   below.
+* `equations` / `independent_variables` on `operator_compose_translate` — two
+  separate oracle gaps, neither about the composition this case exists to pin
+  (the merge itself matches the corpus exactly and is asserted locally below).
+  (i) `independent_variables`: the fixture's diffusion term is
+  `{"op":"D","args":["ozone_conc"],"wrt":"z"}`, and §4.7.6's scan names "`grad`,
+  `div`, `laplacian`, or **`D` with `wrt ≠ "t"`**". Julia reports
+  `["t","z","x","y"]`; the oracle reports `["t","x","y"]`, because
+  `_spatial_dims_in_expr` harvests only a node's `dim` field and a spatial `D`
+  carries its axis in `wrt`. It is the same axis the oracle's own expected
+  equations print as `D(ChemistrySystem.O3)/Dz`, so the omission also makes the
+  case's `system_kind: "pde"` rest on `grad` alone. Julia's answer is the
+  spec's; pinned locally below.
+  (ii) `equations`: `DepositionSystem` writes `surface_flux = deposition_velocity
+  * O3` for an `O3` it does not declare and no coupling binds — the same
+  under-specified-fixture shape as `complete_coupling_types` below. Julia's
+  namespacing prefixes only a component's OWN locals, so the dangling reference
+  stays bare; the oracle prefixes it to `DepositionSystem.O3`, a name that is in
+  no variable map either. Neither answer is usable and the fixture is what wants
+  fixing. Every other equation in the case agrees exactly.
 * `equations` on `minimal_chemistry` / `metadata_inheritance_coupled` — the
   reaction-lowering coefficient rendering below (`-1 * rate` vs `-rate`), and
   nothing else; the composed advection terms agree exactly. These two are the
@@ -220,6 +239,7 @@ const _FC_DIVERGENCES = Dict{String,Vector{String}}(
     "minimal_chemistry" => ["equations"],
     "metadata_inheritance_coupled" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
+    "operator_compose_translate" => ["equations", "independent_variables"],
 )
 
 # There is no `_FC_REFUSED_CASES` any more. `advanced_coupling` was its only
@@ -401,11 +421,14 @@ end
             @test (id, "independent_variables", act["independent_variables"]) ==
                   (id, "independent_variables", exp["independent_variables"])
         else
-            # The oracle sorts; membership is still a real check.
-            @test (id, "independent_variables (set)",
-                   sort(act["independent_variables"])) ==
-                  (id, "independent_variables (set)",
-                   sort(String[String(x) for x in exp["independent_variables"]]))
+            # The one skipped case (`operator_compose_translate`) diverges by an
+            # axis the oracle MISSES, not by order — so containment is still a
+            # real check: every axis the oracle found must be here too, and the
+            # extra one is pinned locally below.
+            @test (id, "independent_variables (⊇)",
+                   String[x for x in exp["independent_variables"]
+                          if !(String(x) in act["independent_variables"])]) ==
+                  (id, "independent_variables (⊇)", String[])
         end
 
         for key in ("state_variables", "parameters", "observed_variables")
@@ -604,12 +627,45 @@ end
         ]
     end
 
+    @testset "operator_compose tier: the TRANSLATED composition, in full" begin
+        # `operator_compose_translate` skips `equations` over the oracle's
+        # namespacing of one dangling reference, and `independent_variables` over
+        # the oracle's `dim`-only spatial scan (see the header). Everything the
+        # case exists to pin — a bare `translate` map that finally MATCHES, the
+        # merge under A's spelling, and the prune of the two merged-away
+        # declarations — is asserted here in full instead.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
+                                          "operator_compose_resolution_fixtures.esm")))
+        diff(v) = " + DiffusionSystem.kh * laplacian(ChemistrySystem.$(v))" *
+                  " + DiffusionSystem.kv * D(ChemistrySystem.$(v))/Dz"
+        @test String[to_ascii(eq) for eq in flat.equations] == [
+            "D(ChemistrySystem.O3)/Dt = -1 * ChemistrySystem.k1 * " *
+                "ChemistrySystem.O3" * diff("O3"),
+            "D(ChemistrySystem.NO)/Dt = ChemistrySystem.k2 * " *
+                "ChemistrySystem.NO2" * diff("NO"),
+            # NO2 has no diffusion counterpart in the fixture: unmatched, so
+            # untouched.
+            "D(ChemistrySystem.NO2)/Dt = -1 * ChemistrySystem.k2 * ChemistrySystem.NO2",
+            # `AdvectionSystem` writes `D(u)` for its OWN parameter, so neither
+            # entry naming it ever matches and its equation survives whole.
+            "D(AdvectionSystem.u)/Dt = (-AdvectionSystem.u) * grad(AdvectionSystem.u) + " *
+                "(-AdvectionSystem.v) * grad(AdvectionSystem.u)",
+            # The one equation the oracle namespaces differently (`O3` vs
+            # `DepositionSystem.O3`); the rest of it is pinned here.
+            "DepositionSystem.surface_flux = DepositionSystem.deposition_velocity * O3",
+        ]
+        # The prune: `DiffusionSystem.ozone_conc` / `.nitrogen_oxide` were merged
+        # away and must not survive as unconstrained unknowns.
+        @test collect(keys(flat.state_variables)) ==
+              ["ChemistrySystem.O3", "ChemistrySystem.NO", "ChemistrySystem.NO2"]
+        @test isempty(flat.algebraic_variables)
+        # §4.7.6: `D` with `wrt != "t"` names a spatial axis too, so `z` is in.
+        @test String[String(v) for v in flat.independent_variables] ==
+              ["t", "z", "x", "y"]
+    end
+
     @testset "operator_compose: a translation match rewrites B's dependent var" begin
-        # esm-libraries-spec §4.7.1 step 4, amended 2026-08-24. Nothing in the
-        # corpus reaches this: every `translate` map in the shared fixture tree
-        # values `"B._var"`, which §10.2 makes REDUNDANT (the case below the
-        # next one), so the corpus only ever exercises direct and placeholder
-        # matches — for which the rewrite is the identity.
+        # esm-libraries-spec §4.7.1 step 4, amended 2026-08-24.
         #
         # `translate: {"A.x": "T.z"}` names two spellings of ONE quantity. The
         # merge consumes `D(T.z)`'s equation, so leaving `T.z` in the summed RHS
@@ -637,6 +693,87 @@ end
               ["D(A.x)/Dt = -A.x + T.w * A.x"]
         # The rewrite is the point: `T.z` must not survive in the merged RHS.
         @test !occursin("T.z", to_ascii(flat.equations[1]))
+        # ... and the PRUNE is its other half (§4.7.1 step 4, esm-spec §10.2):
+        # `T.z`'s defining equation is gone, so keeping its declaration would
+        # leave an unknown with no constraint — an ALGEBRAIC unknown (§6.3.1),
+        # i.e. a structurally singular system. Only `A.x` survives.
+        @test collect(keys(flat.state_variables)) == ["A.x"]
+        @test isempty(flat.algebraic_variables)
+        @test collect(keys(flat.parameters)) == ["T.w"]
+    end
+
+    @testset "operator_compose: a bare `translate` endpoint is qualified" begin
+        # esm-spec §10.2 / §4.7.1 step 2, amended 2026-08-24: an endpoint may be
+        # written bare or fully scoped and the two spellings MUST produce the
+        # same flattened system. Matching runs against the NAMESPACED dependent
+        # variable, so a bare endpoint has to be qualified first — a key against
+        # `systems[1]`, a value against `systems[2]`.
+        #
+        # This is not a hypothetical spelling: before the fix, every one of the
+        # eight `translate` maps in the shared fixture tree was authored bare and
+        # not one ever matched. The map missed, the bare-name fallback searched A
+        # for B's SHORT name and missed too, and the entry silently no-op'd.
+        doc(k, v) = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "TranslateSpelling",
+                      "description": "bare vs scoped translate endpoints",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "A": {"variables": {"x": {"type": "unknown", "units": "mol/mol", "default": 1.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]}}]},
+           "T": {"variables": {"z": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                               "w": {"type": "parameter", "units": "1/s", "default": 2.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                "rhs": {"op": "*", "args": ["w", "z"]}}]}},
+         "coupling": [{"type": "operator_compose", "systems": ["A", "T"],
+                       "translate": {"$(k)": "$(v)"}}]}
+        """
+        render(f) = String[to_ascii(eq) for eq in f.equations]
+        scoped = flatten(load_string(doc("A.x", "T.z")))
+        bare   = flatten(load_string(doc("x", "z")))
+        mixed  = flatten(load_string(doc("x", "T.z")))
+        @test render(bare) == render(scoped)
+        @test render(mixed) == render(scoped)
+        @test render(bare) == ["D(A.x)/Dt = -A.x + T.w * A.x"]
+        @test collect(keys(bare.state_variables)) == ["A.x"]
+    end
+
+    @testset "operator_compose: the merged-away name is retargeted DOCUMENT-WIDE" begin
+        # §4.7.1 step 4: the retarget is not local to B. A third system that is
+        # in no coupling entry may still reference `B.x` by its scoped name, and
+        # pruning B's declaration while leaving that reference dangling trades
+        # one broken system for another. `C.flux` below is exactly that third
+        # party, and its reference must follow the quantity to `A.x`.
+        doc = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "RetargetDocumentWide",
+                      "description": "a third system references the merged-away name",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "A": {"variables": {"x": {"type": "unknown", "units": "mol/mol", "default": 1.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]}}]},
+           "T": {"variables": {"z": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                               "w": {"type": "parameter", "units": "1/s", "default": 2.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                "rhs": {"op": "*", "args": ["w", "z"]}}]},
+           "C": {"variables": {"flux": {"type": "unknown", "units": "mol/mol/s", "default": 0.0},
+                               "vd": {"type": "parameter", "units": "1/s", "default": 0.1}},
+                 "equations": [{"lhs": "flux",
+                                "rhs": {"op": "*", "args": ["vd", "T.z"]}}]}},
+         "coupling": [{"type": "operator_compose", "systems": ["A", "T"],
+                       "translate": {"A.x": "T.z"}}]}
+        """
+        flat = flatten(load_string(doc))
+        @test String[to_ascii(eq) for eq in flat.equations] ==
+              ["D(A.x)/Dt = -A.x + T.w * A.x", "C.flux = C.vd * A.x"]
+        @test collect(keys(flat.state_variables)) == ["A.x"]
+        @test collect(keys(flat.observed_variables)) == ["C.flux"]
+        # No `T.z` anywhere: not as a declaration, not as a reference.
+        @test !any(occursin("T.z", to_ascii(eq)) for eq in flat.equations)
     end
 
     @testset "operator_compose: a `_var` translate value stays harmless" begin

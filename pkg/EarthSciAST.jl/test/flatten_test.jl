@@ -246,18 +246,30 @@ end
             coupling=coupling)
         flat = flatten(file)
 
-        # After compose we expect a single equation for the canonical dep var
-        # (B.T, since A.T was translated to B.T) and none for A.T.
-        @test _find_eq(flat, "B.T") !== nothing
-        eq = _find_eq(flat, "B.T")
+        # `"systems": [A, B]` with `translate: {"A.T": "B.T"}`: the KEY names A's
+        # variable and the VALUE names B's (esm-spec §10.2), so the pair is two
+        # spellings of ONE quantity and A's spelling is the one that survives.
+        # §4.7.1 step 4: the merge lands on A's equation, at A's position, and
+        # `B.T` — whose defining equation the merge just consumed — is retargeted
+        # at `A.T` and then pruned. An earlier revision of this testset expected
+        # the opposite ("B.T, since A.T was translated to B.T"), which read the
+        # map backwards and predates both the rewrite rule and the prune.
+        @test _find_eq(flat, "B.T") === nothing
+        eq = _find_eq(flat, "A.T")
+        @test eq !== nothing
         # Merged RHS MUST reference BOTH A's parameter (k) AND B's parameter (j),
         # i.e. both sides of the summed equation made it through the merge.
         # Using || would mask the case where only one side survived.
         @test _uses_var(eq.rhs, "A.k")
         @test _uses_var(eq.rhs, "B.j")
-        # And both state references (A.T and B.T) must appear.
+        # Only A's state name is left: B's term was rewritten off `B.T`, since
+        # its own defining equation is gone and it would otherwise be an unknown
+        # nothing defines (a structurally singular system).
         @test _uses_var(eq.rhs, "A.T")
-        @test _uses_var(eq.rhs, "B.T")
+        @test !_uses_var(eq.rhs, "B.T")
+        # ... and the stranded declaration is gone from the variable tables too.
+        @test haskey(flat.state_variables, "A.T")
+        @test !haskey(flat.state_variables, "B.T")
         # The top-level RHS should be a sum (+) of the two composed terms.
         @test eq.rhs isa EarthSciAST.OpExpr
         @test (eq.rhs::EarthSciAST.OpExpr).op == "+"
