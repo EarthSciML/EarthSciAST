@@ -220,7 +220,7 @@ pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValu
 
 /// Introspect the **flattened** simulation inputs of an `.esm` file (gt-5ws).
 ///
-/// Runs the same `flatten` pass [`simulate`] uses, then reports the exact
+/// Runs the same `flatten` pass [`solve`] uses, then reports the exact
 /// parameter and state names it will accept — already namespaced — together
 /// with their defaults and units, plus the system's independent variables. Use
 /// this to build a Run UI without guessing the flattened names: the keys
@@ -296,17 +296,21 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 /// - `ic_str`: JSON object mapping state name → initial value (`{}` to use the
 ///   model's `default`s).
 /// - `opts_str`: JSON object, all fields optional —
-///   `{ "solver": "bdf"|"sdirk"|"erk", "abstol": f64, "reltol": f64,
-///      "maxSteps": u32, "outputPoints": u32 }`. `outputPoints` samples the
+///   `{ "alg": "bdf"|"sdirk"|"erk", "abstol": f64, "reltol": f64,
+///      "maxiters": u32, "outputPoints": u32 }`. `outputPoints` samples the
 ///   solution at that many evenly spaced times in `[t0, t_end]` (nice for
-///   plotting); omit it to get the solver's natural step grid.
+///   plotting); omit it to get the solver's natural step grid. The names are
+///   the canonical SciML ones (`API_SPEC.md` §4); the pre-harmonization
+///   `solver` / `maxSteps` spellings are still accepted as aliases so an
+///   existing host keeps working.
 /// - `progress`: optional observer, called as `progress(fraction, t, step)`
 ///   once before the first step and then after **every** accepted step.
 ///   `fraction` is the covered share of `[t0, t_end]`, clamped to `[0, 1]`.
-///   Return **`false`** to cancel the run (it rejects with `Simulation error:
-///   Cancelled by the caller at t = …`); any other return value — including
-///   `undefined`, which is what a callback with no `return` gives — continues.
-///   A callback that throws is treated as a cancel.
+///   Return **`false`** to cancel the run. A cancel is NOT an error: the call
+///   resolves with the trajectory computed so far and `metadata.retcode ===
+///   "Terminated"`. Any other return value — including `undefined`, which is
+///   what a callback with no `return` gives — continues. A callback that throws
+///   is treated as a cancel.
 ///
 ///   It is called on every step and is **not throttled here**: the integrator
 ///   has no portable clock (`Instant::now()` panics on `wasm32-unknown-unknown`),
@@ -315,11 +319,18 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 ///   thousands of steps in a fraction of a second.
 ///
 /// Returns a JS object `{ time: number[], state: number[][],
-/// stateVariableNames: string[], metadata: {...} }` where
-/// `state[i][k]` is variable `stateVariableNames[i]` at `time[k]`.
-#[cfg(feature = "wasm")]
+/// stateVariableNames: string[], retcode: string, metadata: {...} }` where
+/// `state[i][k]` is variable `stateVariableNames[i]` at `time[k]`, and
+/// `retcode` is the SciML return code — `"Success"` means the run reached
+/// `t_end`, anything else means it stopped early and the trajectory ends there.
+///
+/// Named `solve`, not `simulate`: `simulate` is deleted in every binding
+/// (`esm-libraries-spec.md` §2.5.1). This export builds the Problem and solves
+/// it in one call because a `wasm_bindgen` boundary cannot hand a host a
+/// `Problem` handle without a lifetime story JS has no way to honour.
+#[cfg(all(feature = "wasm", feature = "solve"))]
 #[wasm_bindgen]
-pub fn simulate(
+pub fn solve(
     json_str: &str,
     t0: f64,
     t_end: f64,
@@ -328,9 +339,8 @@ pub fn simulate(
     opts_str: &str,
     progress: Option<js_sys::Function>,
 ) -> Result<JsValue, JsValue> {
-    use crate::simulate::{
-        Flow, Progress, ProgressFn, SimulateOptions, SolverChoice, simulate as rust_simulate,
-    };
+    use crate::problem::{ProblemOptions, esm_problem, solve as rust_solve};
+    use crate::simulate::{Alg, Flow, Progress, ProgressFn, SolveOptions};
     use std::collections::HashMap;
 
     let esm_file =
@@ -356,10 +366,15 @@ pub fn simulate(
         }
     };
 
-    let mut opts = SimulateOptions::default();
-    if let Some(s) = opts_json.get("solver").and_then(|v| v.as_str()) {
-        opts.solver = SolverChoice::from_name(s)
-            .ok_or_else(|| JsValue::from_str(&format!("Unknown solver '{s}'")))?;
+    let mut opts = SolveOptions::default();
+    // Canonical `alg` first, the pre-harmonization `solver` as an alias.
+    let alg_name = opts_json
+        .get("alg")
+        .or_else(|| opts_json.get("solver"))
+        .and_then(|v| v.as_str());
+    if let Some(s) = alg_name {
+        opts.alg =
+            Alg::from_name(s).ok_or_else(|| JsValue::from_str(&format!("Unknown alg '{s}'")))?;
     }
     if let Some(v) = opts_json.get("abstol").and_then(|v| v.as_f64()) {
         opts.abstol = v;
@@ -367,8 +382,12 @@ pub fn simulate(
     if let Some(v) = opts_json.get("reltol").and_then(|v| v.as_f64()) {
         opts.reltol = v;
     }
-    if let Some(v) = opts_json.get("maxSteps").and_then(|v| v.as_u64()) {
-        opts.max_steps = v as usize;
+    if let Some(v) = opts_json
+        .get("maxiters")
+        .or_else(|| opts_json.get("maxSteps"))
+        .and_then(|v| v.as_u64())
+    {
+        opts.maxiters = v as usize;
     }
     if let Some(n) = opts_json.get("outputPoints").and_then(|v| v.as_u64()) {
         opts.sample_evenly(t0, t_end, n as usize);
@@ -382,7 +401,7 @@ pub fn simulate(
     // cancel would make the most natural observer — `(f) => postMessage(f)`,
     // which returns `undefined` — abort on its first call.
     if let Some(cb) = progress {
-        let observer: ProgressFn = std::sync::Arc::new(move |p: &Progress| {
+        let observer: ProgressFn = std::sync::Arc::new(move |p: &Progress<'_>| {
             match cb.call3(
                 &JsValue::NULL,
                 &JsValue::from_f64(p.fraction()),
@@ -405,15 +424,32 @@ pub fn simulate(
         opts.progress = Some(observer);
     }
 
-    let sol = rust_simulate(&esm_file, (t0, t_end), &params, &initial_conditions, &opts)
-        .map_err(|e| JsValue::from_str(&format!("Simulation error: {e}")))?;
+    // Build once, then solve — the same two steps every native caller takes,
+    // collapsed here because the JS boundary cannot hold a `Problem`.
+    let prob = esm_problem(
+        &esm_file,
+        (t0, t_end),
+        ProblemOptions {
+            p: params,
+            u0: initial_conditions,
+            compile: crate::problem::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| JsValue::from_str(&format!("Problem build error: {e}")))?;
+    let sol =
+        rust_solve(&prob, &opts).map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
 
     let out = serde_json::json!({
         "time": sol.time,
         "state": sol.state,
         "stateVariableNames": sol.state_variable_names,
+        // The SciML return code (esm-libraries-spec §2.5.3). A host tells "ran
+        // to t_end" from "stopped early, here is why" by reading THIS, not by
+        // comparing step counters or parsing an error string.
+        "retcode": sol.retcode.name(),
         "metadata": {
-            "solver": sol.metadata.solver,
+            "alg": sol.metadata.alg,
             "nRhsCalls": sol.metadata.n_rhs_calls,
             "nJacobianCalls": sol.metadata.n_jacobian_calls,
             "nAcceptedSteps": sol.metadata.n_accepted_steps,
@@ -435,7 +471,7 @@ pub fn simulate(
 /// Compile a document's RHS onto the vectorized tape and report which rules
 /// did NOT make it — WITHOUT integrating anything.
 ///
-/// The companion to [`simulate`]'s `metadata.tapeFallbacks`, for the case that
+/// The companion to [`solve`]'s `metadata.tapeFallbacks`, for the case that
 /// motivated it: a model with a fallback in a tendency equation may take hours,
 /// so the metadata that would have named the culprit never arrives. This runs
 /// the build alone (milliseconds) and answers the same question up front.

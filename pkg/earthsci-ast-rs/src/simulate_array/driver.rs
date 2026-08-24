@@ -1,14 +1,23 @@
-//! Solver plumbing on [`ArrayCompiled`]: `simulate` / `simulate_inspect`
+//! Solver plumbing on [`ArrayCompiled`]: `solve` / `solve_inspect`
 //! (diffsol problem build, RHS/Jacobian closures, scalar-observed trajectory
 //! exposure), the `debug_*` RHS entry points, and the external forcing-channel
 //! handle ([`ArrayCompiled::forcing_handle`]).
 
-use super::tape::{TapeProgram, tape_disabled};
+#[cfg(feature = "solve")]
+use super::tape::TapeProgram;
+use super::tape::tape_disabled;
 use super::*;
+#[cfg_attr(not(feature = "solve"), allow(unused_imports))]
+use crate::simulate::SimulateError;
+#[cfg(feature = "solve")]
 use crate::simulate::{
-    Progress, ProgressFn, SimulateError, SimulateOptions, Solution, SolutionMetadata, SolveStats,
-    SolverChoice,
+    Alg, Progress, ProgressFn, ReturnCode, Solution, SolutionMetadata, SolveOptions, SolveStats,
 };
+// The solver is optional (esm-libraries-spec §2.5.9). Everything below that
+// touches `diffsol` is gated on the `solve` feature; the `debug_*` RHS entry
+// points and the forcing-channel handle are not, because a caller that only
+// BUILDS a Problem still reaches them.
+#[cfg(feature = "solve")]
 use diffsol::{Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, Sdirk, VectorHost};
 use std::collections::HashSet;
 
@@ -183,6 +192,7 @@ impl ArrayCompiled {
     /// provider-seeded forcing buffer and folded into the lifted grid state's cells
     /// (column-major, matching the slot enumeration in [`Self::from_model`]); a
     /// constant RHS broadcasts to every cell. Empty on the non-`ic` path.
+    #[cfg(feature = "solve")]
     fn resolve_field_ics(
         &self,
         params: &HashMap<String, f64>,
@@ -234,6 +244,7 @@ impl ArrayCompiled {
     /// vector (override > variable default; a parameter with neither is an
     /// [`SimulateError::InvalidParameter`]). The strict simulate-time
     /// counterpart of the lenient [`Self::debug_resolve_params`].
+    #[cfg(feature = "solve")]
     fn build_param_vec(&self, params: &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError> {
         // esm-spec §6.6.2 caller-key canonicalization (see
         // `crate::simulate::canonicalize_override_keys`). This subsumes the
@@ -263,6 +274,7 @@ impl ArrayCompiled {
     /// `initial_conditions` override > loaded field ic > variable default (a
     /// slot with none of the three is an
     /// [`SimulateError::InvalidInitialCondition`]).
+    #[cfg(feature = "solve")]
     fn build_initial_state(
         &self,
         initial_conditions: &HashMap<String, f64>,
@@ -299,32 +311,34 @@ impl ArrayCompiled {
         Ok(ic_vec)
     }
 
-    pub fn simulate(
+    #[cfg(feature = "solve")]
+    pub fn solve(
         &self,
         tspan: (f64, f64),
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
     ) -> Result<Solution, SimulateError> {
-        self.simulate_inspect(tspan, params, initial_conditions, opts, None)
+        self.solve_inspect(tspan, params, initial_conditions, opts, None)
     }
 
-    /// [`Self::simulate`] with an optional build-observability sink (see
+    /// [`Self::solve`] with an optional build-observability sink (see
     /// [`BuildInspection`]). When `inspect` is `Some`, the sink is filled —
     /// after the initial state vector is assembled and before the solver runs —
     /// with the state-free observed arrays materialized at `u0`/`t0` and every
     /// observed rule's resolved body expression. The integration itself is
     /// byte-identical with or without a sink.
-    pub fn simulate_inspect(
+    #[cfg(feature = "solve")]
+    pub fn solve_inspect(
         &self,
         tspan: (f64, f64),
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
         inspect: Option<&mut BuildInspection>,
     ) -> Result<Solution, SimulateError> {
         // CONST / single-segment: no discrete forcing, no refresh boundaries.
-        self.simulate_core(
+        self.solve_core(
             tspan,
             params,
             initial_conditions,
@@ -336,7 +350,7 @@ impl ArrayCompiled {
         )
     }
 
-    /// [`Self::simulate_inspect`] with a DISCRETE-cadence forcing refresh. The
+    /// [`Self::solve_inspect`] with a DISCRETE-cadence forcing refresh. The
     /// integration is SEGMENTED on `boundaries` (solver-second refresh anchors);
     /// at each boundary `refresh_fn(t)` re-slices the live forcing buffer to that
     /// record. Observeds transitively reaching a `discrete_forcing` name are
@@ -344,18 +358,19 @@ impl ArrayCompiled {
     /// refreshed buffer per segment while the CONST terrain regrid stays hoisted.
     /// This is the Rust analog of the ESS-Julia live-field taint + segmented driver.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn simulate_with_refresh_inspect(
+    #[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
+    pub(crate) fn solve_with_refresh_inspect(
         &self,
         tspan: (f64, f64),
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
         inspect: Option<&mut BuildInspection>,
         discrete_forcing: &HashSet<String>,
         boundaries: &[f64],
         refresh_fn: impl FnMut(f64) -> Result<(), SimulateError>,
     ) -> Result<Solution, SimulateError> {
-        self.simulate_core(
+        self.solve_core(
             tspan,
             params,
             initial_conditions,
@@ -372,12 +387,13 @@ impl ArrayCompiled {
     /// `(t0, t_end)`; an empty `boundaries` (the CONST path) runs one segment,
     /// byte-identical to the un-segmented driver.
     #[allow(clippy::too_many_arguments)]
-    fn simulate_core(
+    #[cfg(feature = "solve")]
+    fn solve_core(
         &self,
         tspan: (f64, f64),
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
         inspect: Option<&mut BuildInspection>,
         discrete_forcing: &HashSet<String>,
         boundaries: &[f64],
@@ -514,10 +530,10 @@ impl ArrayCompiled {
             }
         }
 
-        let solver_name = match opts.solver {
-            SolverChoice::Bdf => "Bdf",
-            SolverChoice::Sdirk => "Sdirk",
-            SolverChoice::Erk => "Erk",
+        let solver_name = match opts.alg {
+            Alg::Bdf => "Bdf",
+            Alg::Sdirk => "Sdirk",
+            Alg::Erk => "Erk",
         };
 
         // Step 3b: compile the tape program ONCE per solve and share it across
@@ -548,8 +564,8 @@ impl ArrayCompiled {
         // CONST / single-segment (or no output grid to align segment samples on):
         // the original un-segmented run — byte-identical to the pre-segmentation
         // driver (one `run_one_segment` over the whole span with `opts` verbatim).
-        if boundaries.is_empty() || opts.output_times.is_none() {
-            let (time, mut state, stats) = self.run_one_segment(
+        if boundaries.is_empty() || opts.saveat.is_none() {
+            let (time, mut state, stats, retcode) = self.run_one_segment(
                 t0,
                 t_end,
                 &ic_vec,
@@ -578,8 +594,9 @@ impl ArrayCompiled {
                 time,
                 state,
                 state_variable_names,
+                retcode,
                 metadata: SolutionMetadata {
-                    solver: solver_name.to_string(),
+                    alg: solver_name.to_string(),
                     n_rhs_calls: stats.n_rhs_calls,
                     n_jacobian_calls: stats.n_jacobian_calls,
                     n_accepted_steps: stats.n_accepted_steps,
@@ -601,13 +618,14 @@ impl ArrayCompiled {
             endpoints.push(t_end);
         }
 
-        let global_out = opts.output_times.clone().expect("output grid checked Some");
+        let global_out = opts.saveat.clone().expect("output grid checked Some");
         let mut u0 = ic_vec.clone();
         let mut time: Vec<f64> = Vec::new();
         let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
         // Each segment integrates with its own fresh diffsol solver, so the
         // reported step/eval counts are the sum across all segments.
         let mut stats = SolveStats::default();
+        let mut retcode = ReturnCode::Success;
 
         for w in endpoints.windows(2) {
             let (a, b) = (w[0], w[1]);
@@ -635,23 +653,24 @@ impl ArrayCompiled {
             let seg_progress: Option<ProgressFn> = opts.progress.as_ref().map(|user| {
                 let user = user.clone();
                 let steps_before = stats.n_accepted_steps;
-                let wrapped: ProgressFn = std::sync::Arc::new(move |p: &Progress| {
+                let wrapped: ProgressFn = std::sync::Arc::new(move |p: &Progress<'_>| {
                     user(&Progress {
                         t0,
                         t: p.t,
                         t_end,
                         step: steps_before + p.step,
-                        max_steps: p.max_steps,
+                        maxiters: p.maxiters,
+                        u: p.u,
                     })
                 });
                 wrapped
             });
-            let seg_opts = SimulateOptions {
-                output_times: Some(grid),
+            let seg_opts = SolveOptions {
+                saveat: Some(grid),
                 progress: seg_progress,
                 ..opts.clone()
             };
-            let (seg_time, seg_state, seg_stats) = self.run_one_segment(
+            let (seg_time, seg_state, seg_stats, seg_retcode) = self.run_one_segment(
                 a,
                 b,
                 &u0,
@@ -663,6 +682,12 @@ impl ArrayCompiled {
                 tape.as_ref(),
             )?;
             stats += seg_stats;
+            // A segment that stopped early ends the whole run: the state at its
+            // right endpoint never materialised, so there is nothing to seed the
+            // next segment with. Its reason becomes the run's `retcode`.
+            if !seg_retcode.is_success() {
+                retcode = seg_retcode;
+            }
             // `run_solver` pushes the REQUESTED grid time verbatim, so a float
             // equality against `requested`/`b` is exact.
             for (i, &t) in seg_time.iter().enumerate() {
@@ -675,6 +700,9 @@ impl ArrayCompiled {
                         state[r].push(seg_state[r][i]);
                     }
                 }
+            }
+            if !retcode.is_success() {
+                break;
             }
         }
 
@@ -703,8 +731,9 @@ impl ArrayCompiled {
             time,
             state,
             state_variable_names,
+            retcode,
             metadata: SolutionMetadata {
-                solver: solver_name.to_string(),
+                alg: solver_name.to_string(),
                 n_rhs_calls: stats.n_rhs_calls,
                 n_jacobian_calls: stats.n_jacobian_calls,
                 n_accepted_steps: stats.n_accepted_steps,
@@ -718,8 +747,9 @@ impl ArrayCompiled {
     /// live forcing buffer (`self.forcing`) — which a segmented driver refreshes
     /// between segments. Builds a fresh RHS/Jacobian closure pair (each scratch
     /// pre-seeded with the already-materialized `static_obs`) and a fresh diffsol
-    /// problem, returning the states at `opts.output_times`.
+    /// problem, returning the states at `opts.saveat`.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "solve")]
     fn run_one_segment(
         &self,
         t0: f64,
@@ -729,11 +759,11 @@ impl ArrayCompiled {
         static_obs: &ArrMap,
         segment_static_rules: &[AlgebraicRule],
         continuous_rules: &[AlgebraicRule],
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
         // Step 3b: the solve-wide tape program + the FULL observed rule list
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
         tape: Option<&(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError> {
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
         let n_states = self.n_states;
         let rhs_rules = self.rhs_rules.clone();
         let var_shapes = self.var_shapes.clone();
@@ -930,52 +960,52 @@ impl ArrayCompiled {
         // Mirror the scalar `Compiled::integrate` dispatch: run the solver, then
         // read the real step/eval counters out of diffsol before the concrete
         // solver is dropped (see [`SolveStats::from_solver`]).
-        let (time, state, stats) = match opts.solver {
-            SolverChoice::Bdf => {
+        let (time, state, stats, retcode) = match opts.alg {
+            Alg::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
-            SolverChoice::Sdirk => {
+            Alg::Sdirk => {
                 let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
                     .tr_bdf2::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
-            SolverChoice::Erk => {
+            Alg::Erk => {
                 let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                     details: e.to_string(),
                 })?;
-                let (time, state) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = crate::simulate::run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
         };
-        Ok((time, state, stats))
+        Ok((time, state, stats, retcode))
     }
 
     /// Expose scalar observed trajectories (e.g. an `area` FAQ) alongside the
@@ -988,6 +1018,7 @@ impl ArrayCompiled {
     /// const polygons) are not scalar rows and are skipped. Mirrors the Python
     /// `_simulate_with_numpy` output-observed exposure. A model with no
     /// observed rules (or an empty trajectory) is untouched.
+    #[cfg(feature = "solve")]
     fn append_scalar_observed_trajectories(
         &self,
         time: &[f64],
@@ -1248,6 +1279,7 @@ impl ArrayCompiled {
     /// parameters, and the arrays of the static (state-free / `t`-free) subset
     /// (`static_obs`, materialized once by the caller). Read-only with respect to
     /// the run.
+    #[cfg(feature = "solve")]
     fn fill_inspection(
         &self,
         insp: &mut BuildInspection,
@@ -1547,9 +1579,9 @@ mod forcing_channel_tests {
             .insert("w".to_string(), arr1(&[2.0, 4.0, 6.0]));
         let params = HashMap::new();
         let ics = HashMap::new(); // states default to 0
-        let opts = SimulateOptions::default();
+        let opts = SolveOptions::default();
         let sol = compiled
-            .simulate((0.0, 1.0), &params, &ics, &opts)
+            .solve((0.0, 1.0), &params, &ics, &opts)
             .expect("solve with forcing");
         // Final state ≈ u0 + w·1 = [2, 4, 6].
         for (i, want) in [2.0, 4.0, 6.0].iter().enumerate() {

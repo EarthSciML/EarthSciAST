@@ -3129,7 +3129,7 @@ mod subsystem_ragged_and_inspection_tests {
     //! through the inspection surface; a 2-cell ragged CSR miniature end to
     //! end; build byte-identical with/without a sink).
     use super::*;
-    use crate::simulate::{SimulateOptions, SolverChoice, simulate, simulate_with_inspection};
+    use crate::simulate::{Alg, SolveOptions};
     use serde_json::json;
 
     /// Typed load for inline test documents. The esm-schema pins `subsystems`
@@ -3141,12 +3141,27 @@ mod subsystem_ragged_and_inspection_tests {
         serde_json::from_value(doc).expect("test document deserializes")
     }
 
-    fn erk_opts() -> SimulateOptions {
-        SimulateOptions {
-            solver: SolverChoice::Erk,
+    /// A Problem with build observability switched on at CONSTRUCTION — the
+    /// seam that replaced threading a `&mut BuildInspection` through the run.
+    fn inspecting_problem(file: &EsmFile) -> crate::problem::Problem {
+        crate::problem::esm_problem(
+            file,
+            (0.0, 1.0),
+            crate::problem::ProblemOptions {
+                inspect: true,
+                compile: crate::problem::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .expect("builds")
+    }
+
+    fn erk_opts() -> SolveOptions {
+        SolveOptions {
+            alg: Alg::Erk,
             reltol: 1e-10,
             abstol: 1e-12,
-            output_times: Some(vec![1.0]),
+            saveat: Some(vec![1.0]),
             ..Default::default()
         }
     }
@@ -3219,16 +3234,9 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn ragged_csr_miniature_through_subsystem_and_aliases() {
         let file = typed(ragged_miniature_doc());
-        let mut insp = BuildInspection::default();
-        let sol = simulate_with_inspection(
-            &file,
-            (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &erk_opts(),
-            &mut insp,
-        )
-        .expect("simulates");
+        let prob = inspecting_problem(&file);
+        let sol = crate::problem::solve(&prob, &erk_opts()).expect("solves");
+        let insp = prob.take_inspection();
         let ti = sol.time.len() - 1;
         let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), 2);
@@ -3262,24 +3270,21 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn inspection_does_not_change_the_run() {
         let file = typed(ragged_miniature_doc());
-        let plain = simulate(
+        let plain = crate::problem::esm_problem(
             &file,
             (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &erk_opts(),
+            crate::problem::ProblemOptions {
+                p: HashMap::new().clone(),
+                u0: HashMap::new().clone(),
+                compile: crate::problem::Compile::Always,
+                ..Default::default()
+            },
         )
+        .and_then(|prob| crate::problem::solve(&prob, &erk_opts()))
         .expect("simulates");
-        let mut insp = BuildInspection::default();
-        let inspected = simulate_with_inspection(
-            &file,
-            (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &erk_opts(),
-            &mut insp,
-        )
-        .expect("simulates");
+        let prob = inspecting_problem(&file);
+        let inspected = crate::problem::solve(&prob, &erk_opts()).expect("solves");
+        let insp = prob.take_inspection();
         assert_eq!(plain.time, inspected.time);
         assert_eq!(plain.state, inspected.state);
         assert_eq!(plain.state_variable_names, inspected.state_variable_names);
@@ -3441,16 +3446,9 @@ mod subsystem_ragged_and_inspection_tests {
             }}
         });
         let file = typed(doc);
-        let mut insp = BuildInspection::default();
-        simulate_with_inspection(
-            &file,
-            (0.0, 1.0),
-            &HashMap::new(),
-            &HashMap::new(),
-            &erk_opts(),
-            &mut insp,
-        )
-        .expect("simulates");
+        let prob = inspecting_problem(&file);
+        crate::problem::solve(&prob, &erk_opts()).expect("solves");
+        let insp = prob.take_inspection();
         let a_ij = insp.setup_arrays.get("A_ij").expect("A_ij captured");
         assert_eq!(a_ij.shape(), [2, 1]);
         assert_eq!(a_ij[IxDyn(&[0, 0])], 1.0);

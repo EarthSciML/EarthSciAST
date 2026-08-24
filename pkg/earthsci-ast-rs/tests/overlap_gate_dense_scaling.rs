@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
-use earthsci_ast::prepare::{PrepareOptions, prepare};
+use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
@@ -187,16 +187,25 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
         "models": {"Mirror": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
 
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("Mirror".into()),
         ..Default::default()
     };
     reset_overlap_enum_visits();
-    let prep = prepare(&doc, geom_arrays(&g), Vec::new(), &opts).expect("prepare");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: geom_arrays(&g),
+            build_providers: Vec::new(),
+            ..opts
+        },
+    )
+    .expect("prepare");
     let visits = overlap_enum_visits();
 
     // ---- values: exact, one term per record --------------------------------
-    let got = prep.observed_field("P").expect("P materialized");
+    let got = observed_field(&prep, "P").expect("P materialized");
     assert_eq!(got.len(), NPTS);
     for (p, (val, &cell)) in got.iter().zip(g.cell_of.iter()).enumerate() {
         let k = cell - 1;
@@ -322,21 +331,30 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
         ArrayD::from_shape_vec(IxDyn(&[NPTS, 2]), vec![1.0; NPTS * 2]).unwrap(),
     );
 
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("Fwd".into()),
         pushdown_rewrite: true,
         ..Default::default()
     };
     reset_overlap_enum_visits();
-    let prep = prepare(&doc, arrays, Vec::new(), &opts).expect("prepare");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: arrays,
+            build_providers: Vec::new(),
+            ..opts
+        },
+    )
+    .expect("prepare");
     let visits = overlap_enum_visits();
 
     // ---- the support axis compacted to exactly the occupied cells ----------
-    let members = &prep.members["pd_faq__cells"];
+    let members = &prep.members()["pd_faq__cells"];
     assert_eq!(members.len(), NPTS, "one distinct cell per record");
 
     // ---- values: every record contributes `annual` to exactly one cell -----
-    let e_field = prep.observed_field("E").expect("E materialized");
+    let e_field = observed_field(&prep, "E").expect("E materialized");
     assert_eq!(e_field.len(), NPTS);
     let sum: f64 = e_field.iter().sum();
     assert_eq!(sum, annual.iter().sum::<f64>());
@@ -454,12 +472,21 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         "index_sets": pir_index_sets(),
         "models": {"Pairs": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("Pairs".into()),
         ..Default::default()
     };
     reset_overlap_enum_visits();
-    let prep = prepare(&doc, pir_arrays(), Vec::new(), &opts).expect("prepare");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: pir_arrays(),
+            build_providers: Vec::new(),
+            ..opts
+        },
+    )
+    .expect("prepare");
     let visits = overlap_enum_visits();
 
     // The four contained (point, cell) pairs, folded in the odometer's own
@@ -469,7 +496,7 @@ fn both_gated_symbols_contracted_drives_from_the_candidate_pairs() {
         + (PIR_W[1] + PIR_X[1])
         + (PIR_W[1] + PIR_X[2])
         + (PIR_W[3] + PIR_X[4]);
-    let got = prep.observed_field("total").expect("total materialized");
+    let got = observed_field(&prep, "total").expect("total materialized");
     assert_eq!(got.len(), 1);
     assert_eq!(got.iter().next().copied().unwrap(), want);
     // 6 candidate pairs drive the walk, not the 4*5 = 20 full product.
@@ -505,15 +532,24 @@ fn both_gated_symbols_bound_is_a_membership_test_with_identity_fill() {
         "index_sets": pir_index_sets(),
         "models": {"Member": {"variables": Value::Object(vars), "equations": Value::Array(eqs)}}
     });
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("Member".into()),
         ..Default::default()
     };
     reset_overlap_enum_visits();
-    let prep = prepare(&doc, pir_arrays(), Vec::new(), &opts).expect("prepare");
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: pir_arrays(),
+            build_providers: Vec::new(),
+            ..opts
+        },
+    )
+    .expect("prepare");
     let visits = overlap_enum_visits();
 
-    let got = prep.observed_field("hit").expect("hit materialized");
+    let got = observed_field(&prep, "hit").expect("hit materialized");
     assert_eq!(got.shape(), &[5, 4]);
     // The four containments survive; every other position — the two candidate
     // pairs the narrow phase drops as well as the fourteen the gate rejects

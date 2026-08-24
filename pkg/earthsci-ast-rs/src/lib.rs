@@ -36,6 +36,13 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+// Without the `solve` feature the crate keeps the whole build half —
+// parse, validate, flatten, classify, `esm_problem` — but every item that
+// only the solver reaches is compiled out. The pieces those items were the
+// sole callers of are then unreachable BY CONSTRUCTION, which is the point of
+// the feature, not a defect to chase per-item.
+#![cfg_attr(not(feature = "solve"), allow(dead_code, unused_imports))]
+
 // Conformance-harness argument parsing; callable by the conformance binaries but
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
@@ -95,7 +102,7 @@ pub mod wasm;
 pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
-// `aggregate` / `join` passes, so it cannot live inside the gated `simulate`.
+// `aggregate` / `join` passes, so it cannot live inside the gated solver module.
 pub mod compile_error;
 
 // Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
@@ -112,7 +119,7 @@ pub mod simulate_array;
 // §6.6.5 inline PDE tests over the array simulation pathway (field
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub mod pde_inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
@@ -131,12 +138,19 @@ pub mod value_invention;
 // see the module docs.
 pub mod pushdown_rewrite;
 
-// `prepare` — the build-time public surface mirroring the Julia binding's
-// `prepare`/`observed_field` and the Python `earthsci_ast.prepare`: rewrite →
-// value-invention → member-factor feedback → gated fetch → observed-graph
-// evaluation, all engine-side. Native-only (drives `simulate_array`).
+// The deterministic-per-document BUILD PIPELINE — rewrite → value-invention →
+// member-factor feedback → gated fetch → observed-graph evaluation, all
+// engine-side. It used to be the public `prepare`/`Prepared` entry point;
+// `esm-libraries-spec.md` §2.5.1 folds it into Problem construction, so what is
+// public here is the provider contract and the build-observability seam.
+// Native-only (drives `simulate_array`).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prepare;
+
+// The Problem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
+// one verb. Construction does NOT require the solver — only `solve` / `init` /
+// `solve_to_completion` do, and those are behind the `solve` feature.
+pub mod problem;
 
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
@@ -240,12 +254,14 @@ pub use pushdown_rewrite::{
     GateAxis, ProviderGate, PushdownRewriteError, desugar_pushdown, pushdown_coupling_pairs,
     pushdown_provider_gates, pushdown_record,
 };
-// `Flow` is deliberately absent: `prepare` re-exports the SAME `Flow` the
-// solver uses, and the crate root already carries it from `simulate`.
+// `Flow` is deliberately absent: the build pipeline re-exports the SAME `Flow`
+// the solver uses, and the crate root already carries it from `simulate`.
+// `prepare` / `Prepared` / `PrepareOptions` are GONE (esm-libraries-spec §2.5.1
+// — replaced by `esm_problem` / `Problem` / `ProblemOptions`); what remains is
+// the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
 pub use prepare::{
-    AxisSel, PrepareError, PrepareOptions, PreparePhase, PrepareProgress, PrepareProgressFn,
-    PrepareProvider, Prepared, prepare,
+    AxisSel, PrepareError, PreparePhase, PrepareProgress, PrepareProgressFn, PrepareProvider,
 };
 
 pub use edit::{
@@ -264,7 +280,7 @@ pub use migration::{MigrationError, can_migrate, get_supported_migration_targets
 
 pub use compile_error::CompileError;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub use pde_inline_tests::{
     PdeAssertionResult, ephemeral_injected_file, evaluate_cellwise, field_reduce, run_pde_tests,
     run_pde_tests_with_base_dir, state_cells,
@@ -273,9 +289,18 @@ pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
-    Compiled, Flow, Progress, ProgressFn, ResolvedExpr, SimulateError, SimulateOptions, Solution,
-    SolutionMetadata, SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
+    Alg, Compiled, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ResolvedExpr,
+    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
+    fold_constant_expr, interpret,
 };
+
+// The Problem / `solve` surface. `simulate` is deleted in all its forms.
+pub use problem::{
+    CallbackFn, CallbackSet, Compile, EnsembleProblem, Problem, ProblemInput, ProblemOptions,
+    Remake, callbacks, compose, esm_problem, observed_field, remake,
+};
+#[cfg(feature = "solve")]
+pub use problem::{Integrator, StepStatus, init, solve, solve_ensemble, solve_to_completion, step};
 pub use units::{
     Dimension, Rational, UNIT_FINDING_ANALYSIS, UNIT_FINDING_DIMENSIONAL_MISMATCH,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,

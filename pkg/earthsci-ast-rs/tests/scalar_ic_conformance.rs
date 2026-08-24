@@ -20,7 +20,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::pde_inline_tests::run_pde_tests_with_base_dir;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -36,11 +36,11 @@ fn read_json(path: &PathBuf) -> serde_json::Value {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-fn manifest_opts(manifest: &serde_json::Value) -> SimulateOptions {
+fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
     let rs = &manifest["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    SimulateOptions {
-        solver: SolverChoice::Erk,
+    SolveOptions {
+        alg: Alg::Erk,
         reltol: rs["reltol"].as_f64().expect("reltol"),
         abstol: rs["abstol"].as_f64().expect("abstol"),
         ..Default::default()
@@ -117,11 +117,11 @@ fn scalar_ic_seeding_precedence() {
     let path = dir.join("fixtures/scalar_ic.esm");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&text).expect("fixture loads");
-    let opts = SimulateOptions {
-        solver: SolverChoice::Erk,
+    let opts = SolveOptions {
+        alg: Alg::Erk,
         reltol: 1e-12,
         abstol: 1e-14,
-        output_times: Some(vec![0.0]),
+        saveat: Some(vec![0.0]),
         ..Default::default()
     };
 
@@ -135,8 +135,18 @@ fn scalar_ic_seeding_precedence() {
     };
 
     // (1) Defaults: each state takes its own ic; `z` declares none and takes 7.
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("defaults simulate");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("defaults simulate");
     assert_eq!(at0(&sol, "M.u"), 3.0);
     assert_eq!(at0(&sol, "M.q"), 2.0);
     assert_eq!(at0(&sol, "M.w"), 4.0);
@@ -146,8 +156,18 @@ fn scalar_ic_seeding_precedence() {
     // spelling of the key (§6.6.2).
     for key in ["A", "M.A"] {
         let params = HashMap::from([(key.to_string(), 10.0)]);
-        let sol = simulate(&file, (0.0, 1.0), &params, &HashMap::new(), &opts)
-            .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
+        let sol = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                p: params.clone(),
+                u0: HashMap::new().clone(),
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+        .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
         assert_eq!(at0(&sol, "M.w"), 20.0, "{key}");
         assert_eq!(at0(&sol, "M.u"), 3.0, "{key}: parameter-free ic moved");
     }
@@ -155,8 +175,18 @@ fn scalar_ic_seeding_precedence() {
     // (3) A run-time `initial_conditions` entry beats the ic equation.
     for key in ["u", "M.u"] {
         let ics = HashMap::from([(key.to_string(), 9.0)]);
-        let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
-            .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
+        let sol = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                p: HashMap::new().clone(),
+                u0: ics.clone(),
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+        .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
         assert_eq!(at0(&sol, "M.u"), 9.0, "{key}");
         assert_eq!(at0(&sol, "M.w"), 4.0, "{key}: unnamed state lost its ic");
     }

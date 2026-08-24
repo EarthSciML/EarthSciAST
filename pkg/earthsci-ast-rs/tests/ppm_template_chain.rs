@@ -27,7 +27,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use earthsci_ast::parse::load_path_with_options;
-use earthsci_ast::simulate::{SimulateOptions, SolverChoice, simulate};
+use earthsci_ast::simulate::{Alg, SolveOptions};
 use earthsci_ast::types::Expr;
 
 const FIXTURE: &str = "tests/fixtures/discretization/advection_1d_ppm_periodic.esm";
@@ -130,15 +130,25 @@ fn ppm_expansion_is_deterministic_across_loads() {
 fn ppm_problem_simulates_a_few_steps() {
     let n = 16i64;
     let file = load_at(n);
-    let opts = SimulateOptions {
-        solver: SolverChoice::Erk,
+    let opts = SolveOptions {
+        alg: Alg::Erk,
         reltol: 1e-8,
         abstol: 1e-10,
-        output_times: Some(vec![0.0, 0.005, 0.01]),
+        saveat: Some(vec![0.0, 0.005, 0.01]),
         ..Default::default()
     };
-    let sol = simulate(&file, (0.0, 0.01), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("the PPM problem integrates");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 0.01),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("the PPM problem integrates");
 
     assert_eq!(sol.time.len(), 3);
     for (row, name) in sol.state.iter().zip(&sol.state_variable_names) {

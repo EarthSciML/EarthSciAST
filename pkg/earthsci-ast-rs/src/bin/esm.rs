@@ -1460,13 +1460,22 @@ fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::e
 /// Time repeated 1-time-unit simulations from default initial conditions.
 fn bench_simulate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
     let esm_file = load_string(content)?;
-    let opts = earthsci_ast::SimulateOptions::default();
-    let params = HashMap::new();
-    let initial_conditions = HashMap::new();
+    let opts = earthsci_ast::SolveOptions::default();
+    // Build the Problem ONCE, outside the loop, and time only the solve. That
+    // split is the point of the Problem/`solve` surface: construction is
+    // deterministic per document, `solve` is what a benchmark should measure.
+    let prob = earthsci_ast::esm_problem(
+        &esm_file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("problem build failed: {e}"))?;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        earthsci_ast::simulate(&esm_file, (0.0, 1.0), &params, &initial_conditions, &opts)
-            .map_err(|e| format!("simulation failed: {e}"))?;
+        earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
     }
     let duration = start.elapsed();
     println!(
@@ -2139,17 +2148,31 @@ fn run_simulate(
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
 
-    let opts = earthsci_ast::SimulateOptions::default();
-    let params = HashMap::new();
-    let initial_conditions = HashMap::new();
-    let sol = earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
-        .map_err(|e| format!("simulation failed: {e}"))?;
+    let opts = earthsci_ast::SolveOptions::default();
+    let prob = earthsci_ast::esm_problem(
+        &esm_file,
+        (0.0, time),
+        earthsci_ast::ProblemOptions {
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("problem build failed: {e}"))?;
+    let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
 
     println!(
-        "✓ Simulation complete: {} output points, solver {}",
+        "✓ Simulation complete: {} output points, alg {}, retcode {}",
         sol.time.len(),
-        sol.metadata.solver
+        sol.metadata.alg,
+        sol.retcode
     );
+    if !sol.retcode.is_success() {
+        println!(
+            "⚠ The run did NOT reach t = {time}: it stopped at t = {} with retcode {}",
+            sol.time.last().copied().unwrap_or(0.0),
+            sol.retcode
+        );
+    }
     if let Some(&t_final) = sol.time.last() {
         println!("Final state at t = {t_final}:");
         for (name, series) in sol.state_variable_names.iter().zip(sol.state.iter()) {
@@ -2164,7 +2187,8 @@ fn run_simulate(
             "time": sol.time,
             "state": sol.state,
             "state_variable_names": sol.state_variable_names,
-            "solver": sol.metadata.solver,
+            "alg": sol.metadata.alg,
+            "retcode": sol.retcode.name(),
         });
         fs::write(&output_path, serde_json::to_string_pretty(&out)?)?;
         println!("Results written to: {}", output_path.display());

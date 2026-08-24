@@ -76,7 +76,14 @@ s2rst = "=0.4.0"
 # always selects FaerMat / FaerLU at the call site, so we still get the faer path;
 # nalgebra is just along for the ride at compile time. The heavyweight optional
 # features (LLVM / Cranelift / DiffSL / CUDA / SuiteSparse / Sundials) are excluded.
-diffsol = "0.11"
+#
+# OPTIONAL, behind the `solve` feature (esm-libraries-spec §2.5.9): constructing
+# a `Problem` MUST NOT require the solver. Only `solve` / `init` /
+# `solve_to_completion` may. On by DEFAULT, so nothing a consumer already builds
+# changes; `--no-default-features` (or `default-features = false, features =
+# ["cli"]`) now yields a crate that parses, validates, flattens, classifies and
+# BUILDS a Problem with no ODE solver linked at all.
+diffsol = { version = "0.11", optional = true }
 clap = { version = "4.0", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
@@ -138,8 +145,12 @@ harness = false
 required-features = ["benchmarks"]
 
 [features]
-default = ["cli"]
+default = ["cli", "solve"]
 cli = ["clap"]
+# The ODE solver. See the `diffsol` dependency comment and
+# esm-libraries-spec.md §2.5.9: Problem CONSTRUCTION never needs this; only
+# `solve`, `init` and `solve_to_completion` do.
+solve = ["dep:diffsol"]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
 # OPT-IN EarthSciIO data-provider bridge (src/esio_provider.rs): a
 # `CadenceProvider` delegating to a real `earthsciio::Provider`, so the loader

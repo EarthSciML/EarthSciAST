@@ -29,8 +29,7 @@
 
 use earthsci_ast::simulate::Solution;
 use earthsci_ast::{
-    EsmFile, Model, ModelTest, ModelTestAssertion, SimulateOptions, SolverChoice, Tolerance,
-    load_string, simulate,
+    Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, load_string,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -139,24 +138,29 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     times.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(times),
+        maxiters: 100_000,
+        saveat: Some(times),
         progress: None,
+        callback: None,
     };
     let params: HashMap<String, f64> = HashMap::new();
     let ics: HashMap<String, f64> = t.initial_conditions.as_ref().cloned().unwrap_or_default();
 
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         file,
         (t.time_span.start, t.time_span.end),
-        &params,
-        &ics,
-        &opts,
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("[{fixture}/{model_name}/{}] simulate failed: {e}", t.id));
 
     for a in &t.assertions {
@@ -248,26 +252,31 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         .as_ref()
         .and_then(|ts| ts.first())
         .expect("fixture has an inline test");
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![0.0, 1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![0.0, 1.0]),
         progress: None,
+        callback: None,
     };
     let ics: HashMap<String, f64> = test
         .initial_conditions
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (test.time_span.start, test.time_span.end),
-        &HashMap::new(),
-        &ics,
-        &opts,
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("[{model_name}] polygon_intersection_area simulate failed: {e}"));
 
     // The fused scalar overlap area is exposed and is exactly 1.0 at every node.
@@ -314,26 +323,31 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         .as_ref()
         .and_then(|ts| ts.first())
         .expect("planar_ode has an inline test");
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![0.0, 2.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![0.0, 2.0]),
         progress: None,
+        callback: None,
     };
     let ics: HashMap<String, f64> = test
         .initial_conditions
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (test.time_span.start, test.time_span.end),
-        &HashMap::new(),
-        &ics,
-        &opts,
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("[{model_name}] planar_ode simulate failed: {e}"));
 
     assert!(

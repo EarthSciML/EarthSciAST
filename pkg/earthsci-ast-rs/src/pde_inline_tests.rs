@@ -60,13 +60,14 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::simulate::{SimulateOptions, Solution, simulate_with_inspection};
+use crate::problem::{ProblemOptions, esm_problem, solve};
+use crate::simulate::{Solution, SolveOptions};
 
 /// Qualify a test's override keys with the component that OWNS the test.
 ///
 /// esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
 /// name — local to the ENCLOSING component, since a test "exercises one model in
-/// isolation" (§6.6). The runner hands them to `simulate`, which resolves against
+/// isolation" (§6.6). The runner hands them to `esm_problem`, which resolves against
 /// the WHOLE flattened document, where that locality is gone: two mounted
 /// components that each declare a `T` flatten to `M1.T` / `M2.T`, and the bare
 /// `T` in `M2`'s test is then AMBIGUOUS document-wide even though it is
@@ -75,7 +76,7 @@ use crate::simulate::{SimulateOptions, Solution, simulate_with_inspection};
 /// So re-attach the scope the runner still knows: a key whose `<model>.<key>`
 /// form names a real variable of the flattened system is rewritten to it. A key
 /// that does not (already qualified, a scoped reference the prefix would double
-/// up, or simply wrong) passes through untouched, so `simulate` reports on it
+/// up, or simply wrong) passes through untouched, so the build reports on it
 /// exactly as it would have.
 fn scope_to_component(
     overrides: Option<&HashMap<String, f64>>,
@@ -86,7 +87,7 @@ fn scope_to_component(
         return HashMap::new();
     };
     let Ok(flat) = crate::flatten::flatten(file) else {
-        return overrides.clone(); // let `simulate` report the real failure
+        return overrides.clone(); // let the build report the real failure
     };
     overrides
         .iter()
@@ -822,7 +823,7 @@ fn run_model_tests(
     model_name: &str,
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
-    opts: &SimulateOptions,
+    opts: &SolveOptions,
     base_dir: Option<&Path>,
     results: &mut Vec<PdeAssertionResult>,
 ) {
@@ -891,21 +892,34 @@ fn run_model_tests(
         times.sort_by(f64::total_cmp);
         times.dedup();
         let mut run_opts = opts.clone();
-        run_opts.output_times = Some(times);
+        run_opts.saveat = Some(times);
         let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
         let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
         // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
         // slot) read their state-free materialized field from here
         // (`observed_field`).
+        //
+        // Build observability is now a CONSTRUCTION-time seam
+        // (`ProblemOptions::inspect`), not a `&mut BuildInspection` threaded
+        // through the run — the same move that gave `observed_field` one arity
+        // in every binding.
         let mut insp = BuildInspection::default();
-        let sim = simulate_with_inspection(
+        let sim = esm_problem(
             run_file,
             (t.time_span.start, t.time_span.end),
-            &params,
-            &ics,
-            &run_opts,
-            &mut insp,
+            ProblemOptions {
+                p: params,
+                u0: ics,
+                inspect: true,
+                compile: crate::problem::Compile::Always,
+                ..Default::default()
+            },
         )
+        .and_then(|prob| {
+            let sol = solve(&prob, &run_opts)?;
+            insp = prob.take_inspection();
+            Ok(sol)
+        })
         .map_err(|e| format!("simulate failed: {e}"));
         for (i, a) in t.assertions.iter().enumerate() {
             let (rtol, atol) = resolve_tolerance(
@@ -970,7 +984,7 @@ fn run_model_tests(
 /// Per test: simulate over the test's `time_span` (with its
 /// `initial_conditions` / `parameter_overrides` applied and `opts` pinning
 /// the solver family and tolerances; the assertion times become the sampled
-/// `output_times`); then per assertion the asserted variable's field is read
+/// `saveat`); then per assertion the asserted variable's field is read
 /// at the assertion time and either point-sampled per its `coords`
 /// (positions in 1-based INDEX space; nearest grid index, exact ties
 /// rounding DOWN — the pinned cross-binding convention) or collapsed per its
@@ -985,7 +999,7 @@ fn run_model_tests(
 pub fn run_pde_tests(
     file: &EsmFile,
     model_name: Option<&str>,
-    opts: &SimulateOptions,
+    opts: &SolveOptions,
 ) -> Vec<PdeAssertionResult> {
     run_pde_tests_with_base_dir(file, model_name, opts, None)
 }
@@ -998,7 +1012,7 @@ pub fn run_pde_tests(
 pub fn run_pde_tests_with_base_dir(
     file: &EsmFile,
     model_name: Option<&str>,
-    opts: &SimulateOptions,
+    opts: &SolveOptions,
     base_dir: Option<&Path>,
 ) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
@@ -1036,7 +1050,7 @@ pub fn run_pde_tests_with_base_dir(
 mod tests {
     use super::*;
     use crate::parse::load_string;
-    use crate::simulate::SolverChoice;
+    use crate::simulate::Alg;
     use crate::types::ExpressionNode;
     use serde_json::json;
 
@@ -1102,9 +1116,9 @@ mod tests {
         })
     }
 
-    fn tight_opts() -> SimulateOptions {
-        SimulateOptions {
-            solver: SolverChoice::Erk,
+    fn tight_opts() -> SolveOptions {
+        SolveOptions {
+            alg: Alg::Erk,
             reltol: 1e-12,
             abstol: 1e-14,
             ..Default::default()
@@ -1333,10 +1347,19 @@ mod tests {
         // The §11.4.1 case-3 seeding path in isolation: u(0) = cos(pi x_i).
         let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
         let mut opts = tight_opts();
-        opts.output_times = Some(vec![0.0]);
-        let sol =
-            crate::simulate::simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-                .expect("simulates");
+        opts.saveat = Some(vec![0.0]);
+        let sol = crate::problem::esm_problem(
+            &file,
+            (0.0, 1.0),
+            crate::problem::ProblemOptions {
+                p: HashMap::new().clone(),
+                u0: HashMap::new().clone(),
+                compile: crate::problem::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| crate::problem::solve(&prob, &opts))
+        .expect("simulates");
         let cells = state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), N as usize);
         for (cell, row) in &cells {

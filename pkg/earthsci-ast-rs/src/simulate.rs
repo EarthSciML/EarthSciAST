@@ -18,15 +18,16 @@
 //!
 //! ## Usage
 //!
+//! This module is the compiled right-hand side and the solver plumbing around
+//! it. The public entry point is the Problem/`solve` surface in
+//! [`crate::problem`] (`esm-libraries-spec.md` §2.5):
+//!
 //! ```no_run
-//! use earthsci_ast::{load_string, simulate, SimulateOptions};
-//! use std::collections::HashMap;
+//! use earthsci_ast::{ProblemOptions, SolveOptions, esm_problem, load_string, solve};
 //!
 //! let file = load_string(r#"{"esm":"1.0.0","metadata":{},"models":{}}"#).unwrap();
-//! let params = HashMap::new();
-//! let ic = HashMap::new();
-//! let opts = SimulateOptions::default();
-//! let _ = simulate(&file, (0.0, 1.0), &params, &ic, &opts);
+//! let prob = esm_problem(&file, (0.0, 1.0), ProblemOptions::default()).unwrap();
+//! let _ = solve(&prob, &SolveOptions::default());
 //! ```
 
 use crate::flatten::{FlattenedSystem, flatten, flatten_model};
@@ -35,6 +36,10 @@ use crate::types::{EsmFile, Expr, Model};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
+// The solver is OPTIONAL (esm-libraries-spec §2.5.9): building a `Problem`
+// never needs it, so `diffsol` sits behind the `solve` Cargo feature and every
+// item that touches it is gated the same way.
+#[cfg(feature = "solve")]
 use diffsol::{
     Bdf, FaerLU, FaerMat, NewtonNonlinearSolver, OdeBuilder, OdeSolverMethod, Op, Sdirk, VectorHost,
 };
@@ -49,10 +54,10 @@ use diffsol::{
 pub use crate::compile_error::CompileError;
 
 /// Errors raised when running [`Compiled::simulate`] or the convenience
-/// [`simulate`] free function.
+/// [`crate::problem::solve`] entry point.
 #[derive(Error, Debug)]
 pub enum SimulateError {
-    /// Wraps a CompileError raised by the convenience [`simulate`] function
+    /// Wraps a CompileError raised by [`crate::problem::esm_problem`]
     /// before solving even starts.
     #[error("Compile failed: {0}")]
     Compile(#[from] CompileError),
@@ -69,24 +74,42 @@ pub enum SimulateError {
     #[error("Tolerance not met")]
     ToleranceNotMet,
 
-    /// The integrator hit the configured `max_steps` cap before reaching the
-    /// end of the integration interval.
-    #[error("Maximum steps ({max_steps}) exceeded")]
-    MaxStepsExceeded {
-        /// The configured cap.
-        max_steps: usize,
+    /// [`crate::problem::solve`] was called on a Problem whose document
+    /// declares no differential equations, so there is nothing to integrate.
+    /// Its build-time products are still readable with
+    /// [`crate::problem::observed_field`].
+    #[error("Nothing to integrate: {details}")]
+    NotDynamic {
+        /// Why the Problem carries no integrable right-hand side.
+        details: String,
     },
 
-    /// The host's [`SimulateOptions::progress`] observer asked the integrator
-    /// to stop (returned [`Flow::Cancel`]). Distinct from every other variant
-    /// in that nothing went wrong: it is the caller's own decision, surfaced as
-    /// an error only because that is how [`run_solver`] unwinds.
-    #[error("Cancelled by the caller at t = {t} (after {step} steps)")]
+    /// A build progress observer asked [`crate::problem::esm_problem`] to
+    /// stop (returned [`Flow::Cancel`]).
+    ///
+    /// Distinct from every other variant in that nothing went wrong: it is the
+    /// caller's own decision. It stays an ERROR — unlike a cancelled *solve*,
+    /// which is [`ReturnCode::Terminated`] with a partial trajectory — because a
+    /// half-built Problem is not a usable result.
+    #[error("Cancelled by the caller during the build: {details}")]
     Cancelled {
-        /// Independent-variable value the integrator had reached.
-        t: f64,
-        /// Accepted steps taken before the cancel.
-        step: usize,
+        /// The phase and item the build stopped at.
+        details: String,
+    },
+
+    /// [`crate::problem::remake`] was asked to substitute a binding the
+    /// Problem cannot honour without redoing part of construction.
+    ///
+    /// Raised rather than silently rebuilding or silently ignoring the
+    /// substitution (`esm-libraries-spec.md` §2.5.5): the name and the class
+    /// that makes it un-substitutable are both reported so the caller knows to
+    /// build a fresh Problem instead.
+    #[error("Cannot remake '{name}': {class}")]
+    UnsubstitutableBinding {
+        /// The binding the caller tried to substitute.
+        name: String,
+        /// The class that makes it un-substitutable.
+        class: String,
     },
 
     /// The user supplied a parameter name that does not appear in the
@@ -146,7 +169,7 @@ pub enum SimulateError {
         details: String,
     },
 
-    /// A data provider passed to [`simulate_with_providers_inspect`] failed to
+    /// A data provider bound in [`crate::problem::ProblemOptions`] failed to
     /// materialize its loader field, or produced the wrong number of fields for
     /// its target forcing variable.
     #[error("Provider for '{name}': {details}")]
@@ -158,13 +181,90 @@ pub enum SimulateError {
     },
 }
 
+impl SimulateError {
+    /// Whether this is a build progress observer's own [`Flow::Cancel`] rather
+    /// than something going wrong — the counterpart of reading
+    /// [`ReturnCode::Terminated`] off a [`Solution`].
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, SimulateError::Cancelled { .. })
+    }
+}
+
 // ============================================================================
 // Public API surface (per gt-5ws design)
 // ============================================================================
 
+/// Why a solve stopped — the SciML `ReturnCode` vocabulary
+/// (`esm-libraries-spec.md` §2.5.3).
+///
+/// This REPLACES reading [`SolutionMetadata`]'s step and evaluation counters as
+/// a proxy for whether a run finished. The counters remain, as informative
+/// statistics; the answer to "did it reach `tspan.1`" is this enum and nothing
+/// else, and a caller never has to parse an error message to get it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnCode {
+    /// The integration reached the end of `tspan`.
+    Success,
+    /// The integrator hit the configured [`SolveOptions::maxiters`] cap first.
+    /// The trajectory returned is everything computed up to that point.
+    MaxIters,
+    /// The state left the finite range (a NaN or an infinity appeared), so the
+    /// remaining trajectory would be meaningless.
+    Unstable,
+    /// A callback or the progress observer asked the integrator to stop
+    /// ([`Flow::Cancel`]). Nothing went wrong: it is the caller's own decision.
+    Terminated,
+    /// The solver itself reported an error — a step failure, a build failure, a
+    /// nonlinear-solve failure.
+    Failure,
+}
+
+impl ReturnCode {
+    /// Whether this is [`ReturnCode::Success`] — the one code that means the
+    /// integration covered the whole of `tspan`.
+    pub fn is_success(self) -> bool {
+        matches!(self, ReturnCode::Success)
+    }
+
+    /// The canonical SciML spelling, for display and for JSON hosts.
+    pub fn name(self) -> &'static str {
+        match self {
+            ReturnCode::Success => "Success",
+            ReturnCode::MaxIters => "MaxIters",
+            ReturnCode::Unstable => "Unstable",
+            ReturnCode::Terminated => "Terminated",
+            ReturnCode::Failure => "Failure",
+        }
+    }
+}
+
+impl std::fmt::Display for ReturnCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The canonical default relative tolerance.
+///
+/// All three simulation-capable bindings defaulted differently — Rust `1e-6`,
+/// Python scipy's `1e-3`, Julia `1e-4` — so the same document solved with
+/// default options did not produce comparable trajectories. The ruling is to
+/// adopt **Julia's** pair, which is what this is; Rust's own default was two
+/// orders TIGHTER, so aligning loosens it.
+///
+/// These are the defaults for a *production* run, not for a conformance
+/// assertion. A test that pins a trajectory to a numerical threshold should
+/// pass an explicit `reltol`/`abstol` rather than lean on these — that is what
+/// the knobs are for, and it is what the in-tree fixtures do.
+pub const DEFAULT_RELTOL: f64 = 1e-4;
+
+/// The canonical default absolute tolerance — Julia's. Rust's was `1e-8`.
+/// See [`DEFAULT_RELTOL`].
+pub const DEFAULT_ABSTOL: f64 = 1e-6;
+
 /// Which solver family to use inside diffsol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SolverChoice {
+pub enum Alg {
     /// Backward Differentiation Formulas — implicit, default for stiff ODEs.
     Bdf,
     /// Singly Diagonally Implicit Runge-Kutta (TR-BDF2 tableau) — implicit,
@@ -174,11 +274,17 @@ pub enum SolverChoice {
     Erk,
 }
 
-/// The raw trajectory `integrate` hands back: sample times, one state row per
-/// time, and the solver's step/eval counters.
-type IntegrateResult = Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats), SimulateError>;
+/// The raw trajectory the solver loop hands back: sample times, one state row
+/// per time, and why it stopped.
+#[cfg(feature = "solve")]
+pub(crate) type RawTrajectory = (Vec<f64>, Vec<Vec<f64>>, ReturnCode);
 
-impl SolverChoice {
+/// The raw trajectory `integrate` hands back: [`RawTrajectory`] plus the
+/// solver's step/eval counters.
+#[cfg(feature = "solve")]
+type IntegrateResult = Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError>;
+
+impl Alg {
     /// Parse the host-facing solver name, case-insensitively.
     ///
     /// Every host that lets a caller pick a solver receives it as a string —
@@ -207,7 +313,7 @@ impl SolverChoice {
 }
 
 /// How far along an in-flight integration is, handed to
-/// [`SimulateOptions::progress`] once per accepted step.
+/// [`SolveOptions::progress`] once per accepted step.
 ///
 /// `t` advances non-uniformly: an adaptive solver crawls through a stiff
 /// startup and then takes large steps, so [`Progress::fraction`] is *not*
@@ -215,7 +321,7 @@ impl SolverChoice {
 /// the early part of a stiff run to look stalled, and is usually better off
 /// showing `step` alongside the bar so a slow start still reads as alive.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Progress {
+pub struct Progress<'a> {
     /// Start of the integration interval.
     pub t0: f64,
     /// Independent-variable value the integrator has reached.
@@ -224,11 +330,19 @@ pub struct Progress {
     pub t_end: f64,
     /// Accepted steps taken so far (`0` for the pre-loop report at `t0`).
     pub step: usize,
-    /// The configured [`SimulateOptions::max_steps`] cap, for context.
-    pub max_steps: usize,
+    /// The configured [`SolveOptions::maxiters`] cap, for context.
+    pub maxiters: usize,
+    /// The integrator's state vector at `t`, in
+    /// [`Compiled::state_variable_names`] order.
+    ///
+    /// This is what makes a [`crate::problem::CallbackSet`] entry able to do
+    /// the job `esm-libraries-spec.md` §2.5.4 describes — write an output
+    /// stream, checkpoint, watch for a threshold — rather than only draw a
+    /// progress bar.
+    pub u: &'a [f64],
 }
 
-impl Progress {
+impl Progress<'_> {
     /// Fraction of the integration interval covered, clamped to `[0, 1]`.
     ///
     /// Returns `0.0` for a degenerate (zero-length) interval rather than a NaN,
@@ -242,7 +356,7 @@ impl Progress {
     }
 }
 
-/// What a [`SimulateOptions::progress`] observer wants the integrator to do
+/// What a [`SolveOptions::progress`] observer wants the integrator to do
 /// next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -252,33 +366,47 @@ pub enum Flow {
     Cancel,
 }
 
-/// A progress observer. See [`SimulateOptions::progress`].
+/// A progress observer. See [`SolveOptions::progress`].
 ///
 /// The `Send + Sync` bound is dropped on `wasm32`, where the natural observer
 /// wraps a `js_sys::Function` (neither `Send` nor `Sync`, and harmlessly so on
 /// a single-threaded target). Keeping the bound on native means adding this
-/// field does not cost native callers `SimulateOptions: Send + Sync`.
+/// field does not cost native callers `SolveOptions: Send + Sync`.
 #[cfg(target_arch = "wasm32")]
-pub type ProgressFn = std::sync::Arc<dyn Fn(&Progress) -> Flow>;
-/// A progress observer. See [`SimulateOptions::progress`].
+pub type ProgressFn = std::sync::Arc<dyn for<'p> Fn(&Progress<'p>) -> Flow>;
+/// A progress observer. See [`SolveOptions::progress`].
 #[cfg(not(target_arch = "wasm32"))]
-pub type ProgressFn = std::sync::Arc<dyn Fn(&Progress) -> Flow + Send + Sync>;
+pub type ProgressFn = std::sync::Arc<dyn for<'p> Fn(&Progress<'p>) -> Flow + Send + Sync>;
 
-/// Tunable options for [`Compiled::simulate`] / [`simulate`].
+/// Per-run knobs for [`crate::problem::solve`] / [`Compiled::solve`].
+///
+/// Every field carries the canonical SciML spelling (`API_SPEC.md` §4):
+/// `alg`, `abstol`, `reltol`, `saveat`, `maxiters`.
 #[derive(Clone)]
-pub struct SimulateOptions {
-    /// Which solver family to use. Defaults to [`SolverChoice::Bdf`].
-    pub solver: SolverChoice,
-    /// Absolute tolerance. Defaults to `1e-8`.
+pub struct SolveOptions {
+    /// Which solver algorithm to use. Defaults to [`Alg::Bdf`].
+    ///
+    /// Named `alg` — not `solver` — because `API_SPEC.md` §4 makes the SciML
+    /// spelling canonical in every binding.
+    pub alg: Alg,
+    /// Absolute tolerance. Defaults to [`DEFAULT_ABSTOL`] (`1e-6`).
     pub abstol: f64,
-    /// Relative tolerance. Defaults to `1e-6`.
+    /// Relative tolerance. Defaults to [`DEFAULT_RELTOL`] (`1e-4`).
     pub reltol: f64,
     /// Maximum number of integrator steps before bailing out. Defaults to `10_000`.
-    pub max_steps: usize,
+    pub maxiters: usize,
     /// If `Some`, the solution is sampled (via dense output / interpolation)
     /// at exactly these times. If `None`, the natural step times are
     /// returned.
-    pub output_times: Option<Vec<f64>>,
+    pub saveat: Option<Vec<f64>>,
+    /// Callbacks for THIS run.
+    ///
+    /// **`Some(set)` REPLACES the Problem's callback set entirely** — it does
+    /// not append, merge or wrap (`esm-libraries-spec.md` §2.5.4). `None`
+    /// inherits the Problem's set. To extend rather than replace, read the set
+    /// back with [`crate::problem::callbacks`] and
+    /// [`crate::problem::compose`] explicitly.
+    pub callback: Option<crate::problem::CallbackSet>,
     /// If `Some`, called once before the first step and then after every
     /// accepted step, with the interval covered so far. Returning
     /// [`Flow::Cancel`] stops the integration with
@@ -295,16 +423,17 @@ pub struct SimulateOptions {
 }
 
 // Hand-written because `ProgressFn` is a trait object: it cannot derive Debug,
-// and a `SimulateOptions` that no longer prints would be a regression for every
+// and a `SolveOptions` that no longer prints would be a regression for every
 // existing `{:?}` on a solver error path.
-impl std::fmt::Debug for SimulateOptions {
+impl std::fmt::Debug for SolveOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimulateOptions")
-            .field("solver", &self.solver)
+        f.debug_struct("SolveOptions")
+            .field("alg", &self.alg)
             .field("abstol", &self.abstol)
             .field("reltol", &self.reltol)
-            .field("max_steps", &self.max_steps)
-            .field("output_times", &self.output_times)
+            .field("maxiters", &self.maxiters)
+            .field("saveat", &self.saveat)
+            .field("callback", &self.callback)
             .field(
                 "progress",
                 &self
@@ -317,20 +446,21 @@ impl std::fmt::Debug for SimulateOptions {
     }
 }
 
-impl Default for SimulateOptions {
+impl Default for SolveOptions {
     fn default() -> Self {
         Self {
-            solver: SolverChoice::Bdf,
-            abstol: 1e-8,
-            reltol: 1e-6,
-            max_steps: 10_000,
-            output_times: None,
+            alg: Alg::Bdf,
+            abstol: DEFAULT_ABSTOL,
+            reltol: DEFAULT_RELTOL,
+            maxiters: 10_000,
+            saveat: None,
+            callback: None,
             progress: None,
         }
     }
 }
 
-impl SimulateOptions {
+impl SolveOptions {
     /// Request `n` evenly spaced output samples across `[t0, t_end]`.
     ///
     /// Hosts almost always express "how much output do I want" as a count, not
@@ -340,7 +470,7 @@ impl SimulateOptions {
     pub fn sample_evenly(&mut self, t0: f64, t_end: f64, n: usize) {
         let n = n.max(2);
         let span = t_end - t0;
-        self.output_times = Some(
+        self.saveat = Some(
             (0..n)
                 .map(|i| t0 + span * (i as f64) / ((n - 1) as f64))
                 .collect(),
@@ -360,15 +490,90 @@ pub struct Solution {
     pub state: Vec<Vec<f64>>,
     /// Names of the state variables, parallel to the rows of `state`.
     pub state_variable_names: Vec<String>,
+    /// Why the integration stopped (`esm-libraries-spec.md` §2.5.3).
+    ///
+    /// [`ReturnCode::Success`] means the run reached `tspan.1`. Anything else
+    /// means it stopped early and the trajectory ends where it stopped — the
+    /// counters in [`Solution::metadata`] are statistics, not the answer to
+    /// that question.
+    pub retcode: ReturnCode,
     /// Solver provenance and step counts.
     pub metadata: SolutionMetadata,
+}
+
+impl Solution {
+    /// The trajectory of the variable named `name` — the documented way to read
+    /// a solution (`esm-libraries-spec.md` §2.5.7).
+    ///
+    /// Matches the exact (flattened, qualified) name first, then falls back to
+    /// the UNIQUE dotted-name tail, so a caller may write `"x"` for `"M.x"`
+    /// while an ambiguous bare name still returns `None` rather than an
+    /// arbitrary one of the candidates. Position-indexed access through
+    /// [`Solution::state`] remains available, but the flattened state ordering
+    /// is an implementation detail that coupling can change.
+    pub fn get(&self, name: &str) -> Option<&[f64]> {
+        if let Some(i) = self.state_variable_names.iter().position(|n| n == name) {
+            return Some(&self.state[i]);
+        }
+        if name.contains('.') {
+            return None;
+        }
+        let mut hit = None;
+        for (i, n) in self.state_variable_names.iter().enumerate() {
+            if n.rsplit('.').next() == Some(name) && n.contains('.') {
+                if hit.is_some() {
+                    return None; // ambiguous bare name
+                }
+                hit = Some(i);
+            }
+        }
+        hit.map(|i| self.state[i].as_slice())
+    }
+
+    /// [`Solution::get`], as a `Result` naming the variable that was not found.
+    pub fn variable(&self, name: &str) -> Result<&[f64], SimulateError> {
+        self.get(name)
+            .ok_or_else(|| SimulateError::InvalidParameter {
+                name: name.to_string(),
+            })
+    }
+
+    /// The value of variable `name` at output index `k`.
+    pub fn at(&self, name: &str, k: usize) -> Option<f64> {
+        self.get(name).and_then(|row| row.get(k).copied())
+    }
+
+    /// The final value of variable `name`.
+    pub fn final_value(&self, name: &str) -> Option<f64> {
+        self.get(name).and_then(|row| row.last().copied())
+    }
+
+    /// Every variable name carried by this solution.
+    pub fn variable_names(&self) -> &[String] {
+        &self.state_variable_names
+    }
+}
+
+impl std::ops::Index<&str> for Solution {
+    type Output = [f64];
+
+    /// `sol["M.x"]` — name-indexed access, panicking on an unknown or
+    /// ambiguous name. Use [`Solution::get`] when absence is expected.
+    fn index(&self, name: &str) -> &[f64] {
+        self.get(name).unwrap_or_else(|| {
+            panic!(
+                "no state variable '{name}' in this solution; have {:?}",
+                self.state_variable_names
+            )
+        })
+    }
 }
 
 /// Provenance metadata for a [`Solution`].
 #[derive(Debug, Clone, Default)]
 pub struct SolutionMetadata {
-    /// Solver name (e.g. `"Bdf"`, `"Sdirk"`, `"Erk"`).
-    pub solver: String,
+    /// Solver algorithm name (e.g. `"Bdf"`, `"Sdirk"`, `"Erk"`).
+    pub alg: String,
     /// Number of RHS function evaluations performed (best-effort, may be
     /// zero in v1 if diffsol does not expose it).
     pub n_rhs_calls: usize,
@@ -580,12 +785,13 @@ impl Compiled {
     /// problem build + solver dispatch ([`Self::integrate`]), and
     /// algebraic-trajectory output reconstruction
     /// ([`Self::reconstruct_algebraic_trajectory`]).
-    pub fn simulate(
+    #[cfg(feature = "solve")]
+    pub fn solve(
         &self,
         tspan: (f64, f64),
         params: &HashMap<String, f64>,
         initial_conditions: &HashMap<String, f64>,
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
     ) -> Result<Solution, SimulateError> {
         let (t0, t_end) = tspan;
 
@@ -593,15 +799,17 @@ impl Compiled {
         let mut ic_vec = self.build_initial_state(initial_conditions, &param_vec, t0)?;
         self.apply_algebraic_ics(&mut ic_vec, &param_vec, t0);
 
-        let (time, mut state, stats) = self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
+        let (time, mut state, stats, retcode) =
+            self.integrate(t0, t_end, &param_vec, &ic_vec, opts)?;
         self.reconstruct_algebraic_trajectory(&time, &mut state, &param_vec);
 
         Ok(Solution {
             time,
             state,
             state_variable_names: self.state_names.clone(),
+            retcode,
             metadata: SolutionMetadata {
-                solver: solver_name(opts.solver).to_string(),
+                alg: solver_name(opts.alg).to_string(),
                 n_rhs_calls: stats.n_rhs_calls,
                 n_jacobian_calls: stats.n_jacobian_calls,
                 n_accepted_steps: stats.n_accepted_steps,
@@ -681,7 +889,7 @@ impl Compiled {
                 //
                 // Callers used to paper over this themselves: the TypeScript
                 // binding injected a placeholder for exactly these states before
-                // calling `simulate`, which meant a model ran in the browser and
+                // calling the solver, which meant a model ran in the browser and
                 // failed on a server that called the same function directly.
                 ic_vec[i] = 0.0;
             } else {
@@ -717,6 +925,7 @@ impl Compiled {
     /// y[idx] must be reconstructed from the algebraic body before the
     /// differential RHS reads it. We work in a local copy of y so the
     /// integrator's own state vector is untouched.
+    #[cfg(feature = "solve")]
     fn make_rhs_closure(
         &self,
     ) -> impl Fn(&diffsol::FaerVec<f64>, &diffsol::FaerVec<f64>, f64, &mut diffsol::FaerVec<f64>) + use<>
@@ -773,6 +982,7 @@ impl Compiled {
     /// before the differential RHS is evaluated, on both the unperturbed and
     /// perturbed states, so the resulting Jacobian column reflects the
     /// total derivative through any chained algebraic substitutions.
+    #[cfg(feature = "solve")]
     fn make_jac_closure(
         &self,
     ) -> impl Fn(
@@ -846,13 +1056,14 @@ impl Compiled {
     /// tolerances, initial state) and dispatch to the configured solver
     /// family, returning the raw `(time, state_rows)` trajectory from
     /// [`run_solver`].
+    #[cfg(feature = "solve")]
     fn integrate(
         &self,
         t0: f64,
         t_end: f64,
         param_vec: &[f64],
         ic_vec: &[f64],
-        opts: &SimulateOptions,
+        opts: &SolveOptions,
     ) -> IntegrateResult {
         let n_states = self.state_names.len();
         let rhs_closure = self.make_rhs_closure();
@@ -889,52 +1100,52 @@ impl Compiled {
         // the equations' per-op `OpStatistics` (via `eqn_eval_stats`, available on
         // any `OdeSolverMethod`), accepted/rejected steps from each solver's
         // concrete `get_statistics()` (`BdfStatistics`, shared by Bdf/Sdirk/Erk).
-        let (time, state, stats) = match opts.solver {
-            SolverChoice::Bdf => {
+        let (time, state, stats, retcode) = match opts.alg {
+            Alg::Bdf => {
                 let mut solver: Bdf<'_, _, NewtonNonlinearSolver<_, FaerLU<f64>, _>> = problem
                     .bdf::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
-            SolverChoice::Sdirk => {
+            Alg::Sdirk => {
                 let mut solver: Sdirk<'_, _, FaerLU<f64>> = problem
                     .tr_bdf2::<FaerLU<f64>>()
                     .map_err(|e| SimulateError::DiffsolError {
                         details: e.to_string(),
                     })?;
-                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
-            SolverChoice::Erk => {
+            Alg::Erk => {
                 let mut solver = problem.tsit45().map_err(|e| SimulateError::DiffsolError {
                     details: e.to_string(),
                 })?;
-                let (time, state) = run_solver(&mut solver, t_end, opts)?;
+                let (time, state, retcode) = run_solver(&mut solver, t_end, opts)?;
                 let bs = solver.get_statistics();
                 let stats = SolveStats::from_solver(
                     &solver,
                     bs.number_of_steps,
                     bs.number_of_error_test_failures + bs.number_of_nonlinear_solver_fails,
                 );
-                (time, state, stats)
+                (time, state, stats, retcode)
             }
         };
-        Ok((time, state, stats))
+        Ok((time, state, stats, retcode))
     }
 
     /// Reconstruct algebraic-state values along the output trajectory
@@ -943,6 +1154,7 @@ impl Compiled {
     /// algebraic IC at every sample. Recompute from the differential
     /// states + parameters at each output time. No-op for a system without
     /// algebraic states.
+    #[cfg(feature = "solve")]
     fn reconstruct_algebraic_trajectory(
         &self,
         time: &[f64],
@@ -975,11 +1187,12 @@ impl Compiled {
 }
 
 /// Human-readable solver-family name recorded in [`SolutionMetadata::solver`].
-fn solver_name(choice: SolverChoice) -> &'static str {
+#[cfg(feature = "solve")]
+fn solver_name(choice: Alg) -> &'static str {
     match choice {
-        SolverChoice::Bdf => "Bdf",
-        SolverChoice::Sdirk => "Sdirk",
-        SolverChoice::Erk => "Erk",
+        Alg::Bdf => "Bdf",
+        Alg::Sdirk => "Sdirk",
+        Alg::Erk => "Erk",
     }
 }
 
@@ -994,6 +1207,7 @@ fn solver_name(choice: SolverChoice) -> &'static str {
 /// for accepted steps, and error-test + nonlinear-solver failures for rejected
 /// steps. `get_statistics()` is not on the `OdeSolverMethod` trait, so the
 /// caller reads those two counts off the concrete solver and passes them in.
+#[cfg(feature = "solve")]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SolveStats {
     pub n_rhs_calls: usize,
@@ -1002,6 +1216,7 @@ pub(crate) struct SolveStats {
     pub n_rejected_steps: usize,
 }
 
+#[cfg(feature = "solve")]
 impl SolveStats {
     /// Assemble from a solver's equation-eval statistics (`problem().eqn.rhs()`)
     /// plus the accepted/rejected step counts the caller pulled from the
@@ -1025,6 +1240,7 @@ impl SolveStats {
     }
 }
 
+#[cfg(feature = "solve")]
 impl std::ops::AddAssign for SolveStats {
     fn add_assign(&mut self, rhs: Self) {
         self.n_rhs_calls += rhs.n_rhs_calls;
@@ -1317,21 +1533,22 @@ fn build_state_kinds(
     Ok(state_kinds)
 }
 
-/// Run the configured solver from `t0` to `t_end`, honoring `opts.max_steps`
-/// and `opts.output_times`. Returns `(time_vec, state_matrix_rows)` where
+/// Run the configured solver from `t0` to `t_end`, honoring `opts.maxiters`
+/// and `opts.saveat`. Returns `(time_vec, state_matrix_rows)` where
 /// `state_matrix_rows[i]` is the trajectory of state variable `i`.
 ///
-/// If `opts.output_times` is `Some`, the solver advances natively but the
+/// If `opts.saveat` is `Some`, the solver advances natively but the
 /// returned grid is interpolated to exactly those times. We watch each step's
 /// `[t_prev, t_curr]` interval and interpolate any user time inside it before
 /// moving on, since `interpolate()` is only valid for times within the
 /// solver's current dense output window (calling it backwards on a stiff
 /// solver returns garbage).
+#[cfg(feature = "solve")]
 pub(crate) fn run_solver<'a, S, Eqn>(
     solver: &mut S,
     t_end: f64,
-    opts: &SimulateOptions,
-) -> Result<(Vec<f64>, Vec<Vec<f64>>), SimulateError>
+    opts: &SolveOptions,
+) -> Result<RawTrajectory, SimulateError>
 where
     S: OdeSolverMethod<'a, Eqn>,
     Eqn: diffsol::OdeEquations<T = f64, V = diffsol::FaerVec<f64>>,
@@ -1362,30 +1579,36 @@ where
     // Progress observer (no-op when the caller supplied none). Both loops below
     // report through this, so a host sees the same stream whether it asked for
     // an interpolated output grid or the solver's natural steps.
-    let report = |step: usize, t: f64| -> Result<(), SimulateError> {
+    //
+    // A `Flow::Cancel` is NOT an error: it ends the run with
+    // [`ReturnCode::Terminated`] and the trajectory computed so far, because a
+    // caller who stops a run deliberately still wants what it produced
+    // (`esm-libraries-spec.md` §2.5.3).
+    let report = |step: usize, t: f64, u: &[f64]| -> Flow {
         let Some(cb) = &opts.progress else {
-            return Ok(());
+            return Flow::Continue;
         };
         let p = Progress {
             t0,
             t,
             t_end,
             step,
-            max_steps: opts.max_steps,
+            maxiters: opts.maxiters,
+            u,
         };
-        match cb(&p) {
-            Flow::Continue => Ok(()),
-            Flow::Cancel => Err(SimulateError::Cancelled { t, step }),
-        }
+        cb(&p)
     };
 
     // One report before stepping, so a host can render a determinate 0% the
     // moment the solve starts rather than after the first (possibly slow) step.
-    report(0, t0)?;
+    let mut retcode = ReturnCode::Success;
+    if matches!(report(0, t0, &initial_state), Flow::Cancel) {
+        return Ok((times, state_rows, ReturnCode::Terminated));
+    }
 
     let mut step_count: usize = 0;
 
-    if let Some(t_eval) = &opts.output_times {
+    if let Some(t_eval) = &opts.saveat {
         // Cursor into the user's evaluation grid. Each step we drain any
         // requested times that now lie inside the solver's [t_prev, t_curr]
         // window.
@@ -1409,17 +1632,24 @@ where
             if next_idx >= t_eval.len() {
                 break;
             }
-            if step_count >= opts.max_steps {
-                return Err(SimulateError::MaxStepsExceeded {
-                    max_steps: opts.max_steps,
-                });
+            if step_count >= opts.maxiters {
+                retcode = ReturnCode::MaxIters;
+                break;
             }
             let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
                 details: e.to_string(),
             })?;
             step_count += 1;
             let t_curr = solver.state().t;
-            report(step_count, t_curr)?;
+            let y_now = solver.state().y.as_slice().to_vec();
+            if !y_now.iter().all(|v| v.is_finite()) {
+                retcode = ReturnCode::Unstable;
+                break;
+            }
+            if matches!(report(step_count, t_curr, &y_now), Flow::Cancel) {
+                retcode = ReturnCode::Terminated;
+                break;
+            }
 
             // Drain user grid points inside (t_prev, t_curr].
             while next_idx < t_eval.len() && t_eval[next_idx] <= t_curr {
@@ -1441,8 +1671,10 @@ where
         }
         // Anything after the solver's tstop is interpolated by extrapolation
         // — strictly speaking out-of-range, but accept it as a courtesy if
-        // the user asked for it.
-        while next_idx < t_eval.len() {
+        // the user asked for it. A run that stopped early (max iterations, an
+        // unstable state, a cancel) is NOT extrapolated past where it got to:
+        // the trajectory ends where the integration ended.
+        while retcode.is_success() && next_idx < t_eval.len() {
             let t = t_eval[next_idx];
             let y = solver
                 .interpolate(t)
@@ -1457,34 +1689,40 @@ where
         // Native step grid: record the initial point, then every step.
         push_state(&mut times, &mut state_rows, t0, &initial_state);
         loop {
-            if step_count >= opts.max_steps {
-                return Err(SimulateError::MaxStepsExceeded {
-                    max_steps: opts.max_steps,
-                });
+            if step_count >= opts.maxiters {
+                retcode = ReturnCode::MaxIters;
+                break;
             }
             let stop = solver.step().map_err(|e| SimulateError::DiffsolError {
                 details: e.to_string(),
             })?;
             step_count += 1;
             let t_curr = solver.state().t;
-            report(step_count, t_curr)?;
             let y_owned: Vec<f64> = solver.state().y.as_slice().to_vec();
+            if !y_owned.iter().all(|v| v.is_finite()) {
+                retcode = ReturnCode::Unstable;
+                break;
+            }
             push_state(&mut times, &mut state_rows, t_curr, &y_owned);
+            if matches!(report(step_count, t_curr, &y_owned), Flow::Cancel) {
+                retcode = ReturnCode::Terminated;
+                break;
+            }
             if matches!(stop, OdeSolverStopReason::TstopReached) {
                 break;
             }
         }
     }
 
-    Ok((times, state_rows))
+    Ok((times, state_rows, retcode))
 }
 
 /// Whether `file` must route to the array/spatial runtime
 /// ([`crate::simulate_array`]) rather than the scalar ODE interpreter: it has
-/// array-op nodes or spatial model structure. The three public entry points
-/// ([`simulate`], [`simulate_with_inspection`], [`simulate_with_providers_inspect`])
-/// share this predicate so their routing cannot drift apart.
-fn is_array_file(file: &EsmFile) -> bool {
+/// array-op nodes or spatial model structure. Problem construction
+/// ([`crate::problem::esm_problem`]) is the single caller, so the routing is
+/// decided exactly once, at build time.
+pub(crate) fn is_array_file(file: &EsmFile) -> bool {
     crate::simulate_array::file_has_array_ops(file)
         || crate::simulate_array::file_has_spatial_model(file)
 }
@@ -1494,7 +1732,7 @@ fn is_array_file(file: &EsmFile) -> bool {
 /// `models.len() != 1` — so flatten the coupling into one namespaced system first
 /// and build from that (ess-14f.8). The single-model path is byte-identical to
 /// the original `from_file` call. Shared by all three public entry points.
-fn build_array_compiled(
+pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
@@ -1510,7 +1748,8 @@ fn build_array_compiled(
 /// [`EsmFile`] and compile it into the array runtime's
 /// [`crate::simulate_array::ArrayCompiled`], which the caller then solves
 /// with [`crate::simulate_array::ArrayCompiled::simulate`]. The one-shot
-/// [`simulate`] borrows `file` and so keeps it alive for the whole solve; for
+/// [`crate::problem::esm_problem`] borrows `file` and so keeps it alive for the
+/// whole build; for
 /// a large expanded discretization the typed file is on the order of the
 /// compiled rules themselves (~1 GiB for `simpleclimate.esm` at its
 /// production grid), and taking the file by value both lets it die before
@@ -1520,7 +1759,7 @@ fn build_array_compiled(
 ///
 /// ```text
 /// let compiled = compile_array(file)?;          // file is consumed here
-/// let sol = compiled.simulate(tspan, &params, &ics, &opts)?;
+/// let sol = compiled.solve(tspan, &params, &ics, &opts)?;
 /// ```
 ///
 /// Routing matches the one-shot entry points ([`build_array_compiled`]): a
@@ -1547,175 +1786,6 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
     } else {
         Ok(crate::simulate_array::ArrayCompiled::from_file_owned(file)?)
     }
-}
-
-/// One-shot convenience: flatten -> compile -> simulate.
-///
-/// Dispatches to the array-op interpreter ([`crate::simulate_array`]) when
-/// the file contains any `arrayop`, `makearray`, `reshape`, `transpose`,
-/// `concat`, `broadcast`, or `index` nodes (gt-oxr), **or** when the file
-/// has spatial model structure — top-level grid declarations or any model
-/// with array-shaped state variables (non-empty `shape` field). Spatial
-/// models that have already been discretized (spatial ops rewritten to
-/// `index`-addressed array equations) integrate end-to-end via the ArrayOp
-/// runtime without hitting the scalar-ODE rejection guard. Their
-/// method-of-lines stencil RHS is evaluated **vectorized** — whole-array
-/// shifted-slice stencils + region-materialized boundary makearrays, no
-/// per-cell scalarization (ess-bdm; see
-/// [`crate::simulate_array::ArrayCompiled`] and the no-scalarization
-/// verification in `tests/pde_vectorized_eval.rs`).
-///
-/// Falls back to the scalar path via [`Compiled::from_file`] for pure-ODE
-/// files with no array-op or spatial structure.
-pub fn simulate(
-    file: &EsmFile,
-    tspan: (f64, f64),
-    params: &HashMap<String, f64>,
-    initial_conditions: &HashMap<String, f64>,
-    opts: &SimulateOptions,
-) -> Result<Solution, SimulateError> {
-    // Array-op / spatial files route to the `simulate_array` backend. This
-    // branch is compiled on wasm too (EarthSciAST-akz): the array
-    // runtime is wasm-clean — planar / geometry-free PDEs run, and a
-    // spherical/geodesic geometry op degrades to a runtime `GeometryError` via
-    // the `crate::geometry` wasm stub rather than a compile failure. Pure-ODE
-    // files still fall through to the scalar path below.
-    if is_array_file(file) {
-        let compiled = build_array_compiled(file)?;
-        return compiled.simulate(tspan, params, initial_conditions, opts);
-    }
-    let compiled = Compiled::from_file(file)?;
-    compiled.simulate(tspan, params, initial_conditions, opts)
-}
-
-/// [`simulate`] with a build-observability sink (the Rust mirror of the Julia
-/// `simulate(…; inspect=BuildInspection())` keyword): identical routing and an
-/// identical [`Solution`], plus `inspect` is filled with the array runtime's
-/// named build-time products — the state-free observed arrays materialized at
-/// the initial state (per-pair regrid geometry `A_ij`/`A_j`/`W_ij`, const mesh
-/// factors and their aliases, rule outputs like the MPAS `div_flux`) and the
-/// resolved observed expression map. See
-/// [`crate::simulate_array::BuildInspection`]. A pure-scalar file runs through
-/// the scalar interpreter unchanged and leaves the sink empty (it has no array
-/// build products). Native-only, like the array runtime it observes.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn simulate_with_inspection(
-    file: &EsmFile,
-    tspan: (f64, f64),
-    params: &HashMap<String, f64>,
-    initial_conditions: &HashMap<String, f64>,
-    opts: &SimulateOptions,
-    inspect: &mut crate::simulate_array::BuildInspection,
-) -> Result<Solution, SimulateError> {
-    if is_array_file(file) {
-        let compiled = build_array_compiled(file)?;
-        return compiled.simulate_inspect(tspan, params, initial_conditions, opts, Some(inspect));
-    }
-    let compiled = Compiled::from_file(file)?;
-    compiled.simulate(tspan, params, initial_conditions, opts)
-}
-
-/// [`simulate_with_inspection`] plus bound data **providers** — the Rust mirror
-/// of the Julia / Python `simulate(…; providers = Dict(var => provider))`
-/// keyword. Each entry binds a loader-fed forcing variable (e.g.
-/// `"USGS3DEP.raw.elevation"`) to a [`crate::provider::CadenceProvider`]; the
-/// provider is materialized ONCE here (the CONST case — a static raster the model
-/// folds into its build-once geometry) and its single native field is seeded into
-/// the array runtime's forcing buffer under that variable name, exactly where the
-/// model's coupling reads it. The heavy build-once products the field drives (a
-/// conservative regrid, terrain slopes) are then hoisted out of the per-step RHS
-/// by [`crate::simulate_array::ArrayCompiled::simulate_inspect`], so the provider
-/// is sampled — and its geometry computed — a single time.
-///
-/// `providers` is keyed by the forcing VARIABLE name (the coupling target), like
-/// the Julia/Python dict; each provider must feed exactly one field. This is the
-/// SINGLE discrete-aware entry point: a [`crate::provider::RefreshExecutor`] (built
-/// [`from_providers`](crate::provider::RefreshExecutor::from_providers), classifying
-/// each provider by its `refresh_times()`) seeds the CONST forcings once, and — when
-/// any provider is DISCRETE (non-empty `refresh_times`) — segments the integration on
-/// its refresh anchors, re-slicing the live forcing per segment (never frozen at the
-/// first record). CONST-only input takes the unchanged single-segment path.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn simulate_with_providers_inspect(
-    file: &EsmFile,
-    tspan: (f64, f64),
-    params: &HashMap<String, f64>,
-    initial_conditions: &HashMap<String, f64>,
-    opts: &SimulateOptions,
-    providers: HashMap<String, Box<dyn crate::provider::CadenceProvider>>,
-    inspect: Option<&mut crate::simulate_array::BuildInspection>,
-) -> Result<Solution, SimulateError> {
-    if !is_array_file(file) {
-        // Providers feed loader fields, which only exist on the array/spatial
-        // runtime; a pure-scalar file has nowhere to put them.
-        if let Some((name, _)) = providers.iter().next() {
-            return Err(SimulateError::ProviderError {
-                name: name.clone(),
-                details: "providers require an array/spatial model (this file has none)"
-                    .to_string(),
-            });
-        }
-        let compiled = Compiled::from_file(file)?;
-        return compiled.simulate(tspan, params, initial_conditions, opts);
-    }
-
-    let compiled = build_array_compiled(file)?;
-
-    // Provider management via the ONE RefreshExecutor (the same executor the
-    // model-declared `data_sources` seam uses): classify each provider by cadence,
-    // seed the CONST forcings once, take the DISCRETE refresh anchors as the
-    // driver's segment boundaries, and re-slice the DISCRETE forcings per segment.
-    // `from_providers` classifies by `refresh_times()` — the cross-language
-    // runtime-provider paradigm (matching Julia/Python) — so a `providers=` model
-    // that carries no `data_ingest` declarations still routes through the executor.
-    let (t0, t_end) = tspan;
-    let mut exec = crate::provider::RefreshExecutor::from_providers(providers);
-    let forcing = compiled.forcing_handle();
-    exec.materialize_const(&forcing)
-        .map_err(|e| SimulateError::ProviderError {
-            name: "<const-loader>".into(),
-            details: e.to_string(),
-        })?;
-
-    let discrete_set: std::collections::HashSet<String> = exec
-        .bindings()
-        .filter(|b| b.cadence == crate::cadence::Cadence::Discrete)
-        .flat_map(|b| b.variables.iter().cloned())
-        .collect();
-
-    // CONST-only: the single-segment entry point (unchanged behavior).
-    if discrete_set.is_empty() {
-        return compiled.simulate_inspect(tspan, params, initial_conditions, opts, inspect);
-    }
-
-    // DISCRETE: segment on the sorted union of the discrete providers' refresh
-    // anchors (RefreshExecutor::refresh_times is already sorted+deduped) that fall
-    // strictly inside `(t0, t_end)`.
-    let mut boundaries: Vec<f64> = exec.refresh_times();
-    boundaries.retain(|&b| b > t0 && b < t_end);
-
-    // The refresh closure the segmented driver calls at t0 and each boundary:
-    // RefreshExecutor::refresh_at re-slices every DISCRETE provider to the record
-    // active at `t` and writes it into the forcing buffer (None-skip when unchanged).
-    let refresh_fn = |t: f64| -> Result<(), SimulateError> {
-        exec.refresh_at(t, &forcing)
-            .map(|_| ())
-            .map_err(|e| SimulateError::ProviderError {
-                name: "<discrete-loader>".into(),
-                details: e.to_string(),
-            })
-    };
-
-    compiled.simulate_with_refresh_inspect(
-        tspan,
-        params,
-        initial_conditions,
-        opts,
-        inspect,
-        &discrete_set,
-        &boundaries,
-        refresh_fn,
-    )
 }
 
 // ============================================================================
@@ -2269,7 +2339,7 @@ fn eval_fn(
 /// Canonical single-expression entry point on the scalar runner: builds a
 /// parameter table from `bindings`, runs [`resolve_expr`], then walks the
 /// result through [`interpret`] / [`eval_op`] — the same primitives the
-/// `simulate` ODE solver uses. Adding an op to `eval_op` transparently
+/// scalar ODE solver uses. Adding an op to `eval_op` transparently
 /// extends single-expression evaluation; there is no parallel dispatch table.
 ///
 /// State and observed buffers are empty. The independent-variable `t` reads
@@ -2744,12 +2814,20 @@ mod tests {
             "#;
         let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
-        let opts = SimulateOptions {
-            output_times: Some(vec![0.0, 1.0]),
+        // Explicit tolerances, not the defaults. The assertion below pins
+        // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
+        // seeing the right G — not about how tightly the production default
+        // integrates. `DEFAULT_RELTOL`/`DEFAULT_ABSTOL` are Julia's `1e-4`/
+        // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
+        // which is larger than the thing being measured.
+        let opts = SolveOptions {
+            abstol: 1e-12,
+            reltol: 1e-10,
+            saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
         let sol = compiled
-            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
             .expect("simulate succeeds");
         let x_idx = sol
             .state_variable_names
@@ -2767,7 +2845,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("M.code".to_string(), 0.5);
         let sol2 = compiled
-            .simulate((0.0, 1.0), &params, &HashMap::new(), &opts)
+            .solve((0.0, 1.0), &params, &HashMap::new(), &opts)
             .expect("simulate succeeds");
         assert!(
             (sol2.state[x_idx][1] - 15.0).abs() < 1e-6,
@@ -2827,12 +2905,20 @@ mod tests {
             "#;
         let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
-        let opts = SimulateOptions {
-            output_times: Some(vec![0.0, 1.0]),
+        // Explicit tolerances, not the defaults. The assertion below pins
+        // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
+        // seeing the right G — not about how tightly the production default
+        // integrates. `DEFAULT_RELTOL`/`DEFAULT_ABSTOL` are Julia's `1e-4`/
+        // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
+        // which is larger than the thing being measured.
+        let opts = SolveOptions {
+            abstol: 1e-12,
+            reltol: 1e-10,
+            saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
         let sol = compiled
-            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
             .expect("simulate succeeds");
         let x_idx = sol
             .state_variable_names
@@ -3084,12 +3170,12 @@ mod tests {
             "#;
         let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
-        let opts = SimulateOptions {
-            output_times: Some(vec![0.0, 1.0]),
+        let opts = SolveOptions {
+            saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
         let sol = compiled
-            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
             .expect("a defaultless OBSERVED unknown must not block a simulation");
 
         // `G` is DEFINED by `G = D`, so esm 1.0.0 makes it an observed unknown:
@@ -3162,11 +3248,11 @@ mod tests {
         let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
         let err = compiled
-            .simulate(
+            .solve(
                 (0.0, 1.0),
                 &HashMap::new(),
                 &HashMap::new(),
-                &SimulateOptions::default(),
+                &SolveOptions::default(),
             )
             .expect_err("a differential state with no initial value must be refused");
         assert!(
@@ -3239,12 +3325,20 @@ mod tests {
             "#;
         let file = crate::parse::load_string(json).expect("parse fixture");
         let compiled = Compiled::from_file(&file).expect("compile succeeds");
-        let opts = SimulateOptions {
-            output_times: Some(vec![0.0, 1.0]),
+        // Explicit tolerances, not the defaults. The assertion below pins
+        // D(1) to exp(-1) within 1e-6, which is a statement about the RHS
+        // seeing the right G — not about how tightly the production default
+        // integrates. `DEFAULT_RELTOL`/`DEFAULT_ABSTOL` are Julia's `1e-4`/
+        // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
+        // which is larger than the thing being measured.
+        let opts = SolveOptions {
+            abstol: 1e-12,
+            reltol: 1e-10,
+            saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
         let sol = compiled
-            .simulate((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
+            .solve((0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
             .expect("simulate succeeds");
 
         let d_idx = sol

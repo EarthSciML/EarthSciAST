@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 
-use earthsci_ast::{SimulateOptions, SolverChoice, load_path_with_options, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_path_with_options};
 
 fn main() -> Result<(), String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -21,7 +21,7 @@ fn main() -> Result<(), String> {
     let mut out = String::from("dump.bits");
     let mut days = 0.25f64;
     let mut samples = 11usize;
-    let mut solver = SolverChoice::Erk;
+    let mut solver = Alg::Erk;
     let mut mp: BTreeMap<String, i64> = BTreeMap::new();
     let mut i = 0;
     while i < argv.len() {
@@ -41,9 +41,9 @@ fn main() -> Result<(), String> {
             }
             "--solver" => {
                 solver = match v()?.as_str() {
-                    "erk" => SolverChoice::Erk,
-                    "bdf" => SolverChoice::Bdf,
-                    "sdirk" => SolverChoice::Sdirk,
+                    "erk" => Alg::Erk,
+                    "bdf" => Alg::Bdf,
+                    "sdirk" => Alg::Sdirk,
                     s => return Err(format!("unknown solver '{s}'")),
                 }
             }
@@ -58,21 +58,32 @@ fn main() -> Result<(), String> {
     let file = load_path_with_options(std::path::Path::new(&model), &mp)
         .map_err(|e| format!("load: {e:?}"))?;
     let tspan = (0.0, days * 86400.0);
-    let opts = SimulateOptions {
-        solver,
+    let opts = SolveOptions {
+        alg: solver,
         abstol: 1e-8,
         reltol: 1e-6,
-        max_steps: 10_000_000,
-        output_times: Some(
+        maxiters: 10_000_000,
+        saveat: Some(
             (0..samples.max(2))
                 .map(|s| tspan.1 * s as f64 / (samples.max(2) - 1) as f64)
                 .collect(),
         ),
         progress: None,
+        callback: None,
     };
     let t_start = std::time::Instant::now();
-    let sol = simulate(&file, tspan, &HashMap::new(), &HashMap::new(), &opts)
-        .map_err(|e| format!("simulate: {e:?}"))?;
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        tspan,
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .map_err(|e| format!("simulate: {e:?}"))?;
     eprintln!(
         "[dump] solve {:.2} s, {} rows, {} times, {} rhs calls",
         t_start.elapsed().as_secs_f64(),

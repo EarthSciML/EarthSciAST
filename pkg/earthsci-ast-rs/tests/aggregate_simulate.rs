@@ -17,7 +17,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::aggregate::resolve_aggregate_ranges;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 
 mod common;
@@ -72,18 +72,29 @@ fn build(
 /// constant-rate forcing, so `y[i](t) = rate·t` regardless).
 fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
     let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     };
     let ics: HashMap<String, f64> =
         HashMap::from([("y[1]".to_string(), 0.0), ("y[2]".to_string(), 0.0)]);
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
-        .map_err(|e| format!("simulate: {e}"))?;
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .map_err(|e| format!("simulate: {e}"))?;
     let slot = sol
         .state_variable_names
         .iter()
@@ -509,13 +520,14 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
         }
         "#;
     let file = load_string(model).unwrap_or_else(|e| panic!("load ragged model: {e}"));
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     };
     let ics: HashMap<String, f64> = HashMap::from([
         ("y[1]".to_string(), 0.0),
@@ -523,8 +535,18 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
         ("nedges[1]".to_string(), 2.0),
         ("nedges[2]".to_string(), 3.0),
     ]);
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
-        .unwrap_or_else(|e| panic!("simulate ragged: {e}"));
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .unwrap_or_else(|e| panic!("simulate ragged: {e}"));
     let at_t1 = |name: &str| -> f64 {
         let slot = sol
             .state_variable_names
