@@ -51,6 +51,10 @@ from .substitute import has_var_placeholder, substitute
 #: never namespaced, and it is exempt from ``translate``-endpoint qualification.
 PLACEHOLDER_VAR = "_var"
 
+#: The independent TIME variable. A differential taken with respect to anything
+#: else names a spatial axis (esm-libraries-spec §4.7.6 step 2).
+TIME_VAR = "t"
+
 # ============================================================================
 # Errors (spec §4.7.5 + §4.7.6 — names mirror Rust's FlattenError enum
 # variants for cross-language error-name parity)
@@ -678,9 +682,27 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
     # array layout follows.
     out: list[str] = []
     for node in walk(expr):
-        if isinstance(node, ExprNode) and node.dim:
+        if not isinstance(node, ExprNode):
+            continue
+        if node.dim:
             if node.dim not in out:
                 out.append(node.dim)
+        # `wrt` is the OTHER axis-naming scalar field, and a differential taken
+        # with respect to anything but time names a spatial axis exactly as
+        # `dim` does. §4.7.6 step 2 lists it alongside grad/div/laplacian:
+        # "`D` with `wrt != "t"`".
+        #
+        # This is not a return to op-name matching -- the docstring's argument
+        # stands, and `wrt` is a structural field test, not a name test. It was
+        # lost when the op-name list was removed, and losing it is not cosmetic:
+        # a pure 1-D vertical-diffusion model written only with `D(c)/Dz` came
+        # out with `independent_variables == ["t"]` and classified as an ODE.
+        # Found by the Rust arm, which had a spec-citing test pinning the
+        # correct behaviour and correctly refused to delete it to match a corpus.
+        wrt = getattr(node, "wrt", None)
+        if isinstance(wrt, str) and wrt and wrt != TIME_VAR:
+            if wrt not in out:
+                out.append(wrt)
     return out
 
 

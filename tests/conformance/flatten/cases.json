@@ -2581,6 +2581,7 @@
       "system_kind": "pde",
       "independent_variables": [
         "t",
+        "z",
         "x",
         "y"
       ],

@@ -378,10 +378,21 @@ def test_unlowered_spatial_D_loads_but_errors_before_evaluation():
         eval_expr(ExprNode(op="D", args=["u"], wrt="x"), ctx)
     assert excinfo.value.code == "unlowered_operator"
 
-    # (c) End-to-end: the loaded fixture surfaces the same token when simulated.
-    res = simulate(f, tspan=(0.0, 1.0))
-    assert res.success is False
-    assert "unlowered_operator" in (res.message or "")
+    # (c) End-to-end: the loaded fixture is REFUSED, and refused earlier than it
+    # used to be. It used to reach evaluation and surface `unlowered_operator`
+    # there; flatten reported `independent_variables == ["t"]` for it, because the
+    # spatial-dimension scan harvested only a node's `dim` field and a spatial `D`
+    # carries its axis in `wrt`. Once §4.7.6 step 2's "`D` with `wrt != \"t\"`" is
+    # honoured, this document is correctly a PDE, and simulate's dimensionality
+    # gate — which is the accurate diagnosis, and the one that names the remedy —
+    # fires first. Part (b) above still pins `unlowered_operator` firing before
+    # evaluation, which is what RFC decision 5 is about.
+    from earthsci_ast.flatten import UnsupportedDimensionalityError
+
+    with pytest.raises(UnsupportedDimensionalityError) as sim_err:
+        simulate(f, tspan=(0.0, 1.0))
+    assert "x" in str(sim_err.value)
+    assert "not discretized" in str(sim_err.value)
 
 
 def test_unlowered_integral_loads_but_errors_before_evaluation():
