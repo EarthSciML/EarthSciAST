@@ -10,7 +10,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 
 # `esm_problem` + `solve` — the two-step run surface (esm-libraries-spec §2.5):
 # construction coerces → build_evaluator → seeds → composes callbacks, and the
-# verb is SciML's own `solve`, specialized on `ESMProblem` in the SciMLBase
+# verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
 # extension (active here: the test target loads SciMLBase + OrdinaryDiffEqTsit5).
 #
 # An authored document is FLATTENED whichever carrier it arrives in (path, Dict,

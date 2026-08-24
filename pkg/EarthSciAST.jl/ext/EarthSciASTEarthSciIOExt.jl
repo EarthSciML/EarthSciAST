@@ -704,7 +704,7 @@ end
 # Wave 3: REAL index-set dim names + CF dimension-coordinate emission (values +
 # standard_name/units/axis) from the document's `coordinates` registry, plus
 # per-variable CF attrs (units, …) — all carried in via the `OutputMeta` a
-# `ESMProblem` derives. Observed fields, auxiliary/source coordinates,
+# `EsmProblem` derives. Observed fields, auxiliary/source coordinates,
 # checkpoint profiles, and object stores are later waves; the protocol is unchanged.
 # --------------------------------------------------------------------------- #
 
@@ -723,12 +723,12 @@ mutable struct ZarrSink
 end
 
 """
-    build_zarr_sink(prob::ESMProblem, base_url; output_times, kwargs...) -> ZarrSink
+    build_zarr_sink(prob::EsmProblem, base_url; output_times, kwargs...) -> ZarrSink
     build_zarr_sink(var_map::AbstractDict, base_url; output_times, meta=nothing, kwargs...) -> ZarrSink
 
 Construct a [`ZarrSink`](@ref) streaming the flat state to the Zarr v3 store at
 `base_url`. The gridded layout is derived from the model's `var_map`
-([`derive_output_gridding`](@ref), RFC §7). Given an `ESMProblem` (or an
+([`derive_output_gridding`](@ref), RFC §7). Given an `EsmProblem` (or an
 [`OutputMeta`](@ref) via the `meta` keyword), axes are named by their REAL
 index-set names and the document's `coordinates` registry is emitted as CF
 dimension coordinates (RFC §8); with a bare `var_map` and no `meta`, axes keep

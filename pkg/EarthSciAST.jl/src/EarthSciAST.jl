@@ -352,11 +352,11 @@ export
     # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
     # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
     # pipeline (load → discretize → build_evaluator → seed → callbacks); the
-    # verb is SciML's own `solve`, specialized on `ESMProblem` in the SciMLBase
+    # verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
     # extension — which is also where `init` / `step!` / `solve!` / `remake` /
     # `EnsembleProblem` come from, so EarthSciAST exports none of those names
     # and cannot collide with the solver package that defines them.
-    esm_problem, ESMProblem, callbacks, SimulateError, seed_expression_ic!,
+    esm_problem, EsmProblem, callbacks, SimulateError, seed_expression_ic!,
     final_state, observed_field,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,

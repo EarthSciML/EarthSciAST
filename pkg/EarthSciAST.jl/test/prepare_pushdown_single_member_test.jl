@@ -133,7 +133,7 @@ end
     insp = EA.BuildInspection()
     prep = EA.esm_problem(doc, (0.0, 1.0); providers=providers, const_arrays=ca,
                       inspect=insp, pushdown_rewrite=true)
-    @test prep isa EA.ESMProblem
+    @test prep isa EA.EsmProblem
 
     # The single-member feedback vector survived as a 1-element ARRAY.
     mfk = [k for k in keys(insp.const_arrays)

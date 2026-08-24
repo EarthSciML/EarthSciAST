@@ -1,5 +1,5 @@
 # ===========================================================================
-# ESMProblem — the ESM simulation Problem, and its SciML plumbing.
+# EsmProblem — the ESM simulation Problem, and its SciML plumbing.
 #
 # esm-libraries-spec §2.5: a run is TWO steps, one noun and one verb.
 #
@@ -15,15 +15,15 @@
 #
 # The `simulate` / `prepare` pair this replaces conflated the two — and had
 # grown a second, `prepare`-shaped entry point next to `simulate` precisely
-# because callers needed the split. `ESMProblem` IS the `PreparedModel`
+# because callers needed the split. `EsmProblem` IS the `PreparedModel`
 # concept under the canonical name, with the run knobs it was missing.
 #
 # `[[library-exposes-rhs-not-solver]]`: EarthSciAST never depends on a solver.
 # Everything here — coerce → build_evaluator → seed → compose callbacks — is
-# solver-free, so CONSTRUCTING an `ESMProblem` needs no SciMLBase and no
+# solver-free, so CONSTRUCTING an `EsmProblem` needs no SciMLBase and no
 # OrdinaryDiffEq (§2.5.9). The `ODEProblem` + `solve` live in a SciMLBase
 # package EXTENSION (EarthSciASTSimulateExt), which specializes
-# `SciMLBase.__init` / `SciMLBase.__solve` on `ESMProblem` so the STANDARD
+# `SciMLBase.__init` / `SciMLBase.__solve` on `EsmProblem` so the STANDARD
 # SciML entry points — `solve`, `init`, `step!`, `solve!`, `remake`,
 # `EnsembleProblem` — work on it directly. A solution is therefore a real
 # `ODESolution`: its `retcode` is a real `SciMLBase.ReturnCode`, and it is
@@ -294,13 +294,13 @@ _compose_callbacks(cbs::AbstractVector) =
 function _solve_problem end
 _solve_problem(prob, alg; kwargs...) = throw(SimulateError(
     alg === nothing ?
-    "solving an ESMProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
+    "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
     "(and `using OrdinaryDiffEqTsit5`)" :
-    "solving an ESMProblem needs the SciMLBase extension; add `using SciMLBase` " *
+    "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
     "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"))
 
 # --------------------------------------------------------------------------- #
-# ESMProblem — the run-ready artifact, built exactly once per document.
+# EsmProblem — the run-ready artifact, built exactly once per document.
 #
 # Everything deterministic-per-document (load → flatten → shape transforms →
 # flattened_to_esm → build_evaluator) plus the run wiring that belongs to the
@@ -311,7 +311,7 @@ _solve_problem(prob, alg; kwargs...) = throw(SimulateError(
 # --------------------------------------------------------------------------- #
 
 """
-    ESMProblem
+    EsmProblem
 
 The ESM simulation problem: the compiled tree-walk RHS `f!`, the seeded initial
 state `u0`, the integration interval `tspan`, the parameter carrier `p`, the
@@ -348,7 +348,7 @@ time (or never reach `p` at all), so call [`esm_problem`](@ref) again.
 Fields are an extension seam, not stable API; `var_map`, `p`, `u0`, `tspan`
 and `output_meta` are the ones downstream code reads.
 """
-struct ESMProblem
+struct EsmProblem
     f!::Function                          # compiled tree-walk RHS (in-place)
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
     tspan::Tuple{Float64,Float64}         # integration interval
@@ -390,9 +390,9 @@ struct ESMProblem
     symcache::Base.RefValue{Any}          # lazy SymbolicIndexingInterface cache
 end
 
-function Base.show(io::IO, prob::ESMProblem)
+function Base.show(io::IO, prob::EsmProblem)
     np = prob.p === nothing ? 0 : length(prob.p)
-    print(io, "ESMProblem(", length(prob.u0), " state elements, ",
+    print(io, "EsmProblem(", length(prob.u0), " state elements, ",
           prob.n_equations, " equations, ", np, " parameters, tspan=", prob.tspan)
     isempty(prob.discrete_providers) ||
         print(io, ", ", length(prob.discrete_providers), " discrete forcings")
@@ -462,14 +462,14 @@ function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::F
 end
 
 """
-    esm_problem(input, tspan; p=Dict(), u0=nothing, kwargs...) -> ESMProblem
+    esm_problem(input, tspan; p=Dict(), u0=nothing, kwargs...) -> EsmProblem
 
 Build the ESM simulation problem for `input` over `tspan = (t0, t1)` — the one
 noun of esm-libraries-spec §2.5. Construction runs everything deterministic per
 document ONCE (coerce `input` to a runnable document: load → flatten → shape
 transforms; materialize provider fields; build the tree-walk evaluator; seed the
 initial state; compose the problem's callbacks) and returns an
-[`ESMProblem`](@ref) that `solve` integrates as often as you like.
+[`EsmProblem`](@ref) that `solve` integrates as often as you like.
 
 `input` may be a path to an `.esm` file, a native ESM `Dict`, a loaded
 [`EsmFile`](@ref), or a [`FlattenedSystem`](@ref). The first three are AUTHORED
@@ -478,7 +478,7 @@ the flattener's namespaced one — `"Chem.A"`, not `"A"`. Only a
 `FlattenedSystem` skips the flattener, that being the type whose whole meaning
 is "already flattened". **Snapshot semantics**: the document is fully parsed
 here, so mutating `input` afterwards does not affect the problem (forcing arrays
-are aliased by design; see [`ESMProblem`](@ref)).
+are aliased by design; see [`EsmProblem`](@ref)).
 
 Stable keyword arguments (API_SPEC §5.8 — the bindings that fix a DOCUMENT):
 
@@ -787,7 +787,7 @@ function esm_problem(input, tspan;
         save_everystep = false
     end
 
-    return ESMProblem(f!, u0_run, span, p_built, var_map, merged_param,
+    return EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
                       discrete_providers, dm, _doc_equation_count(doc),
                       Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
                       Ref{Any}(nothing), param_classes, insp,
@@ -818,7 +818,7 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
 end
 
 """
-    observed_field(prob::ESMProblem, name) -> Array
+    observed_field(prob::EsmProblem, name) -> Array
 
 Evaluate the state-free observed `name` at BUILD time through the problem's own
 graph — the public face of the build-observability path (`_observed_field`).
@@ -834,7 +834,7 @@ locally (`"deathsK"`, resolved against the single run model's variable tails).
 Throws a `SimulateError` when `name` is not a build-time-evaluable observed
 (state-dependent, unsized axis, or not an observed at all).
 """
-function observed_field(prob::ESMProblem, name::AbstractString)
+function observed_field(prob::EsmProblem, name::AbstractString)
     insp = prob.inspection
     if prob.run_file[] === nothing
         prob.run_file[] = coerce_esm_file(prob.run_doc)
@@ -915,7 +915,7 @@ end
 # are pristine and already hold the sample at t0 (the first solve of a problem
 # built at that t0 — no double sample). Called from the solve/init seam, which
 # is the only place that knows a run is starting.
-function _prepare_run!(prob::ESMProblem, t0::Float64)
+function _prepare_run!(prob::EsmProblem, t0::Float64)
     isempty(prob.discrete_providers) && return nothing
     if prob.dirty[] || prob.buffer_time[] != t0
         for (k, prov) in prob.discrete_providers
@@ -930,13 +930,13 @@ function _prepare_run!(prob::ESMProblem, t0::Float64)
 end
 
 """
-    parameter_classes(prob::ESMProblem) -> Dict{String,Symbol}
+    parameter_classes(prob::EsmProblem) -> Dict{String,Symbol}
 
 The parameter partition of the build behind `prob` — `:numeric`, `:structural`,
 `:const_folded`, `:forcing`. See the [`parameter_classes`](@ref) docstring on the
 [`BuildInspection`](@ref) method for what each class means and how it is derived.
 """
-parameter_classes(prob::ESMProblem) = prob.param_classes
+parameter_classes(prob::EsmProblem) = prob.param_classes
 
 # A readable name list for an error: a real model carries dozens of parameters
 # and dumping all of them buries the diagnostic that matters.
@@ -972,12 +972,12 @@ function _param_class_refusal(name::AbstractString, cls::Symbol)
         "call esm_problem(input, tspan; p = Dict(\"$name\" => …)) again — a " *
         "structural change is an explicit rebuild, never something hidden " *
         "inside a `p` swap"
-    return "remake(prob::ESMProblem; p): '$name' is $what. " *
+    return "remake(prob::EsmProblem; p): '$name' is $what. " *
            "To change it, $fix."
 end
 
 """
-    remake_parameters(prob::ESMProblem, overrides) -> p
+    remake_parameters(prob::EsmProblem, overrides) -> p
 
 The parameter carrier `prob.p` with the `:numeric` `overrides` applied — the
 value `remake(prob; p = overrides)` installs, exposed on its own as a tier-2
@@ -1002,7 +1002,7 @@ build, not just a number the build reads. Keys may be spelled locally
 (`"scale"`) or namespaced (`"NEIRegrid.scale"`), exactly as `esm_problem`'s `p`
 overrides are; an unknown or ambiguous key throws rather than being dropped.
 """
-function remake_parameters(prob::ESMProblem, overrides::AbstractDict)
+function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     isempty(overrides) && return prob.p
     classes = prob.param_classes
     pm = param_map(prob.p)
@@ -1073,7 +1073,7 @@ struct _KeepCallbacks end
 const _KEEP_CALLBACKS = _KeepCallbacks()
 
 """
-    callbacks(prob::ESMProblem)
+    callbacks(prob::EsmProblem)
 
 The problem's own callback set — the composition of its data-refresh, output-sink
 and checkpoint callbacks, or `nothing` when it has none.
@@ -1089,10 +1089,10 @@ and composes explicitly:
 solve(prob, Tsit5(); callback = CallbackSet(callbacks(prob), my_extra_callback))
 ```
 """
-callbacks(prob::ESMProblem) = prob.callback
+callbacks(prob::EsmProblem) = prob.callback
 
 """
-    remake(prob::ESMProblem; p, u0, tspan, callback) -> ESMProblem
+    remake(prob::EsmProblem; p, u0, tspan, callback) -> EsmProblem
 
 A NEW problem with the named substitutions applied and everything else SHARED
 (esm-libraries-spec §2.5.5). It does not mutate `prob`, and it does not redo the
@@ -1115,11 +1115,11 @@ class that makes it un-substitutable (`:structural`, `:const_folded`,
 `:forcing`), rather than silently rebuilding or silently ignoring it.
 
 `EarthSciAST.remake` and `SciMLBase.remake` are the same function on an
-`ESMProblem`: the SciMLBase extension forwards the canonical spelling here, so
+`EsmProblem`: the SciMLBase extension forwards the canonical spelling here, so
 `remake(prob; …)` works from a session that has `using OrdinaryDiffEq` without
 EarthSciAST exporting a second `remake` into the conflict.
 """
-function remake(prob::ESMProblem; p = nothing, u0 = nothing, tspan = nothing,
+function remake(prob::EsmProblem; p = nothing, u0 = nothing, tspan = nothing,
                 callback = _KEEP_CALLBACKS)
     p_new = p === nothing ? prob.p :
             p isa AbstractDict ? remake_parameters(prob, p) : p
@@ -1131,7 +1131,7 @@ function remake(prob::ESMProblem; p = nothing, u0 = nothing, tspan = nothing,
     # which a Dict-driven swap can change — so it is shared. A verbatim carrier
     # could carry different names, so that path gets a fresh (lazy) slot.
     sc = (p === nothing || p isa AbstractDict) ? prob.symcache : Ref{Any}(nothing)
-    return ESMProblem(prob.f!, u0_new, span, p_new, prob.var_map,
+    return EsmProblem(prob.f!, u0_new, span, p_new, prob.var_map,
                       prob.param_buffers, prob.discrete_providers, prob.dm,
                       prob.n_equations, prob.buffer_time, prob.dirty,
                       prob.output_meta, prob.run_doc, prob.run_file,

@@ -463,13 +463,13 @@ end
 # distills exactly that slice of the run doc so a sink emits `lon`/`lat` dims (not
 # positional `<base>_d0`) and CF dimension-coordinates, WITHOUT the sink or the
 # writer importing the document model. Built once by [`derive_output_meta`] in
-# `esm_problem` (the doc is in scope there; `ESMProblem` carries the result).
+# `esm_problem` (the doc is in scope there; `EsmProblem` carries the result).
 # --------------------------------------------------------------------------- #
 
 """
     OutputMeta
 
-The document-derived output metadata carried by an [`ESMProblem`](@ref) so a
+The document-derived output metadata carried by an [`EsmProblem`](@ref) so a
 streaming sink can name axes and emit CF coordinates (RFC §7–§8). Distilled from
 the flattened run document by [`derive_output_meta`](@ref).
 
@@ -939,7 +939,7 @@ output_var_dims(g::VarGridding, time_dim::AbstractString) =
     build_zarr_sink(source, base_url; output_times, kwargs...) -> sink
 
 Construct a concrete Zarr [streaming sink](@ref sink_output_times) writing to the
-store at `base_url` (a `file://` URL or path). `source` is an [`ESMProblem`](@ref)
+store at `base_url` (a `file://` URL or path). `source` is an [`EsmProblem`](@ref)
 (or a bare `var_map` dict); `output_times` are the solver-second anchors at which
 the sink writes. The returned object implements the Sink protocol and is passed to
 [`esm_problem`](@ref)'s `sinks` keyword.

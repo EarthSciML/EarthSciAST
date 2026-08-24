@@ -1,20 +1,20 @@
 """
     EarthSciASTSimulateExt
 
-The SciML plumbing for [`ESMProblem`](@ref), loaded automatically when
+The SciML plumbing for [`EsmProblem`](@ref), loaded automatically when
 `SciMLBase` is in the session.
 
 esm-libraries-spec §2.5 gives the simulation surface one noun and one verb, and
 §4 of `API_SPEC.md` makes the SciML spellings canonical. This extension is what
 makes them literally the SciML ones: it specializes `SciMLBase.__init` and
-`SciMLBase.__solve` on an `ESMProblem`, so the standard entry points —
+`SciMLBase.__solve` on an `EsmProblem`, so the standard entry points —
 `solve`, `init`, `step!`, `solve!`, `remake`, `EnsembleProblem` — work on it
 directly, and a solution is a real `ODESolution` carrying a real
 `SciMLBase.ReturnCode` and indexed by variable name through
 SymbolicIndexingInterface.
 
 Kept out of the base package per `[[library-exposes-rhs-not-solver]]` and
-§2.5.9: CONSTRUCTING an `ESMProblem` must not require the solver, so
+§2.5.9: CONSTRUCTING an `EsmProblem` must not require the solver, so
 `ODEProblem` / `solve` / `ReturnCode` stay behind a `weakdep`, mirroring the
 `DataRefreshExt` / `DataOutputExt` / `MTKExt` pattern. Only `solve` / `init` /
 `solve!` need this extension.
@@ -24,7 +24,7 @@ The algorithm itself (e.g. `Tsit5`) comes from the caller's own solver package
 """
 module EarthSciASTSimulateExt
 
-using EarthSciAST: EarthSciAST, ESMProblem, SimulateError, DEFAULT_SIM_RELTOL,
+using EarthSciAST: EarthSciAST, EsmProblem, SimulateError, DEFAULT_SIM_RELTOL,
                    DEFAULT_SIM_ABSTOL, callbacks, param_map, sink_open!, sink_close!
 import SciMLBase
 
@@ -42,7 +42,7 @@ EarthSciAST._callback_set(cbs::AbstractVector) = SciMLBase.CallbackSet(cbs...)
 
 # The core's internal solve bridge (`run_pde_tests` and friends), routed through
 # the ONE public solve path so there is no second mechanism.
-EarthSciAST._solve_problem(prob::ESMProblem, alg; kwargs...) =
+EarthSciAST._solve_problem(prob::EsmProblem, alg; kwargs...) =
     SciMLBase.solve(prob, alg; kwargs...)
 
 # --------------------------------------------------------------------------- #
@@ -56,7 +56,7 @@ EarthSciAST._solve_problem(prob::ESMProblem, alg; kwargs...) =
 # array state (`Symbol("M.psi[3,4]")`), so the SII spelling and the `var_map`
 # spelling never diverge. Built once per problem and memoized on it.
 # --------------------------------------------------------------------------- #
-function _symbol_cache(prob::ESMProblem)
+function _symbol_cache(prob::EsmProblem)
     cached = prob.symcache[]
     cached === nothing || return cached
     n = length(prob.u0)
@@ -82,7 +82,7 @@ function _symbol_cache(prob::ESMProblem)
     return sc
 end
 
-_ode_problem(prob::ESMProblem, tspan) = SciMLBase.ODEProblem(
+_ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(
     SciMLBase.ODEFunction(prob.f!; sys = _symbol_cache(prob)),
     copy(prob.u0), tspan, prob.p)
 
@@ -99,7 +99,7 @@ _ode_problem(prob::ESMProblem, tspan) = SciMLBase.ODEProblem(
 # refresh/output anchors are solver stops the callbacks NEED, so a caller's
 # `tstops` unions with them rather than replacing them.
 # --------------------------------------------------------------------------- #
-function _run_kwargs(prob::ESMProblem; kwargs...)
+function _run_kwargs(prob::EsmProblem; kwargs...)
     kw = Dict{Symbol,Any}(kwargs)
     haskey(kw, :reltol) || (kw[:reltol] = DEFAULT_SIM_RELTOL)
     haskey(kw, :abstol) || (kw[:abstol] = DEFAULT_SIM_ABSTOL)
@@ -127,7 +127,7 @@ function _run_kwargs(prob::ESMProblem; kwargs...)
 end
 
 _need_alg(alg) = alg === nothing && throw(SimulateError(
-    "solving an ESMProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
+    "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
     "(and `using OrdinaryDiffEqTsit5`)"))
 
 # --------------------------------------------------------------------------- #
@@ -138,14 +138,14 @@ _need_alg(alg) = alg === nothing && throw(SimulateError(
 # the run. A caller who drives `init` / `step!` themselves owns that lifecycle
 # and must call `sink_open!` / `sink_close!` around their loop.
 # --------------------------------------------------------------------------- #
-function SciMLBase.__init(prob::ESMProblem, alg = nothing, args...; kwargs...)
+function SciMLBase.__init(prob::EsmProblem, alg = nothing, args...; kwargs...)
     _need_alg(alg)
     EarthSciAST._prepare_run!(prob, prob.tspan[1])
     return SciMLBase.init(_ode_problem(prob, prob.tspan), alg, args...;
                           _run_kwargs(prob; kwargs...)...)
 end
 
-function SciMLBase.__solve(prob::ESMProblem, alg = nothing, args...; kwargs...)
+function SciMLBase.__solve(prob::EsmProblem, alg = nothing, args...; kwargs...)
     _need_alg(alg)
     # Sink lifecycle: open each sink (declares its store dims/coords/chunk-shard
     # grid ONCE) BEFORE the run — the output callback's own `initialize` may
@@ -162,18 +162,18 @@ function SciMLBase.__solve(prob::ESMProblem, alg = nothing, args...; kwargs...)
     end
 end
 
-# `ESMProblem` is deliberately NOT a subtype of `SciMLBase.AbstractDEProblem`:
+# `EsmProblem` is deliberately NOT a subtype of `SciMLBase.AbstractDEProblem`:
 # the type is defined in the core package, which has no SciMLBase dependency
 # (§2.5.9). SciMLBase's generic `solve`/`init` therefore do not cover it, so
 # these two thin methods route the standard entry points into the `__solve` /
 # `__init` specializations above — the same two-layer shape SciMLBase uses
 # internally. `alg` may be positional (the SciML spelling) or a keyword.
-function SciMLBase.solve(prob::ESMProblem, args...; alg = nothing, kwargs...)
+function SciMLBase.solve(prob::EsmProblem, args...; alg = nothing, kwargs...)
     a, rest = _split_alg(alg, args)
     return SciMLBase.__solve(prob, a, rest...; kwargs...)
 end
 
-function SciMLBase.init(prob::ESMProblem, args...; alg = nothing, kwargs...)
+function SciMLBase.init(prob::EsmProblem, args...; alg = nothing, kwargs...)
     a, rest = _split_alg(alg, args)
     return SciMLBase.__init(prob, a, rest...; kwargs...)
 end
@@ -188,7 +188,7 @@ _split_alg(alg, args) = isempty(args) ? (alg, ()) :
 # in a session that has `using OrdinaryDiffEq` WITHOUT EarthSciAST exporting a
 # competing `remake` of its own.
 # --------------------------------------------------------------------------- #
-SciMLBase.remake(prob::ESMProblem; kwargs...) = EarthSciAST.remake(prob; kwargs...)
+SciMLBase.remake(prob::EsmProblem; kwargs...) = EarthSciAST.remake(prob; kwargs...)
 
 # --------------------------------------------------------------------------- #
 # `EnsembleProblem` — §2.5.8: a Problem plus a per-trajectory rewrite, solved as
@@ -199,11 +199,11 @@ SciMLBase.remake(prob::ESMProblem; kwargs...) = EarthSciAST.remake(prob; kwargs.
 #     sols = solve(ens, Tsit5(), EnsembleSerial(); trajectories = length(ks))
 #
 # `safetycopy = false` because `remake` already returns a fresh problem sharing
-# only what a substitution cannot invalidate; deep-copying an `ESMProblem` would
+# only what a substitution cannot invalidate; deep-copying an `EsmProblem` would
 # clone the compiled RHS and BREAK the aliasing between the live forcing buffers
 # and the closure that reads them.
 # --------------------------------------------------------------------------- #
-SciMLBase.EnsembleProblem(prob::ESMProblem, rewrite; safetycopy::Bool = false,
+SciMLBase.EnsembleProblem(prob::EsmProblem, rewrite; safetycopy::Bool = false,
                           kwargs...) =
     SciMLBase.EnsembleProblem(prob; prob_func = rewrite, safetycopy = safetycopy,
                               kwargs...)

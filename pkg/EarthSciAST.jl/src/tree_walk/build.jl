@@ -43,7 +43,7 @@ BUILD-TIME products that are otherwise internal to the evaluator closure:
   and `:forcing` (a live buffer a discrete provider rewrites, never in `p`).
   Derived from what the build actually read, not from what the document
   declares — see [`parameter_classes`](@ref). This is the build-level face of the same
-  partition `parameter_classes(prob)` exposes on an `ESMProblem`.
+  partition `parameter_classes(prob)` exposes on an `EsmProblem`.
 
 Filling the record never changes the build: the returned
 `(f!, u0, p, tspan, var_map)` is identical with or without `inspect`.
@@ -2950,7 +2950,7 @@ function _build_evaluator_impl_inner(model::Model;
                          # Internal: sink for the parameter PARTITION (name →
                          # `:numeric` / `:structural` / `:const_folded` /
                          # `:forcing`; see `_classify_parameters`). `esm_problem`
-                         # passes one and carries it on the `ESMProblem`, so
+                         # passes one and carries it on the `EsmProblem`, so
                          # `parameter_classes(prep)` needs no sixth return value
                          # — the same reasoning as `param_map`.
                          _param_classes::Union{Nothing,AbstractDict}=nothing,
@@ -4028,7 +4028,7 @@ param_map(::Nothing) = Dict{String,Int}()
     parameter_classes(x) -> Dict{String,Symbol}
 
 Parameter NAME → what KIND of parameter it is in the build that produced `x`
-(a [`BuildInspection`](@ref) or an `ESMProblem`). Four classes:
+(a [`BuildInspection`](@ref) or an `EsmProblem`). Four classes:
 
 | class | where its value is consumed | overridable at solve time? |
 |---|---|---|
@@ -4056,7 +4056,7 @@ agreeing silently. It is refused explicitly, with its own message.
 Like [`param_map`](@ref) this is a function of an artifact rather than an extra
 `build_evaluator` return value: the 5-tuple has hundreds of destructuring call
 sites. Pass `inspect = BuildInspection()` to `build_evaluator` / `esm_problem`,
-or read it off the `ESMProblem` that `esm_problem` returns.
+or read it off the `EsmProblem` that `esm_problem` returns.
 
 ```julia
 prob = esm_problem("model.esm", tspan)

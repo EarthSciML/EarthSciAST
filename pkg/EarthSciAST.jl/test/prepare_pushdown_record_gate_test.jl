@@ -317,7 +317,7 @@ end
     insp = EA.BuildInspection()
     prep = EA.esm_problem(doc, (0.0, 1.0); providers=providers, const_arrays=ca,
                       inspect=insp, pushdown_rewrite=true)
-    @test prep isa EA.ESMProblem
+    @test prep isa EA.EsmProblem
 
     # ---- the gated mocks were fetched pre-sliced, never wholesale -----------
     for v in LVARS
@@ -407,7 +407,7 @@ end
                            const_arrays=Dict{String,Any}("src_W"=>W, "src_S"=>Sv,
                                                          "src_E"=>Ev, "src_N"=>Nv),
                            inspect=insp2, pushdown_rewrite=true)
-        @test prep2 isa EA.ESMProblem
+        @test prep2 isa EA.EsmProblem
         for v in LVARS
             sel = [c for c in gmocks2[v].calls if c[1] == :selection]
             @test isempty([c for c in gmocks2[v].calls if c[1] == :wholesale])

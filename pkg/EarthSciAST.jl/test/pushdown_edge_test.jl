@@ -370,7 +370,7 @@ end
         mock2 = MockSR(fullSR, gate, Any[])
         prep = EA.esm_problem(f, (0.0, 1.0); const_arrays=ca_q, providers=Dict("ISRM_SR"=>mock2),
                           inspect=insp2)
-        @test prep isa EA.ESMProblem
+        @test prep isa EA.EsmProblem
         # deferral: NEVER wholesale-materialized in the eager const loop
         @test count(c -> c[1] == :wholesale, mock2.calls) == 0
         selc = [c for c in mock2.calls if c[1] == :selection]

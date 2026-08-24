@@ -196,7 +196,7 @@ function pipeline_fixture(fx, base, reltol, abstol)
                                                    for (name, idx) in var_map)
     end
 
-    # --- Trajectory via the sanctioned ESMProblem provider path ---------------
+    # --- Trajectory via the sanctioned EsmProblem provider path ---------------
     prob = ESS.esm_problem(path, (t0, t1); providers = providers)
     r = SciMLBase.solve(prob, ODE.Tsit5(); reltol = reltol, abstol = abstol,
                         saveat = checkpoints)

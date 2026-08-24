@@ -1,4 +1,4 @@
-# ESMProblem — the simulation Problem as a first-class artifact
+# EsmProblem — the simulation Problem as a first-class artifact
 # (esm-libraries-spec §2.5, API_SPEC §5.8).
 #
 # `esm_problem(input, tspan; …)` runs everything deterministic-per-document ONCE
@@ -44,7 +44,7 @@ function ESM_P.provider_sample(p::_PrepLogProvider, t::Real)
     return p.fields[tf]
 end
 
-@testset "ESMProblem — build once, solve many" begin
+@testset "EsmProblem — build once, solve many" begin
     _D(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
     scalar_esm(rhs) = Dict{String,Any}(
         "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "S"),
@@ -63,7 +63,7 @@ end
         @test isapprox(fresh2[Y][end], 2.0; rtol = 1e-5)   # D(y)=k, k=1
 
         prob = esm_problem(esm, (0.0, 2.0))
-        @test prob isa ESMProblem
+        @test prob isa EsmProblem
 
         # Mutate the input in a way that WOULD change the model...
         esm["models"]["M"]["variables"]["k"]["default"] = 100.0
@@ -188,7 +188,7 @@ end
     @testset "show summarizes the problem" begin
         prob = esm_problem(scalar_esm("k"), (0.0, 2.0))
         s = sprint(show, prob)
-        @test occursin("ESMProblem", s)
+        @test occursin("EsmProblem", s)
         @test occursin("1 state", s)
         @test occursin("1 equations", s)
         @test occursin("1 parameters", s)
