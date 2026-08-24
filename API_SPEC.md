@@ -522,6 +522,13 @@ EnsembleProblem(prob, rewrite) -> EnsembleProblem
 A `Solution` carries `retcode` (SciML `ReturnCode`) and is indexed **by variable
 name**. Errors are `SimulateError`.
 
+**Per-binding type spelling.** The canonical name is `esm_problem`; §2.1's
+consistency rule fixes the transliteration. Julia's only other `Esm`-prefixed
+export is `EsmFile`, so Julia spells the type **`EsmProblem`**, not
+`ESMProblem` — the latter would make Julia inconsistent with itself, which
+§2.1 forbids. Go would spell it `ESMProblem` if it had one; it does not, and
+will not.
+
 **`simulate` is deleted in all three bindings**, not deprecated — it conflated
 build with run, which is why two of the three had already grown a second
 `prepare`-shaped entry point beside it. `prepare` / `PreparedModel` / `Prepared`
@@ -538,18 +545,41 @@ why replacement is the safe default.
 
 | Knob | Julia (was) | Python (was) | Rust (was) |
 |---|---|---|---|
-| relative tolerance | `reltol` (`1e-10`) | `rtol` (`1e-10`) | `reltol` (`1e-6`) |
-| absolute tolerance | `abstol` (`1e-14`) | `atol` (`1e-14`) | `abstol` (`1e-8`) |
+| relative tolerance | `reltol` (`1e-4`) | `rtol` (`1e-10`) | `reltol` (`1e-6`) |
+| absolute tolerance | `abstol` (`1e-6`) | `atol` (`1e-14`) | `abstol` (`1e-8`) |
 | solver | `alg` | `method: str = "LSODA"` | `solver: SolverChoice` |
 | output times | `saveat` | absent | `output_times: Option<Vec<f64>>` |
 | options passing | keywords | positional-or-keyword | `&SimulateOptions` struct |
 | run outcome | `success` + `retcode` + `message` | `success` + `message` + counters | step/eval counters |
 | re-parameterize | `remake_parameters` (params only) | rebuild | rebuild |
 
-Rust's defaults were four orders of magnitude looser than the other two
-(`1e-6`/`1e-8` against `1e-10`/`1e-14`), so two bindings solving the same
-document with default options did not produce comparable trajectories. The
-canonical defaults are `reltol = 1e-10`, `abstol = 1e-14`.
+**Correction of record.** An earlier revision of this table gave Julia's
+defaults as `1e-10`/`1e-14` and concluded that Julia and Python already agreed,
+with Rust the lone outlier. That was a misreading, caught by the Julia arm during
+implementation: `1e-10` is `DEFAULT_TEST_RELTOL` in the inline-test runner
+(`src/run_tests.jl`), whose partner is `1e-12`, not `1e-14`. Julia's actual
+`simulate` defaults are `DEFAULT_SIM_RELTOL = 1e-4` / `DEFAULT_SIM_ABSTOL =
+1e-6` (`src/simulate.jl`).
+
+So the real situation is worse than recorded: **all three bindings default to
+different tolerances**, spanning six orders of magnitude —
+
+| | reltol | abstol |
+|---|---|---|
+| Julia | `1e-4` | `1e-6` |
+| Rust | `1e-6` | `1e-8` |
+| Python | `1e-10` | `1e-14` |
+
+— and no two of them solve the same document comparably by default. Python's
+docstring says its defaults were chosen to match Julia's; they match the *test*
+constants, not the simulate ones.
+
+**The canonical default value is an OPEN DECISION, deliberately not settled
+here.** Naming the knob is a harmonization question; choosing its value is a
+numerical-accuracy-versus-cost question with a wide blast radius — adopting
+Python's `1e-10`/`1e-14` would tighten Julia's default solve by six orders of
+magnitude and slow every default run. The option *names* are canonical now
+(§4); the values stay per-binding until this is ruled on.
 
 `observed_field` also had three different arities — Julia
 `(prep, insp::BuildInspection, name)`, requiring the caller to have threaded the
@@ -917,7 +947,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 1 | `load` | Julia and Go took a **file path**; TypeScript and Rust took **JSON text**; Python sniffed. Same name, same argument type, opposite meanings. | **DONE.** Split into `load_path` / `load_string` / `load_document`; `load` deleted (a deprecation shim would have to keep the sniff). See §5.1. | all five |
 | 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguished them by name, using nobody else's names. | **DONE.** `to_json(file, opts) -> string` pure everywhere; `write_path(file, path)` writes and returns nothing; `to_json_compact` in all five. See §5.1. | all five |
 | 2b | `VERSION` | Meant the SCHEMA version in TypeScript and the PACKAGE version in Rust. Julia exported only `ESM_FORMAT_VERSION`; Python kept the format version private as a tuple; Go exposed neither. | **DONE.** `SCHEMA_VERSION` and `LIBRARY_VERSION`, both public strings, in all five; `VERSION` deleted. See §5.1. | all five |
-| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | Subsumed by the phase-4 simulation reshape: the option names come along with `simulate` being deleted and `Problem`/`solve` replacing it. SciML spelling everywhere (§4), Rust's defaults aligned to `1e-10`/`1e-14`. See §5.8 and libraries-spec §2.5. | Python, Rust |
+| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | Subsumed by the phase-4 simulation reshape: the option names come along with `simulate` being deleted and `Problem`/`solve` replacing it. SciML spelling everywhere (§4). The default VALUES are a separate, still-open decision — the premise that Julia and Python already agreed on `1e-10`/`1e-14` was a misreading; all three differ. See the correction of record in §5.8. | Python, Rust |
 | 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | TypeScript adds `closedFunctionNames()`; the constant becomes a deprecated alias. | TypeScript |
 | 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | Rename to `deriveOdes`. | TypeScript |
 | 6 | `unknowns` / `parameters` | TypeScript and Python export `unknowns`/`parameters`; Julia exports `unknown_names`/`parameter_names` for the same query. | Canonical is `unknowns`/`parameters`. Julia keeps its `*_names` spellings as aliases — the bare names collide badly in Julia's flat namespace. | Julia |
