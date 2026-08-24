@@ -50,7 +50,7 @@ use crate::types::{
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 // ============================================================================
@@ -212,6 +212,30 @@ pub enum FlattenError {
         "Malformed connector equation in couple({systems}): '{side}' is absent or did not deserialize as an expression"
     )]
     MalformedConnectorEquation { systems: String, side: String },
+
+    /// A `couple` connector equation applies the `multiplicative` transform to
+    /// a `to` target that has NO `D(to)` tendency in the flattened system — a
+    /// parameter, an observed, an algebraic unknown, or an undefined name
+    /// (esm-spec §10.3, esm-libraries-spec §4.7.2).
+    ///
+    /// Both sections define `multiplicative` against the target's EXISTING ODE
+    /// right-hand side, so with no tendency there is nothing to multiply and
+    /// the operation has no meaning. Rust used to SKIP the connector equation
+    /// in that case, which is the one outcome a coupling mis-specification must
+    /// not have: the document declares a coupling, the flattened system carries
+    /// no trace of it, and nothing downstream can distinguish "applied" from
+    /// "ignored".
+    ///
+    /// `additive` deliberately has no counterpart error — zero is the additive
+    /// identity, so an additive term against an absent tendency simply BECOMES
+    /// the tendency. There is no multiplicative identity that would do the same.
+    #[error(
+        "couple_multiplicative_no_tendency: couple connector 'multiplicative' transform targets \
+         '{target}', which has no tendency (D({target})) to multiply (esm-spec §10.3). To scale a \
+         constant parameter by a factor, use a variable_map entry with an Expression transform \
+         (esm-spec §10.4) instead."
+    )]
+    CoupleMultiplicativeNoTendency { target: String },
 
     /// A model subsystem that structurally declares itself a [`DataSource`] —
     /// it carries the discriminating `kind` / `source` keys — failed to
@@ -1025,11 +1049,39 @@ fn apply_coupling_entries(
     per_system: &mut Vec<SystemBlock>,
 ) -> Result<Vec<String>, FlattenError> {
     let mut coupling_rules_applied = Vec::new();
-    if let Some(entries) = &file.coupling {
-        for entry in entries {
-            apply_coupling_entry(entry, per_system, &mut coupling_rules_applied)?;
+    let Some(entries) = &file.coupling else {
+        return Ok(coupling_rules_applied);
+    };
+
+    // BY KIND, not by array position. §4.7.1 runs before §4.7.2 and §4.7.3 so
+    // that placeholder expansion and the RHS merge happen before a `couple`
+    // connector term or a `variable_map` substitution rewrites the dependent
+    // variable names out from under them — the operator terms belong to the
+    // ODE the component authored, and folding a connector term in first would
+    // stack the two contributions in the wrong order (a visible divergence:
+    // `advanced_coupling` declares `couple` first and `operator_compose`
+    // third, and the oracle still emits the transport terms ahead of the
+    // deposition sink). Within a kind, array order is preserved.
+    //
+    // `coupling_rules_applied` stays in DECLARATION order: it is provenance
+    // for the document as authored, not a trace of the application schedule.
+    let kind_rank = |entry: &CouplingEntry| match entry {
+        CouplingEntry::OperatorCompose { .. } => 0,
+        CouplingEntry::Couple { .. } => 1,
+        _ => 2,
+    };
+    let mut descriptions: Vec<Option<String>> = vec![None; entries.len()];
+    for rank in 0..=2 {
+        for (i, entry) in entries.iter().enumerate() {
+            if kind_rank(entry) != rank {
+                continue;
+            }
+            let mut one = Vec::new();
+            apply_coupling_entry(entry, per_system, &mut one)?;
+            descriptions[i] = one.into_iter().next();
         }
     }
+    coupling_rules_applied.extend(descriptions.into_iter().flatten());
     Ok(coupling_rules_applied)
 }
 
@@ -1428,7 +1480,23 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // synthesise. A model reads external data through a PARAMETER whose
     // `update` names the source, which lands in `parameters` below like any
     // other parameter.
-    let locals: HashSet<String> = model.variables.keys().cloned().collect();
+    //
+    // A model's SUBSYSTEM keys join the gate: a reference rooted at one of
+    // them (`Photochemistry.NO2_photo` written inside the parent) is
+    // subsystem-LOCAL, not an already-absolute cross-component reference, and
+    // must be lifted to the lowered subsystem name `<parent>.<sub>.<var>`.
+    // Mirrors the Python oracle's `sub_keys` / `locals_` in `_collect_model`.
+    let sub_keys: HashSet<String> = model
+        .subsystems
+        .as_ref()
+        .map(|subs| subs.keys().cloned().collect())
+        .unwrap_or_default();
+    let locals: HashSet<String> = model
+        .variables
+        .keys()
+        .cloned()
+        .chain(sub_keys.iter().cloned())
+        .collect();
 
     // Which unknowns are ODE states and which are observed is DERIVED from
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
@@ -1445,7 +1513,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         // unit conversion) over the model's own symbols, so they namespace
         // exactly as the equations do.
         cloned.for_each_expression_mut(&mut |expr| {
-            *expr = namespace_expr(expr, system_name, &locals);
+            *expr = namespace_expr(expr, system_name, &sub_keys, &locals);
         });
         match var.var_type {
             // An unknown lands in the bucket its EQUATIONS put it in.
@@ -1486,8 +1554,8 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .equations
         .iter()
         .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name, &locals),
-            rhs: namespace_expr(&eq.rhs, system_name, &locals),
+            lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
+            rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
         })
         .collect();
 
@@ -1496,17 +1564,17 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_continuous_event(e, system_name, &locals))
+        .map(|e| namespace_continuous_event(e, system_name, &sub_keys, &locals))
         .collect();
     let discrete_events = model
         .discrete_events
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|e| namespace_discrete_event(e, system_name, &locals))
+        .map(|e| namespace_discrete_event(e, system_name, &sub_keys, &locals))
         .collect();
 
-    Ok(SystemBlock {
+    let mut block = SystemBlock {
         name: system_name.to_string(),
         state_vars,
         parameters,
@@ -1514,7 +1582,42 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         equations,
         continuous_events,
         discrete_events,
-    })
+    };
+
+    // NESTED SUBSYSTEMS (esm-spec §6.2). A subsystem is an ordinary model
+    // mounted under a key, lowered with the compound prefix
+    // `<parent>.<key>` and FOLDED INTO the parent block — the flattened
+    // system has no separate component for it, exactly as the Python oracle's
+    // `_collect_model` recursion + `_ComponentSystem.merge` produce. Rust
+    // ignored `subsystems` entirely, which silently dropped every nested
+    // variable, parameter, and equation from the flattened system
+    // (`tests/scoping/bare_reference_resolution.esm` lost `NO2_photo` and its
+    // ODE, leaving an `ic` equation pointing at a state that did not exist).
+    //
+    // Order matters and is the oracle's: the parent's own tables first, the
+    // subsystems' appended in declaration order.
+    //
+    // EVENTS ARE DELIBERATELY NOT lifted: the document's event view aggregates
+    // only TOP-LEVEL components' events (parse.py's `EsmFile.events`), so a
+    // subsystem-owned event is not part of the flattened system in any
+    // binding. Folding them in here would make Rust the outlier.
+    if let Some(subs) = &model.subsystems {
+        for (sub_name, sub_value) in subs {
+            // A `{ "ref": … }` entry (or any non-model mount) is not a
+            // subsystem to lower: reference resolution runs before flattening,
+            // so anything still unresolved here contributes nothing.
+            let Ok(sub_model) = serde_json::from_value::<Model>(sub_value.clone()) else {
+                continue;
+            };
+            let sub_block = build_model_block(&format!("{system_name}.{sub_name}"), &sub_model)?;
+            block.state_vars.extend(sub_block.state_vars);
+            block.parameters.extend(sub_block.parameters);
+            block.observed_vars.extend(sub_block.observed_vars);
+            block.equations.extend(sub_block.equations);
+        }
+    }
+
+    Ok(block)
 }
 
 fn build_reaction_block(
@@ -1586,8 +1689,8 @@ fn build_reaction_block(
     let equations = lowered
         .into_iter()
         .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name, &locals),
-            rhs: namespace_expr(&eq.rhs, system_name, &locals),
+            lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
+            rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
         })
         .collect();
 
@@ -1630,8 +1733,13 @@ fn build_reaction_block(
 /// are therefore namespaced by [`namespace_join_names`], under the same
 /// declared-local gate Julia's `_namespace_join` uses, so a name that is a loop
 /// symbol or a document-scoped index set passes through untouched.
-fn namespace_expr(expr: &Expr, system_name: &str, locals: &HashSet<String>) -> Expr {
-    namespace_expr_scoped(expr, system_name, &HashSet::new(), &HashSet::new(), locals)
+fn namespace_expr(
+    expr: &Expr,
+    system_name: &str,
+    subsys: &HashSet<String>,
+    locals: &HashSet<String>,
+) -> Expr {
+    namespace_expr_scoped(expr, system_name, &HashSet::new(), subsys, locals)
 }
 
 /// Dot-prefix the plain-string names carried by a node's `join` clauses
@@ -1806,19 +1914,20 @@ fn namespace_expr_scoped(
 fn namespace_continuous_event(
     mut event: ContinuousEvent,
     system_name: &str,
+    subsys: &HashSet<String>,
     locals: &HashSet<String>,
 ) -> ContinuousEvent {
     event.conditions = event
         .conditions
         .into_iter()
-        .map(|c| namespace_expr(&c, system_name, locals))
+        .map(|c| namespace_expr(&c, system_name, subsys, locals))
         .collect();
     event.affects = event
         .affects
         .into_iter()
         .map(|mut a| {
             a.lhs = namespace_plain(&a.lhs, system_name);
-            a.rhs = namespace_expr(&a.rhs, system_name, locals);
+            a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
             a
         })
         .collect();
@@ -1827,7 +1936,7 @@ fn namespace_continuous_event(
             neg.into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_plain(&a.lhs, system_name);
-                    a.rhs = namespace_expr(&a.rhs, system_name, locals);
+                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
                     a
                 })
                 .collect(),
@@ -1839,12 +1948,13 @@ fn namespace_continuous_event(
 fn namespace_discrete_event(
     mut event: DiscreteEvent,
     system_name: &str,
+    subsys: &HashSet<String>,
     locals: &HashSet<String>,
 ) -> DiscreteEvent {
     use crate::types::DiscreteEventTrigger;
     event.trigger = match event.trigger {
         DiscreteEventTrigger::Condition { expression } => DiscreteEventTrigger::Condition {
-            expression: namespace_expr(&expression, system_name, locals),
+            expression: namespace_expr(&expression, system_name, subsys, locals),
         },
         other => other,
     };
@@ -1854,7 +1964,7 @@ fn namespace_discrete_event(
                 .into_iter()
                 .map(|mut a| {
                     a.lhs = namespace_plain(&a.lhs, system_name);
-                    a.rhs = namespace_expr(&a.rhs, system_name, locals);
+                    a.rhs = namespace_expr(&a.rhs, system_name, subsys, locals);
                     a
                 })
                 .collect(),
@@ -1962,10 +2072,11 @@ fn apply_coupling_entry(
     match entry {
         CouplingEntry::OperatorCompose {
             systems,
+            translate,
             description,
             ..
         } => {
-            apply_operator_compose(systems, per_system)?;
+            apply_operator_compose(systems, translate.as_ref(), per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -2065,61 +2176,239 @@ fn apply_coupling_entry(
     Ok(())
 }
 
-/// Apply an `operator_compose` rule: sum matching `D(x, t) = rhs_A + rhs_B`
-/// equations across the listed systems. Per spec §4.7.5 step 3.a + §4.7.1.
+/// The dependent variable an equation defines, for `operator_compose` matching
+/// (esm-libraries-spec §4.7.1 step 1).
+///
+/// `D(x, t)` yields `x`; a bare-variable LHS yields itself; the `index` /
+/// `aggregate` shells peel to the variable they write. An LHS that is a
+/// composite expression (an algebraic constraint, an `ic` seed) defines no
+/// single variable and yields `None`, so it never participates in a match and
+/// is preserved unchanged by step 5.
+///
+/// Delegates to the crate's canonical [`crate::classification::lhs_form`]
+/// rather than re-deriving the shapes, matching the oracle's
+/// `_lhs_dependent_var`.
+fn compose_dependent(lhs: &Expr) -> Option<String> {
+    match crate::classification::lhs_form(lhs) {
+        crate::classification::LhsForm::Derivative(name)
+        | crate::classification::LhsForm::Bare(name) => Some(name),
+        crate::classification::LhsForm::Expression => None,
+    }
+}
+
+/// Normalize an `operator_compose` `translate` map, **INVERTED** for matching
+/// (esm-libraries-spec §4.7.1 step 2, esm-spec §10.2).
+///
+/// The authored direction is normative and is NOT symmetric: for
+/// `"systems": [A, B]` every KEY names a variable of `A` and every VALUE names
+/// a variable of `B`. Step 3 walks *B's* equations, so the matching loop needs
+/// the map the other way round; this returns the inverse
+/// `{b_name: (a_name, factor)}`.
+///
+/// Indexing the authored (A-keyed) map by B's dependent variable is the bug
+/// this function exists to prevent — a correctly spelled `translate` map then
+/// matches nothing at all and the whole coupling entry is a silent no-op.
+///
+/// A value is either a plain string (`"B.O3"`) or an object carrying the target
+/// and an optional conversion factor (`{"var": "B.O3", "factor": 1e-9}`); the
+/// `to` / `target` spellings of that key are accepted alongside `var`, as in
+/// the oracle. Anything else is ignored.
+fn build_translate_map(translate: Option<&serde_json::Value>) -> HashMap<String, (String, f64)> {
+    let mut out: HashMap<String, (String, f64)> = HashMap::new();
+    let Some(obj) = translate.and_then(|v| v.as_object()) else {
+        return out;
+    };
+    for (a_name, value) in obj {
+        match value {
+            serde_json::Value::String(b_name) => {
+                out.insert(b_name.clone(), (a_name.clone(), 1.0));
+            }
+            serde_json::Value::Object(spec) => {
+                let b_name = ["var", "to", "target"]
+                    .iter()
+                    .find_map(|k| spec.get(*k).and_then(|v| v.as_str()));
+                let factor = spec.get("factor").and_then(|f| f.as_f64()).unwrap_or(1.0);
+                if let Some(b_name) = b_name {
+                    out.insert(b_name.to_string(), (a_name.clone(), factor));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Expand the `_var` placeholder (esm-spec §6.4) in B's equations against A's
+/// solved-for variables — esm-libraries-spec §4.7.1 step 3, "Placeholder
+/// expansion".
+///
+/// An operator model writes ONE equation over the sentinel `_var`
+/// (`D(_var, t) = -u·grad(_var)`); composing it with A means CLONING that
+/// equation once per variable A solves for, with `_var` substituted for that
+/// variable's namespaced name. `_var` is a GLOBAL sentinel and is never
+/// namespaced (see [`VAR_PLACEHOLDER`]), so the substitution is a plain
+/// single-name rewrite through the crate's canonical
+/// [`crate::substitute::substitute`] — which reaches the sidecar expression
+/// fields (`aggregate.expr`, `filter`, integral bounds) a hand-rolled `args`
+/// walk would miss.
+///
+/// Runs BEFORE matching, which is what makes an expanded equation a DIRECT
+/// match in step 3 and keeps a redundant `translate: {"A.x": "B._var"}` entry
+/// harmless (§10.2's redundancy invariant).
+fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [SystemBlock]) {
+    let a_states: Vec<String> = per_system[a_idx].state_vars.keys().cloned().collect();
+    if a_states.is_empty() {
+        return;
+    }
+    let b_equations = std::mem::take(&mut per_system[b_idx].equations);
+    let mut expanded: Vec<Equation> = Vec::with_capacity(b_equations.len());
+    for eq in b_equations {
+        if crate::expression::contains(&eq.lhs, VAR_PLACEHOLDER)
+            || crate::expression::contains(&eq.rhs, VAR_PLACEHOLDER)
+        {
+            for state in &a_states {
+                let subs: HashMap<String, Expr> =
+                    std::iter::once((VAR_PLACEHOLDER.to_string(), Expr::Variable(state.clone())))
+                        .collect();
+                expanded.push(Equation {
+                    lhs: crate::substitute::substitute(&eq.lhs, &subs),
+                    rhs: crate::substitute::substitute(&eq.rhs, &subs),
+                });
+            }
+        } else {
+            expanded.push(eq);
+        }
+    }
+    per_system[b_idx].equations = expanded;
+}
+
+/// Apply an `operator_compose` rule (esm-libraries-spec §4.7.1, all five
+/// steps): merge system B's equations into system A by matching dependent
+/// variables and summing right-hand sides.
+///
+/// For `"systems": [A, B]`, A is `systems[0]` and B is `systems[1]`. The five
+/// steps run in order:
+///
+/// 1. **Extract dependent variables** — [`compose_dependent`].
+/// 2. **Apply translations** — [`build_translate_map`] builds the INVERSE
+///    (B → A) map the matching loop needs.
+/// 3. **Match equations**, in the spec's precedence order: DIRECT first, then
+///    TRANSLATION, then the bare-name fallback. Placeholder expansion
+///    ([`expand_placeholder_equations`]) has already run, so an expanded
+///    equation carries A's own variable name and is a DIRECT match.
+///    Direct-first is load-bearing rather than cosmetic: consulting
+///    `translate` first would let an A-keyed map hit spuriously on that
+///    rewritten name and redirect the match to a target that does not exist,
+///    turning a working composition into an over-determination error (§10.2's
+///    redundancy invariant).
+/// 4. **Combine matched equations** — A keeps its LHS, and the RHS becomes
+///    `rhs_A + factor * rhs_B`. On a TRANSLATION match only, B's dependent
+///    variable is rewritten to A's target throughout `rhs_B` first: a
+///    `translate` pair names two spellings of the SAME quantity, and leaving
+///    `rhs_B` in B's spelling would strand that variable as an unknown nothing
+///    defines, because its own defining equation was just consumed. B's other
+///    variables — its parameters, its observeds — keep their names. On a
+///    direct or placeholder match the two names are already equal, so the
+///    rewrite is the identity.
+/// 5. **Preserve unmatched equations** — a B equation with no A counterpart
+///    stays in B's block, in place and unchanged.
+///
+/// This function previously merged only equations whose dependent variable was
+/// byte-identical across two blocks. Because flattening namespaces every
+/// variable (`A.O3` vs `B.O3`), that can essentially never happen, so it was a
+/// total no-op: neither placeholder expansion nor `translate` was implemented
+/// at all, and `translate` was destructured away unread.
 fn apply_operator_compose(
     systems: &[String],
+    translate: Option<&serde_json::Value>,
     per_system: &mut [SystemBlock],
 ) -> Result<(), FlattenError> {
     if systems.len() < 2 {
         return Ok(());
     }
-
-    // Gather the indices of the named systems.
-    let mut indices: Vec<usize> = Vec::new();
-    for wanted in systems {
-        if let Some(i) = per_system.iter().position(|b| b.name == *wanted) {
-            indices.push(i);
-        }
-    }
-    if indices.len() < 2 {
+    let Some(a_idx) = per_system.iter().position(|b| b.name == systems[0]) else {
+        return Ok(());
+    };
+    let Some(b_idx) = per_system.iter().position(|b| b.name == systems[1]) else {
+        return Ok(());
+    };
+    if a_idx == b_idx {
         return Ok(());
     }
 
-    // Build a map of dependent variable -> (block_idx, equation_idx) for all
-    // D(x, t) equations in the participating systems.
-    let mut targets: IndexMap<String, Vec<(usize, usize)>> = IndexMap::new();
-    for &i in &indices {
-        for (j, eq) in per_system[i].equations.iter().enumerate() {
-            if let Some(dep) = extract_ddt_dependent(&eq.lhs) {
-                targets.entry(dep).or_default().push((i, j));
+    // Step 3's placeholder expansion, run first so the expanded equations are
+    // ordinary direct matches below.
+    expand_placeholder_equations(a_idx, b_idx, per_system);
+
+    // Step 2: the INVERSE (B -> A) translation map.
+    let translate = build_translate_map(translate);
+
+    // Step 1: A's equations, indexed by dependent variable.
+    let mut a_index: IndexMap<String, usize> = IndexMap::new();
+    for (i, eq) in per_system[a_idx].equations.iter().enumerate() {
+        if let Some(dep) = compose_dependent(&eq.lhs) {
+            a_index.insert(dep, i);
+        }
+    }
+
+    let b_equations = std::mem::take(&mut per_system[b_idx].equations);
+    let mut surviving: Vec<Equation> = Vec::new();
+    for b_eq in b_equations {
+        let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
+            surviving.push(b_eq);
+            continue;
+        };
+
+        // Step 3, in precedence order: direct, then translation, then the
+        // bare-name fallback.
+        let mut target = b_dep.clone();
+        let mut factor = 1.0_f64;
+        if a_index.contains_key(&b_dep) {
+            // Direct match: `target` is already right.
+        } else if let Some((a_name, f)) = translate.get(&b_dep) {
+            target = a_name.clone();
+            factor = *f;
+        } else {
+            let short = b_dep.split_once('.').map(|(_, s)| s).unwrap_or(&b_dep);
+            let suffix = format!(".{short}");
+            if let Some(hit) = a_index.keys().find(|k| k.ends_with(&suffix)) {
+                target = hit.clone();
             }
         }
-    }
 
-    // For every dependent variable that appears in more than one participating
-    // system, merge the RHS terms into the first listed block's equation and
-    // mark the others for removal.
-    let mut to_remove: Vec<(usize, usize)> = Vec::new();
-    for (_, locations) in &targets {
-        if locations.len() < 2 {
+        // Step 5: no counterpart in A, so the equation stays in B untouched.
+        let Some(&i) = a_index.get(&target) else {
+            surviving.push(b_eq);
             continue;
-        }
-        let (keeper_block, keeper_eq) = locations[0];
-        let mut merged_rhs = per_system[keeper_block].equations[keeper_eq].rhs.clone();
-        for &(bi, ei) in &locations[1..] {
-            merged_rhs = sum_exprs(merged_rhs, per_system[bi].equations[ei].rhs.clone());
-            to_remove.push((bi, ei));
-        }
-        per_system[keeper_block].equations[keeper_eq].rhs = merged_rhs;
-    }
+        };
 
-    // Remove merged equations from owning blocks. Sort in reverse to preserve
-    // indices during removal.
-    to_remove.sort_unstable_by(|a, b| b.cmp(a));
-    for (bi, ei) in to_remove {
-        per_system[bi].equations.remove(ei);
+        // Step 4. B's dependent variable is rewritten to A's target throughout
+        // `rhs_B`. On a direct or placeholder match the two names are already
+        // equal, so this is the identity and no renaming happens; it bites on a
+        // TRANSLATION match (and on the bare-name fallback, which is a
+        // translation by another route), where the two names are two spellings
+        // of ONE quantity and B's own defining equation is being consumed right
+        // here — leaving `rhs_B` in B's spelling would strand that variable as
+        // an unknown nothing defines. ONLY the dependent variable moves; B's
+        // parameters and observeds keep their names.
+        let mut rhs_b = if target == b_dep {
+            b_eq.rhs
+        } else {
+            let subs: HashMap<String, Expr> =
+                std::iter::once((b_dep.clone(), Expr::Variable(target.clone()))).collect();
+            crate::substitute::substitute(&b_eq.rhs, &subs)
+        };
+        if factor != 1.0 {
+            rhs_b = Expr::operator(ExpressionNode {
+                op: "*".to_string(),
+                args: vec![Expr::Number(factor), rhs_b],
+                ..Default::default()
+            });
+        }
+        let rhs_a = std::mem::replace(&mut per_system[a_idx].equations[i].rhs, Expr::Integer(0));
+        per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
     }
+    per_system[b_idx].equations = surviving;
 
     Ok(())
 }
@@ -2198,14 +2487,20 @@ fn apply_couple(
 /// The target equation is found by its LHS DEPENDENT VARIABLE, read through the
 /// crate's canonical [`crate::classification::lhs_form`], so `D(x, t)`,
 /// `D(x[i], t)`, a bare `x`, and the `aggregate`-wrapped spellings all resolve
-/// to `x`. A `to` that names no equation's LHS is SKIPPED, not an error: a
-/// connector may legitimately target a parameter with no defining equation
-/// (`advanced_coupling`'s multiplicative edge targets
-/// `Surface.surface_resistance`, which has none), and the oracle skips it too.
+/// to `x`. For an `additive` or `replacement` transform a `to` that names no
+/// equation's LHS is SKIPPED, not an error — the oracle skips it too.
 ///
 /// `transform` selects how the term combines with the existing RHS: `additive`
 /// sums, `multiplicative` multiplies, `replacement` overwrites. An absent or
 /// unrecognised transform falls through to `additive`, mirroring the oracle.
+///
+/// `multiplicative` is the ONE transform with a precondition: esm-spec §10.3
+/// and esm-libraries-spec §4.7.2 define it against the target's EXISTING ODE
+/// right-hand side, so a `to` with no `D(to)` tendency raises
+/// [`FlattenError::CoupleMultiplicativeNoTendency`] rather than taking the
+/// skip. The check runs BEFORE the skip and is keyed on a TENDENCY
+/// specifically, not on "some equation defines `to`" — an observed or an
+/// algebraic unknown has a defining equation and still has nothing to multiply.
 fn inject_connector_term(
     eq_val: &serde_json::Value,
     systems: &[String],
@@ -2214,6 +2509,24 @@ fn inject_connector_term(
     let Some(target) = eq_val.get("to").and_then(|v| v.as_str()) else {
         return Ok(());
     };
+
+    let transform = eq_val.get("transform").and_then(|v| v.as_str());
+    if transform == Some("multiplicative") {
+        let has_tendency = per_system
+            .iter()
+            .flat_map(|b| b.equations.iter())
+            .any(|eq| {
+                matches!(
+                    crate::classification::lhs_form(&eq.lhs),
+                    crate::classification::LhsForm::Derivative(ref name) if name == target
+                )
+            });
+        if !has_tendency {
+            return Err(FlattenError::CoupleMultiplicativeNoTendency {
+                target: target.to_string(),
+            });
+        }
+    }
 
     // The term: the declared `expression`, or a bare reference to `from` when
     // the entry carries none.
@@ -2246,7 +2559,7 @@ fn inject_connector_term(
                 continue;
             }
             let existing = std::mem::replace(&mut eq.rhs, Expr::Integer(0));
-            eq.rhs = match eq_val.get("transform").and_then(|v| v.as_str()) {
+            eq.rhs = match transform {
                 Some("multiplicative") => Expr::operator(ExpressionNode {
                     op: "*".to_string(),
                     args: vec![existing, term],
@@ -3004,7 +3317,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let out = namespace_expr(&expr, "ExponentialDecay", &HashSet::new());
+        let out = namespace_expr(&expr, "ExponentialDecay", &HashSet::new(), &HashSet::new());
         match out {
             Expr::Operator(node) => {
                 assert_eq!(
@@ -3247,7 +3560,7 @@ mod tests {
             reduce: Some("+".to_string()),
             ..Default::default()
         });
-        let out = namespace_expr(&aggregate, "sys", &HashSet::new());
+        let out = namespace_expr(&aggregate, "sys", &HashSet::new(), &HashSet::new());
         match out {
             Expr::Operator(node) => {
                 assert_eq!(node.args[0], Expr::Variable("sys.w".to_string()));
