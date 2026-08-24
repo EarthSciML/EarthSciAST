@@ -14,7 +14,7 @@ package esm
 // variable of this system and is left alone.
 //
 // Go's flattened EQUATIONS render to strings, so the surface this reaches is
-// events — which is also why it is exercised through namespaceExpressionTree
+// events — which is also why it is exercised through namespaceExprTree
 // directly rather than through Flatten.
 
 import (
@@ -59,7 +59,7 @@ func TestNamespaceJoin_OverlapEnvelopeFactorsFollowTheRegistry(t *testing.T) {
 		}},
 	})
 
-	out := namespaceExpressionTree(expr, "ISRM", varNames)
+	out := namespaceExprTree(expr, "ISRM", nil, nil, varNames)
 	node, _ := asExprNode(out)
 
 	overlap := joinOf(t, out)[0].(map[string]any)["overlap"].(map[string]any)
@@ -73,7 +73,7 @@ func TestNamespaceJoin_OverlapEnvelopeFactorsFollowTheRegistry(t *testing.T) {
 	// `eps` is a scalar, not a name: this pass must not touch it. Pinned against
 	// the same walk with an empty declared-variable set, so the assertion is
 	// about THIS pass and not about how the node decoder spells a number.
-	untouched := joinOf(t, namespaceExpressionTree(expr, "ISRM", map[string]bool{}))
+	untouched := joinOf(t, namespaceExprTree(expr, "ISRM", nil, nil, map[string]bool{}))
 	inert := untouched[0].(map[string]any)["overlap"].(map[string]any)
 	if !reflect.DeepEqual(overlap["eps"], inert["eps"]) {
 		t.Errorf("eps = %#v, want it untouched (%#v)", overlap["eps"], inert["eps"])
@@ -99,7 +99,7 @@ func TestNamespaceJoin_LoopSymbolsAndIndexSetsAreLeftAlone(t *testing.T) {
 		}},
 	})
 
-	on := joinOf(t, namespaceExpressionTree(expr, "M", varNames))[0].(map[string]any)["on"]
+	on := joinOf(t, namespaceExprTree(expr, "M", nil, nil, varNames))[0].(map[string]any)["on"]
 	want := []any{
 		[]any{"M.src_bin", "M.tgt_bin"},
 		[]any{"src", "sourceType"},
@@ -114,7 +114,7 @@ func TestNamespaceJoin_LoopSymbolsAndIndexSetsAreLeftAlone(t *testing.T) {
 func TestNamespaceJoin_UnknownClauseShapeIsPreserved(t *testing.T) {
 	varNames := map[string]bool{"W": true, "X": true}
 	expr := aggregateWithJoin([]any{"not-a-clause"})
-	if got := joinOf(t, namespaceExpressionTree(expr, "M", varNames)); !reflect.DeepEqual(got, []any{"not-a-clause"}) {
+	if got := joinOf(t, namespaceExprTree(expr, "M", nil, nil, varNames)); !reflect.DeepEqual(got, []any{"not-a-clause"}) {
 		t.Errorf("unrecognised clause = %#v, want it preserved", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestNamespaceJoin_ShadowedLoopSymbolStaysALoopSymbol(t *testing.T) {
 		}},
 	})
 
-	on := joinOf(t, namespaceExpressionTree(expr, "M", varNames))[0].(map[string]any)["on"]
+	on := joinOf(t, namespaceExprTree(expr, "M", nil, nil, varNames))[0].(map[string]any)["on"]
 	want := []any{
 		[]any{"src", "sourceType"},
 		[]any{"M.src_bin", "M.tgt_bin"},
@@ -158,7 +158,7 @@ func TestNamespaceJoin_ShadowedOutputIndexStaysABinder(t *testing.T) {
 	expr["output_idx"] = []any{"o", 1}
 
 	varNames := map[string]bool{"o": true}
-	on := joinOf(t, namespaceExpressionTree(expr, "M", varNames))[0].(map[string]any)["on"]
+	on := joinOf(t, namespaceExprTree(expr, "M", nil, nil, varNames))[0].(map[string]any)["on"]
 	if got, want := on, []any{[]any{"o", "sourceType"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("on = %#v, want %#v (an output_idx binder must not be prefixed)", got, want)
 	}

@@ -1,5 +1,19 @@
+/**
+ * Unit tests for `flatten` on hand-built documents.
+ *
+ * The cross-binding contract lives in `flatten-conformance.test.ts`, which
+ * drives `tests/conformance/flatten/cases.json`. This file covers the small
+ * hand-authored cases that corpus does not: subsystem namespacing, the
+ * coupling-rule provenance strings, and the `variable_map` transforms.
+ *
+ * Since `esm 1.0.0` the flattened maps are ORDERED `name -> variable` records
+ * carrying full metadata (esm-libraries-spec §4.7.5 step 4), not bare name
+ * lists, and `equations` carry Expression TREES rather than pretty-printed
+ * strings — so these assertions read `Object.keys(...)` and compare ASTs.
+ */
 import { describe, it, expect } from 'vitest'
-import { flatten } from './flatten.js'
+import { flatten, FlattenError } from './flatten.js'
+import { toAscii } from './pretty-print.js'
 import type { EsmFile } from './types.js'
 
 describe('flatten', () => {
@@ -27,14 +41,21 @@ describe('flatten', () => {
     // `stateVariables` is DERIVED in 1.0.0, not read off a declared type: it
     // holds the unknowns the solver carries (ODE states plus algebraic
     // unknowns). `T` is an unknown under `D(·,t)`, so it is an ODE state.
-    expect(flat.stateVariables).toEqual(['Atmos.T'])
-    expect(flat.parameters).toEqual(['Atmos.k'])
+    expect(Object.keys(flat.stateVariables)).toEqual(['Atmos.T'])
+    expect(Object.keys(flat.parameters)).toEqual(['Atmos.k'])
     expect(flat.metadata.sourceSystems).toEqual(['Atmos'])
+    // Full metadata, not a bare name (step 4): the variable carries its derived
+    // role and its owning system, so a consumer can build a problem from the
+    // flattened form alone.
+    expect(flat.stateVariables['Atmos.T']).toMatchObject({
+      name: 'Atmos.T',
+      type: 'state',
+      sourceSystem: 'Atmos',
+    })
     expect(flat.equations).toHaveLength(1)
     expect(flat.equations[0]!.sourceSystem).toBe('Atmos')
-    expect(flat.equations[0]!.lhs).toContain('Atmos.T')
-    expect(flat.equations[0]!.rhs).toContain('Atmos.k')
-    expect(flat.equations[0]!.rhs).toContain('Atmos.T')
+    expect(toAscii(flat.equations[0]!.lhs)).toBe('D(Atmos.T)/Dt')
+    expect(toAscii(flat.equations[0]!.rhs)).toBe('Atmos.k * Atmos.T')
   })
 
   it('namespaces species and parameters from a reaction system', () => {
@@ -58,10 +79,16 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
-    expect(flat.stateVariables).toContain('Chem.O3')
-    expect(flat.parameters).toContain('Chem.k1')
+    expect(Object.keys(flat.stateVariables)).toContain('Chem.O3')
+    expect(Object.keys(flat.parameters)).toContain('Chem.k1')
+    // A species keeps the `species` role — a state that came from a reaction
+    // network — and its declared units survive flattening.
+    expect(flat.stateVariables['Chem.O3']).toMatchObject({ type: 'species', units: 'mol/L' })
     expect(flat.metadata.sourceSystems).toEqual(['Chem'])
-    expect(flat.equations.length).toBeGreaterThan(0)
+    // One species, one net-consuming reaction: exactly one derived ODE, with the
+    // `-1 * rate` form every binding renders (not a unary minus).
+    expect(flat.equations).toHaveLength(1)
+    expect(toAscii(flat.equations[0]!.rhs)).toBe('-1 * Chem.k1 * Chem.O3 * Chem.O3')
   })
 
   it('records coupling rules in metadata', () => {
@@ -69,8 +96,14 @@ describe('flatten', () => {
       esm: '1.0.0',
       metadata: { name: 'test' },
       models: {
-        A: { variables: { x: { type: 'unknown' } }, equations: [] },
-        B: { variables: { y: { type: 'parameter' } }, equations: [] },
+        A: {
+          variables: { x: { type: 'unknown' } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 1 }],
+        },
+        B: {
+          variables: { y: { type: 'parameter' } },
+          equations: [{ lhs: { op: 'D', args: ['z'], wrt: 't' }, rhs: 'y' }],
+        },
       },
       coupling: [
         {
@@ -83,9 +116,11 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
-    expect(flat.metadata.couplingRules).toHaveLength(1)
-    expect(flat.metadata.couplingRules[0]).toContain('variable_map')
-    expect(flat.variables['B.y']).toBe('A.x')
+    expect(flat.metadata.couplingRules).toEqual(['variable_map(A.x -> B.y, transform=identity)'])
+    // `identity` does NOT promote, so `B.y` stays a parameter — but the
+    // substitution still runs, so the equation set names the canonical source.
+    expect(Object.keys(flat.parameters)).toContain('B.y')
+    expect(toAscii(flat.equations[1]!.rhs)).toBe('A.x')
   })
 
   it('handles an expression (object) transform in variable_map', () => {
@@ -116,8 +151,17 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
-    expect(flat.metadata.couplingRules).toEqual(['variable_map(Src.F -> Sink.y, expression)'])
-    expect(flat.variables['Sink.y']).toBe('((2 * Src.F) + Sink.offset)')
+    expect(flat.metadata.couplingRules).toEqual([
+      'variable_map(Src.F -> Sink.y, transform=expression)',
+    ])
+    // An expression transform promotes like `param_to_var`: the target leaves
+    // `parameters` and becomes an OBSERVED variable whose defining equation is
+    // the transform VERBATIM (its references are already fully scoped).
+    expect(Object.keys(flat.parameters)).toEqual(['Sink.offset'])
+    expect(Object.keys(flat.observedVariables)).toEqual(['Sink.y'])
+    expect(flat.equations).toHaveLength(1)
+    expect(toAscii(flat.equations[0]!.lhs)).toBe('Sink.y')
+    expect(toAscii(flat.equations[0]!.rhs)).toBe('2 * Src.F + Sink.offset')
   })
 
   it('applies the factor scaling for additive/multiplicative/conversion_factor transforms', () => {
@@ -130,20 +174,28 @@ describe('flatten', () => {
         metadata: { name: 'test' },
         models: {
           A: { variables: { x: { type: 'unknown' } }, equations: [] },
-          B: { variables: { y: { type: 'parameter' } }, equations: [] },
+          B: {
+            variables: { y: { type: 'parameter' } },
+            equations: [{ lhs: { op: 'D', args: ['z'], wrt: 't' }, rhs: 'y' }],
+          },
         },
         coupling: [{ type: 'variable_map', from: 'A.x', to: 'B.y', transform, factor }],
       }) satisfies EsmFile
 
+    const substituted = (
+      transform: 'additive' | 'multiplicative' | 'conversion_factor',
+      factor?: number,
+    ) => toAscii(flatten(makeFile(transform, factor)).equations[0]!.rhs)
+
     // Factor applies uniformly across every scaling transform (mirrors Rust /
     // Python / Go: `factor * from`, additive and multiplicative alike).
-    expect(flatten(makeFile('multiplicative', 2.5)).variables['B.y']).toBe('2.5 * A.x')
-    expect(flatten(makeFile('additive', 3)).variables['B.y']).toBe('3 * A.x')
-    expect(flatten(makeFile('conversion_factor', 1000)).variables['B.y']).toBe('1000 * A.x')
+    expect(substituted('multiplicative', 2.5)).toBe('2.5 * A.x')
+    expect(substituted('additive', 3)).toBe('3 * A.x')
+    expect(substituted('conversion_factor', 1000)).toBe('1000 * A.x')
 
     // A factor of 1 (or absent) is a no-op identity map.
-    expect(flatten(makeFile('multiplicative', 1)).variables['B.y']).toBe('A.x')
-    expect(flatten(makeFile('additive')).variables['B.y']).toBe('A.x')
+    expect(substituted('multiplicative', 1)).toBe('A.x')
+    expect(substituted('additive')).toBe('A.x')
   })
 
   it('produces nested dot-namespacing for subsystems', () => {
@@ -165,19 +217,20 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
-    expect(flat.stateVariables).toContain('Outer.y')
-    expect(flat.stateVariables).toContain('Outer.Inner.x')
+    // Document order: the parent's own variables precede its subsystems'.
+    expect(Object.keys(flat.stateVariables)).toEqual(['Outer.y', 'Outer.Inner.x'])
   })
 
   it('derives the state / observed / brownian buckets from equations and updates', () => {
     // The three output buckets used to mirror three DECLARED variable types
     // (`state` / `observed` / `brownian`). 1.0.0 declares only `unknown` and
     // `parameter`, so each bucket is now derived:
-    //   - `S` is an unknown under `D(·,t)`             -> stateVariables
-    //   - `C` is an unknown with a BARE-string LHS      -> variables (observed),
-    //     mapped to its defining expression, namespaced
-    //   - `W` is a parameter with a `wiener` update     -> brownianVariables
-    //   - `k` is a plain parameter                      -> parameters
+    //   - `S` is an unknown under `D(·,t)`          -> stateVariables
+    //   - `C` is an unknown with a BARE-string LHS   -> observedVariables, its
+    //     definition carried as an ordinary equation
+    //   - `W` is a parameter with a `wiener` update  -> parameters AND
+    //     brownianParameters (§6.3.1's four sets PARTITION the parameters)
+    //   - `k` is a plain parameter                   -> parameters only
     const file = {
       esm: '1.0.0',
       metadata: { name: 'test' },
@@ -202,9 +255,22 @@ describe('flatten', () => {
     } satisfies EsmFile
 
     const flat = flatten(file)
-    expect(flat.stateVariables).toEqual(['Box.S'])
-    expect(flat.parameters).toEqual(['Box.k'])
-    expect(flat.brownianVariables).toEqual(['Box.W'])
-    expect(flat.variables).toEqual({ 'Box.C': '(Box.k * Box.S)' })
+    expect(Object.keys(flat.stateVariables)).toEqual(['Box.S'])
+    expect(Object.keys(flat.observedVariables)).toEqual(['Box.C'])
+    // Declaration order is W then k, and the wiener parameter is IN
+    // `parameters`. Excluding it (as this binding used to) would make the
+    // parameter vector's LENGTH depend on whether the model is stochastic.
+    expect(Object.keys(flat.parameters)).toEqual(['Box.W', 'Box.k'])
+    expect(Object.keys(flat.brownianParameters)).toEqual(['Box.W'])
+    expect(flat.systemKind).toBe('sde')
+    // The observed's DEFINING EXPRESSION is its equation, not a side table.
+    expect(toAscii(flat.equations[1]!.lhs)).toBe('Box.C')
+    expect(toAscii(flat.equations[1]!.rhs)).toBe('Box.k * Box.S')
+  })
+
+  it('refuses a document with no models and no reaction systems', () => {
+    const file = { esm: '1.0.0', metadata: { name: 'empty' } } satisfies EsmFile
+    expect(() => flatten(file)).toThrow(FlattenError)
+    expect(() => flatten(file)).toThrow(/no models or reaction systems/)
   })
 })

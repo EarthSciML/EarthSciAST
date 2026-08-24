@@ -23,6 +23,7 @@ import {
 } from './template-imports.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
+import { deepClone } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
@@ -486,6 +487,13 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // image and remains numerically bit-identical to pre-0.9.0 behavior. The
   // reference-preserving form is what `emitDocument` re-derives from source.
   const loweredTemplates = lowerExpressionTemplates(data as object)
+  // Capture the per-component `expression_templates` registries while the
+  // Option-B image still holds them: `expandDocument` below strips every block,
+  // and esm-libraries-spec §4.7.5 step 4 requires `flatten` to carry the MERGED
+  // registry as a first-class field of the flattened representation. Keyed
+  // `"models.<name>"` / `"reaction_systems.<name>"` (the Julia / Python
+  // `component_templates` key shape).
+  const componentTemplates = captureComponentTemplates(loweredTemplates)
   const typedData = expandDocument(loweredTemplates) as EsmFile
 
   // Step 4: Lower `enum` ops to `const` integer nodes against the
@@ -493,6 +501,29 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // codegen runner sees only `const` — `evaluateExpression()` rejects
   // any leftover `enum` op as an unlowered file.
   const loweredData = lowerEnums(typedData)
+
+  // Attach the captured Option-B registries (NON-SCHEMA, loader-populated —
+  // see `EsmFile.componentTemplates` in `types.ts`). Omitted entirely when the
+  // document declares no per-component block, which is the common case, so a
+  // normal load carries no extra key.
+  //
+  // NON-ENUMERABLE deliberately. The field is a loader sidecar, not a document
+  // field, and the conformance round-trip asserts
+  // `loadString(toJson(loadString(f)))` deep-equals `loadString(f)`. An
+  // enumerable sidecar breaks that identity for every template-bearing fixture:
+  // `toJson` cannot emit it (the schema has no such key), so the reloaded file
+  // has no per-component `expression_templates` left to recapture. Hiding it
+  // from enumeration keeps `JSON.stringify`, `Object.keys`, and structural
+  // equality seeing exactly the document — while `file.componentTemplates` still
+  // reads normally for `flatten`.
+  if (Object.keys(componentTemplates).length > 0) {
+    Object.defineProperty(loweredData, 'componentTemplates', {
+      value: componentTemplates,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    })
+  }
 
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal
@@ -508,6 +539,37 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   }
 
   return loweredData
+}
+
+/**
+ * The per-component `expression_templates` blocks of an Option-B loaded
+ * document, keyed `"<section>.<component>"` (`models.A`,
+ * `reaction_systems.rs1`).
+ *
+ * Snapshot taken on the tree BETWEEN `lowerExpressionTemplates` (which
+ * preserves the blocks) and `expandDocument` (which strips them). Deep copied,
+ * so a later in-place pass over the document cannot mutate the snapshot.
+ * Components declaring no block are omitted, so the common document yields
+ * `{}` and flatten's registry merge is a no-op.
+ *
+ * Mirrors the Python reference `parse._capture_component_templates`.
+ */
+function captureComponentTemplates(data: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return out
+  const root = data as Record<string, unknown>
+  for (const section of ['models', 'reaction_systems'] as const) {
+    const comps = root[section]
+    if (comps === null || typeof comps !== 'object' || Array.isArray(comps)) continue
+    for (const [cname, comp] of Object.entries(comps as Record<string, unknown>)) {
+      if (comp === null || typeof comp !== 'object' || Array.isArray(comp)) continue
+      const block = (comp as Record<string, unknown>).expression_templates
+      if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
+      if (Object.keys(block as Record<string, unknown>).length === 0) continue
+      out[`${section}.${cname}`] = deepClone(block)
+    }
+  }
+  return out
 }
 
 /**

@@ -790,6 +790,14 @@ def _serialize_domain(domain: Domain) -> dict[str, Any]:
             temporal_data["reference_time"] = domain.temporal.reference_time
         result["temporal"] = temporal_data
 
+    # Precision / array backend. Emitted after `temporal` to match the order the
+    # schema and the corpus documents declare them in, so a load/emit round trip
+    # is byte-stable rather than merely equal.
+    if domain.element_type is not None:
+        result["element_type"] = domain.element_type
+    if domain.array_type is not None:
+        result["array_type"] = domain.array_type
+
     # Initial conditions are no longer a domain-level concept (v0.8.0): they are
     # declared with `ic` op equations in the model (esm-spec §11.4).
 

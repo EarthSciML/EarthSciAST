@@ -927,9 +927,9 @@
       "system_kind": "pde",
       "independent_variables": [
         "t",
+        "lon",
         "lat",
-        "lev",
-        "lon"
+        "lev"
       ],
       "state_variables": [
         {
@@ -1111,7 +1111,7 @@
       "discrete_events": [],
       "domain": {
         "independent_variable": null,
-        "element_type": null,
+        "element_type": "Float64",
         "array_type": null
       },
       "metadata": {
@@ -1399,7 +1399,7 @@
       "discrete_events": [],
       "domain": {
         "independent_variable": "t",
-        "element_type": null,
+        "element_type": "Float64",
         "array_type": null
       },
       "metadata": {
@@ -1966,7 +1966,7 @@
       "discrete_events": [],
       "domain": {
         "independent_variable": "t",
-        "element_type": null,
+        "element_type": "Float64",
         "array_type": null
       },
       "metadata": {

@@ -90,6 +90,12 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 // LoadDocument parses an ESM document that is ALREADY decoded into a Go map
 // — the same document a `.esm` file holds, just already unmarshalled. It runs
 // the identical pipeline LoadString runs.
+//
+// One thing it CANNOT recover is declaration order: a map[string]any has none,
+// and re-encoding it writes the keys sorted. A document loaded this way
+// therefore flattens with sorted-name order wherever esm-libraries-spec §4.7.5
+// step 4 asks for document order. Use LoadPath / LoadString when the order
+// matters.
 func LoadDocument(document map[string]any, opts ...LoadOption) (*ESMFile, error) {
 	jsonBytes, err := json.Marshal(document)
 	if err != nil {
@@ -159,7 +165,14 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// their working copies cannot perturb what is re-emitted.
 	authoredTemplates, authoredMetaparams := authoredDeclarationBlocks(jsonStr)
 
-	expanded, err := resolveAndLowerJSON(jsonStr, o.basePath, o.metaparameters)
+	// The AUTHORED key order of every object in the document, recorded BEFORE
+	// the template pass re-marshals its map[string]any working copy (Go's
+	// encoder writes map keys sorted, so the expanded text no longer carries
+	// declaration order). esm-libraries-spec §4.7.5 step 4 makes document
+	// order normative for every map a FlattenedSystem carries.
+	authoredOrders := extractTemplateOrders(jsonStr)
+
+	expanded, componentTemplates, err := resolveAndLowerJSONCapturing(jsonStr, o.basePath, o.metaparameters)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +198,8 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams
+	esmFile.keyOrders = authoredOrders
+	esmFile.componentTemplates = componentTemplates
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
 	// Reject any v0.2.x file that still carries the removed top-level

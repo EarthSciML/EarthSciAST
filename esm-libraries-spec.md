@@ -643,6 +643,27 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
   unusable for building a right-hand side without filtering, and makes equation
   counts incomparable across bindings. A library classifies `ic` equations out at
   step 4 and reports them only in `field_ics`.
+- **`independent_variables` follows §4.7.6, and a PDE reaches step 4.** An
+  earlier draft of this table said `independent_variables` is "always `["t"]`"
+  because "an undiscretized spatial operator never reaches step 4". That was one
+  binding's stricter behaviour written up as though it were the format, and it
+  contradicts §4.7.6, which normatively tells libraries to scan equations for
+  `grad` / `div` / `laplacian` / `D` with `wrt != "t"` and add each referenced
+  spatial dimension. §4.7.6 governs: a model carrying undiscretized spatial
+  operators is a PDE, `system_kind` has a `"pde"` value for exactly that case,
+  and refusing to flatten it makes `PDESystem` construction unreachable.
+  Within the list, `t` comes first and the remaining spatial axes follow in
+  **document order** — the order the scan first encounters them, which is the
+  order the document names them in. `full_coupled` flattens to
+  `["t","lon","lat","lev"]`. The document-order rule applies here like anywhere
+  else; an earlier draft of this bullet carved out an exception for
+  lexicographic order, which was wrong on two counts. It was justified by three
+  bindings agreeing, but two of those had just been conformed to the third's
+  corpus, so their agreement was derivative rather than corroborating. And the
+  order is not cosmetic: for a PDE it is the order a downstream array layout
+  follows, so sorting it silently permutes the modeller's axes. A library that
+  accumulates the axes into an unordered set and sorts on the way out is
+  non-conforming even though its output looks stable.
 - **Ordering (normative).** "Post-step-2 scoping" above is an ordering requirement, not a
      parenthetical: the step-2 free-variable rename runs on each component's carried bodies
      **before** the union is taken, and the deep-equal dedup compares the post-scoping bodies.
@@ -668,7 +689,7 @@ TypeScript `camelCase`, others verbatim).
 
 | Field | Type | Contents |
 |---|---|---|
-| `independent_variables` | list of name | Always `["t"]` for a discretized system. An undiscretized spatial operator never reaches step 4. |
+| `independent_variables` | list of name | Computed by the §4.7.6 algorithm: `["t"]` for a 0D system, `["t", <spatial axes>]` for a PDE. This is what selects `ODESystem` vs `PDESystem` downstream. NOT always `["t"]`. |
 | `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including every reaction-system species, which gets a derived `D` equation at step 1), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. |
 | `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus any promoted to variables by `variable_map`. |
 | `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation, bare-LHS or indexed-LHS (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; an arrayed observed materializes into a buffer and IS. |
