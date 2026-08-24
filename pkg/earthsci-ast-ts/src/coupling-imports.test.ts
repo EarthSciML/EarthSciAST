@@ -146,10 +146,15 @@ describe('flatten equivalence (esm-spec §10.10.3)', () => {
       ]),
     )
     expect(imported).toEqual(inline)
-    expect(imported.variables).toEqual({
-      'RothermelFireSpread.sigma': 'FuelModelLookup.sigma',
-      'RothermelFireSpread.w0': 'FuelModelLookup.w_0',
-    })
+    // Sanity anchor: both expanded `param_to_var` edges landed. Since 1.0.0 a
+    // promotion is visible in the canonical fields rather than in a side table —
+    // the target leaves `parameters`, and the coupling rule records the edge.
+    expect(Object.keys(imported.parameters)).not.toContain('RothermelFireSpread.sigma')
+    expect(Object.keys(imported.parameters)).not.toContain('RothermelFireSpread.w0')
+    expect(imported.metadata.couplingRules).toEqual([
+      'variable_map(FuelModelLookup.sigma -> RothermelFireSpread.sigma, transform=param_to_var)',
+      'variable_map(FuelModelLookup.w_0 -> RothermelFireSpread.w0, transform=param_to_var)',
+    ])
   })
 })
 

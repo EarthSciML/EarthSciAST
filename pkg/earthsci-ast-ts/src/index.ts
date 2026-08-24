@@ -255,13 +255,29 @@ export { migrate, canMigrate, getSupportedMigrationTargets, MigrationError } fro
 // Interactive editor components and web components live in the earthsci-ast-editor
 // package.
 
-// Coupled system flattening
-export { flatten } from './flatten.js'
+// Coupled system flattening (esm-libraries-spec §4.7.5)
+export {
+  flatten,
+  // The flatten error family, spelled as every other binding spells it
+  // (§4.7.6's taxonomy) so a caller catching by name behaves uniformly.
+  FlattenError,
+  ConflictingDerivativeError,
+  DomainUnitMismatchError,
+  DimensionPromotionError,
+} from './flatten.js'
 export type {
   FlattenedEquation,
   FlattenMetadata,
   FlattenedSystem,
   FlattenOptions,
+  // The canonical step-4 payload types: an ordered `name -> variable` map
+  // carrying full per-variable metadata, a provider-served loaded field, and a
+  // deferred `ic` (esm-spec §11.4.1).
+  FlattenedVariable,
+  FlattenedVariableRole,
+  FlattenedVariableMap,
+  FieldInitialCondition,
+  LoaderField,
 } from './flatten.js'
 
 // Coupling-library files and coupling_import role binding (esm-spec §10.9–§10.11)

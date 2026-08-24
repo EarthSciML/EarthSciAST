@@ -49,11 +49,18 @@ describe('Brownian (SDE) support', () => {
     expect(parameterClass(model.variables.theta)).toBe('constant')
   })
 
-  it('flatten surfaces brownian parameters in a dedicated collection', () => {
+  it('flatten surfaces brownian parameters as a SUBSET of the parameters', () => {
     const fixture = readFixture('fixtures', 'sde', 'correlated_noise.esm')
     const parsed = loadString(fixture)
     const flat = flatten(parsed)
-    expect(flat.brownianVariables.sort()).toEqual(['TwoBody.B'])
+    // esm-spec §6.3.1: the four parameter sets PARTITION the parameters, so the
+    // wiener entry is in BOTH maps. `brownianParameters` was `brownianVariables`
+    // before 1.0.0, and it EXCLUDED the entry from `parameters` — which made the
+    // parameter vector's length depend on whether the model was stochastic.
+    expect(Object.keys(flat.brownianParameters)).toEqual(['TwoBody.B'])
+    expect(Object.keys(flat.parameters)).toContain('TwoBody.B')
+    // Carrying the bucket is exactly what lets the flattened form report "sde".
+    expect(flat.systemKind).toBe('sde')
   })
 
   it('schema rejects a wiener update on an UNKNOWN', () => {

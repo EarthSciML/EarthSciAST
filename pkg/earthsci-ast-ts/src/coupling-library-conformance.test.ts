@@ -72,8 +72,10 @@ describe('coupling-library conformance (esm-spec §10.9–§10.11)', () => {
     const imported = flatten(loadPath(cl('assembly_import.esm')), { basePath: dir })
     const inline = flatten(loadPath(cl('assembly_inline.esm')))
     expect(imported).toEqual(inline)
-    // Sanity anchor: the five expanded variable maps landed.
-    expect(imported.variables['RothermelFireSpread.w0']).toBe('FuelModelLookup.w_0')
+    // Sanity anchor: the five expanded variable maps landed. A `param_to_var`
+    // PROMOTES its target since 1.0.0 — the parameter is removed rather than
+    // recorded in a side table — so the anchor is its absence.
+    expect(Object.keys(imported.parameters)).not.toContain('RothermelFireSpread.w0')
     expect(imported.metadata.couplingRules).toHaveLength(5)
   })
 
