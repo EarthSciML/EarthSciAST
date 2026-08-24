@@ -263,10 +263,21 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # left to synthesize from a variable-level `expression`, which no longer
     # exists (esm-spec §6.3).
 
+    # An affect LHS is a NAME, not an expression, so it does not travel through
+    # `_ns` and needs the placeholder carve-out spelled out here. esm-spec §6.4:
+    # `_var` is not a variable of this component (or of any component) — it
+    # stands for whichever state `operator_compose` expands it to — so it must
+    # survive namespacing untouched, exactly as `namespace_expr` already leaves
+    # it alone inside the CONDITION (it is in no component's `local_names`).
+    # Prefixing only the affect half produced `Transport._var = 1e-3` beside a
+    # condition still reading `_var`: one placeholder spelled two ways in one
+    # event, which is the partial-rename fingerprint this fixture family was
+    # cleaned up to remove.
     for ev in model.continuous_events
         new_conds = ASTExpr[_ns(c) for c in ev.conditions]
         new_affects = AffectEquation[
-            AffectEquation(startswith(a.lhs, prefix * ".") || occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
+            AffectEquation(is_placeholder(a.lhs) || startswith(a.lhs, prefix * ".") ||
+                           occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
                            _ns(a.rhs))
             for a in ev.affects
         ]
@@ -278,7 +289,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     for ev in model.discrete_events
         new_affects = AffectEquation[
             AffectEquation(
-                occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
+                is_placeholder(a.lhs) || occursin('.', a.lhs) ? a.lhs :
+                    "$(prefix).$(a.lhs)",
                 _ns(a.rhs))
             for a in ev.affects
         ]

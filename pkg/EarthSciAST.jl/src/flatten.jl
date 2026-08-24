@@ -729,6 +729,12 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     params = OrderedDict{String, ModelVariable}()
     observeds = OrderedDict{String, ModelVariable}()
     equations = Equation[]
+    # Parallel to `equations`: which component AUTHORED each one. §4.7.1 step 4
+    # sums `rhs_A + factor * rhs_B`, so the merge has to tell A's equations from
+    # B's, and after namespacing that is no longer readable off the equation —
+    # an operator component may write `D(Chemistry.O3, t) = …` itself. See
+    # `_attribute_equations!`.
+    eq_owners = String[]
     continuous_events = ContinuousEvent[]
     discrete_events = DiscreteEvent[]
     # esm-spec v0.8.0: index sets are a single document-scoped registry, seeded
@@ -761,6 +767,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                             continuous_events, discrete_events,
                             model, name;
                             tpl_rename=get(template_rename, name, nothing))
+            _attribute_equations!(eq_owners, equations, name)
             _collect_loader_fields!(loader_fields, model, name, file.data_sources)
         end
     end
@@ -776,6 +783,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
             _collect_reaction_system!(states, params, equations,
                                       rsys, name; templates=rs_templates)
+            _attribute_equations!(eq_owners, equations, name)
         end
     end
 
@@ -792,23 +800,60 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # loudly against the merged registry below.
     map_rewritten_names = Set{String}()
 
+    # §4.7 "Resolution order" (normative): coupling entries are applied BY KIND
+    # — every `operator_compose` (§4.7.1), then every `couple` (§4.7.2), then
+    # every `variable_map` (§4.7.3) — with the array's order preserved WITHIN
+    # each kind. `callback` / `operator_apply` / `event` are metadata only and
+    # apply nothing.
+    #
+    # The section's claim that the array order "does not affect the final result"
+    # is true only BECAUSE of this bucketing. A `couple` MULTIPLICATIVE connector
+    # and an `operator_compose` on the same variable do not commute: declaration
+    # order gives `(rhs + t) * m` or `(rhs * m) + t` depending on which the author
+    # happened to type first, so applying in declaration order would make the
+    # flattened system depend on typing order. Bucketing fixes one answer.
+    # Running `variable_map` LAST is load-bearing for a second reason: its
+    # substitution must not rename a dependent variable out from under a merge
+    # that has not run yet.
+    #
+    # METADATA REPORTS DECLARATION ORDER. Application order and reporting order
+    # are separate: the first pass below records `coupling_rules_applied` and the
+    # metadata-only kinds in the order the document declares them, and only then
+    # do the three kind passes do the work.
+    #
+    # (Julia used to walk the array once, applying each entry as it came. That is
+    # what the pre-amendment §4.7 asked for — "libraries should process coupling
+    # entries in array order" — and it made `tests/coupling/advanced_coupling.esm`
+    # sum `chemistry + deposition + advection` where every other binding, and the
+    # corpus, has `chemistry + advection + deposition`.)
     for entry in file.coupling
         push!(coupling_rules_applied, describe_coupling_entry(entry))
-        if entry isa CouplingOperatorCompose
-            _apply_operator_compose!(equations, entry)
-        elseif entry isa CouplingCouple
-            _apply_couple!(equations, entry, opaque_refs)
-        elseif entry isa CouplingVariableMap
-            _apply_variable_map!(equations, params, entry;
-                                 observeds=observeds)
-            entry.transform isa ASTExpr || push!(map_rewritten_names, entry.to)
-        elseif entry isa CouplingOperatorApply
+        if entry isa CouplingOperatorApply
             push!(opaque_refs, "operator_apply:$(entry.operator)")
         elseif entry isa CouplingCallback
             push!(opaque_refs, "callback:$(entry.callback_id)")
         elseif entry isa CouplingEvent
             push!(opaque_refs, "event:$(entry.event_type)")
         end
+    end
+
+    for entry in file.coupling
+        entry isa CouplingOperatorCompose || continue
+        # Equations a previous coupling rule introduced belong to no component;
+        # `_attribute_equations!` marks them so before the merge reads the vector.
+        _attribute_equations!(eq_owners, equations, "")
+        _apply_operator_compose!(equations, entry, states, eq_owners)
+    end
+
+    for entry in file.coupling
+        entry isa CouplingCouple || continue
+        _apply_couple!(equations, entry, opaque_refs)
+    end
+
+    for entry in file.coupling
+        entry isa CouplingVariableMap || continue
+        _apply_variable_map!(equations, params, entry; observeds=observeds)
+        entry.transform isa ASTExpr || push!(map_rewritten_names, entry.to)
     end
 
     # (`template_registry` was computed before collection — see above — so its

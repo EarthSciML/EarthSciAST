@@ -103,15 +103,40 @@ which is why it hid. Julia's document order was the correct one; the ORACLE was
 fixed, along with TypeScript, Go and Rust, all four of which accumulated into an
 unordered set and sorted on the way out. The corpus now records
 `["t","lon","lat","lev"]` and this field is compared normally.)
-* `equation_count` / `algebraic_variables` on `full_coupled` — the fixture's
-  reaction system declares species `OH` that no reaction touches. §4.7.5 step 1
-  says the lowering "still emits `D(species, t) = Σ stoich·rate`", and for `OH`
-  that sum is empty, so Julia emits `D(OH,t) = 0` — an inert species is constant.
-  The oracle emits no equation at all, which leaves `OH` an unknown that nothing
-  names on any LHS, i.e. an ALGEBRAIC unknown with no constraint: a structurally
-  singular DAE. Julia's answer is pinned locally below.
-* `continuous_events` on `full_coupled` — the event's affect LHS is the `_var`
-  placeholder. Julia namespaces it to `Transport._var`, the oracle leaves it bare.
+
+(RESOLVED 2026-08-24: `equation_count` and `algebraic_variables` on
+`full_coupled` used to diverge because the fixture's inert species `OH` had a
+reaction tendency in Julia (`D(OH,t) = 0`, the empty stoichiometric sum) and NO
+equation at all in the oracle — an unknown nothing names on any LHS, i.e. a
+structurally singular DAE. The fixture fix gives `OH` a transport tendency from
+`operator_compose`: the `_var` placeholder ranges over A's state variables and
+`OH` is one, so BOTH bindings now emit an `OH` equation and both report 4
+equations and no algebraic unknowns. Compared normally now.)
+
+(RESOLVED 2026-08-24: `continuous_events` on `full_coupled`. The event's affect
+LHS is the `_var` placeholder, and Julia used to namespace it to
+`Transport._var` while leaving the `_var` in the same event's CONDITION bare —
+one placeholder spelled two ways in one event. `namespace_expr` never touched
+the condition because `_var` is in no component's `local_names`; the affect LHS
+is a plain NAME rather than an expression, so it took a different path with no
+placeholder carve-out. `_collect_model!` now applies the §6.4 rule on both
+halves and the field is compared normally.)
+* `equations` on `full_coupled` — what survives of the `OH` divergence above is
+  the equation's POSITION, and it follows from the two bindings' different
+  reaction lowerings rather than from anything about coupling. Julia emits
+  `D(OH,t) = 0`, so the transport terms MERGE ONTO that equation and it keeps
+  its position among the reaction system's four (§4.7.5 step 4: a merged entry
+  keeps the position of its first occurrence) — and the merged RHS still leads
+  with the `0 +` term. The oracle has no `OH` reaction equation to merge into,
+  so its `OH` equation is Transport's UNMATCHED placeholder clone and sits in
+  `models` order, ahead of the reaction system: `[OH, O3, NO, NO2]` against
+  Julia's `[O3, NO, NO2, OH]`. Same four equations, same terms. Pinned locally
+  below.
+* `equations` on `minimal_chemistry` / `metadata_inheritance_coupled` — the
+  reaction-lowering coefficient rendering below (`-1 * rate` vs `-rate`), and
+  nothing else; the composed advection terms agree exactly. These two are the
+  new `operator_compose` tier, so the composition they exist to pin is asserted
+  locally below rather than left to the skipped comparison.
 * `equations` on `complete_coupling_types` — `EmissionSources` writes
   `D(NO,t) = …` for an `NO` it does not declare and no coupling binds. Julia's
   namespacing only prefixes a component's OWN locals, so the dangling reference
@@ -137,28 +162,70 @@ unordered set and sorted on the way out. The corpus now records
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
   wrong — index sets are a document-scoped registry with plain names, and a loop
   variable is body-local, not a component variable; (ii) the oracle prints a range
-  as its extent (`1:4`) where Julia prints the index-set name (`lon`); (iii)
-  `operator_compose` sums the matched RHSs in the opposite order.
-* the whole `advanced_coupling` case — its `couple` connector applies a
-  `multiplicative` transform to `Surface.surface_resistance`, a PARAMETER with no
-  tendency. esm-spec §10.3 defines `multiplicative` as "multiply existing tendency
-  by expression", so Julia raises a named diagnostic. The oracle silently drops
-  the edge (its recorded flattening shows no trace of it, nor of the case's
-  `operator_compose` `translate`), which is the one outcome a coupling
-  mis-specification must not have. The refusal is asserted below instead.
+  as its extent (`1:4`) where Julia prints the index-set name (`lon`); (iii) the
+  reaction-lowering coefficient rendering below. A fourth used to sit here —
+  `operator_compose` summing the matched RHSs in the opposite order — and is
+  RESOLVED (2026-08-24): `Advection` writes `D(Chemistry.O3, t) = …` itself, so
+  after namespacing its equations are indistinguishable from the reaction
+  system's, and the merge was reading the A/B roles off the dependent variable's
+  prefix and getting them backwards. Provenance is now recorded at collection
+  (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
+(RESOLVED 2026-08-24: `equations` on `advanced_coupling`, a summand-order
+divergence. The document declares a `couple` (an additive deposition term onto
+`Chemistry.O3`), then a `variable_map`, then an `operator_compose` (advection).
+Julia applied entries in DECLARATION order and produced
+`chemistry + deposition + advection`; the corpus and all four other bindings had
+`chemistry + advection + deposition`. §4.7 "Resolution order" now settles it
+NORMATIVELY and against Julia's reading: entries are applied BY KIND —
+`operator_compose`, then `couple`, then `variable_map` — with array order kept
+within a kind. The rule is what MAKES the section's commutativity claim true: a
+`couple` multiplicative connector and an `operator_compose` on one variable give
+`(rhs + t) * m` or `(rhs * m) + t` depending on which runs first, so applying in
+declaration order would make the flattened system depend on the order the author
+typed the entries in. Metadata still reports declaration order. The case now
+matches the corpus in full and every field is compared; the rule itself — which
+the corpus cannot express, since it records one document in one order — is pinned
+locally below.)
+
+* `discrete_events` on `bare_reference_resolution` — the fixture declares
+  `daily_reset` on the SUBSYSTEM `SimpleChemistry.Photochemistry`. §4.7.5 step 4
+  collects "all events from all component systems", and a subsystem is a
+  component system, so Julia emits it with its references namespaced to the
+  subsystem path. The oracle's `_namespace_events` walks only the loader's
+  hoisted top-level `events` list, which model-level events reach and
+  SUBSYSTEM-level ones do not, so the corpus records `[]`. Julia's answer is
+  pinned locally below. (`full_coupled`'s model-level `concentration_limit` IS in
+  the corpus, which is what localizes this to the subsystem level.)
+
+(RESOLVED 2026-08-24: the whole `advanced_coupling` case, which Julia used to
+REFUSE. Its `couple` connector applied a `multiplicative` transform to
+`Surface.surface_resistance`, a PARAMETER with no tendency; esm-spec §10.3
+defines `multiplicative` against an existing ODE RHS, so Julia raised while the
+oracle silently dropped the edge. Julia was right and the ruling is now
+normative — `couple_multiplicative_no_tendency`, esm-libraries-spec §4.7.2 — and
+the FIXTURE was migrated to the §10.4 spelling the ruling points at: a
+`variable_map` whose Expression transform is `<parameter default> * <factor>`,
+promoting the parameter to a derived variable. The document flattens cleanly in
+both bindings now and every field is compared. The RULING itself no longer has a
+corpus case, so it is pinned locally below on a document built here — losing the
+refusal must not lose the diagnostic.)
 """
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
-    "full_coupled" => ["equation_count", "equations",
-                       "algebraic_variables", "continuous_events"],
+    "full_coupled" => ["equations"],
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["state_variables", "observed_variables", "equations"],
     "expression_templates_arrhenius" => ["equations"],
     "autocatalytic_reaction" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
+    "minimal_chemistry" => ["equations"],
+    "metadata_inheritance_coupled" => ["equations"],
+    "bare_reference_resolution" => ["discrete_events"],
 )
 
-"""Cases the oracle records but Julia refuses; see `_FC_DIVERGENCES`."""
-const _FC_REFUSED_CASES = Set{String}(["advanced_coupling"])
+# There is no `_FC_REFUSED_CASES` any more. `advanced_coupling` was its only
+# member and the fixture fix made the document flattenable (see above), so every
+# corpus case is now compared field by field. A case the oracle itself refuses
+# belongs in the corpus's own `refusals` array, which the last testset drives.
 
 _fc_skips(id) = get(_FC_DIVERGENCES, id, String[])
 _fc_compare(id, key) = !(key in _fc_skips(id))
@@ -324,14 +391,6 @@ end
         @test isfile(path)
         isfile(path) || continue
 
-        if id in _FC_REFUSED_CASES
-            # Julia refuses this document; see `_FC_DIVERGENCES`. Assert the
-            # refusal rather than the (unreachable) field set, so the divergence
-            # is pinned and a silent acceptance would fail here.
-            @test_throws ArgumentError flatten(load_path(path))
-            continue
-        end
-
         exp = _fc_plain(case)
         act = _fc_record(flatten(load_path(path)))
         lifted = act["_lifted"]
@@ -475,17 +534,259 @@ end
         @test EarthSciAST.flattened_to_esm(flat)["domain"]["element_type"] == "Float32"
     end
 
-    @testset "inert reaction species keeps its zero tendency" begin
+    @testset "inert reaction species: zero tendency, then transported" begin
         # `AtmosphericChemistry.OH` is declared as a species and touched by no
         # reaction. §4.7.5 step 1's lowering emits `D(species,t) = Σ stoich·rate`
         # for every species; the empty sum is 0. Dropping the equation instead
         # (what the oracle does) makes `OH` an unknown no LHS names — an
         # unconstrained algebraic unknown, i.e. a structurally singular DAE.
+        #
+        # `OH` is a STATE, so §4.7.1 step 3's placeholder expansion also gives it
+        # a transport term, and the merge folds that onto the zero tendency. The
+        # `0 +` is therefore the visible trace of the two lowerings differing:
+        # the oracle's `OH` equation is transport ALONE and lands in Transport's
+        # document position, Julia's is `0 + transport` in the reaction system's.
+        # Same four equations either way, which is why `equation_count` and
+        # `algebraic_variables` are ordinary compared fields again.
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "full_coupled.esm")))
         @test haskey(flat.state_variables, "AtmosphericChemistry.OH")
         @test isempty(flat.algebraic_variables)
-        @test any(to_ascii(eq) == "D(AtmosphericChemistry.OH)/Dt = 0"
+        eqs = String[to_ascii(eq) for eq in flat.equations]
+        @test length(eqs) == 4
+        # Position: OH LAST (merged onto the reaction system's fourth equation),
+        # where the corpus records it first. This is the whole of what remains
+        # of the `equations` divergence on this case.
+        @test String[String(split(e, " = ")[1]) for e in eqs] ==
+              ["D(AtmosphericChemistry.O3)/Dt", "D(AtmosphericChemistry.NO)/Dt",
+               "D(AtmosphericChemistry.NO2)/Dt", "D(AtmosphericChemistry.OH)/Dt"]
+        @test eqs[4] == "D(AtmosphericChemistry.OH)/Dt = 0 + " *
+              "(-Transport.u) * grad(AtmosphericChemistry.OH) + " *
+              "(-Transport.v) * grad(AtmosphericChemistry.OH) + " *
+              "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
+              "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
+              "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
+    end
+
+    @testset "operator_compose tier: the composed equations, in full" begin
+        # `equations` is skipped for these two cases over the reaction-lowering
+        # coefficient rendering alone (`-1 * rate` vs `-rate`). They are the new
+        # `operator_compose` tier, so the composition itself — a `_var` template
+        # cloned once per state of A and summed onto A's own tendency — is
+        # pinned here in full rather than left uncompared.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
+                                          "minimal_chemistry.esm")))
+        chem = "-1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * " *
+               "SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2"
+        adv(v) = " + (-Advection.u_wind) * grad(SimpleOzone.$(v))" *
+                 " + (-Advection.v_wind) * grad(SimpleOzone.$(v))"
+        @test String[to_ascii(eq) for eq in flat.equations] == [
+            "D(SimpleOzone.O3)/Dt = " * chem * adv("O3"),
+            "D(SimpleOzone.NO)/Dt = " * chem * adv("NO"),
+            "D(SimpleOzone.NO2)/Dt = 1.8e-12 * exp(-1370 / SimpleOzone.T) * " *
+                "SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 - " *
+                "SimpleOzone.jNO2 * SimpleOzone.NO2" * adv("NO2"),
+        ]
+
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
+                                          "metadata_inheritance_coupled.esm")))
+        chem2 = "-1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * " *
+                "AtmosphericChemistry.NO * AtmosphericChemistry.O3 + " *
+                "AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2"
+        adv2(v) = " + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.$(v))" *
+                  " + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.$(v))"
+        @test String[to_ascii(eq) for eq in flat.equations] == [
+            "D(AtmosphericChemistry.O3)/Dt = " * chem2 * adv2("O3"),
+            "D(AtmosphericChemistry.NO)/Dt = " * chem2 * adv2("NO"),
+            "D(AtmosphericChemistry.NO2)/Dt = 1.8e-12 * " *
+                "exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * " *
+                "AtmosphericChemistry.O3 - AtmosphericChemistry.jNO2 * " *
+                "AtmosphericChemistry.NO2" * adv2("NO2"),
+        ]
+    end
+
+    @testset "operator_compose: a translation match rewrites B's dependent var" begin
+        # esm-libraries-spec §4.7.1 step 4, amended 2026-08-24. Nothing in the
+        # corpus reaches this: every `translate` map in the shared fixture tree
+        # values `"B._var"`, which §10.2 makes REDUNDANT (the case below the
+        # next one), so the corpus only ever exercises direct and placeholder
+        # matches — for which the rewrite is the identity.
+        #
+        # `translate: {"A.x": "T.z"}` names two spellings of ONE quantity. The
+        # merge consumes `D(T.z)`'s equation, so leaving `T.z` in the summed RHS
+        # strands it as an unknown nothing defines. Only the DEPENDENT variable
+        # is rewritten: `T.w` is a parameter of B and keeps its name.
+        doc = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "TranslateMatch",
+                      "description": "operator_compose across differently-named states",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "A": {"variables": {"x": {"type": "unknown", "units": "mol/mol", "default": 1.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                                "rhs": {"op": "-", "args": ["x"]}}]},
+           "T": {"variables": {"z": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                               "w": {"type": "parameter", "units": "1/s", "default": 2.0}},
+                 "equations": [{"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+                                "rhs": {"op": "*", "args": ["w", "z"]}}]}},
+         "coupling": [{"type": "operator_compose", "systems": ["A", "T"],
+                       "translate": {"A.x": "T.z"}}]}
+        """
+        flat = flatten(load_string(doc))
+        @test String[to_ascii(eq) for eq in flat.equations] ==
+              ["D(A.x)/Dt = -A.x + T.w * A.x"]
+        # The rewrite is the point: `T.z` must not survive in the merged RHS.
+        @test !occursin("T.z", to_ascii(flat.equations[1]))
+    end
+
+    @testset "operator_compose: a `_var` translate value stays harmless" begin
+        # esm-spec §10.2's redundancy invariant, and the reason a DIRECT match
+        # is tried before a translation match. `tests/scoping/bare_reference_
+        # resolution.esm` maps all three chemistry species to `Transport._var`,
+        # which asks for exactly what placeholder expansion already does.
+        # Consulting the map on the POST-expansion dependent variable made all
+        # three collapse onto one equation and left `NO`/`NO2` as unconstrained
+        # algebraic unknowns; the corpus records four separate equations.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "scoping",
+                                          "bare_reference_resolution.esm")))
+        @test length(flat.equations) == 4
+        @test isempty(flat.algebraic_variables)
+        @test String[String(split(to_ascii(eq), " = ")[1]) for eq in flat.equations] ==
+              ["D(SimpleChemistry.O3)/Dt", "D(SimpleChemistry.NO)/Dt",
+               "D(SimpleChemistry.NO2)/Dt",
+               "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt"]
+    end
+
+    @testset "coupling entries apply BY KIND, not in declaration order" begin
+        # §4.7 "Resolution order". The corpus cannot pin this: it records one
+        # document in one declaration order, so a binding that applied entries as
+        # they came would still match it whenever the author happened to type
+        # them in kind order. What the rule actually claims is that declaration
+        # order is IRRELEVANT — and that claim is only true BECAUSE of the
+        # bucketing.
+        #
+        # The two documents below are the same three edges in two array orders,
+        # over a state carrying BOTH an `operator_compose` term and a `couple`
+        # MULTIPLICATIVE connector — the pair that does not commute. Applying in
+        # declaration order gives `(rhs + advection) * scale` for one spelling and
+        # `(rhs * scale) + advection` for the other; under the rule both must
+        # flatten identically.
+        doc(order) = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "ResolutionOrder",
+                      "description": "same edges, two declaration orders",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "Chem": {"variables": {"O3": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                                  "loss": {"type": "parameter", "units": "1/s", "default": 0.5}},
+                    "equations": [{"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["loss"]}, "O3"]}}]},
+           "Scale": {"variables": {"factor": {"type": "parameter", "units": "1/s", "default": 2.0}},
+                     "equations": []},
+           "Adv": {"variables": {"wind": {"type": "parameter", "units": "m/s", "default": 3.0}},
+                   "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                                  "rhs": {"op": "*", "args": [{"op": "-", "args": ["wind"]},
+                                                              {"op": "grad", "args": ["_var"]}]}}]}},
+         "coupling": [$(join(order, ", "))]}
+        """
+        compose = """{"type": "operator_compose", "systems": ["Chem", "Adv"]}"""
+        couple = """{"type": "couple", "systems": ["Chem", "Scale"],
+                     "connector": {"equations": [
+                       {"from": "Scale.factor", "to": "Chem.O3",
+                        "transform": "multiplicative", "expression": "Scale.factor"}]}}"""
+        varmap = """{"type": "variable_map", "from": "Scale.factor", "to": "Chem.loss",
+                     "transform": "identity"}"""
+
+        declared = flatten(load_string(doc([couple, varmap, compose])))
+        permuted = flatten(load_string(doc([compose, couple, varmap])))
+
+        # Same flattened equations, whichever order the author typed them in.
+        @test String[to_ascii(eq) for eq in declared.equations] ==
+              String[to_ascii(eq) for eq in permuted.equations]
+        # ... and it is the BY-KIND answer: `operator_compose` runs first, so
+        # advection is summed onto the tendency and only then is the whole sum
+        # scaled by the multiplicative connector. Declaration order would have
+        # scaled the bare reaction term and added advection outside the product.
+        @test length(declared.equations) == 1
+        @test to_ascii(declared.equations[1]) ==
+              "D(Chem.O3)/Dt = ((-Scale.factor) * Chem.O3 + " *
+              "(-Adv.wind) * grad(Chem.O3)) * Scale.factor"
+
+        # METADATA still reports DECLARATION order — application order and
+        # reporting order are separate, which is why these two disagree.
+        kinds(f) = String[String(first(split(r, '('))) for r in
+                          f.metadata.coupling_rules_applied]
+        @test kinds(declared) == ["couple", "variable_map", "operator_compose"]
+        @test kinds(permuted) == ["operator_compose", "couple", "variable_map"]
+    end
+
+    @testset "subsystem events reach the flattened system" begin
+        # §4.7.5 step 4: "all events from all component systems". `daily_reset`
+        # is declared on the SUBSYSTEM `SimpleChemistry.Photochemistry`; the
+        # oracle only sees hoisted top-level events and records none, so the
+        # corpus cannot pin this and `discrete_events` is skipped for the case.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "scoping",
+                                          "bare_reference_resolution.esm")))
+        @test length(flat.discrete_events) == 1
+        ev = flat.discrete_events[1]
+        @test ev.name == "daily_reset"
+        @test String[a.lhs for a in ev.affects] ==
+              ["SimpleChemistry.Photochemistry.photolysis_rate"]
+        @test ev.trigger isa EarthSciAST.ConditionTrigger
+        @test occursin("SimpleChemistry.Photochemistry.solar_zenith",
+                       to_ascii(ev.trigger.expression))
+    end
+
+    @testset "operator_compose: the placeholder ranges over STATES only" begin
+        # §4.7.1 step 3 expands `_var` over "every state variable in system A".
+        # `tests/coupling/advanced_coupling.esm` also declares an OBSERVED
+        # unknown, `Chemistry.deposition_flux`, defined algebraically. Expanding
+        # over "anything with a defining equation" instead gave it an advection
+        # term — a transported diagnostic.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
+                                          "advanced_coupling.esm")))
+        @test any(to_ascii(eq) == "Chemistry.deposition_flux = Chemistry.O3 * 1.0e-3"
                   for eq in flat.equations)
+    end
+
+    @testset "couple `multiplicative` onto something with no tendency" begin
+        # esm-libraries-spec §4.7.2 / esm-spec §10.3, diagnostic
+        # `couple_multiplicative_no_tendency`. `multiplicative` is defined
+        # against an EXISTING ODE RHS; a `to` that is a parameter has none, and
+        # silently dropping the connector equation is the one outcome a coupling
+        # mis-specification must not have — the document declares a coupling and
+        # the flattened system carries no trace of it.
+        #
+        # This used to be pinned by `advanced_coupling`'s refusal. That fixture
+        # has been migrated to the §10.4 `variable_map` spelling, so the ruling
+        # would otherwise have lost its only test.
+        doc = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "MultiplicativeNoTendency",
+                      "description": "multiplicative onto a parameter",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-24T00:00:00Z"},
+         "models": {
+           "Chem": {"variables": {"O3": {"type": "unknown", "units": "mol/mol", "default": 1.0}},
+                    "equations": [{"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+                                   "rhs": {"op": "-", "args": ["O3"]}}]},
+           "Surface": {"variables": {"r": {"type": "parameter", "units": "mol/mol", "default": 100.0}},
+                       "equations": []}},
+         "coupling": [{"type": "couple", "systems": ["Chem", "Surface"],
+                       "connector": {"equations": [
+                         {"from": "Chem.O3", "to": "Surface.r",
+                          "transform": "multiplicative",
+                          "expression": {"op": "*", "args": [2.0, "Chem.O3"]}}]}}]}
+        """
+        err = try
+            flatten(load_string(doc)); nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test err === nothing || occursin("Surface.r", sprint(showerror, err))
+        @test err === nothing || occursin("no tendency", sprint(showerror, err))
     end
 
     # ── refusals ────────────────────────────────────────────────────────────
