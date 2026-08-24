@@ -88,7 +88,7 @@ pub fn add_model(esm_file: &EsmFile, model_id: &str, model: Model) -> EditResult
 
     // Initialize models map if it doesn't exist
     if new_file.models.is_none() {
-        new_file.models = Some(HashMap::new());
+        new_file.models = Some(indexmap::IndexMap::new());
     }
 
     // Check if model already exists
@@ -122,7 +122,7 @@ pub fn remove_model(esm_file: &EsmFile, model_id: &str) -> EditResult<EsmFile> {
     let mut new_file = esm_file.clone();
 
     if let Some(ref mut models) = new_file.models {
-        if models.remove(model_id).is_none() {
+        if models.shift_remove(model_id).is_none() {
             return Err(EditError::ComponentNotFound(model_id.to_string()));
         }
     } else {
@@ -167,7 +167,7 @@ pub fn add_variable(model: &Model, var_name: &str, variable: ModelVariable) -> E
 pub fn remove_variable(model: &Model, var_name: &str) -> EditResult<Model> {
     let mut new_model = model.clone();
 
-    if new_model.variables.remove(var_name).is_none() {
+    if new_model.variables.shift_remove(var_name).is_none() {
         return Err(EditError::ComponentNotFound(var_name.to_string()));
     }
 
@@ -251,7 +251,7 @@ pub fn add_reaction_system(
 
     // Initialize reaction_systems map if it doesn't exist
     if new_file.reaction_systems.is_none() {
-        new_file.reaction_systems = Some(HashMap::new());
+        new_file.reaction_systems = Some(indexmap::IndexMap::new());
     }
 
     // Check if reaction system already exists
@@ -317,7 +317,7 @@ pub fn add_species(
 pub fn remove_species(system: &ReactionSystem, species_name: &str) -> EditResult<ReactionSystem> {
     let mut new_system = system.clone();
 
-    if new_system.species.remove(species_name).is_none() {
+    if new_system.species.shift_remove(species_name).is_none() {
         return Err(EditError::SpeciesNotFound(species_name.to_string()));
     }
 
@@ -560,10 +560,12 @@ pub fn replace_coupling(
 mod tests {
     use super::*;
     use crate::{ExpressionNode, Metadata, VariableType};
+    use indexmap::IndexMap;
     use std::collections::HashMap;
 
     fn create_empty_esm_file() -> EsmFile {
         EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -600,7 +602,7 @@ mod tests {
             reference: None,
             subsystems: None,
             name: Some("Test Model".to_string()),
-            variables: HashMap::new(),
+            variables: IndexMap::new(),
             equations: vec![],
             discrete_events: None,
             continuous_events: None,

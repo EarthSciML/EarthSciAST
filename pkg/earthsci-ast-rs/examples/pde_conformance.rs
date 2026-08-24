@@ -317,7 +317,12 @@ fn cmd_convergence(
         }
         let field: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         let cell_tuples: Vec<Vec<i64>> = cells.iter().map(|(c, _)| c.clone()).collect();
-        let index_sets = file.index_sets.clone().unwrap_or_default();
+        let index_sets: HashMap<String, earthsci_ast::types::IndexSet> = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         // Analytic convergence reference over domain dimensions (no parameters).
         let no_params: HashMap<String, f64> = HashMap::new();
         let reference_field = evaluate_cellwise(&reference, &cell_tuples, &index_sets, &no_params)?;

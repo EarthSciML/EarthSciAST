@@ -151,7 +151,7 @@
       "julia": 291,
       "typescript": 219,
       "python": 234,
-      "rust": 291,
+      "rust": 292,
       "go": 383,
       "editor": 71
     },
@@ -4632,6 +4632,7 @@
       "bindings": {
         "go": "LoaderField",
         "python": "LoaderField",
+        "rust": "LoaderField",
         "typescript": "LoaderField"
       }
     },

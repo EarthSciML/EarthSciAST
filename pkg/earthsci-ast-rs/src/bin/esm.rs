@@ -1704,6 +1704,7 @@ fn run_extract(
 
     // Create a new ESM file with just the requested component
     let mut extracted_esm = earthsci_ast::EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         // The extracted component is a NEW document. Any template call
@@ -1730,7 +1731,7 @@ fn run_extract(
     if let Some(ref models) = esm_file.models
         && let Some(model) = models.get(&component)
     {
-        let mut extracted_models = HashMap::new();
+        let mut extracted_models = indexmap::IndexMap::new();
         extracted_models.insert(component.clone(), model.clone());
         extracted_esm.models = Some(extracted_models);
     }
@@ -1738,7 +1739,7 @@ fn run_extract(
     if let Some(ref reaction_systems) = esm_file.reaction_systems
         && let Some(rs) = reaction_systems.get(&component)
     {
-        let mut extracted_rs = HashMap::new();
+        let mut extracted_rs = indexmap::IndexMap::new();
         extracted_rs.insert(component.clone(), rs.clone());
         extracted_esm.reaction_systems = Some(extracted_rs);
     }
@@ -1746,7 +1747,7 @@ fn run_extract(
     if let Some(ref data_sources) = esm_file.data_sources
         && let Some(dl) = data_sources.get(&component)
     {
-        let mut extracted_dl = HashMap::new();
+        let mut extracted_dl = indexmap::IndexMap::new();
         extracted_dl.insert(component.clone(), dl.clone());
         extracted_esm.data_sources = Some(extracted_dl);
     }

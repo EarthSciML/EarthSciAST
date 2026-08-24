@@ -466,25 +466,18 @@ impl Compiled {
         let state_defaults: Vec<Option<f64>> =
             flat.state_variables.values().map(|mv| mv.default).collect();
 
-        // Plain parameters, plus the DISCRETE ones: a discrete parameter is
+        // EVERY parameter, of every cadence. A DISCRETE parameter is
         // piecewise-constant between refreshes, and this scalar backend has no
         // refresh machinery — but it must still RESOLVE, seeded at its declared
         // `default`, or every expression naming one fails to compile. The
         // driver-level segmented solve (`crate::provider`) is what actually
-        // rewrites such a value between segments.
-        let param_names: Vec<String> = flat
-            .parameters
-            .keys()
-            .chain(flat.discrete_variables.keys())
-            .cloned()
-            .collect();
+        // rewrites such a value between segments. Since esm-libraries-spec
+        // §4.7.5 step 4 the cadence subsets PARTITION `parameters` rather than
+        // sitting beside it, so one map is the whole set.
+        let param_names: Vec<String> = flat.parameters.keys().cloned().collect();
         let param_index = build_index_map(&param_names);
-        let param_defaults: Vec<Option<f64>> = flat
-            .parameters
-            .values()
-            .chain(flat.discrete_variables.values())
-            .map(|mv| mv.default)
-            .collect();
+        let param_defaults: Vec<Option<f64>> =
+            flat.parameters.values().map(|mv| mv.default).collect();
 
         let observed_names_raw: Vec<String> = flat.observed_variables.keys().cloned().collect();
         let observed_index_raw = build_index_map(&observed_names_raw);
@@ -1049,6 +1042,14 @@ impl std::ops::AddAssign for SolveStats {
 /// ODE systems with no continuous or discrete events are supported.
 fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), CompileError> {
     if flat.independent_variables != ["t"] {
+        // A spatial independent variable means a rewrite-target operator was
+        // never discretized. Report THAT, with the uniform
+        // `unlowered_operator` code esm-spec §4.2 / §9.6.8 specifies for
+        // an op reaching evaluation unlowered; the dimensionality error
+        // is the fallback for a spatial axis with no such op behind it.
+        if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+            return Err(CompileError::UnloweredOperatorError { op });
+        }
         return Err(CompileError::UnsupportedDimensionalityError {
             independent_variables: flat.independent_variables.clone(),
         });

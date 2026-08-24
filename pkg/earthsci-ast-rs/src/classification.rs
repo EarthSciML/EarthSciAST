@@ -30,7 +30,8 @@
 //! conformance goldens compare order-independently for exactly that reason).
 
 use crate::types::{Equation, Expr, Model, ModelVariable, VariableType};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use indexmap::IndexMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The `wrt` value naming the independent (time) variable.
 const TIME: &str = "t";
@@ -80,8 +81,18 @@ impl std::fmt::Display for SystemKind {
 pub struct Classification {
     /// Unknowns appearing under `D(·, t)` on some equation LHS.
     pub ode_states: Vec<String>,
-    /// Unknowns defined by a bare-variable LHS.
+    /// Unknowns defined by a bare-variable OR indexed-variable LHS
+    /// (esm-spec §6.3.1) — the semantic "defined by an equation" set.
     pub observed_unknowns: Vec<String>,
+    /// The NARROWER set alongside [`Self::observed_unknowns`]: the observed
+    /// unknowns whose defining LHS is a BARE variable, so they are eliminable
+    /// **by inlining** (esm-spec §6.3.1, "Note that *eliminable* and
+    /// *inlineable* are not the same thing"). An ARRAYED definition
+    /// (`y[i] ~ f(i)`) is observed too, but it materializes into a buffer its
+    /// consumers index rather than being substituted away, so it is NOT here.
+    /// Spelled `inlined_unknowns` in the Python oracle; it does not narrow the
+    /// §6.3.1 partition, it sits beside it.
+    pub inlined_unknowns: Vec<String>,
     /// Unknowns constrained only implicitly.
     pub algebraic_unknowns: Vec<String>,
     /// Parameters whose update is `wiener`.
@@ -110,11 +121,12 @@ impl Classification {
     /// equation list rather than a whole [`Model`] (the JSON-level cadence
     /// pass, the flatten/compile pipelines).
     pub fn from_parts(
-        variables: &HashMap<String, ModelVariable>,
+        variables: &IndexMap<String, ModelVariable>,
         equations: &[Equation],
     ) -> Classification {
         let mut ode_states = BTreeSet::new();
         let mut observed = BTreeSet::new();
+        let mut inlined = BTreeSet::new();
         let mut observed_definitions = BTreeMap::new();
 
         let unknowns: BTreeSet<&str> = variables
@@ -132,11 +144,14 @@ impl Classification {
                         ode_states.insert(name);
                     }
                 }
-                // `y ~ f(…)` — a bare-variable LHS DEFINES y.
+                // `y ~ f(…)` / `y[i] ~ f(…)` — the LHS DEFINES y.
                 LhsForm::Bare(name) => {
                     if unknowns.contains(name.as_str()) {
                         if !observed.contains(&name) {
                             observed_definitions.insert(name.clone(), eq.rhs.clone());
+                        }
+                        if matches!(eq.lhs, Expr::Variable(_)) {
+                            inlined.insert(name.clone());
                         }
                         observed.insert(name);
                     }
@@ -151,6 +166,7 @@ impl Classification {
         // integrates, and the partition must stay disjoint.
         for name in &ode_states {
             observed.remove(name);
+            inlined.remove(name);
             observed_definitions.remove(name);
         }
 
@@ -189,6 +205,7 @@ impl Classification {
         Classification {
             ode_states: ode_states.into_iter().collect(),
             observed_unknowns: observed.into_iter().collect(),
+            inlined_unknowns: inlined.into_iter().collect(),
             algebraic_unknowns: algebraic,
             brownian_parameters: brownian,
             discrete_parameters: discrete,
@@ -214,9 +231,9 @@ impl Classification {
     /// call this run over partially-lowered intermediate JSON whose
     /// well-formedness is the schema layer's business, not classification's.
     pub fn from_json(model: &serde_json::Value) -> Result<Classification, serde_json::Error> {
-        let variables: HashMap<String, ModelVariable> = match model.get("variables") {
+        let variables: IndexMap<String, ModelVariable> = match model.get("variables") {
             Some(v) => serde_json::from_value(v.clone())?,
-            None => HashMap::new(),
+            None => IndexMap::new(),
         };
         let equations: Vec<Equation> = model
             .get("equations")
@@ -238,6 +255,11 @@ impl Classification {
     /// Membership test for [`Classification::observed_unknowns`].
     pub fn is_observed(&self, name: &str) -> bool {
         self.observed_unknowns.iter().any(|s| s == name)
+    }
+
+    /// Membership test for [`Classification::inlined_unknowns`].
+    pub fn is_inlined(&self, name: &str) -> bool {
+        self.inlined_unknowns.iter().any(|s| s == name)
     }
 
     /// Membership test for [`Classification::brownian_parameters`].
@@ -360,6 +382,13 @@ pub fn ode_states(model: &Model) -> Vec<String> {
 /// materializable.
 pub fn observed_unknowns(model: &Model) -> Vec<String> {
     Classification::of(model).observed_unknowns
+}
+
+/// The observed unknowns whose defining LHS is a BARE variable — the strict
+/// `y ~ f(…)` form that is eliminable by INLINING (esm-spec §6.3.1). An arrayed
+/// definition is observed but materializes into a buffer, so it is excluded.
+pub fn inlined_unknowns(model: &Model) -> Vec<String> {
+    Classification::of(model).inlined_unknowns
 }
 
 /// Unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`).

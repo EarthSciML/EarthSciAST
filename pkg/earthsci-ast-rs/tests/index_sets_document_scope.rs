@@ -56,6 +56,7 @@ fn aggregate_fixture_index_sets_is_document_scoped_and_round_trips() {
         .and_then(|m| m.values().next())
         .expect("model present")
         .clone();
+    let index_sets: std::collections::HashMap<_, _> = index_sets.clone().into_iter().collect();
     resolve_aggregate_ranges(&mut model, &index_sets)
         .expect("`{from}` ranges resolve against the document registry");
 }
@@ -104,6 +105,7 @@ fn regrid_fixture_index_sets_is_document_scoped_and_round_trips() {
         .and_then(|m| m.values().next())
         .expect("model present")
         .clone();
+    let index_sets: std::collections::HashMap<_, _> = index_sets.clone().into_iter().collect();
     resolve_aggregate_ranges(&mut model, &index_sets)
         .expect("`{from}` ranges resolve against the document registry");
 

@@ -174,7 +174,7 @@ pub use display::{to_ascii, to_latex, to_unicode};
 pub use expression::evaluate;
 pub use expression::{contains, free_parameters, free_variables, simplify};
 pub use flatten::{
-    DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem, flatten,
+    DimensionPromotionRecord, FlattenError, FlattenMetadata, FlattenedSystem, LoaderField, flatten,
     flatten_model, flatten_with_options,
 };
 pub use geometry::{

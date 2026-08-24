@@ -79,13 +79,14 @@ fn empty_metadata() -> Metadata {
 }
 
 fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
-    let mut models = std::collections::HashMap::new();
+    let mut models = indexmap::IndexMap::new();
     if let Some(all) = &file.models
         && let Some(m) = all.get(model_key)
     {
         models.insert(model_key.to_string(), m.clone());
     }
     EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -106,13 +107,14 @@ fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
 }
 
 fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
-    let mut rs = std::collections::HashMap::new();
+    let mut rs = indexmap::IndexMap::new();
     if let Some(all) = &file.reaction_systems
         && let Some(r) = all.get(rs_key)
     {
         rs.insert(rs_key.to_string(), r.clone());
     }
     EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,

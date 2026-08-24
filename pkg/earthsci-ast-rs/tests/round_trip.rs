@@ -436,8 +436,11 @@ fn test_correlated_noise_sde_round_trip() {
     // correlation lives in its `cov`.
     use earthsci_ast::flatten::flatten;
     let flat = flatten(&parsed).expect("flatten");
-    assert_eq!(flat.brownian_variables.len(), 1);
-    assert!(flat.brownian_variables.contains_key("TwoBody.B"));
+    assert_eq!(flat.brownian_parameters.len(), 1);
+    assert!(flat.brownian_parameters.contains_key("TwoBody.B"));
+    // ...and it is ALSO an ordinary parameter: esm-spec §6.3.1's four sets
+    // partition `parameters` rather than sitting beside it.
+    assert!(flat.parameters.contains_key("TwoBody.B"));
 }
 
 /// Round-trip: nonlinear models with initialization_equations, guesses, system_kind (gt-ebuq).

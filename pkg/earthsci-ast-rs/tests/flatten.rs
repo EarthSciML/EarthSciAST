@@ -12,7 +12,7 @@ use earthsci_ast::types::{
     Parameter, Reaction, ReactionSystem, Species, StoichiometricEntry, VariableType,
 };
 use earthsci_ast::{FlattenError, flatten, flatten_model};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 fn empty_metadata() -> Metadata {
     Metadata {
@@ -32,6 +32,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -106,8 +107,8 @@ fn reaction_system(
                 },
             )
         })
-        .collect::<HashMap<_, _>>();
-    let mut parameters = HashMap::new();
+        .collect::<IndexMap<_, _>>();
+    let mut parameters = IndexMap::new();
     for (name, default) in params {
         parameters.insert(
             name.to_string(),
@@ -155,10 +156,11 @@ fn flatten_reactions_only_file_produces_mass_action_odes() {
         }],
     );
 
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
@@ -188,7 +190,7 @@ fn flatten_reactions_only_file_produces_mass_action_odes() {
 // ============================================================================
 #[test]
 fn flatten_mixed_model_and_reaction_system() {
-    let mut model_vars = HashMap::new();
+    let mut model_vars = IndexMap::new();
     model_vars.insert(
         "y".to_string(),
         ModelVariable {
@@ -203,7 +205,7 @@ fn flatten_mixed_model_and_reaction_system() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "dyn".to_string(),
         Model {
@@ -238,10 +240,11 @@ fn flatten_mixed_model_and_reaction_system() {
             reference: None,
         }],
     );
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("chem".to_string(), rs);
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
@@ -288,9 +291,10 @@ fn flatten_autocatalytic_reaction_net_stoichiometry() {
             reference: None,
         }],
     );
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("auto".to_string(), rs);
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
@@ -350,9 +354,10 @@ fn flatten_source_and_sink_reactions() {
             },
         ],
     );
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("box".to_string(), rs);
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
@@ -379,7 +384,7 @@ fn flatten_conflicting_derivative_raises_error() {
     // X that participates in a reaction. After namespacing, both produce
     // equations with LHS D(sys.X, t). With no operator_compose rule to
     // merge them, the flattener must raise ConflictingDerivative.
-    let mut model_vars = HashMap::new();
+    let mut model_vars = IndexMap::new();
     model_vars.insert(
         "X".to_string(),
         ModelVariable {
@@ -394,7 +399,7 @@ fn flatten_conflicting_derivative_raises_error() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "sys".to_string(),
         Model {
@@ -429,10 +434,11 @@ fn flatten_conflicting_derivative_raises_error() {
             reference: None,
         }],
     );
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("sys".to_string(), rs);
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
@@ -458,7 +464,7 @@ fn flatten_conflicting_derivative_raises_error() {
 #[test]
 fn flatten_operator_compose_sums_matched_rhses() {
     // Model A: d(u)/dt = k_A
-    let mut vars_a = HashMap::new();
+    let mut vars_a = IndexMap::new();
     vars_a.insert(
         "u".to_string(),
         ModelVariable {
@@ -490,7 +496,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     // Model B: d(A.u)/dt = k_B  (references A's state via a pre-namespaced
     // form, simulating what an operator_compose with matching LHSes looks
     // like after phase-1 namespacing).
-    let mut vars_b = HashMap::new();
+    let mut vars_b = IndexMap::new();
     vars_b.insert(
         "k".to_string(),
         ModelVariable {
@@ -505,7 +511,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "A".to_string(),
         Model {
@@ -563,6 +569,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     }];
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
@@ -605,7 +612,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
 #[test]
 fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     // Target model "M" has state u, parameter T, equation du/dt = T.
-    let mut vars_m = HashMap::new();
+    let mut vars_m = IndexMap::new();
     vars_m.insert(
         "u".to_string(),
         ModelVariable {
@@ -635,7 +642,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         },
     );
     // Source model "S" has observed T_out.
-    let mut vars_s = HashMap::new();
+    let mut vars_s = IndexMap::new();
     vars_s.insert(
         "T_out".to_string(),
         ModelVariable {
@@ -650,7 +657,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "M".to_string(),
         Model {
@@ -700,6 +707,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     }];
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
@@ -730,7 +738,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
 // ============================================================================
 #[test]
 fn flatten_couple_includes_connector_equations() {
-    let mut vars_a = HashMap::new();
+    let mut vars_a = IndexMap::new();
     vars_a.insert(
         "x".to_string(),
         ModelVariable {
@@ -745,7 +753,7 @@ fn flatten_couple_includes_connector_equations() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "A".to_string(),
         Model {
@@ -779,6 +787,7 @@ fn flatten_couple_includes_connector_equations() {
         description: None,
     }];
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
@@ -809,7 +818,7 @@ fn flatten_couple_includes_connector_equations() {
 // ============================================================================
 #[test]
 fn flatten_model_wraps_and_namespaces_under_declared_name() {
-    let mut vars = HashMap::new();
+    let mut vars = IndexMap::new();
     vars.insert(
         "q".to_string(),
         ModelVariable {
@@ -848,11 +857,21 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
 }
 
 // ============================================================================
-// (10) UNSUPPORTED: spatial operators → UnsupportedMapping
+// (10) PDE: an undiscretized spatial operator names an INDEPENDENT VARIABLE
 // ============================================================================
+//
+// This pair used to assert that `flatten` REFUSED such a document with
+// `unlowered_operator`. esm-libraries-spec §4.7.6 rules otherwise: the
+// independent variables are DERIVED from exactly these operators, and that
+// derivation "is what determines whether the downstream constructor produces an
+// ODESystem or a PDESystem" — which a refusal makes unreachable, along with
+// esm-spec §6.3.1's `"pde"` system_kind. So flatten now succeeds and records the
+// axis, and the refusal moves to the places that genuinely require a discretized
+// system: `reject_unlowered_operators`, and the simulators' compile-time gate.
+// Both halves are asserted here so neither can be lost.
 #[test]
-fn flatten_rejects_spatial_operators() {
-    let mut vars = HashMap::new();
+fn flatten_derives_spatial_independent_variable_from_grad() {
+    let mut vars = IndexMap::new();
     vars.insert(
         "c".to_string(),
         ModelVariable {
@@ -867,7 +886,7 @@ fn flatten_rejects_spatial_operators() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "transport".to_string(),
         Model {
@@ -897,35 +916,44 @@ fn flatten_rejects_spatial_operators() {
         },
     );
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()
     };
-    let err = flatten(&file).unwrap_err();
+    // §4.7.6: flatten SUCCEEDS, and `grad`'s `dim` axis joins `t`.
+    let flat = flatten(&file).expect("a PDE is a legitimate flattened system");
+    assert_eq!(
+        flat.independent_variables,
+        vec!["t".to_string(), "x".to_string()],
+        "grad(c, dim=x) must contribute the spatial axis `x`"
+    );
+    // ...and esm-spec §6.3.1 can therefore report the system as a PDE.
+    assert_eq!(flat.system_kind().as_str(), "pde");
+
+    // The `unlowered_operator` refusal still exists, for a consumer that
+    // requires a DISCRETIZED system and says so.
+    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+        .expect_err("an undiscretized grad must be rejected on demand");
     let msg = format!("{err}");
     match err {
-        // esm-spec §4.2 / §9.6.8: `grad` is an unlowered rewrite-target op; the
-        // gate surfaces the uniform `unlowered_operator` code (superseding the
-        // old `UnsupportedMapping`-for-spatial-ops behavior).
-        FlattenError::UnloweredOperator { op } => {
-            assert_eq!(op, "grad");
-        }
+        FlattenError::UnloweredOperator { op } => assert_eq!(op, "grad"),
         other => panic!("expected UnloweredOperator, got {other:?}"),
     }
     assert!(
         msg.contains("unlowered_operator"),
-        "flatten error should carry the uniform `unlowered_operator` code"
+        "the error must carry the uniform `unlowered_operator` code"
     );
 }
 
 // ============================================================================
-// (11) UNSUPPORTED: non-time derivative D(c, x) → UnsupportedMapping("slice"-style)
+// (11) PDE: a non-time derivative D(c, x) likewise names its axis
 // ============================================================================
 #[test]
-fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
+fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     // Non-time derivative path: D with wrt != "t"
-    let mut vars = HashMap::new();
+    let mut vars = IndexMap::new();
     vars.insert(
         "c".to_string(),
         ModelVariable {
@@ -940,7 +968,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
             update: None,
         },
     );
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "pde".to_string(),
         Model {
@@ -969,17 +997,28 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
         },
     );
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()
     };
-    let err = flatten(&file).unwrap_err();
+    // §4.7.6 step 2 names `D` with `wrt != "t"` alongside grad/div/laplacian, so
+    // the axis it differentiates by is an independent variable. `wrt` names a
+    // document-scoped AXIS and is NOT namespaced: the axis is `x`, not `pde.x`.
+    let flat = flatten(&file).expect("a PDE is a legitimate flattened system");
+    assert_eq!(
+        flat.independent_variables,
+        vec!["t".to_string(), "x".to_string()],
+        "D(c, wrt=x) must contribute the spatial axis `x`, un-namespaced"
+    );
+    assert_eq!(flat.system_kind().as_str(), "pde");
+
+    // ...and it is still rejected on demand, with the offending op name `"D"`.
+    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+        .expect_err("an undiscretized spatial D must be rejected on demand");
     let msg = format!("{err}");
     match err {
-        // esm-spec §4.2 / §9.6.8: a spatial `D` (`wrt` != "t") is an unlowered
-        // rewrite-target op; the gate surfaces the uniform `unlowered_operator`
-        // code with the offending op name `"D"`.
         FlattenError::UnloweredOperator { op } => {
             assert_eq!(op, "D", "unexpected op '{op}'");
         }
@@ -987,7 +1026,7 @@ fn flatten_rejects_non_time_derivative_and_exposes_slice_variant() {
     }
     assert!(
         msg.contains("unlowered_operator"),
-        "flatten error should carry the uniform `unlowered_operator` code"
+        "the error must carry the uniform `unlowered_operator` code"
     );
 
     // Type-level parity check: the FlattenError::UnsupportedMapping variant

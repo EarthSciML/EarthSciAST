@@ -582,7 +582,7 @@ pub(crate) fn build_system_reference_map(esm_file: &EsmFile) -> HashMap<String, 
 /// later) without claiming to know its contents.
 fn register_subsystems(
     prefix: &str,
-    subsystems: Option<&HashMap<String, serde_json::Value>>,
+    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
     systems: &mut HashMap<String, SystemInfo>,
 ) {
     let Some(subsystems) = subsystems else {
@@ -628,7 +628,7 @@ fn register_subsystems(
 
         // Recurse into this subsystem's own `subsystems` map.
         if let Some(nested) = child.get("subsystems").and_then(|v| v.as_object()) {
-            let nested: HashMap<String, serde_json::Value> =
+            let nested: indexmap::IndexMap<String, serde_json::Value> =
                 nested.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             register_subsystems(&path, Some(&nested), systems);
         }
@@ -647,11 +647,12 @@ mod tests {
     use super::*;
     use crate::types::{Equation, ExpressionNode, Metadata, ModelVariable, VariableType};
     use crate::{Expr, Model};
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_validate_empty_file() {
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -690,8 +691,8 @@ mod tests {
 
     #[test]
     fn test_validate_model_with_undefined_variable() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
         variables.insert(
             "x".to_string(),
             ModelVariable {
@@ -736,6 +737,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -782,8 +784,8 @@ mod tests {
 
     #[test]
     fn test_equation_count_mismatch() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // Define two state variables
         variables.insert(
@@ -847,6 +849,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -902,6 +905,7 @@ mod tests {
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -947,8 +951,8 @@ mod tests {
     /// is not a malformed declaration but an UNBALANCED SYSTEM, reported by
     /// `equation_count_mismatch` (esm-spec §4.9.4).
     fn test_unknown_without_equation() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // An unknown that NO equation defines - the defect.
         variables.insert(
@@ -986,6 +990,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1040,8 +1045,8 @@ mod tests {
 
     #[test]
     fn test_observed_variable_with_expression() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // State variable
         variables.insert(
@@ -1134,6 +1139,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1241,8 +1247,8 @@ mod tests {
 
     #[test]
     fn test_unit_validation() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // State variable with units
         variables.insert(
@@ -1314,6 +1320,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1363,8 +1370,8 @@ mod tests {
 
     #[test]
     fn test_unit_validation_mismatch() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // State variable with units
         variables.insert(
@@ -1427,6 +1434,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1477,8 +1485,8 @@ mod tests {
     #[test]
     fn test_unit_validation_integration() {
         // Test that unit validation warnings are properly returned from the main validate function
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // State variable with position units
         variables.insert(
@@ -1541,6 +1549,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1588,8 +1597,8 @@ mod tests {
 
     #[test]
     fn test_transcendental_function_units() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
 
         // State variable with units (should cause warning when used in exp)
         variables.insert(
@@ -1642,6 +1651,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1717,6 +1727,7 @@ mod tests {
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,

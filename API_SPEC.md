@@ -658,6 +658,7 @@ reading that as a gap.
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
+| `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
@@ -713,7 +714,6 @@ reading that as a gap.
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
 | `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
-| `loader_field` | type | – | `LoaderField` | `LoaderField` | – | `LoaderField` |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |

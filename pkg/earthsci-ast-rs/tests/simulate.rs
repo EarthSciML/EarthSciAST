@@ -44,9 +44,10 @@ fn empty_metadata() -> Metadata {
 }
 
 fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
-    let mut models = std::collections::HashMap::new();
+    let mut models = indexmap::IndexMap::new();
     models.insert(model_name.to_string(), model);
     EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -140,7 +141,7 @@ fn make_model(
     params: Vec<(String, ModelVariable)>,
     equations: Vec<Equation>,
 ) -> Model {
-    let mut variables = std::collections::HashMap::new();
+    let mut variables = indexmap::IndexMap::new();
     for (n, v) in state_vars {
         variables.insert(n, v);
     }
@@ -839,12 +840,17 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         },
     );
     FlattenedSystem {
-        discrete_variables: Default::default(),
+        algebraic_variables: Default::default(),
+        function_tables: Default::default(),
+        template_registry: Default::default(),
+        loader_fields: Default::default(),
+        lifted_shapes: Default::default(),
+        discrete_parameters: Default::default(),
         independent_variables: vec!["t".to_string()],
         state_variables,
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
-        brownian_variables: IndexMap::new(),
+        brownian_parameters: IndexMap::new(),
         field_ics: Vec::new(),
         equations: vec![Equation {
             lhs: Expr::operator(ExpressionNode {
@@ -1031,7 +1037,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
 
     let mut u = state("u", 0.0).1;
     u.shape = Some(vec!["i".to_string()]);
-    let mut variables = std::collections::HashMap::new();
+    let mut variables = indexmap::IndexMap::new();
     variables.insert("u".to_string(), u);
     let model = Model {
         name: Some("ArrUnknown".to_string()),
@@ -1077,12 +1083,17 @@ fn test_error_unknown_variable_in_array_model_rejected() {
 #[allow(dead_code)]
 fn dummy_flat() -> FlattenedSystem {
     FlattenedSystem {
-        discrete_variables: Default::default(),
+        algebraic_variables: Default::default(),
+        function_tables: Default::default(),
+        template_registry: Default::default(),
+        loader_fields: Default::default(),
+        lifted_shapes: Default::default(),
+        discrete_parameters: Default::default(),
         independent_variables: vec!["t".to_string()],
         state_variables: IndexMap::new(),
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
-        brownian_variables: IndexMap::new(),
+        brownian_parameters: IndexMap::new(),
         field_ics: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
