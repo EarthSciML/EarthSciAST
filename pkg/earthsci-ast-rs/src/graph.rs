@@ -7,7 +7,7 @@ use crate::{CouplingEntry, EsmFile};
 /// Node and edge order feeds rendered output (`to_dot`/`to_mermaid`/
 /// `to_json_graph`), so every component/variable map is iterated in
 /// sorted-key order rather than nondeterministic `HashMap` order.
-fn sorted_keys<V>(map: &std::collections::HashMap<String, V>) -> Vec<&String> {
+fn sorted_keys<V>(map: &indexmap::IndexMap<String, V>) -> Vec<&String> {
     let mut keys: Vec<&String> = map.keys().collect();
     keys.sort();
     keys
@@ -379,7 +379,7 @@ pub fn component_exists(esm_file: &EsmFile, component_id: &str) -> bool {
 /// * `Some(ComponentType)` if the component exists
 /// * `None` if the component doesn't exist
 pub fn get_component_type(esm_file: &EsmFile, component_id: &str) -> Option<ComponentType> {
-    fn contains<V>(map: &Option<std::collections::HashMap<String, V>>, key: &str) -> bool {
+    fn contains<V>(map: &Option<indexmap::IndexMap<String, V>>, key: &str) -> bool {
         map.as_ref().is_some_and(|m| m.contains_key(key))
     }
 
@@ -1407,12 +1407,13 @@ mod tests {
     use super::*;
     use crate::types::Metadata;
     use crate::{Expr, ExpressionNode as ExprNode, Model, ReactionSystem};
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     /// An `EsmFile` with every optional container empty, to be spread with
     /// `..empty_file()` so a test names only the fields it cares about.
     fn empty_file() -> EsmFile {
         EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1449,7 +1450,7 @@ mod tests {
             reference: None,
             subsystems: None,
             name: Some(name.to_string()),
-            variables: HashMap::new(),
+            variables: IndexMap::new(),
             equations: vec![],
             discrete_events: None,
             continuous_events: None,
@@ -1465,6 +1466,7 @@ mod tests {
     #[test]
     fn test_component_graph_empty() {
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1502,14 +1504,14 @@ mod tests {
 
     #[test]
     fn test_component_graph_with_models() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "model1".to_string(),
             Model {
                 reference: None,
                 subsystems: None,
                 name: Some("Test Model 1".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1527,7 +1529,7 @@ mod tests {
                 reference: None,
                 subsystems: None,
                 name: Some("Test Model 2".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1541,6 +1543,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1585,14 +1588,14 @@ mod tests {
 
     #[test]
     fn test_component_exists() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "test_model".to_string(),
             Model {
                 reference: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1606,6 +1609,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1642,14 +1646,14 @@ mod tests {
 
     #[test]
     fn test_get_component_type() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "test_model".to_string(),
             Model {
                 reference: None,
                 subsystems: None,
                 name: Some("Test Model".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1662,13 +1666,13 @@ mod tests {
             },
         );
 
-        let mut reaction_systems = HashMap::new();
+        let mut reaction_systems = IndexMap::new();
         reaction_systems.insert(
             "test_rs".to_string(),
             ReactionSystem {
                 reference: None,
-                species: HashMap::new(),
-                parameters: HashMap::new(),
+                species: IndexMap::new(),
+                parameters: IndexMap::new(),
                 reactions: vec![],
                 constraint_equations: None,
                 discrete_events: None,
@@ -1678,6 +1682,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1822,14 +1827,14 @@ mod tests {
 
     #[test]
     fn test_component_graph_variable_map_edge_extraction() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "source".to_string(),
             Model {
                 reference: None,
                 subsystems: None,
                 name: Some("Source System".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1847,7 +1852,7 @@ mod tests {
                 reference: None,
                 subsystems: None,
                 name: Some("Target System".to_string()),
-                variables: HashMap::new(),
+                variables: IndexMap::new(),
                 equations: vec![],
                 discrete_events: None,
                 continuous_events: None,
@@ -1869,6 +1874,7 @@ mod tests {
         }];
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -1921,12 +1927,13 @@ mod tests {
     /// so it anchors no edge (esm-libraries-spec §4.8.1).
     #[test]
     fn test_component_graph_variable_map_requires_scoped_endpoints() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         for id in ["source", "target"] {
             models.insert(id.to_string(), test_model(id));
         }
 
         let esm_file = EsmFile {
+            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source".to_string(),
                 to: "target".to_string(),
@@ -1969,12 +1976,13 @@ mod tests {
     /// The §4.8.3 closure lookups, on a two-node one-edge graph.
     #[test]
     fn test_component_graph_closure() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         for id in ["source", "target"] {
             models.insert(id.to_string(), test_model(id));
         }
 
         let esm_file = EsmFile {
+            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source.var".to_string(),
                 to: "target.param".to_string(),
@@ -2001,12 +2009,13 @@ mod tests {
     /// every node, `{source, target, data}` edges, and an adjacency map.
     #[test]
     fn test_to_json_graph_is_an_adjacency_list() {
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         for id in ["source", "target"] {
             models.insert(id.to_string(), test_model(id));
         }
 
         let esm_file = EsmFile {
+            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source.var".to_string(),
                 to: "target.param".to_string(),

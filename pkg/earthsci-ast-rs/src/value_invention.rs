@@ -1902,7 +1902,7 @@ pub fn drop_value_invention_equations(model: &mut Model, vi_var_names: &HashSet<
         });
     }
     for name in vi_var_names {
-        model.variables.remove(name);
+        model.variables.shift_remove(name);
     }
 }
 
@@ -2165,10 +2165,12 @@ mod tests {
         let file = crate::parse::load_string(EDGE_FIXTURE).expect("fixture loads");
         // v0.8.0: the `index_sets` registry is document-scoped, so it is threaded
         // in and rewritten in place rather than living on the model.
-        let mut registry = file
+        let mut registry: HashMap<String, IndexSet> = file
             .index_sets
             .clone()
-            .expect("fixture declares index_sets");
+            .expect("fixture declares index_sets")
+            .into_iter()
+            .collect();
         let model = file
             .models
             .as_ref()

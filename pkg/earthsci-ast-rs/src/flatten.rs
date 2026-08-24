@@ -20,17 +20,28 @@
 //! [`FlattenError::DimensionPromotion`] is raised by the pointwise spatial lift
 //! (esm-spec §10.5) when the grid loop variables cannot be determined (mirrors
 //! Julia / Python `DimensionPromotionError`).
-//! Unlowered rewrite-target operators (the sugar ops
-//! `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
-//! `wrt != "t"`) raise [`FlattenError::UnloweredOperator`] with the uniform
-//! `unlowered_operator` code (esm-spec §4.2 / §9.6.8): they must first be
-//! discretized into an `arrayop` stencil by a `match` rewrite rule (an
-//! `expression_templates` discretization, applied during the load-time rewrite
-//! fixpoint). Once discretized, the spatial axis folds into the array index
-//! (`independent_variables == ["t"]`) and the system simulates natively through
-//! the array-op backend — Rust runs discretized PDEs alongside Julia and Python
-//! (CONFORMANCE_SPEC §5.9). The error fires only for a spatial operator that
-//! reached flatten without being discretized.
+//! **Flattening does not refuse a PDE.** An undiscretized spatial operator (the
+//! sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`, or a spatial `D` with
+//! `wrt != "t"`) flattens like any other, and the spatial axes it names are
+//! recorded in [`FlattenedSystem::independent_variables`] by §4.7.6's
+//! independent-variable derivation — which is precisely what decides whether a
+//! downstream constructor builds an `ODESystem` or a `PDESystem`, and what makes
+//! esm-spec §6.3.1's `"pde"` `system_kind` reachable. This module used to raise
+//! [`FlattenError::UnloweredOperator`] here instead; that was this binding's own
+//! stricter behaviour, not the format's, and it put Rust alone against Python,
+//! Go, TypeScript and §4.7.6 itself.
+//!
+//! The `unlowered_operator` gate (esm-spec §4.2 / §9.6.8) still applies where
+//! discretization is genuinely required: such an operator must be lowered to an
+//! `arrayop` stencil by a `match` rewrite rule (an `expression_templates`
+//! discretization applied during the load-time rewrite fixpoint) before it can
+//! be EVALUATED, and the scalar and array simulators reject a survivor at
+//! compile time with [`crate::compile_error::CompileError::UnloweredOperatorError`].
+//! Once discretized, the spatial axis folds into the array index (so §4.7.6
+//! derives `["t"]` again) and the system simulates natively through the array-op
+//! backend — Rust runs discretized PDEs alongside Julia and Python
+//! (CONFORMANCE_SPEC §5.9). A consumer that needs a discretized system up front
+//! can demand one with [`reject_unlowered_operators`].
 
 use crate::types::{
     ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
@@ -39,7 +50,7 @@ use crate::types::{
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use thiserror::Error;
 
 // ============================================================================
@@ -94,8 +105,9 @@ pub enum FlattenError {
     /// **Reserved / parity-only — never currently raised.** This crate never
     /// inspects `dimension_mapping` declarations, so it does not construct this
     /// variant; it exists so a sibling binding (or a future Rust tier) reports
-    /// the same failure under the same name. Unlowered spatial operators are
-    /// rejected separately via [`FlattenError::UnloweredOperator`], not here.
+    /// the same failure under the same name. An unlowered spatial operator is
+    /// not rejected by [`flatten`] at all — §4.7.6 records the axis it names in
+    /// [`FlattenedSystem::independent_variables`] instead.
     #[error(
         "Unsupported mapping type '{mapping_type}' at Rust Core tier (supported: broadcast, identity). Reason: {reason}"
     )]
@@ -105,12 +117,16 @@ pub enum FlattenError {
     },
 
     /// A rewrite-target operator (a spatial / right-hand-side `D`, or the
-    /// optional sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`) reached
-    /// flattening without being lowered to a stencil by a `match` rewrite rule
-    /// (esm-spec §4.2 / §9.6.8). Flattening is part of the compile pipeline, so
-    /// this fires before evaluation (loading stays permissive). Carries the
-    /// uniform `unlowered_operator` code that supersedes the former per-binding
-    /// spatial-operator errors; the scalar / array simulators surface the same
+    /// optional sugar ops `grad` / `div` / `laplacian` / `curl` / `∇`) survived
+    /// into a position that REQUIRES it to have been lowered to a stencil by a
+    /// `match` rewrite rule (esm-spec §4.2 / §9.6.8).
+    ///
+    /// [`flatten`] does not raise this: a PDE is a legitimate flattened system
+    /// (§4.7.6 records its spatial axes in
+    /// [`FlattenedSystem::independent_variables`]). It is raised by
+    /// [`reject_unlowered_operators`], the explicit check a consumer that needs
+    /// a DISCRETIZED system runs; the scalar / array simulators enforce the same
+    /// rule at compile time and surface the same uniform `unlowered_operator`
     /// code via [`crate::compile_error::CompileError::UnloweredOperatorError`].
     #[error(
         "unlowered_operator: rewrite-target operator '{op}' reached compilation without being \
@@ -261,11 +277,18 @@ pub struct FlattenMetadata {
 /// deterministic iteration, and full provenance metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlattenedSystem {
-    /// Independent variables. Always `["t"]`: a discretized system — whether a
-    /// pure ODE or a PDE with its spatial axis folded into `arrayop`
-    /// dimensions — has time as its only independent variable. An
-    /// *undiscretized* spatial operator never reaches this struct; it is
-    /// rejected earlier with [`FlattenError::UnloweredOperator`].
+    /// Independent variables, derived per esm-libraries-spec §4.7.6
+    /// "Independent-variable computation": `["t"]` for a 0-D system or a
+    /// DISCRETIZED one (whose spatial axes have been folded into `arrayop`
+    /// dimensions and so name no axis any more), and `["t", <spatial axes>]`
+    /// for a system still carrying undiscretized spatial differentials.
+    ///
+    /// This is what decides whether a downstream constructor builds an
+    /// `ODESystem` or a `PDESystem`, so an undiscretized spatial operator must
+    /// REACH this struct rather than be rejected before it. `t` comes first;
+    /// the spatial axes follow in LEXICOGRAPHIC order — the one place the
+    /// document-order rule does not apply, because the axes are discovered by
+    /// scanning the equations rather than declared in any order.
     pub independent_variables: Vec<String>,
     /// Dot-namespaced state variables with full metadata.
     pub state_variables: IndexMap<String, ModelVariable>,
@@ -274,17 +297,30 @@ pub struct FlattenedSystem {
     pub parameters: IndexMap<String, ModelVariable>,
     /// Dot-namespaced observed variables.
     pub observed_variables: IndexMap<String, ModelVariable>,
-    /// Dot-namespaced brownian noise sources (Wiener processes). Non-empty
-    /// implies the flattened system is an SDE rather than an ODE — runtimes
-    /// that consume this should target an SDESystem (Julia/MTK) or equivalent.
+    /// Unknowns constrained ONLY by an expression-LHS equation (`H*H*SO4 ~ Ksp`,
+    /// esm-spec §6.3.1). A **SUBSET** of [`Self::state_variables`], not a
+    /// sibling bucket: `state_variables` is the SOLVED-FOR VECTOR and a DAE
+    /// solves for its algebraic unknowns, so removing them from that map would
+    /// emit a `u` vector that silently omits them
+    /// (esm-libraries-spec §4.7.5 step 4).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub brownian_variables: IndexMap<String, ModelVariable>,
-    /// Dot-namespaced DISCRETE variables (piecewise-constant between refreshes).
-    /// Kept in their own bucket rather than folded into `state_variables`: they
-    /// persist across time like a state but are never DIFFERENTIATED, so a
-    /// consumer that integrates `state_variables` must not pick them up.
+    pub algebraic_variables: IndexMap<String, ModelVariable>,
+    /// Dot-namespaced Brownian noise sources — parameters whose `update.kind`
+    /// is `"wiener"`. A **SUBSET** of [`Self::parameters`]: esm-spec §6.3.1 says
+    /// the four parameter sets *partition the parameters*, so a wiener entry IS
+    /// a parameter and also appears here. Excluding it from `parameters` would
+    /// make the parameter vector's LENGTH depend on whether the model happens
+    /// to be stochastic, and leave the four sets partitioning nothing.
+    /// Non-empty is exactly what §6.3.1's `system_kind` derivation tests FIRST,
+    /// so carrying this map is what keeps the flattened form able to report
+    /// `"sde"`.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub discrete_variables: IndexMap<String, ModelVariable>,
+    pub brownian_parameters: IndexMap<String, ModelVariable>,
+    /// Dot-namespaced DISCRETE parameters — any OTHER `update`, i.e.
+    /// piecewise-constant between refreshes. Likewise a **SUBSET** of
+    /// [`Self::parameters`].
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub discrete_parameters: IndexMap<String, ModelVariable>,
     /// Deferred scoped-reference / array `ic` equations (esm-spec §11.4.1),
     /// classified out of `equations` by [`flatten`]. Each entry is
     /// `(target_state, rhs)` where `target_state` names the (post-lift, grid-
@@ -315,8 +351,84 @@ pub struct FlattenedSystem {
     /// file that declares no index sets, so the ordinary ODE path is unaffected.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub index_sets: IndexMap<String, IndexSet>,
+    /// The document-scoped `function_tables` registry (esm-spec §9.5), copied
+    /// from the source [`EsmFile`] in document order. Carried so a surviving
+    /// `table_lookup` node resolves without re-reading the source document
+    /// (esm-libraries-spec §4.7.5 step 4).
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub function_tables: IndexMap<String, crate::types::FunctionTable>,
+    /// The MERGED expression-template registry (esm-spec §9.6.4 rule 7, §10.7;
+    /// esm-libraries-spec §4.7.5 step 4): the union of the per-component
+    /// registries with each model's carried bodies component-SCOPED first,
+    /// deep-equal same-name entries deduplicated at first occurrence, and a
+    /// non-deep-equal same-name collision renamed to `<ComponentPath>.<name>`
+    /// in every owning component with the rename propagated along the
+    /// reference DAG. See [`merged_template_registry`].
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub template_registry: IndexMap<String, serde_json::Value>,
+    /// The provider-served loaded fields this system consumes (esm-spec §8.5):
+    /// one descriptor per PARAMETER carrying a `data`-kind `update`, in the
+    /// document order of [`Self::parameters`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loader_fields: Vec<LoaderField>,
+    /// Concrete integer grid shapes assigned by the pointwise spatial lift
+    /// (esm-spec §10.5) to each lifted state variable, e.g.
+    /// `{"Chemistry.O3": [4, 2]}`. Empty when no lift ran.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub lifted_shapes: IndexMap<String, Vec<i64>>,
     /// Provenance metadata.
     pub metadata: FlattenMetadata,
+}
+
+impl FlattenedSystem {
+    /// The flattened system's DERIVED kind (esm-spec §6.3.1) — `"sde"` /
+    /// `"pde"` / `"nonlinear"` / `"ode"`, tested in that order.
+    ///
+    /// Available on the flattened form precisely because
+    /// [`Self::brownian_parameters`] survives flattening: the derivation's first
+    /// row is "any parameter in `brownian_parameters`", so a `FlattenedSystem`
+    /// that dropped the bucket could not report `"sde"` and a consumer would
+    /// integrate a stochastic system as a deterministic one
+    /// (esm-libraries-spec §4.7.5 step 4).
+    pub fn system_kind(&self) -> crate::classification::SystemKind {
+        let mut view: IndexMap<String, ModelVariable> = IndexMap::new();
+        for (name, var) in &self.state_variables {
+            view.insert(name.clone(), var.clone());
+        }
+        for (name, var) in &self.observed_variables {
+            view.entry(name.clone()).or_insert_with(|| var.clone());
+        }
+        for (name, var) in &self.parameters {
+            view.entry(name.clone()).or_insert_with(|| var.clone());
+        }
+        crate::classification::Classification::from_parts(&view, &self.equations).system_kind
+    }
+}
+
+/// One provider-served loaded field the flattened system consumes
+/// (esm-spec §8.5; esm-libraries-spec §4.7.5 step 4 `loader_fields`).
+///
+/// From esm 1.0.0 a data source is not a component: there is no loader
+/// subsystem and no coupling edge. A model consumes a source by declaring a
+/// PARAMETER whose `update` is `{kind: "data", source: <key>, from:
+/// {file_variable}}` — the parameter IS the loaded field and owns the units.
+/// Flatten records this descriptor per such parameter so a consumer can
+/// execute the source at its cadence and bind the resulting array into the RHS
+/// as a read-only input, without re-reading the source document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoaderField {
+    /// The namespaced parameter symbol, e.g. `"Advection.u_wind"`.
+    pub name: String,
+    /// The owning component's namespace prefix, e.g. `"Advection"`.
+    pub owner: String,
+    /// The `data_sources` key the parameter's `update` names.
+    pub source: String,
+    /// The source-file variable the binding names.
+    pub file_variable: String,
+    /// `"const"` (the source declares no `temporal` block — read once before
+    /// integration) or `"discrete"` (time-varying — refreshed at its cadence).
+    /// The source-seeded cadence refinement of CONFORMANCE_SPEC §5.7.2.
+    pub cadence: String,
 }
 
 // ============================================================================
@@ -329,9 +441,10 @@ pub struct FlattenedSystem {
 ///
 /// 1. Lower every reaction system to ODE equations ([`crate::reactions::lower_reactions_to_equations`]).
 /// 2. Namespace every variable, parameter, and equation by dot-notation.
-/// 3. Reject unlowered spatial / rewrite-target operators
-///    ([`FlattenError::UnloweredOperator`]). No `dimension_mapping` inspection
-///    is performed — `slice` / `project` / `regrid` are not checked at this tier.
+/// 3. Derive [`FlattenedSystem::independent_variables`] from the flattened
+///    equations (§4.7.6) — an undiscretized spatial operator names an axis
+///    here, it is NOT rejected. No `dimension_mapping` inspection is performed:
+///    `slice` / `project` / `regrid` are not checked at this tier.
 /// 4. Apply coupling rules in order: `operator_compose`, `couple`,
 ///    `variable_map` (see §4.7.1–§4.7.4).
 /// 5. Detect [`FlattenError::ConflictingDerivative`] — species that end up
@@ -401,13 +514,22 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 1: collect per-system lowered equations and namespaced variables.
     let (source_systems, mut per_system) = collect_component_systems(file)?;
 
-    // Phase 2: reject spatial operators in any equation (Core tier = ODE only).
-    for block in &per_system {
-        for eq in &block.equations {
-            reject_spatial_operators(&eq.lhs)?;
-            reject_spatial_operators(&eq.rhs)?;
-        }
-    }
+    // NOTE: flatten does NOT reject an undiscretized spatial operator. It used
+    // to, and that was this binding's own stricter behaviour rather than the
+    // format's: esm-libraries-spec §4.7.6 "Independent-variable computation" is
+    // a normative algorithm that DERIVES `[:t, :x, :y, …]` from exactly those
+    // operators, and says the result "is what determines whether the downstream
+    // constructor produces an ODESystem or a PDESystem" — which refusing makes
+    // unreachable, along with §6.3.1's `"pde"` `system_kind`. Python, Go and
+    // TypeScript all flatten such a document and agree on the ordered lists.
+    // See `derive_independent_variables` below.
+    //
+    // The `unlowered_operator` gate still fires where discretization is
+    // genuinely required — the scalar and array simulators reject a surviving
+    // rewrite-target op at COMPILE time via
+    // [`crate::compile_error::CompileError::UnloweredOperatorError`] — and a
+    // consumer that needs a discretized system can demand one explicitly with
+    // [`reject_unlowered_operators`].
 
     // Phase 3: apply coupling rules, collecting rule descriptions.
     let coupling_rules_applied = apply_coupling_entries(file, &mut per_system)?;
@@ -426,25 +548,46 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
     maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
 
+    // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
+    // they see the equations coupling and the pointwise lift actually produced
+    // rather than the ones the document declared. Each is a subset of the map
+    // it classifies, in that map's document order.
+    let class = flattened_classification(&parts);
+    let algebraic_variables = in_document_order(
+        &class.algebraic_unknowns,
+        &[&parts.state_variables, &parts.observed_variables],
+    );
+    let brownian_parameters = in_document_order(&class.brownian_parameters, &[&parts.parameters]);
+    let discrete_parameters = in_document_order(&class.discrete_parameters, &[&parts.parameters]);
+
+    // Phase 5d: the provider-served loaded fields (esm-spec §8.5).
+    let loader_fields = collect_loader_fields(file, &parts.parameters);
+
+    // Phase 5e: the §4.7.6 independent-variable derivation, over the FINISHED
+    // equation set (post-coupling, post-lift) plus the `ic` equations that were
+    // classified out of it — the oracle derives before splitting `field_ics`
+    // off, so scanning both keeps the two passes seeing the same expressions.
+    let independent_variables = derive_independent_variables(&parts);
+
     let AssembledParts {
         state_variables,
         parameters,
         observed_variables,
-        brownian_variables,
-        discrete_variables,
         field_ics,
         equations,
         continuous_events,
         discrete_events,
+        lifted_shapes,
     } = parts;
 
     Ok(FlattenedSystem {
-        independent_variables: vec!["t".to_string()],
+        independent_variables,
         state_variables,
         parameters,
         observed_variables,
-        brownian_variables,
-        discrete_variables,
+        algebraic_variables,
+        brownian_parameters,
+        discrete_parameters,
         field_ics,
         equations,
         continuous_events,
@@ -455,6 +598,14 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             .as_ref()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default(),
+        function_tables: file
+            .function_tables
+            .as_ref()
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+        template_registry: merged_template_registry(file),
+        loader_fields,
+        lifted_shapes,
         metadata: FlattenMetadata {
             source_systems,
             coupling_rules_applied,
@@ -462,6 +613,373 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             implicit_interface_inferred: false,
         },
     })
+}
+
+/// The MERGED expression-template registry of the flattened representation
+/// (esm-spec §9.6.4 rule 7, §10.7; esm-libraries-spec §4.7.5 step 4).
+///
+/// Union of the per-component registries [captured at load]
+/// (`EsmFile::component_templates`), in this order:
+///
+/// 1. **Scope, THEN union.** Each MODEL block's bodies are component-scoped
+///    first ([`scope_template_body`]), because the dedup below compares
+///    POST-scoping bodies. Step 4 calls this an ordering requirement rather
+///    than a parenthetical, and it is load-bearing: two components importing
+///    one library each supply their own free `inv_dx`, so their carried entries
+///    are byte-identical pre-scoping and deduplicate to a single body that is
+///    correct for NEITHER. Scoping also makes them non-deep-equal, which is
+///    what routes them into the collision rename and keeps an entry per owner.
+///    Reaction-system blocks pass through UNSCOPED by policy, mirroring the
+///    Julia reference and the Python oracle: a rate-law reference is expanded
+///    eagerly at collect, so a reaction-system entry is never resolved against
+///    the post-flatten scope.
+/// 2. **Deep-equal dedup at first occurrence.**
+/// 3. **Collision rename** to `<ComponentPath>.<name>` in EVERY owning
+///    component, propagated along the reference DAG
+///    ([`crate::lower_expression_templates::registry_collision_names`]) so no
+///    surviving body holds a reference the merged registry cannot resolve.
+///
+/// `match` rules are excluded: only match-less templates are referenceable
+/// (§9.6.2), so only they can be merged.
+///
+/// Components are walked in DOCUMENT order (models in file order, then reaction
+/// systems), which is what step 4's ordering rule requires and what makes
+/// "first occurrence" mean the first occurrence in the file.
+///
+/// Rust's typed build path expands every surviving reference at load (RFC
+/// out-of-line-expression-templates §7.7), so no equation reaching here carries
+/// an `apply_expression_template` node and the rename has no COMPONENT
+/// reference site left to rewrite — step 4's "Applicability" paragraph says
+/// exactly this. The registry is still carried, because the field is normative
+/// and a consumer must be able to reconstitute the reference-preserving
+/// document from the flattened form alone.
+pub fn merged_template_registry(file: &EsmFile) -> IndexMap<String, serde_json::Value> {
+    let Some(component_templates) = &file.component_templates else {
+        return IndexMap::new();
+    };
+
+    // Document order: models as the file declares them, then reaction systems,
+    // then any captured component the typed file no longer holds.
+    let mut ordered: Vec<String> = Vec::new();
+    if let Some(models) = &file.models {
+        ordered.extend(models.keys().map(|n| format!("models.{n}")));
+    }
+    if let Some(rs) = &file.reaction_systems {
+        ordered.extend(rs.keys().map(|n| format!("reaction_systems.{n}")));
+    }
+    for key in component_templates.keys() {
+        if !ordered.contains(key) {
+            ordered.push(key.clone());
+        }
+    }
+
+    // name -> [(component_path, declaration), ...], in document order.
+    let mut byname: Vec<(String, Vec<(String, serde_json::Value)>)> = Vec::new();
+    for compkey in &ordered {
+        let Some(block) = component_templates.get(compkey).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        let (section, cname) = compkey.split_once('.').unwrap_or(("", compkey.as_str()));
+        let model = (section == "models")
+            .then(|| file.models.as_ref().and_then(|m| m.get(cname)))
+            .flatten();
+        for (tname, decl) in block {
+            if decl.get("match").is_some_and(|m| !m.is_null()) {
+                continue; // match rules are not referenceable, so not merged
+            }
+            let scoped = match (model, decl.get("body")) {
+                (Some(model), Some(body)) => {
+                    let params: HashSet<String> = decl
+                        .get("params")
+                        .and_then(|p| p.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut locals: HashSet<String> = model.variables.keys().cloned().collect();
+                    if let Some(subs) = &model.subsystems {
+                        locals.extend(subs.keys().cloned());
+                    }
+                    for p in &params {
+                        locals.remove(p);
+                    }
+                    match serde_json::from_value::<Expr>(body.clone()) {
+                        Ok(parsed) => {
+                            let scoped_body =
+                                scope_template_body(&parsed, cname, &locals, &HashSet::new());
+                            match serde_json::to_value(&scoped_body) {
+                                Ok(v) => {
+                                    let mut d = decl.clone();
+                                    if let Some(obj) = d.as_object_mut() {
+                                        obj.insert("body".to_string(), v);
+                                    }
+                                    d
+                                }
+                                // A body that will not re-serialize is carried
+                                // verbatim rather than dropped: the registry is
+                                // provenance, and losing an entry is worse than
+                                // carrying an unscoped one.
+                                Err(_) => decl.clone(),
+                            }
+                        }
+                        Err(_) => decl.clone(),
+                    }
+                }
+                _ => decl.clone(),
+            };
+            match byname.iter_mut().find(|(k, _)| k == tname) {
+                Some((_, occ)) => occ.push((cname.to_string(), scoped)),
+                None => byname.push((tname.clone(), vec![(cname.to_string(), scoped)])),
+            }
+        }
+    }
+
+    let collide = crate::lower_expression_templates::registry_collision_names(&byname);
+    let mut merged: IndexMap<String, serde_json::Value> = IndexMap::new();
+    let mut rename: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (name, occ) in &byname {
+        if collide.contains(name) {
+            for (path, decl) in occ {
+                let newname = format!("{path}.{name}");
+                merged.insert(newname.clone(), decl.clone());
+                rename
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(name.clone(), newname);
+            }
+        } else {
+            merged.insert(name.clone(), occ[0].1.clone()); // deep-equal dedup
+        }
+    }
+    // A renamed body's own nested references follow its OWNER's map, so a
+    // per-owner wrapper reaches its owner's leaf and never the other owner's.
+    for per_owner in rename.values() {
+        for new in per_owner.values() {
+            if let Some(decl) = merged.get_mut(new) {
+                crate::lower_expression_templates::rename_apply_refs(decl, per_owner);
+            }
+        }
+    }
+    merged
+}
+
+/// Component-scope ONE carried template body: prefix exactly the references
+/// that name one of the OWNING component's locals.
+///
+/// Unlike [`namespace_expr`] — which prefixes every bare reference except an
+/// explicit leave-alone set — this is a WHITELIST, matching the Julia
+/// `namespace_expr(body, cname, local_names)` and the Python oracle's
+/// `_scope_template_body`: a body legitimately references its own formal
+/// `params`, loop symbols, and document-scoped index sets, none of which is a
+/// component local and none of which may be prefixed. The caller removes the
+/// template's `params` from `locals` before calling.
+fn scope_template_body(
+    expr: &Expr,
+    prefix: &str,
+    locals: &HashSet<String>,
+    bound: &HashSet<String>,
+) -> Expr {
+    match expr {
+        Expr::Number(n) => Expr::Number(*n),
+        Expr::Integer(n) => Expr::Integer(*n),
+        Expr::Variable(name) => {
+            if bound.contains(name) {
+                return Expr::Variable(name.clone());
+            }
+            let head = name.split('.').next().unwrap_or(name.as_str());
+            if locals.contains(head) {
+                Expr::Variable(format!("{prefix}.{name}"))
+            } else {
+                Expr::Variable(name.clone())
+            }
+        }
+        Expr::Operator(node) => {
+            let mut child_bound = bound.clone();
+            if let Some(output_idx) = &node.output_idx {
+                child_bound.extend(output_idx.iter().cloned());
+            }
+            if let Some(ranges) = &node.ranges {
+                child_bound.extend(ranges.keys().cloned());
+            }
+            let mut out =
+                node.map_children(&mut |c| scope_template_body(c, prefix, locals, &child_bound));
+            if let Some(join) = &node.join {
+                let mut binders: HashSet<&str> = HashSet::new();
+                if let Some(output_idx) = &node.output_idx {
+                    binders.extend(output_idx.iter().map(String::as_str));
+                }
+                if let Some(ranges) = &node.ranges {
+                    binders.extend(ranges.keys().map(String::as_str));
+                }
+                if let Some(ns) = namespace_join_names(join, &binders, prefix, locals) {
+                    out.join = Some(ns);
+                }
+            }
+            Expr::operator(out)
+        }
+    }
+}
+
+/// Phase 5e of [`flatten`]: the independent variables of the flattened system
+/// (esm-libraries-spec §4.7.6 "Independent-variable computation").
+///
+/// The spec's three steps:
+///
+/// 1. **Start with `["t"]`.** Time is always an independent variable.
+/// 2. **Scan every equation for spatial operators** — `grad` / `div` /
+///    `laplacian` (and any other undiscretized differential), or a `D` whose
+///    `wrt` is not the time variable — and add each spatial dimension they
+///    reference.
+/// 3. **Scan every `domains` entry for spatial axes** and add them. VACUOUS
+///    since v0.8.0: `Domain.spatial` was removed, and the surviving `domain`
+///    carries only `independent_variable` / `temporal` / `element_type` /
+///    `array_type`. There is no spatial domain left to scan, so the operators
+///    in the equations are the whole signal — esm-spec §6.3.1 makes the same
+///    point about the `"pde"` `system_kind` test.
+///
+/// Step 2's signal is harvested STRUCTURALLY, from the axis-naming `dim` scalar
+/// field (esm-spec §4.9.1) and from a spatial `wrt` — never from a hardcoded
+/// op-name list, so the sugar ops carry no spatial-detection privilege over a
+/// custom rewrite-target op. A DISCRETIZED system has folded its spatial axes
+/// into array dimensions and carries no such node, so it yields nothing and
+/// stays a pure ODE with `["t"]`.
+///
+/// **Ordering.** `t` first, then the spatial axes LEXICOGRAPHIC. This is the one
+/// The axes follow DOCUMENT ORDER, like every other ordered field in step 4 —
+/// the order the scan first encounters them, which is the order the document
+/// names them (`full_coupled` → `["t", "lon", "lat", "lev"]`). This used to
+/// collect into a `BTreeSet`, i.e. sorted, on the reasoning that a scanned list
+/// has no document order to preserve. That was wrong: the axis order is the
+/// order a downstream array layout follows, so sorting silently permutes the
+/// modeller's axes.
+fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
+    // First-encounter order, deduplicated. `out` doubles as the seen-set: it
+    // starts with "t", which also drops a spatial `wrt` naming time.
+    let mut out = vec!["t".to_string()];
+    let mut scan = |e: &Expr| collect_spatial_dims(e, &mut out);
+    for eq in &parts.equations {
+        scan(&eq.lhs);
+        scan(&eq.rhs);
+    }
+    for (_, rhs) in &parts.field_ics {
+        scan(rhs);
+    }
+    // Step 3 is vacuous — see the doc comment.
+    out
+}
+
+/// Collect the spatial dimension labels an UNDISCRETIZED differential names
+/// anywhere in `expr`. Helper of [`derive_independent_variables`].
+fn collect_spatial_dims(expr: &Expr, out: &mut Vec<String>) {
+    let Expr::Operator(node) = expr else { return };
+    // The axis a `grad` / `div` / `laplacian` (or any custom differential)
+    // iterates over. Only an undiscretized differential carries it; no
+    // evaluable-core op uses `dim`.
+    if let Some(dim) = &node.dim
+        && !out.iter().any(|d| d == dim)
+    {
+        out.push(dim.clone());
+    }
+    // A SPATIAL `D`: `wrt` naming an axis other than time. The structural
+    // `D(u, t)` of an ODE is excluded, as is a `D` with no `wrt` (time by
+    // default).
+    if let Some(wrt) = &node.wrt
+        && wrt != "t"
+        && !out.iter().any(|d| d == wrt)
+    {
+        out.push(wrt.clone());
+    }
+    node.for_each_child(&mut |child| collect_spatial_dims(child, out));
+}
+
+/// Demand that `flat` carry NO undiscretized rewrite-target operator, reporting
+/// the first offender as [`FlattenError::UnloweredOperator`] (the uniform
+/// `unlowered_operator` code, esm-spec §4.2 / §9.6.8).
+///
+/// [`flatten`] itself does NOT run this: a PDE is a legitimate flattened system
+/// whose spatial axes §4.7.6 records in
+/// [`FlattenedSystem::independent_variables`], and refusing it would make
+/// `PDESystem` construction and the `"pde"` `system_kind` unreachable. This is
+/// for a consumer that genuinely REQUIRES a discretized system and wants to say
+/// so before it starts work; the scalar and array simulators enforce the same
+/// rule at compile time on their own, through
+/// [`crate::compile_error::CompileError::UnloweredOperatorError`].
+///
+/// The tier decision is delegated wholesale to [`crate::op_registry`], so this
+/// keeps no hand-maintained op-name list.
+pub fn reject_unlowered_operators(flat: &FlattenedSystem) -> Result<(), FlattenError> {
+    match first_unlowered_operator(flat) {
+        Some(op) => Err(FlattenError::UnloweredOperator { op }),
+        None => Ok(()),
+    }
+}
+
+/// The name of the first undiscretized rewrite-target operator in `flat`, or
+/// `None` when the system is fully discretized.
+///
+/// The query form of [`reject_unlowered_operators`], for a caller that already
+/// has its own error type — the scalar and array simulators use it to report a
+/// PDE that reached them with the uniform `unlowered_operator` code
+/// ([`crate::compile_error::CompileError::UnloweredOperatorError`]) rather than
+/// the vaguer "unsupported dimensionality", preserving the cross-binding
+/// diagnostic esm-spec §4.2 / §9.6.8 specifies.
+pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
+    for eq in &flat.equations {
+        for side in [&eq.lhs, &eq.rhs] {
+            if let Err(FlattenError::UnloweredOperator { op }) = reject_spatial_operators(side) {
+                return Some(op);
+            }
+        }
+    }
+    None
+}
+
+/// Phase 5d of [`flatten`]: the provider-served loaded fields
+/// (esm-spec §8.5; esm-libraries-spec §4.7.5 step 4 `loader_fields`).
+///
+/// One descriptor per flattened PARAMETER carrying a `data`-kind `update`, in
+/// the document order of `parameters`. `cadence` follows the source-seeded
+/// refinement of CONFORMANCE_SPEC §5.7.2: a source WITH a `temporal` block is
+/// time-varying (`"discrete"`), one without it is read once (`"const"`).
+fn collect_loader_fields(
+    file: &EsmFile,
+    parameters: &IndexMap<String, ModelVariable>,
+) -> Vec<LoaderField> {
+    let mut out = Vec::new();
+    for (name, var) in parameters {
+        let Some(spec) = &var.update else { continue };
+        let rules: &[crate::types::ParameterUpdate] = match spec {
+            crate::types::ParameterUpdateSpec::Single(rule) => std::slice::from_ref(rule),
+            crate::types::ParameterUpdateSpec::Several(rules) => rules,
+        };
+        for rule in rules {
+            let Some(source) = rule.data_source() else {
+                continue;
+            };
+            let Some(binding) = rule.value().and_then(|v| v.from.as_ref()) else {
+                continue;
+            };
+            let has_temporal = file
+                .data_sources
+                .as_ref()
+                .and_then(|ds| ds.get(source))
+                .is_some_and(|ds| ds.temporal.is_some());
+            out.push(LoaderField {
+                name: name.clone(),
+                owner: name
+                    .rsplit_once('.')
+                    .map(|(owner, _)| owner.to_string())
+                    .unwrap_or_default(),
+                source: source.to_string(),
+                file_variable: binding.file_variable.clone(),
+                cadence: if has_temporal { "discrete" } else { "const" }.to_string(),
+            });
+            break; // one parameter is fed by one source
+        }
+    }
+    out
 }
 
 /// Phase 1 of [`flatten`]: build one [`SystemBlock`] per component — models
@@ -475,12 +993,12 @@ fn collect_component_systems(
     let mut source_systems = Vec::new();
     let mut per_system: Vec<SystemBlock> = Vec::new();
 
-    // Models first (spec §4.7.5 step 2) — sorted for deterministic output.
+    // Models first (spec §4.7.5 step 2), in the order the DOCUMENT declares
+    // them (esm-libraries-spec §4.7.5 step 4, "Ordering"). Sorting the keys —
+    // what this used to do — is observable in the flattened parameter vector.
     if let Some(models) = &file.models {
-        let mut keys: Vec<&String> = models.keys().collect();
-        keys.sort();
-        for name in keys {
-            let block = build_model_block(name, &models[name])?;
+        for (name, model) in models {
+            let block = build_model_block(name, model)?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -488,10 +1006,8 @@ fn collect_component_systems(
 
     // Reaction systems next — lowered to ODE equations then namespaced.
     if let Some(rsystems) = &file.reaction_systems {
-        let mut keys: Vec<&String> = rsystems.keys().collect();
-        keys.sort();
-        for name in keys {
-            let block = build_reaction_block(name, &rsystems[name])?;
+        for (name, rs) in rsystems {
+            let block = build_reaction_block(name, rs)?;
             source_systems.push(name.clone());
             per_system.push(block);
         }
@@ -574,12 +1090,11 @@ struct AssembledParts {
     state_variables: IndexMap<String, ModelVariable>,
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
-    brownian_variables: IndexMap<String, ModelVariable>,
-    discrete_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
     equations: Vec<Equation>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
+    lifted_shapes: IndexMap<String, Vec<i64>>,
 }
 
 /// Phase 5 of [`flatten`]: merge the per-system blocks (in block order) into
@@ -594,12 +1109,11 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         state_variables: IndexMap::new(),
         parameters: IndexMap::new(),
         observed_variables: IndexMap::new(),
-        brownian_variables: IndexMap::new(),
-        discrete_variables: IndexMap::new(),
         field_ics: Vec::new(),
         equations: Vec::new(),
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
+        lifted_shapes: IndexMap::new(),
     };
 
     for block in per_system {
@@ -611,12 +1125,6 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
         }
         for (name, var) in block.observed_vars {
             parts.observed_variables.insert(name, var);
-        }
-        for (name, var) in block.brownian_vars {
-            parts.brownian_variables.insert(name, var);
-        }
-        for (name, var) in block.discrete_vars {
-            parts.discrete_variables.insert(name, var);
         }
         for eq in block.equations {
             if let Some(target) = extract_ic_target(&eq.lhs) {
@@ -656,9 +1164,11 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 /// grid-shaped wind field stays a whole ARRAY inside a per-cell expression and
 /// the tendency evaluates to `NaN`.
 fn source_fed_producers(parts: &AssembledParts) -> HashMap<String, usize> {
+    let class = flattened_classification(parts);
     parts
-        .discrete_variables
+        .parameters
         .iter()
+        .filter(|(name, _)| class.is_discrete_parameter(name))
         .filter_map(|(name, var)| {
             var.shape
                 .as_ref()
@@ -666,6 +1176,53 @@ fn source_fed_producers(parts: &AssembledParts) -> HashMap<String, usize> {
                 .map(|s| (name.clone(), s.len()))
         })
         .collect()
+}
+
+/// The esm-spec §6.3.1 classification of the FLATTENED system.
+///
+/// Re-derived over the flattened maps and equations rather than lifted from the
+/// per-component answers, because flattening moves the ground under it:
+/// `operator_compose` merges two RHSs into one equation, `variable_map` deletes
+/// a parameter and promotes a variable in its place, and the pointwise lift
+/// rewrites a scalar state ODE into an `aggregate`. Every membership decision
+/// is delegated to [`crate::classification`] — the binding's only sanctioned
+/// answer to these questions — so no `update.kind == "wiener"` test is spelled
+/// here. Mirrors Python's `_classification_view` / `_classify_flattened`.
+fn flattened_classification(parts: &AssembledParts) -> crate::classification::Classification {
+    let mut view: IndexMap<String, ModelVariable> = IndexMap::new();
+    for (name, var) in &parts.state_variables {
+        view.insert(name.clone(), var.clone());
+    }
+    for (name, var) in &parts.observed_variables {
+        view.entry(name.clone()).or_insert_with(|| var.clone());
+    }
+    for (name, var) in &parts.parameters {
+        view.entry(name.clone()).or_insert_with(|| var.clone());
+    }
+    crate::classification::Classification::from_parts(&view, &parts.equations)
+}
+
+/// Select `names` out of `maps`, keeping each map's DOCUMENT order.
+///
+/// The classification accessors return lexicographically sorted name lists — a
+/// set-valued answer spelled as a list. esm-libraries-spec §4.7.5 step 4
+/// requires document order of every map on the flattened system, so membership
+/// comes from the accessor and POSITION comes from the already-document-ordered
+/// map being filtered. Sorting here instead would be observable.
+fn in_document_order(
+    names: &[String],
+    maps: &[&IndexMap<String, ModelVariable>],
+) -> IndexMap<String, ModelVariable> {
+    let wanted: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut out = IndexMap::new();
+    for m in maps {
+        for (name, var) in *m {
+            if wanted.contains(name.as_str()) && !out.contains_key(name) {
+                out.insert(name.clone(), var.clone());
+            }
+        }
+    }
+    out
 }
 
 fn apply_variable_map_removals(
@@ -775,6 +1332,7 @@ fn maybe_apply_pointwise_lift(
         apply_pointwise_lift(
             &mut parts.equations,
             &mut parts.state_variables,
+            &mut parts.lifted_shapes,
             loaded_producers,
         )?;
     }
@@ -793,10 +1351,11 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
 
     let system_name = model.name.clone().unwrap_or_else(|| "model".to_string());
 
-    let mut models = std::collections::HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(system_name, model.clone());
 
     let file = EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         // A synthesized single-system view: it declares no templates and no
@@ -842,10 +1401,13 @@ pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
 struct SystemBlock {
     name: String,
     state_vars: IndexMap<String, ModelVariable>,
+    /// EVERY parameter of the component, in declaration order and of every
+    /// cadence. The wiener / discrete subsets are re-derived over the FLATTENED
+    /// system in [`classify_flattened`]; they are not carved out here, because
+    /// esm-spec §6.3.1's four sets partition `parameters` rather than sitting
+    /// beside it.
     parameters: IndexMap<String, ModelVariable>,
     observed_vars: IndexMap<String, ModelVariable>,
-    brownian_vars: IndexMap<String, ModelVariable>,
-    discrete_vars: IndexMap<String, ModelVariable>,
     equations: Vec<Equation>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
@@ -855,8 +1417,6 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
     let mut observed_vars = IndexMap::new();
-    let mut brownian_vars = IndexMap::new();
-    let mut discrete_vars = IndexMap::new();
 
     // The component's own declared names — the gate for namespacing the
     // plain-string references a `join` clause carries (§5.5.6).
@@ -874,10 +1434,11 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
     // this model's equations (esm-spec §6.3.1), once, before namespacing.
     let class = crate::classification::Classification::of(model);
 
-    let mut var_names: Vec<&String> = model.variables.keys().collect();
-    var_names.sort();
-    for var_name in var_names {
-        let var = &model.variables[var_name];
+    // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
+    // component's variables in the order the component declares them. A
+    // parameter vector is positional, so lexicographic sorting here would be
+    // observable — and non-conforming.
+    for (var_name, var) in &model.variables {
         let namespaced = format!("{system_name}.{var_name}");
         let mut cloned = var.clone();
         // A parameter's `update` carries Expressions (trigger, value,
@@ -887,28 +1448,36 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             *expr = namespace_expr(expr, system_name, &locals);
         });
         match var.var_type {
-            // An unknown lands in the bucket its EQUATIONS put it in. An
-            // algebraic unknown joins `state_vars`: it is solved for, is not
-            // eliminable, and the downstream consumers that integrate this
-            // bucket already tolerate an unknown with no derivative equation
-            // (that is what the DAE contract in `dae.rs` handles).
+            // An unknown lands in the bucket its EQUATIONS put it in.
+            // `observed_variables` is the INLINED form specifically — the
+            // strict `y ~ f(…)` a bare-variable LHS defines, which is
+            // substituted into every consumer and contributes no output of its
+            // own. Every OTHER unknown is SOLVED FOR and joins `state_vars`:
+            // an ODE state; an algebraic unknown (not eliminable, and the
+            // consumers that integrate this bucket already tolerate an unknown
+            // with no derivative equation — that is what `dae.rs` handles); and
+            // an ARRAYED definition (`y[i] ~ f(i)`), which is observed by
+            // §6.3.1 but materializes into a buffer its consumers index rather
+            // than being inlined, so the solver must allocate it.
+            //
+            // Gating on `is_observed` — the broader semantic set — instead left
+            // an arrayed observed OUT of the solved-for vector entirely, the
+            // same class of defect esm-libraries-spec 45fa534a0 corrected for
+            // `algebraic_variables`.
             VariableType::Unknown => {
-                if class.is_observed(var_name) {
+                if class.is_inlined(var_name) {
                     observed_vars.insert(namespaced, cloned);
                 } else {
                     state_vars.insert(namespaced, cloned);
                 }
             }
-            // A parameter lands in the bucket its `distribution` / `update`
-            // put it in — Brownian, discrete, or plain.
+            // EVERY parameter lands in `parameters`, whatever its cadence.
+            // esm-spec §6.3.1: `brownian_parameters` / `discrete_parameters` /
+            // `sampled_parameters` / `constant_parameters` PARTITION the
+            // parameters, so a wiener-updated entry is a parameter that ALSO
+            // appears in the Brownian subset — see [`classify_flattened`].
             VariableType::Parameter => {
-                if class.is_brownian(var_name) {
-                    brownian_vars.insert(namespaced, cloned);
-                } else if class.is_discrete_parameter(var_name) {
-                    discrete_vars.insert(namespaced, cloned);
-                } else {
-                    parameters.insert(namespaced, cloned);
-                }
+                parameters.insert(namespaced, cloned);
             }
         }
     }
@@ -942,8 +1511,6 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         state_vars,
         parameters,
         observed_vars,
-        brownian_vars,
-        discrete_vars,
         equations,
         continuous_events,
         discrete_events,
@@ -957,10 +1524,8 @@ fn build_reaction_block(
     let mut state_vars = IndexMap::new();
     let mut parameters = IndexMap::new();
 
-    let mut species_names: Vec<&String> = rs.species.keys().collect();
-    species_names.sort();
-    for species_name in species_names {
-        let species = &rs.species[species_name];
+    // Document order (see [`build_model_block`]).
+    for (species_name, species) in &rs.species {
         let namespaced = format!("{system_name}.{species_name}");
         // Reservoir species (`constant: true`, §7.4): held fixed, no ODE
         // (`lower_reactions_to_equations` skips its equation), so it is a
@@ -990,10 +1555,7 @@ fn build_reaction_block(
         }
     }
 
-    let mut param_names: Vec<&String> = rs.parameters.keys().collect();
-    param_names.sort();
-    for param_name in param_names {
-        let param = &rs.parameters[param_name];
+    for (param_name, param) in &rs.parameters {
         let namespaced = format!("{system_name}.{param_name}");
         parameters.insert(
             namespaced,
@@ -1034,8 +1596,6 @@ fn build_reaction_block(
         state_vars,
         parameters,
         observed_vars: IndexMap::new(),
-        brownian_vars: IndexMap::new(),
-        discrete_vars: IndexMap::new(),
         equations,
         continuous_events: Vec::new(),
         discrete_events: Vec::new(),
@@ -1145,7 +1705,9 @@ fn namespace_expr_scoped(
         Expr::Number(n) => Expr::Number(*n),
         Expr::Integer(n) => Expr::Integer(*n),
         Expr::Variable(name) => {
-            if name == "t" || bound.contains(name) {
+            // `t` is the independent variable and `_var` the §6.4 operator
+            // placeholder; both are global symbols, neither is component-scoped.
+            if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name) {
                 Expr::Variable(name.clone())
             } else if name.contains('.') {
                 // A dotted reference is already-namespaced UNLESS its head is a
@@ -1193,8 +1755,23 @@ fn namespace_expr_scoped(
             // `wrt` is a differentiation-variable *string*, not a child `Expr`,
             // so it is a node-local rewrite the child-walker does not (and must
             // not) cover; apply it to the rebuilt node exactly as before.
+            // `wrt` is a differentiation-variable *string*, not a child `Expr`.
+            // A SPATIAL `wrt` names a document-scoped AXIS (esm-libraries-spec
+            // §4.7.6 harvests it as an independent variable), so it is prefixed
+            // only when it actually names one of this component's own locals —
+            // the same whitelist rule `namespace_join_names` applies to a plain
+            // string that may be a document-scoped index set. Prefixing it
+            // unconditionally produced axes like `m.x` in
+            // `independent_variables`; nothing observed that before, because an
+            // undiscretized spatial `D` could not reach a FlattenedSystem at all
+            // until flatten stopped refusing PDEs.
             out.wrt = node.wrt.as_ref().map(|w| {
-                if w.contains('.') || w == "t" || child_bound.contains(w) {
+                if w.contains('.')
+                    || w == "t"
+                    || w == VAR_PLACEHOLDER
+                    || child_bound.contains(w)
+                    || !locals.contains(w)
+                {
                     w.clone()
                 } else {
                     format!("{system_name}.{w}")
@@ -1286,8 +1863,15 @@ fn namespace_discrete_event(
     event
 }
 
+/// The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel, not a
+/// component-scoped name: `operator_compose` substitutes it with each matching
+/// ODE state of the TARGET system, so prefixing it with the operator model's
+/// own namespace destroys the very name the substitution looks for. Treated
+/// exactly like the independent variable `t` everywhere namespacing happens.
+const VAR_PLACEHOLDER: &str = "_var";
+
 fn namespace_plain(name: &str, system_name: &str) -> String {
-    if name.contains('.') {
+    if name.contains('.') || name == VAR_PLACEHOLDER {
         name.to_string()
     } else {
         format!("{system_name}.{name}")
@@ -1565,9 +2149,30 @@ fn apply_couple(
     let block_name = format!("couple({})", systems.join(","));
     let mut new_equations = Vec::new();
     for eq_val in eqs_json {
-        let lhs = parse_connector_side(eq_val, "lhs", systems)?;
-        let rhs = parse_connector_side(eq_val, "rhs", systems)?;
-        new_equations.push(Equation { lhs, rhs });
+        // esm-spec §4.7.2 gives a connector equation TWO spellings, and a
+        // document may mix them:
+        //
+        //   * EXPLICIT — `{lhs, rhs}` — a new equation of its own, collected
+        //     into a synthetic `couple(...)` block below;
+        //   * INJECTED — `{from, to, transform, expression}` — a source/sink
+        //     TERM folded into the equation that already defines `to`.
+        //
+        // Only the explicit form was implemented, so every fixture using the
+        // injected one hard-failed with `MalformedConnectorEquation`. That went
+        // unnoticed because the spatial-operator refusal fired first on all
+        // three corpus documents that carry it.
+        if eq_val.get("lhs").is_some() || eq_val.get("rhs").is_some() {
+            let lhs = parse_connector_side(eq_val, "lhs", systems)?;
+            let rhs = parse_connector_side(eq_val, "rhs", systems)?;
+            new_equations.push(Equation { lhs, rhs });
+        } else if eq_val.get("to").is_some() {
+            inject_connector_term(eq_val, systems, per_system)?;
+        } else {
+            return Err(FlattenError::MalformedConnectorEquation {
+                systems: systems.join(","),
+                side: "lhs".to_string(),
+            });
+        }
     }
     if !new_equations.is_empty() {
         per_system.push(SystemBlock {
@@ -1575,13 +2180,86 @@ fn apply_couple(
             state_vars: IndexMap::new(),
             parameters: IndexMap::new(),
             observed_vars: IndexMap::new(),
-            brownian_vars: IndexMap::new(),
-            discrete_vars: IndexMap::new(),
             equations: new_equations,
             continuous_events: Vec::new(),
             discrete_events: Vec::new(),
         });
     }
+    Ok(())
+}
+
+/// Fold one INJECTED connector equation — `{from, to, transform, expression}`
+/// (esm-spec §4.7.2) — into the equation that already defines its `to` target.
+///
+/// `from` / `to` are scoped references (`A.x`) and the `expression`'s own
+/// references are, by contract, already fully scoped, so nothing is namespaced
+/// here — the term is used verbatim, exactly as the Python oracle uses it.
+///
+/// The target equation is found by its LHS DEPENDENT VARIABLE, read through the
+/// crate's canonical [`crate::classification::lhs_form`], so `D(x, t)`,
+/// `D(x[i], t)`, a bare `x`, and the `aggregate`-wrapped spellings all resolve
+/// to `x`. A `to` that names no equation's LHS is SKIPPED, not an error: a
+/// connector may legitimately target a parameter with no defining equation
+/// (`advanced_coupling`'s multiplicative edge targets
+/// `Surface.surface_resistance`, which has none), and the oracle skips it too.
+///
+/// `transform` selects how the term combines with the existing RHS: `additive`
+/// sums, `multiplicative` multiplies, `replacement` overwrites. An absent or
+/// unrecognised transform falls through to `additive`, mirroring the oracle.
+fn inject_connector_term(
+    eq_val: &serde_json::Value,
+    systems: &[String],
+    per_system: &mut [SystemBlock],
+) -> Result<(), FlattenError> {
+    let Some(target) = eq_val.get("to").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+
+    // The term: the declared `expression`, or a bare reference to `from` when
+    // the entry carries none.
+    let term = match eq_val.get("expression") {
+        Some(v) => serde_json::from_value::<Expr>(v.clone()).map_err(|_| {
+            FlattenError::MalformedConnectorEquation {
+                systems: systems.join(","),
+                side: "expression".to_string(),
+            }
+        })?,
+        None => match eq_val.get("from").and_then(|v| v.as_str()) {
+            Some(from) => Expr::Variable(from.to_string()),
+            None => {
+                return Err(FlattenError::MalformedConnectorEquation {
+                    systems: systems.join(","),
+                    side: "from".to_string(),
+                });
+            }
+        },
+    };
+
+    for block in per_system.iter_mut() {
+        for eq in block.equations.iter_mut() {
+            let dep = match crate::classification::lhs_form(&eq.lhs) {
+                crate::classification::LhsForm::Derivative(name)
+                | crate::classification::LhsForm::Bare(name) => name,
+                crate::classification::LhsForm::Expression => continue,
+            };
+            if dep != target {
+                continue;
+            }
+            let existing = std::mem::replace(&mut eq.rhs, Expr::Integer(0));
+            eq.rhs = match eq_val.get("transform").and_then(|v| v.as_str()) {
+                Some("multiplicative") => Expr::operator(ExpressionNode {
+                    op: "*".to_string(),
+                    args: vec![existing, term],
+                    ..Default::default()
+                }),
+                Some("replacement") => term,
+                // `additive`, absent, or unrecognised.
+                _ => sum_exprs(existing, term),
+            };
+            return Ok(());
+        }
+    }
+    // No equation defines `to` — nothing to inject into. See the doc comment.
     Ok(())
 }
 
@@ -1650,7 +2328,6 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
             .observed_vars
             .values_mut()
             .chain(block.parameters.values_mut())
-            .chain(block.discrete_vars.values_mut())
         {
             var.for_each_expression_mut(&mut |expr| {
                 *expr = rename_join_names(&crate::substitute::substitute(expr, &subs), to, from);
@@ -2065,6 +2742,7 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
 fn apply_pointwise_lift(
     equations: &mut [Equation],
     state_variables: &mut IndexMap<String, ModelVariable>,
+    lifted_shapes: &mut IndexMap<String, Vec<i64>>,
     loaded_producers: &HashMap<String, usize>,
 ) -> Result<(), FlattenError> {
     // A species is lifted iff its state ODE's merged RHS carries a spatial-operator
@@ -2123,6 +2801,10 @@ fn apply_pointwise_lift(
         })?;
 
         let extents = makearray_extents(first_ma);
+        // The post-lift grid shape, recorded as a first-class flattened field
+        // (esm-libraries-spec §4.7.5 step 4 `lifted_shapes`) so a consumer need
+        // not re-infer it from the lifted equations' index use.
+        lifted_shapes.insert(species.clone(), extents.clone());
 
         // Operands to index per cell: the lifted species plus any loaded producer
         // whose rank matches the grid rank (e.g. a grid-shaped wind field).
@@ -2139,12 +2821,14 @@ fn apply_pointwise_lift(
             ranges.insert(loop_name.clone(), RangeSpec::Interval([1, extents[d]]));
         }
 
-        // Promote the species to the grid shape (a synthetic shape axis per dim)
-        // so downstream consumers see an array state. The array simulator infers
-        // the concrete extent from the lifted equations regardless.
-        if let Some(var) = state_variables.get_mut(&species) {
-            var.shape = Some(loops.iter().map(|l| format!("_lift_{l}")).collect());
-        }
+        // The species' DECLARED shape is left alone. A synthetic `_lift_<loop>`
+        // axis used to be written here so downstream consumers saw an array
+        // state, but that fabricates a `shape` the document never declared —
+        // and step 4 requires each map to carry the DECLARED variable. The real
+        // post-lift grid shape now travels in `lifted_shapes` above, which is
+        // the field the spec provides for exactly this, and the array simulator
+        // infers the concrete extent from the lifted equations regardless.
+        let _ = &state_variables;
 
         let idx_species = index_node(&species, &loops);
         let d_body = Expr::operator(ExpressionNode {
@@ -2197,6 +2881,7 @@ mod tests {
 
     fn empty_file() -> EsmFile {
         EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -2224,7 +2909,7 @@ mod tests {
 
     #[test]
     fn test_flatten_single_model_namespaces_variables() {
-        let mut vars = HashMap::new();
+        let mut vars = IndexMap::new();
         vars.insert(
             "x".to_string(),
             ModelVariable {
@@ -2254,7 +2939,7 @@ mod tests {
             },
         );
 
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "sys".to_string(),
             Model {
@@ -2284,6 +2969,7 @@ mod tests {
         );
 
         let file = EsmFile {
+            component_templates: None,
             coordinates: None,
             coupling_roles: None,
             models: Some(models),
@@ -2360,7 +3046,7 @@ mod tests {
     }
 
     fn make_model(vars: Vec<(&str, ModelVariable)>, equations: Vec<Equation>) -> Model {
-        let mut variables = HashMap::new();
+        let mut variables = IndexMap::new();
         for (name, v) in vars {
             variables.insert(name.to_string(), v);
         }
@@ -2395,11 +3081,12 @@ mod tests {
             ],
             vec![ddt("y", Expr::Variable("temp".to_string()))],
         );
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("src".to_string(), src);
         models.insert("dst".to_string(), dst);
 
         EsmFile {
+            component_templates: None,
             coordinates: None,
             models: Some(models),
             coupling: Some(vec![CouplingEntry::VariableMap {
@@ -2470,8 +3157,14 @@ mod tests {
         state_variables.insert("C".to_string(), var(VariableType::Unknown, None));
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
-        let err = apply_pointwise_lift(&mut equations, &mut state_variables, &loaded_producers)
-            .unwrap_err();
+        let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
+        let err = apply_pointwise_lift(
+            &mut equations,
+            &mut state_variables,
+            &mut lifted_shapes,
+            &loaded_producers,
+        )
+        .unwrap_err();
         match err {
             FlattenError::DimensionPromotion { message } => {
                 assert!(message.contains("pointwise lift"), "message: {message}");

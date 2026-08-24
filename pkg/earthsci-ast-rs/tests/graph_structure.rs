@@ -7,7 +7,7 @@
 //! lookup.
 
 use earthsci_ast::*;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Test component graph generation
 #[test]
@@ -27,7 +27,7 @@ fn test_component_graph_generation() {
         discretized_from: None,
     };
 
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -59,11 +59,11 @@ fn test_component_graph_generation() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("model1".to_string(), model);
 
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -80,17 +80,18 @@ fn test_component_graph_generation() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions: vec![],
         constraint_equations: None,
         discrete_events: None,
         continuous_events: None,
     };
 
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("rs1".to_string(), rs);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -156,7 +157,7 @@ fn test_component_graph_exports() {
         subsystems: None,
         reference: None,
         name: Some("SimpleModel".to_string()),
-        variables: HashMap::new(),
+        variables: IndexMap::new(),
         equations: vec![],
         discrete_events: None,
         continuous_events: None,
@@ -168,10 +169,11 @@ fn test_component_graph_exports() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("simple".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -224,7 +226,7 @@ fn test_component_graph_exports() {
 #[test]
 fn test_model_expression_graph() {
     // Create model with equations
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -319,7 +321,7 @@ fn test_model_expression_graph() {
 fn test_reaction_system_expression_graph() {
     // Create reaction system
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -369,7 +371,7 @@ fn test_reaction_system_expression_graph() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -415,7 +417,7 @@ fn test_component_existence() {
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
-        variables: HashMap::new(),
+        variables: IndexMap::new(),
         equations: vec![],
         discrete_events: None,
         continuous_events: None,
@@ -427,10 +429,11 @@ fn test_component_existence() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,

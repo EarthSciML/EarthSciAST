@@ -849,7 +849,12 @@ fn run_model_tests(
                 ) {
                     Ok(f) => {
                         ephemeral = f;
-                        let is = ephemeral.index_sets.clone().unwrap_or_default();
+                        let is: HashMap<String, IndexSet> = ephemeral
+                            .index_sets
+                            .clone()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .collect();
                         (&ephemeral, Some(is))
                     }
                     Err(e) => {
@@ -1000,7 +1005,12 @@ pub fn run_pde_tests_with_base_dir(
     let Some(models) = &file.models else {
         return results;
     };
-    let index_sets = file.index_sets.clone().unwrap_or_default();
+    let index_sets: HashMap<String, IndexSet> = file
+        .index_sets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let mut names: Vec<&String> = models.keys().collect();
     names.sort();
     for mname in names {
@@ -1156,7 +1166,8 @@ mod tests {
         let Some(AssertionReference::Expression(expr)) = &a.reference else {
             panic!("expected inline reference");
         };
-        let index_sets = file.index_sets.clone().unwrap();
+        let index_sets: HashMap<String, IndexSet> =
+            file.index_sets.clone().unwrap().into_iter().collect();
         let cells: Vec<Vec<i64>> = (1..=N).map(|i| vec![i]).collect();
         let no_params: HashMap<String, f64> = HashMap::new();
         let vals = evaluate_cellwise(expr, &cells, &index_sets, &no_params).expect("evaluates");

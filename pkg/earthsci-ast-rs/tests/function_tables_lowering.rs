@@ -14,6 +14,7 @@
 //! input expression) by computing the "expected" value from the raw
 //! `function_tables` block independently of the parsed `table_lookup` node.
 
+use indexmap::IndexMap;
 use std::path::PathBuf;
 
 use earthsci_ast::registered_functions::{ClosedArg, ClosedValue, evaluate_closed_function};
@@ -59,10 +60,7 @@ fn resolve_output_index(node: &ExpressionNode, outputs: Option<&[String]>) -> us
 /// Resolve a per-axis input expression to a scalar value, given the model's
 /// variables map (parameter / state defaults). Numeric literals pass through;
 /// variable references look up `default`.
-fn resolve_axis_value(
-    expr: &Expr,
-    vars: &std::collections::HashMap<String, earthsci_ast::ModelVariable>,
-) -> f64 {
+fn resolve_axis_value(expr: &Expr, vars: &IndexMap<String, earthsci_ast::ModelVariable>) -> f64 {
     match expr {
         Expr::Number(n) => *n,
         Expr::Integer(i) => *i as f64,
@@ -90,7 +88,7 @@ fn evaluate_interp(name: &str, args: Vec<ClosedArg>) -> f64 {
 fn lower_and_evaluate(
     node: &ExpressionNode,
     file: &EsmFile,
-    model_vars: &std::collections::HashMap<String, earthsci_ast::ModelVariable>,
+    model_vars: &IndexMap<String, earthsci_ast::ModelVariable>,
 ) -> f64 {
     assert_eq!(node.op, "table_lookup");
     assert!(node.args.is_empty(), "table_lookup.args MUST be empty");
@@ -161,7 +159,7 @@ fn reference_inline_const(
     output_idx_int: Option<usize>,
     axis_inputs: &[(&str, &str)],
     file: &EsmFile,
-    model_vars: &std::collections::HashMap<String, earthsci_ast::ModelVariable>,
+    model_vars: &IndexMap<String, earthsci_ast::ModelVariable>,
 ) -> f64 {
     let table = &file.function_tables.as_ref().unwrap()[table_id];
     let kind = table.interpolation.as_deref().unwrap_or("linear");

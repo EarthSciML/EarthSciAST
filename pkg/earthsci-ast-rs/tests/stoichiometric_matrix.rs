@@ -3,14 +3,14 @@
 //! Tests for generating and analyzing stoichiometric matrices from reaction systems.
 
 use earthsci_ast::*;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 /// Test simple stoichiometric matrix generation
 #[test]
 fn test_simple_stoichiometric_matrix() {
     // Simple reaction: A -> B
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -51,7 +51,7 @@ fn test_simple_stoichiometric_matrix() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -74,7 +74,7 @@ fn test_simple_stoichiometric_matrix() {
 fn test_multiple_reaction_stoichiometric_matrix() {
     // Reactions: A -> B, B -> C
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -140,7 +140,7 @@ fn test_multiple_reaction_stoichiometric_matrix() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -169,7 +169,7 @@ fn test_multiple_reaction_stoichiometric_matrix() {
 fn test_stoichiometric_coefficients() {
     // Reaction: 2A + B -> 3C
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -225,7 +225,7 @@ fn test_stoichiometric_coefficients() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -245,7 +245,7 @@ fn test_stoichiometric_coefficients() {
 fn test_reversible_reactions() {
     // Forward: A -> B, Reverse: B -> A
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -302,7 +302,7 @@ fn test_reversible_reactions() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -329,7 +329,7 @@ fn test_reversible_reactions() {
 fn test_complex_reaction_network() {
     // Network: A + B -> C, C -> D + E, D -> A
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -442,7 +442,7 @@ fn test_complex_reaction_network() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -483,8 +483,8 @@ fn test_empty_reaction_system() {
     let rs = ReactionSystem {
         subsystems: None,
         reference: None,
-        species: std::collections::HashMap::new(),
-        parameters: HashMap::new(),
+        species: indexmap::IndexMap::new(),
+        parameters: IndexMap::new(),
         reactions: vec![],
         constraint_equations: None,
         discrete_events: None,
@@ -502,7 +502,7 @@ fn test_empty_reaction_system() {
 #[test]
 fn test_no_reactions() {
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -519,7 +519,7 @@ fn test_no_reactions() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions: vec![],
         constraint_equations: None,
         discrete_events: None,
@@ -538,7 +538,7 @@ fn test_no_reactions() {
 fn test_default_coefficients() {
     // Reaction with no explicit coefficients should default to 1.0
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -579,7 +579,7 @@ fn test_default_coefficients() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,

@@ -2132,7 +2132,7 @@ fn validate_discrete_event(
     event_idx: usize,
     parent_path: &str,
     defined_vars: &HashSet<String>,
-    variables: &HashMap<String, crate::types::ModelVariable>,
+    variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
     let event_path = format!("{parent_path}/discrete_events/{event_idx}");
@@ -2178,7 +2178,7 @@ fn validate_continuous_event(
     event_idx: usize,
     parent_path: &str,
     defined_vars: &HashSet<String>,
-    variables: &HashMap<String, crate::types::ModelVariable>,
+    variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     errors: &mut Vec<StructuralError>,
 ) {
     let event_path = format!("{parent_path}/continuous_events/{event_idx}");
@@ -2225,7 +2225,7 @@ fn validate_continuous_event(
 fn validate_event_affects(
     affects: &[crate::AffectEquation],
     defined_vars: &HashSet<String>,
-    variables: &HashMap<String, crate::types::ModelVariable>,
+    variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
     trigger: Option<&crate::DiscreteEventTrigger>,
     event_path: &str,
     location: &str,
@@ -2353,7 +2353,7 @@ fn validate_event_ref_expression(
 
 /// Check for circular dependencies between models
 pub(crate) fn check_circular_dependencies_in_models(
-    models: &HashMap<String, crate::Model>,
+    models: &indexmap::IndexMap<String, crate::Model>,
     errors: &mut Vec<StructuralError>,
 ) {
     let mut dependencies: HashMap<String, HashSet<String>> = HashMap::new();
@@ -2414,7 +2414,7 @@ fn extract_model_dependencies(
     expr: &crate::Expr,
     deps: &mut HashSet<String>,
     self_name: &str,
-    models: &HashMap<String, crate::Model>,
+    models: &indexmap::IndexMap<String, crate::Model>,
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {

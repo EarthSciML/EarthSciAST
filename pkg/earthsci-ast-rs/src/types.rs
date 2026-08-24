@@ -2,6 +2,7 @@
 //!
 //! This module provides Rust types that correspond to the ESM JSON Schema.
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,7 +22,7 @@ pub struct EsmFile {
     /// variable `shape`s. Declared once at the document top level (a sibling of
     /// `models`/`domain`), no longer per-`Model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_sets: Option<HashMap<String, IndexSet>>,
+    pub index_sets: Option<IndexMap<String, IndexSet>>,
 
     /// Document-scoped, OPTIONAL registry of coordinate variables
     /// (RFC streaming-output-sinks §8.3), keyed by name.
@@ -60,18 +61,18 @@ pub struct EsmFile {
 
     /// ODE-based model components, keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub models: Option<HashMap<String, Model>>,
+    pub models: Option<IndexMap<String, Model>>,
 
     /// Reaction network components, keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reaction_systems: Option<HashMap<String, ReactionSystem>>,
+    pub reaction_systems: Option<IndexMap<String, ReactionSystem>>,
 
     /// Document-scoped ingest registry (esm-spec §8): named external data
     /// sources, keyed by id. NOT components — a source is not a coupling
     /// endpoint, a subsystem, or a scoped-reference path root; a model consumes
     /// one through a parameter `update` naming it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_sources: Option<HashMap<String, DataSource>>,
+    pub data_sources: Option<IndexMap<String, DataSource>>,
 
     /// Registered runtime operators (by reference)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,7 +107,24 @@ pub struct EsmFile {
     /// Keys are table ids; values are `FunctionTable` entries referenced by
     /// `table_lookup` AST nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function_tables: Option<HashMap<String, FunctionTable>>,
+    pub function_tables: Option<IndexMap<String, FunctionTable>>,
+
+    /// The per-component `expression_templates` registries, captured at LOAD
+    /// before the Expand-at-build pass strips them from the document
+    /// (esm-spec §9.6.4 Option B, RFC out-of-line-expression-templates §7.7).
+    /// Keyed `"models.<name>"` / `"reaction_systems.<name>"`, in document
+    /// order, each value the component's registry object VERBATIM (post
+    /// `expression_template_imports` resolution).
+    ///
+    /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions, so a
+    /// `parse -> emit` round trip is byte-identical and a document is never
+    /// asked to carry it. It exists because
+    /// [`crate::flatten::merged_template_registry`] must reconstruct the
+    /// step-4 merged registry, and the typed structs — by design — never see an
+    /// `expression_templates` block. Mirrors the Python oracle's
+    /// `EsmFile.component_templates`.
+    #[serde(default, skip)]
+    pub component_templates: Option<IndexMap<String, serde_json::Value>>,
 }
 
 /// A single named axis inside a [`FunctionTable`] (esm-spec §9.5).
@@ -1699,7 +1717,7 @@ pub struct Model {
     pub reference: Option<Reference>,
 
     /// State variables, parameters, and observed quantities (keyed by name)
-    pub variables: HashMap<String, ModelVariable>,
+    pub variables: IndexMap<String, ModelVariable>,
 
     /// Differential equations
     pub equations: Vec<Equation>,
@@ -1714,7 +1732,7 @@ pub struct Model {
 
     /// Named child models (subsystems), keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subsystems: Option<HashMap<String, serde_json::Value>>,
+    pub subsystems: Option<IndexMap<String, serde_json::Value>>,
 
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2459,10 +2477,10 @@ pub struct ReactionSystem {
     pub reference: Option<Reference>,
 
     /// Chemical species, keyed by species name
-    pub species: HashMap<String, Species>,
+    pub species: IndexMap<String, Species>,
 
     /// Named parameters (rate constants, temperature, photolysis rates, etc.)
-    pub parameters: HashMap<String, Parameter>,
+    pub parameters: IndexMap<String, Parameter>,
 
     /// Chemical reactions
     pub reactions: Vec<Reaction>,
@@ -2481,7 +2499,7 @@ pub struct ReactionSystem {
 
     /// Named child reaction systems (subsystems), keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subsystems: Option<HashMap<String, serde_json::Value>>,
+    pub subsystems: Option<IndexMap<String, serde_json::Value>>,
 }
 
 /// Chemical species in a reaction system. Keyed by name in the parent map.

@@ -1,10 +1,10 @@
 #![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 use earthsci_ast::*;
+use indexmap::IndexMap;
 
 #[test]
 fn test_analysis_features_integration() {
     // Use a simpler test that bypasses schema validation
-    use std::collections::HashMap;
 
     let metadata = crate::types::Metadata {
         name: Some("test_model".to_string()),
@@ -20,7 +20,7 @@ fn test_analysis_features_integration() {
         discretized_from: None,
     };
 
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
     variables.insert(
         "x".to_string(),
         ModelVariable {
@@ -84,12 +84,12 @@ fn test_analysis_features_integration() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("simple".to_string(), model);
 
     // Create reaction system
     let species = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = indexmap::IndexMap::new();
         m.insert(
             "A".to_string(),
             Species {
@@ -139,17 +139,18 @@ fn test_analysis_features_integration() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
         continuous_events: None,
     };
 
-    let mut reaction_systems = HashMap::new();
+    let mut reaction_systems = IndexMap::new();
     reaction_systems.insert("simple_rs".to_string(), rs);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -227,7 +228,7 @@ fn test_editing_operations() {
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
-        variables: HashMap::new(),
+        variables: IndexMap::new(),
         equations: vec![],
         discrete_events: None,
         continuous_events: None,

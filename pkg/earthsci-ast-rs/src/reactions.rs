@@ -9,6 +9,7 @@
 use crate::{
     Equation, Expr, ExpressionNode, Model, ModelVariable, ReactionSystem, Species, VariableType,
 };
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -36,7 +37,7 @@ pub enum DeriveError {
 /// and product contributions for each species.
 pub fn lower_reactions_to_equations(
     reactions: &[crate::Reaction],
-    species: &HashMap<String, Species>,
+    species: &IndexMap<String, Species>,
 ) -> Result<Vec<Equation>, DeriveError> {
     // Validate system has species if there are reactions
     if species.is_empty() && !reactions.is_empty() {
@@ -79,9 +80,12 @@ pub fn lower_reactions_to_equations(
 
     let mut equations = Vec::with_capacity(species.len());
 
-    let mut species_names: Vec<&String> = species.keys().collect();
-    species_names.sort();
-    for sp_name in species_names {
+    // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
+    // derived `D(species, t)` equations follow the order the reaction system
+    // DECLARES its species. Sorting them — what this used to do — reorders the
+    // flattened equation list relative to `state_variables`, which the shared
+    // flatten corpus pins per equation index.
+    for sp_name in species.keys() {
         // Reservoir species (`constant: true`, §7.4): held fixed, so it gets
         // NO dX/dt equation. Its concentration is still a mass-action factor in
         // the OTHER species' rate laws — `enhance_rate_with_mass_action` reads
@@ -132,9 +136,19 @@ pub fn lower_reactions_to_equations(
             }
         }
 
-        let rhs = if rate_terms.is_empty() {
-            Expr::Number(0.0)
-        } else if rate_terms.len() == 1 {
+        // A species with NO net contribution from any reaction gets NO
+        // equation, rather than a vacuous `D(X, t) = 0`. Emitting the zero
+        // equation makes such a species an ODE state that never moves, and
+        // makes `equation_count` incomparable across bindings; omitting it
+        // leaves the species an unknown that no equation names, which
+        // esm-spec §6.3.1's partition-by-complement classifies ALGEBRAIC —
+        // the oracle's answer, and the one Rust's own `classification`
+        // module already reaches for such an unknown.
+        if rate_terms.is_empty() {
+            continue;
+        }
+
+        let rhs = if rate_terms.len() == 1 {
             rate_terms.into_iter().next().unwrap()
         } else {
             Expr::operator(ExpressionNode {
@@ -181,7 +195,7 @@ pub fn lower_reactions_to_equations(
 ///
 /// Returns `DeriveError` for invalid stoichiometry, missing rate laws, or unit conversion issues.
 pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
-    let mut variables = HashMap::new();
+    let mut variables = IndexMap::new();
 
     for (species_name, species) in &system.species {
         // Reservoir species (`constant: true`, §7.4) are held fixed and get no
@@ -398,6 +412,7 @@ pub fn stoichiometric_matrix_parallel(
 mod tests {
     use super::*;
     use crate::{Reaction, Species, StoichiometricEntry, VariableType};
+    use indexmap::IndexMap;
 
     fn create_test_species(name: &str) -> (String, Species) {
         (
@@ -448,8 +463,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // A -> B with rate k1 * A
                 create_test_reaction(
@@ -504,7 +519,7 @@ mod tests {
         // stoichiometric SUBSTRATE (R + A -> B) is held fixed — it lowers to a
         // PARAMETER (not a state), gets NO dR/dt equation, yet still appears as
         // a mass-action concentration factor in the other species' rate laws.
-        let mut species: std::collections::HashMap<String, Species> =
+        let mut species: IndexMap<String, Species> =
             [create_test_species("A"), create_test_species("B")]
                 .into_iter()
                 .collect();
@@ -520,7 +535,7 @@ mod tests {
         let system = ReactionSystem {
             reference: None,
             species,
-            parameters: HashMap::new(),
+            parameters: IndexMap::new(),
             reactions: vec![create_test_reaction(
                 vec![("R", 1.0), ("A", 1.0)],
                 vec![("B", 1.0)],
@@ -598,8 +613,8 @@ mod tests {
                 create_test_species("C"),
             ]
             .into_iter()
-            .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+            .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // Reaction 1: A -> B
                 create_test_reaction(
@@ -649,8 +664,8 @@ mod tests {
     fn test_stoichiometric_matrix_empty() {
         let system = ReactionSystem {
             reference: None,
-            species: std::collections::HashMap::new(),
-            parameters: HashMap::new(),
+            species: indexmap::IndexMap::new(),
+            parameters: IndexMap::new(),
             reactions: vec![],
             constraint_equations: None,
             discrete_events: None,
@@ -666,8 +681,8 @@ mod tests {
     fn test_derive_odes_empty_system() {
         let system = ReactionSystem {
             reference: None,
-            species: std::collections::HashMap::new(),
-            parameters: HashMap::new(),
+            species: indexmap::IndexMap::new(),
+            parameters: IndexMap::new(),
             reactions: vec![],
             constraint_equations: None,
             discrete_events: None,
@@ -686,8 +701,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![create_test_reaction(
                 vec![("B", 1.0)], // B is not defined in species
                 vec![("A", 1.0)],
@@ -719,8 +734,8 @@ mod tests {
                 create_test_species("C"),
             ]
             .into_iter()
-            .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+            .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // A + B -> C with rate coefficient k1 (should become k1*A*B)
                 create_test_reaction(
@@ -769,8 +784,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // Source reaction: -> A with rate k0 (no substrates)
                 create_test_reaction(vec![], vec![("A", 1.0)], Expr::Variable("k0".to_string())),
@@ -799,8 +814,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // Sink reaction: A -> with rate k_deg (no products)
                 create_test_reaction(
@@ -844,8 +859,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // 2A -> B with rate k1 (second order in A)
                 create_test_reaction(
@@ -893,8 +908,8 @@ mod tests {
             reference: None,
             species: [create_test_species("A")]
                 .into_iter()
-                .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+                .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![create_test_reaction(
                 vec![], // No substrates
                 vec![], // No products
@@ -927,8 +942,8 @@ mod tests {
                 create_test_species("D"),
             ]
             .into_iter()
-            .collect::<std::collections::HashMap<_, _>>(),
-            parameters: HashMap::new(),
+            .collect::<IndexMap<_, _>>(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // A + B -> C + D (rate k1)
                 create_test_reaction(
@@ -985,7 +1000,7 @@ mod tests {
                 create_test_species("C"),
             ]
             .into_iter()
-            .collect::<std::collections::HashMap<_, _>>(),
+            .collect::<IndexMap<_, _>>(),
             parameters: HashMap::new(),
             reactions: vec![
                 // A -> B

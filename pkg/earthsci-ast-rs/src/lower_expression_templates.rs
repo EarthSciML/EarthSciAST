@@ -2338,6 +2338,38 @@ fn validate_manifolds_in_refs(
 /// is acyclic and substitution confluent, so `expand(load_string(f))` is structurally
 /// equal to the pre-0.9.0 expanded form. Mutates `value` in place. Mirrors the
 /// Julia reference `expand_document` / `Expand`.
+/// Capture every component's `expression_templates` registry BEFORE
+/// [`expand`] strips the blocks from the document.
+///
+/// Keyed `"models.<name>"` / `"reaction_systems.<name>"` in document order,
+/// each value the component's registry object verbatim (post
+/// `expression_template_imports` resolution). The typed `EsmFile` deliberately
+/// never sees an `expression_templates` block — the build path is
+/// Expand-at-build (RFC out-of-line-expression-templates §7.7) — so this is the
+/// only place the per-component registries survive to reach
+/// [`crate::flatten::merged_template_registry`], which needs them to build the
+/// step-4 merged registry. Returns `None` when no component declares one, so a
+/// document without templates costs nothing.
+pub fn capture_component_templates(value: &Value) -> Option<indexmap::IndexMap<String, Value>> {
+    let root = value.as_object()?;
+    let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
+    for compkind in ["models", "reaction_systems"] {
+        let Some(comps) = root.get(compkind).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (cname, comp) in comps {
+            let Some(tpl) = comp.get("expression_templates") else {
+                continue;
+            };
+            if !tpl.is_object() {
+                continue;
+            }
+            out.insert(format!("{compkind}.{cname}"), tpl.clone());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 pub fn expand(value: &mut Value) -> Result<(), ExpressionTemplateError> {
     let Some(root) = value.as_object_mut() else {
         return Ok(());
@@ -2700,7 +2732,10 @@ pub fn emit_esm_string(doc: &Value) -> String {
 /// Rewrite the `name` of every `apply_expression_template` reference in `value`
 /// according to `rename` (old name → new name), in lockstep with a registry
 /// rename. Mirrors the Julia reference `_rename_apply_refs`.
-fn rename_apply_refs(value: &mut Value, rename: &std::collections::HashMap<String, String>) {
+pub(crate) fn rename_apply_refs(
+    value: &mut Value,
+    rename: &std::collections::HashMap<String, String>,
+) {
     match value {
         Value::Array(items) => {
             for v in items {
@@ -2748,7 +2783,7 @@ fn rename_apply_refs(value: &mut Value, rename: &std::collections::HashMap<Strin
 /// references a name inside it, so deduped entries need no reference rewriting.
 ///
 /// Mirrors the Julia reference `_registry_collision_names`.
-fn registry_collision_names(
+pub(crate) fn registry_collision_names(
     byname: &[(String, Vec<(String, Value)>)],
 ) -> std::collections::HashSet<String> {
     let mut collide: std::collections::HashSet<String> = std::collections::HashSet::new();

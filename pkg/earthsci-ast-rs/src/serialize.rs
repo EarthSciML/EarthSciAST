@@ -23,6 +23,7 @@ use std::path::Path;
 /// use earthsci_ast::{EsmFile, Metadata, to_json};
 ///
 /// let esm_file = EsmFile {
+///     component_templates: None,
 ///     coordinates: None,
 ///     coupling_roles: None,
 ///     esm: "0.1.0".to_string(),
@@ -99,11 +100,12 @@ mod tests {
     use super::*;
     use crate::types::{Equation, Metadata, ModelVariable, VariableType};
     use crate::{Expr, Model};
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     #[test]
     fn test_save_minimal_file() {
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -144,8 +146,8 @@ mod tests {
 
     #[test]
     fn test_save_with_model() {
-        let mut models = HashMap::new();
-        let mut variables = HashMap::new();
+        let mut models = IndexMap::new();
+        let mut variables = IndexMap::new();
         variables.insert(
             "x".to_string(),
             ModelVariable {
@@ -184,6 +186,7 @@ mod tests {
         );
 
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,
@@ -227,6 +230,7 @@ mod tests {
     #[test]
     fn test_save_compact() {
         let esm_file = EsmFile {
+            component_templates: None,
             coordinates: None,
             expression_templates: None,
             metaparameters: None,

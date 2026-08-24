@@ -13,6 +13,7 @@ use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{
     ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
 };
+use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
@@ -178,7 +179,10 @@ pub(super) fn parse_subsystem_model(
             });
         }
         let model = models.into_values().next().expect("len checked above");
-        Ok((model, file.index_sets.unwrap_or_default()))
+        Ok((
+            model,
+            file.index_sets.unwrap_or_default().into_iter().collect(),
+        ))
     } else if obj.contains_key("variables") || obj.contains_key("equations") {
         let model: Model = serde_json::from_value(value.clone()).map_err(|e| {
             CompileError::InterpreterBuildError {
@@ -289,7 +293,7 @@ pub(super) fn mount_subsystems(
 /// documents without ragged index sets.
 pub(super) fn apply_ragged_factor_scope(
     index_sets: &mut HashMap<String, IndexSet>,
-    variables: &HashMap<String, ModelVariable>,
+    variables: &IndexMap<String, ModelVariable>,
 ) -> Result<(), CompileError> {
     let scope_one = |fname: &str, set_name: &str| -> Result<Option<String>, CompileError> {
         if variables.contains_key(fname) {
@@ -367,7 +371,12 @@ impl ArrayCompiled {
         let (model_name, model) = models.iter().next().unwrap();
         // v0.8.0: `index_sets` is document-scoped (one registry shared by all
         // models), so source it from the file rather than the model.
-        let index_sets = file.index_sets.clone().unwrap_or_default();
+        let index_sets: HashMap<String, IndexSet> = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         let mut compiled = Self::from_model(model, &index_sets)?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
@@ -396,7 +405,8 @@ impl ArrayCompiled {
                     .to_string(),
             });
         }
-        let index_sets = file.index_sets.unwrap_or_default();
+        let index_sets: HashMap<String, IndexSet> =
+            file.index_sets.unwrap_or_default().into_iter().collect();
         let (model_name, model) = models.into_iter().next().unwrap();
         let mut compiled = Self::from_model_owned(model, &index_sets)?;
         compiled.namespace = Some(model_name);
@@ -433,6 +443,14 @@ impl ArrayCompiled {
         // capability while preventing a model that *does* declare events from
         // compiling with its events silently dropped.
         if flat.independent_variables != ["t"] {
+            // A spatial independent variable means a rewrite-target operator was
+            // never discretized. Report THAT, with the uniform
+            // `unlowered_operator` code esm-spec §4.2 / §9.6.8 specifies for
+            // an op reaching evaluation unlowered; the dimensionality error
+            // is the fallback for a spatial axis with no such op behind it.
+            if let Some(op) = crate::flatten::first_unlowered_operator(flat) {
+                return Err(CompileError::UnloweredOperatorError { op });
+            }
             return Err(CompileError::UnsupportedDimensionalityError {
                 independent_variables: flat.independent_variables.clone(),
             });
@@ -456,9 +474,13 @@ impl ArrayCompiled {
 
         // Re-merge the typed variable maps into one registry. The maps are
         // disjoint by construction (a variable has exactly one `var_type`), so
-        // no key collides; brownian variables are included so `from_model`
-        // surfaces its explicit "no SDE" rejection rather than dropping them.
-        let mut variables: HashMap<String, ModelVariable> = HashMap::new();
+        // no key collides. `parameters` is the WHOLE parameter set of every
+        // cadence (esm-libraries-spec §4.7.5 step 4: the wiener / discrete
+        // subsets partition it rather than sitting beside it), so a Brownian
+        // parameter still reaches `from_model` and gets its explicit "no SDE"
+        // rejection, and a `data`-kind discrete parameter still reaches the
+        // provider forcing seam `classify_variables` routes.
+        let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
         for (name, var) in &flat.state_variables {
             variables.insert(name.clone(), var.clone());
         }
@@ -466,17 +488,6 @@ impl ArrayCompiled {
             variables.insert(name.clone(), var.clone());
         }
         for (name, var) in &flat.observed_variables {
-            variables.insert(name.clone(), var.clone());
-        }
-        for (name, var) in &flat.brownian_variables {
-            variables.insert(name.clone(), var.clone());
-        }
-        // DISCRETE parameters too: a `data`-kind update is the provider forcing
-        // seam and IS supported here (`classify_variables` routes it), and any
-        // other update kind must reach `from_model` so it surfaces the explicit
-        // "no refresh machinery" rejection rather than being silently dropped —
-        // which is what leaving this bucket out did.
-        for (name, var) in &flat.discrete_variables {
             variables.insert(name.clone(), var.clone());
         }
 
@@ -3303,7 +3314,7 @@ mod subsystem_ragged_and_inspection_tests {
     fn factor_scope_exact_name_wins_and_shallowest_suffix_resolves() {
         // Exact name in scope: keep as authored.
         let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
-        let vars: HashMap<String, ModelVariable> = [
+        let vars: IndexMap<String, ModelVariable> = [
             ("nEdgesOnCell", obs_var()),
             ("mesh.nEdgesOnCell", obs_var()),
             ("edgesOnCell", obs_var()),
@@ -3321,7 +3332,7 @@ mod subsystem_ragged_and_inspection_tests {
 
         // No exact name: the depth-1 alias beats the depth-2 mounted const.
         let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
-        let vars: HashMap<String, ModelVariable> = [
+        let vars: IndexMap<String, ModelVariable> = [
             ("Div.nEdgesOnCell", obs_var()),
             ("Div.mesh.nEdgesOnCell", obs_var()),
             ("Div.edgesOnCell", obs_var()),
@@ -3343,7 +3354,7 @@ mod subsystem_ragged_and_inspection_tests {
         // No candidate at all: left bare (the existing unbound-name behavior
         // surfaces downstream).
         let mut reg = ragged_registry("nowhere", "edgesOnCell");
-        let vars: HashMap<String, ModelVariable> = [("Div.edgesOnCell", obs_var())]
+        let vars: IndexMap<String, ModelVariable> = [("Div.edgesOnCell", obs_var())]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
@@ -3356,7 +3367,7 @@ mod subsystem_ragged_and_inspection_tests {
     #[test]
     fn factor_scope_ambiguity_is_a_hard_error() {
         let mut reg = ragged_registry("nEdgesOnCell", "edgesOnCell");
-        let vars: HashMap<String, ModelVariable> = [
+        let vars: IndexMap<String, ModelVariable> = [
             ("A.nEdgesOnCell", obs_var()),
             ("B.nEdgesOnCell", obs_var()),
             ("A.edgesOnCell", obs_var()),

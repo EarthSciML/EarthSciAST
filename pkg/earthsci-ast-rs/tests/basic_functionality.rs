@@ -4,6 +4,7 @@
 //! Tests basic parsing, serialization, and core functionality with simple valid examples.
 
 use earthsci_ast::*;
+use indexmap::IndexMap;
 use std::collections::HashMap;
 
 /// Test basic round-trip with simple valid data
@@ -79,7 +80,7 @@ fn test_wrong_data_types() {
 #[test]
 fn test_structural_validation() {
     // Create a model with equations but no variables (should fail structural validation)
-    let variables = HashMap::new();
+    let variables = IndexMap::new();
     let model = Model {
         subsystems: None,
         reference: None,
@@ -99,10 +100,11 @@ fn test_structural_validation() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("test".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -178,7 +180,7 @@ fn test_expression_operations() {
 /// Test stoichiometric matrix generation
 #[test]
 fn test_stoichiometric_matrix() {
-    let mut species = HashMap::new();
+    let mut species = IndexMap::new();
     species.insert(
         "A".to_string(),
         Species {
@@ -217,7 +219,7 @@ fn test_stoichiometric_matrix() {
         subsystems: None,
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
@@ -252,7 +254,7 @@ fn test_component_graph() {
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
-        variables: HashMap::new(),
+        variables: IndexMap::new(),
         equations: vec![],
         discrete_events: None,
         continuous_events: None,
@@ -264,10 +266,11 @@ fn test_component_graph() {
         system_kind: None,
     };
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert("test_model".to_string(), model);
 
     let esm_file = EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -324,7 +327,7 @@ fn test_editing() {
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
-        variables: HashMap::new(),
+        variables: IndexMap::new(),
         equations: vec![],
         discrete_events: None,
         continuous_events: None,

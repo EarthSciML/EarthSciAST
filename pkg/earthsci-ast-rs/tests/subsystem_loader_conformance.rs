@@ -93,9 +93,9 @@ fn subsystem_loader_flattens_to_expressionless_observeds() {
 
     for name in ["Box.k", "Box.wind"] {
         assert!(
-            flat.discrete_variables.contains_key(name),
+            flat.discrete_parameters.contains_key(name),
             "{name} must be a DISCRETE parameter (a `data` update is the provider seam); got {:?}",
-            flat.discrete_variables.keys().collect::<Vec<_>>()
+            flat.discrete_parameters.keys().collect::<Vec<_>>()
         );
         // Not an integrated state, and no equation defines it.
         assert!(

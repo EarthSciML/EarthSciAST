@@ -15,6 +15,7 @@ use earthsci_ast::types::{
     VariableMapTransform, VariableType,
 };
 use earthsci_ast::{FlattenError, flatten, validate};
+use indexmap::IndexMap;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -40,6 +41,7 @@ fn empty_metadata() -> Metadata {
 
 fn empty_file() -> EsmFile {
     EsmFile {
+        component_templates: None,
         coordinates: None,
         expression_templates: None,
         metaparameters: None,
@@ -72,7 +74,7 @@ fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable
     }
 }
 
-fn make_model(variables: HashMap<String, ModelVariable>, equations: Vec<Equation>) -> Model {
+fn make_model(variables: IndexMap<String, ModelVariable>, equations: Vec<Equation>) -> Model {
     Model {
         subsystems: None,
         name: None,
@@ -121,12 +123,12 @@ fn transform_node() -> ExpressionNode {
 /// metadata to verify carry-over), and state `u` with `d(u)/dt = F_in`;
 /// coupling maps `Src.F -> Sink.F_in` via the given transform.
 fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<f64>) -> EsmFile {
-    let mut vars_src = HashMap::new();
+    let mut vars_src = IndexMap::new();
     // An OBSERVED unknown: declared `unknown`, made observed by the
     // bare-variable-LHS equation `F ~ 4.0` on `Src` below (esm-spec 6.3.1).
     vars_src.insert("F".to_string(), model_variable(VariableType::Unknown, None));
 
-    let mut vars_sink = HashMap::new();
+    let mut vars_sink = IndexMap::new();
     vars_sink.insert(
         "offset".to_string(),
         model_variable(VariableType::Parameter, Some(1.5)),
@@ -140,7 +142,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
         model_variable(VariableType::Unknown, Some(0.0)),
     );
 
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
     models.insert(
         "Src".to_string(),
         make_model(
@@ -163,6 +165,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
     );
 
     EsmFile {
+        component_templates: None,
         coordinates: None,
         coupling_roles: None,
         models: Some(models),
