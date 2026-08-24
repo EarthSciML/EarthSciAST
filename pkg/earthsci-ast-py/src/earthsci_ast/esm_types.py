@@ -1159,6 +1159,20 @@ class EsmFile:
     # illegal the moment it was loaded and re-emitted.
     expression_templates: dict[str, Any] = field(default_factory=dict)
     metaparameters: dict[str, Any] = field(default_factory=dict)
+    # The PER-COMPONENT expression-template registries as they stood after the
+    # Option-B load (esm-spec §9.6.4 rule 5) and BEFORE `expand_document` folded
+    # every reference into its call site. Keyed ``"models.<name>"`` /
+    # ``"reaction_systems.<name>"`` — the same key shape Julia's
+    # ``EsmFile.component_templates`` uses — each value the component's raw
+    # ``expression_templates`` block.
+    #
+    # Python's typed path is Expand-at-build, so nothing downstream RESOLVES
+    # against these: the equations reaching `flatten` carry no surviving
+    # ``apply_expression_template`` reference. They are captured anyway because
+    # esm-libraries-spec §4.7.5 step 4 makes the MERGED registry a normative
+    # field of the flattened representation, and a registry cannot be merged
+    # from a document that has already thrown its inputs away.
+    component_templates: dict[str, Any] = field(default_factory=dict)
 
     @property
     def esm(self) -> str:
