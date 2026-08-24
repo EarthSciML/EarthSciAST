@@ -1196,7 +1196,14 @@ impl ComponentGraph {
     ///
     /// * `String` - Mermaid representation of the graph
     pub fn to_mermaid(&self) -> String {
-        let mut mermaid = String::from("graph LR\n");
+        // `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and
+        // specifies no syntax for it, so the cross-binding tie-break is the
+        // majority, applied to the keyword and the direction independently:
+        // `graph` beats `flowchart` 4-1 (this binding, Python, Go and Julia
+        // against TypeScript) and `TD` beats `LR` 3-2 (TypeScript, Python and
+        // Julia against Go and this binding). The EXPRESSION graph below
+        // already wrote `graph TD`. tests/conformance/graph/cases.json pins it.
+        let mut mermaid = String::from("graph TD\n");
 
         // Add nodes with types
         for node in &self.nodes {
@@ -1744,7 +1751,9 @@ mod tests {
             graph.edges[0].relationship,
             DependencyRelationship::Multiplicative
         );
-        assert_eq!(graph.edges[0].equation_index, Some(0));
+        // A bare expression has no positional equation to index, so its
+        // `expr_result` edges carry NON_EQUATION_INDEX.
+        assert_eq!(graph.edges[0].equation_index, Some(NON_EQUATION_INDEX));
     }
 
     #[test]
@@ -1778,7 +1787,7 @@ mod tests {
         };
 
         let mermaid = graph.to_mermaid();
-        assert!(mermaid.contains("graph LR"));
+        assert!(mermaid.contains("graph TD"));
         assert!(mermaid.contains("model1(Test Model)"));
     }
 

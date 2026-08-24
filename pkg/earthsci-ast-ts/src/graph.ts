@@ -90,6 +90,9 @@ export interface ComponentGraph {
   edges: CouplingEdge[]
 }
 
+/** Which of the two graphs §4.8 defines. */
+export type GraphKind = 'component' | 'expression'
+
 /**
  * Directed graph with node/edge lists plus adjacency, predecessor, and
  * successor lookups (ESM Libraries Specification §4.8). Nodes are addressed by
@@ -97,6 +100,17 @@ export interface ComponentGraph {
  * those keys through `source`/`target`.
  */
 export interface Graph<N, E> {
+  /**
+   * Which of the two §4.8 graphs this is. Carried explicitly because the DOT
+   * and Mermaid exporters name the graph in their header
+   * (`digraph ComponentGraph` / `digraph ExpressionGraph`) and an EMPTY graph —
+   * `tests/valid/data_sources_only.esm` produces two — has no node to sniff.
+   * The other bindings get this from their type system (Julia dispatches on
+   * `Graph{ComponentNode,CouplingEdge}`, Python reads `node_type`, Go and Rust
+   * have two distinct structs); TypeScript's `Graph` is one generic interface,
+   * so it carries the tag.
+   */
+  kind?: GraphKind
   /** All nodes in the graph */
   nodes: N[]
   /** All edges in the graph */
@@ -215,6 +229,7 @@ export function buildGraph<N, E>(
   nodes: N[],
   edges: Array<{ source: string; target: string; data: E }>,
   keyOf: (node: N) => string,
+  kind?: GraphKind,
 ): Graph<N, E> {
   const adjacencyMap = new Map<string, Set<string>>()
   const predecessorMap = new Map<string, Set<string>>()
@@ -240,6 +255,7 @@ export function buildGraph<N, E>(
   }
 
   return {
+    kind,
     nodes,
     edges,
 
@@ -455,7 +471,7 @@ export function componentGraph(file: EsmFile): Graph<ComponentNode, CouplingEdge
     data: edge,
   }))
 
-  return buildGraph(nodes, graphEdges, (node) => node.id)
+  return buildGraph(nodes, graphEdges, (node) => node.id, 'component')
 }
 
 /**
@@ -916,7 +932,7 @@ export function expressionGraph(
     processExpression(b, target as Expr, 'expr_result', NON_EQUATION_INDEX, 'default')
   }
 
-  return buildGraph(b.nodes, b.edges, (node) => node.name)
+  return buildGraph(b.nodes, b.edges, (node) => node.name, 'expression')
 }
 
 // ---------------------------------------------------------------------------
@@ -966,14 +982,36 @@ function nodeLabel(node: object): string {
 }
 
 /**
+ * Which of the two §4.8 graphs this is: the explicit {@link Graph.kind} tag when
+ * present, otherwise sniffed from the first node. An empty, untagged graph is
+ * reported as a component graph.
+ */
+function graphKindOf(graph: Graph<object, unknown>): GraphKind {
+  if (graph.kind !== undefined) return graph.kind
+  const first = graph.nodes[0]
+  if (first !== undefined && isVariableNode(first)) return 'expression'
+  return 'component'
+}
+
+/**
  * Export graph as Graphviz DOT format.
  * Node shapes: box for models and reaction systems, diamond for operators.
  * Edge styles: solid for compose, dashed for variable_map.
+ *
+ * The header NAMES the graph — `digraph ComponentGraph` / `digraph
+ * ExpressionGraph`. §4.8.3 requires a DOT export and specifies no syntax for it,
+ * so the cross-binding tie-break is the majority: Python, Go, Rust and Julia all
+ * emitted the named form and this binding alone emitted a bare `digraph {`.
+ * `tests/conformance/graph/cases.json` pins it.
  */
 export function toDot<N extends object, E>(graph: Graph<N, E>): string {
   const lines: string[] = []
 
-  lines.push('digraph {')
+  lines.push(
+    graphKindOf(graph as Graph<object, unknown>) === 'component'
+      ? 'digraph ComponentGraph {'
+      : 'digraph ExpressionGraph {',
+  )
   lines.push('  rankdir=TB;')
   lines.push('  node [fontname="Arial"];')
   lines.push('  edge [fontname="Arial"];')
@@ -1107,11 +1145,19 @@ export function toDot<N extends object, E>(graph: Graph<N, E>): string {
 
 /**
  * Export graph as Mermaid flowchart format for Markdown embedding.
+ *
+ * The header is `graph TD`. §4.8.3 requires a Mermaid export and specifies no
+ * syntax for it, so the cross-binding tie-break is the majority, applied to the
+ * keyword and the direction independently: `graph` beats `flowchart` 4-1
+ * (Python, Go, Rust and Julia against this binding) and `TD` beats `LR` 3-2
+ * (this binding, Python and Julia against Go and Rust). `graph` is Mermaid's
+ * legacy spelling of `flowchart`; both render, and the majority points at
+ * `graph`. `tests/conformance/graph/cases.json` pins it.
  */
 export function toMermaid<N extends object, E>(graph: Graph<N, E>): string {
   const lines: string[] = []
 
-  lines.push('flowchart TD')
+  lines.push('graph TD')
 
   // Add node definitions with shapes
   for (const node of graph.nodes) {

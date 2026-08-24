@@ -260,7 +260,7 @@ export function buildDependencyGraph(
   // The base Graph (nodes/edges + adjacency/predecessor/successor lookups) is
   // assembled by the shared graph.ts helper; this builder only layers on the
   // dependency-specific methods below.
-  const base = buildGraph(nodes, edges, (node) => node.name)
+  const base = buildGraph(nodes, edges, (node) => node.name, 'expression')
 
   const getCycles = (): DependencyNode[][] =>
     circularDeps.map((cycle) =>

@@ -760,7 +760,7 @@ describe('Graph export functions', () => {
       const graph = componentGraph(mockEsmFile)
       const dotOutput = toDot(graph)
 
-      expect(dotOutput).toContain('digraph {')
+      expect(dotOutput).toContain('digraph ComponentGraph {')
       expect(dotOutput).toContain('rankdir=TB;')
       expect(dotOutput).toContain('}')
 
@@ -796,7 +796,7 @@ describe('Graph export functions', () => {
       const graph = expressionGraph(model)
       const dotOutput = toDot(graph)
 
-      expect(dotOutput).toContain('digraph {')
+      expect(dotOutput).toContain('digraph ExpressionGraph {')
       expect(dotOutput).toContain('CO₂')
       expect(dotOutput).toContain('H₂O')
       expect(dotOutput).toContain('->')
@@ -812,7 +812,7 @@ describe('Graph export functions', () => {
       const graph = componentGraph(mockEsmFile)
       const mermaidOutput = toMermaid(graph)
 
-      expect(mermaidOutput).toContain('flowchart TD')
+      expect(mermaidOutput).toContain('graph TD')
 
       // Check for nodes with correct shapes. Both component types render as
       // rectangles; the circle belonged to the retired `data_loader` node type,
@@ -853,7 +853,7 @@ describe('Graph export functions', () => {
       const graph = expressionGraph(reactionSystem)
       const mermaidOutput = toMermaid(graph)
 
-      expect(mermaidOutput).toContain('flowchart TD')
+      expect(mermaidOutput).toContain('graph TD')
       expect(mermaidOutput).toContain('((NH₃))') // Species render as circles
     })
   })

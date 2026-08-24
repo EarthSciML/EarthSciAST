@@ -527,10 +527,20 @@ func TestAuditG11_GraphWalkSeesSidecarFields(t *testing.T) {
 	for _, v := range got {
 		seen[v] = true
 	}
-	for _, want := range []string{"w", "i", "y"} {
+	// `y` is the point of G11: it is reachable only through the `expr` sidecar,
+	// and the walk used to recurse over `args` alone.
+	for _, want := range []string{"w", "y"} {
 		if !seen[want] {
 			t.Errorf("the dependency-graph walk missed %q, so its edge vanishes silently; got %v", want, got)
 		}
+	}
+	// `i` is the aggregate's OWN range binder, not a model variable, so the
+	// GRAPH walk subtracts it — it has no declaration, no units and no kind, and
+	// a node for it would be a node for a loop counter. The shared
+	// FreeVariables still reports it (TestAuditG1), which is what substitution
+	// and validation want.
+	if seen["i"] {
+		t.Errorf("the graph walk reported %q, an aggregate range binder, as a variable; got %v", "i", got)
 	}
 }
 

@@ -212,31 +212,6 @@ end
 
 # ── the suite ───────────────────────────────────────────────────────────────
 
-# Fixtures whose EXPRESSION graph this binding cannot yet match, and why. Two
-# distinct open questions land on the same document; both are recorded rather
-# than silently dropped, so they stay measured.
-#
-# 1. INDEXED-LHS CLASSIFICATION. `wildfire_atmosphere_ocean` declares three
-#    unknowns (`rg_pairs`, `rg_src_bin`, `rg_tgt_bin`) defined by an indexed LHS
-#    (`rg_src_bin[a] ~ …`). esm-spec §6.3.1 defines an observed unknown as one
-#    with a "bare-variable LHS", so TypeScript and Go classify these `algebraic`
-#    and the corpus carries that; this binding, Python and Rust classify them
-#    `observed`, because `observed_definitions` credits the arrayed form through
-#    `_lhs_unwrap`. Narrowing it would fix the graph, but `algebraic_unknowns` is
-#    also `solver_unknowns`' complement — the set codegen and the structural
-#    checks consume — so the change reaches well past §4.8.
-#
-# 2. AGGREGATE-BOUND INDEX VARIABLES. The corpus carries graph nodes named `a`,
-#    `o` and `v` — the BOUND index variables of that document's `aggregate`
-#    reductions. The variable collector the OTHER FOUR bindings' graphs use walks
-#    every child and does not subtract an aggregate's own range indices, so all
-#    four reach them; this binding's `free_variables` does subtract them, so
-#    Julia alone omits these three nodes. A bound index is not a model variable,
-#    so four-of-five agreeing does not make it obviously right — but the
-#    collector is shared with other passes in each of those four, so this too is
-#    a decision rather than a local fix.
-const _EXPRESSION_GRAPH_DIVERGENCE = Set(["wildfire_atmosphere_ocean"])
-
 if _require_fixture(_GRAPH_CORPUS_PATH)
     const _CORPUS = JSON3.read(read(_GRAPH_CORPUS_PATH, String))
 
@@ -248,30 +223,38 @@ if _require_fixture(_GRAPH_CORPUS_PATH)
             file = load(fixture)
 
             @testset "$name" begin
-                # The COMPONENT graph is asserted strictly for every fixture:
-                # neither open question touches it.
                 _assert_graph(_actual_component(component_graph(file)),
                               case["component_graph"], "component_graph")
                 _assert_json_export(_actual_json_export(component_graph(file)),
                                     case["component_graph_json"],
                                     "component_graph JSON export")
 
-                if name in _EXPRESSION_GRAPH_DIVERGENCE
-                    # One `@test_broken` standing for the whole expression-graph
-                    # family, since its JSON export and merge_coupled form are
-                    # derived from the same node set.
-                    @test_broken _multiset_d(_actual_expression(expression_graph(file)).nodes) ==
-                                 _multiset_d(_norm_all(case["expression_graph"]["nodes"]))
-                else
-                    _assert_graph(_actual_expression(expression_graph(file)),
-                                  case["expression_graph"], "expression_graph")
-                    _assert_json_export(_actual_json_export(expression_graph(file)),
-                                        case["expression_graph_json"],
-                                        "expression_graph JSON export")
-                    _assert_graph(
-                        _actual_expression(expression_graph(file; merge_coupled=true)),
-                        case["expression_graph_merge_coupled"],
-                        "expression_graph merge_coupled")
+                _assert_graph(_actual_expression(expression_graph(file)),
+                              case["expression_graph"], "expression_graph")
+                _assert_json_export(_actual_json_export(expression_graph(file)),
+                                    case["expression_graph_json"],
+                                    "expression_graph JSON export")
+                _assert_graph(
+                    _actual_expression(expression_graph(file; merge_coupled=true)),
+                    case["expression_graph_merge_coupled"],
+                    "expression_graph merge_coupled")
+
+                # The DOT and Mermaid HEADER lines (esm-libraries-spec §4.8.3).
+                # The corpus pins only the first line of each: the rest carries
+                # node labels run through the chemical-subscript formatter,
+                # which two of the five bindings do not have. See
+                # tests/conformance/graph/README.md.
+                for (what, text, expected) in (
+                    ("component_graph DOT", to_dot(component_graph(file)),
+                     case["component_graph_dot_header"]),
+                    ("component_graph Mermaid", to_mermaid(component_graph(file)),
+                     case["component_graph_mermaid_header"]),
+                    ("expression_graph DOT", to_dot(expression_graph(file)),
+                     case["expression_graph_dot_header"]),
+                    ("expression_graph Mermaid", to_mermaid(expression_graph(file)),
+                     case["expression_graph_mermaid_header"]),
+                )
+                    @test first(split(text, "\n")) == String(expected)
                 end
             end
         end
