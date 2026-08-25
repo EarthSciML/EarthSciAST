@@ -475,20 +475,6 @@ export function componentGraph(file: EsmFile): Graph<ComponentNode, CouplingEdge
 }
 
 /**
- * Extract the system graph from an ESM file in the legacy `{nodes, edges}`
- * {@link ComponentGraph} shape (edges as {@link CouplingEdge} carrying
- * `from`/`to`).
- *
- * @deprecated Prefer {@link componentGraph}, which returns the richer
- * {@link Graph} with adjacency/predecessor/successor helpers. This snake_case
- * alias is retained because the editor's web-components consume the flat
- * `{nodes, edges}` shape; it will be removed once those callers migrate.
- */
-export function component_graph(esmFile: EsmFile): ComponentGraph {
-  return extractComponentGraph(esmFile)
-}
-
-/**
  * Utility to check if a component exists in the ESM file
  */
 export function componentExists(esmFile: EsmFile, componentId: string): boolean {

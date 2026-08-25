@@ -12,7 +12,7 @@
  *
  * Canonical alias names (duplicates are kept for back-compat but marked
  * `@deprecated`):
- *   - root file structure → `EsmFile`   (aliases: `EsmFormat`, generated `ESMFormat`)
+ *   - root file structure → `EsmFile`   (alias: the generated `ESMFormat`)
  *   - operator node       → `ExpressionNode` (alias: `ExprNode`)
  *   - `Expression` (wire / schema-shaped value) and `Expr` (widened in-memory
  *     value that MAY carry a tagged `NumericLiteral`) are DISTINCT types, not
@@ -82,11 +82,10 @@ export {
 
 /**
  * Main ESM file structure — the CANONICAL name for the root document type.
- * Alias for the generated `ESMFormat`. Prefer `EsmFile` over the deprecated
- * `EsmFormat` and the generated `ESMFormat` (all three are the same type).
+ * Prefer it over the generated `ESMFormat`. The deprecated `EsmFormat` spelling
+ * was removed in phase 6 (API_SPEC.md §8).
  */
 import type {
-  ESMFormat,
   ESMFormat1,
   ESMFormat2,
   ExpressionNode,
@@ -140,9 +139,6 @@ export type EsmFile = ESMFormat1 &
      */
     componentTemplates?: Record<string, unknown>
   }
-
-/** @deprecated Prefer {@link EsmFile}. Identical to the generated `ESMFormat`. */
-export type EsmFormat = ESMFormat
 
 /** @deprecated Prefer {@link ExpressionNode} (the generated name). */
 export type ExprNode = ExpressionNode

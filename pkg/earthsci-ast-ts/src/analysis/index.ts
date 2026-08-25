@@ -155,10 +155,3 @@ export function analyzeExpression(
   return results
 }
 
-/**
- * Static namespace wrapping {@link analyzeExpression}.
- * @deprecated Call {@link analyzeExpression} directly.
- */
-export const ExpressionAnalyzer = {
-  analyze: analyzeExpression,
-}
