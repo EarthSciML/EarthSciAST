@@ -81,6 +81,19 @@ pub mod diagnostic {
     pub use crate::diagnostic::DiagnosticError;
 }
 
+/// Document-editing operations with no root re-export. The four event
+/// operations are `stable` in the four OTHER bindings (`api-surface.json`);
+/// Rust implements them but has never named them at the crate root, so they
+/// live here rather than silently becoming dead code. Promoting them to the
+/// stable tier is a manifest change, not an encapsulation one — see the H-3
+/// report.
+pub mod edit {
+    pub use crate::edit::{
+        EditResult, add_continuous_event, add_discrete_event, remove_continuous_event,
+        remove_discrete_event,
+    };
+}
+
 /// Flatten-pass internals.
 pub mod flatten {
     pub use crate::flatten::reject_unlowered_operators;
@@ -97,6 +110,29 @@ pub mod lower_expression_templates {
     pub use crate::lower_expression_templates::{
         ExpressionTemplateError, MAX_TEMPLATE_EXPANSION_DEPTH, emit_document, emit_esm_string,
         expand, flatten_template_registries, lower_expression_templates,
+    };
+}
+
+/// Event-level substitution. The model-level entry points are the stable tier
+/// (`substitute`, `substitute_in_model`, ...); these reach one event, trigger
+/// or affect at a time and are Rust-only.
+pub mod substitute {
+    pub use crate::substitute::{
+        substitute_in_affect_equation, substitute_in_affect_equation_with_context,
+        substitute_in_continuous_event, substitute_in_continuous_event_with_context,
+        substitute_in_discrete_event, substitute_in_discrete_event_trigger,
+        substitute_in_discrete_event_trigger_with_context,
+        substitute_in_discrete_event_with_context,
+    };
+}
+
+/// A data loader's declared `unit_conversion` (esm-spec section 8.5). `stable`
+/// in Julia and Python; in Rust its only in-crate caller is the feature-gated
+/// `esio_provider`, so without this re-export the whole module is dead on a
+/// default build.
+pub mod unit_conversion {
+    pub use crate::unit_conversion::{
+        UnitConversionError, apply_unit_conversion, parse_unit_conversion,
     };
 }
 

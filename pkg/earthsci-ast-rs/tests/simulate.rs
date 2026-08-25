@@ -15,7 +15,7 @@ use earthsci_ast::{
     Metadata, Model, ModelVariable, VariableType,
 };
 use earthsci_ast::{
-    Alg, CompileError, Compiled, Expr, FlattenedSystem, SimulateError, SolveOptions, types::EsmFile,
+    Alg, CompileError, Compiled, EsmFile, Expr, FlattenedSystem, SimulateError, SolveOptions,
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;

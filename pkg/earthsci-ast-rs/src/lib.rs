@@ -49,12 +49,12 @@
 pub mod adapter_support;
 pub mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
-pub mod analysis;
+pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
 pub mod broad_phase;
 pub mod cadence;
-pub mod canonicalize;
+pub(crate) mod canonicalize;
 pub mod classification;
 pub mod coupling;
 pub mod coupling_imports;
@@ -63,26 +63,26 @@ pub mod dae;
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.
 pub mod data_output;
-pub mod diagnostic;
-pub mod display;
-pub mod edit;
-pub mod error;
+pub(crate) mod diagnostic;
+pub(crate) mod display;
+pub(crate) mod edit;
+pub(crate) mod error;
 // The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
 // where a Rust-only internal is handed to a caller. Everything reachable from
 // outside this crate is either a root `pub use` above/below (the stable tier,
 // pinned symbol-by-symbol by api-surface.json) or a member of this module.
-pub mod expression;
+pub(crate) mod expression;
 pub mod extension;
 pub mod flatten;
 pub mod geometry;
-pub mod graph;
+pub(crate) mod graph;
 pub mod intern;
 pub mod join;
 pub mod lower_enums;
 pub mod lower_expression_templates;
-pub mod migration;
+pub(crate) mod migration;
 pub mod op_registry;
-pub mod parse;
+pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
 /// (the inverse of that printer). Pure and wasm32-clean.
 pub mod parse_expression;
@@ -92,14 +92,14 @@ pub mod ref_loading;
 pub mod reference_resolution;
 pub mod registered_functions;
 pub mod relational;
-pub mod serialize;
-pub mod structural;
-pub mod substitute;
+pub(crate) mod serialize;
+pub(crate) mod structural;
+pub(crate) mod substitute;
 pub mod template_imports;
-pub mod types;
-pub mod unit_conversion;
-pub mod units;
-pub mod validate;
+pub(crate) mod types;
+pub(crate) mod unit_conversion;
+pub(crate) mod units;
+pub(crate) mod validate;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -108,7 +108,7 @@ pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
 // `aggregate` / `join` passes, so it cannot live inside the gated solver module.
-pub mod compile_error;
+pub(crate) mod compile_error;
 
 // Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
 // is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
