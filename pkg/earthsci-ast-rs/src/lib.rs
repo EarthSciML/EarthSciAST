@@ -114,7 +114,7 @@ pub(crate) mod compile_error;
 // is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
 // into stays native-only, so the wasm build runs pure-ODE / 0-D box models and
 // the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
-pub mod simulate;
+pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
 // wasm-clean — planar / geometry-free PDEs run client-side; only spherical
@@ -125,7 +125,7 @@ pub mod simulate_array;
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub mod pde_inline_tests;
+pub(crate) mod pde_inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
@@ -150,12 +150,12 @@ pub(crate) mod pushdown_rewrite;
 // public here is the provider contract and the build-observability seam.
 // Native-only (drives `simulate_array`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod prepare;
+pub(crate) mod prepare;
 
 // The EsmProblem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
 // one verb. Construction does NOT require the solver — only `solve` / `init` /
 // `solve_to_completion` do, and those are behind the `solve` feature.
-pub mod problem;
+pub(crate) mod problem;
 
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link

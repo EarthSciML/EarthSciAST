@@ -148,6 +148,12 @@ pub mod lower_expression_templates {
     };
 }
 
+/// Scalar-simulation internals. The `EsmProblem` / `solve` surface itself is
+/// the stable tier, at the crate root.
+pub mod simulate {
+    pub use crate::simulate::algebraic_state_names;
+}
+
 /// Event-level substitution. The model-level entry points are the stable tier
 /// (`substitute`, `substitute_in_model`, ...); these reach one event, trigger
 /// or affect at a time and are Rust-only.
@@ -174,6 +180,13 @@ pub mod unit_conversion {
 /// Projection-pushdown desugar internals.
 pub mod pushdown_rewrite {
     pub use crate::pushdown_rewrite::pushdown_diagnostics;
+}
+
+/// Build-time value invention (derived index sets). The `apply_*` /
+/// `materialize_*` entry points are the stable tier, at the crate root; this
+/// predicate has no native caller left and none at all on wasm32.
+pub mod value_invention {
+    pub use crate::value_invention::is_value_invention_assignment;
 }
 
 /// Document types that are part of the serialized schema but are not in the
