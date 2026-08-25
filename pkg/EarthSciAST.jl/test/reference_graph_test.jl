@@ -217,4 +217,96 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test isempty(graphs["B"].edges)
     end
 
+    # ---------------------------------------------------------------------
+    # API_SPEC.md §8 item 17 — the DOCUMENT-scoped `index_sets` registry.
+    #
+    # Every other test in this file writes `index_sets` INSIDE the model,
+    # which is the pre-0.8.0 shape. esm 1.0.0 puts the registry at the top
+    # level of the document (`esm-schema.json` declares `index_sets` at
+    # `/properties/index_sets` and nowhere else), and this pass read only the
+    # model key — so on a real 1.0.0 document every `ranges[*].from` target
+    # looked undeclared and the pass THREW `undeclared_index_set` where
+    # Python, Rust and Go all built the graph. The whole existing suite passed
+    # throughout, because none of it used the 1.0.0 shape.
+    # ---------------------------------------------------------------------
+    @testset "index_sets at DOCUMENT scope (esm 1.0.0 flat shape)" begin
+        # One model, no model-local `index_sets`; the registry is a sibling of
+        # `models`, exactly as a 1.0.0 document writes it.
+        producer = agg(id = "edge_faq", output_idx = ["edge"],
+                       ranges = Dict("f" => Dict("from" => "faces")))
+        consumer = agg(output_idx = ["e"], ranges = Dict("e" => Dict("from" => "edges")))
+        model = Dict{String,Any}("equations" => [eqn(producer, 0), eqn(consumer, 1)])
+        document = Dict{String,Any}(
+            "esm" => "1.0.0",
+            "index_sets" => Dict(
+                "faces" => Dict("kind" => "interval", "size" => 8),
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
+            "models" => Dict("M" => model))
+
+        # (a) The pre-fix read: no registry threaded, no model-local key, so
+        #     the FIRST `ranges[*].from` is undeclared and the build throws.
+        #     This is exactly what `resolve_references` used to do.
+        err = try
+            build_reference_graph(model, "M")
+            nothing
+        catch e
+            e
+        end
+        @test err isa ReferenceResolutionError
+        @test err.code == ESS.E_REF_UNDECLARED_INDEX_SET
+
+        # (b) With the document registry threaded — the fixed behaviour — the
+        #     graph builds, both index sets are vertices, both `range_from`
+        #     edges exist, and the derived set resolves its `from_faq`.
+        g = build_reference_graph(model, "M", document["index_sets"])
+        @test haskey(g.vertices, "index_set:faces")
+        @test haskey(g.vertices, "index_set:edges")
+        @test length(ESS.edges_of_kind(g, ESS.REF_EDGE_RANGE_FROM)) == 2
+        ff = ESS.edges_of_kind(g, ESS.REF_EDGE_FROM_FAQ)
+        @test length(ff) == 1
+        @test ff[1].source == "index_set:edges"
+        @test ff[1].target == "node:edge_faq"
+
+        # (c) `resolve_references(document)` threads it for every model, so the
+        #     document-level entry point agrees with (b) rather than with (a).
+        graphs = resolve_references(document)
+        @test Set(keys(graphs)) == Set(["M"])
+        @test length(ESS.edges_of_kind(graphs["M"], ESS.REF_EDGE_RANGE_FROM)) == 2
+        @test length(ESS.edges_of_kind(graphs["M"], ESS.REF_EDGE_FROM_FAQ)) == 1
+
+        # (d) The registry is shared by EVERY model, not re-declared per model
+        #     — the point of hoisting it to document scope.
+        m2 = Dict{String,Any}("equations" =>
+            [eqn(agg(output_idx = ["f"], ranges = Dict("f" => Dict("from" => "faces"))), 0)])
+        doc2 = Dict{String,Any}(
+            "esm" => "1.0.0",
+            "index_sets" => Dict("faces" => Dict("kind" => "interval", "size" => 8)),
+            "models" => Dict("A" => m2, "B" => deepcopy(m2)))
+        graphs2 = resolve_references(doc2)
+        @test length(ESS.edges_of_kind(graphs2["A"], ESS.REF_EDGE_RANGE_FROM)) == 1
+        @test length(ESS.edges_of_kind(graphs2["B"], ESS.REF_EDGE_RANGE_FROM)) == 1
+    end
+
+    @testset "model-nested index_sets still resolve (pre-0.8.0 fallback)" begin
+        # Omitting the trailing argument keeps the old behaviour for a caller
+        # holding only a raw model dict — this is what every test above relies
+        # on, and what Python's `index_sets=None` fallback does.
+        model = Dict{String,Any}(
+            "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
+            "equations" => [eqn(agg(output_idx = ["i"],
+                                    ranges = Dict("i" => Dict("from" => "cells"))), 0)])
+        g = build_reference_graph(model, "M")
+        @test length(ESS.edges_of_kind(g, ESS.REF_EDGE_RANGE_FROM)) == 1
+
+        # A model-local entry wins a key collision with the document registry
+        # (the Rust/Go merge rule); no 1.0.0 document can produce this, since
+        # the schema allows `index_sets` only at document scope.
+        g2 = build_reference_graph(model, "M",
+            Dict{String,Any}("cells" => Dict("kind" => "interval", "size" => 99),
+                             "other" => Dict("kind" => "interval", "size" => 2)))
+        @test haskey(g2.vertices, "index_set:cells")
+        @test haskey(g2.vertices, "index_set:other")
+        @test length(ESS.edges_of_kind(g2, ESS.REF_EDGE_RANGE_FROM)) == 1
+    end
+
 end
