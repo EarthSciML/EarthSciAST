@@ -148,7 +148,7 @@ reasoning is worth reading once rather than five times.
 | `simulate(prep, tspan; …)` | `solve(prob, alg; …)` | `deleted` |
 | `prepare(input; …)` → `PreparedModel` | `esm_problem(input, tspan; …)` → `EsmProblem` | `deleted` |
 | `SimulateOptions` / `SimulationResult` / `SolverChoice` | gone; options are SciML's and a solution is a real `ODESolution` | `deleted` |
-| `remake_parameters(prep, overrides)` | `remake(prob; p = overrides)` (`SciMLBase.remake`) | `deleted` |
+| `remake_parameters(prep, overrides)` | `remake(prob; p = overrides)` (`SciMLBase.remake`) | `semantics` |
 | `observed_field(prep, insp::BuildInspection, name)` | `observed_field(prob, name)` | `semantics` |
 | `unknown_names(model)` | `unknowns(model)` | `alias` — **kept, not going away**, see below |
 | `parameter_names(model)` | `parameters(model)` | `alias` — as above |
