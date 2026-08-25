@@ -645,6 +645,11 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
+| `add_coupling` | function | `add_coupling` | `addCoupling` | `add_coupling` | `add_coupling` | `AddCoupling` |
+| `add_equation` | function | `add_equation` | `addEquation` | `add_equation` | `add_equation` | `AddEquation` |
+| `add_reaction` | function | `add_reaction` | `addReaction` | `add_reaction` | `add_reaction` | `AddReaction` |
+| `add_species` | function | `add_species` | `addSpecies` | `add_species` | `add_species` | `AddSpecies` |
+| `add_variable` | function | `add_variable` | `addVariable` | `add_variable` | `add_variable` | `AddVariable` |
 | `algebraic_unknowns` | function | `algebraic_unknowns` | `algebraicUnknowns` | `algebraic_unknowns` | `algebraic_unknowns` | `AlgebraicUnknowns` |
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
 | `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
@@ -663,6 +668,7 @@ reading that as a gap.
 | `load_document` | function | `load_document` | `loadDocument` | `load_document` | `load_document` | `LoadDocument` |
 | `load_path` | function | `load_path` | `loadPath` | `load_path` | `load_path` | `LoadPath` |
 | `load_string` | function | `load_string` | `loadString` | `load_string` | `load_string` | `LoadString` |
+| `lower_enums` | function | `lower_enums!` | `lowerEnums` | `lower_enums` | `lower_enums` | `LowerEnums` |
 | `migrate` | function | `migrate` | `migrate` | `migrate` | `migrate` | `Migrate` |
 | `migration_error` | error | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
@@ -670,6 +676,10 @@ reading that as a gap.
 | `parse_equation` | function | `parse_equation` | `parseEquation` | `parse_equation` | `parse_equation` | `ParseEquation` |
 | `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
+| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` | `remove_coupling` | `RemoveCoupling` |
+| `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` | `remove_reaction` | `RemoveReaction` |
+| `remove_species` | function | `remove_species` | `removeSpecies` | `remove_species` | `remove_species` | `RemoveSpecies` |
+| `remove_variable` | function | `remove_variable` | `removeVariable` | `remove_variable` | `remove_variable` | `RemoveVariable` |
 | `resolve_subsystem_refs` | function | `resolve_subsystem_refs!` | `resolveSubsystemRefs` | `resolve_subsystem_refs` | `resolve_subsystem_refs` | `ResolveSubsystemRefs` |
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
 | `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
@@ -681,6 +691,7 @@ reading that as a gap.
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
+| `unit_warning` | type | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
@@ -690,11 +701,8 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_coupling` | function | `add_coupling` | `addCoupling` | – | `add_coupling` | `AddCoupling` |
-| `add_equation` | function | `add_equation` | `addEquation` | – | `add_equation` | `AddEquation` |
-| `add_reaction` | function | `add_reaction` | `addReaction` | – | `add_reaction` | `AddReaction` |
-| `add_species` | function | `add_species` | `addSpecies` | – | `add_species` | `AddSpecies` |
-| `add_variable` | function | `add_variable` | `addVariable` | – | `add_variable` | `AddVariable` |
+| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | `add_continuous_event` | – | `AddContinuousEvent` |
+| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | `add_discrete_event` | – | `AddDiscreteEvent` |
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
 | `build_reference_graph` | function | `build_reference_graph` | – | `build_reference_graph` | `build_reference_graph` | `BuildReferenceGraph` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
@@ -722,9 +730,9 @@ reading that as a gap.
 | `expand_coupling_imports` | function | `expand_coupling_imports` | `expandCouplingImports` | `expand_coupling_imports` | `expand_coupling_imports` | – |
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
+| `extract` | function | `extract` | `extract` | `extract` | – | `Extract` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
-| `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
@@ -737,24 +745,20 @@ reading that as a gap.
 | `reference_graph` | type | `ReferenceGraph` | – | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
 | `reference_vertex` | type | `ReferenceVertex` | – | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
-| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | `RemoveCoupling` |
-| `remove_reaction` | function | `remove_reaction` | `removeReaction` | – | `remove_reaction` | `RemoveReaction` |
-| `remove_species` | function | `remove_species` | `removeSpecies` | – | `remove_species` | `RemoveSpecies` |
-| `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | `RemoveVariable` |
+| `remove_equation` | function | `remove_equation` | `removeEquation` | `remove_equation` | `remove_equation` | – |
+| `remove_event` | function | `remove_event` | `removeEvent` | `remove_event` | – | `RemoveEvent` |
+| `rename_variable` | function | `rename_variable` | `renameVariable` | `rename_variable` | – | `RenameVariable` |
 | `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 
 #### Exported by three of the five
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | – | – | `AddContinuousEvent` |
-| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | – | – | `AddDiscreteEvent` |
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
 | `callbacks` | function | `callbacks` | – | `callbacks` | `callbacks` | – |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
@@ -768,11 +772,12 @@ reading that as a gap.
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `enum_lowering_error` | error | – | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | – |
+| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | `ERROR_CODES` | – | – |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
 | `evaluate_closed_function` | function | `evaluate_closed_function` | – | – | `evaluate_closed_function` | `EvaluateClosedFunction` |
-| `extract` | function | `extract` | `extract` | – | – | `Extract` |
 | `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
@@ -784,20 +789,22 @@ reading that as a gap.
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
+| `merge` | function | – | `merge` | `merge` | – | `Merge` |
 | `observed_field` | function | `observed_field` | – | `observed_field` | `observed_field` | – |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
 | `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
-| `remove_equation` | function | `remove_equation` | `removeEquation` | – | `remove_equation` | – |
-| `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
-| `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
 | `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
+| `unit_finding` | type | `UnitFinding` | – | `UnitFinding` | `UnitFinding` | – |
+| `unit_finding_analysis` | constant | – | – | `UNIT_FINDING_ANALYSIS` | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
+| `unit_finding_dimensional_mismatch` | constant | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
+| `unit_finding_unparseable` | constant | – | – | `UNIT_FINDING_UNPARSEABLE` | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
 | `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
 
@@ -828,13 +835,12 @@ reading that as a gap.
 | `distinct` | function | – | – | `distinct` | `distinct` | – |
 | `domain_extent_mismatch_error` | error | `DomainExtentMismatchError` | – | `DomainExtentMismatchError` | – | – |
 | `earth_sci_ast_error` | error | `EarthSciASTError` | – | `EarthSciAstError` | – | – |
+| `effective_system_kind` | function | – | – | `effective_system_kind` | – | `EffectiveSystemKind` |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
 | `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
-| `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
-| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
@@ -860,7 +866,6 @@ reading that as a gap.
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
-| `merge` | function | – | `merge` | – | – | `Merge` |
 | `observed_definition` | function | `observed_definition` | – | – | – | `ObservedDefinition` |
 | `operator` | type | – | – | `Operator` | `Operator` | – |
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
@@ -897,10 +902,6 @@ reading that as a gap.
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
-| `unit_finding` | type | `UnitFinding` | – | – | `UnitFinding` | – |
-| `unit_finding_analysis` | constant | – | – | – | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
-| `unit_finding_dimensional_mismatch` | constant | – | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
-| `unit_finding_unparseable` | constant | – | – | – | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
 | `unknowns` | function | – | `unknowns` | `unknowns` | – | – |
 | `unmapped_domain_error` | error | `UnmappedDomainError` | – | `UnmappedDomainError` | – | – |
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |

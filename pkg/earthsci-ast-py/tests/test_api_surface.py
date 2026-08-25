@@ -26,42 +26,23 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MANIFEST_PATH = REPO_ROOT / "api-surface.json"
 
 # ---------------------------------------------------------------------------
-# Phase 4 (esm-libraries-spec §2.5 / API_SPEC §5.8): `simulate` is DELETED and
-# `prepare` / `PreparedModel` are REPLACED by EsmProblem construction, in Julia,
-# Python and Rust. `api-surface.json` is regenerated ONCE, after all three
-# bindings land, so between now and that regeneration the manifest still
-# describes the old Python surface. These two sets carry the delta so the
-# surface stays pinned rather than un-asserted in the interval.
+# Phase 4 (esm-libraries-spec §2.5 / API_SPEC §5.8) has landed in Julia, Python
+# and Rust, and `python3 scripts/gen-api-surface.py` has run for the merged
+# phase, so the manifest now describes the current Python surface directly and
+# these two deltas are empty.
 #
-# When `python3 scripts/gen-api-surface.py` runs for the merged phase, BOTH
-# sets go back to empty — the manifest then says all of this itself, and a
-# non-empty set here is a claim that the manifest is stale.
+# They stay here as the mechanism for the NEXT such interval: when a
+# multi-binding change lands in Python before the manifest is regenerated, list
+# the delta here so the surface stays pinned rather than un-asserted, and empty
+# both sets again at the regeneration. A non-empty set is a claim that the
+# manifest is stale.
 # ---------------------------------------------------------------------------
 
 #: Exported by the Python binding now; not yet in the manifest.
-PENDING_ADDED = {
-    "CallbackSet",
-    "EnsembleProblem",
-    "Integrator",
-    "EsmProblem",
-    "ReturnCode",
-    "Solution",
-    "callbacks",
-    "esm_problem",
-    "init",
-    "remake",
-    "solve",
-    "solve_all",
-    "step",
-}
+PENDING_ADDED: set[str] = set()
 
 #: Still in the manifest; deleted from the Python binding.
-PENDING_REMOVED = {
-    "PreparedModel",
-    "SimulationResult",
-    "prepare",
-    "simulate",
-}
+PENDING_REMOVED: set[str] = set()
 
 
 def _spellings(entry: object) -> list[str]:
