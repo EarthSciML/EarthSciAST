@@ -273,7 +273,7 @@ func TestCouplingEventAffectsParameter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	res := ValidateFile(file, src)
+	res := Validate(file)
 	found := false
 	for _, e := range res.StructuralErrors {
 		if e.Code != ErrorEventAffectsParameter {

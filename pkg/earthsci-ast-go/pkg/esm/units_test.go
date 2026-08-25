@@ -520,7 +520,7 @@ func TestValidateFileUnitsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := ValidateFile(file, jsonStr)
+	result := Validate(file)
 	if len(result.UnitWarnings) == 0 {
 		t.Fatal("expected dimensional mismatch warning, got none")
 	}
