@@ -676,10 +676,11 @@ func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LowerEnums(file); err != nil {
+	lowered, err := LowerEnums(file)
+	if err != nil {
 		t.Fatalf("LowerEnums: %v", err)
 	}
-	ev := file.Models["M"].DiscreteEvents[0]
+	ev := lowered.Models["M"].DiscreteEvents[0]
 	trig, err := SerializeExpression(ev.Trigger.Expression)
 	if err != nil {
 		t.Fatal(err)

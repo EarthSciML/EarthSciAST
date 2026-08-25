@@ -216,7 +216,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 
 	// Lower `enum` ops to `const` integer nodes per esm-spec §9.3. After
 	// this pass, no `enum` op remains in the in-memory representation.
-	if err := LowerEnums(&esmFile); err != nil {
+	//
+	// The MUTATING twin: esmFile is this function's own local, being built, and
+	// is discarded outright on error — so there is nothing here for the pure
+	// form's copy to protect, and copying the whole document on every load
+	// would be pure cost.
+	if err := LowerEnumsMut(&esmFile); err != nil {
 		return nil, err
 	}
 

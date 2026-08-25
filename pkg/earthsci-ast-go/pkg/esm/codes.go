@@ -326,7 +326,7 @@ const (
 )
 
 // DiagnosticError is implemented by the package's code-bearing error types
-// (EvaluationError, ExpressionTemplateError, RuleEngineError, LowerEnumsError,
+// (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
 // ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
 // recover the stable diagnostic code from any of them uniformly —
 // errors.As(err, &de) then de.DiagnosticCode() — without switching over the
@@ -342,7 +342,7 @@ var (
 	_ DiagnosticError = (*EvaluationError)(nil)
 	_ DiagnosticError = (*ExpressionTemplateError)(nil)
 	_ DiagnosticError = (*RuleEngineError)(nil)
-	_ DiagnosticError = (*LowerEnumsError)(nil)
+	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
 )
