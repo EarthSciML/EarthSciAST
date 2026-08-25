@@ -1114,6 +1114,25 @@ the documented path.
 | Python | `[project.scripts]` deleted — the three `earthsci-*-adapter-python` console scripts are gone; use `python3 -m`. |
 | Rust | Root `pub mod` 53 → 8. Rewrite `earthsci_ast::<module>::X` to the crate root or `earthsci_ast::extension::<module>::X`. |
 | Rust | `diffsol` behind the `solve` feature; the three conformance-adapter binaries behind the non-default `conformance-adapters` feature, so a default `cargo build` / `install` / `publish` no longer produces them. |
+
+> **`default-features = false` now silently costs you `solve`.** The `solve`
+> feature is in `default`, so a plain dependency is unaffected — but a crate
+> that opted out of default features for some unrelated reason (dropping the
+> `cli`, say, back when `solve` was not yet a feature) loses the integrator
+> without ever naming it. The failure does not read as a missing feature:
+>
+> ```
+> error[E0432]: unresolved import `earthsci_ast::solve`
+>   note: found an item that was configured out
+> error[E0599]: no method named `solve` found for struct `ArrayCompiled`
+> ```
+>
+> `esm_problem`, `ProblemOptions`, `Alg`, `SolveOptions`, `compile_array`,
+> `load_path_with_options` and `ArrayCompiled` all resolve normally, so the
+> crate looks migrated right up to the point it has to integrate. If you build
+> with `default-features = false` and you solve, add `features = ["solve"]`.
+> Found in `simpleclimate.esm/run-model-rs` while migrating it.
+
 | Go | `main.go` deleted — no more `esm-go` binary. |
 | all | **`esm` (Rust) is the only command-line tool this project ships.** |
 
