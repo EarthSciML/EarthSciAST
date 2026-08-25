@@ -171,8 +171,52 @@ fn find_enum_paths(view: &Value, path: &str, hits: &mut Vec<String>) {
     }
 }
 
+/// Lower every `enum`-op node in `file` to a `{op: "const", value: <int>}`
+/// node using the document's top-level `enums` block, returning a NEW
+/// document. `file` is left untouched.
+///
+/// The canonical entry point (API_SPEC.md §8 items 14 and 15): TYPED, because
+/// every other binding takes a typed document, and PURE, because TypeScript
+/// and Python are pure and the mutating variants take a `_mut` suffix
+/// (Julia's `!`). The in-place raw-JSON pass the loader itself runs is
+/// [`lower_enums_raw`].
+///
+/// Pre-condition: the input has been schema-validated and any
+/// `apply_expression_template` ops have already been expanded.
+///
+/// Errors with an [`EnumLoweringError`] carrying one of the diagnostic codes
+/// listed on [`lower_enums_raw`].
+pub fn lower_enums(file: &crate::EsmFile) -> Result<crate::EsmFile, EnumLoweringError> {
+    let mut value = serde_json::to_value(file).map_err(|e| {
+        err(
+            codes::INVALID_ENUMS_BLOCK,
+            format!("could not render the document as JSON for enum lowering: {e}"),
+        )
+    })?;
+    lower_enums_raw(&mut value)?;
+    serde_json::from_value(value).map_err(|e| {
+        err(
+            codes::ENUM_LOWERING_RESIDUAL,
+            format!("lowered document did not deserialize back into an EsmFile: {e}"),
+        )
+    })
+}
+
+/// [`lower_enums`], applied in place. The `_mut` spelling API_SPEC.md §8 item
+/// 15 assigns to a mutating variant (Julia spells the same thing
+/// `lower_enums!`).
+pub fn lower_enums_mut(file: &mut crate::EsmFile) -> Result<(), EnumLoweringError> {
+    *file = lower_enums(file)?;
+    Ok(())
+}
+
 /// Lower every `enum`-op node in `value` to a `{op: "const", value: <int>}`
 /// node using the file's top-level `enums` block. Mutates `value` in place.
+///
+/// The raw-`serde_json::Value` extension seam (API_SPEC.md §8 item 14): this
+/// is what the loader runs, BEFORE the document is coerced to an
+/// [`crate::EsmFile`], so that JSON-typed subsystem blobs are covered by the
+/// same walk. Callers holding a typed document want [`lower_enums`].
 ///
 /// Pre-condition: the input has been schema-validated and any
 /// `apply_expression_template` ops have already been expanded.
@@ -182,7 +226,7 @@ fn find_enum_paths(view: &Value, path: &str, hits: &mut Vec<String>) {
 /// - `unknown_enum_symbol` — `enum` op references an undeclared symbol
 /// - `enum_invalid_args` — `enum` op has a non-positional or wrong-arity body
 /// - `invalid_enums_block` — top-level `enums` block is malformed
-pub fn lower_enums(value: &mut Value) -> Result<(), EnumLoweringError> {
+pub fn lower_enums_raw(value: &mut Value) -> Result<(), EnumLoweringError> {
     let enums = parse_enums_block(value)?;
 
     // Fast path: no enum-op nodes anywhere; skip the rebuild.
@@ -217,7 +261,7 @@ mod tests {
 
     fn lowered(input: Value) -> Value {
         let mut v = input;
-        lower_enums(&mut v).expect("lowering should succeed");
+        lower_enums_raw(&mut v).expect("lowering should succeed");
         v
     }
 
@@ -295,7 +339,7 @@ mod tests {
                 {"lhs": "x", "rhs": {"op": "enum", "args": ["weekday", "monday"]}}]
             }}
         });
-        let err = lower_enums(&mut v).unwrap_err();
+        let err = lower_enums_raw(&mut v).unwrap_err();
         assert_eq!(err.code, "unknown_enum");
         assert!(err.message.contains("weekday"));
     }
@@ -311,7 +355,7 @@ mod tests {
                 {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "winter"]}}]
             }}
         });
-        let err = lower_enums(&mut v).unwrap_err();
+        let err = lower_enums_raw(&mut v).unwrap_err();
         assert_eq!(err.code, "unknown_enum_symbol");
         assert!(err.message.contains("winter"));
         assert!(err.message.contains("season"));
@@ -327,7 +371,7 @@ mod tests {
                 {"lhs": "x", "rhs": {"op": "enum", "args": ["season", "summer"]}}]
             }}
         });
-        let err = lower_enums(&mut v).unwrap_err();
+        let err = lower_enums_raw(&mut v).unwrap_err();
         assert_eq!(err.code, "unknown_enum");
     }
 
@@ -342,7 +386,7 @@ mod tests {
                 {"lhs": "x", "rhs": {"op": "enum", "args": ["season"]}}]
             }}
         });
-        let err = lower_enums(&mut v).unwrap_err();
+        let err = lower_enums_raw(&mut v).unwrap_err();
         assert_eq!(err.code, "enum_invalid_args");
     }
 
@@ -413,5 +457,65 @@ mod tests {
         .expect("y defining equation");
         assert_eq!(expr["op"], "const");
         assert_eq!(expr["value"], 3);
+    }
+
+    /// API_SPEC.md §8 items 14 + 15: the canonical `lower_enums` is TYPED and
+    /// PURE — it takes an `EsmFile`, returns a new one, and leaves the input
+    /// alone. `lower_enums_mut` is the in-place variant.
+    #[test]
+    fn typed_lower_enums_is_pure_and_agrees_with_the_raw_pass() {
+        let doc = json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "enum_doc"},
+            "enums": {"season": {"winter": 1, "summer": 3}},
+            "models": {
+                "M": {
+                    "variables": {"s": {"type": "unknown"}},
+                    "equations": [
+                        {"lhs": "s", "rhs": {"op": "enum", "args": ["season", "summer"]}}
+                    ]
+                }
+            }
+        });
+        let file: crate::EsmFile = serde_json::from_value(doc.clone()).expect("typed document");
+
+        let lowered_file = lower_enums(&file).expect("typed lowering succeeds");
+
+        // Pure: the input still carries the enum op.
+        let before = serde_json::to_value(&file).expect("re-render");
+        assert_eq!(before["models"]["M"]["equations"][0]["rhs"]["op"], "enum");
+
+        let after = serde_json::to_value(&lowered_file).expect("re-render");
+        assert_eq!(after["models"]["M"]["equations"][0]["rhs"]["op"], "const");
+        assert_eq!(after["models"]["M"]["equations"][0]["rhs"]["value"], 3);
+
+        // Agrees with the raw seam.
+        assert_eq!(after, lowered(doc));
+
+        // And `_mut` is the same transform applied in place.
+        let mut mutated = file.clone();
+        lower_enums_mut(&mut mutated).expect("in-place lowering succeeds");
+        assert_eq!(serde_json::to_value(&mutated).expect("re-render"), after);
+    }
+
+    /// The typed form raises `EnumLoweringError` with the cross-binding code.
+    #[test]
+    fn typed_lower_enums_raises_enum_lowering_error() {
+        let file: crate::EsmFile = serde_json::from_value(json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "bad_enum"},
+            "enums": {"season": {"winter": 1}},
+            "models": {
+                "M": {
+                    "variables": {"s": {"type": "unknown"}},
+                    "equations": [
+                        {"lhs": "s", "rhs": {"op": "enum", "args": ["season", "nope"]}}
+                    ]
+                }
+            }
+        }))
+        .expect("typed document");
+        let e: EnumLoweringError = lower_enums(&file).unwrap_err();
+        assert_eq!(e.code, codes::UNKNOWN_ENUM_SYMBOL);
     }
 }

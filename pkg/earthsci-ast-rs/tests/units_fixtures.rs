@@ -6,7 +6,7 @@
 //!
 //! Asserts that each fixture parses, that every variable's declared unit
 //! string round-trips through `parse_unit`, and — now that expression-level
-//! dimension propagation exists (`units::propagate` via `validate_complete`)
+//! dimension propagation exists (`units::propagate` via `validate_text`)
 //! — that every fixture passes full validation with zero unit warnings.
 
 use earthsci_ast::*;
@@ -113,7 +113,7 @@ fn units_fixtures_dimensional_propagation() {
         ("units_propagation.esm", 0),
     ];
     for (name, content) in UNITS_FIXTURES {
-        let result = validate_complete(content, None);
+        let result = validate_text(content, None);
         assert!(
             result.schema_errors.is_empty(),
             "{name}: unexpected schema errors: {:?}",

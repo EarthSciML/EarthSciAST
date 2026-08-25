@@ -230,7 +230,7 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // Lower `enum`-op nodes to `const` integers using the file's `enums`
     // block (esm-spec §4.5 / §9.3). Mirrors the Julia / Python load-time
     // pass so that downstream consumers never see enum strings.
-    crate::lower_enums::lower_enums(&mut json_value)
+    crate::lower_enums::lower_enums_raw(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
     // Deserialize into our types. The interning scope makes every

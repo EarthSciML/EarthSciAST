@@ -11,7 +11,7 @@ use earthsci_ast::analysis::{
 };
 use earthsci_ast::{
     component_exists, component_graph, load_string, to_json, to_json_compact, validate,
-    validate_complete,
+    validate_text,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -1609,7 +1609,7 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
     // real path so a document with relative refs is not spuriously
     // rejected (stdin has no directory → process CWD).
     let base_dir = file.parent();
-    let validation_result = validate_complete(&content, base_dir);
+    let validation_result = validate_text(&content, base_dir);
 
     if validation_result.is_valid {
         println!("✓ Validation passed");
@@ -2659,7 +2659,7 @@ fn run_validate_fixtures(
                 continue;
             }
         };
-        let result = validate_complete(&content, path.parent());
+        let result = validate_text(&content, path.parent());
         if result.is_valid {
             println!("✓ {}", path.display());
             passed += 1;
@@ -2848,7 +2848,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 //
 // Every validation entry runs the full **load → resolve → validate** pipeline.
 // `load_path` resolves §4.7 subsystem refs against the file's own directory; the
-// producer used to call `validate_complete(&content)` on the file's TEXT, which
+// producer used to call `validate_text(&content)` on the file's TEXT, which
 // takes no base path, so no `{ref}` could ever resolve here.
 //
 // See `scripts/run-python-conformance.py` for the emitted wire shape; every
@@ -3095,10 +3095,10 @@ fn run_conformance_test(
                 // Schema validation judges the document AS WRITTEN, so it runs
                 // on the raw text; structural validation judges the RESOLVED
                 // form, so it runs on the loaded file (which has its §4.7 refs
-                // spliced in). `validate_complete` is the only exported entry
+                // spliced in). `validate_text` is the only exported entry
                 // that reports schema errors, so its structural half is
                 // discarded — it saw the unresolved document.
-                let schema = validate_complete(&content, path.parent());
+                let schema = validate_text(&content, path.parent());
                 let structural = validate(esm_file);
                 record.insert(
                     "schema_errors".into(),
@@ -3135,18 +3135,18 @@ fn run_conformance_test(
                 record.insert("is_valid".into(), json!(false));
                 // Raw document: the load-phase rejection still yields whatever
                 // structured findings the binding is able to enumerate.
-                // `validate_complete` now itself recovers the typed structural
+                // `validate_text` now itself recovers the typed structural
                 // `(code, path)` records on a load rejection (best-effort raw parse
                 // + typed `validate()`), so a document rejected at load no longer
                 // records `is_valid:false` with an EMPTY `structural_errors`
                 // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
                 // `validate()` here, or every such record would be duplicated.
-                let raw = validate_complete(&content, path.parent());
+                let raw = validate_text(&content, path.parent());
                 let mut structural_errors: Vec<earthsci_ast::StructuralError> =
                     raw.structural_errors.clone();
                 // A subsystem `ref` that could not be resolved (missing file) or is
                 // ambiguous (resolves to a file with != 1 top-level system) aborts
-                // the load before any typed pass AND before `validate_complete` can
+                // the load before any typed pass AND before `validate_text` can
                 // deserialize the document, so those findings are recovered here
                 // directly from the raw document against the file's own directory.
                 structural_errors.extend(collect_subsystem_ref_errors(&content, &path));

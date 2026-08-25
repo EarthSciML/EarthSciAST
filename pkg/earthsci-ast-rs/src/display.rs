@@ -1504,14 +1504,89 @@ fn format_operator(node: &ExpressionNode, fmt: Fmt, parent_prec: i32) -> String 
     }
 }
 
-/// Convert an expression to Unicode mathematical notation
-pub fn to_unicode(expr: &Expr) -> String {
-    expr.to_unicode()
+/// The domain the three text renderers accept: expressions AND containers.
+///
+/// API_SPEC.md §8 item 18 requires [`to_unicode`] / [`to_latex`] /
+/// [`to_ascii`] to accept the full domain in every binding — this binding
+/// accepted [`Expr`] only. The domain mirrors Python's
+/// `Expr | Equation | Model | ReactionSystem | EsmFile`.
+///
+/// Container renderings are the esm-spec §6.3 SUMMARIES and are
+/// format-independent, exactly as Python's `_format_*_summary` helpers are
+/// (they take a `format_type` and ignore it). Only the expression and
+/// equation renderings differ per format.
+pub trait TextRenderable {
+    /// Unicode mathematical notation.
+    fn render_unicode(&self) -> String;
+    /// LaTeX notation.
+    fn render_latex(&self) -> String;
+    /// Plain-ASCII notation.
+    fn render_ascii(&self) -> String;
 }
 
-/// Convert an expression to LaTeX notation
-pub fn to_latex(expr: &Expr) -> String {
-    to_latex_prec(expr, 0)
+impl TextRenderable for Expr {
+    fn render_unicode(&self) -> String {
+        self.to_unicode()
+    }
+    fn render_latex(&self) -> String {
+        to_latex_prec(self, 0)
+    }
+    fn render_ascii(&self) -> String {
+        to_ascii_prec(self, 0)
+    }
+}
+
+impl TextRenderable for Equation {
+    fn render_unicode(&self) -> String {
+        format!(
+            "{} = {}",
+            self.lhs.render_unicode(),
+            self.rhs.render_unicode()
+        )
+    }
+    fn render_latex(&self) -> String {
+        format!("{} = {}", self.lhs.render_latex(), self.rhs.render_latex())
+    }
+    fn render_ascii(&self) -> String {
+        format!("{} = {}", self.lhs.render_ascii(), self.rhs.render_ascii())
+    }
+}
+
+/// Container summaries: the same §6.3 summary in all three formats, which is
+/// what the peer bindings do (their summary helpers accept a format and never
+/// branch on it). Rendered by the type's own `Display`, so the text is the one
+/// already pinned by `tests/display/model_summary.json`.
+macro_rules! summary_renderable {
+    ($t:ty) => {
+        impl TextRenderable for $t {
+            fn render_unicode(&self) -> String {
+                self.to_string()
+            }
+            fn render_latex(&self) -> String {
+                self.to_string()
+            }
+            fn render_ascii(&self) -> String {
+                self.to_string()
+            }
+        }
+    };
+}
+
+summary_renderable!(Model);
+summary_renderable!(ReactionSystem);
+summary_renderable!(EsmFile);
+
+/// Render `target` as Unicode mathematical notation.
+///
+/// Accepts the full display domain (API_SPEC.md §8 item 18): an [`Expr`], an
+/// [`Equation`], or a [`Model`] / [`ReactionSystem`] / [`EsmFile`] summary.
+pub fn to_unicode<T: TextRenderable + ?Sized>(target: &T) -> String {
+    target.render_unicode()
+}
+
+/// Render `target` as LaTeX. See [`to_unicode`] for the accepted domain.
+pub fn to_latex<T: TextRenderable + ?Sized>(target: &T) -> String {
+    target.render_latex()
 }
 
 /// LaTeX rendering with the parent operator's precedence threaded through.
@@ -1799,9 +1874,9 @@ fn format_chemical_latex(variable: &str) -> String {
     format!("\\mathrm{{{variable}}}")
 }
 
-/// Convert an expression to ASCII representation
-pub fn to_ascii(expr: &Expr) -> String {
-    to_ascii_prec(expr, 0)
+/// Render `target` as plain ASCII. See [`to_unicode`] for the accepted domain.
+pub fn to_ascii<T: TextRenderable + ?Sized>(target: &T) -> String {
+    target.render_ascii()
 }
 
 /// ASCII rendering with the parent operator's precedence threaded through.
@@ -2272,6 +2347,35 @@ mod tests {
         assert!(output.contains("Reaction Systems:"));
         assert!(output.contains("(2 species, 1 parameters, 1 reaction)"));
         assert!(output.contains("R1: A → B    rate: k1"));
+
+        // API_SPEC.md §8 item 18: the three renderers accept CONTAINERS, not
+        // just expressions. A container renders its §6.3 summary, the same
+        // text in all three formats (the peer bindings' summary helpers take
+        // a format and ignore it).
+        assert_eq!(to_unicode(&esm_file), output);
+        assert_eq!(to_latex(&esm_file), output);
+        assert_eq!(to_ascii(&esm_file), output);
+
+        let rs = &esm_file.reaction_systems.as_ref().unwrap()["TestReactions"];
+        assert_eq!(to_unicode(rs), rs.to_string());
+        assert_eq!(to_ascii(rs), rs.to_string());
+    }
+
+    /// §8 item 18: an `Equation` renders as `lhs = rhs` in each format, the
+    /// shape Python and TypeScript already produce.
+    #[test]
+    fn equations_render_in_all_three_formats() {
+        let eq = Equation {
+            lhs: Expr::Variable("alpha".to_string()),
+            rhs: Expr::operator(ExpressionNode {
+                op: "*".to_string(),
+                args: vec![Expr::Variable("beta".to_string()), Expr::Number(2.0)],
+                ..Default::default()
+            }),
+        };
+        assert_eq!(to_unicode(&eq), "α = β·2");
+        assert_eq!(to_ascii(&eq), "alpha = beta * 2");
+        assert_eq!(to_latex(&eq), "\\alpha = \\beta \\cdot 2");
     }
 
     #[test]

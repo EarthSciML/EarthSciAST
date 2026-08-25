@@ -691,6 +691,7 @@ reading that as a gap.
 | `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
 | `reference_edge` | type | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
 | `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
+| `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` |
 | `reference_vertex` | type | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
 | `resolve_references` | function | `resolve_references` | `resolveReferences` | `resolve_references` | `resolve_references` | `ResolveReferences` |
@@ -700,11 +701,15 @@ reading that as a gap.
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
+| `supported_migration_targets` | function | `supported_migration_targets` | `supportedMigrationTargets` | `supported_migration_targets` | `supported_migration_targets` | `SupportedMigrationTargets` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
 | `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | `ToDOT` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
+| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | `to_json_graph` | `ToJSONGraph` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | `to_mermaid` | `ToMermaid` |
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
@@ -761,7 +766,6 @@ reading that as a gap.
 | `parameter_update` | type | `ParameterUpdate` | – | `ParameterUpdate` | `ParameterUpdate` | `ParameterUpdate` |
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
-| `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
 | `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | `RemoveCoupling` |
 | `remove_reaction` | function | `remove_reaction` | `removeReaction` | – | `remove_reaction` | `RemoveReaction` |
@@ -771,10 +775,6 @@ reading that as a gap.
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `supported_migration_targets` | function | `supported_migration_targets` | `supportedMigrationTargets` | `supported_migration_targets` | – | `SupportedMigrationTargets` |
-| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | `ToDOT` |
-| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | – | `ToJSONGraph` |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | `ToMermaid` |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
@@ -796,6 +796,7 @@ reading that as a gap.
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
 | `effective_system_kind` | function | `effective_system_kind` | `effectiveSystemKind` | – | – | `EffectiveSystemKind` |
+| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | `ERROR_CODES` | – |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -823,6 +824,7 @@ reading that as a gap.
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
 | `unknowns` | function | `unknowns` | `unknowns` | `unknowns` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
+| `validate_text` | function | – | `validateText` | – | `validate_text` | `ValidateText` |
 
 #### Exported by two of the five
 
@@ -855,7 +857,7 @@ reading that as a gap.
 | `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
-| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
+| `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
@@ -879,6 +881,7 @@ reading that as a gap.
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
+| `lower_enums_mut` | function | – | – | – | `lower_enums_mut` | `LowerEnumsMut` |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
 | `merge` | function | – | `merge` | – | – | `Merge` |
@@ -929,7 +932,6 @@ reading that as a gap.
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |
 | `validate_schema` | function | `validate_schema` | `validateSchema` | – | – | – |
 | `validate_structural` | function | `validate_structural` | – | – | – | `ValidateStructural` |
-| `validate_text` | function | – | `validateText` | – | – | `ValidateText` |
 | `validate_units` | function | – | `validateUnits` | `validate_units` | – | – |
 | `validation_error` | type | – | `ValidationError` | `ValidationError` | – | – |
 | `value_invention_error` | error | – | – | `ValueInventionError` | `ValueInventionError` | – |

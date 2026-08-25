@@ -411,7 +411,7 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         // the §9.7 machinery of problem.esm closes with the edge bindings.
         let src = std::fs::read_to_string(&wrapper_path).expect("read wrapper");
         let mut v: Value = serde_json::from_str(&src).expect("parse wrapper");
-        earthsci_ast::resolve_subsystem_refs(&mut v, wrapper_path.parent().unwrap())
+        earthsci_ast::resolve_subsystem_refs_raw(&mut v, wrapper_path.parent().unwrap())
             .expect("resolve subsystem refs");
         assert_eq!(
             v,

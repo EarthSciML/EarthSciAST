@@ -199,7 +199,7 @@ pub use graph::{
     ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
     DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions,
     VariableKind, VariableNode, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, get_component_type,
+    expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };
 pub use parse::{
     LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
@@ -209,11 +209,22 @@ pub use parse_expression::{ExpressionParseError, parse_equation, parse_expressio
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
-pub use ref_loading::{resolve_subsystem_refs, resolve_subsystem_refs_with_metaparameters};
+pub use ref_loading::{
+    resolve_subsystem_refs, resolve_subsystem_refs_raw, resolve_subsystem_refs_with_metaparameters,
+};
 pub use reference_resolution::{
-    EdgeKind, ReferenceEdge, ReferenceError, ReferenceGraph, ReferenceVertex, VertexKind,
+    EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,
     build_reference_graph, resolve_references,
 };
+// Deprecated alias of `build_reference_graph`, kept for one minor per
+// API_SPEC.md §10 (§8 item 17 folded the registry into a trailing argument).
+#[allow(deprecated)]
+pub use reference_resolution::build_reference_graph_with_index_sets;
+// Deprecated alias of `ReferenceResolutionError`, kept for one minor per
+// API_SPEC.md §10 (§8 item 10 renamed it). Re-exported behind
+// `allow(deprecated)` so the re-export itself does not warn.
+#[allow(deprecated)]
+pub use reference_resolution::ReferenceError;
 pub use registered_functions::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
@@ -243,8 +254,12 @@ pub use types::{
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_complete,
+    validate_text,
 };
+// Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
+// (§8 item 13 named the text convenience `validate_text`).
+#[allow(deprecated)]
+pub use validate::validate_complete;
 pub use value_invention::{
     BoundaryKind, ValueInventionError, ValueInventionResult, apply_value_invention,
     materialize_value_invention,
@@ -269,14 +284,18 @@ pub use edit::{
     add_species, add_variable, remove_coupling, remove_equation, remove_model, remove_reaction,
     remove_species, remove_variable, replace_coupling, replace_equation, update_model_metadata,
 };
-// Deprecated alias kept for backward compatibility; delegates to
-// `substitute::substitute`. Re-exported behind `allow(deprecated)` so the
-// re-export itself does not warn.
-#[allow(deprecated)]
-pub use edit::substitute_in_expression;
 pub use error::EsmError;
-pub use lower_enums::{EnumLoweringError, lower_enums};
-pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
+// The central diagnostic-code registry (phase-6 H-2). `diagnostic::codes` is
+// the per-code constant form that raise sites reference; `ERROR_CODES` is its
+// enumerable `(name, value)` table, the Rust twin of Julia's `ERROR_CODES`
+// NamedTuple, TypeScript's `ERROR_CODES` object and Go's `codes.go`.
+pub use diagnostic::{ERROR_CODES, error_code_names};
+pub use lower_enums::{EnumLoweringError, lower_enums, lower_enums_mut, lower_enums_raw};
+pub use migration::{MigrationError, can_migrate, migrate, supported_migration_targets};
+// Deprecated alias of `supported_migration_targets`, kept for one minor per
+// API_SPEC.md §10 (phase-6 G-2 dropped the `get_` prefix).
+#[allow(deprecated)]
+pub use migration::get_supported_migration_targets;
 
 pub use compile_error::CompileError;
 
