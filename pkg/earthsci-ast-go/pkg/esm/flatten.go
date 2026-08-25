@@ -446,11 +446,6 @@ func (t *varTable) set(v FlattenedVariable) {
 
 func (t *varTable) has(name string) bool { _, ok := t.m[name]; return ok }
 
-func (t *varTable) get(name string) (FlattenedVariable, bool) {
-	v, ok := t.m[name]
-	return v, ok
-}
-
 // remove deletes a name, closing the gap in the order.
 func (t *varTable) remove(name string) (FlattenedVariable, bool) {
 	v, ok := t.m[name]
@@ -1603,7 +1598,7 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		}
 		comp := components[ref.system]
 		existing := comp.equations[ref.index]
-		var expression Expression = ceq.Expression
+		expression := ceq.Expression
 		if expression == nil {
 			expression = ceq.From
 		}

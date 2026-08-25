@@ -237,7 +237,7 @@ func TestRenameVariableUnknownName(t *testing.T) {
 	file := loadEditFixture(t)
 	model := file.Models["EventTestModel"]
 	_, err := RenameVariable(model, "nope", "other")
-	asEntityNotFound(t, err)
+	_ = asEntityNotFound(t, err)
 }
 
 // =============================================================================
@@ -270,7 +270,7 @@ func TestEquationOps(t *testing.T) {
 		if _, err := RemoveEquationAt(model, bad); err == nil {
 			t.Fatalf("RemoveEquationAt(%d) succeeded on a %d-equation model", bad, n)
 		} else {
-			asEntityNotFound(t, err)
+			_ = asEntityNotFound(t, err)
 		}
 	}
 }
@@ -302,7 +302,7 @@ func TestRemoveEquationByLHSIsFieldAware(t *testing.T) {
 	if _, err := RemoveEquationByLHS(model, nearMiss); err == nil {
 		t.Fatal("a derivative differing only in `wrt` matched")
 	} else {
-		asEntityNotFound(t, err)
+		_ = asEntityNotFound(t, err)
 	}
 
 	if _, err := RemoveEquationByLHS(model, "not_an_lhs_here"); err == nil {
@@ -357,7 +357,7 @@ func TestReactionOps(t *testing.T) {
 	if _, err := RemoveReaction(system, "no_such_reaction"); err == nil {
 		t.Fatal("RemoveReaction accepted an unknown id")
 	} else {
-		asEntityNotFound(t, err)
+		_ = asEntityNotFound(t, err)
 	}
 }
 
@@ -400,7 +400,7 @@ func TestSpeciesOps(t *testing.T) {
 	if _, err := RemoveSpecies(system, "no_such_species"); err == nil {
 		t.Fatal("RemoveSpecies accepted an unknown name")
 	} else {
-		asEntityNotFound(t, err)
+		_ = asEntityNotFound(t, err)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestEventOps(t *testing.T) {
 	if _, err := RemoveEvent(model, "no_such_event"); err == nil {
 		t.Fatal("RemoveEvent accepted an unknown name")
 	} else {
-		asEntityNotFound(t, err)
+		_ = asEntityNotFound(t, err)
 	}
 }
 
@@ -554,7 +554,7 @@ func TestCouplingOps(t *testing.T) {
 		if _, err := RemoveCoupling(*file, bad); err == nil {
 			t.Fatalf("RemoveCoupling(%d) succeeded on a %d-entry file", bad, n)
 		} else {
-			asEntityNotFound(t, err)
+			_ = asEntityNotFound(t, err)
 		}
 	}
 }
@@ -669,7 +669,7 @@ func TestExtractDoesNotOfferDataSources(t *testing.T) {
 		if _, err := Extract(*file, name); err == nil {
 			t.Fatalf("Extract offered data source %q as a component", name)
 		} else {
-			asEntityNotFound(t, err)
+			_ = asEntityNotFound(t, err)
 		}
 	}
 }
@@ -800,7 +800,7 @@ func TestRenameVariableScopeAwareVsModelScoped(t *testing.T) {
 	if _, err := RemoveVariable(model, varName); err == nil {
 		t.Fatal("RemoveVariable ignored a scoped read of the variable")
 	} else {
-		asVariableInUse(t, err)
+		_ = asVariableInUse(t, err)
 	}
 
 	// Model-scoped: the bare reads are rewritten, the scoped one is not.
@@ -835,7 +835,7 @@ func TestRenameVariableScopeAwareVsModelScoped(t *testing.T) {
 	if _, err := RenameVariableInFile(*file, "no_such_model", varName, "x"); err == nil {
 		t.Fatal("RenameVariableInFile accepted an unknown model")
 	} else {
-		asEntityNotFound(t, err)
+		_ = asEntityNotFound(t, err)
 	}
 }
 

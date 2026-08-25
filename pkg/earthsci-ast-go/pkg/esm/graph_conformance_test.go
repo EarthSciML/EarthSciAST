@@ -271,12 +271,7 @@ func shapeComponentClosure(graph *ComponentGraph) map[string]corpusClosureEntry 
 func shapeExpressionGraph(graph *ExpressionGraph) corpusExprGraph {
 	nodes := make([]corpusVariableNode, 0, len(graph.Nodes))
 	for _, n := range graph.Nodes {
-		nodes = append(nodes, corpusVariableNode{
-			Name:   n.Name,
-			Kind:   n.Kind,
-			Units:  n.Units,
-			System: n.System,
-		})
+		nodes = append(nodes, corpusVariableNode(n))
 	}
 	edges := make([]corpusDependencyEdge, 0, len(graph.Edges))
 	for _, e := range graph.Edges {
