@@ -12,8 +12,8 @@
 # EQUATION; what it cannot see is that a stencil model instantiates the same
 # equation once per cell/column with different ghost patterns and interp
 # specs, yielding thousands of structurally identical mostly-1-lane kernels
-# (ReSEACT transport at 7×7×8: 4,119 kernels, 7.93M IR nodes, only ~346
-# distinct classes). The interpreted walkers tolerate that; an XLA tracer
+# over only a few hundred distinct classes. The interpreted walkers tolerate
+# that; an XLA tracer
 # (Reactant) does not — it retraces every kernel body, so IR volume is the
 # whole cost. This pass groups kernels by a lockstep-structure signature and
 # merges each class into ONE kernel whose varying leaves become per-lane
@@ -28,8 +28,8 @@
 # the class signature keys an interp spec's SHAPE (knot count), not its
 # CONTENT, so kernels identical except for their interp const tables share a
 # class and the clone transposes the specs into per-lane tables (see
-# `_oop_merge_fn_payload` and registered_functions.jl `_Interp*LaneSpec`).
-# On ReSEACT transport that is 346 classes -> ~a few dozen.
+# `_oop_merge_fn_payload` and registered_functions.jl `_Interp*LaneSpec`),
+# collapsing the class count by another order of magnitude.
 #
 # with `_outs_cells` lane addressing (m1 = lane ordinal, so s1=1/off=1).
 # Per-lane index/const data comes from each member's already-built
@@ -589,14 +589,12 @@ end
 # per-kernel CSE pass sliced different recipe sets (a boundary cell's slightly
 # different tree changes which subtrees repeat, and a single early difference
 # renumbers every later slot) land in different classes even though their
-# fully-expanded arithmetic is lockstep-identical. Measured on ReSEACT
-# transport (7×7×72): 4,119 kernels → 346 round-1 classes, of which 343 share
-# ONE spine and differ mainly in recipe slicing/slot numbering plus
-# literal-vs-frozen-const leaf flips — NOT in interp specs and NOT in
-# forcing-buffer identity (both measured no-ops). Expansion-normalizing the
-# signature (inline every own-scratch `_NK_CACHED` read through its recipe,
-# treat a LITERAL and a frozen const-family access as one "value leaf")
-# collapses 346 → 150.
+# fully-expanded arithmetic is lockstep-identical. On a real transport equation
+# the great majority of round-1 classes share ONE spine and differ only in recipe
+# slicing/slot numbering plus literal-vs-frozen-const leaf flips — not in interp
+# specs, not in forcing-buffer identity. Expansion-normalizing the signature
+# (inline every own-scratch `_NK_CACHED` read through its recipe, treat a LITERAL
+# and a frozen const-family access as one "value leaf") more than halves them.
 #
 # HOW. A second grouping pass over the round-1 output:
 #   * SIGNATURE: a memoized structural HASH of the fully-EXPANDED trees —

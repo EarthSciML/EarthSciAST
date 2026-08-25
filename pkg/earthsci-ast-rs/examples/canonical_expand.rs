@@ -21,8 +21,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use earthsci_ast::lower_expression_templates::lower_expression_templates;
-use earthsci_ast::template_imports::resolve_template_machinery;
+use earthsci_ast::extension::lower_expression_templates::lower_expression_templates;
+use earthsci_ast::resolve_template_machinery;
 use serde_json::Value;
 
 /// Render a non-integral finite float exactly as Julia's `JSON3.write`

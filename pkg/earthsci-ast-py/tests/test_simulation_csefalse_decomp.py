@@ -46,7 +46,7 @@ from earthsci_ast.esm_types import (
     ModelVariable,
 )
 from earthsci_ast.expression import ExprNode
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.sympy_bridge import (
     _LAMBDIFY_MODULES,
     _ess_numeric_abs,
@@ -156,8 +156,8 @@ def test_b_numerical_domain_agnostic_negative_state():
         models={"NegState": model},
     )
 
-    res = simulate(esm, tspan=(0.0, 1.0))
-    assert res.success
+    res = solve(esm_problem(esm, (0.0, 1.0)))
+    assert (res.retcode is ReturnCode.Success)
     v_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".v"))
     v_final = float(res.y[v_idx, -1])
 

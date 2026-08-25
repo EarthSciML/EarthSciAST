@@ -15,17 +15,17 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::pde_inline_tests::run_pde_tests;
-use earthsci_ast::validate::{StructuralErrorCode, validate};
-use earthsci_ast::{Model, SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::run_pde_tests;
+use earthsci_ast::{Alg, Model, SolveOptions, load_string};
+use earthsci_ast::{StructuralErrorCode, validate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 mod common;
 
-fn opts() -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn opts() -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         reltol: 1e-12,
         abstol: 1e-14,
         ..Default::default()
@@ -35,10 +35,20 @@ fn opts() -> SimulateOptions {
 /// Integrate a document from t=0 to t=1, sampling exactly the two endpoints.
 fn run(
     file: &earthsci_ast::EsmFile,
-) -> Result<earthsci_ast::Solution, earthsci_ast::simulate::SimulateError> {
+) -> Result<earthsci_ast::Solution, earthsci_ast::SimulateError> {
     let mut o = opts();
-    o.output_times = Some(vec![0.0, 1.0]);
-    simulate(file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &o)
+    o.saveat = Some(vec![0.0, 1.0]);
+    earthsci_ast::esm_problem(
+        file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &o))
 }
 
 fn read(path: &PathBuf) -> String {
@@ -308,9 +318,19 @@ fn anonymous_shapes_keep_positional_broadcast() {
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let mut o = opts();
-    o.output_times = Some(vec![0.0, 1.0]);
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &o)
-        .expect("positional broadcast still simulates");
+    o.saveat = Some(vec![0.0, 1.0]);
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &o))
+    .expect("positional broadcast still simulates");
 
     // result[i, j] = a[i] + b[j] with a = [1,2,3], b = [100,200,300].
     for (name, want) in [("corner", 101.0), ("middle", 302.0), ("far", 203.0)] {

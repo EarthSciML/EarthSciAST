@@ -31,7 +31,7 @@
 //! (`models.<M>.subsystems.<k> = {ref, bindings}`), exercised below.
 
 use earthsci_ast::load_path_with_options;
-use earthsci_ast::template_imports::resolve_template_machinery;
+use earthsci_ast::resolve_template_machinery;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;

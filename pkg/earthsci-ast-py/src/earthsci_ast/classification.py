@@ -515,6 +515,27 @@ def declared_system_kind(model: Any) -> str | None:
     return declared if isinstance(declared, str) else None
 
 
+def effective_system_kind(model: Any) -> str:
+    """The kind a caller choosing a solver should act on: the declared
+    ``system_kind`` field when the document states one, otherwise the §6.3.1
+    derivation.
+
+    This is the composition ``declared ?? derived`` of the other two members of
+    the family (API_SPEC.md §8 item 11) — the third of three distinct questions:
+
+    * :func:`system_kind` — what the model's CONTENT implies (always answers);
+    * :func:`declared_system_kind` — what the document SAYS, or ``None``;
+    * :func:`effective_system_kind` — what to actually DO (always answers).
+
+    It deliberately does not diagnose disagreement between the two: a declared
+    field that contradicts the derivation is reported as
+    ``system_kind_mismatch`` by :func:`~earthsci_ast.validation.validate`, and a
+    caller that has already validated its document wants one answer, not a
+    second copy of the check.
+    """
+    return declared_system_kind(model) or system_kind(model)
+
+
 # === Partition assertion + document traversal ==============================
 
 

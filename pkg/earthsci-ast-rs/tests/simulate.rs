@@ -10,13 +10,12 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::types::{
+use earthsci_ast::{
     AffectEquation, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, Equation, ExpressionNode,
     Metadata, Model, ModelVariable, VariableType,
 };
 use earthsci_ast::{
-    CompileError, Compiled, Expr, FlattenedSystem, SimulateError, SimulateOptions, SolverChoice,
-    simulate, types::EsmFile,
+    Alg, CompileError, Compiled, EsmFile, Expr, FlattenedSystem, SimulateError, SolveOptions,
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -186,16 +185,28 @@ fn test_exponential_decay_matches_analytical() {
     let mut ic = HashMap::new();
     ic.insert("Decay.N".to_string(), 1.0);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 10_000,
-        output_times: Some(vec![0.0, 1.0, 10.0, 100.0]),
+        maxiters: 10_000,
+        saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         progress: None,
+        callback: None,
     };
 
-    let sol = simulate(&file, (0.0, 100.0), &params, &ic, &opts).expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 100.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
 
     assert_eq!(sol.state_variable_names, vec!["Decay.N".to_string()]);
     assert_eq!(sol.time.len(), 4);
@@ -259,16 +270,28 @@ fn test_reversible_reaction_reaches_steady_state() {
     ic.insert("Rev.A".to_string(), 1.0);
     ic.insert("Rev.B".to_string(), 0.0);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 10_000,
-        output_times: Some(vec![10.0, 50.0]),
+        maxiters: 10_000,
+        saveat: Some(vec![10.0, 50.0]),
         progress: None,
+        callback: None,
     };
 
-    let sol = simulate(&file, (0.0, 50.0), &params, &ic, &opts).expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 50.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
 
     let a_idx = sol
         .state_variable_names
@@ -332,16 +355,28 @@ fn test_autocatalytic_conserves_mass() {
     ic.insert("Auto.A".to_string(), 1.0);
     ic.insert("Auto.B".to_string(), 0.01);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 10_000,
-        output_times: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
+        maxiters: 10_000,
+        saveat: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
         progress: None,
+        callback: None,
     };
 
-    let sol = simulate(&file, (0.0, 10.0), &params, &ic, &opts).expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 10.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
     let a_idx = sol
         .state_variable_names
         .iter()
@@ -441,17 +476,28 @@ fn test_robertson_stiff_problem() {
     ic.insert("Robertson.B".to_string(), 0.0);
     ic.insert("Robertson.C".to_string(), 0.0);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
         progress: None,
+        callback: None,
     };
 
-    let sol =
-        simulate(&file, (0.0, 4000.0), &params, &ic, &opts).expect("Robertson simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 4000.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("Robertson simulate failed");
 
     let a_idx = sol
         .state_variable_names
@@ -550,16 +596,28 @@ fn test_round_trip_simple_ode_fixture() {
     let mut ic = HashMap::new();
     ic.insert("ExponentialDecay.N".to_string(), 100.0);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 10_000,
-        output_times: Some(vec![0.0, 1.0, 10.0, 100.0]),
+        maxiters: 10_000,
+        saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         progress: None,
+        callback: None,
     };
 
-    let sol = simulate(&file, (0.0, 100.0), &params, &ic, &opts).expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 100.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
     assert_eq!(sol.state_variable_names.len(), 1);
 
     for (i, &t) in sol.time.iter().enumerate() {
@@ -605,16 +663,28 @@ fn test_round_trip_stiff_vdp_fixture() {
     ic.insert("StiffSystem.x".to_string(), 2.0);
     ic.insert("StiffSystem.y".to_string(), 0.0);
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-8,
         reltol: 1e-6,
-        max_steps: 100_000,
-        output_times: None,
+        maxiters: 100_000,
+        saveat: None,
         progress: None,
+        callback: None,
     };
 
-    let sol = simulate(&file, (0.0, 1.0), &params, &ic, &opts).expect("VdP simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("VdP simulate failed");
     assert!(sol.time.len() >= 2);
     let n = sol.state.len();
     for row in 0..n {
@@ -640,13 +710,14 @@ fn test_compiled_reuse_for_parameter_sweep() {
 
     let compiled = Compiled::from_file(&file).expect("compile failed");
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 10_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 10_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     };
 
     let mut ic = HashMap::new();
@@ -656,7 +727,7 @@ fn test_compiled_reuse_for_parameter_sweep() {
         let mut params = HashMap::new();
         params.insert("Sweep.k".to_string(), k_value);
         let sol = compiled
-            .simulate((0.0, 1.0), &params, &ic, &opts)
+            .solve((0.0, 1.0), &params, &ic, &opts)
             .expect("sweep simulate failed");
         let analytic = (-k_value * 1.0f64).exp();
         let numeric = sol.state[0][0];
@@ -762,8 +833,19 @@ fn test_error_invalid_parameter_name() {
     let mut ic = HashMap::new();
     ic.insert("P.N".to_string(), 1.0);
 
-    let opts = SimulateOptions::default();
-    let err = simulate(&file, (0.0, 1.0), &params, &ic, &opts).unwrap_err();
+    let opts = SolveOptions::default();
+    let err = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .unwrap_err();
     match err {
         SimulateError::InvalidParameter { name } => {
             assert_eq!(name, "not_a_real_param");
@@ -803,8 +885,19 @@ fn test_error_missing_initial_condition() {
     let params = HashMap::new();
     let ic = HashMap::new(); // empty -> no value for N
 
-    let opts = SimulateOptions::default();
-    let err = simulate(&file, (0.0, 1.0), &params, &ic, &opts).unwrap_err();
+    let opts = SolveOptions::default();
+    let err = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: params.clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .unwrap_err();
     match err {
         SimulateError::InvalidInitialCondition { name } => {
             assert!(name.contains("N"), "expected N in error, got {name}");
@@ -949,7 +1042,7 @@ fn test_error_grad_in_array_simulator_rejected() {
     let mut ranges = HashMap::new();
     ranges.insert(
         "i".to_string(),
-        earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
+        earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
     // NOTE: this used to carry the legacy `op: "arrayop"` spelling, which ESM
     // v0.8.0 removed (`aggregate::is_aggregate_op` no longer accepts it). The op
@@ -1010,7 +1103,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
     let mut ranges = HashMap::new();
     ranges.insert(
         "i".to_string(),
-        earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
+        earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
     let good_lhs = Expr::operator(ExpressionNode {
         op: "aggregate".to_string(),

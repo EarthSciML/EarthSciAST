@@ -384,7 +384,7 @@ func TestCouplingValidationWithTypedEntries(t *testing.T) {
 
 	// Now test validation - this should detect the reference to non-existent "model3"
 	// We'll test the detailed validation since it should now work properly with typed coupling entries
-	result := Validate(&esmFile)
+	result := ValidateStructural(&esmFile)
 
 	// The validation should still work even with typed coupling entries
 	// The validation should find the invalid system reference

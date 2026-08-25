@@ -56,7 +56,12 @@ export type { SchemaError, LoadOptions } from './parse.js'
 // is pure, `writePath` writes and returns nothing.
 export { toJson, toJsonCompact, writePath } from './serialize.js'
 export type { ToJsonOptions } from './serialize.js'
-export { validate } from './validate.js'
+// `validate` takes a TYPED DOCUMENT in every binding (API_SPEC.md §8 item 13).
+// The text convenience has its own name. There is deliberately NO
+// `validatePath` here: this package targets the browser as well as Node and
+// has no synchronous filesystem story on its public surface — read the file
+// yourself and call `validateText(text, { basePath })`.
+export { validate, validateText } from './validate.js'
 export type { ValidationError, ValidationResult } from './validate.js'
 
 // The esm 1.0.0 classification API (esm-spec §6.3.1). Two variable types are
@@ -73,6 +78,7 @@ export {
   constantParameters,
   systemKind,
   declaredSystemKind,
+  effectiveSystemKind,
   parameterClass,
   updateRules,
   classifyModel,
@@ -102,7 +108,6 @@ export type { CadenceClass } from './cadence.js'
 
 // Export graph utilities
 export {
-  component_graph,
   componentGraph,
   expressionGraph,
   componentExists,
@@ -155,7 +160,6 @@ export {
   InvalidDerivativeOrderError,
   // Combined expression-analysis entry point
   analyzeExpression,
-  ExpressionAnalyzer,
 } from './analysis/index.js'
 export type {
   // Analysis-owned types
@@ -187,7 +191,7 @@ export { substitute, substituteInModel, substituteInReactionSystem } from './sub
 
 // Export immutable editing operations.
 // Explicit named re-export of the full public surface of ./edit.js (formerly
-// `export *`). edit.js also re-exports `deriveODEs` from reactions.js, but that
+// `export *`). edit.js also re-exports `deriveOdes` from reactions.js, but that
 // symbol is already exported from reactions.js above, so it is intentionally
 // not re-listed here to avoid a duplicate re-export.
 export {
@@ -225,7 +229,17 @@ export {
 export { freeVariables, freeParameters, contains, simplify } from './expression.js'
 
 // Export reaction system ODE derivation and stoichiometric matrix computation
-export { deriveODEs, stoichiometricMatrix, substrateMatrix, productMatrix } from './reactions.js'
+// `deriveODEs` was the one §2.1 violation left in this binding; the canonical
+// `derive_odes` transliterates to `deriveOdes`, matching the siblings
+// `odeStates` / `isOdeState`. The old spelling stays one minor (§10).
+export {
+  deriveOdes,
+  /** @deprecated Use `deriveOdes`. */
+  deriveODEs,
+  stoichiometricMatrix,
+  substrateMatrix,
+  productMatrix,
+} from './reactions.js'
 
 // Export unit parsing and dimensional analysis
 export { parseUnit, tryParseUnit, checkDimensions, validateUnits } from './units.js'
@@ -250,7 +264,14 @@ export {
 export type { CompiledExpression } from './codegen.js'
 
 // Export migration functionality
-export { migrate, canMigrate, getSupportedMigrationTargets, MigrationError } from './migration.js'
+export {
+  migrate,
+  canMigrate,
+  supportedMigrationTargets,
+  /** @deprecated Use `supportedMigrationTargets`. */
+  getSupportedMigrationTargets,
+  MigrationError,
+} from './migration.js'
 
 // Interactive editor components and web components live in the earthsci-ast-editor
 // package.
@@ -262,6 +283,7 @@ export {
   // (§4.7.6's taxonomy) so a caller catching by name behaves uniformly.
   FlattenError,
   ConflictingDerivativeError,
+  CoupleMultiplicativeNoTendencyError,
   DomainUnitMismatchError,
   DimensionPromotionError,
 } from './flatten.js'
@@ -292,6 +314,19 @@ export {
   RefLoadError,
 } from './ref-loading.js'
 
+// Build-time reference resolution: the intra-document node-id / index-set
+// dependency DAG (RFC semiring-faq-unified-ir §6.1). Distinct from
+// `resolveSubsystemRefs` above, which inlines cross-FILE `{ref}` mounts.
+export {
+  buildReferenceGraph,
+  resolveReferences,
+  ReferenceGraph,
+  ReferenceResolutionError,
+  VertexKind,
+  EdgeKind,
+} from './reference-resolution.js'
+export type { ReferenceVertex, ReferenceEdge } from './reference-resolution.js'
+
 // Canonical AST form (RFC §5.4). TS lacks native int/float distinction;
 // see canonicalize.ts for the gt-ca2u limitation note.
 export {
@@ -305,6 +340,8 @@ export {
 
 // Closed function registry (esm-spec §9.2 / RFC closed-function-registry).
 export {
+  closedFunctionNames,
+  /** @deprecated Use `closedFunctionNames()`. */
   CLOSED_FUNCTION_NAMES,
   ClosedFunctionError,
   dispatchClosedFunction,

@@ -51,10 +51,10 @@ const (
 	// CodeRefUndeclaredIndexSet: an undeclared name in a `ranges[*].from`.
 	CodeRefUndeclaredIndexSet = "E_REF_UNDECLARED_INDEX_SET"
 	// CodeRefUnknownFAQNode: a `kind:"derived"` index set's `from_faq` names no
-	// node id in the model.
+	// node id in the document.
 	CodeRefUnknownFAQNode = "E_REF_UNKNOWN_FAQ_NODE"
-	// CodeRefDuplicateNodeID: two expression nodes in the same model share an
-	// explicit `id`.
+	// CodeRefDuplicateNodeID: two expression nodes in the same document share
+	// an explicit `id`.
 	CodeRefDuplicateNodeID = "E_REF_DUPLICATE_NODE_ID"
 	// CodeRefUnresolvedJoinFactor: a `join.on` factor reference names nothing in
 	// the node's scope.
@@ -410,37 +410,149 @@ func sortedRawKeys(m map[string]any) []string {
 	return keys
 }
 
-// factorScope returns the names a `join.on` reference on this node may resolve
-// to: the node's string factor-args, its declared range keys, and its symbolic
-// output_idx.
-func factorScope(node map[string]any) map[string]bool {
-	names := map[string]bool{}
-	if args, ok := rawArray(node["args"]); ok {
-		for _, a := range args {
-			if s, ok := a.(string); ok {
-				names[s] = true
-			}
-		}
+// joinBinderClass reports which binder class a `join` name resolves to, or ""
+// when it resolves nowhere.
+//
+// An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop symbol
+// bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a
+// declared component-local variable — a value-invention bin buffer. A binding
+// that diagnoses such a name "must do so against the variable AND index-set
+// registries", not against node-local names alone.
+//
+// The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+// node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+// permits one string to be a variable reference outside an aggregate and an
+// index symbol inside one):
+//
+//  1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+//     tested FIRST;
+//  2. a node-local string factor `arg`;
+//  3. a declared component-local variable (the model's variable registry);
+//  4. a document-scoped index set.
+//
+// Anything else is unresolvable and raises E_REF_UNRESOLVED_JOIN_FACTOR.
+// Nothing here widens the check to "accept any string": a name in none of the
+// four registries is still a typo and is still reported.
+func joinBinderClass(node map[string]any, name string, variables, indexSets map[string]any) string {
+	if name == "" {
+		return ""
 	}
+	// 1. node-local binders (these shadow a same-named variable)
 	if ranges, ok := rawObject(node["ranges"]); ok {
-		for k := range ranges {
-			names[k] = true
+		if _, bound := ranges[name]; bound {
+			return "range"
 		}
 	}
 	if outputIdx, ok := rawArray(node["output_idx"]); ok {
 		for _, o := range outputIdx {
-			if s, ok := o.(string); ok {
-				names[s] = true
+			if s, isStr := o.(string); isStr && s == name {
+				return "output_idx"
 			}
 		}
 	}
-	return names
+	// 2. node-local string factor args
+	if args, ok := rawArray(node["args"]); ok {
+		for _, a := range args {
+			if s, isStr := a.(string); isStr && s == name {
+				return "arg"
+			}
+		}
+	}
+	// 3. the model's variable registry — where a bin buffer lives
+	if _, declared := variables[name]; declared {
+		return "variable"
+	}
+	// 4. the document-scoped index-set registry
+	if _, declared := indexSets[name]; declared {
+		return "index_set"
+	}
+	return ""
 }
 
-// nodeAddr records where an explicit node id was first seen.
+// checkJoinName diagnoses one `join` name, returning the unresolved-join-factor
+// error when it resolves in none of the four binder classes.
+func checkJoinName(node map[string]any, name string, variables, indexSets map[string]any, key, modelName, path string) error {
+	if joinBinderClass(node, name, variables, indexSets) != "" {
+		return nil
+	}
+	return refErr(CodeRefUnresolvedJoinFactor,
+		"join factor '%s' of node %s names no range, output index, factor arg, declared variable, or index set in scope (model '%s', at %s)",
+		name, key, modelName, path)
+}
+
+// nodeAddr records one id-bearing expression node, as the `from_faq` scope sees
+// it: where it was first seen, and enough to mint a vertex for it.
 type nodeAddr struct {
 	addr string
 	path string
+	op   string
+}
+
+// collectDocumentNodeIDs returns every explicit expression-node id in
+// `document`, keyed by id.
+//
+// `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+// `index_sets` entry is visible to every model, so the node it names may live in
+// ANY of them. This pass therefore runs over all models BEFORE any single
+// model's graph is built.
+//
+// Because ids from different models share one namespace, uniqueness is a
+// DOCUMENT-wide requirement: a duplicate id anywhere in the document is
+// CodeRefDuplicateNodeID.
+func collectDocumentNodeIDs(document map[string]any) (map[string]nodeAddr, error) {
+	nodes := map[string]nodeAddr{}
+	models, ok := rawObject(document["models"])
+	if !ok {
+		return nodes, nil
+	}
+	for _, modelName := range sortedRawKeys(models) {
+		model, ok := rawObject(models[modelName])
+		if !ok {
+			continue
+		}
+		for _, root := range referenceWalkRoots {
+			v, has := model[root]
+			if !has {
+				continue
+			}
+			if err := collectIDs(v, root, modelName, nodes); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nodes, nil
+}
+
+// collectIDs descends one model's expression trees, recording every explicit
+// node id under a model-qualified path.
+func collectIDs(value any, path, modelName string, nodes map[string]nodeAddr) error {
+	switch v := value.(type) {
+	case map[string]any:
+		if _, isNode := v["op"]; isNode {
+			if nodeID, hasID := nonEmptyString(v, "id"); hasID {
+				qualified := "models/" + modelName + "/" + path
+				if first, seen := nodes[nodeID]; seen {
+					return refErr(CodeRefDuplicateNodeID,
+						"duplicate expression-node id '%s' in document (at %s and %s)",
+						nodeID, qualified, first.path)
+				}
+				op, _ := v["op"].(string)
+				nodes[nodeID] = nodeAddr{addr: nodeID, path: qualified, op: op}
+			}
+		}
+		for _, k := range sortedRawKeys(v) {
+			if err := collectIDs(v[k], path+"/"+k, modelName, nodes); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, el := range v {
+			if err := collectIDs(el, fmt.Sprintf("%s/%d", path, i), modelName, nodes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // registerAndProcess registers one operator node as an addressable vertex (when
@@ -451,6 +563,7 @@ func registerAndProcess(
 	node map[string]any,
 	path, modelName string,
 	indexSets map[string]any,
+	variables map[string]any,
 	idToAddr map[string]nodeAddr,
 ) error {
 	op, _ := node["op"].(string)
@@ -472,7 +585,7 @@ func registerAndProcess(
 				"duplicate expression-node id '%s' in model '%s' (at %s and %s)",
 				nodeID, modelName, path, first.path)
 		}
-		idToAddr[nodeID] = nodeAddr{addr: addr, path: path}
+		idToAddr[nodeID] = nodeAddr{addr: addr, path: path, op: op}
 	}
 
 	g.ensureVertex(ReferenceVertex{
@@ -503,7 +616,6 @@ func registerAndProcess(
 
 	// join[*].on[*] -> factor
 	if join, ok := rawArray(node["join"]); ok {
-		scope := factorScope(node)
 		for _, clause := range join {
 			clauseObj, ok := rawObject(clause)
 			if !ok {
@@ -523,11 +635,29 @@ func registerAndProcess(
 				if !ok || len(pairArr) == 0 {
 					continue
 				}
-				ref, isStr := pairArr[0].(string)
-				if !isStr || !scope[ref] {
-					return refErr(CodeRefUnresolvedJoinFactor,
-						"join factor '%s' of node %s names no factor, range, or output index in scope (model '%s', at %s)",
-						ref, key, modelName, path)
+				ref, _ := pairArr[0].(string)
+				if err := checkJoinName(node, ref, variables, indexSets, key, modelName, path); err != nil {
+					return err
+				}
+				// BOTH key columns are references (esm-spec §4.9.5). Only the
+				// LEFT one carries the graph edge: the join_factor edge kind
+				// records the node's own key-column dependency, and the right
+				// column is frequently a document-scoped index set, which
+				// already has its own vertex kind. The right column is
+				// DIAGNOSED here and left un-edged, which is what makes
+				// `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+				// through the index-set class without inventing a
+				// `factor:sourceType` twin of `index_set:sourceType`.
+				//
+				// A non-string right column is a SCHEMA defect
+				// (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+				// there) and is not re-diagnosed as a reference error.
+				if len(pairArr) > 1 {
+					if right, isStr := pairArr[1].(string); isStr {
+						if err := checkJoinName(node, right, variables, indexSets, key, modelName, path); err != nil {
+							return err
+						}
+					}
 				}
 				g.ensureVertex(ReferenceVertex{
 					Key: factorKeyOf(ref), Kind: VertexKindFactor, Name: ref,
@@ -547,23 +677,24 @@ func walkReferences(
 	value any,
 	path, modelName string,
 	indexSets map[string]any,
+	variables map[string]any,
 	idToAddr map[string]nodeAddr,
 ) error {
 	switch v := value.(type) {
 	case map[string]any:
 		if _, isNode := v["op"]; isNode {
-			if err := registerAndProcess(g, v, path, modelName, indexSets, idToAddr); err != nil {
+			if err := registerAndProcess(g, v, path, modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
 		for _, k := range sortedRawKeys(v) {
-			if err := walkReferences(g, v[k], path+"/"+k, modelName, indexSets, idToAddr); err != nil {
+			if err := walkReferences(g, v[k], path+"/"+k, modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, el := range v {
-			if err := walkReferences(g, el, fmt.Sprintf("%s/%d", path, i), modelName, indexSets, idToAddr); err != nil {
+			if err := walkReferences(g, el, fmt.Sprintf("%s/%d", path, i), modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
@@ -589,7 +720,19 @@ var referenceWalkRoots = []string{"equations", "initialization_equations"}
 // `ranges[*].from` index set, a `from_faq` naming no node, or an unresolved
 // `join.on` factor. Cycles are reported lazily by
 // ReferenceGraph.TopologicalOrder, or eagerly by ResolveReferences.
+//
+// `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5). A caller holding
+// one model gets that model as its own document, which is the right answer for
+// a one-model document; ResolveReferences is the document-scoped entry point
+// and resolves against every model's nodes.
 func BuildReferenceGraph(model map[string]any, modelName string, docIndexSets map[string]any) (*ReferenceGraph, error) {
+	return buildReferenceGraph(model, modelName, docIndexSets, nil)
+}
+
+// buildReferenceGraph is BuildReferenceGraph plus the document-wide `from_faq`
+// scope. `documentNodes` is the map collectDocumentNodeIDs builds over every
+// model; when it is nil the model's own nodes are the scope.
+func buildReferenceGraph(model map[string]any, modelName string, docIndexSets map[string]any, documentNodes map[string]nodeAddr) (*ReferenceGraph, error) {
 	g := newReferenceGraph(modelName)
 
 	// Merge the document-scoped registry (v0.8.0+) with any model-nested one
@@ -611,6 +754,12 @@ func BuildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 		})
 	}
 
+	// The model's declared variable registry. A `join` `on` key column may name a
+	// declared component-local variable — a value-invention bin buffer written by
+	// an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
+	// an `on` column polymorphic over. See joinBinderClass.
+	variables, _ := rawObject(model["variables"])
+
 	// Pass 2 — walk every expression node: assign a stable address, register
 	// aggregate / id-bearing nodes, and add the within-node reference edges
 	// (ranges[*].from, join.on). Builds id -> address for from_faq.
@@ -620,12 +769,18 @@ func BuildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 		if !has {
 			continue
 		}
-		if err := walkReferences(g, v, root, modelName, indexSets, idToAddr); err != nil {
+		if err := walkReferences(g, v, root, modelName, indexSets, variables, idToAddr); err != nil {
 			return nil, err
 		}
 	}
 
-	// Pass 3 — derived index sets resolve their from_faq to a node by id.
+	// Pass 3 — derived index sets resolve their from_faq to a node by id, at
+	// DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+	// model, since the registry entry naming it is visible to all of them.
+	faqScope := documentNodes
+	if faqScope == nil {
+		faqScope = idToAddr
+	}
 	for _, name := range sortedRawKeys(indexSets) {
 		entry, ok := rawObject(indexSets[name])
 		if !ok {
@@ -635,12 +790,19 @@ func BuildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 			continue
 		}
 		faq, _ := entry["from_faq"].(string)
-		target, resolved := idToAddr[faq]
+		target, resolved := faqScope[faq]
 		if !resolved {
 			return nil, refErr(CodeRefUnknownFAQNode,
-				"derived index set '%s' references from_faq '%s', which is not the id of any expression node in model '%s'",
-				name, faq, modelName)
+				"derived index set '%s' references from_faq '%s', which is not the id of any expression node in the document",
+				name, faq)
 		}
+		// The producer may belong to another model; give this graph a vertex
+		// for it so the edge has a real endpoint. ensureVertex is idempotent:
+		// a local producer was already registered in pass 2.
+		g.ensureVertex(ReferenceVertex{
+			Key: nodeKey(target.addr), Kind: VertexKindNode, Name: target.addr,
+			Op: target.op, NodeID: faq, Path: target.path,
+		})
 		g.addEdge(indexSetKey(name), nodeKey(target.addr), EdgeKindFromFAQ)
 	}
 
@@ -653,6 +815,10 @@ func BuildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 // Returns a *ReferenceResolutionError on any unresolved reference OR reference
 // cycle — each model's graph is checked acyclic eagerly here, unlike
 // BuildReferenceGraph, which leaves cycle detection to TopologicalOrder.
+//
+// Node ids are collected from EVERY model first, so a derived index set's
+// `from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a
+// duplicate id anywhere in the document is an error.
 func ResolveReferences(document map[string]any) (map[string]*ReferenceGraph, error) {
 	out := map[string]*ReferenceGraph{}
 	models, ok := rawObject(document["models"])
@@ -663,12 +829,17 @@ func ResolveReferences(document map[string]any) (map[string]*ReferenceGraph, err
 	// top level and thread it into every model's graph.
 	docIndexSets, _ := rawObject(document["index_sets"])
 
+	documentNodes, err := collectDocumentNodeIDs(document)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, name := range sortedRawKeys(models) {
 		model, ok := rawObject(models[name])
 		if !ok {
 			continue
 		}
-		g, err := BuildReferenceGraph(model, name, docIndexSets)
+		g, err := buildReferenceGraph(model, name, docIndexSets, documentNodes)
 		if err != nil {
 			return nil, err
 		}

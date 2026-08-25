@@ -8,7 +8,8 @@
 //! `compare_to_golden`: class summary, materialization-threshold multiset, and
 //! byte-identical CONST-folded buffers.
 
-use earthsci_ast::cadence::{compute_fold, model_with_loaders, partition_model};
+use earthsci_ast::extension::cadence::model_with_loaders;
+use earthsci_ast::{compute_fold, partition_model};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

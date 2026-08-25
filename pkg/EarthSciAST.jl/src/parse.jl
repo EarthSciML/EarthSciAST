@@ -547,11 +547,12 @@ function coerce_esm_file(data::Any)::EsmFile
     # reports a JSON `null` as absent, matching the previous per-field
     # `haskey(data, :x) && data.x !== nothing` guards.
     models = _maybe(_get_field(data, :models, nothing)) do m
-        Dict{String,Model}(string(k) => coerce_model(v) for (k, v) in pairs(m))
+        OrderedDict{String,Model}(string(k) => coerce_model(v) for (k, v) in pairs(m))
     end
 
     reaction_systems = _maybe(_get_field(data, :reaction_systems, nothing)) do rs
-        Dict{String,ReactionSystem}(string(k) => coerce_reaction_system(v) for (k, v) in pairs(rs))
+        OrderedDict{String,ReactionSystem}(string(k) => coerce_reaction_system(v)
+                                          for (k, v) in pairs(rs))
     end
 
     data_sources = _maybe(_get_field(data, :data_sources, nothing)) do dl
@@ -605,7 +606,7 @@ function coerce_esm_file(data::Any)::EsmFile
     # and ESI categorical dims. `ranges[*]` `{from: <name>}` references, array
     # `shape`s, and derived-set `from_faq` edges resolve against it. Empty when
     # the document declares none.
-    index_sets = Dict{String,IndexSet}()
+    index_sets = OrderedDict{String,IndexSet}()
     index_sets_raw = _get_field(data, :index_sets, nothing)
     if index_sets_raw !== nothing
         for (k, v) in pairs(index_sets_raw)
@@ -629,7 +630,7 @@ function coerce_esm_file(data::Any)::EsmFile
     # in the coerced expressions stay resolvable; without this the references
     # compile into opaque op nodes that only fail at RHS evaluation time.
     component_templates = nothing
-    let ct = Dict{String,Any}()
+    let ct = OrderedDict{String,Any}()
         for (compkind, comps_raw) in (("models", _get_field(data, :models, nothing)),
                                       ("reaction_systems", _get_field(data, :reaction_systems, nothing)))
             comps_raw === nothing && continue
@@ -710,15 +711,15 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
 end
 
 """
-    coerce_function_tables(data) -> Dict{String,FunctionTable}
+    coerce_function_tables(data) -> OrderedDict{String,FunctionTable}
 
 Coerce the top-level `function_tables` JSON block into the typed map
 carried on [`EsmFile`](@ref) (esm-spec §9.5, v0.4.0). Each entry holds
 ordered named axes plus a literal nested-array data block referenced by
 `table_lookup` AST nodes.
 """
-function coerce_function_tables(data)::Dict{String,FunctionTable}
-    out = Dict{String,FunctionTable}()
+function coerce_function_tables(data)::OrderedDict{String,FunctionTable}
+    out = OrderedDict{String,FunctionTable}()
     for (table_name_raw, entry_raw) in pairs(data)
         table_name = string(table_name_raw)
         if isempty(table_name)
@@ -1004,7 +1005,7 @@ end
 # Model `subsystems` (schema §4.7): each entry is oneOf [Model, SubsystemRef],
 # sniffed per entry by `_coerce_subsystem_entry` (the key is threaded in for
 # metaparameter-binding diagnostics).
-_coerce_model_subsystems(v) = Dict{String,SubsystemNode}(
+_coerce_model_subsystems(v) = OrderedDict{String,SubsystemNode}(
     string(k) => _coerce_subsystem_entry(string(k), x) for (k, x) in pairs(v))
 
 
@@ -1179,8 +1180,8 @@ function _record_parse_expr(row, v)
     elseif kind === :record_vec
         :($(row.eltype)[$(Symbol(:coerce_, row.of))(x) for x in $v])
     elseif kind === :record_map
-        :(Dict{String,$(row.eltype)}(string(k) => $(Symbol(:coerce_, row.of))(x)
-                                     for (k, x) in pairs($v)))
+        :(OrderedDict{String,$(row.eltype)}(string(k) => $(Symbol(:coerce_, row.of))(x)
+                                            for (k, x) in pairs($v)))
     elseif kind === :custom
         :($(row.parse_fn)($v))
     else

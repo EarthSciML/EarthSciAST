@@ -61,6 +61,7 @@
           },
           "rhs": {
             "op": "aggregate",
+            "id": "edge_set",
             "args": [
               "edge_lo",
               "edge_hi"

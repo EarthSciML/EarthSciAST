@@ -240,8 +240,7 @@ function _direct_merge_fn_payload(nodes::Vector{_Node})
 end
 
 
-# ---- Structural grouping signature (moved here from the deleted _VecNode
-# overlay, vectorize.jl — same bytes, same partition) ----------------------
+# ---- Structural grouping signature ------------------------------------------
 
 # A signature that is equal for two per-cell nodes iff they have an identical
 # tree shape ignoring the values that legitimately vary per cell (STATE slot
@@ -298,7 +297,7 @@ function _struct_sig!(io::IOBuffer, n::_Node, direct::Bool)
             # the typed spec, NOT in its children (`_compile_fn_node` pulls the const
             # args out of the arg list), so two cells calling `interp.linear` against
             # DIFFERENT tables have identical children and would otherwise share a
-            # signature — and `_merge_fn_node` puts ONE spec on the merged kernel, so
+            # signature — and `_acc_merge_nodes` puts ONE spec on the merged kernel, so
             # every cell would silently compute against `nodes[1]`'s table. Reachable:
             # a `makearray` whose regions each call `interp.*` with their own table,
             # indexed inside an arrayop that takes the per-cell path (any contraction,
@@ -353,7 +352,7 @@ end
 # genuinely sharing such a table must merge, not throw.
 #
 # `_fn_spec_hash` keys `_struct_sig!`'s grouping; `_fn_spec_content_equal` is the
-# exact check `_merge_fn_node` re-runs on the resulting group, so a hash COLLISION
+# exact check `_check_fn_group_specs` re-runs on the resulting group, so a COLLISION
 # degrades to a loud build error instead of back to silent wrong numbers.
 _fn_spec_hash(::Nothing) = UInt(0)                      # boxed all-scalar fn
 _fn_spec_hash(s::_InterpLinearSpec) = hash(s.axis, hash(s.table, UInt(0x11)))
@@ -494,8 +493,7 @@ function _check_fn_group_specs(nodes::Vector{_Node})
 end
 
 # Merge one structurally-identical group of per-cell nodes into an access
-# spine, appending per-cell tables to `acc` (the kernel's descriptor table).
-# Mirrors the deleted overlay's `_merge_nodes` case for case:
+# spine, appending per-cell tables to `acc` (the kernel's descriptor table):
 #   LITERAL   all-equal → spine literal; varying → CONST_BOX ordinal table
 #   STATE     all-equal → STATE_FIXED (invariant tier hoists it); varying →
 #             STATE_TBL_BOX ordinal slot table (never 0 here — a per-cell ghost

@@ -245,7 +245,7 @@ struct _ViCtx
     const_arrays::Dict{String,Any}
     params::Dict{String,Float64}
     index_sets::Dict{String,IndexSet}
-    variables::Dict{String,ModelVariable}
+    variables::OrderedDict{String,ModelVariable}
     maps::Dict{String,Dict{Any,Any}}   # materialised map var → (output-index → value)
     # Per-name cadence SEED, derived once from the model (esm-spec §6.3.1 /
     # CONFORMANCE_SPEC §5.7.2). From esm 1.0.0 the seed cannot be read off a

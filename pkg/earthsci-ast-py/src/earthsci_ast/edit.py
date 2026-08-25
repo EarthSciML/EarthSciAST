@@ -7,6 +7,7 @@ components in a safe and consistent manner.
 
 from __future__ import annotations
 
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -95,17 +96,33 @@ class ESMEditor:
                     success=False, errors=[f"Unsupported target type: {type(target)}"]
                 )
 
+            # Post-edit validation runs only on a whole EsmFile. `validate`
+            # takes a typed DOCUMENT (API_SPEC.md §8 item 13) and every check it
+            # runs is document-scoped -- equation/unknown balance, cross-model
+            # reference integrity, coupling refs. Handing it a bare Model or
+            # ReactionSystem never worked: it crashed on `esm_file.models` and
+            # came back `is_valid=False` with a `validation_error` at path `""`,
+            # i.e. it reported the EDIT as invalid when nothing was wrong with
+            # it. Skipping is the honest answer, and it is recorded on the
+            # result rather than passed over in silence.
             if result.success and self.validate_after_edit:
-                try:
-                    validation_result = validate(result.modified_object)
-                    result.validation_result = validation_result
-                    if not validation_result.is_valid:
-                        result.warnings.append("Modified structure has validation issues")
-                except (AttributeError, KeyError, TypeError, ValueError) as e:
-                    # Validation is best-effort and walks possibly-incomplete
-                    # structures, so a missing attribute here is downgraded to a
-                    # warning rather than failing the edit.
-                    result.warnings.append(f"Validation failed: {e}")
+                if isinstance(result.modified_object, EsmFile):
+                    try:
+                        validation_result = validate(result.modified_object)
+                        result.validation_result = validation_result
+                        if not validation_result.is_valid:
+                            result.warnings.append("Modified structure has validation issues")
+                    except (AttributeError, KeyError, TypeError, ValueError) as e:
+                        # Validation is best-effort and walks possibly-incomplete
+                        # structures, so a missing attribute here is downgraded to
+                        # a warning rather than failing the edit.
+                        result.warnings.append(f"Validation failed: {e}")
+                else:
+                    result.warnings.append(
+                        "Validation skipped: post-edit validation is document-scoped "
+                        f"and this edit targets a {type(result.modified_object).__name__}; "
+                        "validate the containing EsmFile to check it."
+                    )
 
             return result
 
@@ -719,8 +736,20 @@ class ESMEditor:
         )
 
 
-# Convenience functions
-def add_variable_to_model(
+# ===========================================================================
+# Convenience functions.
+#
+# The canonical spelling of every edit operation is the BARE VERB
+# (`add_variable`, `remove_coupling`, `merge`, `extract`) -- the spelling Julia,
+# TypeScript and Rust already use, and the one API_SPEC.md 2 derives from the
+# canonical name for each of them. Python historically suffixed each with its
+# container (`add_variable_to_model`, `remove_coupling_from_file`,
+# `merge_esm_files`, `extract_component_from_file`); those spellings are kept
+# as DEPRECATED ALIASES for one minor per API_SPEC.md 10 and are defined at the
+# bottom of this module.
+# ===========================================================================
+
+def add_variable(
     model: Model, var_name: str, var_info: ModelVariable, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a variable to a model."""
@@ -728,7 +757,7 @@ def add_variable_to_model(
     return editor.add_variable(model, var_name, var_info)
 
 
-def rename_variable_in_model(
+def rename_variable(
     model: Model, old_name: str, new_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Rename a variable in a model."""
@@ -736,7 +765,7 @@ def rename_variable_in_model(
     return editor.rename_variable(model, old_name, new_name)
 
 
-def remove_variable_from_model(
+def remove_variable(
     model: Model, var_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove a variable from a model."""
@@ -744,7 +773,7 @@ def remove_variable_from_model(
     return editor.remove_variable(model, var_name)
 
 
-def add_equation_to_model(
+def add_equation(
     model: Model, equation: Equation, validate_after_edit: bool = True
 ) -> EditResult:
     """Add an equation to a model."""
@@ -752,7 +781,7 @@ def add_equation_to_model(
     return editor.add_equation(model, equation)
 
 
-def remove_equation_from_model(
+def remove_equation(
     model: Model, index: int, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove an equation from a model by index."""
@@ -760,7 +789,7 @@ def remove_equation_from_model(
     return editor.remove_equation(model, index)
 
 
-def add_reaction_to_system(
+def add_reaction(
     reaction_system: ReactionSystem, reaction: Reaction, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a reaction to a reaction system."""
@@ -768,7 +797,7 @@ def add_reaction_to_system(
     return editor.add_reaction(reaction_system, reaction)
 
 
-def remove_reaction_from_system(
+def remove_reaction(
     reaction_system: ReactionSystem, reaction_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove a reaction from a reaction system."""
@@ -776,7 +805,7 @@ def remove_reaction_from_system(
     return editor.remove_reaction(reaction_system, reaction_name)
 
 
-def add_species_to_system(
+def add_species(
     reaction_system: ReactionSystem, species: Species, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a species to a reaction system."""
@@ -784,7 +813,7 @@ def add_species_to_system(
     return editor.add_species(reaction_system, species)
 
 
-def remove_species_from_system(
+def remove_species(
     reaction_system: ReactionSystem, species_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove a species from a reaction system."""
@@ -792,7 +821,7 @@ def remove_species_from_system(
     return editor.remove_species(reaction_system, species_name)
 
 
-def add_continuous_event_to_model(
+def add_continuous_event(
     model: Model, event: ContinuousEvent, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a continuous event to a model."""
@@ -800,7 +829,7 @@ def add_continuous_event_to_model(
     return editor.add_continuous_event(model, event)
 
 
-def add_discrete_event_to_model(
+def add_discrete_event(
     model: Model, event: DiscreteEvent, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a discrete event to a model."""
@@ -808,7 +837,7 @@ def add_discrete_event_to_model(
     return editor.add_discrete_event(model, event)
 
 
-def remove_event_from_model(
+def remove_event(
     model: Model, event_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove an event from a model."""
@@ -816,7 +845,7 @@ def remove_event_from_model(
     return editor.remove_event(model, event_name)
 
 
-def add_coupling_to_file(
+def add_coupling(
     esm_file: EsmFile, coupling: CouplingEntry, validate_after_edit: bool = True
 ) -> EditResult:
     """Add a coupling entry to an ESM file."""
@@ -824,7 +853,7 @@ def add_coupling_to_file(
     return editor.add_coupling(esm_file, coupling)
 
 
-def remove_coupling_from_file(
+def remove_coupling(
     esm_file: EsmFile, index: int, validate_after_edit: bool = True
 ) -> EditResult:
     """Remove a coupling entry from an ESM file."""
@@ -832,7 +861,7 @@ def remove_coupling_from_file(
     return editor.remove_coupling(esm_file, index)
 
 
-def merge_esm_files(
+def merge(
     file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True
 ) -> EditResult:
     """Merge two ESM files."""
@@ -840,9 +869,210 @@ def merge_esm_files(
     return editor.merge(file_a, file_b)
 
 
-def extract_component_from_file(
+def extract(
     esm_file: EsmFile, component_name: str, validate_after_edit: bool = True
 ) -> EditResult:
     """Extract a single component into a standalone ESM file."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.extract(esm_file, component_name)
+
+
+# ===========================================================================
+# Deprecated container-suffixed aliases (API_SPEC.md 8 item 7).
+#
+# Each forwards to the canonical bare-verb function above and emits a
+# `DeprecationWarning`. They stay exported -- and stay in `api-surface.json`
+# alongside the canonical name -- for at least one minor release, then go at the
+# next major (API_SPEC.md 10).
+# ===========================================================================
+
+def add_variable_to_model(
+    model: Model, var_name: str, var_info: ModelVariable, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_variable`. Add a variable to a model."""
+    warnings.warn(
+        "add_variable_to_model() is deprecated; use add_variable() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_variable(model, var_name, var_info, validate_after_edit=validate_after_edit)
+
+
+def rename_variable_in_model(
+    model: Model, old_name: str, new_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`rename_variable`. Rename a variable in a model."""
+    warnings.warn(
+        "rename_variable_in_model() is deprecated; use rename_variable() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return rename_variable(model, old_name, new_name, validate_after_edit=validate_after_edit)
+
+
+def remove_variable_from_model(
+    model: Model, var_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_variable`. Remove a variable from a model."""
+    warnings.warn(
+        "remove_variable_from_model() is deprecated; use remove_variable() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_variable(model, var_name, validate_after_edit=validate_after_edit)
+
+
+def add_equation_to_model(
+    model: Model, equation: Equation, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_equation`. Add an equation to a model."""
+    warnings.warn(
+        "add_equation_to_model() is deprecated; use add_equation() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_equation(model, equation, validate_after_edit=validate_after_edit)
+
+
+def remove_equation_from_model(
+    model: Model, index: int, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_equation`. Remove an equation from a model by index."""
+    warnings.warn(
+        "remove_equation_from_model() is deprecated; use remove_equation() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_equation(model, index, validate_after_edit=validate_after_edit)
+
+
+def add_reaction_to_system(
+    reaction_system: ReactionSystem, reaction: Reaction, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_reaction`. Add a reaction to a reaction system."""
+    warnings.warn(
+        "add_reaction_to_system() is deprecated; use add_reaction() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_reaction(reaction_system, reaction, validate_after_edit=validate_after_edit)
+
+
+def remove_reaction_from_system(
+    reaction_system: ReactionSystem, reaction_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_reaction`. Remove a reaction from a reaction system."""
+    warnings.warn(
+        "remove_reaction_from_system() is deprecated; use remove_reaction() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_reaction(reaction_system, reaction_name, validate_after_edit=validate_after_edit)
+
+
+def add_species_to_system(
+    reaction_system: ReactionSystem, species: Species, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_species`. Add a species to a reaction system."""
+    warnings.warn(
+        "add_species_to_system() is deprecated; use add_species() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_species(reaction_system, species, validate_after_edit=validate_after_edit)
+
+
+def remove_species_from_system(
+    reaction_system: ReactionSystem, species_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_species`. Remove a species from a reaction system."""
+    warnings.warn(
+        "remove_species_from_system() is deprecated; use remove_species() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_species(reaction_system, species_name, validate_after_edit=validate_after_edit)
+
+
+def add_continuous_event_to_model(
+    model: Model, event: ContinuousEvent, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_continuous_event`. Add a continuous event to a model."""
+    warnings.warn(
+        "add_continuous_event_to_model() is deprecated; use add_continuous_event() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_continuous_event(model, event, validate_after_edit=validate_after_edit)
+
+
+def add_discrete_event_to_model(
+    model: Model, event: DiscreteEvent, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_discrete_event`. Add a discrete event to a model."""
+    warnings.warn(
+        "add_discrete_event_to_model() is deprecated; use add_discrete_event() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_discrete_event(model, event, validate_after_edit=validate_after_edit)
+
+
+def remove_event_from_model(
+    model: Model, event_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_event`. Remove an event from a model."""
+    warnings.warn(
+        "remove_event_from_model() is deprecated; use remove_event() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_event(model, event_name, validate_after_edit=validate_after_edit)
+
+
+def add_coupling_to_file(
+    esm_file: EsmFile, coupling: CouplingEntry, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`add_coupling`. Add a coupling entry to an ESM file."""
+    warnings.warn(
+        "add_coupling_to_file() is deprecated; use add_coupling() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return add_coupling(esm_file, coupling, validate_after_edit=validate_after_edit)
+
+
+def remove_coupling_from_file(
+    esm_file: EsmFile, index: int, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`remove_coupling`. Remove a coupling entry from an ESM file."""
+    warnings.warn(
+        "remove_coupling_from_file() is deprecated; use remove_coupling() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return remove_coupling(esm_file, index, validate_after_edit=validate_after_edit)
+
+
+def merge_esm_files(
+    file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`merge`. Merge two ESM files."""
+    warnings.warn(
+        "merge_esm_files() is deprecated; use merge() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return merge(file_a, file_b, validate_after_edit=validate_after_edit)
+
+
+def extract_component_from_file(
+    esm_file: EsmFile, component_name: str, validate_after_edit: bool = True
+) -> EditResult:
+    """Deprecated alias for :func:`extract`. Extract a single component into a standalone ESM file."""
+    warnings.warn(
+        "extract_component_from_file() is deprecated; use extract() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return extract(esm_file, component_name, validate_after_edit=validate_after_edit)

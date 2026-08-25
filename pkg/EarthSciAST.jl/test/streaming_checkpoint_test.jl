@@ -38,9 +38,9 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     # --- a predicate-fired checkpoint, verified analytically ---
     fixture = joinpath(@__DIR__, "fixtures", "streaming_decay_grid.esm")
-    prep = prepare(fixture)
+    _ckpt_seed! = (u0, _vm) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
+    prep = esm_problem(fixture, (0.0, 100.0); seed_ic! = _ckpt_seed!)
     k = 0.001                                   # fixture's decay rate (scalar param)
-    seed! = (u0, _vm) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
 
     dir = mktempdir()
     base_url = "file://" * joinpath(dir, "ckpt.zarr")
@@ -51,10 +51,12 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     # An always-true predicate fires at the first accepted step: checkpoint the full
     # state there, flush, and terminate for a clean early exit.
-    simulate(prep, (0.0, 100.0); alg = Tsit5(),
+    # The checkpoint sink + predicates are PROBLEM-level declarations (§2.5.4):
+    # they compose into the callback set the problem carries.
+    solve(esm_problem(fixture, (0.0, 100.0);
              sinks = Any[], checkpoint_sinks = Any[cksink],
              checkpoint_predicates = Any[() -> true],
-             terminate_on_checkpoint = true, seed_ic! = seed!)
+             terminate_on_checkpoint = true, seed_ic! = _ckpt_seed!), Tsit5())
 
     man = cksink.manifest
     @test man !== nothing
@@ -71,12 +73,12 @@ using OrdinaryDiffEqTsit5: Tsit5
     end
 
     # --- restart CONTINUATION: resume from (t1, u1), reach the same end within tol ---
-    ref = simulate(prep, (0.0, 100.0); alg = Tsit5(), saveat = [100.0], seed_ic! = seed!)
+    ref = solve(prep, Tsit5(); saveat = [100.0])
     uend_ref = ref.u[end]
 
     seed_from_u1 = (u0, _vm) -> (u0 .= u1)
-    cont = simulate(prep, (t1, 100.0); alg = Tsit5(), saveat = [100.0],
-                    seed_ic! = seed_from_u1)
+    cont = solve(esm_problem(fixture, (t1, 100.0);
+                    seed_ic! = seed_from_u1), Tsit5(); saveat = [100.0])
     uend_cont = cont.u[end]
 
     @test length(uend_cont) == length(uend_ref)

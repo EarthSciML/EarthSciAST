@@ -127,6 +127,52 @@ CASES: list[tuple[str, str, str]] = [
         "coupled_atmospheric_system",
         "end_to_end/coupled_atmospheric_system.esm",
     ),
+    # --- operator_compose that actually COMPOSES -----------------------------
+    # Added 2026-08-24. Until then EVERY coupled case above recorded an
+    # operator_compose that matched nothing, because each named an operator model
+    # whose equations used a state of its own instead of the `_var` placeholder
+    # (esm-spec §6.4). The corpus therefore pinned the NO-OP as the correct
+    # answer, and a binding whose `operator_compose` did nothing at all passed
+    # every case. These three fixtures are the ones in the shared tree whose
+    # operator model really is spelled with `_var`, so they are what makes
+    # §4.7.1 steps 3-5 observable:
+    #
+    #   * minimal_chemistry        -- the canonical §4.7.1 example: three species
+    #                                 x one placeholder advection equation.
+    #   * metadata_inheritance_coupled -- the same shape under a reaction system.
+    #   * bare_reference_resolution -- placeholder expansion AND a `translate`
+    #                                 map together, which is the pair that pins
+    #                                 §10.2's redundancy invariant: consulting
+    #                                 `translate` with the POST-expansion
+    #                                 dependent variable turns this document into
+    #                                 a spurious ConflictingDerivativeError.
+    ("operator_compose", "minimal_chemistry", "valid/minimal_chemistry.esm"),
+    (
+        "operator_compose",
+        "metadata_inheritance_coupled",
+        "valid/metadata_inheritance_coupled.esm",
+    ),
+    (
+        "operator_compose",
+        "bare_reference_resolution",
+        "scoping/bare_reference_resolution.esm",
+    ),
+    # Added later the same day, once the three above were driven from every
+    # binding and the translation branch was MEASURED rather than read: across
+    # all 34 `operator_compose` entries in the shared tree, 19 matched directly
+    # and ZERO matched through `translate` -- the branch was dead everywhere,
+    # even after the direction fix, because `translate` endpoints are authored
+    # bare (`"O3"`) while matching runs on the NAMESPACED dependent variable
+    # (`"DiffusionSystem.ozone_conc"`) and no binding qualified them. This is the
+    # one fixture in the tree that pins a real translation match, so it is what
+    # makes §4.7.1 step 2's name-form rule and step 4's prune observable at all:
+    # `ChemistrySystem.O3` and `DiffusionSystem.ozone_conc` are one quantity
+    # under two names, each carrying its own tendency.
+    (
+        "operator_compose",
+        "operator_compose_translate",
+        "coupling/operator_compose_resolution_fixtures.esm",
+    ),
     # --- arrayed model exercising index_sets ---------------------------------
     (
         "arrayed",
@@ -199,6 +245,29 @@ CASES: list[tuple[str, str, str]] = [
 # changes. `error` is the oracle's exception CLASS NAME; the `reason` is prose
 # and is not asserted by a consuming binding.
 
+# --- a hazard for whoever adds the next translate fixture ----------------------
+# `metadata.coupling_rules` is compared VERBATIM across bindings, and the
+# oracle renders an object-valued `translate` entry as "<target>*<factor>". The
+# factor therefore travels as TEXT, so every binding has to produce the same
+# characters for the same number. Two independent arms hit this while conforming
+# to `operator_compose_translate`:
+#
+#   * Go rendered the decoded map with %v ("map[factor:1 var:ozone_conc]");
+#   * TypeScript rendered it with JSON.stringify, then had to hand-write a
+#     `formatPythonFloat` to reproduce Python's `str(float)` rules.
+#
+# The int-vs-float half of that is closed: the oracle now coerces the factor to
+# float, so a factor authored `2` and one authored `2.0` render identically.
+# What is NOT closed is exotic float spellings -- Python prints `1e-07` where
+# JavaScript prints `1e-7` -- and no fixture in the tree exercises one, so the
+# agreement currently holds by the values that happen to be authored.
+#
+# If you add a fixture whose translate factor is not a plain decimal in
+# [1e-4, 1e16), check the rendering in every binding before trusting a green
+# corpus run. The durable fix, if it ever bites, is to give the factor a
+# canonical rendering in the spec rather than have five bindings reverse-engineer
+# one language's float repr.
+
 REFUSALS: list[dict[str, str]] = [
     {
         "fixture": "valid/template_import_lib.esm",
@@ -208,6 +277,23 @@ REFUSALS: list[dict[str, str]] = [
             "nothing to flatten, and a library file must stay generic (its "
             "metaparameters bind per import edge), so flatten refuses rather "
             "than instantiating it at its defaults."
+        ),
+    },
+    {
+        "fixture": "coupling/couple_multiplicative_no_tendency.esm",
+        "error": "CoupleMultiplicativeNoTendencyError",
+        "reason": (
+            "a `couple` connector applies `multiplicative` to `Surface.resistance`, a constant "
+            "parameter with no `D(...)` tendency. esm-spec \u00a710.3 and libraries \u00a74.7.2 both "
+            "define the transform against the target's EXISTING ODE RHS, so there is nothing to "
+            "multiply. Four of five bindings used to drop the connector equation SILENTLY -- the "
+            "document declared a coupling and the flattened system carried no trace of it. This "
+            "case exists so `couple_multiplicative_no_tendency` cannot rot the way "
+            "`operator_compose` did: every fixture that used the idiom was migrated to the "
+            "\u00a710.4 `variable_map` spelling, which left the diagnostic with no fixture at all. "
+            "It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and "
+            "structurally valid -- `tests/invalid/` means `validate()` must reject, and this "
+            "document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
         ),
     },
     {

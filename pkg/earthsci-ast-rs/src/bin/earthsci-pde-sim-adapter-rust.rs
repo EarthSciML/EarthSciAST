@@ -22,9 +22,9 @@ use std::process::ExitCode;
 
 use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, Compile, ProblemOptions, SolveOptions, esm_problem, load_string, solve};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Map, Value, json};
 
@@ -40,17 +40,17 @@ fn time_key(t: f64) -> String {
 }
 
 /// Index of the solution sample closest to `t` (`total_cmp`, so a NaN sample
-/// cannot panic the comparison). `output_times` pins the sample grid, but the
+/// cannot panic the comparison). `saveat` pins the sample grid, but the
 /// trajectory lookups match defensively by closest time.
 fn nearest_index(times: &[f64], t: f64) -> Option<usize> {
     (0..times.len()).min_by(|&a, &b| (times[a] - t).abs().total_cmp(&(times[b] - t).abs()))
 }
 
-fn solver_from(name: &str) -> SolverChoice {
+fn solver_from(name: &str) -> Alg {
     match name {
-        "Bdf" | "bdf" => SolverChoice::Bdf,
-        "Sdirk" | "sdirk" => SolverChoice::Sdirk,
-        _ => SolverChoice::Erk,
+        "Bdf" | "bdf" => Alg::Bdf,
+        "Sdirk" | "sdirk" => Alg::Sdirk,
+        _ => Alg::Erk,
     }
 }
 
@@ -95,22 +95,40 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         .iter()
         .map(|(k, v)| (k.clone(), v.as_f64().unwrap_or(0.0)))
         .collect();
+    // The MANIFEST key is `output_times` -- a shared cross-binding fixture
+    // field written by `scripts/gen_pde_sim_fixtures.py` and read as
+    // `tr.output_times` by the Julia adapter. It is NOT the SciML
+    // `SolveOptions.saveat` field below; phase 4's `output_times` -> `saveat`
+    // rename applied to the OPTIONS struct and was wrongly applied to this
+    // manifest read too, which made every fixture report an error instead of
+    // a trajectory.
     let out_times: Vec<f64> = tr["output_times"]
         .as_array()
         .ok_or("output_times missing")?
         .iter()
         .map(|v| v.as_f64().unwrap_or(0.0))
         .collect();
-    let opts = SimulateOptions {
-        solver: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
+    let opts = SolveOptions {
+        alg: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
         abstol: integ["abstol"].as_f64().unwrap_or(1e-12),
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
-        max_steps: 1_000_000,
-        output_times: Some(out_times.clone()),
+        maxiters: 1_000_000,
+        saveat: Some(out_times.clone()),
+        callback: None,
         progress: None,
     };
-    let sol =
-        simulate(&file, (t0, t1), &params, &ics, &opts).map_err(|e| format!("simulate: {e:?}"))?;
+    let prob = esm_problem(
+        &file,
+        (t0, t1),
+        ProblemOptions {
+            p: params,
+            u0: ics,
+            compile: Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("esm_problem: {e:?}"))?;
+    let sol = solve(&prob, &opts).map_err(|e| format!("solve: {e:?}"))?;
 
     let mut traj = Map::new();
     for &t in &out_times {
@@ -229,17 +247,18 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
         .collect();
     let t0 = *checkpoints.first().ok_or("empty checkpoints")?;
     let t1 = *checkpoints.last().ok_or("empty checkpoints")?;
-    let opts = SimulateOptions {
-        solver: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
+    let opts = SolveOptions {
+        alg: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
         abstol: integ["abstol"].as_f64().unwrap_or(1e-12),
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
-        max_steps: 10_000_000,
-        output_times: Some(checkpoints.clone()),
+        maxiters: 10_000_000,
+        saveat: Some(checkpoints.clone()),
+        callback: None,
         progress: None,
     };
     let sol = compiled
-        .simulate((t0, t1), &params, &HashMap::new(), &opts)
-        .map_err(|e| format!("simulate: {e:?}"))?;
+        .solve((t0, t1), &params, &HashMap::new(), &opts)
+        .map_err(|e| format!("solve: {e:?}"))?;
 
     let mut traj = Map::new();
     for &t in &checkpoints {

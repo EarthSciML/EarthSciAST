@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
-import { loadString, toJson, validate, validateSchema } from './index.js'
+import { loadString, toJson, validateText, validateSchema } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
 const testsDir = fixturesDir()
@@ -43,7 +43,7 @@ describe('Aggregate / semiring fixtures', () => {
       // relational `index(v, i) = aggregate(...)` form) as an equation for its
       // output variable, and binds aggregate range / `index` element symbols so
       // contracted indices are not flagged as undefined references.
-      const result = validate(content)
+      const result = validateText(content)
       expect(result.schema_errors).toHaveLength(0)
       expect(result.structural_errors).toHaveLength(0)
       expect(result.is_valid).toBe(true)
@@ -99,7 +99,7 @@ describe('Aggregate / semiring fixtures', () => {
       // (unregistered semiring, join not an array / wrong `on` arity, discrete
       // missing shape, ...) or a promoted STRUCTURAL F-6 finding (a relational
       // node reading state, an undeclared index-set range).
-      const result = validate(content)
+      const result = validateText(content)
       expect(result.is_valid, `${basename(filePath)} is pinned invalid but was accepted`).toBe(
         false,
       )

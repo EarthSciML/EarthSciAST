@@ -45,13 +45,25 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use thiserror::Error;
 
+/// Deprecated alias of [`ReferenceResolutionError`].
+///
+/// API_SPEC.md §8 item 10: Julia, Python and Go all raise
+/// `ReferenceResolutionError`; this binding alone spelled it `ReferenceError`.
+/// The canonical spelling is now `ReferenceResolutionError`; this alias is kept
+/// for one minor per API_SPEC.md §10 and will be removed at the next major.
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `ReferenceResolutionError` (API_SPEC.md §8 item 10)"
+)]
+pub type ReferenceError = ReferenceResolutionError;
+
 /// A reference could not be resolved, or the reference graph has a cycle.
 ///
 /// Variant names are deliberately cross-language-compatible so the Julia,
 /// Python, and Rust bindings report the same failure mode under the same name
 /// (mirrors the `E_REF_*` codes in the Python binding).
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
-pub enum ReferenceError {
+pub enum ReferenceResolutionError {
     /// A `ranges[*].from` names an index set not declared in `index_sets`.
     #[error(
         "undeclared index set '{name}' referenced by range '{index}' of node {node} (model '{model}', at {path})"
@@ -65,8 +77,11 @@ pub enum ReferenceError {
     },
 
     /// A `kind:"derived"` index set's `from_faq` names no expression-node id.
+    ///
+    /// Resolved at DOCUMENT scope (esm-spec.md §9.7.5); `model` names the model
+    /// whose graph was being built when the lookup failed.
     #[error(
-        "derived index set '{index_set}' references from_faq '{from_faq}', which is not the id of any expression node in model '{model}'"
+        "derived index set '{index_set}' references from_faq '{from_faq}', which is not the id of any expression node in the document (model '{model}')"
     )]
     UnknownFaqNode {
         index_set: String,
@@ -74,7 +89,11 @@ pub enum ReferenceError {
         model: String,
     },
 
-    /// Two expression nodes in the same model share an explicit `id`.
+    /// Two expression nodes in the same DOCUMENT share an explicit `id`.
+    ///
+    /// Node ids are unique per document, not per model (esm-spec.md §9.7.5);
+    /// when the two occurrences are in different models the paths are
+    /// model-qualified and `model` names the second occurrence's model.
     #[error("duplicate expression-node id '{id}' in model '{model}' (at {path} and {first})")]
     DuplicateNodeId {
         id: String,
@@ -85,7 +104,7 @@ pub enum ReferenceError {
 
     /// A `join.on` factor reference names nothing in the node's scope.
     #[error(
-        "join factor '{factor}' of node {node} names no factor, range, or output index in scope (model '{model}', at {path})"
+        "join factor '{factor}' of node {node} names no range, output index, factor arg, declared variable, or index set in scope (model '{model}', at {path})"
     )]
     UnresolvedJoinFactor {
         factor: String,
@@ -257,10 +276,10 @@ impl ReferenceGraph {
 
     /// Bottom-up order (dependencies before dependents).
     ///
-    /// Errors with [`ReferenceError::ReferenceCycle`] if the graph is cyclic —
+    /// Errors with [`ReferenceResolutionError::ReferenceCycle`] if the graph is cyclic —
     /// a cycle among reference edges is an out-of-scope implicit/iterative solve
     /// (RFC §6.1 "Acyclicity").
-    pub fn topological_order(&self) -> Result<Vec<String>, ReferenceError> {
+    pub fn topological_order(&self) -> Result<Vec<String>, ReferenceResolutionError> {
         // Two deliberate passes rather than one Kahn sweep: `detect_cycle`'s
         // DFS reports the actual cycle PATH (Kahn's leftover-vertex set
         // cannot name the path), and the wave loop below emits ready vertices
@@ -269,7 +288,7 @@ impl ReferenceGraph {
         // is irrelevant; after the cycle check the no-progress break is
         // unreachable.
         if let Some(cyc) = self.detect_cycle() {
-            return Err(ReferenceError::ReferenceCycle { path: cyc });
+            return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
         let mut emitted: Vec<String> = Vec::new();
         let mut done: HashSet<String> = HashSet::new();
@@ -310,30 +329,106 @@ fn nonempty_str(value: Option<&Value>) -> Option<&str> {
     value.and_then(|v| v.as_str()).filter(|s| !s.is_empty())
 }
 
-/// The names a `join.on` reference may resolve to: the node's string
-/// factor-args, its declared range keys, and its symbolic `output_idx`.
-fn factor_scope(map: &Map<String, Value>) -> HashSet<String> {
-    let mut names = HashSet::new();
-    if let Some(args) = map.get("args").and_then(|v| v.as_array()) {
-        for a in args {
-            if let Some(s) = a.as_str() {
-                names.insert(s.to_string());
-            }
-        }
+/// Which binder class a `join` name resolves to, or `None`.
+///
+/// An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop
+/// symbol bound by the enclosing `ranges`, a document-scoped index set
+/// (§9.7.5), or a declared component-local variable — a value-invention bin
+/// buffer. A binding that diagnoses such a name "must do so against the
+/// variable AND index-set registries", not against node-local names alone.
+///
+/// The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+/// node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+/// permits one string to be a variable reference outside an aggregate and an
+/// index symbol inside one):
+///
+/// 1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+///    tested FIRST;
+/// 2. a node-local string factor `arg`;
+/// 3. a declared component-local variable (the model's variable registry);
+/// 4. a document-scoped index set.
+///
+/// Anything else is unresolvable and raises `E_REF_UNRESOLVED_JOIN_FACTOR`.
+/// Nothing here widens the check to "accept any string": a name in none of the
+/// four registries is still a typo and is still reported.
+fn join_binder_class(
+    map: &Map<String, Value>,
+    name: &str,
+    variables: Option<&Map<String, Value>>,
+    index_sets: Option<&Map<String, Value>>,
+) -> Option<JoinBinder> {
+    if name.is_empty() {
+        return None;
     }
-    if let Some(ranges) = map.get("ranges").and_then(|v| v.as_object()) {
-        for k in ranges.keys() {
-            names.insert(k.clone());
-        }
+    // 1. node-local binders (these shadow a same-named variable)
+    if let Some(ranges) = map.get("ranges").and_then(|v| v.as_object())
+        && ranges.contains_key(name)
+    {
+        return Some(JoinBinder::Range);
     }
-    if let Some(oi) = map.get("output_idx").and_then(|v| v.as_array()) {
-        for o in oi {
-            if let Some(s) = o.as_str() {
-                names.insert(s.to_string());
-            }
-        }
+    if let Some(oi) = map.get("output_idx").and_then(|v| v.as_array())
+        && oi.iter().any(|o| o.as_str() == Some(name))
+    {
+        return Some(JoinBinder::OutputIdx);
     }
-    names
+    // 2. node-local string factor args
+    if let Some(args) = map.get("args").and_then(|v| v.as_array())
+        && args.iter().any(|a| a.as_str() == Some(name))
+    {
+        return Some(JoinBinder::Arg);
+    }
+    // 3. the model's variable registry — where a bin buffer lives
+    if variables.map(|v| v.contains_key(name)).unwrap_or(false) {
+        return Some(JoinBinder::Variable);
+    }
+    // 4. the document-scoped index-set registry
+    if index_sets.map(|v| v.contains_key(name)).unwrap_or(false) {
+        return Some(JoinBinder::IndexSet);
+    }
+    None
+}
+
+/// The binder classes a `join` name may resolve to (CONFORMANCE_SPEC §5.5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinBinder {
+    Range,
+    OutputIdx,
+    Arg,
+    Variable,
+    IndexSet,
+}
+
+/// Diagnose one `join` name, or return the unresolved-join-factor error.
+fn check_join_name(
+    map: &Map<String, Value>,
+    name: Option<&str>,
+    variables: Option<&Map<String, Value>>,
+    index_sets: Option<&Map<String, Value>>,
+    node_key: &str,
+    model_name: &str,
+    path: &str,
+) -> Result<(), ReferenceResolutionError> {
+    let resolved = name
+        .and_then(|n| join_binder_class(map, n, variables, index_sets))
+        .is_some();
+    if resolved {
+        Ok(())
+    } else {
+        Err(ReferenceResolutionError::UnresolvedJoinFactor {
+            factor: name.unwrap_or("").to_string(),
+            node: node_key.to_string(),
+            model: model_name.to_string(),
+            path: path.to_string(),
+        })
+    }
+}
+
+/// One id-bearing expression node, as the `from_faq` scope sees it.
+#[derive(Clone, Debug)]
+struct DocNode {
+    addr: String,
+    path: String,
+    op: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -342,9 +437,10 @@ fn register_and_process(
     path: &str,
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
+    variables: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
-    id_to_addr: &mut IndexMap<String, (String, String)>,
-) -> Result<(), ReferenceError> {
+    id_to_addr: &mut IndexMap<String, DocNode>,
+) -> Result<(), ReferenceResolutionError> {
     let op = map.get("op").and_then(|v| v.as_str());
     let nid = nonempty_str(map.get("id"));
     let is_agg = op.map(crate::aggregate::is_aggregate_op).unwrap_or(false);
@@ -359,15 +455,22 @@ fn register_and_process(
     let key = node_key(&addr);
 
     if let Some(id) = nid {
-        if let Some((_, first_path)) = id_to_addr.get(id) {
-            return Err(ReferenceError::DuplicateNodeId {
+        if let Some(first) = id_to_addr.get(id) {
+            return Err(ReferenceResolutionError::DuplicateNodeId {
                 id: id.to_string(),
                 model: model_name.to_string(),
                 path: path.to_string(),
-                first: first_path.clone(),
+                first: first.path.clone(),
             });
         }
-        id_to_addr.insert(id.to_string(), (addr.clone(), path.to_string()));
+        id_to_addr.insert(
+            id.to_string(),
+            DocNode {
+                addr: addr.clone(),
+                path: path.to_string(),
+                op: op.map(|s| s.to_string()),
+            },
+        );
     }
 
     graph.ensure_vertex(ReferenceVertex {
@@ -388,7 +491,7 @@ fn register_and_process(
                 let target = from.as_str().unwrap_or("");
                 let declared = index_sets.map(|m| m.contains_key(target)).unwrap_or(false);
                 if target.is_empty() || !declared {
-                    return Err(ReferenceError::UndeclaredIndexSet {
+                    return Err(ReferenceResolutionError::UndeclaredIndexSet {
                         name: target.to_string(),
                         index: idx_name.clone(),
                         node: key.clone(),
@@ -403,7 +506,6 @@ fn register_and_process(
 
     // join[*].on[*] -> factor
     if let Some(join) = map.get("join").and_then(|v| v.as_array()) {
-        let scope = factor_scope(map);
         for clause in join {
             let on = match clause.get("on").and_then(|v| v.as_array()) {
                 Some(on) => on,
@@ -414,8 +516,29 @@ fn register_and_process(
                     .as_array()
                     .and_then(|p| p.first())
                     .and_then(|v| v.as_str());
+                check_join_name(
+                    map, reference, variables, index_sets, &key, model_name, path,
+                )?;
+                // BOTH key columns are references (esm-spec §4.9.5). Only the
+                // LEFT one carries the graph edge: the JoinFactor edge kind
+                // records the node's own key-column dependency, and the right
+                // column is frequently a document-scoped index set, which
+                // already has its own vertex kind. The right column is
+                // DIAGNOSED here and left un-edged, which is what makes
+                // `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+                // through the index-set class without inventing a
+                // `factor:sourceType` twin of `index_set:sourceType`.
+                //
+                // A non-string right column is a SCHEMA defect
+                // (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                // there) and is not re-diagnosed as a reference error.
+                if let Some(right) = pair.as_array().and_then(|p| p.get(1))
+                    && let Some(r) = right.as_str()
+                {
+                    check_join_name(map, Some(r), variables, index_sets, &key, model_name, path)?;
+                }
                 match reference {
-                    Some(r) if scope.contains(r) => {
+                    Some(r) => {
                         graph.ensure_vertex(ReferenceVertex {
                             key: factor_key(r),
                             kind: VertexKind::Factor,
@@ -426,14 +549,7 @@ fn register_and_process(
                         });
                         graph.add_edge(&key, &factor_key(r), EdgeKind::JoinFactor);
                     }
-                    other => {
-                        return Err(ReferenceError::UnresolvedJoinFactor {
-                            factor: other.unwrap_or("").to_string(),
-                            node: key.clone(),
-                            model: model_name.to_string(),
-                            path: path.to_string(),
-                        });
-                    }
+                    None => unreachable!("check_join_name rejects a non-string left column"),
                 }
             }
         }
@@ -442,18 +558,22 @@ fn register_and_process(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     value: &Value,
     path: &str,
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
+    variables: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
-    id_to_addr: &mut IndexMap<String, (String, String)>,
-) -> Result<(), ReferenceError> {
+    id_to_addr: &mut IndexMap<String, DocNode>,
+) -> Result<(), ReferenceResolutionError> {
     match value {
         Value::Object(map) => {
             if map.contains_key("op") {
-                register_and_process(map, path, model_name, index_sets, graph, id_to_addr)?;
+                register_and_process(
+                    map, path, model_name, index_sets, variables, graph, id_to_addr,
+                )?;
             }
             for (k, v) in map {
                 walk(
@@ -461,6 +581,7 @@ fn walk(
                     &format!("{path}/{k}"),
                     model_name,
                     index_sets,
+                    variables,
                     graph,
                     id_to_addr,
                 )?;
@@ -473,6 +594,7 @@ fn walk(
                     &format!("{path}/{i}"),
                     model_name,
                     index_sets,
+                    variables,
                     graph,
                     id_to_addr,
                 )?;
@@ -483,7 +605,114 @@ fn walk(
     Ok(())
 }
 
-/// Resolve the reference edges of one `model` value into a graph.
+/// The model members whose expression trees carry addressable nodes.
+const WALK_ROOTS: [&str; 2] = ["equations", "initialization_equations"];
+
+/// Collect every explicit expression-node `id` under one model's `value`.
+fn collect_ids(
+    value: &Value,
+    path: &str,
+    model_name: &str,
+    nodes: &mut IndexMap<String, DocNode>,
+) -> Result<(), ReferenceResolutionError> {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("op")
+                && let Some(id) = nonempty_str(map.get("id"))
+            {
+                let qualified = format!("models/{model_name}/{path}");
+                if let Some(first) = nodes.get(id) {
+                    return Err(ReferenceResolutionError::DuplicateNodeId {
+                        id: id.to_string(),
+                        model: model_name.to_string(),
+                        path: qualified,
+                        first: first.path.clone(),
+                    });
+                }
+                nodes.insert(
+                    id.to_string(),
+                    DocNode {
+                        addr: id.to_string(),
+                        path: qualified,
+                        op: map
+                            .get("op")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                    },
+                );
+            }
+            for (k, v) in map {
+                collect_ids(v, &format!("{path}/{k}"), model_name, nodes)?;
+            }
+        }
+        Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                collect_ids(v, &format!("{path}/{i}"), model_name, nodes)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every explicit expression-node `id` in `document`, keyed by id.
+///
+/// `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+/// `index_sets` entry is visible to every model, so the node it names may live
+/// in any of them. This pass therefore runs over all models BEFORE any single
+/// model's graph is built.
+///
+/// Because ids from different models share one namespace, uniqueness is a
+/// DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
+/// [`ReferenceResolutionError::DuplicateNodeId`].
+fn collect_document_node_ids(
+    document: &Value,
+) -> Result<IndexMap<String, DocNode>, ReferenceResolutionError> {
+    let mut nodes = IndexMap::new();
+    if let Some(models) = document.get("models").and_then(|v| v.as_object()) {
+        for (model_name, model) in models {
+            for root in WALK_ROOTS {
+                if let Some(v) = model.get(root) {
+                    collect_ids(v, root, model_name, &mut nodes)?;
+                }
+            }
+        }
+    }
+    Ok(nodes)
+}
+
+/// Deprecated alias of [`build_reference_graph`].
+///
+/// API_SPEC.md §8 item 17: a binding that exposes the explicit index-set
+/// registry keeps it as an optional TRAILING argument of
+/// `build_reference_graph`, not as a separate name. Kept for one minor per
+/// API_SPEC.md §10.
+#[deprecated(
+    since = "0.2.0",
+    note = "the registry is now the trailing argument of `build_reference_graph` (API_SPEC.md §8 item 17)"
+)]
+pub fn build_reference_graph_with_index_sets(
+    model: &Value,
+    model_name: &str,
+    doc_index_sets: Option<&Map<String, Value>>,
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
+    build_reference_graph(model, model_name, doc_index_sets)
+}
+
+/// Resolve the reference edges of one `model` value into a graph, against the
+/// **document-scoped** `index_sets` registry.
+///
+/// One name, with the registry as an optional TRAILING argument (API_SPEC.md
+/// §8 item 17) — the shape Python (`index_sets=None`) and Go (`docIndexSets`)
+/// already have. Pass `None` for a direct caller holding only a raw model;
+/// [`resolve_references`], which is the DOCUMENT-scoped entry point, derives
+/// the registry from the document itself and threads it in for every model.
+///
+/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
+/// every model, rather than nested inside each model (mirrors
+/// [`crate::cadence::model_with_loaders`]). Any (pre-0.8.0) model-nested
+/// `index_sets` is *merged* on top — a model-level entry wins on a key
+/// collision — so the older nested shape keeps working unchanged.
 ///
 /// Errors on a duplicate node id, an undeclared `ranges[*].from` index set, a
 /// `from_faq` naming no node, or an unresolved `join.on` factor. Cycles are
@@ -492,25 +721,21 @@ fn walk(
 pub fn build_reference_graph(
     model: &Value,
     model_name: &str,
-) -> Result<ReferenceGraph, ReferenceError> {
-    build_reference_graph_with_index_sets(model, model_name, None)
+    doc_index_sets: Option<&Map<String, Value>>,
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
+    build_reference_graph_impl(model, model_name, doc_index_sets, None)
 }
 
-/// As [`build_reference_graph`], but also honours the **document-scoped**
-/// `index_sets` registry.
+/// [`build_reference_graph`], plus the document-wide `from_faq` scope.
 ///
-/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
-/// every model, rather than nested inside each model (mirrors
-/// [`crate::cadence::model_with_loaders`]). [`resolve_references`] passes that
-/// document-level registry here so a schema-conformant document's
-/// `ranges[*].from` still resolves against it. Any (pre-0.8.0) model-nested
-/// `index_sets` is *merged* on top — a model-level entry wins on a key
-/// collision — so the older nested shape keeps working unchanged.
-pub fn build_reference_graph_with_index_sets(
+/// `document_nodes` is the map [`collect_document_node_ids`] builds over every
+/// model. When it is `None` the model's own nodes are the scope.
+fn build_reference_graph_impl(
     model: &Value,
     model_name: &str,
     doc_index_sets: Option<&Map<String, Value>>,
-) -> Result<ReferenceGraph, ReferenceError> {
+    document_nodes: Option<&IndexMap<String, DocNode>>,
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
     let mut graph = ReferenceGraph {
         model: model_name.to_string(),
         ..Default::default()
@@ -547,27 +772,59 @@ pub fn build_reference_graph_with_index_sets(
         }
     }
 
+    // The model's declared variable registry. A `join` `on` key column may name
+    // a declared component-local variable — a value-invention bin buffer written
+    // by an earlier equation — one of the three binder classes esm-spec §4.9.5
+    // makes an `on` column polymorphic over. See `join_binder_class`.
+    let variables = model.get("variables").and_then(|v| v.as_object());
+
     // Pass 2 — walk every expression node: assign a stable address, register
     // aggregate / id-bearing nodes, and add the within-node reference edges
     // (ranges[*].from, join.on). Builds id -> address for from_faq.
-    let mut id_to_addr: IndexMap<String, (String, String)> = IndexMap::new();
-    for root in ["equations", "initialization_equations"] {
+    let mut id_to_addr: IndexMap<String, DocNode> = IndexMap::new();
+    for root in WALK_ROOTS {
         if let Some(v) = model.get(root) {
-            walk(v, root, model_name, index_sets, &mut graph, &mut id_to_addr)?;
+            walk(
+                v,
+                root,
+                model_name,
+                index_sets,
+                variables,
+                &mut graph,
+                &mut id_to_addr,
+            )?;
         }
     }
 
-    // Pass 3 — derived index sets resolve their from_faq to a node by id.
+    // Pass 3 — derived index sets resolve their from_faq to a node by id, at
+    // DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+    // model, since the registry entry naming it is visible to all of them.
+    let faq_scope = document_nodes.unwrap_or(&id_to_addr);
     if let Some(is) = index_sets {
         for (name, entry) in is {
             if entry.get("kind").and_then(|v| v.as_str()) == Some("derived") {
                 let faq = entry.get("from_faq").and_then(|v| v.as_str());
-                match faq.and_then(|f| id_to_addr.get(f)) {
-                    Some((addr, _)) => {
-                        graph.add_edge(&index_set_key(name), &node_key(addr), EdgeKind::FromFaq);
+                match faq.and_then(|f| faq_scope.get(f)) {
+                    Some(target) => {
+                        // The producer may belong to another model; give this
+                        // graph a vertex for it so the edge has a real endpoint.
+                        // Idempotent: a local producer was registered in pass 2.
+                        graph.ensure_vertex(ReferenceVertex {
+                            key: node_key(&target.addr),
+                            kind: VertexKind::Node,
+                            name: target.addr.clone(),
+                            op: target.op.clone(),
+                            node_id: faq.map(|s| s.to_string()),
+                            path: Some(target.path.clone()),
+                        });
+                        graph.add_edge(
+                            &index_set_key(name),
+                            &node_key(&target.addr),
+                            EdgeKind::FromFaq,
+                        );
                     }
                     None => {
-                        return Err(ReferenceError::UnknownFaqNode {
+                        return Err(ReferenceResolutionError::UnknownFaqNode {
                             index_set: name.clone(),
                             from_faq: faq.unwrap_or("").to_string(),
                             model: model_name.to_string(),
@@ -585,9 +842,13 @@ pub fn build_reference_graph_with_index_sets(
 ///
 /// Returns a `{model_name: ReferenceGraph}` map. Errors on any unresolved
 /// reference *or* reference cycle (each model's graph is checked acyclic).
+///
+/// Node ids are collected from EVERY model first, so a derived index set's
+/// `from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a
+/// duplicate id anywhere in the document is an error.
 pub fn resolve_references(
     document: &Value,
-) -> Result<IndexMap<String, ReferenceGraph>, ReferenceError> {
+) -> Result<IndexMap<String, ReferenceGraph>, ReferenceResolutionError> {
     let mut out = IndexMap::new();
     let models = match document.get("models").and_then(|v| v.as_object()) {
         Some(m) => m,
@@ -596,10 +857,12 @@ pub fn resolve_references(
     // Since v0.8.0 the index_sets registry is document-scoped (a sibling of
     // `models`); thread it down so each model's ranges[*].from resolves.
     let doc_index_sets = document.get("index_sets").and_then(|v| v.as_object());
+    let document_nodes = collect_document_node_ids(document)?;
     for (model_name, model) in models {
-        let graph = build_reference_graph_with_index_sets(model, model_name, doc_index_sets)?;
+        let graph =
+            build_reference_graph_impl(model, model_name, doc_index_sets, Some(&document_nodes))?;
         if let Some(cyc) = graph.detect_cycle() {
-            return Err(ReferenceError::ReferenceCycle { path: cyc });
+            return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
         out.insert(model_name.clone(), graph);
     }
@@ -634,7 +897,7 @@ mod tests {
             },
             "equations": [{"lhs": producer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let from_faq = g.edges_of_kind(EdgeKind::FromFaq);
         assert_eq!(from_faq.len(), 1);
         assert_eq!(from_faq[0].source, "index_set:edges");
@@ -655,8 +918,11 @@ mod tests {
             "index_sets": {"edges": {"kind": "derived", "from_faq": "missing"}},
             "equations": [{"lhs": agg(json!({"id": "present"})), "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UnknownFaqNode { .. }));
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UnknownFaqNode { .. }
+        ));
     }
 
     #[test]
@@ -667,8 +933,11 @@ mod tests {
                 {"lhs": agg(json!({"id": "dup"})), "rhs": 0}
             ]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::DuplicateNodeId { .. }));
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::DuplicateNodeId { .. }
+        ));
     }
 
     // ranges[*].from resolves to an index set -------------------------------
@@ -680,7 +949,7 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 4}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let rf = g.edges_of_kind(EdgeKind::RangeFrom);
         assert_eq!(rf.len(), 1);
         assert_eq!(rf[0].target, "index_set:cells");
@@ -697,15 +966,18 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 4}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UndeclaredIndexSet { .. }));
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UndeclaredIndexSet { .. }
+        ));
     }
 
     #[test]
     fn dense_tuple_ranges_make_no_edge() {
         let node = agg(json!({"output_idx": ["i"], "ranges": {"i": [1, 64]}}));
         let model = json!({"equations": [{"lhs": node, "rhs": 0}]});
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         assert!(g.edges.is_empty());
     }
 
@@ -726,7 +998,7 @@ mod tests {
             },
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let jf = g.edges_of_kind(EdgeKind::JoinFactor);
         assert_eq!(jf.len(), 1);
         assert_eq!(jf[0].target, "factor:activity");
@@ -752,7 +1024,7 @@ mod tests {
             },
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let jf = g.edges_of_kind(EdgeKind::JoinFactor);
         assert_eq!(jf.len(), 1);
         assert_eq!(jf[0].target, "factor:src");
@@ -770,8 +1042,63 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 2}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UnresolvedJoinFactor { .. }));
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UnresolvedJoinFactor { .. }
+        ));
+    }
+
+    /// One document declaring all four binder classes: a variable (`bin`), an
+    /// index set (`cells`), a bound range (`i`) and a string arg (`w`).
+    fn four_class_model(on: serde_json::Value) -> Value {
+        json!({
+            "index_sets": {"cells": {"kind": "interval", "size": 4}},
+            "variables": {"bin": {"type": "parameter"}, "w": {"type": "parameter"}},
+            "equations": [{"lhs": agg(json!({
+                "id": "j",
+                "args": ["w"],
+                "output_idx": [],
+                "ranges": {"i": {"from": "cells"}},
+                "join": [{"on": [on]}]
+            })), "rhs": 0}]
+        })
+    }
+
+    /// A `join` `on` column resolves against ALL FOUR binder classes esm-spec
+    /// §4.9.5 / CONFORMANCE_SPEC §5.5.6 require, on BOTH key columns. The
+    /// variable class is the one corpus defect #3 was missing.
+    #[test]
+    fn join_binder_classes_all_resolve_on_both_columns() {
+        for on in [
+            json!(["i", "i"]),         // 1. node-local binder (ranges key)
+            json!(["w", "w"]),         // 2. node-local string factor arg
+            json!(["bin", "bin"]),     // 3. declared model variable — defect #3
+            json!(["cells", "cells"]), // 4. document-scoped index set
+        ] {
+            let model = four_class_model(on.clone());
+            build_reference_graph(&model, "M", None)
+                .unwrap_or_else(|e| panic!("join on {on} should resolve: {e}"));
+        }
+    }
+
+    /// The NEGATIVE guard: widening the scope to the variable and index-set
+    /// registries must not degrade into "accept any string". A name in none of
+    /// the four classes is still a typo, on either column.
+    #[test]
+    fn join_binder_classes_still_reject_an_undefined_name() {
+        for on in [
+            json!(["no_such_name", "bin"]),
+            json!(["bin", "no_such_name"]),
+        ] {
+            let err = build_reference_graph(&four_class_model(on.clone()), "M", None).unwrap_err();
+            match &err {
+                ReferenceResolutionError::UnresolvedJoinFactor { factor, .. } => {
+                    assert_eq!(factor, "no_such_name", "for {on}");
+                }
+                other => panic!("want UnresolvedJoinFactor for {on}, got {other:?}"),
+            }
+        }
     }
 
     // (3) edges are queryable by the partition pass -------------------------
@@ -788,7 +1115,7 @@ mod tests {
             },
             "equations": [{"lhs": producer, "rhs": 0}, {"lhs": consumer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let order = g.topological_order().unwrap();
         assert_eq!(order.len(), g.vertices.len());
         let pos = |k: &str| order.iter().position(|x| x == k).unwrap();
@@ -806,7 +1133,7 @@ mod tests {
             "index_sets": {"edges": {"kind": "derived", "from_faq": "edge_faq"}},
             "equations": [{"lhs": producer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let cyc = g.detect_cycle().expect("cycle");
         assert_eq!(cyc.first(), cyc.last());
         assert!(cyc.contains(&"node:edge_faq".to_string()));
@@ -814,7 +1141,10 @@ mod tests {
 
         let doc = json!({"models": {"M": model}});
         let err = resolve_references(&doc).unwrap_err();
-        assert!(matches!(err, ReferenceError::ReferenceCycle { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::ReferenceCycle { .. }
+        ));
     }
 
     // additive: no references -> empty graph --------------------------------
@@ -825,7 +1155,7 @@ mod tests {
             "variables": {"u": {"type": "unknown"}},
             "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": -1}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         assert!(g.edges.is_empty());
         assert!(g.detect_cycle().is_none());
     }
@@ -884,5 +1214,29 @@ mod tests {
         assert_eq!(g.edges_of_kind(EdgeKind::RangeFrom).len(), 2);
         assert!(g.vertices.contains_key("index_set:faces"));
         assert!(g.vertices.contains_key("index_set:cells"));
+    }
+
+    /// API_SPEC.md §8 item 17: ONE name, with the document-scoped registry as
+    /// an optional TRAILING argument rather than a second function.
+    #[test]
+    fn document_registry_is_a_trailing_argument() {
+        let node = agg(json!({"output_idx": ["i"], "ranges": {"i": {"from": "cells"}}}));
+        let model = json!({"equations": [{"lhs": node, "rhs": 0}]});
+        let registry: Map<String, Value> = json!({"cells": {"kind": "interval", "size": 4}})
+            .as_object()
+            .expect("object")
+            .clone();
+
+        // Without the registry the range names an undeclared index set.
+        let e = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            e,
+            ReferenceResolutionError::UndeclaredIndexSet { .. }
+        ));
+
+        // With it, the range resolves against the document scope.
+        let g = build_reference_graph(&model, "M", Some(&registry)).expect("resolves");
+        assert!(g.vertices.contains_key("index_set:cells"));
+        assert_eq!(g.edges_of_kind(EdgeKind::RangeFrom).len(), 1);
     }
 }

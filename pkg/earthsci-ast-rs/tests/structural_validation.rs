@@ -839,7 +839,7 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
 
     // (1) The aggregate's `output_idx` symbol `i` is in scope in its body, and an
     //     `index(...)` element position is itself a binder. Both resolve.
-    let ok = validate_complete(&doc("", "\"i\""), None);
+    let ok = validate_text(&doc("", "\"i\""), None);
     let undefined: Vec<_> = ok
         .structural_errors
         .iter()
@@ -852,7 +852,7 @@ fn bound_index_symbols_are_in_scope_but_do_not_leak() {
 
     // (2) A name that NO enclosing construct binds is STILL undefined — the fix
     //     must not degenerate into allowlisting short names.
-    let bad = validate_complete(
+    let bad = validate_text(
         &doc("", "{ \"op\": \"+\", \"args\": [\"GHOST\", 1] }"),
         None,
     );
@@ -921,7 +921,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
           }
         }
         "#;
-    let r = validate_complete(init, None);
+    let r = validate_text(init, None);
     let e = r
         .structural_errors
         .iter()
@@ -1003,7 +1003,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
           }
         }
         "#;
-    let r = validate_complete(sidecar, None);
+    let r = validate_text(sidecar, None);
     assert!(
         r.structural_errors
             .iter()
@@ -1015,7 +1015,7 @@ fn reference_integrity_reaches_every_expression_bearing_block() {
     // A DEFINED name in that same sidecar still validates — the walk must not
     // manufacture errors.
     let clean = sidecar.replace("GHOST_SIDECAR", "x");
-    let r = validate_complete(&clean, None);
+    let r = validate_text(&clean, None);
     assert!(
         !r.structural_errors
             .iter()
@@ -1058,7 +1058,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
       },
       "coupling": [{ "type": "couple", "systems": ["Advection", "Wind"] }]
     }"#;
-    let r = validate_complete(coupled, None);
+    let r = validate_text(coupled, None);
     assert!(
         r.structural_errors.is_empty(),
         "a coupled model must skip reference integrity and equation balance: {:?}",
@@ -1074,7 +1074,7 @@ fn coupled_systems_skip_reference_integrity_and_equation_balance() {
         uncoupled, coupled,
         "the coupling block must actually be removed"
     );
-    let r = validate_complete(&uncoupled, None);
+    let r = validate_text(&uncoupled, None);
     assert!(
         r.structural_errors
             .iter()
@@ -1110,7 +1110,7 @@ fn discrete_parameter_loads_and_is_derived() {
         "equations": [{ "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": 1 }]
       } }
     }"#;
-    let r = validate_complete(doc, None);
+    let r = validate_text(doc, None);
     assert!(
         r.schema_errors.is_empty(),
         "an updated parameter must parse: {:?}",
@@ -1125,12 +1125,9 @@ fn discrete_parameter_loads_and_is_derived() {
         model.variables["held"].var_type,
         earthsci_ast::VariableType::Parameter
     );
-    assert_eq!(
-        earthsci_ast::classification::discrete_parameters(model),
-        ["held"]
-    );
+    assert_eq!(earthsci_ast::discrete_parameters(model), ["held"]);
     // ...and the unknown `x` is an ODE state, not a "state" declaration.
-    assert!(earthsci_ast::classification::is_ode_state(model, "x"));
+    assert!(earthsci_ast::is_ode_state(model, "x"));
 }
 
 /// A `default_units` naming a unit OTHER than the declared `units` means the
@@ -1161,7 +1158,7 @@ fn default_units_must_match_declared_units() {
         )
     };
 
-    let bad = validate_complete(&doc("degC"), None);
+    let bad = validate_text(&doc("degC"), None);
     let e = bad
         .structural_errors
         .iter()
@@ -1173,9 +1170,7 @@ fn default_units_must_match_declared_units() {
 
     // A `default_units` that AGREES is redundant but clean.
     assert!(
-        validate_complete(&doc("K"), None)
-            .structural_errors
-            .is_empty(),
+        validate_text(&doc("K"), None).structural_errors.is_empty(),
         "matching default_units must not be reported"
     );
 }
@@ -1216,7 +1211,7 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
     };
 
     // Wrong conversion factor: Pa from atm needs 101325, not 50000.
-    let bad = validate_complete(&doc("Pa", "50000", "atm"), None);
+    let bad = validate_text(&doc("Pa", "50000", "atm"), None);
     let e = bad
         .structural_errors
         .iter()
@@ -1228,7 +1223,7 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
 
     // The CORRECT factor validates.
     assert!(
-        !validate_complete(&doc("Pa", "101325", "atm"), None)
+        !validate_text(&doc("Pa", "101325", "atm"), None)
             .structural_errors
             .iter()
             .any(|e| e.message.contains("conversion factor")),
@@ -1238,7 +1233,7 @@ fn wrong_conversion_factor_is_caught_but_a_plain_coefficient_is_not() {
     // THE SOUNDNESS GUARD: identical units ⇒ the coefficient is free.
     // `y [m] ~ 2 * x [m]` must not be touched.
     assert!(
-        !validate_complete(&doc("m", "2", "m"), None)
+        !validate_text(&doc("m", "2", "m"), None)
             .structural_errors
             .iter()
             .any(|e| e.message.contains("conversion factor")),

@@ -9,7 +9,7 @@
 > modelled loaders as nodes need updating accordingly. See
 > `docs/content/rfcs/unified-variable-model.md`.
 
-**Companion Libraries for the EarthSciML Serialization Format — Version 0.1.0 Draft**
+**Companion Libraries for the EarthSciML Serialization Format — esm 1.0.0**
 
 ## 1. Overview
 
@@ -33,10 +33,22 @@ Each library implementation is classified into tiers:
 | Tier | Capabilities | Required for |
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
-| **Analysis** | Unit checking, equation counting, stoichiometric matrix computation, conservation law detection | All languages |
+| **Analysis** | Unit checking, stoichiometric matrix computation | All languages |
 | **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `earthsci-ast-editor` (SolidJS) |
 | **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
+
+> **Retracted from the Analysis tier: conservation-law detection and equation
+> counting.** Both were listed here as required of all languages, and **no
+> binding has ever implemented either under any exported name** —
+> `api-surface.json` carries no `conservation_laws` / `detect_conservation_laws`
+> and no `equation_count` / `count_equations` in any of the six columns. (The
+> two near-misses are unrelated: Go's `ErrorEquationCountMismatch` is a
+> validation error CODE, and `substitute_in_equations` is a substitution
+> helper.) Phase 6 recorded the gap; the 1.0.0 release removes the claim rather
+> than shipping a tier definition that five bindings do not meet. Restoring
+> either capability means implementing it in all five and re-adding the row —
+> not editing this table alone.
 
 ---
 
@@ -248,8 +260,192 @@ Libraries at a tier that produces simulation-ready systems (currently: Julia via
 | Library | Status | Notes |
 |---|---|---|
 | Python (`earthsci_ast`) | ✅ conforms | `tests/test_simulation.py` calls `scipy.integrate.solve_ivp` on multiple canonical problems and asserts trajectory correctness. |
-| Rust (`earthsci-ast-rs`) | ✅ conforms (partial) | `tests/simulate_tests.rs` runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. `diffsol` is currently an unconditional dependency; moving it behind a `simulate` feature flag is a recommended follow-up. |
-| Julia (`EarthSciAST.jl`) | ❌ does not conform | The test suite constructs `ODESystem` objects but never calls `solve()`. `real_mtk_integration_test.jl` has `@test_skip` gates and only verifies the returned object is a non-`MockMTKSystem`. Tracked as a follow-up gap. |
+| Rust (`earthsci-ast-rs`) | ✅ conforms | Runs Robertson, exponential decay, reversible, and autocatalytic problems through `diffsol`. *Row updated 2026-08-24:* the recommended follow-up is done — `diffsol` is now `optional = true` behind a `solve` feature (in `default`), so a consumer that only parses/validates/flattens/graphs can drop it. Verified: `cargo tree --no-default-features -e normal` reports zero `diffsol`, and `cargo build --lib --no-default-features` is clean. This is what §2.5.9 requires of every simulation-capable binding. |
+| Julia (`EarthSciAST.jl`) | ✅ conforms | *Row corrected 2026-08-24; it was stale on both of its stated grounds.* `real_mtk_integration_test.jl` contains zero `@test_skip`, and `mtk_export_test.jl` solves both the original and the round-tripped MTK problem and compares trajectories. The tree-walk path additionally asserts analytic values end-to-end — `simulate_run_test.jl` against `A0·exp(-(k1+k)t)`, plus `conformance_scalar_ic`, `subsystem_loader`, `build_once_spatial_field` and `wildfire` against golden trajectories. `esm_problem_test.jl` now also integrates through `solve`, and pins retcode discrimination, the `init`/`step!`/`solve!` lifecycle, name-indexing, and an ensemble sweep. |
+
+### 2.5 The Simulation Problem (Julia, Python, Rust)
+
+*Normative for simulation-capable bindings. TypeScript and Go implement none of
+this — they have no Problem type, by decision, and stop at the flattened system.*
+
+§2.4 says a library sets systems up and does not solve them. This section says
+what "set up" produces: **one noun, `Problem`, and one verb, `solve`.** The
+SciML common interface is the model, and §4 of `API_SPEC.md` makes its spellings
+canonical in every binding.
+
+#### 2.5.1 `simulate` does not exist
+
+There is no `simulate` entry point in any binding. A run is always two steps:
+
+```
+prob = esm_problem(input, tspan; p, u0, providers, ...)   # build once
+sol  = solve(prob; alg, abstol, reltol, saveat, ...)      # run per-knob-set
+```
+
+The two steps are separated because their costs differ by orders of magnitude
+and their inputs differ in kind. Construction is deterministic per document: it
+rewrites, invents values, fetches gated data, and compiles. `solve` varies only
+per-run knobs. A single `simulate` call conflates them, and every binding that
+had one grew a second, `prepare`-shaped entry point next to it precisely because
+callers needed the split — Julia and Python already carried both, spelled
+differently and with different arguments.
+
+`prepare` is therefore *replaced by* Problem construction, not kept alongside
+it. `PreparedModel` and `Prepared` are the same concept under a local name;
+`Problem` is that concept under the canonical one.
+
+#### 2.5.2 Construction
+
+Construction absorbs the whole deterministic-per-document pipeline: the pushdown
+rewrite, value invention, the gated fetch of provider data, and the compile of
+the right-hand side. It takes the document (a path, a native document, a typed
+document, or a `FlattenedSystem`), the integration interval, and the bindings
+that fix a *document* rather than a *run* — parameters, initial state, data
+providers, metaparameters, and the model to build when the file holds several.
+
+A binding MAY expose additional construction arguments for its own build
+observability (Julia's `inspect`, Rust's progress observer). Those are extension
+seam, not stable API.
+
+**A failed build RAISES; it does not return a code.** Construction is where the
+right-hand side is compiled, so an unlowerable operator, a cyclic observed graph,
+or an undiscretized spatial operator is a *construction* error and MUST be raised
+as one. `retcode` (§2.5.3) describes runs that happened; a document that never
+became a Problem has no run to describe. This resolves a split the previous
+entry points had: `simulate` reported build failures as a failed result while
+`prepare` raised.
+
+**`sample_time` defaults to `tspan[1]`, not to zero.** Providers are sampled at
+construction, and a literal zero default silently samples the wrong instant for
+any run that does not start at `t = 0`. A binding MUST default it to the start of
+the integration interval and MUST let a caller override it.
+
+`build_evaluator` survives as a **documented tier-2 extension seam**. It is the
+entry point for a caller that wants the compiled right-hand side without a
+Problem around it, and it has substantial downstream use; it is not deprecated
+by this section, and it is not stable API either.
+
+#### 2.5.3 `solve`, and the return code
+
+`solve(prob; alg, abstol, reltol, saveat, callback, maxiters)` runs to
+completion. `alg` is the solver algorithm; a binding whose ecosystem has no
+first-class algorithm object MAY accept a name.
+
+**Default tolerances are `reltol = 1e-4`, `abstol = 1e-6`, in every binding.**
+Before this was settled the three simulation-capable bindings defaulted to three
+different pairs spanning six orders of magnitude, so no two of them solved the
+same document comparably without the caller naming a tolerance. A default is
+what a document gets when its author has expressed no opinion, so it is the
+cheapest of the three rather than the most accurate; an author who needs tighter
+integration asks for it, under the same option name everywhere.
+
+A test that asserts numerical accuracy MUST pass an explicit tolerance rather
+than rely on the default — otherwise it is asserting something about the
+library's default rather than about the model.
+
+The result carries a **`retcode`** drawn from the SciML `ReturnCode` vocabulary
+— at minimum `Success`, `MaxIters`, `Unstable`, `Terminated`, and a failure code
+for a solver-reported error. `retcode` REPLACES the ad-hoc pairs the bindings
+carried before it: a `success` boolean beside a free-text `message`, and Rust's
+step counters read as a proxy for whether the run finished. A caller MUST be
+able to distinguish "ran to `tspan[2]`" from "stopped early, here is why" without
+parsing prose.
+
+A binding MAY additionally carry solver statistics; those are informative.
+
+#### 2.5.4 Callbacks: an argument to `solve` REPLACES the Problem's set
+
+Callbacks are declared on the **Problem**, because a callback that refreshes
+provider buffers or writes an output stream belongs to the document, not to a
+particular run's tolerances.
+
+A `callback` argument to `solve` **replaces the Problem's callback set
+entirely.** It does not append, merge, or wrap.
+
+This is the one genuinely ambiguous point in the design, and it is settled this
+way deliberately. Silent composition is the more dangerous default: a caller who
+passes `callback` to override a Problem-level callback would instead get both,
+and two callbacks that both write output or both mutate the same buffer produce
+a wrong run rather than an error. Replacement is visible in the result the first
+time it is wrong. A caller who wants to *extend* rather than replace reads the
+existing set back with `callbacks(prob)` and composes explicitly:
+
+```
+solve(prob; callback = compose(callbacks(prob), my_extra_callback))
+```
+
+`callbacks(prob)` is stable API in every simulation-capable binding, for exactly
+this reason: without it, replacement semantics would make a Problem-level
+callback impossible to extend.
+
+**Solver stops are unioned, not replaced.** A Problem's refresh and output
+anchors are `tstops` its callbacks *need* in order to be correct — a refresh
+callback that is never stopped at silently interpolates across a data boundary.
+Replacing the callback set therefore MUST NOT discard the Problem's stops: a
+caller-supplied `tstops` is unioned with the Problem's. Replacement is about
+*which callbacks run*, not about where the solver is allowed to stop.
+
+**Firing points.** A callback fires at the run's output points and after each
+accepted step. A binding whose solver ecosystem has a richer callback vocabulary
+(continuous/discrete conditions, affect!/initialize) MAY expose it; this section
+fixes only composition and stops, which are the parts that must agree.
+
+#### 2.5.5 `remake`
+
+`remake(prob; p, u0, tspan, ...)` returns a NEW Problem with the named
+substitutions applied and everything else shared. It MUST NOT mutate the
+original, and it MUST NOT redo the parts of construction the substitution cannot
+have invalidated — a changed parameter value does not re-fetch provider data or
+recompile the right-hand side.
+
+`remake` generalizes Julia's `remake_parameters`, which took parameters only.
+Refusal behavior is preserved: a substitution that a Problem cannot honor
+without a rebuild MUST raise, naming the parameter and the class that makes it
+un-substitutable, rather than silently rebuilding or silently ignoring it.
+
+#### 2.5.6 Stepping
+
+`init(prob; ...)` returns an integrator; `step!` advances it; `solve!` runs it to
+completion. This is the same lifecycle `solve` performs internally, exposed for
+callers that need to interleave their own work with the integration — the
+coupling driver in a host model, an interactive session, a progress UI.
+
+**The caller owns the sink lifecycle on this path.** `solve` opens and closes the
+Problem's output sinks around the run; a caller driving `init`/`step!` is outside
+that bracket and MUST open and close them itself. A binding MUST document how,
+and MUST NOT leave a half-written sink as the failure mode for forgetting.
+
+#### 2.5.7 Accessing results by name
+
+A solution is indexed by **variable name**, not by position in the state vector.
+Julia implements `SymbolicIndexingInterface`; the other bindings expose
+name-keyed accessors with the same meaning. Position-indexed access MAY remain
+available but is not the documented path: the flattened state ordering is an
+implementation detail that coupling can change.
+
+#### 2.5.8 Ensembles
+
+`EnsembleProblem` wraps a Problem plus a per-trajectory rewrite, and solves the
+family. It is the canonical form for parameter sweeps, Monte Carlo over declared
+distributions, and perturbed initial conditions. Go's orphaned `ParameterSweep` /
+`SweepRange` / `SweepDimension` types — a sweep vocabulary in the one binding
+with no solver to run it — are deleted rather than harmonized.
+
+#### 2.5.9 Solver dependencies stay optional
+
+§2.4's rule is unchanged by any of the above, and applies to the `solve` half of
+it: the solver is a test dependency, an optional extra, a Cargo feature, or a
+package extension — never an unconditional runtime dependency. Constructing a
+Problem MUST NOT require the solver to be present. Only `solve`, `init`, and
+`solve!` may.
+
+"The solver" means the *integrator* — the package that steps the ODE. It does not
+mean the solver ecosystem's shared interface and callback vocabulary: a Problem
+that composes refresh or output callbacks at construction necessarily needs those
+callback constructors at construction, and that is conforming. The line this
+section draws is that building a Problem must not drag in a time-stepping
+integrator, not that it must be free of every package the solver ecosystem
+ships.
 
 ---
 
@@ -402,6 +598,7 @@ text.
 | `undefined_parameter` | Parameter referenced in a rate expression is not declared |
 | `undefined_system` | Coupling entry references a nonexistent model, reaction system, or operator |
 | `undefined_operator` | `operator_apply` references a nonexistent operator |
+| `couple_multiplicative_no_tendency` | A `couple` connector equation applies the `multiplicative` transform to a `to` target that has no `D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or an undefined name. There is no tendency to multiply (§4.7.2, esm-spec §10.3) |
 | `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared. Also raised at flatten for an edge produced by a `coupling_import` expansion whose bound component lacks a referenced variable (esm-spec §10.10.3) |
 | `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
@@ -475,9 +672,30 @@ Libraries at **all tiers** (including Core) must implement coupling resolution a
 
 Libraries that support simulation (Julia, Python) additionally convert the flattened system into native solver objects (see Section 4.7.5). Libraries at the Core tier produce the flattened representation but do not convert to solver-specific types.
 
-**Resolution order:** The order of entries in the `coupling` array does not affect the final result. Coupling rules are commutative — the same mathematical system is produced regardless of the order in which rules are applied. (This matches the behavior of EarthSciMLBase.jl, which is tested across all permutations of system ordering.)
+**Resolution order:** The order of entries in the `coupling` array does not affect the final result.
+(This matches the behavior of EarthSciMLBase.jl, which is tested across all permutations of system
+ordering.)
 
-However, for deterministic intermediate representations (e.g., variable naming), libraries should process coupling entries in array order.
+That property is not free, and it is not because the rules commute — they do not. A `couple`
+`multiplicative` connector and an `operator_compose` that target the same variable produce
+`(rhs + t) * m` or `(rhs * m) + t` depending on which runs first, and those are different systems.
+Order-independence holds because entries are applied **by kind**, in the order the subsections below
+are written:
+
+1. every `operator_compose` entry (§4.7.1), then
+2. every `couple` entry (§4.7.2), then
+3. every `variable_map` entry (§4.7.3).
+
+Array order is preserved **within** a kind, which is what keeps intermediate representations (e.g.
+variable naming) deterministic. `callback` and `operator_apply` entries (§4.7.4) are recorded as
+metadata and applied at no point in this sequence.
+
+Kind-ordering is normative, not an implementation convenience: it is the whole reason the first
+paragraph is true. A library that instead walked the array in declaration order — which an earlier
+revision of this section advised — would make the flattened system depend on the order the author
+happened to write the entries in, and the two spellings above would silently disagree. Any metadata
+recording which coupling rules were applied (§4.7.5 step 4) still reports them in **declaration**
+order; the application sequence and the reporting sequence are separate.
 
 #### 4.7.1 `operator_compose` Algorithm
 
@@ -489,7 +707,48 @@ However, for deterministic intermediate representations (e.g., variable naming),
    - If the LHS is `D(var, t)`, the dependent variable is `var`.
    - Otherwise, the dependent variable is the LHS expression itself.
 
-2. **Apply translations.** If a `translate` map is provided, build a mapping from system A variable names to system B variable names (with optional conversion factors). Translations use scoped references (e.g., `"ChemModel.ozone": "PhotolysisModel.O3"`).
+2. **Apply translations.** If a `translate` map is provided, build a mapping from system A
+   variable names to system B variable names (with optional conversion factors). Translations use
+   scoped references (e.g., `"ChemModel.ozone": "PhotolysisModel.O3"`).
+
+   **The direction is normative and is not symmetric.** For `"systems": [A, B]`, every `translate`
+   KEY names a variable of **A** (`systems[0]`) and every VALUE names a variable of **B**
+   (`systems[1]`) — the spelling esm-spec §10.2 shows. Step 3 walks B's equations, so an
+   implementation that indexes the map by B's dependent variable is consulting it BACKWARDS: it
+   must use the **inverse** (B → A) map, or index the forward map by its values. Getting this
+   wrong is not a partial failure — a correctly spelled `translate` map then never matches
+   anything and the whole entry is a silent no-op, which is the one outcome a coupling
+   mis-specification must not have.
+
+   A binding MAY additionally accept the reversed spelling, but MUST accept the normative one.
+
+   **The redundancy invariant.** esm-spec §10.2 states that `translate` "is only needed when two
+   non-placeholder systems have differently-named variables", because `_var` expansion (step 3) is
+   automatic. A `translate` entry whose value is `"B._var"` is therefore **redundant by
+   construction**, and adding it MUST NOT change the result of the composition. In particular it
+   must not be consulted with B's *post-expansion* dependent variable: after step 3 substitutes
+   `_var`, B's equation carries A's own variable name, so a map keyed by A's names will hit
+   spuriously and redirect the match to a target that does not exist — turning a working
+   composition into an over-determination error. Translation lookup MUST use B's dependent
+   variable **as authored**, before placeholder expansion.
+
+   **Endpoints are matched in namespaced form.** A `translate` endpoint may be authored either
+   bare (`"O3"`) or fully scoped (`"ChemistrySystem.O3"`); esm-spec §10.10.2 lists both key and
+   value as scoped-reference occurrence sites. Matching, however, runs against the **namespaced**
+   dependent variable of a flattened equation. An implementation MUST therefore qualify a bare
+   endpoint before matching — a KEY against `systems[0]`, a VALUE against `systems[1]` — and MUST
+   leave an endpoint that already carries a dot alone, since it is either already namespaced or
+   names a subsystem path.
+
+   This is the second half of the direction rule above and fails the same way. A map authored
+   `{"O3": {"var": "ozone_conc"}}` under `"systems": ["ChemistrySystem", "DiffusionSystem"]` is
+   correctly spelled, but compared against B's dependent variable `DiffusionSystem.ozone_conc` it
+   misses; the bare-name fallback then searches A for B's short name and misses too, and the entry
+   silently no-ops. Direction and name-form must BOTH be right for the branch to run at all.
+
+   `_var` is exempt in either position: it is a global sentinel (esm-spec §6.4), never namespaced,
+   and a value of `"B._var"` is the redundant spelling the invariant above requires to stay
+   harmless.
 
 3. **Match equations.** For each equation in system A, find a matching equation in system B by comparing dependent variables:
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
@@ -499,7 +758,31 @@ However, for deterministic intermediate representations (e.g., variable naming),
 4. **Combine matched equations.** For each matched pair:
    - The final equation for variable `x` has the original LHS: `D(x, t)`.
    - The RHS is the sum of both systems' RHS expressions: `rhs_A + factor * rhs_B`, where `factor` is the conversion factor from the translate map (default 1).
+   - On a **translation match**, B's dependent variable is rewritten to A's target throughout
+     `rhs_B` before summing. §10.2 says a `translate` pair names two spellings of *the same physical
+     quantity*, so the merged equation must speak of it in one name. Leaving `rhs_B` referring to
+     B's spelling strands that variable: its own defining equation was just consumed by the merge,
+     so it survives as an unknown nothing defines — a structurally singular system. Only the
+     dependent variable is rewritten; B's other variables (its parameters, its observeds) keep their
+     names, which is what the next bullet is about.
+   - On a **direct match** the two names are already equal and on a **placeholder match** step 3 has
+     already substituted, so in both cases this rewrite is the identity. Step 4 introduces no
+     renaming of its own beyond it.
    - Variables from system B that appear in the combined RHS are added to the merged system's variable list.
+   - **The merged-away name does not survive.** When a match renames the dependent variable — a
+     translation match, or the bare-name fallback, which is a name-based translation — B's
+     declaration of that variable is left with nothing to constrain it: the equation that defined
+     it has just been consumed by the merge. An implementation MUST drop that stranded declaration
+     from the flattened variable tables, and MUST first retarget every surviving reference to it at
+     A's spelling. The retarget is **document-wide**, not local to B: a third system may reference
+     `B.x` by its scoped name, and pruning the declaration while leaving that reference dangling
+     trades one broken system for another.
+
+     Keeping the declaration is not a harmless conservatism. An unknown with no defining equation
+     classifies as an *algebraic* unknown (§6.3.1), so the flattened system gains a state with no
+     constraint — structurally singular, and rejected by the solver rather than by the coupling
+     that caused it. Avoiding exactly that is what the rewrite in the previous bullet is for; the
+     prune is its other half.
 
 5. **Preserve unmatched equations.** Equations in either system that have no match are included in the merged system unchanged.
 
@@ -524,9 +807,24 @@ The `connector.equations` array contains the complete coupling specification, ex
    - Resolve the `from` and `to` scoped references to their respective systems and variables.
    - Apply the coupling based on the `transform` type:
      - `additive`: Add the `expression` as a source/sink term to the target variable's ODE RHS.
+       If `to` has no tendency yet, `expression` BECOMES it (`D(to) ~ expression`) — an additive
+       term against an absent tendency is well defined, because zero is the additive identity.
      - `multiplicative`: Multiply the target variable's existing ODE RHS by the `expression`.
      - `replacement`: Replace the target variable's value with the `expression` (used for algebraic constraints).
 3. Variables referenced across systems become shared — the coupled system includes both systems' variables.
+
+**A `multiplicative` transform REQUIRES an existing tendency.** Both this section and esm-spec §10.3
+define the operation against the target's existing ODE RHS. When `to` names something with no
+`D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or simply
+an undefined name — there is nothing to multiply and the operation has no meaning. A library MUST
+raise `couple_multiplicative_no_tendency` naming the target; it MUST NOT silently drop the connector
+equation. Dropping it is a wrong answer delivered quietly: the document declares a coupling, the
+flattened system carries no trace of it, and nothing downstream can tell the difference between
+"this coupling was applied" and "this coupling was ignored".
+
+Note the asymmetry with `additive` above, and that it is deliberate: zero is the additive identity,
+so `additive` against an absent tendency has an obvious reading and takes it; there is no
+corresponding identity that makes `multiplicative` meaningful against nothing.
 
 #### 4.7.3 `variable_map` Resolution
 
@@ -1271,7 +1569,7 @@ The expression editor is fundamentally a tree of reactive nodes. When a user cli
 **Dependencies:** `ajv` (schema validation). No framework, no DOM.
 
 ```
-esm-format/
+pkg/earthsci-ast-rs/
 ├── src/
 │   ├── types.ts          # TypeScript type definitions matching JSON Schema
 │   ├── parse.ts          # JSON → typed EsmFile
@@ -1920,7 +2218,13 @@ esm.explore(file)  # widget showing models, reactions, coupling graph
 
 ### 5.4 Rust — `earthsci-ast`
 
-**Tier: Core + Analysis**
+**Tier: Core + Analysis + Simulation**
+
+> The tier label read "Core + Analysis" until phase 6. That contradicted the
+> binding itself — Rust ships the simulation surface (`esm_problem` / `solve`)
+> and the `arrayop` runtime that executes discretized PDEs, described two
+> paragraphs below. `API_SPEC.md` §11 recorded the contradiction; this is the
+> correction.
 
 Rust provides a high-performance, memory-safe implementation suitable for CLI tools, WASM compilation (for web), and embedding in other systems.
 
@@ -1931,7 +2235,7 @@ Rust provides a high-performance, memory-safe implementation suitable for CLI to
 - `serde` + `serde_json` — serialization
 - `jsonschema` — schema validation
 - `wasm-bindgen` — optional, for WASM target
-- `diffsol` (0.11) — native-only ODE solver, used by `simulate()` (gated to non-wasm targets via `cfg(not(target_arch = "wasm32"))`); pulls in `faer` for the linear-algebra backend used at the call site
+- `diffsol` (0.11) — native-only ODE solver, behind the `simulate` feature and used by `solve()` (also gated to non-wasm targets via `cfg(not(target_arch = "wasm32"))`). `simulate()` no longer exists: phase 4 replaced it with `esm_problem(...)` + `solve(...)`, per §2.5; pulls in `faer` for the linear-algebra backend used at the call site
 
 #### 5.4.2 Crate Structure
 
@@ -2068,21 +2372,46 @@ The v1 acceptance harness includes the Robertson stiff problem (verified against
 
 ---
 
-### 5.5 Go — `earthsci-ast-go` (Optional)
+### 5.5 Go — `earthsci-ast-go`
 
-**Tier: Core**
+**Tier: Core + Analysis**
 
 Go is useful for server-side tooling, CI/CD validation, and API backends.
 
-#### 5.5.1 Minimal Scope
+> This section described a "minimal scope" binding until phase 6, and was badly
+> stale: it predated the phase-5 work that roughly doubled Go's public surface.
+> Go is now the LARGEST surface of the six (383 exported spellings against
+> Rust's 323 and Julia's 298). The tier label moved from Core to Core +
+> Analysis in phase 6, when `DeriveODEs` and `StoichiometricMatrix` closed the
+> last two Analysis capabilities Go lacked.
+
+#### 5.5.1 Scope
+
+Core, in full:
 
 - Parse/serialize ESM files using standard `encoding/json`.
-- Schema validation via `gojsonschema`.
-- Pretty-print to Unicode and LaTeX.
-- Structural validation (equation counting, reference checks).
-- Substitution.
+- Schema validation via `gojsonschema`; structural validation; reference checks.
+- Pretty-print to Unicode, LaTeX and ASCII, over the full domain (expressions,
+  equations, models, reaction systems, whole files).
+- Substitution, including the scoped `*WithContext` family.
+- `Flatten`, the text expression parser (`ParseExpression` / `ParseEquation`),
+  the §4 editing operation set, `Migrate` / `CanMigrate`, and the reference
+  graph.
+- Graph representations and all three §4.8.3 renderings (`ToDOT`, `ToMermaid`,
+  `ToJSONGraph`).
 
-No simulation capability. The Go library serves as a validation and transformation layer in backend services.
+Analysis: unit validation with structured `UnitWarning` findings,
+`StoichiometricMatrix`, and `DeriveODEs`.
+
+**No simulation capability**, by design — the Go library is a validation and
+transformation layer for backend services. Go also no longer ships a
+command-line tool: phase 6 retired its `main.go` under H-5, which makes the
+Rust `esm` binary the only CLI. Go still ships as a library.
+
+**One documented divergence.** Go's `ReactionSystem.Species` is a
+`map[string]Species`, a genuinely unordered Go map, so `DeriveODEs` emits
+species in sorted-name order where Julia, Python, TypeScript and Rust emit
+declaration order. See `API_SPEC.md` §5.10; nothing in `tests/` pins it.
 
 ---
 
@@ -2351,13 +2680,13 @@ The following items are acknowledged gaps in this specification. They do not blo
 | LaTeX pretty-print | ✓ | ✓ (string) | — | ✓ | ✓ | ✓ |
 | Substitution | ✓ | ✓ | ✓ (interactive) | ✓ | ✓ | ✓ |
 | Structural validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Unit validation | ✓ | ✓ | — | ✓ | ✓ | — |
-| Derive ODEs from reactions | ✓ | ✓ | — | ✓ | ✓ | — |
-| Stoichiometric matrix | ✓ | ✓ | — | ✓ | ✓ | — |
+| Unit validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| Derive ODEs from reactions | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| Stoichiometric matrix | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | System graph (component) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
 | Expression graph (variable) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
 | Graph export (DOT/Mermaid) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Model editing (programmatic) | ✓ | ✓ | — | ✓ | ✓ | — |
+| Model editing (programmatic) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | Click-to-edit expressions | — | — | ✓ | — | — | — |
 | Drag-and-drop reordering | — | — | ✓ | — | — | — |
 | Expression palette | — | — | ✓ | — | — | — |

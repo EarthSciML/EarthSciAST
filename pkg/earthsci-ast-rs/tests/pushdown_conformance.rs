@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use earthsci_ast::pushdown_rewrite::{desugar_pushdown, pushdown_diagnostics};
+use earthsci_ast::desugar_pushdown;
+use earthsci_ast::extension::pushdown_rewrite::pushdown_diagnostics;
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

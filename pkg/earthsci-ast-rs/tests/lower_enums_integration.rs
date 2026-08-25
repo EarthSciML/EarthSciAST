@@ -24,7 +24,7 @@ fn enums_categorical_lookup_fixture_lowers_enum_ops() {
         .expect("DryDep model present");
     // `r_c` is an OBSERVED unknown; its defining expression is the RHS of the
     // bare-variable-LHS equation (esm-spec §6.3.1), not a field on the variable.
-    let defs = earthsci_ast::classification::observed_definitions(model);
+    let defs = earthsci_ast::observed_definitions(model);
     let expr = defs.get("r_c").expect("r_c has a defining equation");
 
     let Expr::Operator(node) = expr else {

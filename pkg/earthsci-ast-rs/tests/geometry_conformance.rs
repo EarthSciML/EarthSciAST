@@ -18,8 +18,9 @@
 
 use std::path::PathBuf;
 
-use earthsci_ast::geometry::{self, Manifold};
+use earthsci_ast::extension::geometry::spherical_area;
 use earthsci_ast::load_string;
+use earthsci_ast::{Manifold, intersect_polygon, shoelace_area};
 
 mod common;
 
@@ -86,8 +87,8 @@ fn invalid_geometry_fixtures_rejected() {
 fn public_planar_clip_and_shoelace_area() {
     let a = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
     let b = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)];
-    let ring = geometry::intersect_polygon(&a, &b, Manifold::Planar).expect("planar clip");
-    assert!((geometry::shoelace_area(&ring) - 1.0).abs() < 1e-9);
+    let ring = intersect_polygon(&a, &b, Manifold::Planar).expect("planar clip");
+    assert!((shoelace_area(&ring) - 1.0).abs() < 1e-9);
 }
 
 #[test]
@@ -95,9 +96,9 @@ fn public_spherical_clip_via_s2_and_area() {
     // The s2bindings README example: two octant sectors overlap in π/4 sr.
     let a = [(0.0, 0.0), (90.0, 0.0), (0.0, 90.0)];
     let b = [(45.0, 0.0), (135.0, 0.0), (45.0, 90.0)];
-    let ring = geometry::intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical clip");
+    let ring = intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical clip");
     assert!(ring.len() >= 3, "s2 spherical clip should be non-empty");
-    let area = geometry::spherical_area(&ring).expect("spherical area");
+    let area = spherical_area(&ring).expect("spherical area");
     assert!(
         (area - std::f64::consts::FRAC_PI_4).abs() < 1e-9,
         "area {area}"
@@ -110,7 +111,7 @@ fn public_geodesic_matches_spherical() {
     // path as spherical (compared same-manifold only).
     let a = [(10.0, 10.0), (40.0, 10.0), (40.0, 40.0), (10.0, 40.0)];
     let b = [(25.0, 25.0), (55.0, 25.0), (55.0, 55.0), (25.0, 55.0)];
-    let sph = geometry::intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical");
-    let geo = geometry::intersect_polygon(&a, &b, Manifold::Geodesic).expect("geodesic");
+    let sph = intersect_polygon(&a, &b, Manifold::Spherical).expect("spherical");
+    let geo = intersect_polygon(&a, &b, Manifold::Geodesic).expect("geodesic");
     assert_eq!(sph, geo);
 }

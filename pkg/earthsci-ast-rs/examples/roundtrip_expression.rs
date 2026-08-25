@@ -11,7 +11,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use earthsci_ast::types::Expr;
+use earthsci_ast::Expr;
 use serde_json::{Value, json};
 
 fn roundtrip_one(path: &Path) -> Value {

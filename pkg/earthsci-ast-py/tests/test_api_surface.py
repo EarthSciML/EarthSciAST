@@ -25,6 +25,25 @@ import earthsci_ast
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MANIFEST_PATH = REPO_ROOT / "api-surface.json"
 
+# ---------------------------------------------------------------------------
+# Phase 4 (esm-libraries-spec §2.5 / API_SPEC §5.8) has landed in Julia, Python
+# and Rust, and `python3 scripts/gen-api-surface.py` has run for the merged
+# phase, so the manifest now describes the current Python surface directly and
+# these two deltas are empty.
+#
+# They stay here as the mechanism for the NEXT such interval: when a
+# multi-binding change lands in Python before the manifest is regenerated, list
+# the delta here so the surface stays pinned rather than un-asserted, and empty
+# both sets again at the regeneration. A non-empty set is a claim that the
+# manifest is stale.
+# ---------------------------------------------------------------------------
+
+#: Exported by the Python binding now; not yet in the manifest.
+PENDING_ADDED: set[str] = set()
+
+#: Still in the manifest; deleted from the Python binding.
+PENDING_REMOVED: set[str] = set()
+
 
 def _spellings(entry: object) -> list[str]:
     """A binding entry is a string, or a list when it exports aliases."""
@@ -57,7 +76,7 @@ def test_all_is_a_set(declared: set[str]) -> None:
 
 def test_no_undeclared_exports(declared: set[str]) -> None:
     """Every name in __all__ must be in the manifest (nothing leaks out)."""
-    extra = sorted(set(earthsci_ast.__all__) - declared)
+    extra = sorted(set(earthsci_ast.__all__) - declared - PENDING_ADDED)
     assert not extra, (
         "exported by earthsci_ast but absent from api-surface.json:\n  "
         + "\n  ".join(extra)
@@ -68,12 +87,27 @@ def test_no_undeclared_exports(declared: set[str]) -> None:
 
 def test_no_missing_exports(declared: set[str]) -> None:
     """Every Python name in the manifest must be in __all__ (nothing vanishes)."""
-    missing = sorted(declared - set(earthsci_ast.__all__))
+    missing = sorted(declared - set(earthsci_ast.__all__) - PENDING_REMOVED)
     assert not missing, (
         "declared for python in api-surface.json but not in earthsci_ast.__all__:\n  "
         + "\n  ".join(missing)
         + "\nEither restore the export or drop it from the manifest -- dropping a "
           "`stable` symbol is a major-version break (API_SPEC.md §3)."
+    )
+
+
+def test_pending_sets_are_disjoint_from_the_live_surface() -> None:
+    """The delta above must describe reality: everything PENDING_ADDED names is
+    actually exported, and nothing PENDING_REMOVED names still is. Without this
+    the two allowances could silently outlive the change they cover."""
+    exported = set(earthsci_ast.__all__)
+    assert not (PENDING_ADDED - exported), (
+        "PENDING_ADDED names symbols the binding does not export: "
+        f"{sorted(PENDING_ADDED - exported)}"
+    )
+    assert not (PENDING_REMOVED & exported), (
+        "PENDING_REMOVED names symbols the binding still exports: "
+        f"{sorted(PENDING_REMOVED & exported)}"
     )
 
 

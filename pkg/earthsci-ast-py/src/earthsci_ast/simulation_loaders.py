@@ -29,8 +29,11 @@ from .simulation_array import (
 )
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
-    SimulationResult,
+    ReturnCode,
+    Solution,
     _failure_result,
+    _limit_iters,
+    _retcode_for_error,
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
@@ -39,7 +42,7 @@ from .sympy_bridge import SimulationError
 # returns its current value as a flat float array. Time is the simulation
 # clock (the same ``t`` the RHS sees); a const field is queried once at the
 # start, a discrete field once per cadence segment. Inject a custom provider
-# (e.g. a fixture stub) via ``simulate(..., loader_provider=...)``; the default
+# (e.g. a fixture stub) via ``esm_problem(..., loader_provider=...)``; the default
 # executes the real loader I/O.
 LoaderProvider = Callable[[LoaderField, float], "np.ndarray"]
 
@@ -286,7 +289,8 @@ def _run_cadence_segmented_solve(
     loader_arrays: dict[str, np.ndarray],
     refresh_fn: Callable[[float], None],
     inspect: Any | None = None,
-) -> SimulationResult:
+    maxiters: int | None = None,
+) -> Solution:
     """The ONE discrete-cadence segmented solve — both the ``providers=`` seam
     (:func:`_simulate_with_discrete_providers`) and the ``loader_fields`` seam
     (:func:`_simulate_with_loaders`) route through this, so there is a single
@@ -339,7 +343,7 @@ def _run_cadence_segmented_solve(
             if inspect is not None:
                 _fill_build_inspection(inspect, flat, build, t0, loader_arrays=loader_arrays)
         sol = solve_ivp(
-            fun=build.rhs_function,
+            fun=_limit_iters(build.rhs_function, maxiters),
             t_span=(t_current, seg_end),
             y0=y_current,
             method=method,
@@ -370,11 +374,11 @@ def _run_cadence_segmented_solve(
         t_current = seg_end
         y_current = sol.y[:, -1]
 
-    return SimulationResult(
+    return Solution(
         t=np.concatenate(t_chunks),
         y=np.concatenate(y_chunks, axis=1),
         vars=list(elem_names),
-        success=True,
+        retcode=ReturnCode.Success,
         message=last_message,
         nfev=nfev,
         njev=njev,
@@ -392,7 +396,8 @@ def _simulate_with_loaders(
     atol: float = 1e-12,
     loader_provider: LoaderProvider | None = None,
     provider_factory: Callable | None = None,
-) -> SimulationResult:
+    maxiters: int | None = None,
+) -> Solution:
     """Integrate a system whose RHS reads data-loader fields (RFC §4.3).
 
     Loader fields are external inputs, not equations: a coupling edge already
@@ -526,12 +531,13 @@ def _simulate_with_loaders(
             seg_ends,
             loader_arrays,
             _refresh_discrete,
+            maxiters=maxiters,
         )
 
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
-        return _failure_result(f"Simulation failed: {e}")
+        return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))
 
 
 # --------------------------------------------------------------------------- #
@@ -642,7 +648,8 @@ def _simulate_with_discrete_providers(
     atol: float,
     providers: dict[str, Any],
     inspect: Any | None = None,
-) -> SimulationResult:
+    maxiters: int | None = None,
+) -> Solution:
     """Cadence-aware ``providers=`` integration: segment on the DISCRETE
     providers' refresh boundaries so a time-varying loader changes in-sim.
 
@@ -740,9 +747,10 @@ def _simulate_with_discrete_providers(
             loader_arrays,
             _refresh_discrete,
             inspect,
+            maxiters=maxiters,
         )
 
     except UnsupportedDimensionalityError:
         raise
     except Exception as e:
-        return _failure_result(f"Simulation failed: {e}")
+        return _failure_result(f"Simulation failed: {e}", retcode=_retcode_for_error(e))

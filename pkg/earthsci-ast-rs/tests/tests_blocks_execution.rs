@@ -6,7 +6,7 @@
 //!   1. Builds a single-model subset [`EsmFile`] so unrelated dynamics from
 //!      other components in the same fixture don't couple into the solve.
 //!   2. Compiles it via [`Compiled::from_file`].
-//!   3. Runs [`Compiled::simulate`] with output_times = each assertion's
+//!   3. Runs [`Compiled::simulate`] with saveat = each assertion's
 //!      `time`, so state values are interpolated directly at the assertion
 //!      points (no separate np.interp pass).
 //!   4. Verifies each assertion against the resolved tolerance
@@ -22,8 +22,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::types::{EsmFile, Metadata};
-use earthsci_ast::{Compiled, SimulateOptions, SolverChoice, Tolerance, load_path};
+use earthsci_ast::{Alg, Compiled, SolveOptions, Tolerance, load_path};
+use earthsci_ast::{EsmFile, Metadata};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -55,10 +55,10 @@ fn simulation_skip(name: &str) -> Option<&'static str> {
 /// integration cases) use `Erk` so the numerical trajectory stays within the
 /// fixture's relative tolerance at long horizons — gt-su6u tracked Bdf drift
 /// on ExponentialDecay at t=3000 that Erk (Tsit5) resolves.
-fn per_fixture_solver(name: &str) -> SolverChoice {
+fn per_fixture_solver(name: &str) -> Alg {
     match name {
-        "python_scipy_integration.esm" => SolverChoice::Erk,
-        _ => SolverChoice::Bdf,
+        "python_scipy_integration.esm" => Alg::Erk,
+        _ => Alg::Bdf,
     }
 }
 
@@ -163,7 +163,7 @@ fn execute_component(
     component: &str,
     tests: &[earthsci_ast::ModelTest],
     model_tol: Option<&Tolerance>,
-    solver: SolverChoice,
+    solver: Alg,
 ) {
     let compiled =
         Compiled::from_file(subset).unwrap_or_else(|e| panic!("{label}: compile failed: {e}"));
@@ -198,24 +198,25 @@ fn execute_component(
             }
         }
 
-        // output_times covers every assertion's `time` so we get direct
+        // saveat covers every assertion's `time` so we get direct
         // dense-output samples without a separate interpolation pass.
         let mut sample_times: Vec<f64> = t.assertions.iter().map(|a| a.time).collect();
         sample_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sample_times.dedup_by(|a, b| (*a - *b).abs() < 0.0);
 
-        let opts = SimulateOptions {
-            solver,
+        let opts = SolveOptions {
+            alg: solver,
             abstol: 1e-15,
             reltol: 1e-10,
-            max_steps: 1_000_000,
-            output_times: Some(sample_times.clone()),
+            maxiters: 1_000_000,
+            saveat: Some(sample_times.clone()),
             progress: None,
+            callback: None,
         };
 
         let tspan = (t.time_span.start, t.time_span.end);
         let sol = compiled
-            .simulate(tspan, &params, &ics, &opts)
+            .solve(tspan, &params, &ics, &opts)
             .unwrap_or_else(|e| panic!("{label}/{}: simulate failed: {e:?}", t.id));
 
         for a in &t.assertions {
@@ -227,7 +228,7 @@ fn execute_component(
                     )
                 });
             // Locate the sample whose time matches this assertion's time.
-            // output_times was dedup'd; find the nearest entry.
+            // saveat was dedup'd; find the nearest entry.
             let (k, _) = sol
                 .time
                 .iter()

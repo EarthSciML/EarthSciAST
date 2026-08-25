@@ -26,7 +26,7 @@ import pytest
 
 from earthsci_ast.flatten import LoaderField, flatten
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "subsystem_loader"
 _FIXTURE = _ROOT / "fixtures" / "subsystem_loader_ode.esm"
@@ -79,10 +79,8 @@ def test_subsystem_loader_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = simulate(
-        esm, tspan=(float(t0), float(t1)), method="LSODA", loader_provider=_provider(golden)
-    )
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (float(t0), float(t1)), loader_provider=_provider(golden)), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), result.message
     assert result.vars == golden["state_order"]
 
     traj = golden["trajectory"]

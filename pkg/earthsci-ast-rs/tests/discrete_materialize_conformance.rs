@@ -22,9 +22,9 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::fs;
@@ -159,13 +159,14 @@ fn discrete_materialize_trajectory_matches_golden() {
 
     let cells = ["M.c[1]", "M.c[2]", "M.c[3]"];
     let params: HashMap<String, f64> = HashMap::new();
-    let base_opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let base_opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: None,
+        maxiters: 1_000_000,
+        saveat: None,
         progress: None,
+        callback: None,
     };
 
     // Segment-by-segment: refresh `src` at each boundary (forcing frozen for the
@@ -181,9 +182,9 @@ fn discrete_materialize_trajectory_matches_golden() {
             .insert(SRC_KEY.to_string(), snapshot_at(&golden, seg_start));
 
         let mut opts = base_opts.clone();
-        opts.output_times = Some(vec![seg_end]);
+        opts.saveat = Some(vec![seg_end]);
         let sol = compiled
-            .simulate((seg_start, seg_end), &params, &ics, &opts)
+            .solve((seg_start, seg_end), &params, &ics, &opts)
             .unwrap_or_else(|e| panic!("simulate segment [{seg_start}, {seg_end}]: {e}"));
 
         ics = cells

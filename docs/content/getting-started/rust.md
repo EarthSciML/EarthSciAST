@@ -44,280 +44,255 @@ The Rust implementation provides **Core + CLI** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```rust
-use earthsci_ast::{load_string, to_json, validate, EsmFile};
+use earthsci_ast::{load_path, load_string, to_json, validate, EsmFile};
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load from file
-    let content = fs::read_to_string("model.esm")?;
-    let esm_file: EsmFile = load_string(&content)?;
-    println!("Loaded: {}", esm_file.metadata.name);
+    // From a path, or from a string you already hold
+    let esm_file: EsmFile = load_path("model.esm")?;
+    let _also: EsmFile = load_string(&fs::read_to_string("model.esm")?)?;
 
-    // Validate loaded file
-    let validation_result = validate(&esm_file);
-    if validation_result.valid {
-        println!("✓ Valid ESM file");
-    } else {
-        for error in validation_result.errors {
-            eprintln!("✗ {}: {}", error.path, error.message);
+    // `models` is optional in the schema, so it is an Option<IndexMap<..>>
+    if let Some(models) = &esm_file.models {
+        for (name, model) in models {
+            println!("{name}: {} variables", model.variables.len());
         }
     }
 
-    // Save back to JSON
-    let json_output = to_json(&esm_file)?;
-    fs::write("output.esm", json_output)?;
+    // ValidationResult { is_valid, schema_errors, structural_errors, unit_warnings }
+    let result = validate(&esm_file);
+    if result.is_valid {
+        println!("Valid");
+    } else {
+        for e in &result.schema_errors { eprintln!("schema: {e:?}"); }
+        for e in &result.structural_errors { eprintln!("structural: {e:?}"); }
+    }
 
+    // Unit findings are warnings; they never make a document invalid
+    for w in &result.unit_warnings { eprintln!("units: {w:?}"); }
+
+    fs::write("output.esm", to_json(&esm_file)?)?;
     Ok(())
 }
 ```
 
+`load_path_with_options` takes metaparameter bindings and a base path when the
+document is metaparameterized or uses `$ref`.
+
 ### Working with Expressions
 
+`parse_expression` reads infix source and returns an [`Expr`]:
+
 ```rust
-use earthsci_ast::{Expression, parse_expression, to_unicode, to_latex, substitute, free_variables};
+use earthsci_ast::{parse_expression, to_unicode, to_latex, substitute, free_variables, Expr};
 use std::collections::HashMap;
 
 fn expression_example() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse mathematical expression
-    let expr_json = r#"{"op": "+", "args": ["x", {"op": "^", "args": ["y", "2"]}]}"#;
-    let expr: Expression = parse_expression(expr_json)?;
+    let expr: Expr = parse_expression("x + y^2")?;
 
-    // Pretty-print in different formats
-    println!("Unicode: {}", to_unicode(&expr));    // x + y²
-    println!("LaTeX: {}", to_latex(&expr));        // x + y^{2}
+    println!("{}", to_unicode(&expr));
+    println!("{}", to_latex(&expr));
 
-    // Analyze expression
-    let variables = free_variables(&expr);           // vec!["x", "y"]
-    println!("Free variables: {:?}", variables);
+    let vars = free_variables(&expr);        // HashSet<String>
+    println!("{vars:?}");
 
-    // Substitute values
-    let mut substitutions = HashMap::new();
-    substitutions.insert("x".to_string(), "2".to_string());
-    substitutions.insert("y".to_string(), "t".to_string());
+    // Substitution maps a name to an expression, not to a string
+    let mut subs: HashMap<String, Expr> = HashMap::new();
+    subs.insert("x".to_string(), parse_expression("2")?);
 
-    let substituted = substitute(&expr, &substitutions);
-    println!("After substitution: {}", to_unicode(&substituted)); // 2 + t²
-
+    let out = substitute(&expr, &subs);
+    println!("{}", to_unicode(&out));
     Ok(())
 }
 ```
 
 ## CLI Tool Usage
 
-The CLI tool provides comprehensive functionality for working with ESM files:
+`esm --help` lists every subcommand; `esm <command> --help` gives its flags. The
+most commonly used ones:
 
-### File Validation
+### Validation
 ```bash
-# Validate a single file
-esm validate model.esm
-
-# Validate multiple files
-esm validate *.esm
-
-# Validate with detailed output
-esm validate model.esm --verbose
-
-# Validate directory recursively
-esm validate models/ --recursive
+esm validate model.esm              # exit status reflects validity
+esm validate model.esm --verbose    # detailed findings
 ```
 
-### Format Conversion
+`validate` takes exactly one file. Use the shell to walk several:
+
 ```bash
-# Convert to compact JSON
-esm convert model.esm -o compact.json -f compact-json
-
-# Convert to pretty-printed JSON
-esm convert model.esm -o pretty.json -f pretty-json
-
-# Convert to YAML (if feature enabled)
-esm convert model.esm -o model.yaml -f yaml
-
-# Batch conversion
-esm convert input_dir/ -o output_dir/ -f compact-json --recursive
+for f in models/*.esm; do esm validate "$f"; done
 ```
 
-### Expression Pretty-Printing
+### Format conversion
 ```bash
-# Show all expressions in Unicode
-esm pretty-print model.esm -f unicode
-
-# Show expressions in LaTeX
-esm pretty-print model.esm -f latex
-
-# Show specific model's expressions
-esm pretty-print model.esm --model atmospheric_chemistry
-
-# Export to file
-esm pretty-print model.esm -f latex -o expressions.tex
+esm convert model.esm --to json                  # to stdout
+esm convert model.esm --to compact-json -o out.json
 ```
 
-### File Information and Analysis
+`--to` accepts `json` (default) and `compact-json`.
+
+### Expression pretty-printing
 ```bash
-# Basic file information
-esm info model.esm
-
-# Detailed statistics
-esm stats model.esm
-
-# Dependency analysis
-esm deps model.esm
-
-# Variable usage analysis
-esm analyze variables model.esm
-
-# Expression complexity analysis
-esm analyze complexity model.esm
+esm pretty model.esm                 # Unicode (default)
+esm pretty model.esm -f latex        # also: unicode, ascii
 ```
 
-### Schema Operations
+`display` is an alias for `pretty`.
+
+### Information and analysis
 ```bash
-# Generate JSON schema
-esm schema --output esm-schema.json
-
-# Validate against custom schema
-esm validate model.esm --schema custom-schema.json
-
-# Schema version information
-esm schema --version
+esm info model.esm                                  # summary of the document
+esm analyze model.esm                               # all analyses
+esm analyze model.esm --analysis-type complexity    # also: structure, coupling
+esm units model.esm                                 # dimensional analysis report
+esm coupling-analysis model.esm                     # coupling dependencies
+esm compare a.esm b.esm                             # model difference report
+esm diff a.esm b.esm                                # semantic comparison
 ```
+
+### Schema and fidelity checks
+```bash
+esm schema-check model.esm                          # JSON schema compliance
+esm schema-check model.esm --schema-version 1.0.0
+esm round-trip model.esm                            # load/save fidelity
+esm validate-fixtures tests/                        # batch validation
+```
+
+### Other subcommands
+
+`extract` (pull one component out), `stoich` (stoichiometric matrix), `graph`
+(system or expression graphs), `simulate`, `optimize`, `init` (new project from
+a template), `benchmark`, `performance-profile`, and `conformance-test`.
 
 ## Advanced Library Usage
 
 ### Error Handling
 
+Fallible entry points return `EsmError`, whose variants name the stage that
+failed:
+
 ```rust
-use earthsci_ast::{EsmError, ValidationError, load_string, validate};
+use earthsci_ast::{load_path, validate, EsmError};
 
-fn robust_loading(filename: &str) -> Result<(), EsmError> {
-    let content = std::fs::read_to_string(filename)
-        .map_err(|e| EsmError::Io(e))?;
+fn robust_loading(path: &str) -> Result<(), EsmError> {
+    let esm_file = match load_path(path) {
+        Ok(f) => f,
+        Err(EsmError::JsonParse(e))            => { eprintln!("bad JSON: {e}"); return Err(EsmError::JsonParse(e)); }
+        Err(EsmError::SchemaValidation(m))     => { eprintln!("schema: {m}");   return Err(EsmError::SchemaValidation(m)); }
+        Err(EsmError::StructuralValidation(m)) => { eprintln!("structural: {m}"); return Err(EsmError::StructuralValidation(m)); }
+        Err(e)                                 => { eprintln!("load failed: {e}"); return Err(e); }
+    };
 
-    match load_string(&content) {
-        Ok(esm_file) => {
-            let validation = validate(&esm_file);
-            if !validation.valid {
-                for error in validation.errors {
-                    match error.error_type {
-                        ValidationError::SchemaViolation => {
-                            eprintln!("Schema error at {}: {}", error.path, error.message);
-                        },
-                        ValidationError::UnitMismatch => {
-                            eprintln!("Unit mismatch at {}: {}", error.path, error.message);
-                        },
-                        ValidationError::UnresolvedReference => {
-                            eprintln!("Unresolved reference at {}: {}", error.path, error.message);
-                        }
-                    }
-                }
-                return Err(EsmError::Validation(validation));
-            }
-            println!("Successfully loaded and validated {}", filename);
-        },
-        Err(e) => {
-            eprintln!("Failed to parse {}: {}", filename, e);
-            return Err(e);
-        }
+    let result = validate(&esm_file);
+    if !result.is_valid {
+        for e in &result.schema_errors     { eprintln!("schema: {e:?}"); }
+        for e in &result.structural_errors { eprintln!("structural: {e:?}"); }
+        return Err(EsmError::StructuralValidation(
+            format!("{path} failed validation")));
     }
+
+    println!("Loaded and validated {path}");
     Ok(())
 }
 ```
 
-### Performance Optimization
+The full variant set is `JsonParse`, `SchemaValidation`, `StructuralValidation`,
+`ExpressionEvaluation`, `UnitValidation`, `FileRead`, `FileWrite`, and `Other`.
+
+### Performance
+
+There is no separate streaming or zero-copy parser — `load_path` /
+`load_string` are the parsing surface, and the crate gets its speed from what
+happens *inside* them:
+
+- **Load-time interning.** Structurally identical expression subtrees are
+  hash-consed onto one `Arc<ExpressionNode>` while they are deserialized, so a
+  template-expanded discretization never materializes its duplicate subtrees.
+  This makes `Expr::clone` O(1) for operator trees.
+- **Common-subexpression elimination.** The simulation path evaluates each
+  distinct subtree once per scope rather than once per occurrence.
+
+Practical guidance:
 
 ```rust
-use earthsci_ast::{EsmFile, load_streaming, validate_streaming};
-use std::fs::File;
-use std::io::BufReader;
+use earthsci_ast::{load_path, validate};
 
-fn handle_large_file(filename: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(filename)?;
-    let reader = BufReader::new(file);
-
-    // Stream parsing for large files (low memory usage)
-    let esm_file = load_streaming(reader)?;
-
-    // Streaming validation (processes in chunks)
-    let validation = validate_streaming(&esm_file)?;
-
-    if validation.valid {
-        println!("Large file validated successfully");
-    }
-
-    Ok(())
+// Load once and reuse — parsing, reference resolution and the template
+// rewrite all happen in load_path.
+let esm_file = load_path("model.esm")?;
+for _ in 0..100 {
+    let _ = validate(&esm_file);
 }
+# Ok::<(), earthsci_ast::EsmError>(())
+```
 
-// Zero-copy parsing for read-only access
-fn zero_copy_analysis(content: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = earthsci_ast::parse_borrowed(content)?;
+Cargo features control how much of the crate you compile:
 
-    // Work with borrowed data (no allocations for string data)
-    println!("Model name: {}", esm_file.metadata.name);
-    println!("Number of models: {}", esm_file.models.len());
+| Feature | Default | What it adds |
+| --- | --- | --- |
+| `cli` | on | the `esm` binary (pulls in `clap`) |
+| `solve` | on | the ODE solver (pulls in `diffsol`) |
+| `wasm` | off | the WebAssembly bindings |
+| `esio` | off | the EarthSciIO data-provider bridge |
+| `conformance-adapters` | off | the cross-language conformance adapter binaries |
 
-    // esm_file references content, so content must remain valid
-    Ok(())
-}
+For a library-only dependency, turn the defaults off:
+
+```toml
+[dependencies]
+earthsci-ast = { version = "0.1", default-features = false }
 ```
 
 ### Custom Validation Rules
 
+There is no `Validator` trait to implement — a custom rule is a plain function
+over `&EsmFile` that you run alongside `validate`:
+
 ```rust
-use earthsci_ast::{EsmFile, ValidationResult, ValidationError, Validator};
+use earthsci_ast::{load_path, validate, EsmFile, VariableType};
 
-struct CustomValidator;
+/// Every model must declare at least one unknown, and be lowercase-named.
+fn house_rules(esm_file: &EsmFile) -> Vec<String> {
+    let mut problems = Vec::new();
+    let Some(models) = &esm_file.models else { return problems };
 
-impl Validator for CustomValidator {
-    fn validate(&self, esm_file: &EsmFile) -> ValidationResult {
-        let mut errors = Vec::new();
-
-        // Custom rule: All model names must be lowercase
-        for (name, _) in &esm_file.models {
-            if name != &name.to_lowercase() {
-                errors.push(ValidationError {
-                    path: format!("models.{}", name),
-                    message: "Model names must be lowercase".to_string(),
-                    error_type: ValidationError::CustomRule,
-                });
-            }
+    for (name, model) in models {
+        if *name != name.to_lowercase() {
+            problems.push(format!("models.{name}: model names must be lowercase"));
         }
 
-        // Custom rule: Must have at least one state variable per model
-        for (name, model) in &esm_file.models {
-            let state_vars = model.variables.iter()
-                .filter(|v| v.var_type == "state")
-                .count();
+        let unknowns = model
+            .variables
+            .values()
+            .filter(|v| v.var_type == VariableType::Unknown)
+            .count();
 
-            if state_vars == 0 {
-                errors.push(ValidationError {
-                    path: format!("models.{}.variables", name),
-                    message: "Models must have at least one state variable".to_string(),
-                    error_type: ValidationError::CustomRule,
-                });
-            }
-        }
-
-        ValidationResult {
-            valid: errors.is_empty(),
-            errors,
+        if unknowns == 0 {
+            problems.push(format!("models.{name}.variables: no unknown declared"));
         }
     }
+    problems
 }
 
-fn main() {
-    let esm_file = load_string(&content).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let esm_file = load_path("model.esm")?;
 
-    // Use custom validator
-    let custom_validator = CustomValidator;
-    let custom_result = custom_validator.validate(&esm_file);
+    let standard = validate(&esm_file);
+    let custom = house_rules(&esm_file);
 
-    // Combine with standard validation
-    let standard_result = validate(&esm_file);
-
-    if custom_result.valid && standard_result.valid {
+    if standard.is_valid && custom.is_empty() {
         println!("Passed all validation checks");
+    } else {
+        for p in custom { eprintln!("{p}"); }
     }
+    Ok(())
 }
 ```
+
+Note the esm 1.0.0 variable model: there are exactly two declared types,
+`VariableType::Unknown` and `VariableType::Parameter`. Whether an unknown is an
+ODE state or an observed follows from the equation that defines it, not from a
+declared type.
 
 ## WebAssembly Integration
 
@@ -354,12 +329,11 @@ async function main() {
         console.log('Loaded:', esmFile.metadata.name);
 
         const validation = validate(esmFile);
-        if (validation.valid) {
+        if (validation.isValid) {
             console.log('✓ Valid ESM file');
         } else {
-            validation.errors.forEach(error => {
-                console.error(`✗ ${error.path}: ${error.message}`);
-            });
+            [...validation.schemaErrors, ...validation.structuralErrors]
+                .forEach(error => console.error('✗', error));
         }
 
         // Pretty-print expressions
@@ -410,7 +384,7 @@ main();
                 const esmFile = loadString(content);
                 const validation = validate(esmFile);
 
-                if (validation.valid) {
+                if (validation.isValid) {
                     outputDiv.innerHTML = `
                         <h3>${esmFile.metadata.name}</h3>
                         <p>${esmFile.metadata.description || ''}</p>
@@ -554,32 +528,27 @@ mod tests {
 
         let esm_file = load_string(invalid_esm).unwrap();
         let validation = validate(&esm_file);
-        assert!(!validation.valid);
-        assert!(!validation.errors.is_empty());
+        assert!(!validation.is_valid);
+        assert!(!validation.structural_errors.is_empty()
+                || !validation.schema_errors.is_empty());
     }
 
     #[test]
     fn test_expression_substitution() {
-        let expr = Expression::Binary {
-            op: "+".to_string(),
-            left: Box::new(Expression::Variable("x".to_string())),
-            right: Box::new(Expression::Variable("y".to_string())),
-        };
+        // `Expr` is Integer | Number | Variable | Operator(Arc<ExpressionNode>),
+        // and n-ary — not a binary tree. Build one by parsing.
+        let expr = parse_expression("x + y").unwrap();
 
-        let mut substitutions = HashMap::new();
-        substitutions.insert("x".to_string(), "2".to_string());
+        let mut substitutions: HashMap<String, Expr> = HashMap::new();
+        substitutions.insert("x".to_string(), parse_expression("2").unwrap());
 
         let result = substitute(&expr, &substitutions);
-        // Test that x was replaced with 2
-        match result {
-            Expression::Binary { left, .. } => {
-                match **left {
-                    Expression::Number(n) => assert_eq!(n, "2"),
-                    _ => panic!("Expected number after substitution"),
-                }
-            },
-            _ => panic!("Expected binary expression"),
-        }
+
+        // x is gone, y remains
+        let free = free_variables(&result);
+        assert!(!free.contains("x"));
+        assert!(free.contains("y"));
+        assert_eq!(to_unicode(&result), "2 + y");
     }
 }
 ```
@@ -622,29 +591,44 @@ criterion_main!(benches);
 ### Configuration-Driven Validation
 
 ```rust
+use earthsci_ast::{validate, EsmFile, ValidationResult};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct ValidationConfig {
+    /// Treat dimensional-analysis findings as failures
     strict_units: bool,
+    /// Reject models that declare a variable no equation mentions
     allow_unused_variables: bool,
-    max_equation_complexity: usize,
 }
 
-fn validate_with_config(esm_file: &EsmFile, config: &ValidationConfig) -> ValidationResult {
-    let mut validator = StandardValidator::new();
+/// The crate ships one `validate`; policy on top of it is yours.
+fn validate_with_config(esm_file: &EsmFile, config: &ValidationConfig) -> bool {
+    let result: ValidationResult = validate(esm_file);
+    if !result.is_valid {
+        return false;
+    }
 
-    if config.strict_units {
-        validator.enable_strict_unit_checking();
+    // `unit_warnings` are advisory by design — promote them only if asked
+    if config.strict_units && !result.unit_warnings.is_empty() {
+        for w in &result.unit_warnings {
+            eprintln!("units: {w:?}");
+        }
+        return false;
     }
 
     if !config.allow_unused_variables {
-        validator.enable_unused_variable_detection();
+        if let Some(models) = &esm_file.models {
+            for (name, model) in models {
+                if model.equations.is_empty() && !model.variables.is_empty() {
+                    eprintln!("models.{name}: variables declared but no equations");
+                    return false;
+                }
+            }
+        }
     }
 
-    validator.set_max_equation_complexity(config.max_equation_complexity);
-
-    validator.validate(esm_file)
+    true
 }
 ```
 
@@ -660,7 +644,7 @@ fn run_external_validator(filename: &str) -> Result<bool, Box<dyn std::error::Er
     let esm_file = load_string(&content)?;
     let internal_result = validate(&esm_file);
 
-    if !internal_result.valid {
+    if !internal_result.is_valid {
         return Ok(false);
     }
 

@@ -130,14 +130,17 @@ pip install -e .
 
 #### With Optional Dependencies
 ```bash
-# For visualization support
-pip install earthsci-ast[viz]
+# Gridded / static data readers (xarray + netcdf4)
+pip install "earthsci-ast[data]"
 
-# For symbolic computation
-pip install earthsci-ast[symbolic]
+# ODE solver behind `solve` (scipy)
+pip install "earthsci-ast[simulate]"
 
-# All optional features
-pip install earthsci-ast[all]
+# Solution.plot (matplotlib)
+pip install "earthsci-ast[plot]"
+
+# Spherical / geodesic clipping (spherely)
+pip install "earthsci-ast[geometry]"
 ```
 
 #### Virtual Environment Setup
@@ -354,11 +357,14 @@ cargo install --verbose earthsci-ast --features cli
 
 ### Version Compatibility
 
-| ESM Format | Julia Package | TypeScript | Python | Rust CLI |
-|------------|--------------|------------|---------|----------|
-| 0.1.0      | 0.1.0        | 0.1.0     | 0.1.0   | 0.1.0    |
+| ESM Format | Julia | TypeScript | Python | Rust | Go | Editor |
+|------------|-------|------------|--------|------|----|--------|
+| 1.0.0      | 0.1.1 | 0.1.1      | 0.1.1  | 0.1.1| — (unversioned module) | 0.1.0 |
 
-All packages are designed to be compatible with ESM Format version 0.1.0. Cross-language compatibility is maintained through the shared JSON schema.
+Every package reads and writes **ESM format 1.0.0**. Package versions move
+independently of the format version; cross-language compatibility comes from the
+shared [`esm-schema.json`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-schema.json)
+and the conformance suite, not from matching package numbers.
 
 ## Next Steps
 

@@ -1,16 +1,16 @@
 package esm
 
-// parse_expression.go — the INVERSE of ToAscii (display.go) for authoring
+// parse_expression.go — the INVERSE of ToASCII (display.go) for authoring
 // EarthSciAST expressions (esm-spec §4.2) as text. It is a direct port of the
 // TypeScript reference implementation (pkg/earthsci-ast-ts/src/parse-expression.ts),
 // whose module docstring is the normative spec; the cross-language contract is
 // tests/conformance/expression_parse/cases.json.
 //
-// The concrete syntax IS what ToAscii emits, so the pair round-trips:
-// ToAscii(ParseExpression(s)) == s. Precedence is sourced from opPrecedence
+// The concrete syntax IS what ToASCII emits, so the pair round-trips:
+// ToASCII(ParseExpression(s)) == s. Precedence is sourced from opPrecedence
 // (display.go) so the parser can never drift from the printer. This parser
 // RECONSTRUCTS existing AST node shapes; it never invents new ones, and it
-// requires no change to ToAscii.
+// requires no change to ToASCII.
 //
 // Coverage:
 //   - scalar tier: arithmetic, powers, comparisons, boolean logic, elementary
@@ -40,11 +40,11 @@ package esm
 //
 // Design rules: multiplication is ALWAYS explicit (`k * A`) — no implicit
 // juxtaposition, because identifiers are multi-letter (`NO2`, `O3`, `k_photo`).
-// Two known non-exactnesses trace to ToAscii, not the parser: float
+// Two known non-exactnesses trace to ToASCII, not the parser: float
 // serialization (formatNumber routes through a float64), and unary-minus
 // operands being under-parenthesized (`-(a+b)` and `(-a)+b` both print
 // `-a + b`) — the parser matches the printer's loose convention. Because the
-// printer is not injective, ParseExpression(ToAscii(ast)) is a faithful
+// printer is not injective, ParseExpression(ToASCII(ast)) is a faithful
 // SEMANTIC round-trip but may normalize structure (flat vs. nested `+`; a scalar
 // `const`/`fn` with a non-dotted name reprints identically to a plain
 // number/op). Editors should treat text as a derived view and re-parse only
@@ -115,7 +115,7 @@ var exprStructuralRefusals = map[string]bool{
 	"table_lookup": true, "broadcast": true, "enum": true,
 }
 
-// exprAggregateSyms are the aggregate reduction symbols ToAscii emits
+// exprAggregateSyms are the aggregate reduction symbols ToASCII emits
 // (formatAggregate). Each maps to a default `reduce` when no explicit
 // `[semiring=…]` supersedes it; `sum` and `any` carry no `reduce` field
 // (plain `+` / semiring-only).
@@ -186,8 +186,8 @@ var exprNumRe = regexp.MustCompile(`^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`)
 //
 // `∂` (U+2202) and `∇` (U+2207) are also name-constituents: source variables are
 // sometimes named with them (`∂u_∂z`, a discretized ∂u/∂z shear field), and
-// ToAscii prints such names verbatim. Those glyphs are NOT ascii operators — the
-// ascii derivative surface is `D(x)/Dt`, so `∂`/`∇` appear in ToAscii output
+// ToASCII prints such names verbatim. Those glyphs are NOT ascii operators — the
+// ascii derivative surface is `D(x)/Dt`, so `∂`/`∇` appear in ToASCII output
 // ONLY inside a name, and accepting them keeps the parser its exact inverse.
 // (The unicode big-operator display forms `∑ ∫ ∈ ⟨⟩` remain refused; they're
 // the ToUnicode/ToLatex forms, not the ascii surface — see exprTokenize.)
@@ -421,7 +421,7 @@ func (p *exprTextParser) parsePrefix() Expression {
 	t := p.peek()
 	// `-` directly before a number is a NEGATIVE LITERAL, not a unary-minus
 	// node. Both print as `-1.3`, but only a literal reprints WITHOUT parens as
-	// an operand (`x^-1.3`, not `x^(-1.3)`) — matching how ToAscii emits
+	// an operand (`x^-1.3`, not `x^(-1.3)`) — matching how ToASCII emits
 	// negative constants (e.g. Arrhenius `(300/T)^-1.3`).
 	if t.k == tkOp && t.s == "-" && p.peekAt(1).k == tkNum {
 		p.next()
@@ -620,7 +620,7 @@ func (p *exprTextParser) aggregateAhead() bool {
 //
 // `sym` selects the default `reduce`; an explicit `[semiring=…]` supersedes it,
 // as does a `join` (which implies `sum_product`). `args` is a derived dependency
-// cache (see deriveAggregateArgs); ToAscii doesn't print it, so its exact value
+// cache (see deriveAggregateArgs); ToASCII doesn't print it, so its exact value
 // is reprint-neutral.
 func (p *exprTextParser) parseAggregate(sym string) Expression {
 	p.next() // '['
@@ -1020,7 +1020,7 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 		return ExprNode{Op: "fn", Name: &nm, Args: args}
 	}
 	// Call-shaped structural ops: reconstruct their non-`args` fields from the
-	// positional / named arguments ToAscii renders.
+	// positional / named arguments ToASCII renders.
 	if name == "integral" && len(args) == 4 {
 		if v, ok := args[1].(string); ok {
 			p.noNamed(named, name, pos)
@@ -1085,7 +1085,7 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 	}
 	if name == "D" {
 		// Friendly form D(expr, t) — wrt as an explicit second arg — in addition
-		// to the ToAscii form D(expr)/Dt handled in parsePostfix. Any other arity
+		// to the ToASCII form D(expr)/Dt handled in parsePostfix. Any other arity
 		// is a nonstandard / discretization D (e.g. with boundary conditions)
 		// that the printer emits via the generic call fallback; keep it a
 		// generic call.
@@ -1106,7 +1106,7 @@ func (p *exprTextParser) makeParsedCall(name string, args []any, named []exprNam
 // ---------------------------------------------------------------------------
 
 // deriveAggregateArgs is a best-effort reconstruction of an aggregate's `args`
-// — its array operands. ToAscii does NOT print `args` (it's a derived
+// — its array operands. ToASCII does NOT print `args` (it's a derived
 // dependency cache), and the authoritative set excludes parameter arrays by
 // *declared role*, which needs the variable table. From the printed structure
 // alone we approximate it as: the base of every `index(…)` in the body / filter
@@ -1264,7 +1264,7 @@ func flattenParsedExpr(e Expression) Expression {
 // ---------------------------------------------------------------------------
 
 // ParseExpression parses a single expression string into an AST expression —
-// the inverse of ToAscii. It returns an error wrapping *ExpressionParseError on
+// the inverse of ToASCII. It returns an error wrapping *ExpressionParseError on
 // malformed input or on an operator with no text surface yet.
 func ParseExpression(src string) (Expression, error) {
 	toks, err := exprTokenize(src)

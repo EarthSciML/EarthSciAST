@@ -31,11 +31,11 @@
 //! axes are discovered by scanning, not declared — and the comparison is an
 //! ordered one, so a binding that emitted them in scan order would fail here.
 
-use earthsci_ast::classification::SystemKind;
-use earthsci_ast::flatten::{FlattenedSystem, flatten};
-use earthsci_ast::parse::load_path;
+use earthsci_ast::SystemKind;
+use earthsci_ast::load_path;
 use earthsci_ast::to_ascii;
-use earthsci_ast::types::{ModelVariable, ParameterUpdateSpec};
+use earthsci_ast::{FlattenedSystem, flatten};
+use earthsci_ast::{ModelVariable, ParameterUpdateSpec};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -67,10 +67,15 @@ fn update_kinds(var: &ModelVariable) -> Vec<String> {
 }
 
 /// The owning component of a namespaced name — the corpus's `source_system`.
-/// Namespacing is `<component>.<var>` (a subsystem-local var keeps further
-/// dots), so the FIRST segment is the component.
+///
+/// Namespacing is `<prefix>.<var>` where `<var>` is a DECLARED variable name
+/// and therefore carries no dot of its own, while `<prefix>` grows one segment
+/// per nesting level: a subsystem's variable lands at
+/// `Parent.Sub.var` and is owned by `Parent.Sub`, not by `Parent`. So the
+/// owner is everything up to the LAST dot — splitting on the first one
+/// attributed every nested variable to its top-level ancestor.
 fn owner(name: &str) -> &str {
-    name.split_once('.').map(|(o, _)| o).unwrap_or(name)
+    name.rsplit_once('.').map(|(o, _)| o).unwrap_or(name)
 }
 
 /// The corpus's DERIVED `role` tag for one entry of one map.

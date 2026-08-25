@@ -88,21 +88,14 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     qualifies it (``M.A``). Both spellings must reach the coordinate-expression
     `ic` seed; an override naming no parameter is REJECTED (§6.6.2)."""
     from earthsci_ast.parse import load_path
-    from earthsci_ast.simulation import simulate
+    from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
     esm = load_path(str(_ROOT / "fixtures" / "ic_param_override.esm"))
     cells = [f"M.u[{i}]" for i in range(1, 6)]
 
     for key in ("A", "M.A"):
-        result = simulate(
-            esm,
-            tspan=(0.0, 1.0),
-            method="RK45",
-            rtol=1e-12,
-            atol=1e-14,
-            parameters={key: 0.0},
-        )
-        assert result.success, result.message
+        result = solve(esm_problem(esm, (0.0, 1.0), p={key: 0.0}), alg="RK45", reltol=1e-12, abstol=1e-14)
+        assert (result.retcode is ReturnCode.Success), result.message
         idx = {name: k for k, name in enumerate(result.vars)}
         for cell in cells:
             assert result.y[idx[cell]][0] == 0.0, f"{key}: {cell} not zeroed"
@@ -115,11 +108,4 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     from earthsci_ast.errors import UnknownParameterError
 
     with pytest.raises(UnknownParameterError, match="not_a_param"):
-        simulate(
-            esm,
-            tspan=(0.0, 1.0),
-            method="RK45",
-            rtol=1e-12,
-            atol=1e-14,
-            parameters={"not_a_param": 7.0},
-        )
+        solve(esm_problem(esm, (0.0, 1.0), p={"not_a_param": 7.0}), alg="RK45", reltol=1e-12, abstol=1e-14)

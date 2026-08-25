@@ -34,7 +34,7 @@ import pytest
 
 from earthsci_ast.flatten import LoaderField, flatten
 from earthsci_ast.parse import load_document, load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "loader_injection" / "loader_consumer.esm"
 
@@ -106,7 +106,7 @@ def test_flatten_records_a_field_per_data_fed_parameter() -> None:
 
 
 def test_flatten_without_data_sources_has_empty_loader_fields() -> None:
-    # Regression guard: a plain model carries no loader fields, so simulate()
+    # Regression guard: a plain model carries no loader fields, so the build
     # never enters the injection path (cross-binding / existing models intact).
     doc = {
         "esm": "1.0.0",
@@ -179,13 +179,8 @@ def test_a_parameter_naming_an_undeclared_source_is_rejected() -> None:
 def test_discrete_and_const_cadence_injection() -> None:
     esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
-    result = simulate(
-        esm,
-        tspan=(0.0, 2.0),
-        method="LSODA",
-        loader_provider=_make_provider(calls),
-    )
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (0.0, 2.0), loader_provider=_make_provider(calls)), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), result.message
     assert result.vars == ["Plume.c"]
 
     # Analytic piecewise solution of dc/dt = (wind[2] + rough[2]) - c, c(0) = 0.
@@ -202,13 +197,8 @@ def test_discrete_and_const_cadence_injection() -> None:
 def test_const_source_read_once_discrete_per_segment() -> None:
     esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
-    result = simulate(
-        esm,
-        tspan=(0.0, 2.0),
-        method="LSODA",
-        loader_provider=_make_provider(calls),
-    )
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (0.0, 2.0), loader_provider=_make_provider(calls)), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), result.message
 
     # Const source: executed exactly once, before integration.
     assert calls["Z0"] == [0.0], "a source with no `temporal` must be read once"
@@ -234,13 +224,8 @@ def test_injected_values_not_constant_defaults() -> None:
             return np.array([0.0, 7.0, 0.0])
         return np.array([0.0, 3.0, 0.0])
 
-    result = simulate(
-        esm,
-        tspan=(0.0, 50.0),
-        method="LSODA",
-        loader_provider=steady_provider,
-    )
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (0.0, 50.0), loader_provider=steady_provider), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), result.message
     # Steady state F = 7 + 3 = 10, far from the all-defaults value of 0.
     assert _c_at(result, 50.0) == pytest.approx(10.0, rel=1e-3)
     assert _c_at(result, 50.0) > 9.0
@@ -254,13 +239,8 @@ def test_the_parameter_name_is_what_resolves_at_the_rhs() -> None:
     # to the injected array at the RHS rather than to its declared default.
     esm = load_path(_FIXTURE)
     calls: Dict[str, List[float]] = {}
-    result = simulate(
-        esm,
-        tspan=(0.0, 1.0),
-        method="LSODA",
-        loader_provider=_make_provider(calls),
-    )
-    assert result.success, result.message
+    result = solve(esm_problem(esm, (0.0, 1.0), loader_provider=_make_provider(calls)), alg="LSODA")
+    assert (result.retcode is ReturnCode.Success), result.message
     # On [0, 1): F = 11, c(1) = 11 (1 - e^-1) ~= 6.953. A failure to resolve the
     # data-fed parameter would raise (caught -> success False).
     assert _c_at(result, 1.0) == pytest.approx(11.0 * (1.0 - math.exp(-1.0)), rel=1e-4)

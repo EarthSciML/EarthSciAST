@@ -671,8 +671,8 @@ const _EMPTY_PARAMS = Dict{String,Float64}()
 # the source shape for bounds-checking + column-major linearization at build time.
 # Reading the captured `flat` (NOT `getfield(p, runtime_sym)`) is what keeps the
 # read zero-alloc: a runtime-symbol `getfield` on a heterogeneous NamedTuple boxes
-# the union (measured 48 B/call) and would also regress the scalar `_NK_PARAM`
-# path — see the JL-J0 feasibility-gate note in `_build_evaluator_impl`.
+# the union and would also regress the scalar `_NK_PARAM` path — see the JL-J0
+# feasibility-gate note in `_build_evaluator_impl`.
 struct _PGatherArray
     flat::Vector{Float64}   # aliased flat view of the caller's buffer (live, by-ref)
     dims::Vector{Int}       # original shape — bounds-check + linearize at build time

@@ -33,6 +33,22 @@ export const ERROR_CODES = {
   //   whose `from`/`to` variables carry declared, non-empty, DIFFERENT units
   //   (esm-spec §4.7.6). `param_to_var` / `conversion_factor` are exempt.
   DOMAIN_UNIT_MISMATCH: 'domain_unit_mismatch',
+  // `couple_multiplicative_no_tendency` — a `couple` connector equation whose
+  //   `transform` is `multiplicative` names a `to` target with no `D(to)`
+  //   tendency in the flattened system: a parameter, an observed, an algebraic
+  //   unknown, or an undefined name. esm-spec §10.3 and esm-libraries-spec
+  //   §4.7.2 both define `multiplicative` against the target's EXISTING ODE RHS,
+  //   so there is nothing to multiply and the operation has no meaning. A
+  //   library MUST raise rather than silently drop the connector equation —
+  //   dropping it is a wrong answer delivered quietly: the document declares a
+  //   coupling, the flattened system carries no trace of it, and nothing
+  //   downstream can tell "applied" from "ignored". `additive` deliberately has
+  //   NO counterpart code, and the asymmetry is intentional: zero is the
+  //   additive identity, so an additive term against an absent tendency simply
+  //   BECOMES the tendency; no multiplicative identity gives the degenerate
+  //   case a corresponding meaning. Raised from flatten.ts as
+  //   CoupleMultiplicativeNoTendencyError.
+  COUPLE_MULTIPLICATIVE_NO_TENDENCY: 'couple_multiplicative_no_tendency',
   // `relational_node_in_continuous` — a relational / value-invention
   //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
   //   reads a declared STATE variable, so the cadence partition would class the

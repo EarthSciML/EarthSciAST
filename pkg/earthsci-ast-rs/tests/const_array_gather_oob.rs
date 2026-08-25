@@ -18,12 +18,12 @@
 use std::collections::HashMap;
 
 use earthsci_ast::BoundaryKind;
-use earthsci_ast::prepare::{PrepareOptions, prepare};
+use earthsci_ast::Expr;
 use earthsci_ast::simulate_array::{
     ConstArrayScope, Value as EvalValue, eval_expression_with_extents,
     eval_expression_with_extents_and_consts,
 };
-use earthsci_ast::types::Expr;
+use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
@@ -120,22 +120,29 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
                     }}]
         }}
     });
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         model_name: Some("Gather".into()),
         ..Default::default()
     };
-    let e = match prepare(&doc, m_arrays(), Vec::new(), &opts) {
+    let e = match esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: m_arrays(),
+            build_providers: Vec::new(),
+            ..opts
+        },
+    ) {
         Err(e) => e,
         Ok(prep) => panic!(
             "an entirely off-the-end const-array gather must fail closed; got {:?}",
-            prep.observed_field("shifted")
-                .map(|a| a.iter().copied().collect::<Vec<_>>())
+            observed_field(&prep, "shifted").map(|a| a.iter().copied().collect::<Vec<_>>())
         ),
     };
+    let msg = e.to_string();
     assert!(
-        e.0.contains("E_TREEWALK_CONSTARRAY_OOB"),
-        "wrong diagnostic: {}",
-        e.0
+        msg.contains("E_TREEWALK_CONSTARRAY_OOB"),
+        "wrong diagnostic: {msg}"
     );
     let _: Value = doc; // the document is untouched
 }

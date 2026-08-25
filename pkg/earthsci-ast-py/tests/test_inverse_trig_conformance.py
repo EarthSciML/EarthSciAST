@@ -27,7 +27,7 @@ import pytest
 from conftest import VALID_DIR
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 _FIXTURES_DIR = VALID_DIR / "scalar_leaves"
@@ -120,8 +120,8 @@ def test_inverse_trig_fixture_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
-            assert result.success, (
+            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            assert (result.retcode is ReturnCode.Success), (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 

@@ -7,7 +7,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   componentGraph,
-  component_graph,
   buildGraph,
   expressionGraph,
   lhsTargetName,
@@ -1031,41 +1030,6 @@ describe('buildGraph helper', () => {
     expect(g.adjacency('missing')).toEqual([])
     expect(g.predecessors('missing')).toEqual([])
     expect(g.successors('missing')).toEqual([])
-  })
-})
-
-describe('component_graph (deprecated alias)', () => {
-  const mockEsmFile: EsmFile = {
-    esm: '1.0.0',
-    metadata: { name: 'Test', authors: [] },
-    models: {
-      Transport: { variables: { u: { type: 'unknown', default: 0 } }, equations: [] },
-      Chemistry: { variables: { o3: { type: 'unknown', default: 0 } }, equations: [] },
-    },
-    coupling: [{ type: 'operator_compose', systems: ['Transport', 'Chemistry'] }],
-  }
-
-  it('returns the flat {nodes, edges} ComponentGraph shape the editor consumes', () => {
-    const cg = component_graph(mockEsmFile)
-
-    expect(cg).toHaveProperty('nodes')
-    expect(cg).toHaveProperty('edges')
-    // The flat alias does NOT carry the adjacency helpers of componentGraph().
-    expect(cg).not.toHaveProperty('adjacency')
-
-    // Edges retain the from/to CouplingEdge shape.
-    const composeEdge = cg.edges.find((e) => e.type === 'operator_compose')
-    expect(composeEdge?.from).toBe('Transport')
-    expect(composeEdge?.to).toBe('Chemistry')
-  })
-
-  it('produces the same nodes/edge payloads as componentGraph()', () => {
-    const cg = component_graph(mockEsmFile)
-    const g = componentGraph(mockEsmFile)
-
-    expect(cg.nodes).toEqual(g.nodes)
-    // componentGraph wraps the same CouplingEdge objects in {source,target,data}.
-    expect(cg.edges).toEqual(g.edges.map((e) => e.data))
   })
 })
 

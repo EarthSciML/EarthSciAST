@@ -362,13 +362,16 @@ Total: it reports, it does not raise.
 
 - **Input type.** Rust and Go accept only a typed `&EsmFile` / `*ESMFile`.
   TypeScript accepts JSON text or an object. Julia accepts an `EsmFile` **or a
-  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**.
-- **Return shape.** Julia, TypeScript, Python and Rust return the four-field
-  result. **Go's `Validate` returns the legacy `*DetailedValidationResult`
-  (`Valid` + a flat `Messages` list).** Go's four-field equivalent is a
-  *different function*, `ValidateFile(file, jsonStr) *ValidationResult`.
-- Rust's `validate` performs **no schema validation at all** — its
-  `schema_errors` is empty by construction.
+  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**. Go's
+  text convenience is the separate `ValidateText(jsonStr)` (§8 item 13).
+- **Return shape.** All five return the four-field result. Go's `Validate`
+  returned the legacy `*DetailedValidationResult` (`Valid` + a flat `Messages`
+  list) until phase 6, with the four-field shape on a different function,
+  `ValidateFile(file, jsonStr)`; that function is now `ValidateText(jsonStr)`
+  and `ValidateStructural` is what still returns the legacy shape.
+- Rust's and Go's `validate` perform **no schema validation at all** — their
+  `schema_errors` is empty by construction, because a typed document can only
+  exist by having already passed the schema at load.
 
 #### `validate_schema`
 
@@ -410,10 +413,13 @@ bindings export the family; all are total and return sorted names.
 
 Divergences:
 
-- **`system_kind` arity.** Go alone takes a second argument,
-  `SystemKind(model *Model, domain *Domain)`, documented as accepted only so
-  callers need not change. Go also exports `EffectiveSystemKind` with no
-  counterpart anywhere.
+- **`system_kind` arity.** Settled in phase 6 (§8 item 11): Go took a second
+  `domain *Domain` argument that neither its `SystemKind` nor its
+  `EffectiveSystemKind` body read, and has dropped it. All five now take the
+  model and nothing else. Go now exports the whole family the item rules —
+  `system_kind` (derived), `declared_system_kind` (the explicit field, nullable)
+  and `effective_system_kind` (`declared ?? derived`); the other four are
+  landing theirs.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -470,7 +476,7 @@ Divergences:
 | Python | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 | Julia | all of the above | **`Expr`/`Equation` only — containers throw `ArgumentError`** |
 | Rust | **`&Expr` only** | `&Expr` only |
-| Go | **`Expression` only** | `Expression` only |
+| Go | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 
 ### 5.6 Flatten
 
@@ -489,7 +495,7 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
 |---|---|---|---|---|---|
-| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | mutates, returns `*LowerEnumsError` |
+| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
 | `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)`, raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | takes a raw `&mut Value` + `&Path` | returns `error` |
 | `resolve_template_machinery` | `(raw, base_path; metaparameters, load_ref)` | `(rawData, basePath, {metaparameters, readFile, validateSchema})` | `(raw, base_path, metaparameters)` — no loader seam | `(&Value, &Path, &BTreeMap)` — no loader seam | **not exported** |
 | `expand_coupling_imports` | returns the coupling list | returns `CouplingEntry[] \| undefined` | returns the list | returns `Result<Option<Vec<_>>, _>` | **not exported** |
@@ -504,40 +510,104 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 ### 5.8 Simulation (Julia, Python, Rust)
 
-**Canonical.**
+**Canonical.** One noun and one verb. `esm-libraries-spec.md` §2.5 is normative;
+this is the surface it implies.
 
 ```
-prepare(input, *, parameters, const_arrays, providers, model_name,
-        metaparameters, base_path, sample_time) -> PreparedModel
-simulate(prepared_or_input, tspan, *, alg, parameters, initial_conditions,
-         reltol, abstol, saveat) -> SimulationResult
-observed_field(prepared, name) -> Array
+esm_problem(input, tspan, *, p, u0, providers, model_name,
+            metaparameters, base_path, sample_time) -> Problem
+solve(prob, *, alg, abstol, reltol, saveat, callback, maxiters) -> Solution
+remake(prob, *, p, u0, tspan) -> Problem
+init(prob, *, alg, ...) -> Integrator
+step!(integrator) / solve!(integrator)
+callbacks(prob) -> CallbackSet
+observed_field(prob, name) -> Array
+EnsembleProblem(prob, rewrite) -> EnsembleProblem
 ```
 
-`prepare` runs the deterministic-per-document pipeline once; `simulate` varies
-only per-run knobs. Both raise `SimulateError`.
+A `Solution` carries `retcode` (SciML `ReturnCode`) and is indexed **by variable
+name**. Errors are `SimulateError`.
 
-**Today:**
+**Per-binding type spelling.** The canonical name is `esm_problem`; §2.1's
+consistency rule fixes the transliteration. Julia's only other `Esm`-prefixed
+export is `EsmFile`, so Julia spells the type **`EsmProblem`**, not
+`ESMProblem` — the latter would make Julia inconsistent with itself, which
+§2.1 forbids. Go would spell it `ESMProblem` if it had one; it does not, and
+will not.
 
-| Knob | Julia | Python | Rust |
+**`simulate` is deleted in all three bindings**, not deprecated — it conflated
+build with run, which is why two of the three had already grown a second
+`prepare`-shaped entry point beside it. `prepare` / `PreparedModel` / `Prepared`
+are replaced by Problem construction, which absorbs the same pipeline (rewrite →
+value invention → gated fetch → compile). `build_evaluator` survives as a
+documented extension seam (§7), not stable API.
+
+**Callback composition:** a `callback` argument to `solve` REPLACES the
+Problem's set entirely. To extend rather than replace, read the set back with
+`callbacks(prob)` and compose explicitly. See §2.5.4 of the libraries spec for
+why replacement is the safe default.
+
+**What this replaced, per binding:**
+
+| Knob | Julia (was) | Python (was) | Rust (was) |
 |---|---|---|---|
-| relative tolerance | `reltol` (`1e-10`) | **`rtol`** (`1e-10`) | `reltol` (**`1e-6`**) |
-| absolute tolerance | `abstol` (`1e-14`) | **`atol`** (`1e-14`) | `abstol` (**`1e-8`**) |
-| solver | `alg` (SciML algorithm, required) | **`method: str = "LSODA"`** | **`solver: SolverChoice`** |
-| output times | `saveat` | **absent** | **`output_times: Option<Vec<f64>>`** |
+| relative tolerance | `reltol` (`1e-4`) | `rtol` (`1e-10`) | `reltol` (`1e-6`) |
+| absolute tolerance | `abstol` (`1e-6`) | `atol` (`1e-14`) | `abstol` (`1e-8`) |
+| solver | `alg` | `method: str = "LSODA"` | `solver: SolverChoice` |
+| output times | `saveat` | absent | `output_times: Option<Vec<f64>>` |
 | options passing | keywords | positional-or-keyword | `&SimulateOptions` struct |
+| run outcome | `success` + `retcode` + `message` | `success` + `message` + counters | step/eval counters |
+| re-parameterize | `remake_parameters` (params only) | rebuild | rebuild |
 
-> **⚠ Rust's default tolerances are four orders of magnitude looser than
-> Julia's and Python's** (`1e-6`/`1e-8` against `1e-10`/`1e-14`). Python's
-> docstring says its defaults were deliberately matched to Julia's; Rust's were
-> never brought into that agreement. Two bindings solving the same document with
-> default options do not produce comparable trajectories.
+**Correction of record.** An earlier revision of this table gave Julia's
+defaults as `1e-10`/`1e-14` and concluded that Julia and Python already agreed,
+with Rust the lone outlier. That was a misreading, caught by the Julia arm during
+implementation: `1e-10` is `DEFAULT_TEST_RELTOL` in the inline-test runner
+(`src/run_tests.jl`), whose partner is `1e-12`, not `1e-14`. Julia's actual
+`simulate` defaults are `DEFAULT_SIM_RELTOL = 1e-4` / `DEFAULT_SIM_ABSTOL =
+1e-6` (`src/simulate.jl`).
 
-`observed_field` arity differs three ways: Julia takes
-`(prep, insp::BuildInspection, name)` — the caller must have threaded the same
-`BuildInspection` through `prepare` — Python takes `(prep, name)`, and Rust is a
-method on `Prepared` taking only `name`. Rust also returns a borrowed array
-only, where Python may return a float scalar.
+So the real situation is worse than recorded: **all three bindings default to
+different tolerances**, spanning six orders of magnitude —
+
+| | reltol | abstol |
+|---|---|---|
+| Julia | `1e-4` | `1e-6` |
+| Rust | `1e-6` | `1e-8` |
+| Python | `1e-10` | `1e-14` |
+
+— and no two of them solve the same document comparably by default. Python's
+docstring says its defaults were chosen to match Julia's; they match the *test*
+constants, not the simulate ones.
+
+**Ruled: the canonical defaults are Julia's.**
+
+| Canonical | Value |
+|---|---|
+| `reltol` | `1e-4` |
+| `abstol` | `1e-6` |
+
+Python loosens by six orders and Rust by two; Julia is unchanged. The direction
+is deliberate. A library default is what a document gets when its author has
+expressed no opinion about accuracy, and the cheapest of the three is the right
+thing to hand someone who has not asked — a default should be a sane starting
+point, not a silent decision to spend six orders of magnitude of extra work on
+their behalf. An author who needs tighter integration says so, and now says so
+under the same name in every binding, which is the part that was actually
+broken.
+
+**A test that asserts trajectory accuracy MUST pass an explicit tolerance**
+rather than lean on the default. Some did, and they are why this change is
+visible: a test calibrated against an implicit `1e-10` is really asserting
+something about the library's default, not about the model. Widening such a
+test's own comparison threshold to keep it green is the wrong repair; give it
+the tolerance it actually needs.
+
+`observed_field` also had three different arities — Julia
+`(prep, insp::BuildInspection, name)`, requiring the caller to have threaded the
+same `BuildInspection` through `prepare`; Python `(prep, name)`; Rust a method on
+`Prepared` taking only `name`. It is `(prob, name)` in all three, with build
+observability moved to a construction-time seam.
 
 ### 5.9 Reference resolution
 
@@ -558,12 +628,92 @@ not implement the semiring-FAQ node addressing of RFC §6.1.
 ### 5.10 Reactions
 
 `derive_odes(system) -> Model` and `stoichiometric_matrix(system) -> Matrix`
-(rows = species, columns = reactions). Julia, TypeScript, Python and Rust; Go
-exports neither.
+(rows = species, columns = reactions). All five, as of phase 6 — Go exported
+neither, so two symbols that four bindings agreed on were `stable` with a hole
+in exactly one column, which is the drift §2 and §3 exist to catch. (It is NOT
+a tier violation: `esm-libraries-spec.md` §5.5 declares Go "Core", not
+"Core + Analysis" — see §3's capability table, which says so and calls that
+label the one part of §5 still accurate. Phase 5's G-3 item named
+"Core + Analysis parity" as a GOAL; the spec never declared it as fact.)
 
-Rust alone has an error channel (`DeriveError`). **TypeScript alone returns a
-struct** from `stoichiometric_matrix` — `{matrix, species, reactions}` — so
-TypeScript is the only binding where the row and column labels are recoverable.
+Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
+**TypeScript alone returns a struct** from `stoichiometric_matrix` —
+`{matrix, species, reactions}` — so TypeScript is the only binding where the row
+and column labels are recoverable.
+
+**Species ORDER is DECLARATION order, in both functions, in all five bindings**
+— the order the document writes the `species` object's keys in. It is
+observable: it is the ROW order of the stoichiometric matrix and the EQUATION
+order of the derived model. Pinned cross-binding by
+`tests/conformance/reactions/species_order.json` (README beside it), driven by a
+test in each of the five bindings.
+
+It was not harmonized before phase 6b, and nothing in `tests/` asserted it,
+which is why five bindings had drifted into three different answers without a
+single failure. Measured before the change:
+
+| | `derive_odes` | `stoichiometric_matrix` |
+|---|---|---|
+| Julia | declaration | declaration |
+| Python | declaration | declaration |
+| TypeScript | declaration | declaration |
+| Rust | declaration | **sorted by name** |
+| Go | **sorted by name** | **sorted by name** |
+
+Declaration order was canonical on both counts: it is the majority in both
+columns, and it is what this section already said. Two bindings moved.
+
+**Rust** dropped the sort in `stoichiometric_matrix` (`src/reactions.rs`) and in
+its `parallel`-feature twin (`src/performance.rs`, which sorted to stay
+consistent with it). The sort's stated justification was "so indices are
+reproducible" — but `ReactionSystem.species` is an `IndexMap`, whose key
+iteration is already deterministic AND already the authored order, so the sort
+bought nothing the container had not already given and cost the agreement with
+Rust's own `derive_odes`, which never sorted.
+
+**Go** moved both functions, and this one was not free. `ReactionSystem.Species`
+is a `map[string]Species` — a genuinely unordered Go map that has lost
+declaration order by the time either function runs — so sorting really was Go's
+only deterministic option *at that call site*. It was not Go's only option in
+the package: `ESMFile.keyOrders` already records the authored JSON key order of
+every object in the document, captured by `LoadString` before the template pass
+re-marshals (Go's encoder writes map keys sorted, so the order has to be taken
+from the text), and `flatten` has read species order from it all along via
+`orderedKeys`. What was missing was a route from a bare `*ReactionSystem` back
+to it. `ReactionSystem` now carries an unexported `speciesOrder []string` that
+`LoadString` fills from `keyOrders`, and both functions iterate
+`orderedKeys(system.Species, system.speciesOrder)`.
+
+The field is unexported and untagged: it widens neither the API surface nor the
+wire. `orderedKeys` falls back to sorted-name order for any species the recorded
+order does not mention, so the two places with no authored order to prefer — a
+`*ReactionSystem` built directly in code, and one reached through a subsystem
+mount (held as `any` and decoded on demand) — keep the previous behaviour and
+stay deterministic. That is the same fallback `ESMFile.declarationOrder` already
+documents.
+
+**A separate defect the new corpus caught on its first run.** TypeScript's
+`derive_odes` ignored `constant: true`: a reservoir species was typed `unknown`
+and given a `D(s, t) = 0` equation, where esm-spec §7.4 holds it fixed and the
+other four bindings lower it to a `parameter` with no ODE. TypeScript's own
+`flatten` path already did the right thing, and two of the other bindings'
+comments cite TypeScript as doing it. Fixed in `src/reactions.ts`, and pinned by
+the reservoir case in the corpus. This is a SEMANTIC divergence, not an ordering
+one; it is recorded here because this corpus is what found it.
+
+**Still open, deliberately out of scope of the ordering work:**
+
+1. **The return SHAPE of `stoichiometric_matrix`.** TypeScript returns
+   `{matrix, species, reactions}`; the other four return a bare matrix. So
+   TypeScript is the only binding in which the row and column labels are
+   recoverable at all — which is also why its corpus driver can make a stronger
+   assertion than the other four (it compares the row labels directly, where
+   they compare the matrix and infer the order from it). Harmonizing this is a
+   `stable` return-type change and therefore major-or-aliased under §10.
+2. **A non-reservoir species with no net contribution from any reaction.** Rust
+   and Go emit no equation for it; TypeScript emits `D(s, t) = 0`. Not exercised
+   by the corpus (its only zero-contribution species is also a reservoir) and
+   not measured in Julia or Python.
 
 ---
 
@@ -581,43 +731,69 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
+| `add_coupling` | function | `add_coupling` | `addCoupling` | `add_coupling` / `add_coupling_to_file` | `add_coupling` | `AddCoupling` |
+| `add_equation` | function | `add_equation` | `addEquation` | `add_equation` / `add_equation_to_model` | `add_equation` | `AddEquation` |
+| `add_reaction` | function | `add_reaction` | `addReaction` | `add_reaction` / `add_reaction_to_system` | `add_reaction` | `AddReaction` |
+| `add_species` | function | `add_species` | `addSpecies` | `add_species` / `add_species_to_system` | `add_species` | `AddSpecies` |
+| `add_variable` | function | `add_variable` | `addVariable` | `add_variable` / `add_variable_to_model` | `add_variable` | `AddVariable` |
 | `algebraic_unknowns` | function | `algebraic_unknowns` | `algebraicUnknowns` | `algebraic_unknowns` | `algebraic_unknowns` | `AlgebraicUnknowns` |
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
+| `build_reference_graph` | function | `build_reference_graph` | `buildReferenceGraph` | `build_reference_graph` | `build_reference_graph` / `build_reference_graph_with_index_sets` | `BuildReferenceGraph` |
 | `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
+| `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
+| `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` | `EnumLoweringError` |
 | `expression_parse_error` | error | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` |
 | `flatten` | function | `flatten` | `flatten` | `flatten` | `flatten` | `Flatten` |
 | `flatten_metadata` | type | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` |
 | `flattened_system` | type | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` |
 | `free_variables` | function | `free_variables` | `freeVariables` | `free_variables` | `free_variables` | `FreeVariables` |
+| `graph` | type | `Graph` | `Graph` | `Graph` | `Graph` | `Graph` |
 | `is_ode_state` | function | `is_ode_state` | `isOdeState` | `is_ode_state` | `is_ode_state` | `IsODEState` |
 | `library_version` | constant | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LibraryVersion` |
 | `load_document` | function | `load_document` | `loadDocument` | `load_document` | `load_document` | `LoadDocument` |
 | `load_path` | function | `load_path` | `loadPath` | `load_path` | `load_path` | `LoadPath` |
 | `load_string` | function | `load_string` | `loadString` | `load_string` | `load_string` | `LoadString` |
+| `lower_enums` | function | `lower_enums` / `lower_enums!` | `lowerEnums` | `lower_enums` | `lower_enums` | `LowerEnums` |
 | `migrate` | function | `migrate` | `migrate` | `migrate` | `migrate` | `Migrate` |
 | `migration_error` | error | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` | `MigrationError` |
 | `observed_unknowns` | function | `observed_unknowns` | `observedUnknowns` | `observed_unknowns` | `observed_unknowns` | `ObservedUnknowns` |
 | `ode_states` | function | `ode_states` | `odeStates` | `ode_states` | `ode_states` | `ODEStates` |
 | `parse_equation` | function | `parse_equation` | `parseEquation` | `parse_equation` | `parse_equation` | `ParseEquation` |
 | `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
+| `reference_edge` | type | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
+| `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
+| `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceError` / `ReferenceResolutionError` | `ReferenceResolutionError` |
+| `reference_vertex` | type | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
+| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` / `remove_coupling_from_file` | `remove_coupling` | `RemoveCoupling` |
+| `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` / `remove_reaction_from_system` | `remove_reaction` | `RemoveReaction` |
+| `remove_species` | function | `remove_species` | `removeSpecies` | `remove_species` / `remove_species_from_system` | `remove_species` | `RemoveSpecies` |
+| `remove_variable` | function | `remove_variable` | `removeVariable` | `remove_variable` / `remove_variable_from_model` | `remove_variable` | `RemoveVariable` |
+| `resolve_references` | function | `resolve_references` | `resolveReferences` | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_subsystem_refs` | function | `resolve_subsystem_refs!` | `resolveSubsystemRefs` | `resolve_subsystem_refs` | `resolve_subsystem_refs` | `ResolveSubsystemRefs` |
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
 | `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
+| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
+| `supported_migration_targets` | function | `supported_migration_targets` | `getSupportedMigrationTargets` / `supportedMigrationTargets` | `supported_migration_targets` | `get_supported_migration_targets` / `supported_migration_targets` | `SupportedMigrationTargets` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
-| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToAscii` |
+| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | `ToDOT` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
+| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | `to_json_graph` | `ToJSONGraph` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | `to_mermaid` | `ToMermaid` |
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
+| `unit_warning` | type | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
+| `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 | `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
@@ -626,17 +802,15 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_coupling` | function | `add_coupling` | `addCoupling` | – | `add_coupling` | `AddCoupling` |
-| `add_equation` | function | `add_equation` | `addEquation` | – | `add_equation` | `AddEquation` |
-| `add_reaction` | function | `add_reaction` | `addReaction` | – | `add_reaction` | `AddReaction` |
-| `add_species` | function | `add_species` | `addSpecies` | – | `add_species` | `AddSpecies` |
-| `add_variable` | function | `add_variable` | `addVariable` | – | `add_variable` | `AddVariable` |
+| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | `add_continuous_event` / `add_continuous_event_to_model` | – | `AddContinuousEvent` |
+| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | `add_discrete_event` / `add_discrete_event_to_model` | – | `AddDiscreteEvent` |
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
-| `build_reference_graph` | function | `build_reference_graph` | – | `build_reference_graph` | `build_reference_graph` | `BuildReferenceGraph` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
 | `closed_function_error` | error | `ClosedFunctionError` | `ClosedFunctionError` | – | `ClosedFunctionError` | `ClosedFunctionError` |
-| `component_graph` | function | `component_graph` | `componentGraph` / `component_graph` | `component_graph` | `component_graph` | – |
+| `closed_function_names` | function | `closed_function_names` | `closedFunctionNames` | – | `closed_function_names` | `ClosedFunctionNames` |
+| `component_graph` | function | `component_graph` | `componentGraph` | `component_graph` | `component_graph` | – |
+| `compose` | function | `compose` | `compose` | – | `compose` | `Compose` |
 | `conflicting_derivative_error` | error | `ConflictingDerivativeError` | `ConflictingDerivativeError` | `ConflictingDerivativeError` | – | `ConflictingDerivativeError` |
 | `contains` | function | – | `contains` | `contains` | `contains` | `Contains` |
 | `continuous_event` | type | `ContinuousEvent` | – | `ContinuousEvent` | `ContinuousEvent` | `ContinuousEvent` |
@@ -646,20 +820,23 @@ reading that as a gap.
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `derive_odes` | function | `derive_odes` | `deriveODEs` | `derive_odes` | `derive_odes` | – |
+| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | `DeclaredSystemKind` |
 | `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
 | `distribution` | type | `Distribution` | – | `Distribution` | `Distribution` | `Distribution` |
 | `domain` | type | `Domain` | – | `Domain` | `Domain` | `Domain` |
+| `edge_kind` | type | – | `EdgeKind` | `EdgeKind` | `EdgeKind` | `EdgeKind` |
+| `effective_system_kind` | function | `effective_system_kind` | `effectiveSystemKind` | `effective_system_kind` | – | `EffectiveSystemKind` |
 | `equation` | type | `Equation` | – | `Equation` | `Equation` | `Equation` |
+| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | `ERROR_CODES` | `ERROR_CODES` | – |
 | `esm_file` | type | `EsmFile` | – | `EsmFile` | `EsmFile` | `ESMFile` |
 | `expand_coupling_imports` | function | `expand_coupling_imports` | `expandCouplingImports` | `expand_coupling_imports` | `expand_coupling_imports` | – |
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
+| `extract` | function | `extract` | `extract` | `extract` / `extract_component_from_file` | – | `Extract` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
-| `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
@@ -668,43 +845,35 @@ reading that as a gap.
 | `parameter_update` | type | `ParameterUpdate` | – | `ParameterUpdate` | `ParameterUpdate` | `ParameterUpdate` |
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
-| `reference_edge` | type | `ReferenceEdge` | – | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
-| `reference_graph` | type | `ReferenceGraph` | – | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
-| `reference_vertex` | type | `ReferenceVertex` | – | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
-| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | `RemoveCoupling` |
-| `remove_reaction` | function | `remove_reaction` | `removeReaction` | – | `remove_reaction` | `RemoveReaction` |
-| `remove_species` | function | `remove_species` | `removeSpecies` | – | `remove_species` | `RemoveSpecies` |
-| `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | `RemoveVariable` |
-| `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | `ResolveReferences` |
+| `remove_equation` | function | `remove_equation` | `removeEquation` | `remove_equation` / `remove_equation_from_model` | `remove_equation` | – |
+| `remove_event` | function | `remove_event` | `removeEvent` | `remove_event` / `remove_event_from_model` | – | `RemoveEvent` |
+| `rename_variable` | function | `rename_variable` | `renameVariable` | `rename_variable` / `rename_variable_in_model` | – | `RenameVariable` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
-| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
+| `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by three of the five
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | – | – | `AddContinuousEvent` |
-| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | – | – | `AddDiscreteEvent` |
 | `cadence_error` | error | – | – | `CadenceError` | `CadenceError` | `CadenceError` |
+| `callbacks` | function | `callbacks` | – | `callbacks` | `callbacks` | – |
 | `canonicalize_error` | error | `CanonicalizeError` | `CanonicalizeError` | – | `CanonicalizeError` | – |
-| `closed_function_names` | function | `closed_function_names` | – | – | `closed_function_names` | `ClosedFunctionNames` |
 | `component_exists` | function | – | `componentExists` | `component_exists` | `component_exists` | – |
 | `component_graph` | type | – | `ComponentGraph` | – | `ComponentGraph` | `ComponentGraph` |
-| `compose` | function | `compose` | `compose` | – | – | `Compose` |
 | `convert_units` | function | – | `convertUnits` | `convert_units` | `convert_units` | – |
+| `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
-| `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
+| `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
 | `evaluate_closed_function` | function | `evaluate_closed_function` | – | – | `evaluate_closed_function` | `EvaluateClosedFunction` |
-| `extract` | function | `extract` | `extract` | – | – | `Extract` |
 | `flatten_error` | error | – | `FlattenError` | `FlattenError` | `FlattenError` | – |
 | `flattened_equation` | type | – | `FlattenedEquation` | `FlattenedEquation` | – | `FlattenedEquation` |
 | `flattened_variable` | type | – | `FlattenedVariable` | `FlattenedVariable` | – | `FlattenedVariable` |
@@ -712,27 +881,24 @@ reading that as a gap.
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
 | `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
-| `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
+| `lower_enums_mut` | function | – | – | `lower_enums_mut` | `lower_enums_mut` | `LowerEnumsMut` |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
+| `merge` | function | – | `merge` | `merge` / `merge_esm_files` | – | `Merge` |
+| `observed_field` | function | `observed_field` | – | `observed_field` | `observed_field` | – |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
-| `prepare` | function | `prepare` | – | `prepare` | `prepare` | – |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
-| `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
-| `remove_equation` | function | `remove_equation` | `removeEquation` | – | `remove_equation` | – |
-| `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
-| `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
-| `simulate` | function | `simulate` | – | `simulate` | `simulate` | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
-| `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
-| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
+| `unit_finding` | type | `UnitFinding` | – | `UnitFinding` | `UnitFinding` | – |
+| `unit_finding_analysis` | constant | – | – | `UNIT_FINDING_ANALYSIS` | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
+| `unit_finding_dimensional_mismatch` | constant | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
+| `unit_finding_unparseable` | constant | – | – | `UNIT_FINDING_UNPARSEABLE` | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
+| `unknowns` | function | `unknown_names` / `unknowns` | `unknowns` | `unknowns` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
-| `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by two of the five
 
@@ -744,6 +910,7 @@ reading that as a gap.
 | `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
+| `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
 | `canonical_index_set_json` | function | – | – | `canonical_index_set_json` | `canonical_index_set_json` | – |
 | `circular_reference_error` | error | – | `CircularReferenceError` | `CircularReferenceError` | – | – |
 | `coupling_couple` | type | `CouplingCouple` | – | – | – | `CouplingCouple` |
@@ -751,7 +918,6 @@ reading that as a gap.
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
 | `dae_info` | type | – | – | – | `DaeInfo` | `DAEInfo` |
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
-| `declared_system_kind` | function | – | `declaredSystemKind` | `declared_system_kind` | – | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
 | `derive_output_meta` | function | `derive_output_meta` | – | – | `derive_output_meta` | – |
 | `derive_output_plan` | function | `derive_output_plan` | – | – | `derive_output_plan` | – |
@@ -762,10 +928,10 @@ reading that as a gap.
 | `earth_sci_ast_error` | error | `EarthSciASTError` | – | `EarthSciAstError` | – | – |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
+| `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
-| `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
-| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
+| `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
@@ -779,58 +945,59 @@ reading that as a gap.
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
-| `get_supported_migration_targets` | function | – | `getSupportedMigrationTargets` | – | `get_supported_migration_targets` | – |
 | `graph_edge` | type | – | – | `GraphEdge` | – | `GraphEdge` |
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
+| `init` | function | – | – | `init` | `init` | – |
+| `integrator` | type | – | – | `Integrator` | `Integrator` | – |
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
-| `merge` | function | – | `merge` | – | – | `Merge` |
 | `observed_definition` | function | `observed_definition` | – | – | – | `ObservedDefinition` |
-| `observed_field` | function | `observed_field` | – | `observed_field` | – | – |
 | `operator` | type | – | – | `Operator` | `Operator` | – |
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
 | `output_plan` | type | `OutputPlan` | – | – | `OutputPlan` | – |
+| `parameters` | function | `parameter_names` / `parameters` | `parameters` | – | – | – |
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
 | `pde_assertion_result` | type | `PdeAssertionResult` | – | – | `PdeAssertionResult` | – |
 | `plan_dimension_coordinates` | function | `plan_dimension_coordinates` | – | – | `plan_dimension_coordinates` | – |
 | `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
-| `prepared_model` | type | `PreparedModel` | – | `PreparedModel` | – | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |
 | `rank` | function | – | – | `rank` | `rank` | – |
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
+| `remake` | function | – | – | `remake` | `remake` | – |
+| `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
 | `run_pde_tests` | function | `run_pde_tests` | – | – | `run_pde_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |
-| `simulation_result` | type | `SimulationResult` | – | `SimulationResult` | – | – |
 | `skolem` | function | – | – | `skolem` | `skolem` | – |
 | `skolem_edge` | function | – | – | `skolem_edge` | `skolem_edge` | – |
 | `slice_out_of_domain_error` | error | `SliceOutOfDomainError` | – | `SliceOutOfDomainError` | – | – |
+| `solution` | type | – | – | `Solution` | `Solution` | – |
+| `solve` | function | – | – | `solve` | `solve` | – |
+| `step` | function | – | – | `step` | `step` | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
+| `substitute_in_model_with_context` | function | – | – | – | `substitute_in_model_with_context` | `SubstituteInModelWithContext` |
+| `substitute_in_reaction_system_with_context` | function | – | – | – | `substitute_in_reaction_system_with_context` | `SubstituteInReactionSystemWithContext` |
+| `substitute_with_context` | function | – | – | – | `substitute_with_context` | `SubstituteWithContext` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
-| `unit_finding` | type | `UnitFinding` | – | – | `UnitFinding` | – |
-| `unit_finding_analysis` | constant | – | – | – | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
-| `unit_finding_dimensional_mismatch` | constant | – | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
-| `unit_finding_unparseable` | constant | – | – | – | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
-| `unknowns` | function | – | `unknowns` | `unknowns` | – | – |
 | `unmapped_domain_error` | error | `UnmappedDomainError` | – | `UnmappedDomainError` | – | – |
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |
+| `validate_path` | function | `validate_path` | – | `validate_path` | – | – |
 | `validate_schema` | function | `validate_schema` | `validateSchema` | – | – | – |
 | `validate_structural` | function | `validate_structural` | – | – | – | `ValidateStructural` |
 | `validate_units` | function | – | `validateUnits` | `validate_units` | – | – |
@@ -898,24 +1065,27 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 1 | `load` | Julia and Go took a **file path**; TypeScript and Rust took **JSON text**; Python sniffed. Same name, same argument type, opposite meanings. | **DONE.** Split into `load_path` / `load_string` / `load_document`; `load` deleted (a deprecation shim would have to keep the sniff). See §5.1. | all five |
 | 2 | `save` | Pure serialization in TypeScript and Rust, a disk write in Julia, both in Python. Go alone distinguished them by name, using nobody else's names. | **DONE.** `to_json(file, opts) -> string` pure everywhere; `write_path(file, path)` writes and returns nothing; `to_json_compact` in all five. See §5.1. | all five |
 | 2b | `VERSION` | Meant the SCHEMA version in TypeScript and the PACKAGE version in Rust. Julia exported only `ESM_FORMAT_VERSION`; Python kept the format version private as a tuple; Go exposed neither. | **DONE.** `SCHEMA_VERSION` and `LIBRARY_VERSION`, both public strings, in all five; `VERSION` deleted. See §5.1. | all five |
-| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | SciML spelling everywhere (§4). Python gains `reltol`/`abstol`/`alg`; Rust renames `solver`→`alg`, `output_times`→`saveat`; Rust's defaults align to `1e-10`/`1e-14`. | Python, Rust |
-| 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | TypeScript adds `closedFunctionNames()`; the constant becomes a deprecated alias. | TypeScript |
-| 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | Rename to `deriveOdes`. | TypeScript |
-| 6 | `unknowns` / `parameters` | TypeScript and Python export `unknowns`/`parameters`; Julia exports `unknown_names`/`parameter_names` for the same query. | Canonical is `unknowns`/`parameters`. Julia keeps its `*_names` spellings as aliases — the bare names collide badly in Julia's flat namespace. | Julia |
-| 7 | edit operations | Python suffixes every edit with its container: `add_variable_to_model`, `remove_coupling_from_file`, `extract_component_from_file`, `merge_esm_files`. Julia, TypeScript and Rust use the bare verb. | Python gains the bare names; the suffixed ones become aliases. | Python |
-| 8 | `to_dot` / `to_mermaid` / `to_json` | Julia and TypeScript export three rendering functions (TypeScript spells the third `toJsonGraph`); Go spells the same renderings as **six** functions, `ExportComponentGraphDOT` … `ExportExpressionGraphMermaid`. | Canonical `to_dot(graph)` / `to_mermaid(graph)` / `to_json(graph)` dispatching on graph kind. Go's `Export*` family becomes `ToDOT`/`ToMermaid`/`ToJSON`. | TypeScript, Go |
-| 9 | `substitute_with_context` | Rust names the scoped-substitution family `*_with_context` (`ScopedContext`); Go names it `*WithScoped`. | Canonical `substitute_with_context`; Go renames. | Go |
-| 10 | `reference_resolution_error` | Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`. | Rust renames, keeping a type alias for one minor. | Rust |
-| 11 | `system_kind` family | `system_kind` is a function everywhere but takes an extra `domain` in Go; `declared_system_kind` exists in TypeScript and Python; `declared_system_kind_mismatch` only in Julia; `EffectiveSystemKind` only in Go. Three overlapping two-binding subsets. | Drop Go's vestigial `domain` argument. Decide whether `EffectiveSystemKind` is `declared_system_kind`'s peer or a Go convenience, then harmonize the trio. | Julia, TS, Python, Go |
-| 12 | `validate` return shape | Go's `Validate` returns the legacy `DetailedValidationResult`; the four-field shape everyone else returns is Go's *other* function, `ValidateFile`. | Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folds into it. | Go |
-| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. | all five |
-| 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. | Rust |
-| 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. | Julia, Python, Rust, Go |
+| 3 | `abstol` / `reltol` / `saveat` / `alg` | Python uses scipy's `rtol`/`atol`/`method`; Rust's `SimulateOptions` uses `solver`/`output_times`. Rust's default tolerances are 4 orders looser than the other two. | Subsumed by the phase-4 simulation reshape: the option names come along with `simulate` being deleted and `Problem`/`solve` replacing it. SciML spelling everywhere (§4). The default VALUES are a separate, still-open decision — the premise that Julia and Python already agreed on `1e-10`/`1e-14` was a misreading; all three differ. See the correction of record in §5.8. **CLOSED (phase 6).** The default VALUES were ruled by the user during phase 4: Julia's `reltol = 1e-4` / `abstol = 1e-6` are canonical in every binding, and §5.8 carries the table. Nothing is open on this row. | Python, Rust |
+| 4 | `closed_function_names` | A function in Julia, Rust and Go; a **constant array** `CLOSED_FUNCTION_NAMES` in TypeScript. | **DONE (phase 6).** TypeScript exports `closedFunctionNames()`; `CLOSED_FUNCTION_NAMES` is a deprecated alias for one minor, returned by identity so the two are the same array. The two spellings are different KINDS, so the manifest carries them as two entries (`function` 4/5 `stable`, `constant` TypeScript-only `extension`) rather than one alias pair. | TypeScript |
+| 5 | `derive_odes` | TypeScript spells it `deriveODEs`, violating §2 — and is internally inconsistent, since it already spells the siblings `odeStates` and `isOdeState`. | **DONE (phase 6).** Renamed to `deriveOdes`; `deriveODEs` stays a deprecated alias for one minor (§10) and is the same function object. | TypeScript |
+| 6 | `unknowns` / `parameters` | TypeScript and Python export `unknowns`/`parameters`; Julia exports `unknown_names`/`parameter_names` for the same query. | Canonical is `unknowns`/`parameters`. Julia keeps its `*_names` spellings as aliases — the bare names collide badly in Julia's flat namespace. **DONE (phase 6).** Julia gained `unknowns` / `parameters`; `unknown_names` / `parameter_names` stay as aliases. The collision was MEASURED, not assumed — with `using EarthSciAST, ModelingToolkit, Catalyst`, a bare `unknowns(m)` raises an ambiguity error, which is why both spellings stay. | Julia |
+| 7 | edit operations | Python suffixes every edit with its container: `add_variable_to_model`, `remove_coupling_from_file`, `extract_component_from_file`, `merge_esm_files`. Julia, TypeScript and Rust use the bare verb. | Python gains the bare names; the suffixed ones become aliases. **DONE (phase 6).** Python gained all 16 bare names (the sample in the Problem column was not the whole set); every suffixed name survives as a deprecated alias emitting `DeprecationWarning`. None of the 16 bare names collided. | Python |
+| 8 | `to_dot` / `to_mermaid` / `to_json` | Julia and TypeScript export three rendering functions (TypeScript spells the third `toJsonGraph`); Go spells the same renderings as **six** functions, `ExportComponentGraphDOT` … `ExportExpressionGraphMermaid`. | **Ruled (phase 6).** `to_json` is the *document* serializer (item 2); it cannot also be the graph renderer in the four bindings without overloading. Canonical trio is `to_dot(graph)` / `to_mermaid(graph)` / `to_json_graph(graph)` — the spelling TypeScript and Python already share. Go's six `Export*` functions collapse to `ToDOT` / `ToMermaid` / `ToJSONGraph`, each taking an exported `Graph` interface that `*ComponentGraph` and `*ExpressionGraph` satisfy via an unexported marker method. Rust adds all three. **TypeScript VERIFIED (phase 6):** `toDot` / `toMermaid` / `toJsonGraph` are already generic over `Graph<N, E>` and dispatch on the graph kind (`Graph.kind` when tagged, else sniffed from the first node), and `tests/conformance/graph/cases.json` exercises all three against BOTH the component and expression graph of every corpus document. No rename needed. | TypeScript, Go |
+| 9 | `substitute_with_context` | Rust names the scoped-substitution family `*_with_context` (`ScopedContext`); Go names it `*WithScoped`. | Canonical `substitute_with_context`; Go renames. **DONE (phase 6).** Go's four exported `*WithScoped` functions and its one unexported helper are now `*WithContext`. | Go |
+| 10 | `reference_resolution_error` | Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`. | Rust renames, keeping a type alias for one minor. **DONE (phase 6).** Rust renamed; `ReferenceError` kept as a `#[deprecated]` type alias for one minor. | Rust |
+| 11 | `system_kind` family | `system_kind` is a function everywhere but takes an extra `domain` in Go; `declared_system_kind` exists in TypeScript and Python; `declared_system_kind_mismatch` only in Julia; `EffectiveSystemKind` only in Go. Three overlapping two-binding subsets. | **Ruled (phase 6).** The four spellings are three distinct questions plus one composition. `system_kind(model)` is the *derived* kind — Go drops the `domain` argument, which both Go bodies already ignore. `declared_system_kind(model)` reads the explicit field, nullable. `effective_system_kind(model)` is `declared ?? derived` — the question a caller choosing a solver actually asks. All three become `stable` in all five. Julia's `declared_system_kind_mismatch` is **deleted**: it is one line over the other two, and the only 1-of-5 member of the family. **TypeScript DONE (phase 6):** `effectiveSystemKind(model)` added alongside the existing `systemKind` / `declaredSystemKind`. | Julia, TS, Python, Go |
+| 12 | `validate` return shape | Go's `Validate` returns the legacy `DetailedValidationResult`; the four-field shape everyone else returns is Go's *other* function, `ValidateFile`. | Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folds into it. **DONE (phase 6).** Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folded in. `SchemaErrors` is always empty, because a `*ESMFile` can only exist by having passed the schema at load — matching Rust's documented behaviour. | Go |
+| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. **CLOSED (phase 6b): Julia gained `validate_text(text; base_path)`, so the symbol is 5/5.** Phase 6's Julia agent correctly declined it at the time — this row scoped the work to RENAMING an existing convenience, and Julia had no text one to rename — but at four bindings out of five it had become a parity hole rather than a rename, which is a different question. Julia's version is the text twin of its existing `validate_path` and shares `load_failure_structural_error` with it. Its bad-input behaviour was MEASURED against the other four rather than assumed: Python's `validate_text` and Go's `ValidateText` both return `is_valid=false` with populated `schema_errors` for schema-invalid AND malformed text and neither raises, so Julia renders three channels — a `SchemaValidationError`'s structured errors straight into `schema_errors`, a codeless `ParseError` (malformed JSON) as one root `SchemaError` under the `parse` keyword, and a `(code, path)`-carrying rejection into `structural_errors`. Julia now returns the same error counts as Python on both bad inputs. **One residual, recorded not fixed:** `validate_path` renders only the third channel and still RAISES on schema-invalid or malformed input, so Julia's two convenience entry points differ on bad input. Changing `validate_path` is a behaviour change to a `stable` function nobody asked for and is left alone. | all five |
+| 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. **PARTLY DONE, PARTLY REFUSED (phase 6).** `lower_enums` and `resolve_subsystem_refs` gained typed wrappers with `*_raw` seams. `prepare` is moot — phase 4 deleted it. `resolve_template_machinery` was REFUSED with evidence: the premise says every other binding takes a typed document, and all three measured take raw — Python `(raw: Any, …)`, Julia `(raw_data, …)`, TypeScript `(rawData: unknown, …)`. A typed wrapper would have made Rust the only non-conformant binding. | Rust |
+| 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. **TypeScript VERIFIED (phase 6):** `lowerEnums(file)` returns a new document and shares unchanged subtrees with the input — it never writes through its argument — and raises `EnumLoweringError` (an `EsmDiagnosticError` subclass carrying a registry-backed `code`), not a bare `Error`. Nothing to change. | Julia, Python, Rust, Go |
 | 16 | `substitute` cycles | ~~Only Go detects substitution cycles; the other four loop.~~ **RESOLVED — the premise was false, and inverted.** The other four never looped: all four are single-pass, so a cyclic binding set terminates on its own, exactly as CONFORMANCE_SPEC.md §2.2.3 rule 1 requires. Go was the sole non-conformant binding: it expanded replacements *transitively*, which (a) silently corrupted chained renames — `substitute("a", {a: b, b: c})` returned `"c"`, not `"b"`, mis-applying every overlapping rename through `renameRawExpr` — and (b) made cyclic sets non-terminating, which was then patched with cycle detection instead of by removing the transitivity. | Go made single-pass; `SubstitutionError` / `cyclic_substitution` removed as unnecessary. Pinned cross-binding by `tests/substitution/cyclic_bindings.json`. | Go (done) |
-| 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | One signature carrying the document-scoped registry. Also a bug fix. | Julia, Rust |
-| 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. | Julia, Rust, Go |
-| 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. | Go |
-| 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | Drop `component_graph`. | TypeScript |
+| 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | **Ruled (phase 6), after a correction.** The first ruling said the canonical signature was `build_reference_graph(document)`. That is not implementable: the function builds the graph of ONE MODEL and takes the model name in all four bindings that have it, and the document-level entry point already exists as `resolve_references(document)`. The Julia agent refused it and was right. Canonical is **`build_reference_graph(model, model_name, index_sets = <none>)`** — the document-scoped registry is an OPTIONAL TRAILING argument, not a separate function name and not required. Omitted, it falls back to a model-nested `index_sets` (the pre-0.8.0 shape); on a collision the model-nested one wins, which is Go's existing merge rule. Rust folds `build_reference_graph_with_index_sets` in; Python already conforms; Go's third argument becomes optional; TypeScript gains the function. **The Julia bug is real and confirmed**: Julia read `model["index_sets"]` where `esm-schema.json` declares `index_sets` only at `/properties/index_sets`, so `resolve_references` THREW `ReferenceResolutionError(E_REF_UNDECLARED_INDEX_SET)` on any 1.0.0 document with a top-level registry, where Python, Rust and Go all returned a graph. **TypeScript ADDED (phase 6):** ported from Python (the most complete of the four: it registers every node before resolving any reference, so a forward `from_faq` resolves), except for the registry rule, which follows Go and Rust: the model-nested pre-0.8.0 `index_sets` is MERGED on top of the document-scoped one, so a model-level entry wins a collision, where Python treats the two as either/or. Verified against the Python binding over all shared `tests/valid/**` fixtures — vertices, edges and topological order identical, zero mismatches, under both registry rules, because no shared fixture carries the two shapes at once. | Julia, Rust, Go, TypeScript |
+| 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. | Julia, Rust, Go |
+| 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`, left open for a ruling. **CLOSED (phase 6b): renamed to `LHSUnits` / `RHSUnits`.** The ruling is that Go's own house style already decided it — `FlattenedEquation.LHSString` / `.RHSString` (`pkg/esm/flatten.go`) spell the same two initialisms uppercase, so these two fields were the outliers, not the precedent. The wire contract is untouched and was VERIFIED so: the `json:"lhs_units"` / `json:"rhs_units"` tags are unchanged, and a `UnitWarning` marshal→unmarshal→marshal round trip is byte-identical before and after the rename. The `"lhs_units"` / `"rhs_units"` keys `promoteUnitFindings` writes into `StructuralError.Details` are likewise unchanged. Struct fields remain non-manifest symbols, so `api-surface.json` does not move. | Go |
+| 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the editor's web-components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
+| G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. **Rust DONE (phase 6)** as well (`a154aa171`): `supported_migration_targets` is the definition, `get_supported_migration_targets` a `#[deprecated]` delegate. Both spellings fold under the canonical name via `ALIAS_OVERRIDES`, so the manifest carries one entry, not two. | TypeScript, Rust |
+| G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |
+| H-4 | Python layering | Python re-exported the whole `data_sources` loader stack through the top-level `__all__` — 32 spellings, of which 29 were `extension`-tier and Python-only — so `import earthsci_ast` handed you a data-loading toolkit as well as a format library. `xarray` and `netcdf4` sat in the BASE dependency set, which a comment justified as "the IO tier hard-depends on them". | **DONE (phase 6).** The premise was measured FALSE: no module under `earthsci_ast/` imports `xarray` or `netCDF4` at module scope — `xarray` is imported inside `data_sources._xarray._default_xarray_opener`, and `netCDF4` is never imported by this package at all (it is the engine xarray selects). With all three of `xarray` / `netCDF4` / `scipy` blocked by an import hook, `import earthsci_ast` already succeeded and `__all__` was still the full 272, so nothing had to be restructured to make the split possible. The 29 `extension` spellings left `__all__` and now live only on `earthsci_ast.data_sources`; Python's declared surface is **272 -> 243**. The three `stable` spellings in that block — `apply_unit_conversion`, `parse_unit_conversion`, `UnitConversionError` — were **deliberately KEPT** at the top level: Julia defines them in core `src/unit_conversion.jl` (not `EarthSciASTEarthSciIOExt`), TypeScript exports `UnitConversionError` from its index, and §6 carries all three as `stable`, so dropping them would have made Python the sole non-conformant binding and downgraded a stable symbol. The manifest's `stable` count is unchanged at 272 — every symbol removed was `extension`. `xarray` / `netcdf4` moved to a new `data` extra; `scipy` had already moved to `simulate` in an earlier round, per esm-libraries-spec §2.4 / §2.5.9. A missing optional dependency is reported at the point of use, naming the extra. | Python |
 
 ---
 
@@ -1019,9 +1189,12 @@ The §8 SciML renames are therefore major-or-aliased, not silent.
   manifest from the schema, which is the right long-term answer and out of scope
   here.
 - **`esm-libraries-spec.md` §5.** Now superseded by this document for API
-  surface, and pointed here from its own heading. Its §2.4.4 conformance table
-  and §5.5 Go description remain stale, and its §5.4 tier label for Rust —
-  "Core + Analysis" — contradicts both the Rust binding (which exports
-  `simulate`, `simulate_array` and `prepare`) and a paragraph three lines
-  further down the same section, which says the Rust array simulator runs
-  discretized PDEs. Reconciling or retiring that section is follow-up work.
+  surface, and pointed here from its own heading. Phase 6 fixed the two tier
+  labels this row used to flag: §5.4 (Rust) now reads "Core + Analysis +
+  Simulation" and §5.5 (Go) "Core + Analysis", with the Go description
+  rewritten. The parenthetical that once justified the Rust label — "exports
+  `simulate`, `simulate_array` and `prepare`" — no longer holds either: phase 4
+  deleted `simulate` and `prepare` from every binding, and `simulate_array` is
+  a module, not an exported function. Rust's Simulation tier now rests on
+  `esm_problem` / `solve` / `compile_array`. Its §2.4.4 conformance table is
+  still stale. Reconciling or retiring that section is follow-up work.

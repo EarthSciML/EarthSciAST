@@ -43,7 +43,7 @@ func TestUnitsFixturesCrossBinding(t *testing.T) {
 			if len(file.Models) == 0 {
 				t.Fatalf("%s: expected at least one model", name)
 			}
-			result := ValidateFile(file, string(content))
+			result := Validate(file)
 			t.Logf("%s: %d unit warnings (cross-binding registry coverage signal)",
 				name, len(result.UnitWarnings))
 			for _, w := range result.UnitWarnings {
@@ -87,7 +87,7 @@ func TestGradientOperatorMismatchFixtureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
-	result := ValidateFile(file, string(content))
+	result := Validate(file)
 
 	// The fixture is schema-valid per expected_errors.json ("schema_errors": []).
 	if len(result.SchemaErrors) != 0 {
@@ -132,7 +132,7 @@ func TestReactionRateUnitsMismatchFixtureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
-	result := ValidateFile(file, string(content))
+	result := Validate(file)
 	if result.IsValid {
 		t.Fatalf("expected fixture to fail validation, got is_valid=true")
 	}
@@ -187,7 +187,7 @@ func TestICInReactionSystemFixtureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
-	result := ValidateFile(file, string(content))
+	result := Validate(file)
 	if result.IsValid {
 		t.Fatalf("expected fixture to fail validation, got is_valid=true")
 	}
@@ -196,7 +196,7 @@ func TestICInReactionSystemFixtureRejected(t *testing.T) {
 	}
 	var found *StructuralError
 	for i, e := range result.StructuralErrors {
-		if e.Code == ErrorIcInReactionSystem {
+		if e.Code == ErrorICInReactionSystem {
 			found = &result.StructuralErrors[i]
 			break
 		}
@@ -249,9 +249,9 @@ func TestReactionSystemNonICConstraintOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	result := ValidateFile(file, jsonStr)
+	result := Validate(file)
 	for _, e := range result.StructuralErrors {
-		if e.Code == ErrorIcInReactionSystem {
+		if e.Code == ErrorICInReactionSystem {
 			t.Fatalf("unexpected ic_in_reaction_system false positive: %+v", e)
 		}
 	}
@@ -276,7 +276,7 @@ func TestConversionFactorErrorFixtureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
-	result := ValidateFile(file, string(content))
+	result := Validate(file)
 	if result.IsValid {
 		t.Fatalf("expected fixture to fail validation, got is_valid=true")
 	}
@@ -333,7 +333,7 @@ func TestPhysicalConstantDimensionalErrorFixtureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load fixture: %v", err)
 	}
-	result := ValidateFile(file, string(content))
+	result := Validate(file)
 	if result.IsValid {
 		t.Fatalf("expected fixture to fail validation, got is_valid=true")
 	}

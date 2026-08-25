@@ -164,7 +164,8 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
                                 observeds::OrderedDict{String,ModelVariable},
                                 index_sets::OrderedDict{String,IndexSet},
                                 coupling;
-                                template_registry=nothing)
+                                template_registry=nothing,
+                                lifted_shapes=nothing)
     any(c -> c isa CouplingOperatorCompose &&
              (c.lifting !== nothing && c.lifting == "pointwise"), coupling) || return
 
@@ -192,6 +193,12 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         # Promote the species to the grid shape so the scoped-ic fold, array-cell
         # discovery, and evaluator all see an array state.
         haskey(states, species) && (states[species] = _with_shape(states[species], gaxes))
+        # esm-libraries-spec §4.7.5 step 4: report the post-lift grid EXTENTS on
+        # the flattened system, keyed by the lifted state's namespaced name. The
+        # promoted `shape` above names the axes; a consumer sizing a buffer needs
+        # the cell counts, which only this pass knows.
+        lifted_shapes === nothing ||
+            (lifted_shapes[species] = _makearray_extents(mas[1]))
         equations[n] = _pointwise_lift_equation(eq, species, arrayvars, loops,
                                                 ranges)
     end

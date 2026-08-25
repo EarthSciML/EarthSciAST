@@ -433,7 +433,7 @@ func TestGraphConformanceFiles(t *testing.T) {
 			requireSameMultiset(t, "component_graph.edges", shapeCouplingEdges(cg), c.ComponentGraph.Edges)
 			requireSameClosure(t, "component_graph.closure", shapeComponentClosure(cg), c.ComponentGraph.Closure)
 
-			cgJSON, err := ExportComponentGraphJSON(cg)
+			cgJSON, err := ToJSONGraph(cg)
 			if err != nil {
 				t.Fatalf("export component graph JSON: %v", err)
 			}
@@ -445,7 +445,7 @@ func TestGraphConformanceFiles(t *testing.T) {
 			requireSameMultiset(t, "expression_graph.edges", got.Edges, c.ExpressionGraph.Edges)
 			requireSameClosure(t, "expression_graph.closure", got.Closure, c.ExpressionGraph.Closure)
 
-			egJSON, err := ExportExpressionGraphJSON(eg)
+			egJSON, err := ToJSONGraph(eg)
 			if err != nil {
 				t.Fatalf("export expression graph JSON: %v", err)
 			}
@@ -461,21 +461,19 @@ func TestGraphConformanceFiles(t *testing.T) {
 			// the first line of each: the rest carries node labels run through
 			// the chemical-subscript formatter, which this binding does not
 			// have. See tests/conformance/graph/README.md.
-			dot := NewDOTExporter()
-			mermaid := NewMermaidExporter()
-			cgDOT, err := dot.ExportComponentGraph(cg)
+			cgDOT, err := ToDOT(cg)
 			if err != nil {
 				t.Fatalf("export component graph DOT: %v", err)
 			}
-			cgMermaid, err := mermaid.ExportComponentGraph(cg)
+			cgMermaid, err := ToMermaid(cg)
 			if err != nil {
 				t.Fatalf("export component graph Mermaid: %v", err)
 			}
-			egDOT, err := dot.ExportExpressionGraph(eg)
+			egDOT, err := ToDOT(eg)
 			if err != nil {
 				t.Fatalf("export expression graph DOT: %v", err)
 			}
-			egMermaid, err := mermaid.ExportExpressionGraph(eg)
+			egMermaid, err := ToMermaid(eg)
 			if err != nil {
 				t.Fatalf("export expression graph Mermaid: %v", err)
 			}

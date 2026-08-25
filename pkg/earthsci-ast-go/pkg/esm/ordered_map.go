@@ -81,3 +81,29 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// attachSpeciesOrders copies each reaction system's authored `species` key
+// order out of ESMFile.keyOrders and onto the system itself, so DeriveODEs and
+// StoichiometricMatrix — which take a bare *ReactionSystem and have no route
+// back to the file — can iterate species in declaration order (API_SPEC.md
+// §5.10).
+//
+// Only top-level `/reaction_systems/<name>` systems are reached. A system
+// mounted as a SUBSYSTEM is held as `any` and decoded on demand by
+// decodeSubsystemAs, so there is no persistent struct to attach an order to;
+// those fall back to sorted-name order, exactly as ESMFile.declarationOrder
+// already documents for a `{"ref": ...}` mount. Flatten is unaffected either
+// way: it walks subsystems with the file in hand and reads keyOrders directly.
+func attachSpeciesOrders(file *ESMFile) {
+	if file == nil || file.keyOrders == nil {
+		return
+	}
+	for name, rs := range file.ReactionSystems {
+		order := file.declarationOrder("/reaction_systems/" + name + "/species")
+		if order == nil {
+			continue
+		}
+		rs.speciesOrder = order
+		file.ReactionSystems[name] = rs
+	}
+}

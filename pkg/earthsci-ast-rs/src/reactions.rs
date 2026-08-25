@@ -224,6 +224,31 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
         );
     }
 
+    // Rate PARAMETERS become parameter variables of the derived model. Without
+    // this the derived equations reference rate constants (`k1`, `jNO2`, …)
+    // that the model does not declare, so the model does not close — every
+    // rate is an undefined variable. Julia (reactions.jl "Add parameter
+    // variables for all parameters"), Python and TypeScript ("Copy
+    // parameters") all do it; this binding alone did not. Order matches
+    // Python and TypeScript: species in declaration order, then parameters in
+    // declaration order.
+    for (param_name, param) in &system.parameters {
+        variables.insert(
+            param_name.clone(),
+            ModelVariable {
+                var_type: VariableType::Parameter,
+                units: param.units.clone(),
+                default: param.default,
+                default_units: None,
+                description: param.description.clone(),
+                shape: None,
+                location: None,
+                distribution: None,
+                update: None,
+            },
+        );
+    }
+
     let equations = lower_reactions_to_equations(&system.reactions, &system.species)?;
 
     Ok(Model {
@@ -329,14 +354,19 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
     // Initialize matrix with zeros
     let mut matrix = vec![vec![0.0f64; num_reactions]; num_species];
 
-    // Build a stable species ordering (sorted by name) so indices are reproducible
-    // across runs and match the ordering used by derive_odes / lower_reactions_to_equations.
-    let mut sorted_species_names: Vec<&String> = system.species.keys().collect();
-    sorted_species_names.sort();
-    let species_index: HashMap<String, usize> = sorted_species_names
-        .iter()
+    // ROW ORDER IS DECLARATION ORDER (API_SPEC.md §5.10). `system.species` is an
+    // `IndexMap`, so iterating its keys is already deterministic across runs AND
+    // already the order the document declares. This used to `.sort()` the names
+    // first, justified as "so indices are reproducible" — but reproducibility is
+    // what the container was chosen to give, so the sort bought nothing and cost
+    // the agreement with `derive_odes` / `lower_reactions_to_equations`, which
+    // never sorted, and with Julia, Python and TypeScript, which never sorted
+    // either.
+    let species_index: HashMap<String, usize> = system
+        .species
+        .keys()
         .enumerate()
-        .map(|(idx, name)| ((*name).clone(), idx))
+        .map(|(idx, name)| (name.clone(), idx))
         .collect();
 
     // Fill in the matrix
@@ -455,6 +485,66 @@ mod tests {
             rate,
             reference: None,
         }
+    }
+
+    /// The derived model must DECLARE the rate parameters its equations
+    /// reference. Julia, Python and TypeScript all copy `parameters` into the
+    /// derived `variables`; this binding did not, so every rate constant came
+    /// out an undefined variable.
+    #[test]
+    fn derive_odes_declares_rate_parameters() {
+        let mut species = IndexMap::new();
+        species.insert(
+            "A".to_string(),
+            Species {
+                default: Some(1.0),
+                units: Some("molec/cm3".to_string()),
+                description: None,
+                constant: None,
+            },
+        );
+
+        let mut parameters = IndexMap::new();
+        parameters.insert(
+            "k1".to_string(),
+            crate::types::Parameter {
+                default: Some(1.8e-12),
+                units: Some("cm3/molec/s".to_string()),
+                description: Some("Rate constant".to_string()),
+            },
+        );
+
+        let system = ReactionSystem {
+            reference: None,
+            species,
+            parameters,
+            reactions: vec![Reaction {
+                id: Some("R1".to_string()),
+                name: None,
+                substrates: Some(vec![StoichiometricEntry {
+                    species: "A".to_string(),
+                    coefficient: 1.0,
+                }]),
+                products: None,
+                rate: Expr::Variable("k1".to_string()),
+                reference: None,
+            }],
+            constraint_equations: None,
+            discrete_events: None,
+            continuous_events: None,
+            subsystems: None,
+        };
+
+        let model = derive_odes(&system).expect("derives");
+        let k1 = model.variables.get("k1").expect("k1 is declared");
+        assert!(matches!(k1.var_type, VariableType::Parameter));
+        assert_eq!(k1.default, Some(1.8e-12));
+        assert_eq!(k1.units.as_deref(), Some("cm3/molec/s"));
+
+        // Species first in declaration order, then parameters -- the order
+        // Python and TypeScript produce.
+        let names: Vec<&str> = model.variables.keys().map(String::as_str).collect();
+        assert_eq!(names, vec!["A", "k1"]);
     }
 
     #[test]

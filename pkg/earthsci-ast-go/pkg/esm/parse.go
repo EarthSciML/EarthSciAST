@@ -199,6 +199,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams
 	esmFile.keyOrders = authoredOrders
+	// Replay the authored `species` key order onto each reaction system itself.
+	// DeriveODEs and StoichiometricMatrix take a bare *ReactionSystem and so
+	// cannot reach esmFile.keyOrders, but species declaration order is
+	// observable in both their results (API_SPEC.md §5.10). See
+	// ReactionSystem.speciesOrder.
+	attachSpeciesOrders(&esmFile)
 	esmFile.componentTemplates = componentTemplates
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).
@@ -216,7 +222,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 
 	// Lower `enum` ops to `const` integer nodes per esm-spec §9.3. After
 	// this pass, no `enum` op remains in the in-memory representation.
-	if err := LowerEnums(&esmFile); err != nil {
+	//
+	// The MUTATING twin: esmFile is this function's own local, being built, and
+	// is discarded outright on error — so there is nothing here for the pure
+	// form's copy to protect, and copying the whole document on every load
+	// would be pure cost.
+	if err := LowerEnumsMut(&esmFile); err != nil {
 		return nil, err
 	}
 

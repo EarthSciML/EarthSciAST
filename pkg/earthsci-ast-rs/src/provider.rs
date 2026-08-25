@@ -20,7 +20,7 @@
 //! lives in a user-owned driver / example harness (R-3, ess-14f.11), preserving
 //! `library-exposes-rhs-not-solver`: this module exposes data + pure functions
 //! ([`RefreshExecutor::refresh_times`], [`RefreshExecutor::refresh_at`]), never a
-//! `solve`/`simulate`.
+//! `solve`.
 //!
 //! # The provider contract, and why it is a trait
 //!

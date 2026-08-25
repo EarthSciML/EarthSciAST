@@ -2,7 +2,7 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "AdvancedCouplingTests",
-    "description": "Test all coupling types: couple, operator_apply, callback\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
+    "description": "Test all coupling types: couple, variable_map, operator_compose, callback\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
     "authors": [
       "Test Suite"
     ],
@@ -140,12 +140,6 @@
     },
     "Transport": {
       "variables": {
-        "u": {
-          "type": "unknown",
-          "units": "mol/mol",
-          "default": 0.0,
-          "description": "Transported scalar concentration"
-        },
         "wind_speed": {
           "type": "parameter",
           "units": "m/s",
@@ -173,7 +167,7 @@
           "lhs": {
             "op": "D",
             "args": [
-              "u"
+              "_var"
             ],
             "wrt": "t"
           },
@@ -192,7 +186,7 @@
                   {
                     "op": "grad",
                     "args": [
-                      "u"
+                      "_var"
                     ],
                     "dim": "x"
                   }
@@ -205,22 +199,13 @@
                   {
                     "op": "laplacian",
                     "args": [
-                      "u"
+                      "_var"
                     ]
                   }
                 ]
               }
             ]
           }
-        },
-        {
-          "lhs": {
-            "op": "ic",
-            "args": [
-              "u"
-            ]
-          },
-          "rhs": 1e-09
         }
       ]
     }
@@ -269,28 +254,35 @@
                 "Chemistry.O3"
               ]
             }
-          },
-          {
-            "from": "Chemistry.O3",
-            "to": "Surface.surface_resistance",
-            "transform": "multiplicative",
-            "expression": {
-              "op": "+",
-              "args": [
-                1.0,
-                {
-                  "op": "*",
-                  "args": [
-                    0.1,
-                    "Chemistry.O3"
-                  ]
-                }
-              ]
-            }
           }
         ]
       },
       "description": "Bidirectional chemistry-surface coupling"
+    },
+    {
+      "type": "variable_map",
+      "from": "Chemistry.O3",
+      "to": "Surface.surface_resistance",
+      "transform": {
+        "op": "*",
+        "args": [
+          100.0,
+          {
+            "op": "+",
+            "args": [
+              1.0,
+              {
+                "op": "*",
+                "args": [
+                  0.1,
+                  "Chemistry.O3"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Ozone raises surface resistance: the constant parameter becomes a derived variable"
     },
     {
       "type": "operator_compose",

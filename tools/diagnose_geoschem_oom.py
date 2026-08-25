@@ -10,22 +10,22 @@ DIAGNOSIS ONLY — the script does not propose a fix and does not touch any
 other .esm file. Per esm-9ms: lambdify is built with ``cse=False`` (the
 ``cse=True`` path is its own OOM bomb on this mechanism per esm-c6v; this
 diagnostic must NOT trigger it). The compiled RHS is stashed onto
-``flat._simulate_compile_cache`` so subsequent simulate() calls reuse it
+``flat._simulate_compile_cache`` so subsequent Problem builds reuse it
 instead of taking the cse=True path inside ``_compile_flat_rhs``.
 
 Pipeline phases instrumented (all via the canonical pathway —
-parse → flatten → lambdify → simulate from earthsci_ast):
+parse → flatten → lambdify → build+solve from earthsci_ast):
 
   1. imports_loaded             import earthsci_ast + sympy + scipy stack
   2. esm_loaded                 earthsci_ast.load_path(geoschem_fullchem.esm)
   3. flatten_done               earthsci_ast.flatten(esm_file)
   4. lambdify_no_cse            _flat_to_sympy_rhs + sp.lambdify(cse=False),
                                 stashed onto flat._simulate_compile_cache
-  5. simulate_clean_troposphere simulate(flat, …) for inline test #1
-  6. simulate_polluted_urban    simulate(flat, …) for inline test #2
-  7. simulate_upper_troposphere simulate(flat, …) for inline test #3
+  5. simulate_clean_troposphere solve(esm_problem(flat, …)) for inline test #1
+  6. simulate_polluted_urban    solve(esm_problem(flat, …)) for inline test #2
+  7. simulate_upper_troposphere solve(esm_problem(flat, …)) for inline test #3
 
-The deltas across the three simulate phases are the key signal — Python should
+The deltas across the three solve phases are the key signal — Python should
 show ZERO growth across them, while Julia's signature is monotonic growth.
 
 Invocation:
@@ -140,7 +140,7 @@ def _find_esm() -> Path:
 # ----- 1. imports_loaded -------------------------------------------------
 _arm()
 import earthsci_ast as ek  # noqa: E402
-from earthsci_ast.simulation import simulate  # noqa: E402
+from earthsci_ast.problem import ReturnCode, esm_problem, solve  # noqa: E402
 from earthsci_ast.sympy_bridge import (  # noqa: E402
     _LAMBDIFY_MODULES,
     _compile_flat_rhs,
@@ -173,7 +173,7 @@ phase("flatten_done")
 
 # ----- 4. lambdify_no_cse ------------------------------------------------
 # Compile with cse=False and stash on the FlattenedSystem so the
-# simulate() calls below see a cache hit and skip the cse=True path.
+# esm_problem() builds below see a cache hit and skip the cse=True path.
 _arm()
 _compile_flat_rhs(flat, cse=False)
 _disarm()
@@ -182,16 +182,18 @@ phase("lambdify_no_cse")
 # ----- 5/6/7. simulate_<test_id> ----------------------------------------
 for test in rs.tests:
     _arm()
-    res = simulate(
-        flat,
-        tspan=(test.time_span.start, test.time_span.end),
-        parameters=dict(test.parameter_overrides),
-        initial_conditions=dict(test.initial_conditions),
+    res = solve(
+        esm_problem(
+            flat,
+            (test.time_span.start, test.time_span.end),
+            p=dict(test.parameter_overrides),
+            u0=dict(test.initial_conditions),
+        )
     )
     _disarm()
-    if not res.success:
+    if res.retcode is not ReturnCode.Success:
         print(
-            f"NOTE: simulate({test.id}) success=False message={res.message!r}",
+            f"NOTE: solve({test.id}) retcode={res.retcode.value} message={res.message!r}",
             flush=True,
         )
     phase(f"simulate_{test.id}")

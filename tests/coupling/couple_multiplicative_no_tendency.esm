@@ -1,0 +1,44 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CoupleMultiplicativeNoTendency",
+    "description": "A `couple` connector applies the `multiplicative` transform (esm-spec §10.3) to a target that has no tendency. `Surface.resistance` is a constant parameter: there is no D(Surface.resistance) to multiply, so flatten must refuse with couple_multiplicative_no_tendency rather than silently dropping the connector equation. To SCALE a constant parameter by a factor, the correct spelling is a variable_map with an Expression transform (§10.4)."
+  },
+  "models": {
+    "Chemistry": {
+      "variables": {
+        "O3": { "type": "unknown", "units": "mol/mol", "default": 4e-08 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["O3"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.1, "O3"] } }
+      ]
+    },
+    "Surface": {
+      "variables": {
+        "resistance": { "type": "parameter", "units": "s/m", "default": 100.0 },
+        "deposition_velocity": { "type": "unknown", "units": "m/s" }
+      },
+      "equations": [
+        { "lhs": "deposition_velocity",
+          "rhs": { "op": "/", "args": [1.0, "resistance"] } }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "couple",
+      "systems": ["Chemistry", "Surface"],
+      "connector": {
+        "equations": [
+          {
+            "from": "Chemistry.O3",
+            "to": "Surface.resistance",
+            "transform": "multiplicative",
+            "expression": { "op": "+", "args": [1.0, { "op": "*", "args": [0.1, "Chemistry.O3"] }] }
+          }
+        ]
+      }
+    }
+  ]
+}

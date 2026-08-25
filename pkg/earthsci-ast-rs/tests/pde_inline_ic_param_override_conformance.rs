@@ -24,8 +24,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::pde_inline_tests::run_pde_tests_with_base_dir;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::run_pde_tests_with_base_dir;
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -41,11 +41,11 @@ fn read_json(path: &PathBuf) -> serde_json::Value {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-fn manifest_opts(manifest: &serde_json::Value) -> SimulateOptions {
+fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
     let rs = &manifest["integrators"]["rust"];
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
-    SimulateOptions {
-        solver: SolverChoice::Erk,
+    SolveOptions {
+        alg: Alg::Erk,
         reltol: rs["reltol"].as_f64().expect("reltol"),
         abstol: rs["abstol"].as_f64().expect("abstol"),
         ..Default::default()
@@ -127,21 +127,30 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
     let path = dir.join("fixtures/ic_param_override.esm");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let file = load_string(&text).expect("fixture loads");
-    let mut opts = SimulateOptions {
-        solver: SolverChoice::Erk,
+    let mut opts = SolveOptions {
+        alg: Alg::Erk,
         reltol: 1e-12,
         abstol: 1e-14,
         ..Default::default()
     };
-    opts.output_times = Some(vec![0.0]);
+    opts.saveat = Some(vec![0.0]);
 
     for key in ["A", "M.A"] {
         let mut params = HashMap::new();
         params.insert(key.to_string(), 0.0);
-        let sol = simulate(&file, (0.0, 1.0), &params, &HashMap::new(), &opts)
-            .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
-        let cells =
-            earthsci_ast::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
+        let sol = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                p: params.clone(),
+                u0: HashMap::new().clone(),
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+        .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
+        let cells = earthsci_ast::state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), 5);
         for (cell, row) in &cells {
             assert_eq!(sol.state[*row][0], 0.0, "{key}: cell {cell:?} not zeroed");

@@ -223,124 +223,381 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-Apply a `CouplingOperatorCompose` entry: for each equation LHS dependent
-variable (with `translate` and `_var` placeholder expansion), find matching
-equations across the listed systems and sum their RHS terms. In the flattened
-representation, "matching" means "has the same namespaced dependent variable".
+    _apply_operator_compose!(equations, entry, states, observeds, owners)
+
+Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
+`"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
+`_var` placeholder equations are expanded once per state variable of A
+(step 3), each B equation is then matched to A's equation for the same
+dependent variable — directly, through the `translate` map (step 2), or by the
+bare-name fallback — and a matched pair is summed as `rhs_A + factor * rhs_B`
+(step 4). A B equation that matches nothing survives unchanged (step 5).
+
+Six properties here are load-bearing, and each of them has a way of failing
+SILENTLY — which is the one outcome a coupling mis-specification must not have:
+
+  * **`translate` direction.** The map is keyed by A's names and valued by B's
+    (§4.7.1 step 2, esm-spec §10.2). This loop walks B's equations, so it needs
+    the map the other way round; [`_inverse_translate`](@ref) builds it.
+    Indexing the authored map by B's dependent variable makes a correctly
+    spelled map match nothing at all and turns the whole entry into a no-op.
+
+  * **`translate` endpoints are matched NAMESPACED.** An endpoint is authored
+    either bare (`"O3"`) or fully scoped (`"ChemistrySystem.O3"`; esm-spec §10.2
+    admits both), but this loop matches against the NAMESPACED dependent
+    variable of a flattened equation. A bare endpoint therefore has to be
+    qualified first — a key against `systems[1]`, a value against `systems[2]`;
+    see [`_qualify_translate_endpoint`](@ref). This is the second half of the
+    direction rule and fails the same way: before it, every `translate` map in
+    the shared fixture tree was authored bare, missed, fell through to the
+    bare-name fallback (which searches A for B's SHORT name and misses too), and
+    silently no-op'd — so the direction fix above was necessary and not
+    sufficient, and step 4's rewrite below had never once run.
+
+  * **The merged-away name does not survive.** A match that RENAMES the
+    dependent variable — a translation match, or the bare-name fallback, which
+    is a name-based translation — has just consumed B's defining equation, so
+    B's declaration of that name constrains nothing: an unknown with no equation
+    is an ALGEBRAIC unknown (§6.3.1), i.e. a structurally singular system the
+    solver rejects instead of the coupling that caused it. The declaration is
+    dropped, and every surviving reference to it is retargeted at A's spelling
+    FIRST. The retarget is DOCUMENT-WIDE, not B-local — a third system may
+    reference `B.x` by its scoped name, and pruning the declaration while
+    leaving that reference dangling trades one broken system for another.
+
+  * **Direct match BEFORE translation match.** §10.2's redundancy invariant: a
+    `translate` value of `"B._var"` asks for something placeholder expansion
+    already does, and writing it MUST NOT change the result. Expansion has by
+    then rewritten `_var` to A's OWN variable name, so a map consulted on that
+    post-expansion name hits spuriously and redirects every composed species to
+    the same target — collapsing three transported species into one equation
+    and leaving the other two as unconstrained algebraic unknowns. That is
+    exactly what `tests/scoping/bare_reference_resolution.esm` used to produce.
+
+  * **The placeholder ranges over A's STATE VARIABLES**, not over "everything
+    with a defining equation". An observed unknown defined algebraically
+    (`Chemistry.deposition_flux ~ Chemistry.O3 * 1e-3`) is not transported and
+    must not collect an advection term.
+
+  * **The merged equation keeps A's POSITION.** §4.7.5 step 4 makes document
+    order normative and says a coupling-merged entry keeps the position of its
+    first occurrence; appending the merge to the end of the list instead
+    reorders the flattened equation vector against every other binding.
 """
 function _apply_operator_compose!(equations::Vector{Equation},
-                                  entry::CouplingOperatorCompose)
-    translate = entry.translate === nothing ? Dict{String, Any}() : entry.translate
+                                  entry::CouplingOperatorCompose,
+                                  states::OrderedDict{String, ModelVariable},
+                                  observeds::OrderedDict{String, ModelVariable},
+                                  owners::Vector{String})
+    length(entry.systems) >= 2 || return
+    a_name = entry.systems[1]
+    b_names = Set{String}(entry.systems[2:end])
+    # `owners` is parallel to `equations` and records the COMPONENT THAT
+    # AUTHORED each one (see `_attribute_equations!`). It cannot be recovered
+    # from the equation itself: `tests/valid/advection_reaction_loaded_ic_bc.esm`
+    # has the operator component `Advection` write `D(Chemistry.O3, t) = …`
+    # directly — B's equation, A's variable name — and placeholder expansion
+    # produces exactly the same shape. Reading ownership off the dependent
+    # variable's prefix therefore mistakes B's equations for A's, silently
+    # dropping the merge (two equations for one state) or, where it does merge,
+    # summing `rhs_B + rhs_A` where §4.7.1 step 4 says `rhs_A + factor * rhs_B`.
+    while length(owners) < length(equations)
+        push!(owners, "")
+    end
 
-    # Build placeholder targets: if any equation's LHS uses VarExpr("_var"),
-    # that equation is a template to be expanded for every state variable
-    # in the other systems referenced by this compose entry.
-    placeholder_indices = Int[]
-    normal_indices = Int[]
+    # §4.7.1 step 3: A's state variables, in DECLARATION order — the order the
+    # placeholder clones are emitted in, and therefore the order any unmatched
+    # clone lands in the equation vector.
+    target_vars = String[k for k in keys(states) if _component_root(k) == a_name]
+
+    # Step 2, in the normative direction AND in namespaced form (see the
+    # docstring). `systems[2]` is the system a bare VALUE belongs to; §10.2
+    # spells the map over a two-system entry, so a further B system's variables
+    # have to be written scoped to be nameable at all.
+    inv_translate = _inverse_translate(entry.translate, a_name, entry.systems[2])
+
+    # Step 3: expand each `_var` template where it stands, so that a clone which
+    # matches nothing keeps B's document position (step 5). Only a template
+    # owned by one of THIS entry's operator systems is expanded — a second
+    # `operator_compose` naming a different operator has its own template, and
+    # the first entry must not consume it. Ownership travels with the clones,
+    # which is the only way it survives: after substitution they carry A's
+    # variable names and are textually A's own equations.
+    expanded = Equation[]
+    new_owners = String[]
     for (i, eq) in enumerate(equations)
+        owner = owners[i]
         dep = lhs_dependent_variable(eq.lhs)
-        if dep !== nothing && is_placeholder(dep)
-            push!(placeholder_indices, i)
-        else
-            push!(normal_indices, i)
-        end
-    end
-
-    # Expand placeholder equations into concrete ones, one per state variable
-    # that belongs to any of the other systems in `entry.systems`.
-    if !isempty(placeholder_indices)
-        target_vars = _collect_target_state_vars(equations, normal_indices, entry.systems)
-        new_equations = Equation[]
-        delete_indices = Set{Int}()
-        for i in placeholder_indices
-            tmpl = equations[i]
-            push!(delete_indices, i)
-            placeholder_lhs_dep = lhs_dependent_variable(tmpl.lhs)
+        if dep !== nothing && is_placeholder(dep) && owner in b_names
             for var in target_vars
-                new_lhs = _substitute_placeholder(tmpl.lhs, placeholder_lhs_dep, var)
-                new_rhs = _substitute_placeholder(tmpl.rhs, placeholder_lhs_dep, var)
-                push!(new_equations, Equation(new_lhs, new_rhs; _comment=tmpl._comment))
+                push!(expanded, Equation(_substitute_placeholder(eq.lhs, dep, var),
+                                         _substitute_placeholder(eq.rhs, dep, var);
+                                         _comment=eq._comment))
+                push!(new_owners, owner)
             end
+        else
+            push!(expanded, eq)
+            push!(new_owners, owner)
         end
-        # Remove originals and append the expansions.
-        kept = Equation[]
-        for (i, eq) in enumerate(equations)
-            if !(i in delete_indices)
-                push!(kept, eq)
-            end
-        end
-        append!(kept, new_equations)
-        empty!(equations)
-        append!(equations, kept)
     end
 
-    # Now merge equations with identical dependent variables.
-    by_dep = OrderedDict{String, Vector{Int}}()
-    for (i, eq) in enumerate(equations)
+    # A's equations, indexed by dependent variable → position. First occurrence
+    # wins, which is the position §4.7.5 step 4 says the merge keeps.
+    a_index = Dict{String, Int}()
+    for (i, eq) in enumerate(expanded)
+        new_owners[i] == a_name || continue
         dep = lhs_dependent_variable(eq.lhs)
         dep === nothing && continue
-        # Apply translation to land on a canonical name. A non-String
-        # `translate` value (malformed payload — the connector/translate dicts
-        # are deliberately untyped at coercion time) is SILENTLY ignored and
-        # the equation keeps its own dependent variable. Pinned behavior for
-        # now; Wave 3 should surface the discard (e.g. via
-        # `metadata.opaque_coupling_refs`, like `_apply_couple!` does for an
-        # unparsed connector equation).
-        canonical = get(translate, dep, dep)
-        canonical = canonical isa String ? canonical : dep
-        push!(get!(by_dep, canonical, Int[]), i)
+        haskey(a_index, dep) || (a_index[dep] = i)
     end
 
-    merged = Equation[]
-    merged_indices = Set{Int}()
-    for (dep, indices) in by_dep
-        if length(indices) < 2
-            continue
+    # Step 3 (matching) + step 4 (summing). Terms are accumulated per target and
+    # summed into ONE flat `+` node at the end, so `rhs_A + rhs_B1 + rhs_B2`
+    # renders the way it did before this became a position-preserving merge.
+    extra = Dict{Int, Vector{ASTExpr}}()
+    consumed = falses(length(expanded))
+    # B's dependent variable ⇒ A's, for every match that RENAMED it. Ordered so
+    # the retarget/prune below is deterministic.
+    merged_away = OrderedDict{String, String}()
+    for (i, eq) in enumerate(expanded)
+        new_owners[i] in b_names || continue
+        b_dep = lhs_dependent_variable(eq.lhs)
+        b_dep === nothing && continue
+
+        # §4.7.1 step 3 lists the match kinds in PRECEDENCE order and the order
+        # is load-bearing (see the docstring): DIRECT, then TRANSLATION, then
+        # the bare-name fallback.
+        target = b_dep
+        factor = 1.0
+        if haskey(a_index, b_dep)
+            # DIRECT match — tried first; `target` is already right.
+        elseif haskey(inv_translate, b_dep)
+            target, factor = inv_translate[b_dep]   # TRANSLATION match
+        else
+            # Bare-name fallback: A's equation for B's SHORT name, if any. This
+            # is a name-based translation, so a hit renames like one.
+            short = _strip_component_root(b_dep)
+            for (k, a_eq) in enumerate(expanded)
+                new_owners[k] == a_name || continue
+                a_dep = lhs_dependent_variable(a_eq.lhs)
+                a_dep === nothing && continue
+                if endswith(a_dep, "." * short)
+                    target = a_dep
+                    break
+                end
+            end
         end
-        # Sum all RHS terms into a single equation; keep the first equation's LHS.
-        first_idx = indices[1]
-        lhs = equations[first_idx].lhs
-        terms = ASTExpr[equations[i].rhs for i in indices]
-        new_rhs = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
-        push!(merged, Equation(lhs, new_rhs))
-        for i in indices
-            push!(merged_indices, i)
+        haskey(a_index, target) || continue
+
+        rhs_b = eq.rhs
+        if target != b_dep
+            # §4.7.1 step 4: on a translation match the pair names ONE physical
+            # quantity in two spellings, and B's spelling is about to lose its
+            # defining equation to the merge. Rewriting B's dependent variable —
+            # and ONLY it; B's parameters and observeds keep their names — is
+            # what keeps the merged system from carrying an unknown that nothing
+            # defines. On a direct or placeholder match this rewrite is the
+            # identity, which is why it is guarded rather than unconditional.
+            rhs_b = _rename_variable(rhs_b, b_dep, target)
+            merged_away[b_dep] = target
+        end
+        if factor != 1.0
+            rhs_b = OpExpr("*", ASTExpr[NumExpr(factor), rhs_b])
+        end
+        push!(get!(extra, a_index[target], ASTExpr[]), rhs_b)
+        consumed[i] = true
+    end
+
+    if !isempty(extra)
+        for (j, terms) in extra
+            eq = expanded[j]
+            expanded[j] = Equation(eq.lhs,
+                                   OpExpr("+", ASTExpr[eq.rhs; terms...]);
+                                   _comment=eq._comment)
         end
     end
 
-    if isempty(merged)
-        return
+    # Step 5: everything not consumed by a merge survives, in document order.
+    if any(consumed)
+        keep = findall(!, consumed)
+        kept_eqs = Equation[expanded[i] for i in keep]
+        kept_owners = String[new_owners[i] for i in keep]
+        expanded, new_owners = kept_eqs, kept_owners
     end
 
-    kept = Equation[]
-    for (i, eq) in enumerate(equations)
-        if !(i in merged_indices)
-            push!(kept, eq)
+    # §4.7.1 step 4, the merged-away name (see the docstring). Retarget FIRST,
+    # then prune: a reference rewritten after its declaration is gone is a
+    # reference to nothing, and the retarget is what makes the prune safe.
+    if !isempty(merged_away)
+        for (i, eq) in enumerate(expanded)
+            expanded[i] = Equation(_rename_variables(eq.lhs, merged_away),
+                                   _rename_variables(eq.rhs, merged_away);
+                                   _comment=eq._comment)
+        end
+        for gone in keys(merged_away)
+            delete!(states, gone)
+            delete!(observeds, gone)
         end
     end
-    append!(kept, merged)
-    empty!(equations)
-    append!(equations, kept)
+
+    empty!(equations); append!(equations, expanded)
+    empty!(owners);    append!(owners, new_owners)
     return
 end
 
-function _collect_target_state_vars(equations::Vector{Equation},
-                                    normal_indices::Vector{Int},
-                                    system_names::Vector{String})::Vector{String}
-    vars = String[]
-    seen = Set{String}()
-    for i in normal_indices
-        dep = lhs_dependent_variable(equations[i].lhs)
-        dep === nothing && continue
-        parts = split(dep, ".")
-        length(parts) >= 2 || continue
-        root = String(parts[1])
-        if root in system_names && !(dep in seen)
-            push!(vars, dep)
-            push!(seen, dep)
+"""
+    _attribute_equations!(owners, equations, name)
+
+Extend `owners` so it is parallel to `equations` again, attributing every newly
+appended equation to component `name` (`""` for one no component authored — an
+equation a coupling rule itself introduced).
+
+Provenance is recorded here rather than derived later because it is genuinely
+NOT derivable: the flattener keeps one flat equation pool, and after namespacing
+an operator component's equation for a chemistry species is textually
+indistinguishable from the chemistry component's own. §4.7.1 step 4's
+`rhs_A + factor * rhs_B` needs to know which is which. Every mutation between
+collection and the compose either APPENDS (a `couple` connector equation, a
+`variable_map`'s derived-value definition) or replaces in place, so padding at
+the end is always the correct resync.
+"""
+function _attribute_equations!(owners::Vector{String},
+                               equations::Vector{Equation},
+                               name::AbstractString)
+    while length(owners) < length(equations)
+        push!(owners, String(name))
+    end
+    return owners
+end
+
+"""
+The component a namespaced flattened name belongs to: `"A.B.x"` → `"A"`, and a
+name with no dot → itself. Ownership is what tells A's equations from B's, and
+after placeholder expansion it is the only thing that still can.
+"""
+_component_root(name::AbstractString)::String =
+    (i = findfirst('.', name); i === nothing ? String(name) : String(SubString(name, 1, i - 1)))
+
+"""
+A namespaced flattened name with its leading component segment removed:
+`"A.x"` → `"x"`, `"A.B.x"` → `"B.x"`, and a name with no dot → itself. This is
+the "short name" the bare-name fallback in [`_apply_operator_compose!`](@ref)
+searches A for.
+"""
+_strip_component_root(name::AbstractString)::String =
+    (i = findfirst('.', name); i === nothing ? String(name) : String(SubString(name, i + 1)))
+
+"""
+    _qualify_translate_endpoint(name, system) -> String
+
+One `translate` endpoint put into the NAMESPACED form the matcher compares
+against (esm-spec §10.2, esm-libraries-spec §4.7.1 step 2).
+
+An endpoint is authored either bare (`"O3"`) or fully scoped
+(`"ChemistrySystem.O3"`) — §10.10.2 lists both key and value as scoped-reference
+sites — but matching runs against the namespaced dependent variable of a
+flattened equation, so a bare endpoint can never match as written. It is
+qualified with the system it belongs to under the direction rule: a KEY with
+`systems[1]`, a VALUE with `systems[2]`.
+
+An endpoint that ALREADY carries a dot is left exactly as written: it is either
+already namespaced or names a subsystem path, and re-prefixing it would break a
+map that was spelled correctly.
+
+`_var` is exempt in either position. It is a GLOBAL sentinel (esm-spec §6.4),
+never namespaced; a value of `"B._var"` is the redundant spelling §10.2 requires
+to stay harmless, and it stays harmless because placeholder expansion has by
+then made that equation a DIRECT match, which takes precedence over this map.
+"""
+function _qualify_translate_endpoint(name::AbstractString,
+                                     system::AbstractString)::String
+    isempty(name) && return String(name)
+    is_placeholder(name) && return String(name)
+    (occursin('.', name) || isempty(system)) && return String(name)
+    return string(system, ".", name)
+end
+
+"""
+    _inverse_translate(translate, a_system, b_system) -> Dict{String, Tuple{String, Float64}}
+
+The `operator_compose` `translate` map INVERTED for matching and NAMESPACED:
+`B's scoped name => (A's scoped name, factor)`.
+
+The authored direction is normative and is NOT symmetric (esm-spec §10.2,
+esm-libraries-spec §4.7.1 step 2): for `"systems": [A, B]` every KEY names a
+variable of A and every VALUE names a variable of B. The matching loop walks
+B's equations, so it needs the inverse; building it here is what keeps the
+lookup from being done backwards, which would make a correct map match nothing.
+
+A value is either a plain scoped-reference string or a `{"var": …, "factor": …}`
+object (§10.2 shows both spellings). A value of neither shape is a malformed
+payload — the `translate` dict is deliberately untyped at coercion time — and is
+dropped, leaving the entry to fall back on direct matching.
+
+Both endpoints are put into namespaced form on the way in; see
+[`_qualify_translate_endpoint`](@ref) for why a bare one otherwise matches
+nothing.
+"""
+function _inverse_translate(translate, a_system::AbstractString="",
+                            b_system::AbstractString="")::Dict{String, Tuple{String, Float64}}
+    out = Dict{String, Tuple{String, Float64}}()
+    translate === nothing && return out
+    for (a_var, v) in translate
+        a_q = _qualify_translate_endpoint(String(a_var), a_system)
+        if v isa AbstractString
+            out[_qualify_translate_endpoint(String(v), b_system)] = (a_q, 1.0)
+        elseif v isa AbstractDict
+            b_var = get(v, "var", get(v, "to", get(v, "target", nothing)))
+            b_var isa AbstractString || continue
+            f = get(v, "factor", 1.0)
+            out[_qualify_translate_endpoint(String(b_var), b_system)] =
+                (a_q, f isa Real ? Float64(f) : 1.0)
         end
     end
-    return vars
+    return out
+end
+
+"""
+    _rename_variable(expr, from, to) -> ASTExpr
+
+Every `VarExpr` named exactly `from` rewritten to `to`; everything else — other
+variables, operators, every non-expression field — untouched. This is §4.7.1
+step 4's dependent-variable rewrite, which is deliberately NOT a general
+substitution: B's parameters and observeds keep their own names.
+"""
+function _rename_variable(expr::ASTExpr, from::AbstractString,
+                          to::AbstractString)::ASTExpr
+    if expr isa VarExpr
+        return expr.name == from ? VarExpr(String(to)) : expr
+    elseif expr isa OpExpr
+        return map_children(x -> _rename_variable(x, from, to), expr)
+    end
+    return expr
+end
+
+"""
+    _rename_variables(expr, renames) -> ASTExpr
+
+[`_rename_variable`](@ref) over a whole map at once, applied to every `VarExpr`
+in ONE pass so a rename can never chain into another entry's target.
+
+This is §4.7.1 step 4's document-wide retarget of the names an
+`operator_compose` merged away. Unlike the step-4 rewrite of B's own `rhs_B`,
+which touches only the dependent variable of the pair being merged, this runs
+over every equation in the flattened pool: a system that is neither A nor B may
+still reference `B.x` by its scoped name, and that reference has to follow the
+quantity to A's spelling before B's declaration is pruned.
+"""
+function _rename_variables(expr::ASTExpr,
+                           renames::AbstractDict{String, String})::ASTExpr
+    isempty(renames) && return expr
+    if expr isa VarExpr
+        to = get(renames, expr.name, nothing)
+        return to === nothing ? expr : VarExpr(to)
+    elseif expr isa OpExpr
+        return map_children(x -> _rename_variables(x, renames), expr)
+    end
+    return expr
 end
 
 function _substitute_placeholder(expr::ASTExpr,

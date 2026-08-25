@@ -77,56 +77,12 @@
       "surface_test": "pkg/earthsci-ast-rs/tests/api_surface.rs",
       "public_modules": [
         "adapter_support",
-        "aggregate",
-        "analysis",
-        "area_faq",
-        "broad_phase",
-        "cadence",
-        "canonicalize",
-        "classification",
-        "compile_error",
-        "coupling",
-        "coupling_imports",
-        "dae",
-        "data_output",
-        "diagnostic",
-        "display",
-        "edit",
-        "error",
         "esio_provider",
-        "expression",
-        "flatten",
-        "geometry",
-        "graph",
+        "extension",
         "intern",
-        "join",
-        "lower_enums",
-        "lower_expression_templates",
-        "migration",
-        "op_registry",
-        "parse",
-        "parse_expression",
-        "pde_inline_tests",
         "performance",
-        "prepare",
         "provider",
-        "pushdown_rewrite",
-        "reactions",
-        "ref_loading",
-        "reference_resolution",
-        "registered_functions",
-        "relational",
-        "serialize",
-        "simulate",
         "simulate_array",
-        "structural",
-        "substitute",
-        "template_imports",
-        "types",
-        "unit_conversion",
-        "units",
-        "validate",
-        "value_invention",
         "wasm"
       ],
       "public_module_note": "`cargo public-api` needs a nightly toolchain and is not installed here, so the test is the vendored equivalent: it parses the crate root, which is the only source of `earthsci_ast::<name>` paths. Module interiors are extension seams reachable as `earthsci_ast::<module>::<name>`."
@@ -145,19 +101,19 @@
     }
   },
   "counts": {
-    "symbols": 954,
+    "symbols": 909,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 291,
-      "typescript": 219,
-      "python": 234,
-      "rust": 292,
+      "julia": 298,
+      "typescript": 231,
+      "python": 243,
+      "rust": 323,
       "go": 383,
       "editor": 71
     },
     "by_tier": {
-      "extension": 699,
-      "stable": 255
+      "extension": 637,
+      "stable": 272
     }
   },
   "planned": [
@@ -168,22 +124,6 @@
       "affects": [
         "python",
         "rust"
-      ]
-    },
-    {
-      "canonical": "closed_function_names",
-      "issue": "Julia, Rust and Go export a FUNCTION; TypeScript exports a CONSTANT array `CLOSED_FUNCTION_NAMES`.",
-      "resolution": "TypeScript adds `closedFunctionNames()`; the constant stays one minor as a deprecated alias.",
-      "affects": [
-        "typescript"
-      ]
-    },
-    {
-      "canonical": "derive_odes",
-      "issue": "TypeScript spells it `deriveODEs`, violating the §2 rule that TypeScript is lowerCamelCase of the canonical name (`deriveOdes`). TypeScript already spells the sibling `odeStates` / `isOdeState` correctly.",
-      "resolution": "Rename to `deriveOdes`; `deriveODEs` stays one minor as an alias.",
-      "affects": [
-        "typescript"
       ]
     },
     {
@@ -230,7 +170,7 @@
     {
       "canonical": "system_kind",
       "issue": "Julia / Python / Rust / Go export a FUNCTION `system_kind`; TypeScript exports both the function `systemKind` and the type `SystemKind`, and Go additionally has `EffectiveSystemKind` with no counterpart elsewhere.",
-      "resolution": "Keep the function/type pair (they are distinct symbols under the (name, kind) identity rule). Decide whether `EffectiveSystemKind` is `declared_system_kind`'s peer or a Go-only convenience, and harmonise the trio `system_kind` / `declared_system_kind` / `declared_system_kind_mismatch`, which currently exists in three different two-binding subsets.",
+      "resolution": "RULED (phase 6, API_SPEC.md §8 item 11): the family is three distinct questions plus one composition. `system_kind(model)` derives, `declared_system_kind(model)` reads the field, and `effective_system_kind(model)` is `declared ?? derived` — the question a caller choosing a solver actually asks. `declared_system_kind_mismatch` is deleted. TypeScript has all three as of phase 6; Julia, Python and Go still owe `effective_system_kind`. The function/type pair stays (they are distinct symbols under the (name, kind) identity rule).",
       "affects": [
         "julia",
         "typescript",
@@ -255,16 +195,13 @@
       "bindings": {
         "go": "AddContinuousEvent",
         "julia": "add_continuous_event",
+        "python": [
+          "add_continuous_event",
+          "add_continuous_event_to_model"
+        ],
         "typescript": "addContinuousEvent"
-      }
-    },
-    {
-      "name": "add_continuous_event_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_continuous_event_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_continuous_event_to_model (expected add_continuous_event); multiple spellings exported by: python"
     },
     {
       "name": "add_coupling",
@@ -273,17 +210,14 @@
       "bindings": {
         "go": "AddCoupling",
         "julia": "add_coupling",
+        "python": [
+          "add_coupling",
+          "add_coupling_to_file"
+        ],
         "rust": "add_coupling",
         "typescript": "addCoupling"
-      }
-    },
-    {
-      "name": "add_coupling_to_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_coupling_to_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_coupling_to_file (expected add_coupling); multiple spellings exported by: python"
     },
     {
       "name": "add_discrete_event",
@@ -292,16 +226,13 @@
       "bindings": {
         "go": "AddDiscreteEvent",
         "julia": "add_discrete_event",
+        "python": [
+          "add_discrete_event",
+          "add_discrete_event_to_model"
+        ],
         "typescript": "addDiscreteEvent"
-      }
-    },
-    {
-      "name": "add_discrete_event_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_discrete_event_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_discrete_event_to_model (expected add_discrete_event); multiple spellings exported by: python"
     },
     {
       "name": "add_equation",
@@ -310,17 +241,14 @@
       "bindings": {
         "go": "AddEquation",
         "julia": "add_equation",
+        "python": [
+          "add_equation",
+          "add_equation_to_model"
+        ],
         "rust": "add_equation",
         "typescript": "addEquation"
-      }
-    },
-    {
-      "name": "add_equation_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_equation_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_equation_to_model (expected add_equation); multiple spellings exported by: python"
     },
     {
       "name": "add_model",
@@ -337,9 +265,14 @@
       "bindings": {
         "go": "AddReaction",
         "julia": "add_reaction",
+        "python": [
+          "add_reaction",
+          "add_reaction_to_system"
+        ],
         "rust": "add_reaction",
         "typescript": "addReaction"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_reaction_to_system (expected add_reaction); multiple spellings exported by: python"
     },
     {
       "name": "add_reaction_system",
@@ -350,31 +283,20 @@
       }
     },
     {
-      "name": "add_reaction_to_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_reaction_to_system"
-      }
-    },
-    {
       "name": "add_species",
       "kind": "function",
       "tier": "stable",
       "bindings": {
         "go": "AddSpecies",
         "julia": "add_species",
+        "python": [
+          "add_species",
+          "add_species_to_system"
+        ],
         "rust": "add_species",
         "typescript": "addSpecies"
-      }
-    },
-    {
-      "name": "add_species_to_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_species_to_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_species_to_system (expected add_species); multiple spellings exported by: python"
     },
     {
       "name": "add_variable",
@@ -383,17 +305,14 @@
       "bindings": {
         "go": "AddVariable",
         "julia": "add_variable",
+        "python": [
+          "add_variable",
+          "add_variable_to_model"
+        ],
         "rust": "add_variable",
         "typescript": "addVariable"
-      }
-    },
-    {
-      "name": "add_variable_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_variable_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_variable_to_model (expected add_variable); multiple spellings exported by: python"
     },
     {
       "name": "adjacency",
@@ -412,6 +331,14 @@
         "julia": "AffectEquation",
         "python": "AffectEquation",
         "rust": "AffectEquation"
+      }
+    },
+    {
+      "name": "alg",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Alg"
       }
     },
     {
@@ -511,14 +438,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "apply_value_invention"
-      }
-    },
-    {
-      "name": "apply_variable_mapping",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "apply_variable_mapping"
       }
     },
     {
@@ -703,8 +622,13 @@
         "go": "BuildReferenceGraph",
         "julia": "build_reference_graph",
         "python": "build_reference_graph",
-        "rust": "build_reference_graph"
-      }
+        "rust": [
+          "build_reference_graph",
+          "build_reference_graph_with_index_sets"
+        ],
+        "typescript": "buildReferenceGraph"
+      },
+      "notes": "spelling differs from the §2 rule: rust=build_reference_graph_with_index_sets (expected build_reference_graph); multiple spellings exported by: rust"
     },
     {
       "name": "build_reference_graph_from_model",
@@ -753,38 +677,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "build_zarr_sink"
-      }
-    },
-    {
-      "name": "cache_miss",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "CacheMiss"
-      }
-    },
-    {
-      "name": "cache_path_for_url",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cache_path_for_url"
-      }
-    },
-    {
-      "name": "cached_fetcher",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cached_fetcher"
-      }
-    },
-    {
-      "name": "cached_opener",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cached_opener"
       }
     },
     {
@@ -868,6 +760,33 @@
       "tier": "extension",
       "bindings": {
         "go": "CallbackCoupling"
+      }
+    },
+    {
+      "name": "callback_fn",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "CallbackFn"
+      }
+    },
+    {
+      "name": "callback_set",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "CallbackSet",
+        "rust": "CallbackSet"
+      }
+    },
+    {
+      "name": "callbacks",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "callbacks",
+        "python": "callbacks",
+        "rust": "callbacks"
       }
     },
     {
@@ -1070,7 +989,8 @@
       "bindings": {
         "go": "ClosedFunctionNames",
         "julia": "closed_function_names",
-        "rust": "closed_function_names"
+        "rust": "closed_function_names",
+        "typescript": "closedFunctionNames"
       }
     },
     {
@@ -1151,6 +1071,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeCadenceObservedCycle"
+      }
+    },
+    {
+      "name": "code_couple_multiplicative_no_tendency",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeCoupleMultiplicativeNoTendency"
       }
     },
     {
@@ -1610,6 +1538,14 @@
       }
     },
     {
+      "name": "compile",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Compile"
+      }
+    },
+    {
       "name": "compile_array",
       "kind": "function",
       "tier": "extension",
@@ -1691,12 +1627,8 @@
         "julia": "component_graph",
         "python": "component_graph",
         "rust": "component_graph",
-        "typescript": [
-          "componentGraph",
-          "component_graph"
-        ]
-      },
-      "notes": "spelling differs from the §2 rule: typescript=component_graph (expected componentGraph); multiple spellings exported by: typescript"
+        "typescript": "componentGraph"
+      }
     },
     {
       "name": "component_graph",
@@ -1760,6 +1692,7 @@
       "bindings": {
         "go": "Compose",
         "julia": "compose",
+        "rust": "compose",
         "typescript": "compose"
       }
     },
@@ -1864,6 +1797,16 @@
       "tier": "extension",
       "bindings": {
         "rust": "Coordinate"
+      }
+    },
+    {
+      "name": "couple_multiplicative_no_tendency_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "CoupleMultiplicativeNoTendencyError",
+        "python": "CoupleMultiplicativeNoTendencyError",
+        "typescript": "CoupleMultiplicativeNoTendencyError"
       }
     },
     {
@@ -2140,14 +2083,6 @@
       }
     },
     {
-      "name": "data_source_dispatch_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "DataSourceDispatchError"
-      }
-    },
-    {
       "name": "data_source_extent",
       "kind": "type",
       "tier": "extension",
@@ -2207,16 +2142,18 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "DeclaredSystemKind",
+        "julia": "declared_system_kind",
         "python": "declared_system_kind",
         "typescript": "declaredSystemKind"
       }
     },
     {
-      "name": "declared_system_kind_mismatch",
-      "kind": "function",
+      "name": "default_abstol",
+      "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "julia": "declared_system_kind_mismatch"
+        "rust": "DEFAULT_ABSTOL"
       }
     },
     {
@@ -2241,6 +2178,14 @@
       "tier": "extension",
       "bindings": {
         "typescript": "DEFAULT_MIN_COMPLEXITY"
+      }
+    },
+    {
+      "name": "default_reltol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DEFAULT_RELTOL"
       }
     },
     {
@@ -2332,12 +2277,16 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "DeriveODEs",
         "julia": "derive_odes",
         "python": "derive_odes",
         "rust": "derive_odes",
-        "typescript": "deriveODEs"
+        "typescript": [
+          "deriveODEs",
+          "deriveOdes"
+        ]
       },
-      "notes": "spelling differs from the §2 rule: typescript=deriveODEs (expected deriveOdes)"
+      "notes": "spelling differs from the §2 rule: go=DeriveODEs (expected DeriveOdes); typescript=deriveODEs (expected deriveOdes); multiple spellings exported by: typescript"
     },
     {
       "name": "derive_output_gridding",
@@ -2608,14 +2557,6 @@
       }
     },
     {
-      "name": "dot_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "DOTExporter"
-      }
-    },
-    {
       "name": "e_canonical_divby_zero",
       "kind": "constant",
       "tier": "extension",
@@ -2647,7 +2588,8 @@
       "bindings": {
         "go": "EdgeKind",
         "python": "EdgeKind",
-        "rust": "EdgeKind"
+        "rust": "EdgeKind",
+        "typescript": "EdgeKind"
       }
     },
     {
@@ -2703,9 +2645,12 @@
     {
       "name": "effective_system_kind",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "EffectiveSystemKind"
+        "go": "EffectiveSystemKind",
+        "julia": "effective_system_kind",
+        "python": "effective_system_kind",
+        "typescript": "effectiveSystemKind"
       }
     },
     {
@@ -2735,6 +2680,15 @@
       }
     },
     {
+      "name": "ensemble_problem",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "EnsembleProblem",
+        "rust": "EnsembleProblem"
+      }
+    },
+    {
       "name": "entity_not_found_error",
       "kind": "error",
       "tier": "stable",
@@ -2748,6 +2702,9 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "EnumLoweringError",
+        "julia": "EnumLoweringError",
+        "python": "EnumLoweringError",
         "rust": "EnumLoweringError",
         "typescript": "EnumLoweringError"
       }
@@ -2863,9 +2820,10 @@
     {
       "name": "error_code_names",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "error_code_names"
+        "julia": "error_code_names",
+        "rust": "error_code_names"
       }
     },
     {
@@ -2874,6 +2832,8 @@
       "tier": "stable",
       "bindings": {
         "julia": "ERROR_CODES",
+        "python": "ERROR_CODES",
+        "rust": "ERROR_CODES",
         "typescript": "ERROR_CODES"
       }
     },
@@ -2914,9 +2874,8 @@
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "ErrorIcInReactionSystem"
-      },
-      "notes": "spelling differs from the §2 rule: go=ErrorIcInReactionSystem (expected ErrorICInReactionSystem)"
+        "go": "ErrorICInReactionSystem"
+      }
     },
     {
       "name": "error_null_reaction",
@@ -3080,6 +3039,26 @@
       "tier": "extension",
       "bindings": {
         "julia": "esm_path"
+      }
+    },
+    {
+      "name": "esm_problem",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "esm_problem",
+        "python": "esm_problem",
+        "rust": "esm_problem"
+      }
+    },
+    {
+      "name": "esm_problem",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "EsmProblem",
+        "python": "EsmProblem",
+        "rust": "EsmProblem"
       }
     },
     {
@@ -3262,75 +3241,11 @@
       }
     },
     {
-      "name": "expand_url_template",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "expand_url_template"
-      }
-    },
-    {
-      "name": "expand_with_mirrors",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "expand_with_mirrors"
-      }
-    },
-    {
       "name": "expanded_model",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "julia": "expanded_model"
-      }
-    },
-    {
-      "name": "export_component_graph_dot",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphDOT"
-      }
-    },
-    {
-      "name": "export_component_graph_json",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphJSON"
-      }
-    },
-    {
-      "name": "export_component_graph_mermaid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphMermaid"
-      }
-    },
-    {
-      "name": "export_expression_graph_dot",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphDOT"
-      }
-    },
-    {
-      "name": "export_expression_graph_json",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphJSON"
-      }
-    },
-    {
-      "name": "export_expression_graph_mermaid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphMermaid"
       }
     },
     {
@@ -3359,14 +3274,6 @@
       "bindings": {
         "editor": "Expression",
         "go": "Expression"
-      }
-    },
-    {
-      "name": "expression_analyzer",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "ExpressionAnalyzer"
       }
     },
     {
@@ -3549,16 +3456,13 @@
       "bindings": {
         "go": "Extract",
         "julia": "extract",
+        "python": [
+          "extract",
+          "extract_component_from_file"
+        ],
         "typescript": "extract"
-      }
-    },
-    {
-      "name": "extract_component_from_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "extract_component_from_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=extract_component_from_file (expected extract); multiple spellings exported by: python"
     },
     {
       "name": "fail",
@@ -3591,22 +3495,6 @@
       "bindings": {
         "julia": "field_reduce",
         "rust": "field_reduce"
-      }
-    },
-    {
-      "name": "file_anchor_for_time",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "file_anchor_for_time"
-      }
-    },
-    {
-      "name": "file_anchors_in_range",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "file_anchors_in_range"
       }
     },
     {
@@ -3867,9 +3755,8 @@
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "FmtAscii"
-      },
-      "notes": "spelling differs from the §2 rule: go=FmtAscii (expected FmtASCII)"
+        "go": "FmtASCII"
+      }
     },
     {
       "name": "fmt_latex",
@@ -4121,15 +4008,6 @@
       }
     },
     {
-      "name": "get_supported_migration_targets",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "rust": "get_supported_migration_targets",
-        "typescript": "getSupportedMigrationTargets"
-      }
-    },
-    {
       "name": "get_value_at_path",
       "kind": "function",
       "tier": "extension",
@@ -4151,8 +4029,10 @@
       "tier": "stable",
       "bindings": {
         "editor": "Graph",
+        "go": "Graph",
         "julia": "Graph",
         "python": "Graph",
+        "rust": "Graph",
         "typescript": "Graph"
       }
     },
@@ -4163,22 +4043,6 @@
       "bindings": {
         "go": "GraphEdge",
         "python": "GraphEdge"
-      }
-    },
-    {
-      "name": "grid_loader",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "python": "GridLoader"
-      }
-    },
-    {
-      "name": "grid_loader_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "GridLoaderError"
       }
     },
     {
@@ -4313,11 +4177,29 @@
       }
     },
     {
+      "name": "init",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "init",
+        "rust": "init"
+      }
+    },
+    {
       "name": "int_expr",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "julia": "IntExpr"
+      }
+    },
+    {
+      "name": "integrator",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "Integrator",
+        "rust": "Integrator"
       }
     },
     {
@@ -4457,14 +4339,6 @@
       }
     },
     {
-      "name": "json_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "JSONExporter"
-      }
-    },
-    {
       "name": "key",
       "kind": "type",
       "tier": "extension",
@@ -4478,6 +4352,22 @@
       "tier": "extension",
       "bindings": {
         "typescript": "leafCadence"
+      }
+    },
+    {
+      "name": "level_error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "LevelError"
+      }
+    },
+    {
+      "name": "level_warning",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "LevelWarning"
       }
     },
     {
@@ -4517,14 +4407,6 @@
       }
     },
     {
-      "name": "load_data",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_data"
-      }
-    },
-    {
       "name": "load_document",
       "kind": "function",
       "tier": "stable",
@@ -4542,14 +4424,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "load_document_with_options"
-      }
-    },
-    {
-      "name": "load_grid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_grid"
       }
     },
     {
@@ -4590,22 +4464,6 @@
       }
     },
     {
-      "name": "load_points",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_points"
-      }
-    },
-    {
-      "name": "load_static",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_static"
-      }
-    },
-    {
       "name": "load_string",
       "kind": "function",
       "tier": "stable",
@@ -4642,17 +4500,32 @@
       "tier": "stable",
       "bindings": {
         "go": "LowerEnums",
-        "julia": "lower_enums!",
+        "julia": [
+          "lower_enums",
+          "lower_enums!"
+        ],
+        "python": "lower_enums",
         "rust": "lower_enums",
         "typescript": "lowerEnums"
+      },
+      "notes": "multiple spellings exported by: julia"
+    },
+    {
+      "name": "lower_enums_mut",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "LowerEnumsMut",
+        "python": "lower_enums_mut",
+        "rust": "lower_enums_mut"
       }
     },
     {
-      "name": "lower_enums_error",
-      "kind": "error",
+      "name": "lower_enums_raw",
+      "kind": "function",
       "tier": "extension",
       "bindings": {
-        "go": "LowerEnumsError"
+        "rust": "lower_enums_raw"
       }
     },
     {
@@ -4750,24 +4623,13 @@
       "tier": "stable",
       "bindings": {
         "go": "Merge",
+        "python": [
+          "merge",
+          "merge_esm_files"
+        ],
         "typescript": "merge"
-      }
-    },
-    {
-      "name": "merge_esm_files",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "merge_esm_files"
-      }
-    },
-    {
-      "name": "mermaid_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "MermaidExporter"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=merge_esm_files (expected merge); multiple spellings exported by: python"
     },
     {
       "name": "metadata",
@@ -4802,14 +4664,6 @@
         "python": "MigrationError",
         "rust": "MigrationError",
         "typescript": "MigrationError"
-      }
-    },
-    {
-      "name": "mirror_fallback_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "MirrorFallbackError"
       }
     },
     {
@@ -4937,30 +4791,6 @@
       "tier": "extension",
       "bindings": {
         "go": "NewCadenceClassifier"
-      }
-    },
-    {
-      "name": "new_dot_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewDOTExporter"
-      }
-    },
-    {
-      "name": "new_json_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewJSONExporter"
-      }
-    },
-    {
-      "name": "new_mermaid_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewMermaidExporter"
       }
     },
     {
@@ -5093,7 +4923,8 @@
       "tier": "stable",
       "bindings": {
         "julia": "observed_field",
-        "python": "observed_field"
+        "python": "observed_field",
+        "rust": "observed_field"
       }
     },
     {
@@ -5198,14 +5029,6 @@
       "tier": "extension",
       "bindings": {
         "go": "OpTableLookup"
-      }
-    },
-    {
-      "name": "open_with_fallback",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "open_with_fallback"
       }
     },
     {
@@ -5319,14 +5142,6 @@
       }
     },
     {
-      "name": "parameter_names",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "parameter_names"
-      }
-    },
-    {
       "name": "parameter_sweep",
       "kind": "type",
       "tier": "extension",
@@ -5372,10 +5187,15 @@
     {
       "name": "parameters",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "julia": [
+          "parameter_names",
+          "parameters"
+        ],
         "typescript": "parameters"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: julia=parameter_names (expected parameters); multiple spellings exported by: julia"
     },
     {
       "name": "parse_cadence",
@@ -5424,14 +5244,6 @@
         "python": "parse_expression",
         "rust": "parse_expression",
         "typescript": "parseExpression"
-      }
-    },
-    {
-      "name": "parse_iso_duration",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "parse_iso_duration"
       }
     },
     {
@@ -5649,22 +5461,6 @@
       }
     },
     {
-      "name": "points_loader",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "python": "PointsLoader"
-      }
-    },
-    {
-      "name": "points_loader_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "PointsLoaderError"
-      }
-    },
-    {
       "name": "polygon_area",
       "kind": "function",
       "tier": "stable",
@@ -5690,29 +5486,11 @@
       }
     },
     {
-      "name": "prepare",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "prepare",
-        "python": "prepare",
-        "rust": "prepare"
-      }
-    },
-    {
       "name": "prepare_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "rust": "PrepareError"
-      }
-    },
-    {
-      "name": "prepare_options",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "PrepareOptions"
       }
     },
     {
@@ -5748,28 +5526,27 @@
       }
     },
     {
-      "name": "prepared",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "Prepared"
-      }
-    },
-    {
-      "name": "prepared_model",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "PreparedModel",
-        "python": "PreparedModel"
-      }
-    },
-    {
       "name": "preset_times_trigger",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "julia": "PresetTimesTrigger"
+      }
+    },
+    {
+      "name": "problem_input",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProblemInput"
+      }
+    },
+    {
+      "name": "problem_options",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "ProblemOptions"
       }
     },
     {
@@ -6023,14 +5800,6 @@
       }
     },
     {
-      "name": "records_for_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "records_for_file"
-      }
-    },
-    {
       "name": "records_per_file",
       "kind": "type",
       "tier": "extension",
@@ -6064,15 +5833,8 @@
         "go": "ReferenceEdge",
         "julia": "ReferenceEdge",
         "python": "ReferenceEdge",
-        "rust": "ReferenceEdge"
-      }
-    },
-    {
-      "name": "reference_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "rust": "ReferenceError"
+        "rust": "ReferenceEdge",
+        "typescript": "ReferenceEdge"
       }
     },
     {
@@ -6083,7 +5845,8 @@
         "go": "ReferenceGraph",
         "julia": "ReferenceGraph",
         "python": "ReferenceGraph",
-        "rust": "ReferenceGraph"
+        "rust": "ReferenceGraph",
+        "typescript": "ReferenceGraph"
       }
     },
     {
@@ -6101,8 +5864,14 @@
       "bindings": {
         "go": "ReferenceResolutionError",
         "julia": "ReferenceResolutionError",
-        "python": "ReferenceResolutionError"
-      }
+        "python": "ReferenceResolutionError",
+        "rust": [
+          "ReferenceError",
+          "ReferenceResolutionError"
+        ],
+        "typescript": "ReferenceResolutionError"
+      },
+      "notes": "spelling differs from the §2 rule: rust=ReferenceError (expected ReferenceResolutionError); multiple spellings exported by: rust"
     },
     {
       "name": "reference_vertex",
@@ -6112,7 +5881,8 @@
         "go": "ReferenceVertex",
         "julia": "ReferenceVertex",
         "python": "ReferenceVertex",
-        "rust": "ReferenceVertex"
+        "rust": "ReferenceVertex",
+        "typescript": "ReferenceVertex"
       }
     },
     {
@@ -6171,6 +5941,23 @@
       }
     },
     {
+      "name": "remake",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "remake",
+        "rust": "remake"
+      }
+    },
+    {
+      "name": "remake",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "Remake"
+      }
+    },
+    {
       "name": "remake_parameters",
       "kind": "function",
       "tier": "extension",
@@ -6185,17 +5972,14 @@
       "bindings": {
         "go": "RemoveCoupling",
         "julia": "remove_coupling",
+        "python": [
+          "remove_coupling",
+          "remove_coupling_from_file"
+        ],
         "rust": "remove_coupling",
         "typescript": "removeCoupling"
-      }
-    },
-    {
-      "name": "remove_coupling_from_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_coupling_from_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_coupling_from_file (expected remove_coupling); multiple spellings exported by: python"
     },
     {
       "name": "remove_equation",
@@ -6203,9 +5987,14 @@
       "tier": "stable",
       "bindings": {
         "julia": "remove_equation",
+        "python": [
+          "remove_equation",
+          "remove_equation_from_model"
+        ],
         "rust": "remove_equation",
         "typescript": "removeEquation"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_equation_from_model (expected remove_equation); multiple spellings exported by: python"
     },
     {
       "name": "remove_equation_at",
@@ -6224,30 +6013,19 @@
       }
     },
     {
-      "name": "remove_equation_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_equation_from_model"
-      }
-    },
-    {
       "name": "remove_event",
       "kind": "function",
       "tier": "stable",
       "bindings": {
         "go": "RemoveEvent",
         "julia": "remove_event",
+        "python": [
+          "remove_event",
+          "remove_event_from_model"
+        ],
         "typescript": "removeEvent"
-      }
-    },
-    {
-      "name": "remove_event_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_event_from_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_event_from_model (expected remove_event); multiple spellings exported by: python"
     },
     {
       "name": "remove_model",
@@ -6264,17 +6042,14 @@
       "bindings": {
         "go": "RemoveReaction",
         "julia": "remove_reaction",
+        "python": [
+          "remove_reaction",
+          "remove_reaction_from_system"
+        ],
         "rust": "remove_reaction",
         "typescript": "removeReaction"
-      }
-    },
-    {
-      "name": "remove_reaction_from_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_reaction_from_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_reaction_from_system (expected remove_reaction); multiple spellings exported by: python"
     },
     {
       "name": "remove_species",
@@ -6283,17 +6058,14 @@
       "bindings": {
         "go": "RemoveSpecies",
         "julia": "remove_species",
+        "python": [
+          "remove_species",
+          "remove_species_from_system"
+        ],
         "rust": "remove_species",
         "typescript": "removeSpecies"
-      }
-    },
-    {
-      "name": "remove_species_from_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_species_from_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_species_from_system (expected remove_species); multiple spellings exported by: python"
     },
     {
       "name": "remove_variable",
@@ -6302,17 +6074,14 @@
       "bindings": {
         "go": "RemoveVariable",
         "julia": "remove_variable",
+        "python": [
+          "remove_variable",
+          "remove_variable_from_model"
+        ],
         "rust": "remove_variable",
         "typescript": "removeVariable"
-      }
-    },
-    {
-      "name": "remove_variable_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_variable_from_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_variable_from_model (expected remove_variable); multiple spellings exported by: python"
     },
     {
       "name": "rename_variable",
@@ -6321,8 +6090,13 @@
       "bindings": {
         "go": "RenameVariable",
         "julia": "rename_variable",
+        "python": [
+          "rename_variable",
+          "rename_variable_in_model"
+        ],
         "typescript": "renameVariable"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=rename_variable_in_model (expected rename_variable); multiple spellings exported by: python"
     },
     {
       "name": "rename_variable_in_file",
@@ -6330,14 +6104,6 @@
       "tier": "extension",
       "bindings": {
         "go": "RenameVariableInFile"
-      }
-    },
-    {
-      "name": "rename_variable_in_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "rename_variable_in_model"
       }
     },
     {
@@ -6389,22 +6155,6 @@
       }
     },
     {
-      "name": "resolve_data_dir",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "resolve_data_dir"
-      }
-    },
-    {
-      "name": "resolve_files",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "resolve_files"
-      }
-    },
-    {
       "name": "resolve_model_refs",
       "kind": "function",
       "tier": "extension",
@@ -6428,7 +6178,8 @@
         "go": "ResolveReferences",
         "julia": "resolve_references",
         "python": "resolve_references",
-        "rust": "resolve_references"
+        "rust": "resolve_references",
+        "typescript": "resolveReferences"
       }
     },
     {
@@ -6449,6 +6200,14 @@
         "python": "resolve_subsystem_refs",
         "rust": "resolve_subsystem_refs",
         "typescript": "resolveSubsystemRefs"
+      }
+    },
+    {
+      "name": "resolve_subsystem_refs_raw",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "resolve_subsystem_refs_raw"
       }
     },
     {
@@ -6476,6 +6235,15 @@
       "tier": "extension",
       "bindings": {
         "rust": "ResolvedExpr"
+      }
+    },
+    {
+      "name": "return_code",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "python": "ReturnCode",
+        "rust": "ReturnCode"
       }
     },
     {
@@ -6784,16 +6552,6 @@
       }
     },
     {
-      "name": "simulate",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "julia": "simulate",
-        "python": "simulate",
-        "rust": "simulate"
-      }
-    },
-    {
       "name": "simulate_error",
       "kind": "error",
       "tier": "stable",
@@ -6803,28 +6561,11 @@
       }
     },
     {
-      "name": "simulate_options",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "SimulateOptions"
-      }
-    },
-    {
       "name": "simulation_error",
       "kind": "error",
       "tier": "extension",
       "bindings": {
         "python": "SimulationError"
-      }
-    },
-    {
-      "name": "simulation_result",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "SimulationResult",
-        "python": "SimulationResult"
       }
     },
     {
@@ -6945,8 +6686,9 @@
     {
       "name": "solution",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "python": "Solution",
         "rust": "Solution"
       }
     },
@@ -6959,11 +6701,44 @@
       }
     },
     {
-      "name": "solver_choice",
+      "name": "solve",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "python": "solve",
+        "rust": "solve"
+      }
+    },
+    {
+      "name": "solve_all",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "python": "solve_all"
+      }
+    },
+    {
+      "name": "solve_ensemble",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "solve_ensemble"
+      }
+    },
+    {
+      "name": "solve_options",
       "kind": "type",
       "tier": "extension",
       "bindings": {
-        "rust": "SolverChoice"
+        "rust": "SolveOptions"
+      }
+    },
+    {
+      "name": "solve_to_completion",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "solve_to_completion"
       }
     },
     {
@@ -7026,19 +6801,20 @@
       }
     },
     {
-      "name": "static_loader",
-      "kind": "type",
-      "tier": "extension",
+      "name": "step",
+      "kind": "function",
+      "tier": "stable",
       "bindings": {
-        "python": "StaticLoader"
+        "python": "step",
+        "rust": "step"
       }
     },
     {
-      "name": "static_loader_error",
-      "kind": "error",
+      "name": "step_status",
+      "kind": "type",
       "tier": "extension",
       "bindings": {
-        "python": "StaticLoaderError"
+        "rust": "StepStatus"
       }
     },
     {
@@ -7054,6 +6830,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "StoichiometricMatrix",
         "julia": "stoichiometric_matrix",
         "python": "stoichiometric_matrix",
         "rust": "stoichiometric_matrix",
@@ -7164,14 +6941,6 @@
       }
     },
     {
-      "name": "substitute_in_expression",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "substitute_in_expression"
-      }
-    },
-    {
       "name": "substitute_in_file",
       "kind": "function",
       "tier": "extension",
@@ -7180,11 +6949,11 @@
       }
     },
     {
-      "name": "substitute_in_file_with_scoped",
+      "name": "substitute_in_file_with_context",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "go": "SubstituteInFileWithScoped"
+        "go": "SubstituteInFileWithContext"
       }
     },
     {
@@ -7201,17 +6970,10 @@
     {
       "name": "substitute_in_model_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteInModelWithContext",
         "rust": "substitute_in_model_with_context"
-      }
-    },
-    {
-      "name": "substitute_in_model_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteInModelWithScoped"
       }
     },
     {
@@ -7228,33 +6990,19 @@
     {
       "name": "substitute_in_reaction_system_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteInReactionSystemWithContext",
         "rust": "substitute_in_reaction_system_with_context"
-      }
-    },
-    {
-      "name": "substitute_in_reaction_system_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteInReactionSystemWithScoped"
       }
     },
     {
       "name": "substitute_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteWithContext",
         "rust": "substitute_with_context"
-      }
-    },
-    {
-      "name": "substitute_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteWithScoped"
       }
     },
     {
@@ -7322,8 +7070,17 @@
       "bindings": {
         "go": "SupportedMigrationTargets",
         "julia": "supported_migration_targets",
-        "python": "supported_migration_targets"
-      }
+        "python": "supported_migration_targets",
+        "rust": [
+          "get_supported_migration_targets",
+          "supported_migration_targets"
+        ],
+        "typescript": [
+          "getSupportedMigrationTargets",
+          "supportedMigrationTargets"
+        ]
+      },
+      "notes": "spelling differs from the §2 rule: rust=get_supported_migration_targets (expected supported_migration_targets); typescript=getSupportedMigrationTargets (expected supportedMigrationTargets); multiple spellings exported by: rust, typescript"
     },
     {
       "name": "sweep_dimension",
@@ -7411,14 +7168,6 @@
       }
     },
     {
-      "name": "template_placeholders",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "template_placeholders"
-      }
-    },
-    {
       "name": "template_resolve_options",
       "kind": "type",
       "tier": "extension",
@@ -7452,14 +7201,6 @@
       }
     },
     {
-      "name": "time_resolution_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "TimeResolutionError"
-      }
-    },
-    {
       "name": "time_span",
       "kind": "type",
       "tier": "stable",
@@ -7473,21 +7214,22 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "go": "ToAscii",
+        "go": "ToASCII",
         "julia": "to_ascii",
         "python": "to_ascii",
         "rust": "to_ascii",
         "typescript": "toAscii"
-      },
-      "notes": "spelling differs from the §2 rule: go=ToAscii (expected ToASCII)"
+      }
     },
     {
       "name": "to_dot",
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToDOT",
         "julia": "to_dot",
         "python": "to_dot",
+        "rust": "to_dot",
         "typescript": "toDot"
       }
     },
@@ -7520,7 +7262,10 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToJSONGraph",
+        "julia": "to_json_graph",
         "python": "to_json_graph",
+        "rust": "to_json_graph",
         "typescript": "toJsonGraph"
       }
     },
@@ -7566,8 +7311,10 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToMermaid",
         "julia": "to_mermaid",
         "python": "to_mermaid",
+        "rust": "to_mermaid",
         "typescript": "toMermaid"
       }
     },
@@ -7713,6 +7460,7 @@
       "tier": "stable",
       "bindings": {
         "julia": "UnitFinding",
+        "python": "UnitFinding",
         "rust": "UnitFinding"
       }
     },
@@ -7722,6 +7470,7 @@
       "tier": "stable",
       "bindings": {
         "go": "UnitFindingAnalysis",
+        "python": "UNIT_FINDING_ANALYSIS",
         "rust": "UNIT_FINDING_ANALYSIS"
       }
     },
@@ -7731,6 +7480,7 @@
       "tier": "stable",
       "bindings": {
         "go": "UnitFindingDimensionalMismatch",
+        "python": "UNIT_FINDING_DIMENSIONAL_MISMATCH",
         "rust": "UNIT_FINDING_DIMENSIONAL_MISMATCH"
       }
     },
@@ -7740,6 +7490,7 @@
       "tier": "stable",
       "bindings": {
         "go": "UnitFindingUnparseable",
+        "python": "UNIT_FINDING_UNPARSEABLE",
         "rust": "UNIT_FINDING_UNPARSEABLE"
       }
     },
@@ -7798,6 +7549,7 @@
       "bindings": {
         "go": "UnitWarning",
         "julia": "UnitWarning",
+        "python": "UnitWarning",
         "rust": "UnitWarning",
         "typescript": "UnitWarning"
       }
@@ -7819,14 +7571,6 @@
       }
     },
     {
-      "name": "unknown_names",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "unknown_names"
-      }
-    },
-    {
       "name": "unknown_variable",
       "kind": "type",
       "tier": "extension",
@@ -7839,9 +7583,14 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "julia": [
+          "unknown_names",
+          "unknowns"
+        ],
         "python": "unknowns",
         "typescript": "unknowns"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: julia=unknown_names (expected unknowns); multiple spellings exported by: julia"
     },
     {
       "name": "unlowered_operator_error",
@@ -7982,14 +7731,6 @@
       }
     },
     {
-      "name": "url_template_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "UrlTemplateError"
-      }
-    },
-    {
       "name": "use_highlight_context",
       "kind": "function",
       "tier": "extension",
@@ -8010,14 +7751,6 @@
       }
     },
     {
-      "name": "validate_complete",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "validate_complete"
-      }
-    },
-    {
       "name": "validate_equation_dimensions",
       "kind": "function",
       "tier": "stable",
@@ -8025,14 +7758,6 @@
         "go": "ValidateEquationDimensions",
         "julia": "validate_equation_dimensions",
         "rust": "validate_equation_dimensions"
-      }
-    },
-    {
-      "name": "validate_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ValidateFile"
       }
     },
     {
@@ -8057,6 +7782,15 @@
       "tier": "extension",
       "bindings": {
         "julia": "validate_model_dimensions"
+      }
+    },
+    {
+      "name": "validate_path",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "validate_path",
+        "python": "validate_path"
       }
     },
     {
@@ -8116,6 +7850,22 @@
       "bindings": {
         "go": "ValidateStructuralWithCodes"
       }
+    },
+    {
+      "name": "validate_text",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "ValidateText",
+        "julia": "validate_text",
+        "python": "validate_text",
+        "rust": [
+          "validate_complete",
+          "validate_text"
+        ],
+        "typescript": "validateText"
+      },
+      "notes": "spelling differs from the §2 rule: rust=validate_complete (expected validate_text); multiple spellings exported by: rust"
     },
     {
       "name": "validate_units",
@@ -8340,7 +8090,8 @@
       "bindings": {
         "go": "VertexKind",
         "python": "VertexKind",
-        "rust": "VertexKind"
+        "rust": "VertexKind",
+        "typescript": "VertexKind"
       }
     },
     {

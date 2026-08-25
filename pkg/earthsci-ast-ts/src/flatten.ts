@@ -76,7 +76,7 @@ import {
   updateRules,
   type SystemKind,
 } from './classification.js'
-import { EsmDiagnosticError } from './errors.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
@@ -107,6 +107,29 @@ export class ConflictingDerivativeError extends FlattenError {
   constructor(message: string) {
     super(message, 'conflicting_derivative')
     this.name = 'ConflictingDerivativeError'
+  }
+}
+
+/**
+ * A `couple` connector equation with `transform: "multiplicative"` targets
+ * something with no tendency to multiply.
+ *
+ * esm-spec §10.3 and esm-libraries-spec §4.7.2 define `multiplicative` against
+ * the target's EXISTING ODE right-hand side. When `to` names a parameter, an
+ * observed, an algebraic unknown, or an undefined name, there is no `D(to)` and
+ * the operation has no meaning.
+ *
+ * Silently dropping the connector equation — what this binding did before — is
+ * the one outcome a coupling mis-specification must not have: the document
+ * declares a coupling and the flattened system carries no trace of it.
+ *
+ * `additive` has no counterpart error because zero is the additive identity, so
+ * an additive term against an absent tendency simply becomes the tendency.
+ */
+export class CoupleMultiplicativeNoTendencyError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.COUPLE_MULTIPLICATIVE_NO_TENDENCY)
+    this.name = 'CoupleMultiplicativeNoTendencyError'
   }
 }
 
@@ -557,6 +580,13 @@ function spatialDimsInExpr(expr: Expression, into: Set<string>): void {
   walkNodes(expr, (node) => {
     const dim = (node as { dim?: unknown }).dim
     if (typeof dim === 'string' && dim !== '') into.add(dim)
+    // `wrt` is the other axis-naming scalar field, and a differential taken with
+    // respect to anything but time names a spatial axis exactly as `dim` does --
+    // §4.7.6 step 2 lists it alongside grad/div/laplacian as "`D` with
+    // `wrt !== "t"`". Scanning `dim` alone made `D(u,t) = k * D(u,x)`, the heat
+    // equation, come out as a pure ODE.
+    const wrt = (node as { wrt?: unknown }).wrt
+    if (typeof wrt === 'string' && wrt !== '' && wrt !== 't') into.add(wrt)
   })
 }
 
@@ -659,9 +689,56 @@ function renameJoinNamesIn(expr: Expression, toVar: string, fromVar: string): Ex
 // Coupling-rule descriptions
 // ---------------------------------------------------------------------------
 
+/**
+ * Render a number the way Python's `str(float)` does, which is the spelling the
+ * flatten corpus pins for a `translate` conversion factor.
+ *
+ * The two runtimes agree on the DIGITS (both emit the shortest round-tripping
+ * decimal) and disagree on the PRESENTATION: Python switches to exponent
+ * notation outside `1e-4 <= |x| < 1e16` and pads the exponent to two digits,
+ * where JavaScript switches outside `1e-6 <= |x| < 1e21` and pads not at all;
+ * and Python writes an integer-valued float with a `.0` tail where JavaScript
+ * writes a bare integer. So take JS's digits and re-present them under Python's
+ * rules.
+ *
+ * A factor authored as a JSON INTEGER (`2` rather than `2.0`) is the one case
+ * this cannot reproduce: the oracle sees a Python `int` and prints `2`, while
+ * `JSON.parse` has already erased the distinction here. No fixture in the tree
+ * spells a factor that way — every one carries a `.` or an `e`.
+ */
+function formatPythonFloat(value: number): string {
+  if (Number.isNaN(value)) return 'nan'
+  if (!Number.isFinite(value)) return value > 0 ? 'inf' : '-inf'
+  if (Object.is(value, -0)) return '-0.0'
+  const [mantissa, expPart] = value.toExponential().split('e')
+  const exp = Number(expPart)
+  if (exp >= -4 && exp < 16) {
+    const significand = mantissa.replace('-', '').replace('.', '').length
+    const out = value.toFixed(Math.max(significand - 1 - exp, 0))
+    return out.includes('.') ? out : `${out}.0`
+  }
+  const sign = exp < 0 ? '-' : '+'
+  return `${mantissa}e${sign}${String(Math.abs(exp)).padStart(2, '0')}`
+}
+
+/**
+ * One `translate` entry's right-hand side, as the corpus spells it: a bare
+ * target name, or `target*factor` when the entry is the object form carrying a
+ * conversion factor. The endpoint is reported AS AUTHORED — this is provenance
+ * metadata about the document, not about the matcher, so the qualification
+ * {@link qualifyTranslateEndpoint} applies before matching does not show here.
+ */
 function describeTranslateTarget(target: unknown): string {
   if (typeof target === 'string') return target
-  return JSON.stringify(target)
+  if (target !== null && typeof target === 'object') {
+    const rec = target as Record<string, unknown>
+    const name = rec.to ?? rec.target ?? rec.var
+    const label = typeof name === 'string' && name !== '' ? name : '?'
+    const factor = rec.factor
+    if (factor === undefined || factor === null) return label
+    return `${label}*${typeof factor === 'number' ? formatPythonFloat(factor) : String(factor)}`
+  }
+  return String(target)
 }
 
 /**
@@ -834,8 +911,14 @@ function mergeComponent(target: ComponentSystem, other: ComponentSystem): void {
   target.loaderFields.push(...other.loaderFields)
 }
 
+/**
+ * The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel: it is never
+ * namespaced, and it is exempt from `translate`-endpoint qualification.
+ */
+const PLACEHOLDER_VAR = '_var'
+
 /** `_var` is a placeholder expanded by `operator_compose`; never namespace it. */
-const LEAVE_ALONE: ReadonlySet<string> = new Set(['t', '_var'])
+const LEAVE_ALONE: ReadonlySet<string> = new Set(['t', PLACEHOLDER_VAR])
 
 function namespaceEquations(
   equations: Equation[],
@@ -1062,19 +1145,71 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
 // Coupling resolution
 // ---------------------------------------------------------------------------
 
-/** Normalize an `operator_compose` `translate` entry to `(target, factor)`. */
+/**
+ * Put one `translate` endpoint into the NAMESPACED form the matcher uses.
+ *
+ * `translate` endpoints are authored in either form — bare (`"O3"`) or fully
+ * scoped (`"ChemistrySystem.O3"`); esm-spec §10.2 and §10.10.2 admit both, and
+ * both denote the same variable. Matching, however, runs against the NAMESPACED
+ * dependent variable of a flattened equation, so an endpoint left bare can never
+ * match. That is why a correctly spelled bare map was a silent no-op: the lookup
+ * missed, and the bare-name fallback then searched A for B's short name (the
+ * wrong spelling) and missed too.
+ *
+ * A bare endpoint is qualified with the system it belongs to under §10.2's
+ * direction rule: a KEY belongs to `systems[0]`, a VALUE to `systems[1]`. An
+ * endpoint that already carries a dot is left ALONE — it is either already
+ * namespaced or names a subsystem path, and re-prefixing it would break it.
+ *
+ * `_var` is exempt in both forms. It is a GLOBAL sentinel (esm-spec §6.4), never
+ * namespaced; a value of `"B._var"` is the redundant spelling §10.2 requires to
+ * stay harmless, and it stays harmless here because placeholder expansion has
+ * already turned that equation into a DIRECT match, which takes precedence over
+ * this map.
+ */
+function qualifyTranslateEndpoint(name: string, system: string): string {
+  if (name === '' || name === PLACEHOLDER_VAR || name.endsWith(`.${PLACEHOLDER_VAR}`)) return name
+  if (name.includes('.') || system === '') return name
+  return `${system}.${name}`
+}
+
+/**
+ * Normalize an `operator_compose` `translate` map, INVERTED for matching.
+ *
+ * The authored direction is normative and is NOT symmetric (esm-spec §10.2,
+ * esm-libraries-spec §4.7.1 step 2): for `"systems": [A, B]` every KEY names a
+ * variable of `A` (`systems[0]`) and every VALUE names a variable of `B`
+ * (`systems[1]`).
+ *
+ * The matching loop in {@link applyOperatorCompose} walks *B's* equations, so it
+ * needs the map the other way round. This returns the INVERSE,
+ * `{ b_name: [a_name, factor] }`. Indexing the authored (A-keyed) map by B's
+ * dependent variable is the bug this function exists to prevent: a correctly
+ * spelled `translate` map then matches nothing at all, and the whole coupling
+ * entry becomes a silent no-op.
+ *
+ * Both endpoints are put into namespaced form first; see
+ * {@link qualifyTranslateEndpoint}.
+ */
 function buildTranslateMap(entry: CouplingEntry): Record<string, [string, number]> {
   const out: Record<string, [string, number]> = {}
   const translate = (entry as unknown as Record<string, unknown>).translate
   if (translate === null || typeof translate !== 'object') return out
-  for (const [k, v] of Object.entries(translate as Record<string, unknown>)) {
+  const systems = (entry as unknown as { systems?: string[] }).systems ?? []
+  const aSys = systems.length > 0 ? systems[0] : ''
+  const bSys = systems.length > 1 ? systems[1] : ''
+  for (const [aName, v] of Object.entries(translate as Record<string, unknown>)) {
+    const aQ = qualifyTranslateEndpoint(aName, aSys)
     if (typeof v === 'string') {
-      out[k] = [v, 1]
+      out[qualifyTranslateEndpoint(v, bSys)] = [aQ, 1]
     } else if (v !== null && typeof v === 'object') {
       const rec = v as Record<string, unknown>
-      const target = rec.to ?? rec.target ?? rec.var
-      if (typeof target === 'string') {
-        out[k] = [target, typeof rec.factor === 'number' ? rec.factor : 1]
+      const bName = rec.to ?? rec.target ?? rec.var
+      if (typeof bName === 'string') {
+        out[qualifyTranslateEndpoint(bName, bSys)] = [
+          aQ,
+          typeof rec.factor === 'number' ? rec.factor : 1,
+        ]
       }
     }
   }
@@ -1140,6 +1275,8 @@ function applyOperatorCompose(
   })
 
   const survivingB: FlattenedEquation[] = []
+  // `bDep -> targetDep` for every match that RENAMED the dependent variable.
+  const mergedAway: Record<string, string> = {}
   for (const bEq of b.equations) {
     const bDep = lhsDependentVar(bEq.lhs)
     if (bDep === undefined) {
@@ -1147,9 +1284,21 @@ function applyOperatorCompose(
       continue
     }
 
+    // Resolve A's target for this dependent variable. §4.7.1 step 3 lists the
+    // match kinds in PRECEDENCE order: DIRECT first, then TRANSLATION, then the
+    // bare-name fallback. Direct-first is load-bearing, not cosmetic:
+    // placeholder expansion has already rewritten `_var` to A's own variable
+    // name, so an expanded equation IS a direct match. Consulting `translate`
+    // first lets a map keyed by A's names hit spuriously on that rewritten name
+    // and redirect the match to a target that does not exist — turning a working
+    // composition into a spurious ConflictingDerivativeError. That is exactly
+    // the `translate: { "A.x": "B._var" }` redundancy invariant of §10.2: naming
+    // `_var` explicitly asks for something automatic, and MUST stay harmless.
     let targetDep = bDep
     let factor = 1
-    if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
+    if (Object.prototype.hasOwnProperty.call(aIndex, bDep)) {
+      // Direct match — `targetDep` is already right.
+    } else if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
       const mapped = translate[bDep]
       targetDep = mapped[0]
       factor = mapped[1]
@@ -1167,6 +1316,15 @@ function applyOperatorCompose(
     if (Object.prototype.hasOwnProperty.call(aIndex, targetDep)) {
       const i = aIndex[targetDep]
       const aEq = a.equations[i]
+      // §4.7.1 step 4: on a TRANSLATION match, B's dependent variable is
+      // rewritten to A's target throughout `rhs_B` before summing — a
+      // `translate` pair names two spellings of the SAME quantity (§10.2), and
+      // B's own defining equation was just consumed by this merge, so leaving
+      // B's spelling behind would strand it as an unknown nothing defines. Only
+      // the dependent variable is rewritten; B's parameters and observeds keep
+      // their names. On a direct match the two names are equal and on a
+      // placeholder match the expansion already substituted, so in both cases
+      // this is the identity.
       let rhs = substitute(bEq.rhs, { [bDep]: targetDep }) as Expression
       if (factor !== 1) rhs = { op: '*', args: [factor, rhs] }
       a.equations[i] = {
@@ -1174,11 +1332,56 @@ function applyOperatorCompose(
         rhs: addExprs(aEq.rhs, rhs),
         sourceSystem: aEq.sourceSystem,
       }
+      if (targetDep !== bDep) mergedAway[bDep] = targetDep
     } else {
       survivingB.push(bEq)
     }
   }
   b.equations = survivingB
+
+  // §4.7.1 step 4, last bullet: THE MERGED-AWAY NAME DOES NOT SURVIVE. A
+  // renaming match — a translation match, or the bare-name fallback, which is a
+  // name-based translation — CONSUMES B's defining equation, so B's declaration
+  // of that name is left with nothing to constrain it. An unknown with no
+  // defining equation classifies as ALGEBRAIC (§6.3.1), so keeping it hands the
+  // solver a state with no constraint: structurally singular, and rejected far
+  // downstream of the coupling that caused it. §10.2 says the pair names ONE
+  // quantity, so only A's spelling survives: every remaining reference to the
+  // dead name is retargeted at A's FIRST, then the stranded declaration is
+  // dropped.
+  //
+  // The retarget is DOCUMENT-WIDE, not B-local: a third system is free to
+  // reference `B.x` by its scoped name, and pruning the declaration while
+  // leaving that reference dangling would trade one broken system for another.
+  if (Object.keys(mergedAway).length > 0) {
+    retargetMergedNames(components, mergedAway)
+    for (const gone of Object.keys(mergedAway)) {
+      delete b.stateVars[gone]
+      delete b.observed[gone]
+    }
+  }
+}
+
+/**
+ * Rewrite every reference to a merged-away dependent variable, EVERYWHERE.
+ *
+ * Applied after an `operator_compose` renaming match folds `B.x` into `A.y`: the
+ * two spellings named one quantity, only `A.y` still exists, so every equation
+ * side in the whole document is rewritten off the dead name. An observed
+ * variable's defining expression is one of those equations (it is not carried on
+ * the {@link FlattenedVariable} record), so this covers it too.
+ */
+function retargetMergedNames(
+  components: Record<string, ComponentSystem>,
+  renames: Record<string, string>,
+): void {
+  for (const comp of Object.values(components)) {
+    comp.equations = comp.equations.map((eq) => ({
+      lhs: substitute(eq.lhs, renames) as Expression,
+      rhs: substitute(eq.rhs, renames) as Expression,
+      sourceSystem: eq.sourceSystem,
+    }))
+  }
 }
 
 /**
@@ -1199,10 +1402,32 @@ function applyCouple(components: Record<string, ComponentSystem>, entry: Couplin
     })
   }
 
+  // Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME defining
+  // equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2),
+  // so an observed or algebraic equation for `x` does not qualify.
+  const tendencies = new Set<string>()
+  for (const comp of Object.values(components)) {
+    for (const eq of comp.equations) {
+      if (isNode(eq.lhs) && eq.lhs.op === 'D') {
+        const dep = lhsDependentVar(eq.lhs)
+        if (dep !== undefined) tendencies.add(dep)
+      }
+    }
+  }
+
   for (const raw of connectorEquations) {
     const ceq = raw as { to?: string; from?: string; transform?: string; expression?: Expression }
     const target = ceq.to
-    if (target === undefined || !Object.prototype.hasOwnProperty.call(eqIndex, target)) continue
+    if (target === undefined) continue
+    if (ceq.transform === 'multiplicative' && !tendencies.has(target)) {
+      throw new CoupleMultiplicativeNoTendencyError(
+        `couple connector 'multiplicative' transform targets '${target}', ` +
+          `which has no tendency (D(${target})) to multiply (esm-spec §10.3). ` +
+          `To scale a constant parameter by a factor, use a variable_map ` +
+          `entry with an Expression transform (esm-spec §10.4) instead.`,
+      )
+    }
+    if (!Object.prototype.hasOwnProperty.call(eqIndex, target)) continue
     const [sysName, i] = eqIndex[target]
     const comp = components[sysName]
     const existing = comp.equations[i]
@@ -1891,6 +2116,9 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
  *   when a variable carries a type esm 1.0.0 removed.
  * @throws {ConflictingDerivativeError} when two source systems define
  *   non-additive equations for the same dependent variable.
+ * @throws {CoupleMultiplicativeNoTendencyError} when a `couple` connector
+ *   equation with `transform: "multiplicative"` targets something with no
+ *   `D(to)` tendency to multiply (esm-spec §10.3).
  * @throws {DomainUnitMismatchError} when an `identity` `variable_map` bridges two
  *   variables whose declared, non-empty units differ.
  */

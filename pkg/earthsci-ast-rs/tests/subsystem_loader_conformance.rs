@@ -23,10 +23,10 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::load_path;
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice};
+use earthsci_ast::{Alg, Solution, SolveOptions};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -161,16 +161,17 @@ fn subsystem_loader_trajectory_matches_golden() {
         .collect();
     want_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: Some(want_times),
+        maxiters: 1_000_000,
+        saveat: Some(want_times),
         progress: None,
+        callback: None,
     };
     let sol = compiled
-        .simulate((t0, t1), &HashMap::new(), &HashMap::new(), &opts)
+        .solve((t0, t1), &HashMap::new(), &HashMap::new(), &opts)
         .expect("simulate the subsystem-loader system");
 
     assert_eq!(

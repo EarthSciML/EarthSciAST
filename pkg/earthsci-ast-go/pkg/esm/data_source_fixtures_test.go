@@ -115,7 +115,7 @@ func TestDataSourceFixturesCoverage(t *testing.T) {
 
 			// 2. Structural validation must pass, which now includes
 			// `data_source_undefined`: every `update.source` above resolves.
-			vres := Validate(esmFile)
+			vres := ValidateStructural(esmFile)
 			if !vres.Valid {
 				t.Errorf("structural validation failed for %s: %+v", tc.fixture, vres.Messages)
 			}
@@ -150,8 +150,8 @@ func TestDataSourceFixturesCoverage(t *testing.T) {
 // a source — it is not a coupling endpoint any more — so it carries the whole of
 // the diagnostic.
 func TestDataSourceUndefinedReference(t *testing.T) {
-	file, content := loadInvalidFixture(t, "data_source_undefined_reference.esm")
-	result := ValidateFile(file, content)
+	file, _ := loadInvalidFixture(t, "data_source_undefined_reference.esm")
+	result := Validate(file)
 	if !hasCode(result, ErrorDataSourceUndefined) {
 		t.Errorf("want data_source_undefined: %+v", result.StructuralErrors)
 	}

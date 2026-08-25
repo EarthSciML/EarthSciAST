@@ -8,19 +8,80 @@ import (
 )
 
 // ========================================
-// 1. DOT (Graphviz) Export
+// 1. The renderer domain
 // ========================================
 
-// DOTExporter exports graphs to DOT format
-type DOTExporter struct{}
-
-// NewDOTExporter creates a new DOT exporter
-func NewDOTExporter() *DOTExporter {
-	return &DOTExporter{}
+// Graph is the domain of the three graph renderers — ToDOT, ToMermaid and
+// ToJSONGraph — and is satisfied by exactly the two graph types this package
+// builds: *ComponentGraph (BuildComponentGraph) and *ExpressionGraph
+// (BuildExpressionGraph).
+//
+// The other bindings express the same trio as one overloaded/duck-typed
+// function per format (API_SPEC.md §8 item 8). Go has no overloading, so the
+// union is spelled as an interface with an UNEXPORTED marker method: the set of
+// implementations is closed to this package, which is what makes the type
+// switch inside each renderer total rather than merely conventional.
+type Graph interface {
+	isGraph()
 }
 
-// ExportComponentGraph exports a component graph to DOT format
-func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error) {
+func (*ComponentGraph) isGraph()  {}
+func (*ExpressionGraph) isGraph() {}
+
+// ========================================
+// 2. DOT (Graphviz) Export
+// ========================================
+
+// ToDOT renders a graph in DOT (Graphviz) format.
+//
+// Canonical `to_dot` (API_SPEC.md §8 item 8). Replaces the pair
+// ExportComponentGraphDOT / ExportExpressionGraphDOT; the emitted text is
+// byte-identical to what those produced, and is pinned across bindings by
+// tests/conformance/graph/cases.json.
+func ToDOT(g Graph) (string, error) {
+	switch graph := g.(type) {
+	case *ComponentGraph:
+		return componentGraphDOT(graph)
+	case *ExpressionGraph:
+		return expressionGraphDOT(graph)
+	default:
+		return "", fmt.Errorf("to_dot: unsupported graph type %T", g)
+	}
+}
+
+// ToMermaid renders a graph in Mermaid format.
+//
+// Canonical `to_mermaid` (API_SPEC.md §8 item 8). Replaces the pair
+// ExportComponentGraphMermaid / ExportExpressionGraphMermaid.
+func ToMermaid(g Graph) (string, error) {
+	switch graph := g.(type) {
+	case *ComponentGraph:
+		return componentGraphMermaid(graph)
+	case *ExpressionGraph:
+		return expressionGraphMermaid(graph)
+	default:
+		return "", fmt.Errorf("to_mermaid: unsupported graph type %T", g)
+	}
+}
+
+// ToJSONGraph renders a graph as a JSON adjacency list.
+//
+// Canonical `to_json_graph` (API_SPEC.md §8 item 8) — NOT `ToJSON`, which is
+// the DOCUMENT serializer settled by §8 item 2 and cannot carry both meanings.
+// Replaces the pair ExportComponentGraphJSON / ExportExpressionGraphJSON.
+func ToJSONGraph(g Graph) (string, error) {
+	switch graph := g.(type) {
+	case *ComponentGraph:
+		return componentGraphJSON(graph)
+	case *ExpressionGraph:
+		return expressionGraphJSON(graph)
+	default:
+		return "", fmt.Errorf("to_json_graph: unsupported graph type %T", g)
+	}
+}
+
+// componentGraphDOT renders a component graph in DOT format.
+func componentGraphDOT(graph *ComponentGraph) (string, error) {
 	var builder strings.Builder
 
 	builder.WriteString("digraph ComponentGraph {\n")
@@ -70,8 +131,8 @@ func (e *DOTExporter) ExportComponentGraph(graph *ComponentGraph) (string, error
 	return builder.String(), nil
 }
 
-// ExportExpressionGraph exports an expression graph to DOT format
-func (e *DOTExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, error) {
+// expressionGraphDOT renders an expression graph in DOT format.
+func expressionGraphDOT(graph *ExpressionGraph) (string, error) {
 	var builder strings.Builder
 
 	builder.WriteString("digraph ExpressionGraph {\n")
@@ -118,16 +179,8 @@ func (e *DOTExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, err
 // 3. Mermaid Export
 // ========================================
 
-// MermaidExporter exports graphs to Mermaid format
-type MermaidExporter struct{}
-
-// NewMermaidExporter creates a new Mermaid exporter
-func NewMermaidExporter() *MermaidExporter {
-	return &MermaidExporter{}
-}
-
-// ExportComponentGraph exports a component graph to Mermaid format
-func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, error) {
+// componentGraphMermaid renders a component graph in Mermaid format.
+func componentGraphMermaid(graph *ComponentGraph) (string, error) {
 	var builder strings.Builder
 
 	// `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and specifies
@@ -188,8 +241,8 @@ func (e *MermaidExporter) ExportComponentGraph(graph *ComponentGraph) (string, e
 	return builder.String(), nil
 }
 
-// ExportExpressionGraph exports an expression graph to Mermaid format
-func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, error) {
+// expressionGraphMermaid renders an expression graph in Mermaid format.
+func expressionGraphMermaid(graph *ExpressionGraph) (string, error) {
 	var builder strings.Builder
 
 	// `graph TD`, not `graph LR`. §4.8.3 requires a Mermaid export and specifies
@@ -250,14 +303,6 @@ func (e *MermaidExporter) ExportExpressionGraph(graph *ExpressionGraph) (string,
 // 4. JSON Export
 // ========================================
 
-// JSONExporter exports graphs to JSON format
-type JSONExporter struct{}
-
-// NewJSONExporter creates a new JSON exporter
-func NewJSONExporter() *JSONExporter {
-	return &JSONExporter{}
-}
-
 // jsonAdjacencyEdge is one edge of the JSON adjacency-list export. Its
 // endpoints are node KEYS (strings), not embedded node objects: a JSON
 // adjacency list is a node table plus references into it, and inlining whole
@@ -287,8 +332,8 @@ type jsonVariableNode struct {
 	VariableNode
 }
 
-// ExportComponentGraph exports a component graph as a JSON adjacency list.
-func (e *JSONExporter) ExportComponentGraph(graph *ComponentGraph) (string, error) {
+// componentGraphJSON renders a component graph as a JSON adjacency list.
+func componentGraphJSON(graph *ComponentGraph) (string, error) {
 	// Sort nodes and edges for consistent output
 	nodes := make([]ComponentNode, len(graph.Nodes))
 	edges := make([]GraphEdge[ComponentNode, CouplingEdge], len(graph.Edges))
@@ -323,8 +368,8 @@ func (e *JSONExporter) ExportComponentGraph(graph *ComponentGraph) (string, erro
 	return string(data), nil
 }
 
-// ExportExpressionGraph exports an expression graph as a JSON adjacency list.
-func (e *JSONExporter) ExportExpressionGraph(graph *ExpressionGraph) (string, error) {
+// expressionGraphJSON renders an expression graph as a JSON adjacency list.
+func expressionGraphJSON(graph *ExpressionGraph) (string, error) {
 	// Sort nodes and edges for consistent output
 	nodes := make([]VariableNode, len(graph.Nodes))
 	edges := make([]GraphEdge[VariableNode, DependencyEdge], len(graph.Edges))
@@ -527,44 +572,4 @@ func sortVariableEdges(edges []GraphEdge[VariableNode, DependencyEdge], sep stri
 		}
 		return variableNodeID(edges[i].Target, sep) < variableNodeID(edges[j].Target, sep)
 	})
-}
-
-// ========================================
-// 6. Convenience Export Functions
-// ========================================
-
-// ExportComponentGraphDOT exports a component graph to DOT format
-func ExportComponentGraphDOT(graph *ComponentGraph) (string, error) {
-	exporter := NewDOTExporter()
-	return exporter.ExportComponentGraph(graph)
-}
-
-// ExportComponentGraphMermaid exports a component graph to Mermaid format
-func ExportComponentGraphMermaid(graph *ComponentGraph) (string, error) {
-	exporter := NewMermaidExporter()
-	return exporter.ExportComponentGraph(graph)
-}
-
-// ExportComponentGraphJSON exports a component graph to JSON format
-func ExportComponentGraphJSON(graph *ComponentGraph) (string, error) {
-	exporter := NewJSONExporter()
-	return exporter.ExportComponentGraph(graph)
-}
-
-// ExportExpressionGraphDOT exports an expression graph to DOT format
-func ExportExpressionGraphDOT(graph *ExpressionGraph) (string, error) {
-	exporter := NewDOTExporter()
-	return exporter.ExportExpressionGraph(graph)
-}
-
-// ExportExpressionGraphMermaid exports an expression graph to Mermaid format
-func ExportExpressionGraphMermaid(graph *ExpressionGraph) (string, error) {
-	exporter := NewMermaidExporter()
-	return exporter.ExportExpressionGraph(graph)
-}
-
-// ExportExpressionGraphJSON exports an expression graph to JSON format
-func ExportExpressionGraphJSON(graph *ExpressionGraph) (string, error) {
-	exporter := NewJSONExporter()
-	return exporter.ExportExpressionGraph(graph)
 }

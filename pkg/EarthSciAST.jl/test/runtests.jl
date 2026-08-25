@@ -34,6 +34,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("structural_validation_test.jl")
     include("expression_test.jl")
     include("reactions_test.jl")
+    include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
     include("display_test.jl")
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
@@ -65,6 +66,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("reference_resolution_test.jl")
     include("codegen_test.jl")
     include("flatten_test.jl")
+    include("flatten_conformance_test.jl")  # FlattenedSystem field set ≡ Python oracle
     include("pointwise_lift_axis_names_test.jl")  # §10.5 lift axes by NAME, not by extent
     include("coupling_imports_test.jl")
     include("flattened_to_esm_test.jl")
@@ -80,7 +82,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- End-to-end simulation runs + MTK export ----
     include("simulate_run_test.jl")
-    include("prepared_model_test.jl")
+    include("esm_problem_test.jl")
     include("loaded_ic_bc_simulation_test.jl")
     include("subsystem_loader_conformance_test.jl")
     include("build_once_spatial_field_conformance_test.jl")
@@ -119,6 +121,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("f64_overflow_codegen_test.jl")          # ess-f64ofl overflow RGF serves budget-declined Float64 kernels (ESS_F64_OVERFLOW_CODEGEN oracle)
     include("cg_foreign_scratch_test.jl")            # ess-cgfsc codegen emits xcse shared-prelude reads (ESS_CG_FOREIGN_SCRATCH_DISABLE oracle)
     include("codegen_threaded_test.jl")              # codegen threaded cell axis: chunk instances ≡ serial, disjointness, threaded subprocess (ESS_CG_THREADS_DISABLE oracle)
+    include("codegen_body_split_test.jl")            # ess-iip-body-split oversized kernel body split across @noinline helpers ≡ un-split (ESS_CODEGEN_BODY_SPLIT_DISABLE oracle)
     include("lane_table_intern_test.jl")             # content-equal lane tables `===` at build (ESS_LANE_INTERN_DISABLE oracle)
     include("direct_class_emission_test.jl")         # per-cell scalarizer emits class kernels directly (ESS_DIRECT_CLASS_EMIT_DISABLE oracle)
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)

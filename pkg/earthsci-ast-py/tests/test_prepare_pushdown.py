@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from earthsci_ast.prepare import observed_field, prepare
+from earthsci_ast.problem import esm_problem, observed_field
 from earthsci_ast.simulation_array import BuildInspection
 from earthsci_ast.sympy_bridge import SimulationError
 
@@ -239,13 +239,7 @@ def test_prepare_pushdown_record_gate_end_to_end(oracle):
     ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
 
     insp = BuildInspection()
-    prep = prepare(
-        doc,
-        providers=providers,
-        const_arrays=ca,
-        inspect=insp,
-        pushdown_rewrite=True,
-    )
+    prep = esm_problem(doc, (0.0, 1.0), providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True)
 
     # ---- the gated mocks were fetched pre-sliced, never wholesale -----------
     members0 = oracle["members0"]
@@ -318,13 +312,7 @@ def test_prepare_pushdown_single_member_support_set(oracle):
     ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
 
     insp = BuildInspection()
-    prep = prepare(
-        doc,
-        providers=providers,
-        const_arrays=ca,
-        inspect=insp,
-        pushdown_rewrite=True,
-    )
+    prep = esm_problem(doc, (0.0, 1.0), providers=providers, const_arrays=ca, inspect=insp, pushdown_rewrite=True)
 
     # The single-member feedback vector survived as a 1-element ARRAY.
     mf = [k for k in insp.const_arrays if str(k).startswith("pd_member_factor__")]
@@ -384,7 +372,7 @@ def test_observed_field_reports_hoist_skip_root_cause(oracle):
     }
     ca = {"src_W": oracle["W"], "src_S": oracle["S"], "src_E": oracle["E"], "src_N": oracle["N"]}
     try:
-        prep = prepare(doc, providers=providers, const_arrays=ca, pushdown_rewrite=True)
+        prep = esm_problem(doc, (0.0, 1.0), providers=providers, const_arrays=ca, pushdown_rewrite=True)
     except SimulationError:
         pytest.skip("prepare itself rejects the missing providers (also fine)")
     with pytest.raises(SimulationError, match=r"hoist dropped"):

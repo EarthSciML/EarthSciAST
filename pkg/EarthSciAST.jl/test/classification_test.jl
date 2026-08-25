@@ -124,21 +124,58 @@ const _CLS = ClassificationConformanceAdapter
         @test pde.domain !== nothing
     end
 
-    @testset "system_kind_mismatch fires only on a contradicting field" begin
+    # API_SPEC.md §8 item 11: three distinct questions, not one. `system_kind`
+    # DERIVES, `declared_system_kind` READS the field, `effective_system_kind`
+    # composes them. The Julia-only `declared_system_kind_mismatch` is gone;
+    # the mismatch itself is still a `validate` finding.
+    @testset "declared / derived / effective system kind" begin
         variants = EarthSciAST.load_path(
             joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm"))
-        # `Declared` carries a field that AGREES — no mismatch.
-        @test declared_system_kind_mismatch(variants.models["Declared"]) === nothing
-        # An absent field is never a mismatch.
-        @test declared_system_kind_mismatch(variants.models["Sde"]) === nothing
 
-        # A contradicting field is reported as (declared, derived).
+        # `Declared` carries a field that AGREES with the derivation.
+        declared_model = variants.models["Declared"]
+        @test declared_system_kind(declared_model) == system_kind(declared_model)
+        @test effective_system_kind(declared_model) == system_kind(declared_model)
+
+        # An absent field reads as `nothing`, and `effective` falls through to
+        # the derivation.
         sde = variants.models["Sde"]
+        @test declared_system_kind(sde) === nothing
+        @test system_kind(sde) == "sde"
+        @test effective_system_kind(sde) == "sde"
+
+        # A CONTRADICTING field: `declared` and `system_kind` disagree, and
+        # `effective` takes the declaration — the author committed to it.
         wrong = Model(sde.variables, sde.equations; system_kind="ode")
-        @test declared_system_kind_mismatch(wrong) == ("ode", "sde")
+        @test declared_system_kind(wrong) == "ode"
+        @test system_kind(wrong) == "sde"
+        @test effective_system_kind(wrong) == "ode"
+
+        # The disagreement is reported by `validate`, which is the channel it
+        # was always reported through.
         errs = validate_structural(EsmFile("1.0.0", Metadata("M");
                                            models=Dict("Wrong" => wrong)))
         @test any(e -> e.error_type == "system_kind_mismatch", errs)
+        mism = only(filter(e -> e.error_type == "system_kind_mismatch", errs))
+        @test mism.details["declared"] == "ode"
+        @test mism.details["derived"] == "sde"
+
+        # The deleted helper is really gone from the surface.
+        @test !isdefined(EarthSciAST, :declared_system_kind_mismatch)
+    end
+
+    # API_SPEC.md §8 item 6: `unknowns` / `parameters` are canonical;
+    # `unknown_names` / `parameter_names` stay as exported aliases.
+    @testset "unknowns / parameters and their *_names aliases" begin
+        variants = EarthSciAST.load_path(
+            joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm"))
+        m = variants.models["Sde"]
+        @test unknowns(m) == unknown_names(m)
+        @test parameters(m) == parameter_names(m)
+        @test unknowns(m) == sort(unknowns(m))
+        @test !isempty(unknowns(m))
+        @test unknown_names(m) isa Vector{String}
+        @test parameter_names(m) isa Vector{String}
     end
 
     @testset "a distribution alone is NOT Brownian; an update alone is not either" begin

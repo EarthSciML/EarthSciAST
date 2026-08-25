@@ -16,7 +16,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Compiled, SimulateOptions, SolverChoice, load_path};
+use earthsci_ast::{Alg, Compiled, SolveOptions, load_path};
 use std::collections::HashMap;
 
 mod common;
@@ -56,16 +56,17 @@ fn reservoir_reactant_held_fixed() {
     ic.insert("ReservoirHeldFixed.B".to_string(), 0.0);
 
     let sample_times = vec![1.0, 2.0, 3.0];
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-14,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: Some(sample_times.clone()),
+        maxiters: 1_000_000,
+        saveat: Some(sample_times.clone()),
         progress: None,
+        callback: None,
     };
     let sol = compiled
-        .simulate((0.0, 3.0), &par, &ic, &opts)
+        .solve((0.0, 3.0), &par, &ic, &opts)
         .expect("simulate failed");
 
     let a_idx = sol

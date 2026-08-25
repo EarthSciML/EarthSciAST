@@ -1,5 +1,5 @@
 //! `prepare`'s progress observer — the build-time counterpart of
-//! `SimulateOptions::progress`.
+//! `SolveOptions::progress`.
 //!
 //! A document with no ODEs never reaches `simulate`, so nothing in the solver's
 //! observer helps it: a dispatched static evaluation of the InMAP ISRM is a
@@ -28,10 +28,8 @@ use std::sync::{Arc, Mutex};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::prepare::{
-    AxisSel, Flow, PrepareError, PrepareOptions, PreparePhase, PrepareProgress, PrepareProvider,
-    Prepared, prepare,
-};
+use earthsci_ast::{AxisSel, Flow, PrepareError, PreparePhase, PrepareProgress, PrepareProvider};
+use earthsci_ast::{ProblemOptions, esm_problem};
 
 // ---- Lambert conformal conic (unit sphere), to place points inside cells ----
 
@@ -122,7 +120,7 @@ struct Event {
 type Log = Arc<Mutex<Vec<Event>>>;
 
 /// An observer that records everything and never cancels.
-fn recorder(log: &Log) -> earthsci_ast::prepare::PrepareProgressFn {
+fn recorder(log: &Log) -> earthsci_ast::PrepareProgressFn {
     let log = log.clone();
     Arc::new(move |p: &PrepareProgress<'_>| {
         log.lock().unwrap().push(Event {
@@ -153,9 +151,9 @@ const MEMBERS0: [usize; 4] = [0, 1, 3, 8];
 /// was asked for.
 #[allow(clippy::type_complexity)]
 fn run(
-    opts_from: impl FnOnce(&mut PrepareOptions),
+    opts_from: impl FnOnce(&mut ProblemOptions),
 ) -> (
-    Result<Prepared, PrepareError>,
+    Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError>,
     HashMap<String, Vec<Vec<AxisSel>>>,
 ) {
     let mut w = vec![0.0; GRID];
@@ -259,13 +257,21 @@ fn run(
         serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
             .expect("parse pushdown_l1.esm");
 
-    let mut opts = PrepareOptions {
+    let mut opts = ProblemOptions {
         model_name: Some("ISRM".to_string()),
         pushdown_rewrite: true,
         ..Default::default()
     };
     opts_from(&mut opts);
-    let prep = prepare(&doc, ca, providers, &opts);
+    let prep = esm_problem(
+        &doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: ca,
+            build_providers: providers,
+            ..opts
+        },
+    );
 
     let seen = call_logs
         .into_iter()
@@ -274,9 +280,9 @@ fn run(
     (prep, seen)
 }
 
-fn fields_of(p: &Prepared) -> Vec<(String, Vec<u64>)> {
+fn fields_of(p: &earthsci_ast::EsmProblem) -> Vec<(String, Vec<u64>)> {
     let mut out: Vec<(String, Vec<u64>)> = p
-        .fields
+        .observed_fields()
         .iter()
         // Bits, not floats: "the observer changed nothing" has to mean
         // bit-identical, or a batched fetch could reassociate a sum and pass.
@@ -394,7 +400,7 @@ fn a_batched_gated_fetch_reports_per_batch_and_is_bit_identical() {
 
     // The result is the same, to the bit.
     assert_eq!(fields_of(&plain), fields_of(&batched));
-    assert_eq!(plain.members, batched.members);
+    assert_eq!(plain.members(), batched.members());
 
     // The unbatched run made ONE request per gated provider, selecting the
     // whole support set; the batched run made one per member, in order.
@@ -477,15 +483,15 @@ fn cancelling_stops_at_a_named_point_and_is_distinguishable_from_a_failure() {
     };
     assert!(e.is_cancelled(), "not recognised as a cancel: {e}");
     assert!(
-        e.0.contains("the gated fetch"),
+        e.to_string().contains("the gated fetch"),
         "the message does not name the phase: {e}"
     );
     assert!(
-        e.0.contains("ISRM.SR_"),
+        e.to_string().contains("ISRM.SR_"),
         "the message does not name the item: {e}"
     );
     assert!(
-        e.0.contains("(3 of 20)"),
+        e.to_string().contains("(3 of 20)"),
         "the message does not locate the request: {e}"
     );
 
@@ -515,18 +521,18 @@ fn observing_does_not_change_the_result() {
     let (plain, watched) = (plain.expect("plain"), watched.expect("watched"));
 
     assert_eq!(fields_of(&plain), fields_of(&watched));
-    assert_eq!(plain.members, watched.members);
-    assert_eq!(plain.extents, watched.extents);
-    assert_eq!(plain.gated_provider_keys, watched.gated_provider_keys);
+    assert_eq!(plain.members(), watched.members());
+    assert_eq!(plain.extents(), watched.extents());
+    assert_eq!(plain.gated_provider_keys(), watched.gated_provider_keys());
     assert!(!log.lock().unwrap().is_empty(), "the observer never fired");
 }
 
-/// `PrepareOptions` still prints. It carries a trait object now, so `Debug` is
+/// `ProblemOptions` still prints. It carries a trait object now, so `Debug` is
 /// hand-written and could silently lose a field.
 #[test]
 fn prepare_options_still_debug_prints() {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
-    let opts = PrepareOptions {
+    let opts = ProblemOptions {
         pushdown_rewrite: true,
         gated_fetch_batch: Some(64),
         progress: Some(recorder(&log)),

@@ -68,12 +68,12 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice, load_string};
+use earthsci_ast::{Alg, Solution, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -360,7 +360,7 @@ fn segmented_solve(
     tspan: (f64, f64),
     initial_conditions: &HashMap<String, f64>,
     params: &HashMap<String, f64>,
-    base_opts: &SimulateOptions,
+    base_opts: &SolveOptions,
 ) -> Result<Solution, Box<dyn std::error::Error>> {
     let (t0, t_end) = tspan;
 
@@ -391,8 +391,8 @@ fn segmented_solve(
         // the single output node to the segment end so threading reads it
         // directly.
         let mut opts = base_opts.clone();
-        opts.output_times = Some(vec![seg_end]);
-        let sol = compiled.simulate((seg_start, seg_end), params, &ics, &opts)?;
+        opts.saveat = Some(vec![seg_end]);
+        let sol = compiled.solve((seg_start, seg_end), params, &ics, &opts)?;
 
         // Thread state: this segment's final scalar states seed the next.
         ics = final_state_ics(compiled, &sol);
@@ -494,14 +494,15 @@ fn zero_ics(compiled: &ArrayCompiled) -> HashMap<String, f64> {
         .collect()
 }
 
-fn base_opts() -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn base_opts() -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: None, // segmented_solve pins each segment's output node
+        maxiters: 100_000,
+        saveat: None, // segmented_solve pins each segment's output node
         progress: None,
+        callback: None,
     }
 }
 
@@ -690,11 +691,11 @@ fn state_threading_is_load_bearing() {
     for (seg_start, seg_end) in [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)] {
         exec2.refresh_at(seg_start, &forcing2).unwrap();
         let mut opts = base_opts();
-        opts.output_times = Some(vec![seg_end]);
+        opts.saveat = Some(vec![seg_end]);
         // NOTE the bug: zero ICs every segment instead of threading.
         last = Some(
             compiled
-                .simulate(
+                .solve(
                     (seg_start, seg_end),
                     &HashMap::new(),
                     &zero_ics(&compiled),

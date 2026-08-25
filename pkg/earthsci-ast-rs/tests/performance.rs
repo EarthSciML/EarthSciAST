@@ -3,9 +3,11 @@
 // expression tests run, so we silence the unused-import warning rather than
 // scatter cfg attributes over every import.
 #[allow(unused_imports)]
+use earthsci_ast::extension::types::Parameter;
+#[allow(unused_imports)]
 use earthsci_ast::{
     Expr, ExpressionNode, Reaction, ReactionSystem, Species, StoichiometricEntry,
-    performance::CompactExpr, types::Parameter,
+    performance::CompactExpr,
 };
 #[allow(unused_imports)]
 use std::collections::HashMap;

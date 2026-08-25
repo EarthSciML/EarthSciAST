@@ -53,6 +53,7 @@ without creating an import cycle.
 from __future__ import annotations
 
 from enum import Enum
+from types import MappingProxyType
 
 # ===========================================================================
 # Validation codes
@@ -216,3 +217,111 @@ INTERP_NAN_IN_AXIS = "interp_nan_in_axis"
 INTERP_AXIS_TOO_SHORT = "interp_axis_too_short"
 UNKNOWN_ENUM = "unknown_enum"
 UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
+
+
+# ===========================================================================
+# The registry itself (API_SPEC.md §8 / H-2).
+#
+# `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code
+# vocabulary -- the Python twin of Julia's `ERROR_CODES` NamedTuple
+# (`pkg/EarthSciAST.jl/src/error_codes.jl`), TypeScript's `ERROR_CODES` object
+# (`pkg/earthsci-ast-ts/src/errors.ts`), Go's `codes.go` and Rust's
+# `diagnostic::codes`. Everything above stays exactly as it was; this only gives
+# the vocabulary one public, uniformly-spelled entry point, so
+# `ERROR_CODES.UNDEFINED_VARIABLE` reads the same in every binding.
+#
+# It is BUILT FROM the definitions above rather than restating them, so it can
+# never drift: a code added to `ErrorCode` or as a module-level constant appears
+# here automatically, and there is no second list to keep in step.
+#
+# **The values are a cross-binding contract and must never change.** Only where
+# they are defined changed.
+# ===========================================================================
+
+
+class _ErrorCodeRegistry:
+    """Immutable SCREAMING_SNAKE name -> diagnostic code string registry.
+
+    Supports attribute access (``ERROR_CODES.UNDEFINED_VARIABLE``), the mapping
+    protocol (``ERROR_CODES["undefined_variable" ...]``, ``len``, ``in``,
+    iteration over names, ``.keys()`` / ``.values()`` / ``.items()``), and
+    nothing that would let a caller mutate it. An unknown name raises
+    ``AttributeError`` at the access, which is the point of having a registry:
+    a typo fails loudly instead of becoming a silently wrong code string.
+    """
+
+    __slots__ = ("_codes",)
+
+    def __init__(self, codes: dict[str, str]) -> None:
+        object.__setattr__(self, "_codes", MappingProxyType(dict(codes)))
+
+    def __getattr__(self, name: str) -> str:
+        try:
+            return self._codes[name]
+        except KeyError:
+            raise AttributeError(
+                f"no diagnostic code named {name!r}; "
+                f"this binding knows {len(self._codes)} codes"
+            ) from None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("ERROR_CODES is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("ERROR_CODES is immutable")
+
+    def __getitem__(self, name: str) -> str:
+        return self._codes[name]
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._codes
+
+    def __iter__(self):
+        return iter(self._codes)
+
+    def __len__(self) -> int:
+        return len(self._codes)
+
+    def keys(self):
+        return self._codes.keys()
+
+    def values(self):
+        return self._codes.values()
+
+    def items(self):
+        return self._codes.items()
+
+    def __dir__(self):
+        return sorted(self._codes)
+
+    def __repr__(self) -> str:
+        return f"<ERROR_CODES: {len(self._codes)} diagnostic codes>"
+
+
+def _build_error_codes() -> _ErrorCodeRegistry:
+    """Collect both representations into one name -> value mapping.
+
+    A name defined in both representations with DIFFERENT values would mean the
+    module contradicts itself, so that is an error at import rather than a
+    silent winner.
+    """
+    collected: dict[str, str] = {}
+
+    def put(name: str, value: str) -> None:
+        previous = collected.get(name)
+        if previous is not None and previous != value:
+            raise RuntimeError(
+                f"diagnostic code {name!r} is defined twice with different "
+                f"values: {previous!r} and {value!r}"
+            )
+        collected[name] = value
+
+    for member in ErrorCode:
+        put(member.name, member.value)
+    for name, value in list(globals().items()):
+        if name.isupper() and not name.startswith("_") and isinstance(value, str):
+            put(name, value)
+    return _ErrorCodeRegistry(collected)
+
+
+ERROR_CODES = _build_error_codes()

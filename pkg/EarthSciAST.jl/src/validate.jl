@@ -615,10 +615,16 @@ function validate(file::EsmFile)::ValidationResult
 end
 
 """
-    validate(path::AbstractString) -> ValidationResult
+    validate_path(path::AbstractString) -> ValidationResult
 
 Validate the document at `path`, INCLUDING the failures that happen while
 loading it.
+
+`validate` itself takes a TYPED document in every binding (API_SPEC.md §8
+item 13) — it used to be a second `validate` method here, which made one name
+mean "check this document" in four bindings and "read this file and check it"
+in Julia. The file convenience keeps its behaviour under a name that says it
+does I/O.
 
 An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
 pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
@@ -631,10 +637,82 @@ built, and callers that want the exception keep it. This entry point is the one
 the conformance harness wants — it renders the throw as the structural error it
 always was.
 """
-function validate(path::AbstractString)::ValidationResult
+function validate_path(path::AbstractString)::ValidationResult
     file = try
         load_path(path)
     catch e
+        err = load_failure_structural_error(e)
+        err === nothing && rethrow()
+        return ValidationResult(SchemaError[], StructuralError[err])
+    end
+    return validate(file)
+end
+
+"""
+    validate_text(text::AbstractString; base_path=pwd()) -> ValidationResult
+
+Validate an ESM document held as JSON **text**, INCLUDING the failures that
+happen while loading it.
+
+The text twin of [`validate_path`](@ref), and the same shape: `validate` itself
+takes a TYPED document in every binding (API_SPEC.md §8 item 13), and the two
+convenience entry points that do the reading carry names that say so.
+
+Julia was the last binding without this. Phase 6 correctly declined to add it,
+because §8 item 13 scoped that row to RENAMING an existing convenience and Julia
+had no text one to rename — but at four bindings out of five (Go `ValidateText`,
+Python `validate_text`, Rust `validate_text`, TypeScript `validateText`) it is a
+parity hole rather than a rename.
+
+A load failure becomes a **verdict** in the returned `ValidationResult` rather
+than an exception. A caller asking "is this document valid?" wants an answer for
+a malformed document too, and this is the entry point that has to give one: text
+is the only input that can carry SCHEMA errors at all, since a typed `EsmFile`
+can exist only by having already passed the schema at load. Measured against the
+other four before writing this — Python's `validate_text` and Go's `ValidateText`
+both return `is_valid=false` with populated `schema_errors` for schema-invalid
+AND for malformed text, and neither raises — so three channels are rendered:
+
+- a `SchemaValidationError` carries its structured `SchemaError`s straight
+  through into `schema_errors`;
+- an ordinary `ParseError` (no `code`) is malformed JSON: not a schema
+  violation of any node, so it becomes one `SchemaError` at the document root
+  under the `parse` keyword, which is where Go and Python put it too;
+- a rejection carrying a `(code, path)` shape — an unresolvable `{ref}`, the
+  §11.4.1 `ic_in_reaction_system` case — becomes a `StructuralError`, through
+  the same [`load_failure_structural_error`](@ref) [`validate_path`](@ref)
+  uses.
+
+Anything else still propagates.
+
+!!! note
+    [`validate_path`](@ref) renders only the third of those three and still
+    RAISES on schema-invalid or malformed input. That is pre-existing behaviour
+    of a `stable` function and is deliberately not changed here; the two entry
+    points therefore differ on bad input, which is recorded rather than fixed
+    silently.
+
+`base_path` anchors relative §9.7.2 template imports and §4.7 `{ref}`s, since
+text carries no location of its own. Note that `load_string` does not resolve
+subsystem `\$ref` MOUNTS — a document carrying those wants
+`validate_path` — the same split Python and Go document for their text entry
+points.
+
+# Examples
+```julia
+result = validate_text(read("model.esm", String); base_path=dirname("model.esm"))
+result.is_valid
+```
+"""
+function validate_text(text::AbstractString; base_path::AbstractString=pwd())::ValidationResult
+    file = try
+        load_string(text; base_path=base_path)
+    catch e
+        if e isa SchemaValidationError
+            return ValidationResult(e.errors, StructuralError[])
+        elseif e isa ParseError && isempty(e.code)
+            return ValidationResult([SchemaError("", e.message, "parse")], StructuralError[])
+        end
         err = load_failure_structural_error(e)
         err === nothing && rethrow()
         return ValidationResult(SchemaError[], StructuralError[err])
@@ -658,7 +736,7 @@ otherwise leave `structural_errors` empty even though the document is invalid
 - a structured `ParseError` (`code` non-empty) — currently the §11.4.1
   `ic_in_reaction_system` rejection — carries its own code, pointer and details.
 
-Both the file entry point [`validate(::AbstractString)`](@ref) and the
+Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
 in the same shape every other binding reports it.
 """
@@ -790,8 +868,8 @@ function validate_model_balance(model::Model, path::String;
                                 check_excess::Bool=true)::Vector{StructuralError}
     errors = StructuralError[]
 
-    unknowns = unknown_names(model)
-    n_unknowns = length(unknowns)
+    unknown_list = unknowns(model)
+    n_unknowns = length(unknown_list)
 
     # An `ic` equation prescribes an initial value, not a determining equation,
     # so it does not count toward the balance.
@@ -802,14 +880,14 @@ function validate_model_balance(model::Model, path::String;
     for eq in model.equations
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
-    missing_for = String[u for u in unknowns if !(u in equation_vars)]
+    missing_for = String[u for u in unknown_list if !(u in equation_vars)]
 
     has_subsystems = !isempty(model.subsystems)
     shortfall = n_unknowns - n_eqs
 
     report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
     if report
-        details = Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs)
+        details = Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs)
         isempty(missing_for) || (details["missing_equations_for"] = missing_for)
         push!(errors, StructuralError(
             path,
@@ -825,7 +903,7 @@ function validate_model_balance(model::Model, path::String;
             "Model declares unknown '$(first(missing_for))' but has no defining " *
             "equation for it",
             ERROR_CODES.EQUATION_COUNT_MISMATCH,
-            Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs,
+            Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs,
                              "missing_equations_for" => missing_for)))
     end
 
@@ -858,7 +936,8 @@ function _check_update_unit_conversions!(errors::Vector{StructuralError}, file::
             isa(uc, ASTExpr) || continue
             append!(errors, validate_expression_references(
                 file, uc,
-                "$path/variables/$name/update/$(ri-1)/from/unit_conversion";
+                _update_rule_path("$path/variables/$name", rules, ri) *
+                    "/from/unit_conversion";
                 scope=scope))
         end
     end
@@ -912,9 +991,9 @@ absent, and reports `system_kind_mismatch` when a present field contradicts it.
 Recurses into subsystems.
 """
 function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String)
-    mism = declared_system_kind_mismatch(model)
-    if mism !== nothing
-        declared, derived = mism
+    declared = declared_system_kind(model)
+    derived = system_kind(model)
+    if declared !== nothing && declared != derived
         push!(errors, StructuralError(
             "$path/system_kind",
             "Model declares system_kind '$declared' but its equations and " *
@@ -1773,7 +1852,9 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
             for (field, e) in (("when", rule.when), ("expression", rule.expression))
                 e === nothing && continue
                 append!(errors, validate_expression_references(
-                    file, e, "$path/variables/$name/update/$(ri-1)/$field"; scope=scope))
+                    file, e,
+                    _update_rule_path("$path/variables/$name", rules, ri) * "/$field";
+                    scope=scope))
             end
         end
     end

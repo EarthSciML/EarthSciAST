@@ -35,8 +35,8 @@ from earthsci_ast.reference_resolution import (
     ReferenceResolutionError,
     build_reference_graph,
 )
-from earthsci_ast.simulation import simulate
-from earthsci_ast.validation import validate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
+from earthsci_ast.validation import validate, validate_text
 
 
 _FIXTURES_DIR = VALID_DIR / "aggregate"
@@ -130,8 +130,8 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
             ics = {k: float(v) for k, v in (test.get("initial_conditions") or {}).items()}
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
-            result = simulate(esm_file, tspan=tspan, initial_conditions=ics, parameters=params)
-            assert result.success, (
+            result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
+            assert (result.retcode is ReturnCode.Success), (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
@@ -175,7 +175,7 @@ def test_undeclared_from_name_rejected_by_resolver() -> None:
     raw = json.loads(path.read_text())
 
     # Statically rejected at validate() time with the pinned (code, path).
-    result = validate(raw, base_path=str(path.parent))
+    result = validate_text(json.dumps(raw), base_path=str(path.parent))
     assert not result.is_valid
     assert (
         "undefined_index_set",
@@ -233,7 +233,7 @@ def test_build_time_invalid_join_key_rejected(fixture_path: Path) -> None:
     """
     raw = json.loads(fixture_path.read_text())
     model_name = next(iter(raw["models"]))
-    result = validate(raw, base_path=str(fixture_path.parent))
+    result = validate_text(json.dumps(raw), base_path=str(fixture_path.parent))
     assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
     assert (
         "join_key_invalid_type",

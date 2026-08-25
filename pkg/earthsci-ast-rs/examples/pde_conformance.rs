@@ -18,9 +18,9 @@
 //! one canonical pipeline (`.esm` → `load` → §9.7 import/metaparameter
 //! resolution → §9.6.3 rewrite fixpoint → official runner):
 //!
-//! - `pde-tests`   [`earthsci_ast::pde_inline_tests::run_pde_tests`] —
-//!   the §6.6/§6.6.5 inline tests through [`earthsci_ast::simulate`].
-//! - `convergence` [`earthsci_ast::parse::load_path_with_options`] once
+//! - `pde-tests`   [`earthsci_ast::run_pde_tests`] —
+//!   the §6.6/§6.6.5 inline tests through [`earthsci_ast::solve`].
+//! - `convergence` [`earthsci_ast::load_path_with_options`] once
 //!   per resolution (loader-API metaparameter binding, esm-spec §9.7.6 site
 //!   4) → `simulate` → `evaluate_cellwise(reference)` → `field_reduce`.
 //! - `reproject`   a runner-built invocation document importing the library
@@ -40,20 +40,19 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use earthsci_ast::evaluate;
-use earthsci_ast::parse::{
-    LoadOptions, load_path, load_path_with_options, load_string_with_options,
-};
-use earthsci_ast::pde_inline_tests::{evaluate_cellwise, field_reduce, run_pde_tests, state_cells};
-use earthsci_ast::simulate::{SimulateOptions, SolverChoice, simulate, simulate_with_inspection};
+use earthsci_ast::extension::types::AssertionReference;
 use earthsci_ast::simulate_array::BuildInspection;
-use earthsci_ast::types::{AssertionReference, EsmFile, Expr};
+use earthsci_ast::{Alg, SolveOptions};
+use earthsci_ast::{EsmFile, Expr};
+use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
+use earthsci_ast::{evaluate_cellwise, field_reduce, run_pde_tests, state_cells};
 use serde_json::{Value, json};
 
-fn parse_solver(name: &str) -> Result<SolverChoice, String> {
+fn parse_solver(name: &str) -> Result<Alg, String> {
     match name {
-        "Bdf" => Ok(SolverChoice::Bdf),
-        "Sdirk" => Ok(SolverChoice::Sdirk),
-        "Erk" => Ok(SolverChoice::Erk),
+        "Bdf" => Ok(Alg::Bdf),
+        "Sdirk" => Ok(Alg::Sdirk),
+        "Erk" => Ok(Alg::Erk),
         other => Err(format!("unknown solver '{other}' (want Bdf|Sdirk|Erk)")),
     }
 }
@@ -82,9 +81,9 @@ fn flag<'a>(flags: &'a HashMap<String, String>, name: &str) -> Result<&'a str, S
         .ok_or_else(|| format!("missing required --{name}"))
 }
 
-fn sim_options(flags: &HashMap<String, String>) -> Result<SimulateOptions, String> {
-    Ok(SimulateOptions {
-        solver: parse_solver(flag(flags, "solver")?)?,
+fn sim_options(flags: &HashMap<String, String>) -> Result<SolveOptions, String> {
+    Ok(SolveOptions {
+        alg: parse_solver(flag(flags, "solver")?)?,
         reltol: flag(flags, "reltol")?
             .parse()
             .map_err(|e| format!("--reltol: {e}"))?,
@@ -179,18 +178,22 @@ fn cmd_regrid(positional: &[String], flags: &HashMap<String, String>) -> Result<
     let passed = !results.is_empty() && results.iter().all(|r| r.passed);
     // regrid_state integrates the constant regridded field from 0 over [0,1],
     // so state(1) IS the regridded field F_tgt.
-    let mut insp = BuildInspection::default();
     let mut run_opts = opts.clone();
-    run_opts.output_times = Some(vec![1.0]);
-    let sol = simulate_with_inspection(
+    run_opts.saveat = Some(vec![1.0]);
+    // Build observability is asked for at CONSTRUCTION and read back off the
+    // Problem, not threaded through the run.
+    let prob = earthsci_ast::esm_problem(
         &file,
         (0.0, 1.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &run_opts,
-        &mut insp,
+        earthsci_ast::ProblemOptions {
+            inspect: true,
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
-    .map_err(|e| format!("simulate: {e}"))?;
+    .map_err(|e| format!("esm_problem: {e}"))?;
+    let sol = earthsci_ast::solve(&prob, &run_opts).map_err(|e| format!("solve: {e}"))?;
+    let insp = prob.take_inspection();
     let ti = sol.time.len() - 1;
     let mut out = serde_json::Map::new();
     out.insert("assertions".to_string(), json!(results));
@@ -301,14 +304,18 @@ fn cmd_convergence(
             .map_err(|e| format!("{problem} (n={n}): {e}"))?;
         let (variable, reference) = reference_assertion(&file, model, assert_time)?;
         let mut opts = base_opts.clone();
-        opts.output_times = Some(vec![assert_time]);
-        let sol = simulate(
+        opts.saveat = Some(vec![assert_time]);
+        let sol = earthsci_ast::esm_problem(
             &file,
             (0.0, assert_time),
-            &HashMap::new(),
-            &HashMap::new(),
-            &opts,
+            earthsci_ast::ProblemOptions {
+                p: HashMap::new().clone(),
+                u0: HashMap::new().clone(),
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
         )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts))
         .map_err(|e| format!("simulate (n={n}): {e}"))?;
         let ti = sol.time.len() - 1;
         let cells = state_cells(&sol.state_variable_names, &variable, model);
@@ -317,7 +324,7 @@ fn cmd_convergence(
         }
         let field: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         let cell_tuples: Vec<Vec<i64>> = cells.iter().map(|(c, _)| c.clone()).collect();
-        let index_sets: HashMap<String, earthsci_ast::types::IndexSet> = file
+        let index_sets: HashMap<String, earthsci_ast::extension::types::IndexSet> = file
             .index_sets
             .clone()
             .unwrap_or_default()
@@ -417,7 +424,7 @@ fn reproj_expressions(lib: &Path, params: &Value) -> Result<HashMap<String, Expr
         .ok_or("wrapper doc lost its Reproject model")?;
     // An observed unknown's composed expression is its defining EQUATION's RHS
     // from esm 1.0.0 (esm-spec 6.3.1).
-    let defs = earthsci_ast::classification::observed_definitions(model);
+    let defs = earthsci_ast::observed_definitions(model);
     let mut out = HashMap::new();
     for name in ["fwd_x", "fwd_y", "inv_lon", "inv_lat"] {
         let expr = defs

@@ -23,6 +23,8 @@ import {
   sampledParameters,
   constantParameters,
   systemKind,
+  declaredSystemKind,
+  effectiveSystemKind,
   classifyDocument,
   unknowns,
   parameters,
@@ -140,6 +142,10 @@ describe('classification conformance (esm-spec §6.3.1)', () => {
             expect(sampledParameters(model)).toEqual(expected.sampled_parameters)
             expect(constantParameters(model)).toEqual(expected.constant_parameters)
             expect(systemKind(model)).toBe(expected.system_kind)
+            // §8 item 11: `declared ?? derived`, never null.
+            expect(effectiveSystemKind(model)).toBe(
+              declaredSystemKind(model) ?? expected.system_kind,
+            )
           })
         })
       }
@@ -156,3 +162,23 @@ function modelAt(models: { [k: string]: unknown }, path: string): Model {
   }
   return node
 }
+
+describe('effectiveSystemKind (API_SPEC.md §8 item 11)', () => {
+  const derivedOde: Model = {
+    variables: { x: { type: 'unknown', default: 0 } },
+    equations: [{ lhs: { op: 'D', args: ['x', 't'] }, rhs: 1 }],
+  } as unknown as Model
+
+  it('falls back to the DERIVED kind when nothing is declared', () => {
+    expect(declaredSystemKind(derivedOde)).toBeNull()
+    expect(systemKind(derivedOde)).toBe('ode')
+    expect(effectiveSystemKind(derivedOde)).toBe('ode')
+  })
+
+  it('prefers the DECLARED kind when the document states one', () => {
+    const declared = { ...derivedOde, system_kind: 'nonlinear' } as unknown as Model
+    expect(declaredSystemKind(declared)).toBe('nonlinear')
+    expect(systemKind(declared)).toBe('ode')
+    expect(effectiveSystemKind(declared)).toBe('nonlinear')
+  })
+})

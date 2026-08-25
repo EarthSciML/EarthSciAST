@@ -21,7 +21,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 /// Build a prefix-reduction aggregate over `u` with the given comparison.
-fn prefix_agg(cmp: &str, n: i64, reduce: &str) -> earthsci_ast::types::Expr {
+fn prefix_agg(cmp: &str, n: i64, reduce: &str) -> earthsci_ast::Expr {
     let node = json!({
         "op": "aggregate",
         "args": ["u"],
@@ -34,7 +34,7 @@ fn prefix_agg(cmp: &str, n: i64, reduce: &str) -> earthsci_ast::types::Expr {
     serde_json::from_value(node).expect("aggregate parses")
 }
 
-fn eval_with(expr: &earthsci_ast::types::Expr, u: &[f64]) -> Vec<f64> {
+fn eval_with(expr: &earthsci_ast::Expr, u: &[f64]) -> Vec<f64> {
     let mut inputs: HashMap<String, ArrayD<f64>> = HashMap::new();
     inputs.insert(
         "u".to_string(),
@@ -193,7 +193,7 @@ fn body_referencing_the_scanned_symbol_falls_back_to_the_oracle() {
         // body depends on BOTH i and j — sum_{j<=i} u[j]*i
         "expr": { "op": "*", "args": [ { "op": "index", "args": ["u", "j"] }, "i" ] }
     });
-    let expr: earthsci_ast::types::Expr = serde_json::from_value(node).unwrap();
+    let expr: earthsci_ast::Expr = serde_json::from_value(node).unwrap();
     let u = vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
     let got = eval_with(&expr, &u);
     // result[i] = i * sum_{j<=i} u[j]
@@ -300,7 +300,7 @@ fn rank_2_output_scans_one_axis_and_leaves_the_other_independent() {
         "filter": { "op": "<=", "args": ["j", "i"] },
         "expr": { "op": "index", "args": ["m", "r", "j"] }
     });
-    let expr: earthsci_ast::types::Expr = serde_json::from_value(node).unwrap();
+    let expr: earthsci_ast::Expr = serde_json::from_value(node).unwrap();
 
     let mut inputs: HashMap<String, ArrayD<f64>> = HashMap::new();
     inputs.insert(
@@ -340,7 +340,7 @@ fn mirrored_forward_spelling_matches_and_reverse_spelling_does_not() {
         "filter": { "op": ">=", "args": ["i", "j"] },   // i >= j  ==  j <= i
         "expr": { "op": "index", "args": ["u", "j"] }
     });
-    let expr: earthsci_ast::types::Expr = serde_json::from_value(mirrored).unwrap();
+    let expr: earthsci_ast::Expr = serde_json::from_value(mirrored).unwrap();
     let got = eval_with(&expr, &u);
     let want = oracle(&u, "<=", "+");
     for (k, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -366,7 +366,7 @@ fn rank_2_output_scans_axis_zero() {
         "filter": { "op": "<=", "args": ["j", "i"] },
         "expr": { "op": "index", "args": ["m", "j", "c"] }
     });
-    let expr: earthsci_ast::types::Expr = serde_json::from_value(node).unwrap();
+    let expr: earthsci_ast::Expr = serde_json::from_value(node).unwrap();
     let mut inputs: HashMap<String, ArrayD<f64>> = HashMap::new();
     inputs.insert(
         "m".to_string(),
@@ -415,13 +415,17 @@ fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
             let abs_tol = tol["abs"].as_f64().unwrap_or(0.0);
             for test in model["tests"].as_array().into_iter().flatten() {
                 let end = test["time_span"]["end"].as_f64().expect("time_span.end");
-                let sol = earthsci_ast::simulate(
+                let sol = earthsci_ast::esm_problem(
                     &file,
                     (0.0, end),
-                    &std::collections::HashMap::new(),
-                    &std::collections::HashMap::new(),
-                    &earthsci_ast::SimulateOptions::default(),
+                    earthsci_ast::ProblemOptions {
+                        p: std::collections::HashMap::new().clone(),
+                        u0: std::collections::HashMap::new().clone(),
+                        compile: earthsci_ast::Compile::Always,
+                        ..Default::default()
+                    },
                 )
+                .and_then(|prob| earthsci_ast::solve(&prob, &earthsci_ast::SolveOptions::default()))
                 .unwrap_or_else(|e| panic!("{name}::{model_name} simulate: {e}"));
 
                 for a in test["assertions"].as_array().into_iter().flatten() {

@@ -2192,7 +2192,10 @@ materialized entry remains → §9.6.4 rule 8 version stamp). Shared by
 [`emit_document`](@ref) (raw emit) and the typed load path (`_lower_and_coerce`).
 """
 function _materialize_components!(root, authored::Dict{String,Vector{String}})
-    blocks = Dict{String,OrderedDict{String,Any}}()
+    # ORDERED by component: `_merge_flat_registry` consumes this map positionally
+    # (esm-libraries-spec §4.7.5 step 4 makes the merged registry document-
+    # ordered), and `pairs(comps)` below walks the raw document's own order.
+    blocks = OrderedDict{String,OrderedDict{String,Any}}()
     bump = false
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
@@ -2297,7 +2300,7 @@ function _registry_collision_names(byname::AbstractDict)::Set{String}
 end
 
 """
-    _merge_flat_registry(component_templates) -> (Dict{String,Any}, Dict{String,Dict{String,String}})
+    _merge_flat_registry(component_templates) -> (OrderedDict{String,Any}, OrderedDict{String,Dict{String,String}})
 
 Merge the per-component materialized registries (compkey → block) into the
 single document-scoped registry the flattened representation carries (esm-spec
@@ -2313,17 +2316,22 @@ component's reference sites — `flatten` does so alongside namespacing — or t
 renamed entries become unreachable. `nothing` in ⇒ empty out.
 """
 function _merge_flat_registry(component_templates)
-    merged = Dict{String,Any}()
-    rename = Dict{String,Dict{String,String}}()
+    merged = OrderedDict{String,Any}()
+    rename = OrderedDict{String,Dict{String,String}}()
     component_templates === nothing && return (merged, rename)
     byname = OrderedDict{String,Vector{Tuple{String,Any}}}()
-    # Deterministic component order (sorted compkey) so dedup "first occurrence"
-    # and collision rename are reproducible.
-    for compkey in sort(collect(keys(component_templates)))
-        block = component_templates[compkey]
+    # DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, normative): components in
+    # the order the file declares them, entries in the order their block declares
+    # them. Both loops previously sorted "so dedup first-occurrence and the
+    # collision rename are reproducible" — document order is equally
+    # reproducible, and it is the order the spec fixes. Sorting agreed with it
+    # only when component names happened to sort in declaration order. The
+    # dedup / collision-rename SEMANTICS below are untouched.
+    for (compkey, block) in component_templates
         _is_object(block) || continue
         path = String(last(split(compkey, "."; limit=2)))
-        for name in sort(collect(string(k) for (k, _) in pairs(block)))
+        for (k, _) in pairs(block)
+            name = string(k)
             push!(get!(byname, name, Tuple{String,Any}[]), (path, _raw_get(block, name)))
         end
     end

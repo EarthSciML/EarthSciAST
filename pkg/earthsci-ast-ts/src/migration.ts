@@ -85,7 +85,7 @@ function isOnAdditiveLine(version: SemVer): boolean {
  * Check if migration is possible from the source version to target version.
  */
 export function canMigrate(sourceVersion: string, targetVersion: string): boolean {
-  const supported = getSupportedMigrationTargets(sourceVersion)
+  const supported = supportedMigrationTargets(sourceVersion)
   return supported.includes(targetVersion)
 }
 
@@ -97,7 +97,7 @@ export function canMigrate(sourceVersion: string, targetVersion: string): boolea
  * - everything else — including EVERY 0.x version, which 1.0.0's clean break
  *   puts out of reach of a marker bump — → `[]`.
  */
-export function getSupportedMigrationTargets(sourceVersion: string): string[] {
+export function supportedMigrationTargets(sourceVersion: string): string[] {
   const parsed = parseVersion(sourceVersion)
   if (parsed && isOnAdditiveLine(parsed)) {
     return [SCHEMA_VERSION]
@@ -105,6 +105,14 @@ export function getSupportedMigrationTargets(sourceVersion: string): string[] {
 
   return []
 }
+
+/**
+ * @deprecated Use {@link supportedMigrationTargets}. The canonical name is
+ * `supported_migration_targets` (Julia, Python and Go already spell it that
+ * way); the harmonized API drops the `get` prefix. Kept for one minor per
+ * API_SPEC.md §10; removed at the next major.
+ */
+export const getSupportedMigrationTargets = supportedMigrationTargets
 
 /**
  * Migrate an ESM file from its current schema version to the target version.

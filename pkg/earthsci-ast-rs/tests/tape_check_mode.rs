@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::simulate_array::{ArrayCompiled, RhsStats};
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 
 /// A wrap + ghost stencil with a CONST-tier observed — enough structure that
 /// a genuine divergence between the two paths would be caught.
@@ -195,16 +195,26 @@ fn ess_tape_check_runs_both_paths_without_panicking() {
 
     // And a real solve under check mode must complete (its first 5 RHS calls
     // are dual-path verified inside the closure).
-    let opts = SimulateOptions {
-        solver: SolverChoice::Erk,
+    let opts = SolveOptions {
+        alg: Alg::Erk,
         reltol: 1e-8,
         abstol: 1e-10,
-        output_times: Some(vec![0.5, 1.0]),
+        saveat: Some(vec![0.5, 1.0]),
         ..Default::default()
     };
     let ics: HashMap<String, f64> = (1..=n).map(|k| (format!("u[{k}]"), 1.0)).collect();
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts)
-        .expect("checked simulate must run");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("checked simulate must run");
     assert!(
         sol.state
             .iter()

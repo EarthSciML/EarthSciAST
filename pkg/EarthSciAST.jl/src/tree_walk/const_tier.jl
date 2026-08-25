@@ -66,25 +66,24 @@
 # own — it is a bare `cache[i]` load — so a def that reads a DYNAMIC slot through a
 # cache ref looks leaf-clean and would be classified CONST, and would then be computed
 # once and frozen while the slot it reads kept moving. And prelude defs absolutely do
-# contain `_NK_CACHED` children: `_compile_cse` hoists a def's children BEFORE the def
-# itself (that is what keeps the prelude topologically ordered), and `_share_lane_invariants!`
-# rewrites its new defs against the slots below them.
+# contain `_NK_CACHED` children: `_compile_cse` hoists a def's children BEFORE the
+# def itself (that is what keeps the prelude topologically ordered), and
+# `_share_kernel_invariants!` rewrites its new defs against the slots below them.
 #
-# WHY `_NK_PARAM_GATHER` IS TIME, NOT CONST (and why it could not be, before B3):
+# WHY `_NK_PARAM_GATHER` IS TIME, NOT CONST:
 # a live forcing buffer (ess-14f.3) or a discrete-cadence cache has its CONTENTS
 # refreshed IN PLACE between calls (a data-refresh callback's `buffer .= …`, a
 # `DiscreteMaterializer.materialize!`) while `p` itself never moves — a `p`-keyed
 # validity stamp cannot see it change, so it must never enter the const tier. The
 # TIME tier's stamp carries the FORCING EPOCH precisely so it can: `_write_forcing!`
 # and `materialize!` bump `_FORCING_EPOCH` (compile.jl) on every in-place refresh,
-# and `_cse_t_stale` refills on the bump even at an unchanged `t`. This is the
-# discrete-cadence "refresh-keyed stamp" the original const-tier note deferred.
-# (Contract note: DIRECT buffer mutation outside those two write paths must call
-# `notify_forcing_refresh!` if the RHS may next run at an already-seen `t`.)
+# and `_cse_t_stale` refills on the bump even at an unchanged `t`. Contract note:
+# DIRECT buffer mutation outside those two write paths must call
+# `notify_forcing_refresh!` if the RHS may next run at an already-seen `t`.
 #
 # ASCENDING SLOT ORDER makes clause (2) a single forward pass. Prelude slot order is
 # topological (a def may only read slots strictly below its own — `_compile_cse`
-# assigns child slots first, and `_share_lane_invariants!` sorts its new defs by node
+# assigns child slots first, and `_share_kernel_invariants!` sorts its new defs by node
 # count for the same reason), so when slot `s` is classified, every slot it can
 # possibly reference is already classified:
 #
@@ -142,7 +141,7 @@ end
 
 _tcadence_disabled() = get(ENV, "ESS_TCADENCE_DISABLE", "") == "1"
 
-# Partition the FINAL prelude (post `_share_lane_invariants!`) into its three cadence
+# Partition the FINAL prelude (post `_share_kernel_invariants!`) into its three cadence
 # tiers. Returns three ASCENDING slot-index vectors — the order `f!` must evaluate
 # them in — which together are a permutation of `1:length(prelude)`.
 #

@@ -43,7 +43,7 @@ pytest.importorskip("scipy")
 
 from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 FIXTURE = str(VALID_DIR / "advection_reaction_loaded_ic_bc.esm")
@@ -120,15 +120,8 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
         tspan = (float(ts["start"]), float(ts["end"]))
         test_tol = test.get("tolerance")
 
-        result = simulate(
-            file,
-            tspan=tspan,
-            providers=providers,
-            method="RK45",
-            rtol=1e-10,
-            atol=1e-12,
-        )
-        assert result.success, f"simulate() failed: {result.message}"
+        result = solve(esm_problem(file, tspan, providers=providers), alg="RK45", reltol=1e-10, abstol=1e-12)
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
             total += 1

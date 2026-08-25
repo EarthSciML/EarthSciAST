@@ -208,34 +208,36 @@ pub enum StructuralErrorCode {
     ArrayShapeMismatch,
 }
 
+use crate::diagnostic::codes;
+
 impl std::fmt::Display for StructuralErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::UndefinedVariable => "undefined_variable",
-            Self::EquationCountMismatch => "equation_count_mismatch",
-            Self::UndefinedSpecies => "undefined_species",
-            Self::UndefinedParameter => "undefined_parameter",
-            Self::NullReaction => "null_reaction",
-            Self::EventAffectsParameter => "event_affects_parameter",
-            Self::UnresolvedScopedRef => "unresolved_scoped_ref",
-            Self::EventVarUndeclared => "event_var_undeclared",
-            Self::UndefinedOperator => "undefined_operator",
-            Self::DataSourceUndefined => "data_source_undefined",
-            Self::UndefinedSystem => "undefined_system",
-            Self::OperatorVariableMissing => "operator_variable_missing",
-            Self::CircularDependency => "circular_dependency",
-            Self::UnitInconsistency => "unit_inconsistency",
-            Self::UnitParseError => "unit_parse_error",
-            Self::IcInReactionSystem => "ic_in_reaction_system",
-            Self::FactorWithExpressionTransform => "factor_with_expression_transform",
-            Self::UnresolvedSubsystemRef => "unresolved_subsystem_ref",
-            Self::AmbiguousSubsystemRef => "ambiguous_subsystem_ref",
-            Self::DomainUnitMismatch => "domain_unit_mismatch",
-            Self::JoinKeyInvalidType => "join_key_invalid_type",
-            Self::RelationalNodeInContinuous => "relational_node_in_continuous",
-            Self::UndefinedIndexSet => "undefined_index_set",
-            Self::InvalidBroadcastFn => "invalid_broadcast_fn",
-            Self::ArrayShapeMismatch => "array_shape_mismatch",
+            Self::UndefinedVariable => codes::UNDEFINED_VARIABLE,
+            Self::EquationCountMismatch => codes::EQUATION_COUNT_MISMATCH,
+            Self::UndefinedSpecies => codes::UNDEFINED_SPECIES,
+            Self::UndefinedParameter => codes::UNDEFINED_PARAMETER,
+            Self::NullReaction => codes::NULL_REACTION,
+            Self::EventAffectsParameter => codes::EVENT_AFFECTS_PARAMETER,
+            Self::UnresolvedScopedRef => codes::UNRESOLVED_SCOPED_REF,
+            Self::EventVarUndeclared => codes::EVENT_VAR_UNDECLARED,
+            Self::UndefinedOperator => codes::UNDEFINED_OPERATOR,
+            Self::DataSourceUndefined => codes::DATA_SOURCE_UNDEFINED,
+            Self::UndefinedSystem => codes::UNDEFINED_SYSTEM,
+            Self::OperatorVariableMissing => codes::OPERATOR_VARIABLE_MISSING,
+            Self::CircularDependency => codes::CIRCULAR_DEPENDENCY,
+            Self::UnitInconsistency => codes::UNIT_INCONSISTENCY,
+            Self::UnitParseError => codes::UNIT_PARSE_ERROR,
+            Self::IcInReactionSystem => codes::IC_IN_REACTION_SYSTEM,
+            Self::FactorWithExpressionTransform => codes::FACTOR_WITH_EXPRESSION_TRANSFORM,
+            Self::UnresolvedSubsystemRef => codes::UNRESOLVED_SUBSYSTEM_REF,
+            Self::AmbiguousSubsystemRef => codes::AMBIGUOUS_SUBSYSTEM_REF,
+            Self::DomainUnitMismatch => codes::DOMAIN_UNIT_MISMATCH,
+            Self::JoinKeyInvalidType => codes::JOIN_KEY_INVALID_TYPE,
+            Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
+            Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
+            Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
+            Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,
         };
         write!(f, "{s}")
     }
@@ -244,7 +246,7 @@ impl std::fmt::Display for StructuralErrorCode {
 /// Perform structural validation on an ESM file
 ///
 /// **Note**: This function performs ONLY structural validation, not schema validation.
-/// For comprehensive validation (both schema and structural), use `validate_complete()` instead.
+/// For comprehensive validation (both schema and structural), use `validate_text()` instead.
 ///
 /// This function runs the structural checks (delegating to
 /// [`crate::structural`] and [`crate::coupling`]):
@@ -373,7 +375,7 @@ pub fn validate(esm_file: &EsmFile) -> ValidationResult {
 /// # Returns
 ///
 /// * `ValidationResult` - Comprehensive validation results with both schema and structural errors
-pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
+pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
     // First try to parse the JSON and ESM file, anchoring relative refs at the
     // caller-provided base directory (mirrors Python's `validate(base_path=…)`).
     let loaded = match base_path {
@@ -443,10 +445,23 @@ pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) ->
     }
 }
 
+/// Deprecated alias of [`validate_text`].
+///
+/// API_SPEC.md §8 item 13 makes `validate` take a typed document everywhere
+/// and names the text convenience `validate_text`. This binding spelled that
+/// convenience `validate_complete`. Kept for one minor per API_SPEC.md §10.
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `validate_text` (API_SPEC.md §8 item 13)"
+)]
+pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
+    validate_text(json_str, base_path)
+}
+
 /// Validate an ESM file including schema validation
 ///
 /// This function combines schema and structural validation.
-/// Note: Consider using `validate_complete()` instead for a simpler API.
+/// Note: Consider using `validate_text()` instead for a simpler API.
 pub fn validate_with_schema(json_str: &str, esm_file: &EsmFile) -> ValidationResult {
     let mut schema_errors = Vec::new();
     let mut structural_errors = Vec::new();
@@ -1721,9 +1736,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_vs_validate_complete() {
-        // Test to demonstrate the difference between validate() and validate_complete()
-        // validate() only does structural validation, validate_complete() does both
+    fn test_validate_vs_validate_text() {
+        // Test to demonstrate the difference between validate() and validate_text()
+        // validate() only does structural validation, validate_text() does both
 
         // Create a valid EsmFile structure
         let esm_file = EsmFile {
@@ -1781,8 +1796,8 @@ mod tests {
         // The validate() function - only does structural validation
         let result1 = validate(&esm_file);
 
-        // The validate_complete() function - does both schema and structural validation
-        let result2 = validate_complete(invalid_json, None);
+        // The validate_text() function - does both schema and structural validation
+        let result2 = validate_text(invalid_json, None);
 
         // Correct behavior: validate() should have empty schema_errors (it doesn't check schema)
         assert!(
@@ -1794,26 +1809,26 @@ mod tests {
             "validate() should pass structural validation on valid ESM structure"
         );
 
-        // validate_complete() should find schema errors
+        // validate_text() should find schema errors
         assert!(
             !result2.schema_errors.is_empty(),
-            "validate_complete() should find schema errors"
+            "validate_text() should find schema errors"
         );
         assert!(
             !result2.is_valid,
-            "validate_complete() should fail due to schema errors"
+            "validate_text() should fail due to schema errors"
         );
 
         println!(
-            "CORRECT BEHAVIOR: validate() found {} schema errors, validate_complete() found {} schema errors",
+            "CORRECT BEHAVIOR: validate() found {} schema errors, validate_text() found {} schema errors",
             result1.schema_errors.len(),
             result2.schema_errors.len()
         );
     }
 
     #[test]
-    fn test_validate_complete_with_schema_errors() {
-        // Test the new validate_complete function that should detect schema errors
+    fn test_validate_text_with_schema_errors() {
+        // Test the new validate_text function that should detect schema errors
         let invalid_json = r#"
         {
             "esm": "1.0.0",
@@ -1833,16 +1848,16 @@ mod tests {
         }
         "#;
 
-        let result = validate_complete(invalid_json, None);
+        let result = validate_text(invalid_json, None);
 
         // Should detect schema errors
         assert!(
             !result.is_valid,
-            "validate_complete should detect schema validation failures"
+            "validate_text should detect schema validation failures"
         );
         assert!(
             !result.schema_errors.is_empty(),
-            "validate_complete should find schema errors"
+            "validate_text should find schema errors"
         );
 
         // Per CONFORMANCE_SPEC.md §7.1.2 the wire format is one record PER schema
@@ -1867,8 +1882,8 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_complete_with_valid_json() {
-        // Test validate_complete with valid JSON
+    fn test_validate_text_with_valid_json() {
+        // Test validate_text with valid JSON
         let valid_json = r#"
             {
               "esm": "1.0.0",
@@ -1907,12 +1922,12 @@ mod tests {
             }
             "#;
 
-        let result = validate_complete(valid_json, None);
+        let result = validate_text(valid_json, None);
 
         // Should pass validation
         assert!(
             result.is_valid,
-            "validate_complete should pass with valid JSON: {result:?}"
+            "validate_text should pass with valid JSON: {result:?}"
         );
         assert!(
             result.schema_errors.is_empty(),
@@ -1925,20 +1940,20 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_complete_recovers_structural_on_load_reject() {
+    fn test_validate_text_recovers_structural_on_load_reject() {
         // A document that is schema-valid but rejected at LOAD by a structural
         // rule (here: an event `affects` targeting an undeclared variable) must
         // still surface its structured `(code, path)` structural findings from
-        // `validate_complete`, NOT collapse to an empty `structural_errors`
+        // `validate_text`, NOT collapse to an empty `structural_errors`
         // (CONFORMANCE_SPEC §7.1.2). Fixture + pinned shape:
         // tests/invalid/event_var_undeclared.esm + expected_errors.json.
         let fixture = include_str!("../../../tests/invalid/event_var_undeclared.esm");
-        let result = validate_complete(fixture, None);
+        let result = validate_text(fixture, None);
 
         assert!(!result.is_valid, "load-rejected fixture must be invalid");
         assert!(
             !result.structural_errors.is_empty(),
-            "validate_complete must recover typed structural errors on load-reject, got none"
+            "validate_text must recover typed structural errors on load-reject, got none"
         );
         // The pinned `(code, path)` record must be present. Per §7.1.2 the pin is
         // a REQUIRED SUBSET of what the binding emits, so a load-Err document may

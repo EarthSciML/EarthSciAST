@@ -1238,12 +1238,20 @@ function model_unit_findings(model::Model)::Vector{UnitFinding}
         # expression positions, so an internal inconsistency in either is the
         # same defect as one inside an equation side.
         if var.update !== nothing
-            for (ri, rule) in enumerate(var.update)
+            rules = var.update
+            for (ri, rule) in enumerate(rules)
+                # The pointer addresses the document AS WRITTEN: the object
+                # form is `/update/<field>`, the array form `/update/<i>/<field>`
+                # (`_update_rule_path`, types.jl). The message names the rule
+                # only when there is more than one to distinguish.
+                rule_path = _update_rule_path("variables/$name", rules, ri)
+                rule_label = _update_is_scalar_form(rules) ? "" :
+                             ", update rule $(ri - 1)"
                 for (field, e) in (("when", rule.when), ("expression", rule.expression))
                     e === nothing && continue
                     for msg in expression_unit_findings(e, var_units)
-                        push!(out, UnitFinding("variables/$name/update/$(ri - 1)/$field",
-                            "$msg (variable '$name', update rule $(ri - 1), field '$field')",
+                        push!(out, UnitFinding("$rule_path/$field",
+                            "$msg (variable '$name'$rule_label, field '$field')",
                             UNIT_DIMENSION_MISMATCH))
                     end
                 end

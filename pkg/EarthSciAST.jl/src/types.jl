@@ -1,3 +1,5 @@
+using OrderedCollections: OrderedDict
+
 """
 Type definitions for EarthSciML Serialization Format.
 
@@ -230,13 +232,13 @@ Operator expression node containing:
 # ever copies-with-changes through `reconstruct` (fields are never assigned after
 # construction). Mutability buys true POINTER-IDENTITY for the build-time
 # memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the `_stencil_var_set` cache in tree_walk/stencil.jl). With an *immutable*
+# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
 # `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
 # are STRUCTURAL — every memo probe re-hashes the `op` String and walks all ~35
-# fields (measured ~17× slower per probe than pointer identity), and those probes
-# dominate the `build_evaluator` profile. A mutable struct makes `objectid`/`===`
-# (hence `IdDict` and the `r !== args[i]` "did this subtree change" identity checks
-# throughout the tree walk) pointer-based, so the memos become the O(1) identity
+# fields, and those probes are a large share of the `build_evaluator` profile. A
+# mutable struct makes `objectid`/`===` (hence `IdDict` and the `r !== args[i]`
+# "did this subtree change" identity checks throughout the tree walk)
+# pointer-based, so the memos become the O(1) identity
 # caches they were always meant to be. No custom `==`/`hash` is defined: `OpExpr`
 # is never a *value*-keyed `Dict`/`Set` key anywhere (only ever an `IdDict` key),
 # and default `==` was already non-structural for trees — two distinct-but-equal
@@ -1000,6 +1002,48 @@ _coerce_update_vector(u::Vector{ParameterUpdate}) = u
 _coerce_update_vector(u::AbstractVector) = ParameterUpdate[x for x in u]
 
 """
+    _update_is_scalar_form(rules::AbstractVector) -> Bool
+
+Whether an `update` vector came from the wire's OBJECT form (one rule) rather
+than its ARRAY form. `length(rules) == 1` decides it, and that is sound rather
+than a heuristic: `esm-schema.json`'s `ParameterUpdateSpec` is
+`oneOf: [ParameterUpdate, {type: array, minItems: 2}]`, so a one-element array
+is not a valid document — `tests/invalid/parameter_update_singleton_array.esm`
+exists for the sole purpose of pinning that, because representation uniqueness
+is what makes the round trip idempotent.
+
+This is the SINGLE place that decision is made. Both consumers must agree or
+the document a diagnostic addresses is not the document the serializer emits:
+
+- [`_emit_parameter_update_spec`](@ref) picks the wire form to write;
+- [`_update_rule_path`](@ref) builds the JSON Pointer a diagnostic reports.
+
+The Go binding derives it identically (`single := len(copied) == 1` in
+`expr_walk.go`); TypeScript reads the wire form directly (`Array.isArray`)
+because its typed layer keeps the union. On every schema-valid document all
+three agree.
+"""
+_update_is_scalar_form(rules::AbstractVector) = length(rules) == 1
+
+"""
+    _update_rule_path(base::AbstractString, rules, ri::Integer) -> String
+
+The JSON Pointer addressing update rule `ri` (1-based) of `rules`, under
+`base` — `"\$base/update"` for the object form, `"\$base/update/\$(ri-1)"` for
+the array form.
+
+A diagnostic pointer must address the document **as written**. Julia's typed
+model normalizes a scalar `update` into a one-element `Vector` at parse time
+(see [`_coerce_update_vector`](@ref)), and the three passes that walk update
+rules used to interpolate that synthetic index unconditionally — so a document
+writing `update: {...}` was told about `/update/0/from/unit_conversion`, a
+pointer resolving to nothing in its own source. The corpus pin and the
+TypeScript, Python and Go bindings all say `/update/from/unit_conversion`.
+"""
+_update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
+    _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
+
+"""
     reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
 
 Rebuild a `ModelVariable`, copying every field from `v` by default and
@@ -1246,14 +1290,21 @@ SubsystemRef(ref::AbstractString) =
 ODE-based model component containing variables, equations, and optional subsystems.
 Supports hierarchical composition through subsystems. A subsystem value is a
 child `Model` or — only until references are resolved — a `SubsystemRef`; the
-field is typed by their shared supertype, `Dict{String,SubsystemNode}`.
+field is typed by their shared supertype, `OrderedDict{String,SubsystemNode}`.
+
+`variables` and `subsystems` are `OrderedDict`s, and the parser populates them in
+DOCUMENT ORDER. That is not a convenience: esm-libraries-spec §4.7.5 step 4 makes
+the flattened system's ordering normative (variables in the order their component
+declares them), and a flattener can only inherit an order the IR preserved. A
+plain `Dict` here leaked its hash order all the way out to `flatten`'s
+`parameters`, which a consumer reads POSITIONALLY as the parameter vector.
 """
 struct Model <: SubsystemNode
-    variables::Dict{String,ModelVariable}
+    variables::OrderedDict{String,ModelVariable}
     equations::Vector{Equation}
     discrete_events::Vector{DiscreteEvent}
     continuous_events::Vector{ContinuousEvent}
-    subsystems::Dict{String,SubsystemNode}
+    subsystems::OrderedDict{String,SubsystemNode}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
     initialization_equations::Vector{Equation}
@@ -1268,8 +1319,8 @@ struct Model <: SubsystemNode
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
-        new(Dict{String,ModelVariable}(variables), equations,
-            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
+        new(OrderedDict{String,ModelVariable}(variables), equations,
+            discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
             tolerance, tests,
             initialization_equations, guesses, system_kind)
 
@@ -1277,14 +1328,14 @@ struct Model <: SubsystemNode
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation};
           discrete_events=DiscreteEvent[],
           continuous_events=ContinuousEvent[],
-          subsystems=Dict{String,SubsystemNode}(),
+          subsystems=OrderedDict{String,SubsystemNode}(),
           tolerance=nothing,
           tests=InlineTest[],
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
           system_kind=nothing) =
-        new(Dict{String,ModelVariable}(variables), equations,
-            discrete_events, continuous_events, Dict{String,SubsystemNode}(subsystems),
+        new(OrderedDict{String,ModelVariable}(variables), equations,
+            discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
             tolerance, tests,
             initialization_equations, guesses, system_kind)
 end
@@ -1574,6 +1625,12 @@ end
     Domain
 
 Spatial and temporal domain specification.
+
+Carries every field esm-schema.json's `Domain` defines — the schema sets
+`additionalProperties: false`, so this list is closed — because a flattened
+system is required to reproduce "the file's `domain` section, unchanged"
+(esm-libraries-spec §4.7.5 step 4). A field this type does not hold is a field
+`load` silently drops.
 """
 struct Domain
     # The name of the independent (time) variable, `"t"` unless the document
@@ -1586,10 +1643,27 @@ struct Domain
     # bare `t` in a document that renamed it and rejected the real name.
     independent_variable::String
     temporal::Union{Dict{String,Any},Nothing}
+    # Floating-point precision and array backend (esm-schema.json `Domain`:
+    # `element_type` ∈ {"Float32","Float64"}, `array_type` e.g. "Array" /
+    # "CuArray"). Carried for the same reason `independent_variable` is: the
+    # schema defines them, `tests/valid/model_only.esm` declares
+    # `element_type: "Float32"`, and `Domain` used not to hold them — so `load`
+    # silently DROPPED them and a round trip rewrote a Float32 document as one
+    # with no precision declared at all. They also decide real behaviour
+    # downstream (Float32 vs Float64 for the assembled problem, host vs GPU
+    # arrays), and esm-libraries-spec §4.7.5 step 4 says a `FlattenedSystem`
+    # carries "the file's `domain` section, UNCHANGED". `nothing` means the
+    # document declared none — absence is preserved rather than replaced by the
+    # schema default, so emit round-trips byte-for-byte.
+    element_type::Union{String,Nothing}
+    array_type::Union{String,Nothing}
 
     # Constructor with optional parameters
-    Domain(; independent_variable::AbstractString="t", temporal=nothing) =
-        new(String(independent_variable), temporal)
+    Domain(; independent_variable::AbstractString="t", temporal=nothing,
+             element_type=nothing, array_type=nothing) =
+        new(String(independent_variable), temporal,
+            element_type === nothing ? nothing : String(element_type),
+            array_type === nothing ? nothing : String(array_type))
 end
 
 """
@@ -1645,15 +1719,16 @@ struct ReactionSystem
     species::Vector{Species}
     reactions::Vector{Reaction}
     parameters::Vector{Parameter}
-    subsystems::Dict{String,ReactionSystem}
+    subsystems::OrderedDict{String,ReactionSystem}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
 
     # Constructor with optional parameters and subsystems
     ReactionSystem(species::Vector{Species}, reactions::Vector{Reaction};
-                   parameters=Parameter[], subsystems=Dict{String,ReactionSystem}(),
+                   parameters=Parameter[], subsystems=OrderedDict{String,ReactionSystem}(),
                    tolerance=nothing, tests=InlineTest[]) =
-        new(species, reactions, parameters, subsystems, tolerance, tests)
+        new(species, reactions, parameters,
+            OrderedDict{String,ReactionSystem}(subsystems), tolerance, tests)
 end
 
 """
@@ -1731,12 +1806,17 @@ end
     EsmFile
 
 Main ESM file structure containing all components.
+
+`models`, `reaction_systems`, `index_sets`, `function_tables` and
+`component_templates` are `OrderedDict`s populated by the parser in DOCUMENT
+ORDER — see [`Model`](@ref) for why, and esm-libraries-spec §4.7.5 step 4 for the
+normative rule.
 """
 struct EsmFile
     esm::String  # Version string
     metadata::Metadata
-    models::Union{Dict{String,Model},Nothing}
-    reaction_systems::Union{Dict{String,ReactionSystem},Nothing}
+    models::Union{OrderedDict{String,Model},Nothing}
+    reaction_systems::Union{OrderedDict{String,ReactionSystem},Nothing}
     # Document-scoped INGEST REGISTRY (esm-spec §8). Not components: a data
     # source is not a coupling endpoint, not a subsystem, and not the path root
     # of a scoped reference. A model consumes one through a parameter whose
@@ -1756,13 +1836,13 @@ struct EsmFile
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0).
     # Keys are table ids; values are FunctionTable entries referenced by
     # table_lookup AST nodes.
-    function_tables::Union{Dict{String,FunctionTable},Nothing}
+    function_tables::Union{OrderedDict{String,FunctionTable},Nothing}
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single registry, sibling of `models`/`domain`, shared
     # by every component: `ranges[*]` `{from: <name>}` references, array-variable
     # `shape`s, and derived-set `from_faq` edges resolve against it. Empty when
     # the document declares none.
-    index_sets::Dict{String,IndexSet}
+    index_sets::OrderedDict{String,IndexSet}
 
     # The top-level `expression_templates` registry and `metaparameters` block,
     # PRESERVED VERBATIM (raw JSON) across parse → emit.
@@ -1795,7 +1875,7 @@ struct EsmFile
     # blocks so `to_json(EsmFile)` emits the reference-preserving form byte-identically
     # to `emit_document`. `nothing` under `ESS_TEMPLATE_REF_DISABLE=1` (Expand at
     # load) or for a document with no surviving references.
-    component_templates::Union{Dict{String,Any},Nothing}
+    component_templates::Union{OrderedDict{String,Any},Nothing}
 
     # Document-scoped `coordinates` registry (streaming-output-sinks RFC §8.3): each
     # entry marks an existing data array (by `source` name) or an inline `values`
@@ -1815,15 +1895,23 @@ struct EsmFile
             domain=nothing,
             enums=nothing,
             function_tables=nothing,
-            index_sets=Dict{String,IndexSet}(),
+            index_sets=OrderedDict{String,IndexSet}(),
             expression_templates=nothing,
             metaparameters=nothing,
             component_templates=nothing,
             coordinates=nothing) =
-        new(esm, metadata, models, reaction_systems, data_sources,
-            coupling, domain, enums, function_tables,
-            Dict{String,IndexSet}(index_sets),
-            expression_templates, metaparameters, component_templates,
+        new(esm, metadata,
+            models === nothing ? nothing : OrderedDict{String,Model}(models),
+            reaction_systems === nothing ? nothing :
+                OrderedDict{String,ReactionSystem}(reaction_systems),
+            data_sources,
+            coupling, domain, enums,
+            function_tables === nothing ? nothing :
+                OrderedDict{String,FunctionTable}(function_tables),
+            OrderedDict{String,IndexSet}(index_sets),
+            expression_templates, metaparameters,
+            component_templates === nothing ? nothing :
+                OrderedDict{String,Any}(component_templates),
             coordinates)
 end
 
@@ -2298,6 +2386,8 @@ const RECORD_FIELD_TABLES = (
         (f = :independent_variable, wire = "independent_variable", kind = :string,
          mode = :default, default = "t", emit = :nondefault),
         (f = :temporal, wire = "temporal", kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
+        (f = :element_type, wire = "element_type", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :array_type,   wire = "array_type",   kind = :string, mode = :opt, emit = :nonnothing),
     )),
     (T = :DataSourceLocation, fn = :data_source_location, rows = (
         (f = :url_template, wire = "url_template", kind = :string, mode = :req, emit = :always, pos = true),

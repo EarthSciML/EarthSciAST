@@ -23,8 +23,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate::Solution;
-use earthsci_ast::{EsmFile, Model, ModelTest, SimulateOptions, SolverChoice, simulate};
+use earthsci_ast::Solution;
+use earthsci_ast::{Alg, EsmFile, Model, ModelTest, SolveOptions};
 use std::collections::HashMap;
 
 mod common;
@@ -65,22 +65,27 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
     times.push(test.time_span.end);
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     times.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: Some(times),
+        maxiters: 1_000_000,
+        saveat: Some(times),
         progress: None,
+        callback: None,
     };
     let ics = test.initial_conditions.clone().unwrap_or_default();
-    simulate(
+    earthsci_ast::esm_problem(
         file,
         (test.time_span.start, test.time_span.end),
-        &HashMap::new(),
-        &ics,
-        &opts,
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .unwrap_or_else(|e| panic!("simulate failed: {e}"))
 }
 
@@ -134,21 +139,26 @@ fn wildfire_ocean_inline_tests() {
 #[test]
 fn wildfire_regrid_trajectory_and_constant_states() {
     let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 1_000_000,
-        output_times: Some(vec![0.0, 3600.0]),
+        maxiters: 1_000_000,
+        saveat: Some(vec![0.0, 3600.0]),
         progress: None,
+        callback: None,
     };
-    let sol = simulate(
+    let sol = earthsci_ast::esm_problem(
         &file,
         (0.0, 3600.0),
-        &HashMap::new(),
-        &HashMap::new(),
-        &opts,
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
     )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
     .expect("simulate the coupled regrid fixture");
 
     // SST(3600) = 290 + 3600 * surface_heat_flux / 4_180_000.

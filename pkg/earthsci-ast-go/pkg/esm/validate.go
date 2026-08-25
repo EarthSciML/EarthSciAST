@@ -33,7 +33,7 @@ type StructuralError struct {
 
 // isWarning reports whether se is an advisory warning (Level "warning") rather
 // than a document-invalidating error (Level "" or "error").
-func (se StructuralError) isWarning() bool { return se.Level == "warning" }
+func (se StructuralError) isWarning() bool { return se.Level == LevelWarning }
 
 // countStructuralErrorLevel returns how many entries are hard errors (not
 // warnings) — the count that determines validity.
@@ -60,8 +60,8 @@ type UnitWarning struct {
 	Path     string `json:"path"`      // RFC 6901 JSON Pointer to the equation/expression (see StructuralError.Path)
 	Code     string `json:"code"`      // UnitFindingDimensionalMismatch | UnitFindingUnparseable | UnitFindingAnalysis
 	Message  string `json:"message"`   // Human-readable description
-	LhsUnits string `json:"lhs_units"` // Inferred units of the LHS
-	RhsUnits string `json:"rhs_units"` // Inferred units of the RHS
+	LHSUnits string `json:"lhs_units"` // Inferred units of the LHS
+	RHSUnits string `json:"rhs_units"` // Inferred units of the RHS
 }
 
 // isPromotable reports whether a unit finding invalidates the document — i.e.
@@ -95,13 +95,70 @@ type DetailedValidationResult struct {
 	Messages []ValidationMessage `json:"messages,omitempty"`
 }
 
-// ValidateFile performs comprehensive validation of an ESM file per ESM Libraries Spec Section 3.4
-// This includes schema validation, structural validation, and unit validation (future)
-func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
-	// First validate JSON schema
+// Validate performs semantic validation of an already-parsed ESM document and
+// returns the four-field ValidationResult of esm-libraries-spec §3.4.
+//
+// Canonical `validate` (API_SPEC.md §8 items 12 and 13): the input is a TYPED
+// DOCUMENT in every binding, and the return is the four-field shape in every
+// binding. Go used to answer this name with the legacy message-oriented
+// DetailedValidationResult and put the four-field shape on a second function,
+// ValidateFile, which has been folded in here.
+//
+// SchemaErrors is always EMPTY, exactly as Rust's `validate` documents: a
+// *ESMFile can only exist by having come through LoadString/LoadPath/
+// LoadDocument, all of which schema-validate and refuse to return a document
+// that fails. Validating text that has NOT been through the schema is
+// ValidateText's job.
+//
+// IsValid counts hard structural errors only. Warning-level findings
+// (StructuralError.Level == "warning", e.g. duplicate_reaction_species) are
+// advisory and do not invalidate the document.
+func Validate(file *ESMFile) *ValidationResult {
+	result := &ValidationResult{
+		SchemaErrors:     []SchemaError{},
+		StructuralErrors: []StructuralError{},
+		UnitWarnings:     []UnitWarning{},
+		IsValid:          true,
+	}
+	if file == nil {
+		return result
+	}
+
+	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
+	// coupling-role library per §10.9) declares no components, so every
+	// component-oriented structural check has nothing to say and the
+	// assembly-document invariant inside ValidateStruct would reject it
+	// outright. Its well-formedness was already settled by the schema's root
+	// `anyOf` at load.
+	if isLibraryDocument(file) {
+		return result
+	}
+
+	structural := ValidateStructuralWithCodes(file)
+	result.StructuralErrors = structural.StructuralErrors
+	result.UnitWarnings = structural.UnitWarnings
+	result.IsValid = countStructuralErrorLevel(result.StructuralErrors) == 0
+	return result
+}
+
+// ValidateText validates an ESM document supplied as JSON TEXT: the schema
+// check the document AS WRITTEN must pass, then — only if it passes — the
+// semantic checks Validate runs over the parsed form.
+//
+// Canonical `validate_text` (API_SPEC.md §8 item 13). It is where Go's former
+// ValidateFile(file, jsonStr) went: that function took the typed document AND
+// the text it was parsed from, and the only thing it did with the typed half
+// that Validate does not is nothing at all. Text is the only input that can
+// carry SCHEMA errors, so text is where the schema pass belongs.
+//
+// LoadOptions are forwarded to the parse. WithBasePath is the one that matters
+// for text read from disk: it is what lets relative §9.7 template-library
+// imports resolve. Subsystem `$ref` MOUNTS are resolved by LoadPath and not by
+// LoadString, so a document carrying those wants LoadPath followed by Validate
+// rather than ValidateText — the same split the conformance adapter makes.
+func ValidateText(jsonStr string, opts ...LoadOption) *ValidationResult {
 	schemaResult, err := validateJSONSchema(jsonStr)
 	if err != nil {
-		// If schema validation fails, return with error
 		return &ValidationResult{
 			IsValid:          false,
 			SchemaErrors:     []SchemaError{{Path: "", Message: fmt.Sprintf("Schema validation failed: %v", err), Keyword: "error"}},
@@ -109,74 +166,54 @@ func ValidateFile(file *ESMFile, jsonStr string) *ValidationResult {
 			UnitWarnings:     []UnitWarning{},
 		}
 	}
-
-	// Start with schema validation results
-	result := &ValidationResult{
-		SchemaErrors:     schemaResult.SchemaErrors,
-		StructuralErrors: []StructuralError{},
-		UnitWarnings:     []UnitWarning{},
-		IsValid:          schemaResult.IsValid,
-	}
-
-	// If schema validation failed, don't proceed with structural validation
 	if !schemaResult.IsValid {
-		return result
-	}
-
-	// A LIBRARY document (expression-template library per esm-spec §9.7, or a
-	// coupling-role library per §10.9) declares no components, and its §9.7
-	// constructs are stripped during parse by design — so the loaded ESMFile is
-	// empty and every component-oriented structural check has nothing to say. The
-	// schema (root `anyOf`) has already confirmed it is a well-formed library.
-	// Without this, Go rejected every template library outright, because
-	// ValidateStruct's assembly-document invariant fired on the emptied struct.
-	if isLibraryDocumentJSON(jsonStr) && len(file.Models) == 0 &&
-		len(file.ReactionSystems) == 0 && len(file.DataSources) == 0 {
-		return result
-	}
-
-	// Perform structural validation with structured error codes
-	structuralResult := ValidateStructuralWithCodes(file)
-
-	// Use the structured validation results directly
-	result.StructuralErrors = structuralResult.StructuralErrors
-	result.UnitWarnings = structuralResult.UnitWarnings
-
-	// Update IsValid based on both schema and structural errors. Warning-level
-	// findings (StructuralError.Level == "warning", e.g. duplicate_reaction_species)
-	// are ADVISORY and do not invalidate the document — counting them made
-	// ValidateFile report IsValid=false on a file that ValidateStructural and
-	// ValidateStructuralWithCodes both call valid (audit G14).
-	result.IsValid = len(result.SchemaErrors) == 0 &&
-		countStructuralErrorLevel(result.StructuralErrors) == 0
-
-	return result
-}
-
-// isLibraryDocumentJSON reports whether the RAW document is a library file —
-// one whose payload is an `expression_templates` or `coupling_roles` block
-// rather than components. Both are admitted by the schema's root `anyOf`, and
-// both are legal with no models / reaction systems / data loaders at all.
-//
-// It is answered from the raw JSON because parse deliberately strips the §9.7
-// constructs, so by the time the typed ESMFile exists the evidence is gone.
-func isLibraryDocumentJSON(jsonStr string) bool {
-	var view map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(jsonStr), &view); err != nil {
-		return false
-	}
-	for _, key := range []string{"expression_templates", "coupling_roles"} {
-		if raw, has := view[key]; has && rawIsPresent(raw) {
-			return true
+		return &ValidationResult{
+			IsValid:          false,
+			SchemaErrors:     schemaResult.SchemaErrors,
+			StructuralErrors: []StructuralError{},
+			UnitWarnings:     []UnitWarning{},
 		}
 	}
-	return false
+
+	file, err := LoadString(jsonStr, opts...)
+	if err != nil {
+		// Schema-clean text that still will not parse: a resolution failure
+		// (an unresolved §4.7 subsystem ref, an unexpandable template import).
+		// It is a defect in the document, reported in the structural channel
+		// because it is not a schema violation.
+		return &ValidationResult{
+			IsValid:      false,
+			SchemaErrors: []SchemaError{},
+			StructuralErrors: []StructuralError{{
+				Path:    "",
+				Code:    CodeValidationFailed,
+				Message: err.Error(),
+				Details: map[string]any{},
+			}},
+			UnitWarnings: []UnitWarning{},
+		}
+	}
+
+	return Validate(file)
 }
 
-// Validate is the backward compatibility function that returns DetailedValidationResult
-// For the new spec-compliant validation, use ValidateFile
-func Validate(file *ESMFile) *DetailedValidationResult {
-	return ValidateStructural(file)
+// isLibraryDocument reports whether the parsed document is a LIBRARY file —
+// an expression-template library (esm-spec §9.7) or a coupling-role library
+// (§10.9) — rather than an assembly. Both are admitted by the schema's root
+// `anyOf`, and both are legal with no models / reaction systems / data sources
+// at all.
+//
+// It is answered from the TYPED document. That was not always possible: Go
+// once dropped `expression_templates` and `coupling_roles` at parse, so the
+// only surviving evidence was the raw JSON, and the check had to be handed the
+// text. ESMFile has carried both fields since template libraries were made to
+// round-trip, so the text is no longer needed. A file that declares a library
+// block AND components is an assembly and is validated as one.
+func isLibraryDocument(file *ESMFile) bool {
+	if len(file.Models) != 0 || len(file.ReactionSystems) != 0 || len(file.DataSources) != 0 {
+		return false
+	}
+	return rawIsPresent(file.ExpressionTemplates) || len(file.CouplingRoles) != 0
 }
 
 // StructuralValidationResult holds the code-bearing structural validation
@@ -204,7 +241,7 @@ func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 	if err := file.ValidateStruct(); err != nil {
 		result.Valid = false
 		result.Messages = append(result.Messages, ValidationMessage{
-			Level:   "error",
+			Level:   LevelError,
 			Message: fmt.Sprintf("Basic validation failed: %v", err),
 			Path:    "",
 		})
@@ -302,8 +339,8 @@ func promoteUnitFindings(findings []UnitWarning) []StructuralError {
 			Message: w.Message,
 			Details: map[string]any{
 				"finding":   w.Code,
-				"lhs_units": w.LhsUnits,
-				"rhs_units": w.RhsUnits,
+				"lhs_units": w.LHSUnits,
+				"rhs_units": w.RHSUnits,
 			},
 		})
 	}
@@ -330,9 +367,9 @@ func structuralErrorToLegacyMessage(se StructuralError) ValidationMessage {
 	case ErrorUndefinedVariable, ErrorUndefinedSpecies, ErrorUndefinedSystem, ErrorEventVarUndeclared:
 		msg = strings.Replace(msg, "Undefined", "Unknown", 1)
 	}
-	level := "error"
+	level := LevelError
 	if se.isWarning() {
-		level = "warning"
+		level = LevelWarning
 	}
 	return ValidationMessage{Level: level, Message: msg, Path: se.Path}
 }
@@ -407,7 +444,7 @@ func (s *structuralScan) addWarning(code, path, message string, details map[stri
 		Code:    code,
 		Message: message,
 		Details: details,
-		Level:   "warning",
+		Level:   LevelWarning,
 	})
 }
 
@@ -1393,7 +1430,7 @@ func computeEquationBalance(model *Model, indep string) (EquationBalance, bool) 
 	if len(model.Subsystems) > 0 {
 		return bal, true
 	}
-	if EffectiveSystemKind(model, nil) == SystemKindPDE {
+	if EffectiveSystemKind(model) == SystemKindPDE {
 		return bal, true
 	}
 
@@ -1479,15 +1516,12 @@ func equationCreditTargets(eq Equation, indep string) []string {
 // `system_kind` contradicts the esm-spec §6.3.1 derivation. A model that
 // declares nothing is not checked — the derivation simply IS its kind.
 func (s *structuralScan) validateSystemKind(modelName string, model *Model, basePath string) {
-	if model.SystemKind == nil {
+	declared := DeclaredSystemKind(model)
+	if declared == nil {
 		return
 	}
-	var domain *Domain
-	if s.file != nil {
-		domain = s.file.Domain
-	}
-	derived := SystemKind(model, domain)
-	if *model.SystemKind == derived {
+	derived := SystemKind(model)
+	if *declared == derived {
 		return
 	}
 	s.addErr(StructuralError{
@@ -1715,7 +1749,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		}
 		s.addErr(StructuralError{
 			Path: fmt.Sprintf("/reaction_systems/%s/constraint_equations/%d", systemName, i),
-			Code: ErrorIcInReactionSystem,
+			Code: ErrorICInReactionSystem,
 			Message: "ic equation not allowed in a reaction system; a reaction system has no equations " +
 				"field and hosts no ic equations (ICs are model-hosted: species.default, or a " +
 				"scoped-reference ic equation in a model, spec §11.4.1)",

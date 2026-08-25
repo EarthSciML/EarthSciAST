@@ -88,7 +88,7 @@ The full authoring stance, normatively:
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
-At least one of `models`, `reaction_systems`, `data_sources`, or `expression_templates` must be present. A `data_sources`-only document is a valid **source-catalog file**: it declares ingest configuration that other documents draw from, but it is not a component and is not referenceable as a subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](../earthscidiscretizations) standard library.
+At least one of `models`, `reaction_systems`, `data_sources`, or `expression_templates` must be present. A `data_sources`-only document is a valid **source-catalog file**: it declares ingest configuration that other documents draw from, but it is not a component and is not referenceable as a subsystem (§4.7). A document whose payload is top-level `expression_templates` is a **template-library file** (§9.7.1) — importable via `expression_template_imports`, and the carrier format of the [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations) standard library.
 
 ### 2.1 Coordinate registry (`coordinates`)
 
@@ -284,7 +284,7 @@ pattern with a spatial (or parameter-valued) `wrt` may carry trailing wildcards.
 `div`/`laplacian` are sums/compositions of `D` (`div(F)=ΣᵢD(Fᵢ,xᵢ)`,
 `laplacian(u)=ΣᵢD(D(u,xᵢ),xᵢ)`); `integral` is a PIDE term. This format ships **no** rewrite
 rules for them — the discretization std-lib lives in
-[EarthSciDiscretizations](../earthscidiscretizations). See §9.6.8.
+[EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). See §9.6.8.
 
 As open-tier rewrite targets these sugar ops (and every user rewrite-target op) carry **no**
 privilege of any kind over the enclosing evaluator, checker, or flattener. Specifically: their
@@ -856,6 +856,24 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
 **Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
+
+**`from_faq` resolves at DOCUMENT scope, and `id` is unique per document.**
+A `kind: "derived"` index set names its producing node via `from_faq`. Since
+`index_sets` is a **document-scoped** registry (§3 field table), an entry in it
+that could only name a node inside one model would be incoherent: the same
+registry entry is visible to, and usable by, every model in the document.
+Therefore `from_faq` MUST be resolved against the expression nodes of the
+**whole document**, not of one model, and an expression-node `id` MUST be unique
+across the document rather than merely within its model. A duplicate `id`
+anywhere in a document is a load-time error; a `from_faq` naming no node in the
+document is `unknown_faq_node`.
+
+This is a phase-6 correction. Every binding previously resolved `from_faq`
+within a single model, which made a cross-model derived index set unresolvable —
+`tests/valid/wildfire_atmosphere_ocean.esm`, where the atmosphere model consumes
+a candidate-pair set produced by the ocean model, could not resolve in any
+binding. No fixture in `tests/` reuses an `id` across models, so widening the
+uniqueness requirement invalidates nothing that exists.
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
@@ -3502,7 +3520,7 @@ The Option B RFC adds (see `docs/content/rfcs/out-of-line-expression-templates.m
 
 A spatial derivative — a `D` op with a spatial `wrt`, appearing on a right-hand side — is a **rewrite-target** (§4.2): it has no evaluator and MUST be lowered to an `aggregate` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation, exactly as `table_lookup` lowers to `interp.*` (§9.5). There is **no** discretization block and **no** boundary-condition declaration anywhere in the format. A discretized derivative over a finite domain is inseparable from its boundary treatment, so **the boundary conditions are part of the rewrite rule itself**: the rule body is a single `makearray` whose interior region is the stencil `aggregate` and whose boundary-face regions encode the BC (later regions overwrite earlier, §4.3.2). Boundary conditions cannot be — and must not be — specified anywhere else.
 
-**This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](../earthscidiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by importing a rule from that library via `expression_template_imports` (§9.7). The library is layered — a grid file (index sets + geometry metaparameters), an interior-stencil file importing it, and a BC file importing *that* and wrapping the stencil into the complete `match` rule — so one rule file serves every resolution through metaparameter bindings (§9.7.6).
+**This format ships no discretization rules.** The standard library of finite-difference / finite-volume rules (central, upwind, WENO, Godunov, the BC variants) and its conformance golden live in [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations). A `.esm` file obtains discretization either by declaring in-file `expression_templates` with a `match` on `D`, or by importing a rule from that library via `expression_template_imports` (§9.7). The library is layered — a grid file (index sets + geometry metaparameters), an interior-stencil file importing it, and a BC file importing *that* and wrapping the stencil into the complete `match` rule — so one rule file serves every resolution through metaparameter bindings (§9.7.6).
 
 A discretization rule names its scheme and BC in its identity. `central_D_lon_zero_grad_bc` matches `D(f, wrt: "lon")` and builds a `makearray` from the interior central-difference `aggregate` plus two one-sided boundary faces for the zero-gradient condition (here over a grid with `lon` size 144, `lat` size 91):
 
@@ -3831,15 +3849,47 @@ Optionally with a conversion factor:
 }
 ```
 
+**Direction.** For `"systems": [A, B]`, every KEY names a variable of `A` (`systems[0]`) and every
+VALUE names a variable of `B` (`systems[1]`), as both examples above show. `esm-libraries-spec.md`
+§4.7.1 step 2 makes this normative and explains why it matters: the matching loop walks `B`'s
+equations, so an implementation that looks up `B`'s dependent variable in a map keyed by `A`'s names
+consults it backwards, and a correctly spelled `translate` map then matches nothing at all.
+
+**A `translate` value of `"B._var"` is redundant, and must stay harmless.** Placeholder expansion
+(§6.4) is automatic, so naming `_var` explicitly asks for something that already happens. Writing it
+MUST produce the same flattened system as omitting it — see §4.7.1 step 2's redundancy invariant for
+the specific way this goes wrong when translation is applied after expansion rather than before.
+
+**Either name form is admitted, and both mean the scoped name.** An endpoint may be written bare
+(`"O3"`) or fully scoped (`"ChemistrySystem.O3"`); §10.10.2 lists both key and value as
+scoped-reference sites. A bare endpoint is resolved against the system it belongs to under the
+direction rule above — a key against `systems[0]`, a value against `systems[1]` — so the two
+spellings denote the same variable and MUST produce the same flattened system. An endpoint that
+already contains a `.` is taken as written. `_var` is exempt in either position, being a global
+sentinel (§6.4) that is never namespaced.
+
+**A translation match consumes the merged-away name.** Because a `translate` pair names one physical
+quantity under two spellings, only `A`'s spelling survives the composition: `B`'s declaration of the
+translated variable is removed from the flattened system and every remaining reference to it —
+anywhere in the document, not only inside `B` — is retargeted at `A`'s name. See
+`esm-libraries-spec.md` §4.7.1 step 4.
+
 ### 10.3 The `connector` Field
 
 For `couple`, `connector` defines the `ConnectorSystem` — the set of equations that link two systems. Each equation is explicitly provided by the user and specifies which variable is affected and how:
 
 | Transform | Description |
 |---|---|
-| `additive` | Add expression as source/sink term |
-| `multiplicative` | Multiply existing tendency by expression |
+| `additive` | Add expression as source/sink term. If `to` has no tendency, the expression becomes it |
+| `multiplicative` | Multiply existing tendency by expression. `to` MUST already have one — see below |
 | `replacement` | Replace the variable value entirely |
+
+`multiplicative` is defined against an **existing** tendency. When `to` names something with no
+`D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or an
+undefined name — there is nothing to multiply, and a library MUST raise
+`couple_multiplicative_no_tendency` rather than silently dropping the connector equation
+(`esm-libraries-spec.md` §4.7.2). `additive` has no such requirement because zero is the additive
+identity; there is no multiplicative counterpart that would give the degenerate case a meaning.
 
 ### 10.4 The `variable_map` Transforms
 

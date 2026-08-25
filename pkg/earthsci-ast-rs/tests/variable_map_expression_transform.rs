@@ -10,7 +10,7 @@
 //! template expansion against the RECEIVING component's registry, and the
 //! end-to-end simulate path.
 
-use earthsci_ast::types::{
+use earthsci_ast::{
     CouplingEntry, Equation, EsmFile, Expr, ExpressionNode, Metadata, Model, ModelVariable,
     VariableMapTransform, VariableType,
 };
@@ -474,12 +474,12 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
         }]
     });
 
-    earthsci_ast::lower_expression_templates::lower_expression_templates(&mut doc)
+    earthsci_ast::extension::lower_expression_templates::lower_expression_templates(&mut doc)
         .expect("template expansion");
     // Option B: `double_plus`'s body is pure evaluable-core, so the transform
     // reference SURVIVES load; `expand` produces the Option-A image the build
     // path sees (RFC out-of-line-expression-templates §7.7).
-    earthsci_ast::lower_expression_templates::expand(&mut doc).expect("expand");
+    earthsci_ast::extension::lower_expression_templates::expand(&mut doc).expect("expand");
 
     // The transform is rewritten against the RECEIVING component (`Sink`, the
     // first dot-segment of `to`) to the expanded AST.
@@ -531,7 +531,7 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
         }]
     });
 
-    earthsci_ast::lower_expression_templates::lower_expression_templates(&mut doc)
+    earthsci_ast::extension::lower_expression_templates::lower_expression_templates(&mut doc)
         .expect("apply-free transform must not error");
     assert_eq!(doc["coupling"][0]["transform"], transform);
 }
@@ -545,17 +545,27 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn simulate_variable_map_expression_transform_end_to_end() {
-    use earthsci_ast::{SimulateOptions, simulate};
+    use earthsci_ast::SolveOptions;
 
     let file =
         expression_transform_fixture(VariableMapTransform::Expression(transform_node()), None);
 
-    let opts = SimulateOptions {
-        output_times: Some(vec![0.0, 1.0]),
+    let opts = SolveOptions {
+        saveat: Some(vec![0.0, 1.0]),
         ..Default::default()
     };
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts)
-        .expect("simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate failed");
 
     assert_eq!(sol.state_variable_names, vec!["Sink.u".to_string()]);
     let last = sol.time.len() - 1;

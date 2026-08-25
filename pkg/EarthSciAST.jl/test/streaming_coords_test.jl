@@ -24,7 +24,7 @@ using OrdinaryDiffEqTsit5: Tsit5
     fixture = joinpath(@__DIR__, "fixtures", "streaming_decay_grid_coords.esm")
     @test isfile(fixture)
 
-    prep = prepare(fixture)
+    prep = esm_problem(fixture, (0.0, 100.0))
 
     # (1) the `coordinates` registry survived flatten and reached output metadata.
     meta = prep.output_meta
@@ -50,7 +50,9 @@ using OrdinaryDiffEqTsit5: Tsit5
     store_path = joinpath(dir, "out.zarr")
     base_url = "file://" * store_path
     sink = build_zarr_sink(prep, base_url; output_times = times, records_per_shard = 8)
-    simulate(prep, tspan; alg = Tsit5(), sinks = [sink], seed_ic! = seed!)
+    # The sink rides the PROBLEM (§2.5.4): it contributes the output callback,
+    # so it is declared at construction, not at solve.
+    solve(esm_problem(fixture, tspan; sinks = [sink], seed_ic! = seed!), Tsit5())
     @test sink.manifest.n_records == length(times)
 
     # (2) coordinate VALUES read back through the real reader.

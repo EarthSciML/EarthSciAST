@@ -28,7 +28,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 
 /// The squared-Euclidean distance FAQ `(px[i]-gx[g])² + (py[i]-gy[g])²`, the
@@ -96,14 +96,15 @@ fn argmin_model() -> String {
     )
 }
 
-fn opts() -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Bdf,
+fn opts() -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     }
 }
 
@@ -117,8 +118,18 @@ fn argmin_nearest_generator_simulates_end_to_end() {
         .map(|k| (k.to_string(), 0.0))
         .collect();
 
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts())
-        .expect("value-invention argmin model must SIMULATE (not UnevaluableOperatorError)");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts()))
+    .expect("value-invention argmin model must SIMULATE (not UnevaluableOperatorError)");
 
     // Final time index.
     let tix = sol
@@ -561,8 +572,18 @@ fn scvt_centroid_group_aggregate_simulates_end_to_end() {
         .map(|k| (k.to_string(), 0.0))
         .collect();
 
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ics, &opts())
-        .expect("value-invention group_aggregate/centroid model must SIMULATE");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ics.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts()))
+    .expect("value-invention group_aggregate/centroid model must SIMULATE");
 
     let tix = sol
         .time

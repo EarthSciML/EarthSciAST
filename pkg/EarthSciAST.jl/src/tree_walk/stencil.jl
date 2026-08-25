@@ -7,8 +7,6 @@
 # turns a rule body into a compiled `_Node` spine whose loop-var-dependent
 # leaves are LANE sentinels, and `_eval_recipe` resolves each lane at any cell.
 # The box processor derives per-box access descriptors from those recipes.
-# (The `_VecKernel` lowering that once consumed these templates was deleted
-# when the access-kernel IR became the only array runtime.)
 # ============================================================
 #
 # Identity by construction, not by luck:
@@ -582,10 +580,10 @@ function _stencilize_shared(node::OpExpr, ctx::_StencilCtx, tctx::_TemplateCtx,
         # `tctx = nothing` for the body walk: compile-once boundaries are the
         # OUTERMOST expansion roots only (the RFC's "7 lon bodies"). A NESTED
         # root — ESD's stencils are deeply factored into limiter/edge-interpolant
-        # helper templates — compiles FUSED into its enclosing variant: measured
-        # on the ESD PPM stack, per-nested-root boundaries exploded 8,297 tiny
-        # variants (vs ~40 outer bodies) whose bookkeeping and per-call
-        # indirection cost more than the sharing saved. Nested region selections
+        # helper templates — compiles FUSED into its enclosing variant. Taking
+        # boundaries at nested roots instead explodes the variant count by orders
+        # of magnitude, and the bookkeeping and per-call indirection of those tiny
+        # variants cost more than the sharing saves. Nested region selections
         # still reach the variant key through `_branch_key!`, which descends
         # everything identically.
         subctx = _StencilCtx(ctx.idxset, rs, ctx.idx_env, ctx.array_var_info,

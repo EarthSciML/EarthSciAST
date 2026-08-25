@@ -22,7 +22,7 @@ import (
 // test existed, emitting [OU.Bw, OU.sigma, OU.theta] where the document declares
 // [OU.theta, OU.sigma, OU.Bw].
 //
-// Equations are compared through ToAscii, the same renderer the shared display
+// Equations are compared through ToASCII, the same renderer the shared display
 // fixtures and the expression-parse corpus use, so an equation mismatch is a
 // mismatch of the TREE and not of a private pretty-printer.
 
@@ -176,11 +176,11 @@ func goVarNames(vs []FlattenedVariable) []string {
 func goEventRecord(name *string, conditions []Expression, affects []AffectEquation) flattenEventRecord {
 	conds := []string{}
 	for _, c := range conditions {
-		conds = append(conds, ToAscii(c))
+		conds = append(conds, ToASCII(c))
 	}
 	acts := []string{}
 	for _, a := range affects {
-		acts = append(acts, fmt.Sprintf("%s = %s", ToAscii(a.LHS), ToAscii(a.RHS)))
+		acts = append(acts, fmt.Sprintf("%s = %s", ToASCII(a.LHS), ToASCII(a.RHS)))
 	}
 	return flattenEventRecord{Name: name, Conditions: conds, Affects: acts}
 }
@@ -189,7 +189,7 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 	eqs := make([]flattenEqRecord, 0, len(flat.Equations))
 	for _, eq := range flat.Equations {
 		src := eq.SourceSystem
-		eqs = append(eqs, flattenEqRecord{LHS: ToAscii(eq.LHS), RHS: ToAscii(eq.RHS), SourceSystem: &src})
+		eqs = append(eqs, flattenEqRecord{LHS: ToASCII(eq.LHS), RHS: ToASCII(eq.RHS), SourceSystem: &src})
 	}
 	continuous := []flattenEventRecord{}
 	for _, ce := range flat.ContinuousEvents {
@@ -226,7 +226,7 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 	}
 	ics := []flattenICRecord{}
 	for _, ic := range flat.FieldICs {
-		ics = append(ics, flattenICRecord{State: ic.State, Expr: ToAscii(ic.Expr)})
+		ics = append(ics, flattenICRecord{State: ic.State, Expr: ToASCII(ic.Expr)})
 	}
 	loaders := []flattenLoaderRecord{}
 	for _, lf := range flat.LoaderFields {
@@ -290,7 +290,7 @@ func sameDefault(a, b any) bool {
 	// An expression-valued default is pinned by the corpus as {"expr": <ascii>}.
 	if m, ok := b.(map[string]any); ok {
 		if want, ok := m["expr"].(string); ok {
-			return ToAscii(a) == want
+			return ToASCII(a) == want
 		}
 	}
 	aj, _ := json.Marshal(a)
@@ -424,7 +424,8 @@ func TestFlattenConformance(t *testing.T) {
 
 			diffDomain(t, got.Domain, want.Domain)
 			diffStrSeq(t, "metadata.source_systems", got.Metadata.SourceSystems, want.Metadata.SourceSystems)
-			diffStrSeq(t, "metadata.coupling_rules", got.Metadata.CouplingRules, want.Metadata.CouplingRules)
+			diffStrSeq(t, "metadata.coupling_rules",
+				got.Metadata.CouplingRules, want.Metadata.CouplingRules)
 			diffStrSeq(t, "metadata.operator_applies", got.Metadata.OperatorApplies, want.Metadata.OperatorApplies)
 			diffStrSeq(t, "metadata.callbacks", got.Metadata.Callbacks, want.Metadata.Callbacks)
 

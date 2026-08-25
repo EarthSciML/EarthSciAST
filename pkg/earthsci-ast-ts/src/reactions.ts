@@ -31,7 +31,7 @@ import type {
  * @param system ReactionSystem to derive ODEs from
  * @returns Model with species as state variables, derived ODEs plus constraints
  */
-export function deriveODEs(system: ReactionSystem): Model {
+export function deriveOdes(system: ReactionSystem): Model {
   const variables: { [key: string]: ModelVariable } = {}
   const equations: Equation[] = []
 
@@ -39,9 +39,19 @@ export function deriveODEs(system: ReactionSystem): Model {
   // what makes it an ODE state under the derived classification — the 0.x
   // `type: 'state'` declaration said the same thing twice, and 1.0.0 keeps only
   // the equation (esm-spec 6.3.1).
+  //
+  // EXCEPT a reservoir species (`constant: true`, esm-spec 7.4), which is held
+  // fixed and gets no ODE, so it lowers to a PARAMETER carrying its declared
+  // `default` as the fixed value. This binding alone did not do that: Julia
+  // (reactions.jl), Python (reactions.py), Rust (reactions.rs) and Go
+  // (reactions.go) all skip reservoirs here, and this binding's OWN flatten
+  // path (flatten.ts, `constant === true`) already did. Two of those bindings'
+  // comments even cite TypeScript as doing it. It was caught by
+  // tests/conformance/reactions/species_order.json, whose reservoir case is the
+  // first shared fixture to look.
   for (const [speciesName, species] of Object.entries(system.species)) {
     variables[speciesName] = {
-      type: 'unknown',
+      type: species.constant === true ? 'parameter' : 'unknown',
       units: species.units,
       default: species.default,
       description: species.description,
@@ -61,8 +71,12 @@ export function deriveODEs(system: ReactionSystem): Model {
   // Build ODE right-hand sides for each species
   const odeRhs: { [species: string]: Expression[] } = {}
 
-  // Initialize ODE RHS for each species
-  for (const speciesName of Object.keys(system.species)) {
+  // Initialize ODE RHS for each species. A reservoir is held fixed, so it gets
+  // no slot and therefore no equation — while still contributing to the OTHER
+  // species' rate laws, because `buildRateLaw` reads the substrate list, not
+  // this map.
+  for (const [speciesName, species] of Object.entries(system.species)) {
+    if (species.constant === true) continue
     odeRhs[speciesName] = []
   }
 
@@ -340,3 +354,12 @@ export function productMatrix(system: ReactionSystem): number[][] {
 
   return matrix
 }
+
+/**
+ * @deprecated Spelling alias for {@link deriveOdes}, kept for one minor per
+ * API_SPEC.md §10. `deriveODEs` violated §2/§2.1: the canonical name is
+ * `derive_odes`, whose TypeScript transliteration is `deriveOdes`, and this
+ * binding already spelled the siblings `odeStates` / `isOdeState` that way.
+ * Removed at the next major.
+ */
+export const deriveODEs = deriveOdes

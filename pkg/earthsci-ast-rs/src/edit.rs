@@ -1,10 +1,9 @@
 //! Immutable editing operations for ESM models
 
 use crate::{
-    ContinuousEvent, CouplingEntry, DiscreteEvent, Equation, EsmFile, Expr, Model, ModelVariable,
+    ContinuousEvent, CouplingEntry, DiscreteEvent, Equation, EsmFile, Model, ModelVariable,
     Reaction, ReactionSystem, Species,
 };
-use std::collections::HashMap;
 
 /// Result type for editing operations
 pub type EditResult<T> = Result<T, EditError>;
@@ -389,30 +388,6 @@ pub fn update_model_metadata(
     Ok(new_model)
 }
 
-/// Create a copy of an expression with variable substitution.
-///
-/// **Deprecated:** thin wrapper retained for backward compatibility. The
-/// previous inline implementation rebuilt operator nodes from only
-/// `op`/`args`/`wrt`/`dim`, silently dropping every other [`ExpressionNode`]
-/// field (`broadcast_fn`, `value`, `table`, `axes`, `ranges`, `filter`,
-/// `expr`, `key`, `bindings`, …) and never recursing into non-`args`
-/// expression positions. This now delegates to
-/// [`crate::substitute::substitute`], which traverses the full expression tree
-/// and preserves all operator-node metadata.
-///
-/// # Arguments
-///
-/// * `expr` - The expression to modify
-/// * `substitutions` - Map of variable names to replacement expressions
-///
-/// # Returns
-///
-/// * `Expr` - New expression with substitutions applied
-#[deprecated(note = "use substitute::substitute; this dropped operator metadata")]
-pub fn substitute_in_expression(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
-    crate::substitute::substitute(expr, substitutions)
-}
-
 /// Add a discrete event to a model
 ///
 /// # Arguments
@@ -559,9 +534,8 @@ pub fn replace_coupling(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExpressionNode, Metadata, VariableType};
+    use crate::{Expr, Metadata, VariableType};
     use indexmap::IndexMap;
-    use std::collections::HashMap;
 
     fn create_empty_esm_file() -> EsmFile {
         EsmFile {
@@ -738,32 +712,6 @@ mod tests {
             result.unwrap_err(),
             EditError::EquationIndexError(_)
         ));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_substitute_in_expression() {
-        let expr = Expr::operator(ExpressionNode {
-            op: "+".to_string(),
-            args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
-            wrt: None,
-            dim: None,
-            ..Default::default()
-        });
-
-        let mut substitutions = HashMap::new();
-        substitutions.insert("x".to_string(), Expr::Number(5.0));
-
-        let result = substitute_in_expression(&expr, &substitutions);
-
-        if let Expr::Operator(node) = result {
-            assert_eq!(node.op, "+");
-            assert_eq!(node.args.len(), 2);
-            assert!(matches!(node.args[0], Expr::Number(5.0)));
-            assert!(matches!(node.args[1], Expr::Number(1.0)));
-        } else {
-            panic!("Expected operator expression");
-        }
     }
 
     #[test]

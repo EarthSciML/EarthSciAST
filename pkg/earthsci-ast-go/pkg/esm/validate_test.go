@@ -38,7 +38,7 @@ func TestValidateValidModel(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Messages)
 }
@@ -65,7 +65,7 @@ func TestValidateModelWithUnknownVariable(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.False(t, result.Valid)
 	assert.Len(t, result.Messages, 1)
 	assert.Contains(t, result.Messages[0].Message, "Unknown variable 'unknown_var'")
@@ -128,7 +128,7 @@ func TestValidateUnknownWithoutEquation(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.False(t, result.Valid)
 	assert.Len(t, result.Messages, 1)
 	assert.Contains(t, result.Messages[0].Message,
@@ -163,7 +163,7 @@ func TestValidateReactionSystem(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Messages)
 }
@@ -203,7 +203,7 @@ func TestDuplicateSpeciesWarningBothTracks(t *testing.T) {
 	assert.Equal(t, "/reaction_systems/TestReactions/reactions/0/substrates", found.Path)
 
 	// Legacy surface: same finding rendered as a warning-level message.
-	legacy := Validate(esmFile)
+	legacy := ValidateStructural(esmFile)
 	assert.True(t, legacy.Valid)
 	sawWarning := false
 	for _, m := range legacy.Messages {
@@ -241,7 +241,7 @@ func TestValidateReactionWithUnknownSpecies(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.False(t, result.Valid)
 	assert.Len(t, result.Messages, 1)
 	assert.Contains(t, result.Messages[0].Message, "Unknown species 'UnknownSpecies'")
@@ -287,7 +287,7 @@ func TestValidateComplexExpression(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Messages)
 }
@@ -328,7 +328,7 @@ func TestValidateDiscreteEvent(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Messages)
 }
@@ -363,7 +363,7 @@ func TestValidateDataSources(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Messages)
 }
@@ -398,7 +398,7 @@ func TestValidateDataSourceMissingRequiredFields(t *testing.T) {
 		},
 	}
 
-	result := Validate(esmFile)
+	result := ValidateStructural(esmFile)
 	assert.False(t, result.Valid)
 
 	// Expect errors for the missing kind and url_template.
@@ -579,7 +579,7 @@ func TestValidateEquationUnknownBalance(t *testing.T) {
 				},
 			}
 
-			result := Validate(esmFile)
+			result := ValidateStructural(esmFile)
 			assert.Equal(t, tc.expectedValid, result.Valid, "messages: %+v", result.Messages)
 			if tc.expectedError != "" {
 				found := false
@@ -648,7 +648,7 @@ func TestValidateFileSpecCompliant(t *testing.T) {
 	esmFile, err := LoadString(jsonStr)
 	require.NoError(t, err)
 
-	result := ValidateFile(esmFile, jsonStr)
+	result := Validate(esmFile)
 
 	// Check that result has the correct structure per spec
 	assert.NotNil(t, result)
@@ -703,7 +703,7 @@ func TestValidateFileValidModel(t *testing.T) {
 	esmFile, err := LoadString(jsonStr)
 	require.NoError(t, err)
 
-	result := ValidateFile(esmFile, jsonStr)
+	result := Validate(esmFile)
 
 	// Should be valid - 1 state variable, 1 ODE equation
 	assert.Empty(t, result.SchemaErrors)

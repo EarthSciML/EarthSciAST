@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::units::parse_unit;
+use earthsci_ast::parse_unit;
 use serde_json::Value;
 
 fn tests_dir() -> PathBuf {

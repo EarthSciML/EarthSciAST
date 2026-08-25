@@ -36,58 +36,77 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+// Without the `solve` feature the crate keeps the whole build half —
+// parse, validate, flatten, classify, `esm_problem` — but every item that
+// only the solver reaches is compiled out. The pieces those items were the
+// sole callers of are then unreachable BY CONSTRUCTION, which is the point of
+// the feature, not a defect to chase per-item.
+#![cfg_attr(not(feature = "solve"), allow(dead_code, unused_imports))]
+// H-3 demoted ~45 modules to `pub(crate)`, so a doc link from a PUBLIC item to
+// an item that is now crate-private is expected and pervasive (74 sites). The
+// links are still correct — they resolve under `cargo doc
+// --document-private-items` and when reading the source, which is who reads
+// them now. Rewriting them all as inert code spans would delete working
+// navigation to buy silence, so the lint is turned off instead.
+#![allow(rustdoc::private_intra_doc_links)]
+
 // Conformance-harness argument parsing; callable by the conformance binaries but
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-pub mod aggregate;
+pub(crate) mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
-pub mod analysis;
+pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
-pub mod broad_phase;
-pub mod cadence;
-pub mod canonicalize;
-pub mod classification;
-pub mod coupling;
-pub mod coupling_imports;
-pub mod dae;
+pub(crate) mod broad_phase;
+pub(crate) mod cadence;
+pub(crate) mod canonicalize;
+pub(crate) mod classification;
+pub(crate) mod coupling;
+pub(crate) mod coupling_imports;
+pub(crate) mod dae;
 /// Flat→gridded simulation-output derivation (streaming-output-sinks RFC
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.
-pub mod data_output;
-pub mod diagnostic;
-pub mod display;
-pub mod edit;
-pub mod error;
-pub mod expression;
-pub mod flatten;
-pub mod geometry;
-pub mod graph;
+pub(crate) mod data_output;
+pub(crate) mod diagnostic;
+pub(crate) mod display;
+pub(crate) mod edit;
+pub(crate) mod error;
+// The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
+// where a Rust-only internal is handed to a caller. Everything reachable from
+// outside this crate is either a root `pub use` above/below (the stable tier,
+// pinned symbol-by-symbol by api-surface.json) or a member of this module.
+pub(crate) mod expression;
+pub mod extension;
+pub(crate) mod flatten;
+pub(crate) mod geometry;
+pub(crate) mod graph;
 pub mod intern;
-pub mod join;
-pub mod lower_enums;
-pub mod lower_expression_templates;
-pub mod migration;
-pub mod op_registry;
-pub mod parse;
+pub(crate) mod join;
+pub(crate) mod lower_enums;
+pub(crate) mod lower_expression_templates;
+pub(crate) mod migration;
+pub(crate) mod op_registry;
+pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
 /// (the inverse of that printer). Pure and wasm32-clean.
-pub mod parse_expression;
+pub(crate) mod parse_expression;
 pub mod provider;
-pub mod reactions;
-pub mod ref_loading;
-pub mod reference_resolution;
-pub mod registered_functions;
-pub mod relational;
-pub mod serialize;
-pub mod structural;
-pub mod substitute;
-pub mod template_imports;
-pub mod types;
-pub mod unit_conversion;
-pub mod units;
-pub mod validate;
+pub(crate) mod reactions;
+pub(crate) mod ref_loading;
+pub(crate) mod reference_resolution;
+pub(crate) mod registered_functions;
+pub(crate) mod relational;
+pub(crate) mod serialize;
+pub(crate) mod structural;
+pub(crate) mod substitute;
+pub(crate) mod template_imports;
+pub(crate) mod types;
+pub(crate) mod unit_conversion;
+pub(crate) mod units;
+pub(crate) mod validate;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -95,14 +114,14 @@ pub mod wasm;
 pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
-// `aggregate` / `join` passes, so it cannot live inside the gated `simulate`.
-pub mod compile_error;
+// `aggregate` / `join` passes, so it cannot live inside the gated solver module.
+pub(crate) mod compile_error;
 
 // Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
 // is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
 // into stays native-only, so the wasm build runs pure-ODE / 0-D box models and
 // the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
-pub mod simulate;
+pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
 // wasm-clean — planar / geometry-free PDEs run client-side; only spherical
@@ -112,31 +131,38 @@ pub mod simulate_array;
 // §6.6.5 inline PDE tests over the array simulation pathway (field
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod pde_inline_tests;
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
+pub(crate) mod pde_inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
 // the imperative `geometry::polygon_area`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod area_faq;
+pub(crate) mod area_faq;
 
 // Build-time value-invention front-door — derived index-sets (skolem/distinct/
 // rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
-pub mod value_invention;
+pub(crate) mod value_invention;
 
 // Automatic projection-pushdown desugar (the Julia/Python `desugar_pushdown`
 // port): a raw-document → raw-document transform + the record-derived provider
 // gate helpers the `prepare` entry point consumes. Raw-JSON side by design —
 // see the module docs.
-pub mod pushdown_rewrite;
+pub(crate) mod pushdown_rewrite;
 
-// `prepare` — the build-time public surface mirroring the Julia binding's
-// `prepare`/`observed_field` and the Python `earthsci_ast.prepare`: rewrite →
-// value-invention → member-factor feedback → gated fetch → observed-graph
-// evaluation, all engine-side. Native-only (drives `simulate_array`).
+// The deterministic-per-document BUILD PIPELINE — rewrite → value-invention →
+// member-factor feedback → gated fetch → observed-graph evaluation, all
+// engine-side. It used to be the public `prepare`/`Prepared` entry point;
+// `esm-libraries-spec.md` §2.5.1 folds it into EsmProblem construction, so what is
+// public here is the provider contract and the build-observability seam.
+// Native-only (drives `simulate_array`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod prepare;
+pub(crate) mod prepare;
+
+// The EsmProblem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
+// one verb. Construction does NOT require the solver — only `solve` / `init` /
+// `solve_to_completion` do, and those are behind the `solve` feature.
+pub(crate) mod problem;
 
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
@@ -183,9 +209,9 @@ pub use geometry::{
 };
 pub use graph::{
     ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
-    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions,
+    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions, Graph,
     VariableKind, VariableNode, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, get_component_type,
+    expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };
 pub use parse::{
     LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
@@ -195,11 +221,22 @@ pub use parse_expression::{ExpressionParseError, parse_equation, parse_expressio
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
-pub use ref_loading::{resolve_subsystem_refs, resolve_subsystem_refs_with_metaparameters};
+pub use ref_loading::{
+    resolve_subsystem_refs, resolve_subsystem_refs_raw, resolve_subsystem_refs_with_metaparameters,
+};
 pub use reference_resolution::{
-    EdgeKind, ReferenceEdge, ReferenceError, ReferenceGraph, ReferenceVertex, VertexKind,
+    EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,
     build_reference_graph, resolve_references,
 };
+// Deprecated alias of `build_reference_graph`, kept for one minor per
+// API_SPEC.md §10 (§8 item 17 folded the registry into a trailing argument).
+#[allow(deprecated)]
+pub use reference_resolution::build_reference_graph_with_index_sets;
+// Deprecated alias of `ReferenceResolutionError`, kept for one minor per
+// API_SPEC.md §10 (§8 item 10 renamed it). Re-exported behind
+// `allow(deprecated)` so the re-export itself does not warn.
+#[allow(deprecated)]
+pub use reference_resolution::ReferenceError;
 pub use registered_functions::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
@@ -229,8 +266,12 @@ pub use types::{
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_complete,
+    validate_text,
 };
+// Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
+// (§8 item 13 named the text convenience `validate_text`).
+#[allow(deprecated)]
+pub use validate::validate_complete;
 pub use value_invention::{
     BoundaryKind, ValueInventionError, ValueInventionResult, apply_value_invention,
     materialize_value_invention,
@@ -240,12 +281,14 @@ pub use pushdown_rewrite::{
     GateAxis, ProviderGate, PushdownRewriteError, desugar_pushdown, pushdown_coupling_pairs,
     pushdown_provider_gates, pushdown_record,
 };
-// `Flow` is deliberately absent: `prepare` re-exports the SAME `Flow` the
-// solver uses, and the crate root already carries it from `simulate`.
+// `Flow` is deliberately absent: the build pipeline re-exports the SAME `Flow`
+// the solver uses, and the crate root already carries it from `simulate`.
+// `prepare` / `Prepared` / `PrepareOptions` are GONE (esm-libraries-spec §2.5.1
+// — replaced by `esm_problem` / `EsmProblem` / `ProblemOptions`); what remains is
+// the build-time provider contract and the build-observability seam.
 #[cfg(not(target_arch = "wasm32"))]
 pub use prepare::{
-    AxisSel, PrepareError, PrepareOptions, PreparePhase, PrepareProgress, PrepareProgressFn,
-    PrepareProvider, Prepared, prepare,
+    AxisSel, PrepareError, PreparePhase, PrepareProgress, PrepareProgressFn, PrepareProvider,
 };
 
 pub use edit::{
@@ -253,18 +296,22 @@ pub use edit::{
     add_species, add_variable, remove_coupling, remove_equation, remove_model, remove_reaction,
     remove_species, remove_variable, replace_coupling, replace_equation, update_model_metadata,
 };
-// Deprecated alias kept for backward compatibility; delegates to
-// `substitute::substitute`. Re-exported behind `allow(deprecated)` so the
-// re-export itself does not warn.
-#[allow(deprecated)]
-pub use edit::substitute_in_expression;
 pub use error::EsmError;
-pub use lower_enums::{EnumLoweringError, lower_enums};
-pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
+// The central diagnostic-code registry (phase-6 H-2). `diagnostic::codes` is
+// the per-code constant form that raise sites reference; `ERROR_CODES` is its
+// enumerable `(name, value)` table, the Rust twin of Julia's `ERROR_CODES`
+// NamedTuple, TypeScript's `ERROR_CODES` object and Go's `codes.go`.
+pub use diagnostic::{ERROR_CODES, error_code_names};
+pub use lower_enums::{EnumLoweringError, lower_enums, lower_enums_mut, lower_enums_raw};
+pub use migration::{MigrationError, can_migrate, migrate, supported_migration_targets};
+// Deprecated alias of `supported_migration_targets`, kept for one minor per
+// API_SPEC.md §10 (phase-6 G-2 dropped the `get_` prefix).
+#[allow(deprecated)]
+pub use migration::get_supported_migration_targets;
 
 pub use compile_error::CompileError;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
 pub use pde_inline_tests::{
     PdeAssertionResult, ephemeral_injected_file, evaluate_cellwise, field_reduce, run_pde_tests,
     run_pde_tests_with_base_dir, state_cells,
@@ -273,9 +320,18 @@ pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
 pub use reactions::stoichiometric_matrix_parallel;
 pub use simulate::{
-    Compiled, Flow, Progress, ProgressFn, ResolvedExpr, SimulateError, SimulateOptions, Solution,
-    SolutionMetadata, SolverChoice, compile_array, fold_constant_expr, interpret, simulate,
+    Alg, Compiled, DEFAULT_ABSTOL, DEFAULT_RELTOL, Flow, Progress, ProgressFn, ResolvedExpr,
+    ReturnCode, SimulateError, Solution, SolutionMetadata, SolveOptions, compile_array,
+    fold_constant_expr, interpret,
 };
+
+// The EsmProblem / `solve` surface. `simulate` is deleted in all its forms.
+pub use problem::{
+    CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, ProblemInput, ProblemOptions,
+    Remake, callbacks, compose, esm_problem, observed_field, remake,
+};
+#[cfg(feature = "solve")]
+pub use problem::{Integrator, StepStatus, init, solve, solve_ensemble, solve_to_completion, step};
 pub use units::{
     Dimension, Rational, UNIT_FINDING_ANALYSIS, UNIT_FINDING_DIMENSIONAL_MISMATCH,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,

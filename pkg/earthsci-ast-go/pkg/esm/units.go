@@ -1524,8 +1524,8 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 				Path:     path,
 				Code:     findingCode(err),
 				Message:  fmt.Sprintf("dimensional analysis failed on observed variable %q: %v", name, err),
-				LhsUnits: declaredDimString(v.Units),
-				RhsUnits: "error",
+				LHSUnits: declaredDimString(v.Units),
+				RHSUnits: "error",
 			})
 			continue
 		}
@@ -1542,8 +1542,8 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 				Path:     path,
 				Code:     UnitFindingDimensionalMismatch,
 				Message:  fmt.Sprintf("observed variable %q is declared %s but its expression has dimension %s", name, declared.Dim, got.Dim),
-				LhsUnits: declared.Dim.String(),
-				RhsUnits: got.Dim.String(),
+				LHSUnits: declared.Dim.String(),
+				RHSUnits: got.Dim.String(),
 			})
 		}
 	}
@@ -1581,8 +1581,8 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 			Path:     path,
 			Code:     findingCode(lhsErr),
 			Message:  "dimensional analysis failed on LHS: " + lhsErr.Error(),
-			LhsUnits: "error",
-			RhsUnits: dimString(rhs),
+			LHSUnits: "error",
+			RHSUnits: dimString(rhs),
 		}
 	}
 	if rhsErr != nil {
@@ -1590,8 +1590,8 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 			Path:     path,
 			Code:     findingCode(rhsErr),
 			Message:  "dimensional analysis failed on RHS: " + rhsErr.Error(),
-			LhsUnits: dimString(lhs),
-			RhsUnits: "error",
+			LHSUnits: dimString(lhs),
+			RHSUnits: "error",
 		}
 	}
 
@@ -1604,8 +1604,8 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 				Path:     path,
 				Code:     UnitFindingDimensionalMismatch,
 				Message:  err.Error(),
-				LhsUnits: dimString(state),
-				RhsUnits: dimString(rhs),
+				LHSUnits: dimString(state),
+				RHSUnits: dimString(rhs),
 			}
 		}
 		return nil
@@ -1619,8 +1619,8 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 			Path:     path,
 			Code:     UnitFindingDimensionalMismatch,
 			Message:  fmt.Sprintf("LHS dimension %s does not match RHS dimension %s", lhs.Dim, rhs.Dim),
-			LhsUnits: lhs.Dim.String(),
-			RhsUnits: rhs.Dim.String(),
+			LHSUnits: lhs.Dim.String(),
+			RHSUnits: rhs.Dim.String(),
 		}
 	}
 	return nil

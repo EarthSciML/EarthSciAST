@@ -8,7 +8,7 @@
 //! `tests/conformance/expression_templates/`, so all bindings agree on the
 //! byte-identical fixpoint (or the same rejection).
 
-use earthsci_ast::lower_expression_templates::{
+use earthsci_ast::extension::lower_expression_templates::{
     ExpressionTemplateError, expand, lower_expression_templates,
 };
 use serde_json::{Value, json};
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 /// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
 /// on the variable.
 fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    earthsci_ast::classification::observed_definition_json(model, name)
+    earthsci_ast::observed_definition_json(model, name)
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
@@ -227,7 +227,7 @@ fn attrs_on_rewrite_target_op_bind_as_scalar_metavariables() {
         "#;
     let mut v: Value = serde_json::from_str(src).expect("parse attrs source");
     lower_expression_templates(&mut v).expect("lowering must converge");
-    let expr = earthsci_ast::classification::observed_definition_json(&v["models"]["m"], "y")
+    let expr = earthsci_ast::observed_definition_json(&v["models"]["m"], "y")
         .expect("y defining equation");
     assert_eq!(*expr, json!({"op": "*", "args": [1.4, "u"]}));
 }

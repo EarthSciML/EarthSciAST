@@ -11,7 +11,7 @@ from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load_path, load_string
 from earthsci_ast.serialize import to_json
-from earthsci_ast.validation import validate, SchemaValidationError
+from earthsci_ast.validation import validate, validate_text, SchemaValidationError
 
 
 class TestStructuralValidation:
@@ -54,7 +54,7 @@ class TestStructuralValidation:
         }
 
         # This should be caught by structural validation
-        result = validate(json.dumps(invalid_esm))
+        result = validate_text(json.dumps(invalid_esm))
         if not result.is_valid:
             # Validation found errors - that's what we expect
             all_errors = result.schema_errors + result.structural_errors
@@ -99,7 +99,7 @@ class TestStructuralValidation:
         # raise on the nested `_var` placeholder.
         load_string(json.dumps(advection))
         # And validate() must not surface an undefined-reference error for `_var`.
-        result = validate(advection)
+        result = validate_text(json.dumps(advection))
         ref_errors = [
             e
             for e in (result.schema_errors + result.structural_errors)
@@ -166,7 +166,7 @@ class TestStructuralValidation:
 
         # Unit validation might catch this
         try:
-            result = validate(json.dumps(invalid_esm))
+            result = validate_text(json.dumps(invalid_esm))
             # Some implementations might allow this at parse time but flag in validation
             if hasattr(result, "warnings") and result.unit_warnings:
                 assert any("unit" in str(w).lower() for w in result.unit_warnings)
@@ -215,7 +215,7 @@ class TestStructuralValidation:
         }
 
         # This might be caught by chemical validation
-        result = validate(json.dumps(invalid_esm))
+        result = validate_text(json.dumps(invalid_esm))
         # Mass balance issues might be warnings rather than errors
         if hasattr(result, "warnings"):
             warnings_text = " ".join(str(w) for w in result.unit_warnings).lower()
@@ -249,7 +249,7 @@ class TestStructuralValidation:
             },
         }
 
-        result = validate(json.dumps(invalid_esm))
+        result = validate_text(json.dumps(invalid_esm))
         if not result.is_valid:
             all_errors = result.schema_errors + result.structural_errors
             errors_text = " ".join(str(e) for e in all_errors).lower()
@@ -290,7 +290,7 @@ class TestStructuralValidation:
         }
 
         # Scope resolution should handle this correctly or flag ambiguity
-        result = validate(json.dumps(invalid_esm))
+        result = validate_text(json.dumps(invalid_esm))
         # This might be valid if scope resolution works correctly
         assert result.is_valid or not result.is_valid
 
@@ -375,7 +375,7 @@ class TestStructuralValidation:
 
         # This might be caught during substitution or validation
         try:
-            result = validate(json.dumps(invalid_esm))
+            result = validate_text(json.dumps(invalid_esm))
             if not result.is_valid:
                 errors_text = " ".join(
                     str(e) for e in result.schema_errors + result.structural_errors
@@ -485,7 +485,7 @@ class TestValidationWithFixtures:
                 load_string(content)
             except Exception:
                 continue
-            result = validate(content)
+            result = validate_text(content)
             if result.is_valid:
                 failed_files.append(invalid_file.name)
 
@@ -519,7 +519,7 @@ class TestValidationWithFixtures:
         with open(fixture) as f:
             content = f.read()
 
-        result = validate(content)
+        result = validate_text(content)
         assert not result.is_valid
         matches = [
             e
@@ -555,7 +555,7 @@ class TestValidationWithFixtures:
         # Schema-valid: load() must accept it (rejection is structural, not schema).
         load_string(content)
 
-        result = validate(content)
+        result = validate_text(content)
         assert not result.is_valid
         assert result.schema_errors == []
         matches = [e for e in result.structural_errors if e.code == "ic_in_reaction_system"]
@@ -598,7 +598,7 @@ class TestValidationWithFixtures:
                 },
             }
         )
-        result = validate(content)
+        result = validate_text(content)
         assert not any(e.code == "ic_in_reaction_system" for e in result.structural_errors)
 
     def test_all_valid_fixtures_pass_validation(self, fixtures_dir):
@@ -676,7 +676,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                 }
             },
         )
-        result = validate(content)
+        result = validate_text(content)
         assert result.is_valid, [(e.code, e.message) for e in result.structural_errors]
 
     def test_index_set_names_are_implicitly_declared(self):
@@ -698,7 +698,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                 }
             },
         )
-        result = validate(content)
+        result = validate_text(content)
         assert result.is_valid, [(e.code, e.message) for e in result.structural_errors]
 
     def test_operator_placeholder_var_is_legal_in_event_affects(self):
@@ -727,7 +727,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                 }
             ],
         )
-        result = validate(content)
+        result = validate_text(content)
         assert not any(e.code == "event_var_undeclared" for e in result.structural_errors), [
             (e.code, e.message) for e in result.structural_errors
         ]
@@ -784,7 +784,7 @@ class TestSpecSanctionedConstructsAreNotRejected:
                 }
             },
         )
-        result = validate(content)
+        result = validate_text(content)
         assert not any(e.code == "undeclared_rate_variable" for e in result.structural_errors), [
             (e.code, e.message) for e in result.structural_errors
         ]
@@ -808,10 +808,10 @@ class TestSpecSanctionedConstructsAreNotRejected:
                 {"lhs": {"op": "*", "args": ["H", "H", "SO4"]}, "rhs": "Ksp"},
             ],
         )
-        assert validate(self._doc(models={"Eq": balanced})).is_valid
+        assert validate_text(self._doc(models={"Eq": balanced})).is_valid
 
         short = dict(base, equations=[{"lhs": "H", "rhs": 1e-7}])
-        result = validate(self._doc(models={"Eq": short}))
+        result = validate_text(self._doc(models={"Eq": short}))
         assert not result.is_valid
         assert any(e.code == "equation_count_mismatch" for e in result.structural_errors)
 
@@ -852,10 +852,10 @@ class TestSpecSanctionedConstructsAreNotRejected:
             )
 
         bound = {"op": "*", "args": ["k", {"op": "index", "args": ["u", "i"]}]}
-        assert validate(doc(bound)).is_valid
+        assert validate_text(doc(bound)).is_valid
 
         free = {"op": "*", "args": ["undeclared_zzz", {"op": "index", "args": ["u", "i"]}]}
-        assert not validate(doc(free)).is_valid
+        assert not validate_text(doc(free)).is_valid
 
 
 class TestUnitFindingCodesAreDistinct:
@@ -884,7 +884,7 @@ class TestUnitFindingCodesAreDistinct:
         )
 
     def test_unreal_unit_string_is_unit_parse_error(self):
-        result = validate(self._model("not_a_unit", expression="T"))
+        result = validate_text(self._model("not_a_unit", expression="T"))
         assert not result.is_valid
         codes = [e.code for e in result.structural_errors]
         assert "unit_parse_error" in codes, codes
@@ -894,7 +894,7 @@ class TestUnitFindingCodesAreDistinct:
 
     def test_dimensional_mismatch_is_unit_inconsistency(self):
         # `c` declared in metres but assigned a temperature: both strings parse.
-        result = validate(self._model("m", expression="T"))
+        result = validate_text(self._model("m", expression="T"))
         assert not result.is_valid
         codes = [e.code for e in result.structural_errors]
         assert "unit_inconsistency" in codes, codes
@@ -970,7 +970,7 @@ class TestReferenceIntegrityEveryExpressionBearingField:
         expected = self._STALE_PINS.get(fixture_name, pins[fixture_name]["structural_errors"][0])
 
         content = (fixtures_dir / "invalid" / fixture_name).read_text()
-        result = validate(content)
+        result = validate_text(content)
 
         assert not result.is_valid, f"{fixture_name} must be rejected"
         assert result.schema_errors == [], "must reach the STRUCTURAL layer, not fail schema"
@@ -1006,7 +1006,7 @@ class TestValidateBasePath:
             "lib_calendar_subsystem_inclusion.esm",
         ):
             content = (valid_dir / name).read_text()
-            result = validate(content, base_path=str(valid_dir))
+            result = validate_text(content, base_path=str(valid_dir))
             assert result.is_valid, (
                 f"{name} must validate clean when its refs can be resolved; got "
                 f"{[(e.code, e.path) for e in result.structural_errors + result.schema_errors]}"
@@ -1019,7 +1019,7 @@ class TestValidateBasePath:
         invalid_dir = FIXTURES_ROOT / "invalid"
         content = (invalid_dir / "subsystem_ref_not_found.esm").read_text()
         for kwargs in ({}, {"base_path": str(invalid_dir)}):
-            result = validate(content, **kwargs)
+            result = validate_text(content, **kwargs)
             assert not result.is_valid, f"must be rejected (kwargs={kwargs})"
             assert any(e.code == "unresolved_subsystem_ref" for e in result.structural_errors), [
                 (e.code, e.path) for e in result.structural_errors
@@ -1029,7 +1029,7 @@ class TestValidateBasePath:
         """Backward compatible: omitting `base_path` keeps today's behaviour, and
         a relative ref that cannot be opened is REPORTED, not passed."""
         valid_dir = FIXTURES_ROOT / "valid"
-        result = validate((valid_dir / "subsystem_index_set_merge.esm").read_text())
+        result = validate_text((valid_dir / "subsystem_index_set_merge.esm").read_text())
         assert not result.is_valid
         assert any(e.code == "unresolved_subsystem_ref" for e in result.structural_errors)
 
@@ -1039,7 +1039,7 @@ class TestValidateBasePath:
         exists to be imported — and must not trip the content-presence check."""
         valid_dir = FIXTURES_ROOT / "valid"
         for name in ("template_import_lib.esm", "template_import_rename_lib.esm"):
-            result = validate((valid_dir / name).read_text(), base_path=str(valid_dir))
+            result = validate_text((valid_dir / name).read_text(), base_path=str(valid_dir))
             assert result.is_valid, (
                 f"{name} is a template library and is valid; got "
                 f"{[(e.code, e.path) for e in result.structural_errors]}"
@@ -1050,7 +1050,7 @@ class TestValidateBasePath:
         dotted entry names a SUBSYSTEM at arbitrary depth (§4.6), so only the
         head is decidable here."""
         invalid_dir = FIXTURES_ROOT / "invalid"
-        result = validate((invalid_dir / "undefined_system.esm").read_text())
+        result = validate_text((invalid_dir / "undefined_system.esm").read_text())
         assert not result.is_valid
         matches = [e for e in result.structural_errors if e.code == "undefined_system"]
         assert len(matches) == 1
@@ -1099,7 +1099,7 @@ class TestTemplateLibraryRoundTrip:
         valid_dir = FIXTURES_ROOT / "valid"
         emitted = to_json(load_path(str(valid_dir / name)))
 
-        result = validate(emitted, base_path=str(valid_dir))
+        result = validate_text(emitted, base_path=str(valid_dir))
         assert result.is_valid, [
             (e.code, e.path) for e in result.structural_errors + result.schema_errors
         ]

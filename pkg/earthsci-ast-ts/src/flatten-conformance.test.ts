@@ -145,8 +145,15 @@ function eventRecord(e: ContinuousEvent | DiscreteEvent): EventCase {
 
 describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () => {
   it('covers every corpus case', () => {
-    expect(corpus.cases.length).toBe(19)
-    expect(corpus.refusals.length).toBe(2)
+    // 23 = the 19 of the earlier recording, plus the `operator_compose` tier
+    // (minimal_chemistry, metadata_inheritance_coupled,
+    // bare_reference_resolution) — the three shared fixtures whose operator
+    // model is really spelled with `_var`, which is what makes a composition
+    // observable at all — plus `operator_compose_translate`, the one document in
+    // the tree that pins a real TRANSLATION match (§4.7.1 step 2's namespaced
+    // endpoints and step 4's merged-away-name prune).
+    expect(corpus.cases.length).toBe(23)
+    expect(corpus.refusals.length).toBe(3)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 
@@ -252,7 +259,9 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
         expect(flat.domain.array_type ?? null).toBe(expected.domain.array_type)
       }
       expect(flat.metadata.sourceSystems).toEqual(expected.metadata.source_systems)
-      expect(flat.metadata.couplingRules).toEqual(expected.metadata.coupling_rules)
+      expect(flat.metadata.couplingRules).toEqual(
+        expected.metadata.coupling_rules,
+      )
       expect(flat.metadata.operatorApplies).toEqual(expected.metadata.operator_applies)
       expect(flat.metadata.callbacks).toEqual(expected.metadata.callbacks)
     })

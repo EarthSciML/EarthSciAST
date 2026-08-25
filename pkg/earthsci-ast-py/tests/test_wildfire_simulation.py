@@ -36,7 +36,7 @@ from conftest import VALID_DIR
 pytest.importorskip("scipy")
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
 FIXTURE = str(VALID_DIR / "wildfire_atmosphere_ocean.esm")
@@ -79,8 +79,8 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
         tspan = (float(ts["start"]), float(ts["end"]))
         test_tol = test.get("tolerance")
 
-        result = simulate(file, tspan=tspan, rtol=1e-10, atol=1e-12)
-        assert result.success, f"simulate() failed: {result.message}"
+        result = solve(esm_problem(file, tspan), reltol=1e-10, abstol=1e-12)
+        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
             total += 1
@@ -119,8 +119,8 @@ def test_wildfire_constant_and_regrid_states() -> None:
     SST(t)=290 + t*surface_heat_flux/4.18e6 with the inline conservative
     weights giving surface_heat_flux=[100, 283.333, 350]."""
     file = load_path(FIXTURE)
-    result = simulate(file, tspan=(0.0, 3600.0), rtol=1e-10, atol=1e-12)
-    assert result.success, result.message
+    result = solve(esm_problem(file, (0.0, 3600.0)), reltol=1e-10, abstol=1e-12)
+    assert (result.retcode is ReturnCode.Success), result.message
 
     def final(name: str) -> float:
         assert name in result.vars, f"{name} not in {result.vars}"

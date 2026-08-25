@@ -37,6 +37,14 @@ function _split_ic_equations(flat::FlattenedSystem, var_dict::Dict{String,Any},
                              t_sym, dim_dict::Dict{String,Any})
     ic_values = Tuple{String,Any}[]
     dyn_equations = Equation[]
+    # `field_ics` are classified OUT of `flat.equations` (esm-libraries-spec
+    # §4.7.5 step 4), so they have to be read from their own field or the states
+    # they seed silently fall back to their bare `default`.
+    for (vn, rhs) in flat.field_ics
+        haskey(var_dict, vn) || throw(ArgumentError(
+            "ic($(vn)) targets unknown variable '$(vn)'"))
+        push!(ic_values, (vn, _esm_to_symbolic(rhs, var_dict, t_sym, dim_dict)))
+    end
     for eq in flat.equations
         if eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "ic"
             lop = eq.lhs::OpExpr

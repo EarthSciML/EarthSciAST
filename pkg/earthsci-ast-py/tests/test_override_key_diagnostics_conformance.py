@@ -26,7 +26,7 @@ import pytest
 
 from earthsci_ast.errors import AmbiguousParameterError, UnknownParameterError
 from earthsci_ast.parse import load_path
-from earthsci_ast.simulation import simulate
+from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "override_key_diagnostics"
 _MANIFEST = _ROOT / "manifest.json"
@@ -70,11 +70,11 @@ def test_override_key_outcome(case: dict) -> None:
     rtol = float(manifest["tolerances"]["trajectory_rtol"])
     atol = float(manifest["tolerances"]["trajectory_atol"])
     params = {case["key"]: float(case["value"])}
-    kw = {"method": "RK45", "rtol": 1e-12, "atol": 1e-14}
+    kw = {"alg": "RK45", "reltol": 1e-12, "abstol": 1e-14}
 
     if case["outcome"] == "resolved":
-        result = simulate(esm, tspan=(0.0, 1.0), parameters=params, **kw)
-        assert result.success, result.message
+        result = solve(esm_problem(esm, (0.0, 1.0), p=params), **kw)
+        assert (result.retcode is ReturnCode.Success), result.message
         expected = case["trajectory_at_t1"]
         idx = {n: k for k, n in enumerate(result.vars)}
         for name, want in expected.items():
@@ -82,7 +82,7 @@ def test_override_key_outcome(case: dict) -> None:
             assert got == pytest.approx(want, rel=rtol, abs=atol), name
     elif case["outcome"] == "ambiguous":
         with pytest.raises(AmbiguousParameterError) as exc:
-            simulate(esm, tspan=(0.0, 1.0), parameters=params, **kw)
+            solve(esm_problem(esm, (0.0, 1.0), p=params), **kw)
         # The diagnostic must name the offending key AND every candidate, or it
         # does not tell the author how to qualify it.
         assert case["key"] in str(exc.value)
@@ -90,7 +90,7 @@ def test_override_key_outcome(case: dict) -> None:
             assert cand in str(exc.value)
     else:
         with pytest.raises(UnknownParameterError) as exc:
-            simulate(esm, tspan=(0.0, 1.0), parameters=params, **kw)
+            solve(esm_problem(esm, (0.0, 1.0), p=params), **kw)
         assert case["key"] in str(exc.value)
         # Ambiguous is a SUBCLASS of unknown, so an unknown key must not be
         # reported as the ambiguous one.
@@ -101,8 +101,8 @@ def test_defaults_run_without_overrides() -> None:
     """Non-vacuity: the fixture itself integrates, so a rejection above is about
     the key and not about the document."""
     manifest = _manifest()
-    result = simulate(_load_fixture(), tspan=(0.0, 1.0), method="RK45", rtol=1e-12, atol=1e-14)
-    assert result.success, result.message
+    result = solve(esm_problem(_load_fixture(), (0.0, 1.0)), alg="RK45", reltol=1e-12, abstol=1e-14)
+    assert (result.retcode is ReturnCode.Success), result.message
     idx = {n: k for k, n in enumerate(result.vars)}
     for name, want in _fixture()["defaults_at_t1"].items():
         assert float(result.y[idx[name]][-1]) == pytest.approx(

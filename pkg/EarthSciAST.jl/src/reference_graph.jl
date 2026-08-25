@@ -286,33 +286,88 @@ end
 
 _is_node(x) = x isa AbstractDict && _haskey(x, "op")
 
-# Names a `join.on` reference may resolve to: the node's string factor-args, its
-# declared range keys, and its symbolic output_idx.
-function _factor_scope(node::AbstractDict)
-    names = Set{String}()
-    args = _as_vec(_get(node, "args"))
-    if args !== nothing
-        for a in args
-            s = _as_str(a)
-            s !== nothing && push!(names, s)
-        end
-    end
+# Which binder class a `join` name resolves to, or `nothing`.
+#
+# An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop symbol
+# bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a
+# declared component-local variable — a value-invention bin buffer. A binding
+# that diagnoses such a name "must do so against the variable AND index-set
+# registries", not against node-local names alone.
+#
+# The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+# node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+# permits one string to be a variable reference outside an aggregate and an
+# index symbol inside one):
+#
+#   1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+#      tested FIRST;
+#   2. a node-local string factor `arg`;
+#   3. a declared component-local variable (the model's variable registry);
+#   4. a document-scoped index set.
+#
+# Anything else is unresolvable and raises E_REF_UNRESOLVED_JOIN_FACTOR. Nothing
+# here widens the check to "accept any string": a name in none of the four
+# registries is still a typo and is still reported.
+function _join_binder_class(node::AbstractDict, name::Union{Nothing,AbstractString},
+                            variables::Union{Nothing,AbstractDict},
+                            index_sets::Union{Nothing,AbstractDict})
+    (name === nothing || isempty(name)) && return nothing
+    nm = String(name)
+    # 1. node-local binders (these shadow a same-named variable)
     ranges = _as_dict(_get(node, "ranges"))
-    ranges !== nothing && union!(names, _str_keys(ranges))
+    ranges !== nothing && _haskey(ranges, nm) && return "range"
     oi = _as_vec(_get(node, "output_idx"))
     if oi !== nothing
         for o in oi
-            s = _as_str(o)
-            s !== nothing && push!(names, s)
+            _as_str(o) == nm && return "output_idx"
         end
     end
-    return names
+    # 2. node-local string factor args
+    args = _as_vec(_get(node, "args"))
+    if args !== nothing
+        for a in args
+            _as_str(a) == nm && return "arg"
+        end
+    end
+    # 3. the model's variable registry — where a bin buffer lives
+    variables !== nothing && _haskey(variables, nm) && return "variable"
+    # 4. the document-scoped index-set registry
+    index_sets !== nothing && _haskey(index_sets, nm) && return "index_set"
+    return nothing
 end
+
+# Diagnose one `join` name, throwing the unresolved-join-factor error when it
+# resolves in none of the four binder classes.
+function _check_join_name(node::AbstractDict, name::Union{Nothing,AbstractString},
+                          variables::Union{Nothing,AbstractDict},
+                          index_sets::Union{Nothing,AbstractDict},
+                          key::AbstractString, model_name::AbstractString,
+                          path::AbstractString; label::AbstractString="join factor")
+    if _join_binder_class(node, name, variables, index_sets) === nothing
+        throw(ReferenceResolutionError(
+            E_REF_UNRESOLVED_JOIN_FACTOR,
+            "$(label) '$(name === nothing ? "" : name)' of node $(key) names no range, " *
+            "output index, factor arg, declared variable, or index set in scope " *
+            "(model '$(model_name)', at $(path))"))
+    end
+    return nothing
+end
+
+# One id-bearing expression node, as the `from_faq` scope sees it.
+struct _RefNode
+    addr::String
+    path::String
+    op::Union{Nothing,String}
+end
+
+# The model members whose expression trees carry addressable nodes.
+const _WALK_ROOTS = ("equations", "initialization_equations")
 
 function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::AbstractString,
                                 model_name::AbstractString,
                                 index_sets::Union{Nothing,AbstractDict},
-                                id_to_addr::OrderedDict{String,Tuple{String,String}})
+                                variables::Union{Nothing,AbstractDict},
+                                id_to_addr::OrderedDict{String,_RefNode})
     op = _as_str(_get(node, "op"))
     nid = _nonempty_str(_get(node, "id"))
     is_agg = op !== nothing && op in _AGGREGATE_OPS
@@ -328,9 +383,9 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
             throw(ReferenceResolutionError(
                 E_REF_DUPLICATE_NODE_ID,
                 "duplicate expression-node id '$(nid)' in model '$(model_name)' " *
-                "(at $(path) and $(id_to_addr[nid][2]))"))
+                "(at $(path) and $(id_to_addr[nid].path))"))
         end
-        id_to_addr[nid] = (addr, String(path))
+        id_to_addr[nid] = _RefNode(addr, String(path), op)
     end
 
     _ensure_vertex!(g, ReferenceVertex(key, REF_VERTEX_NODE, addr, op, nid, String(path)))
@@ -356,13 +411,14 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
     # join[*].on[*] -> factor
     join_clauses = _as_vec(_get(node, "join"))
     if join_clauses !== nothing
-        scope = _factor_scope(node)
         for clause in join_clauses
             cld = _as_dict(clause)
             cld === nothing && continue
             # A Phase-2a `overlap` clause references const-array ENVELOPE factors
-            # via `src_env` / `tgt_env`; each must resolve in factor scope just
-            # like a bin-equality key column.
+            # via `src_env` / `tgt_env`; each must resolve in join-name scope
+            # just like a bin-equality key column. CONFORMANCE_SPEC §5.5.6 makes
+            # these ALWAYS factor variables, so the variable registry (class 3)
+            # is what resolves them.
             ov = _as_dict(_get(cld, "overlap"))
             if ov !== nothing
                 for envkey in ("src_env", "tgt_env")
@@ -370,13 +426,8 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                     names === nothing && continue
                     for nm in names
                         ref = _as_str(nm)
-                        if ref === nothing || !(ref in scope)
-                            throw(ReferenceResolutionError(
-                                E_REF_UNRESOLVED_JOIN_FACTOR,
-                                "overlap-join env factor '$(ref === nothing ? "" : ref)' of " *
-                                "node $(key) names no factor, range, or output index in " *
-                                "scope (model '$(model_name)', at $(path))"))
-                        end
+                        _check_join_name(node, ref, variables, index_sets, key, model_name, path;
+                                         label="overlap-join env factor")
                         _ensure_vertex!(g, ReferenceVertex(
                             _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
                         _add_edge!(g, key, _factor_key(ref), REF_EDGE_JOIN_FACTOR)
@@ -390,12 +441,24 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                 pv = _as_vec(pair)
                 (pv === nothing || isempty(pv)) && continue
                 ref = _as_str(pv[1])
-                if ref === nothing || !(ref in scope)
-                    throw(ReferenceResolutionError(
-                        E_REF_UNRESOLVED_JOIN_FACTOR,
-                        "join factor '$(ref === nothing ? "" : ref)' of node $(key) names no " *
-                        "factor, range, or output index in scope " *
-                        "(model '$(model_name)', at $(path))"))
+                _check_join_name(node, ref, variables, index_sets, key, model_name, path)
+                # BOTH key columns are references (esm-spec §4.9.5). Only the
+                # LEFT one carries the graph edge: the join_factor edge kind
+                # records the node's own key-column dependency, and the right
+                # column is frequently a document-scoped index set, which already
+                # has its own vertex kind. The right column is DIAGNOSED here and
+                # left un-edged, which is what makes
+                # `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+                # through the index-set class without inventing a
+                # `factor:sourceType` twin of `index_set:sourceType`.
+                #
+                # A non-string right column is a SCHEMA defect
+                # (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                # there) and is not re-diagnosed as a reference error.
+                if length(pv) > 1
+                    right = _as_str(pv[2])
+                    right === nothing ||
+                        _check_join_name(node, right, variables, index_sets, key, model_name, path)
                 end
                 _ensure_vertex!(g, ReferenceVertex(
                     _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
@@ -409,33 +472,146 @@ end
 
 function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::AbstractString,
                 index_sets::Union{Nothing,AbstractDict},
-                id_to_addr::OrderedDict{String,Tuple{String,String}})
+                variables::Union{Nothing,AbstractDict},
+                id_to_addr::OrderedDict{String,_RefNode})
     if value isa AbstractDict
         _is_node(value) &&
-            _register_and_process!(g, value, path, model_name, index_sets, id_to_addr)
+            _register_and_process!(g, value, path, model_name, index_sets, variables, id_to_addr)
         for k in _str_keys(value)
-            _walk!(g, _get(value, k), string(path, "/", k), model_name, index_sets, id_to_addr)
+            _walk!(g, _get(value, k), string(path, "/", k), model_name, index_sets, variables,
+                   id_to_addr)
         end
     elseif value isa AbstractVector
         for (i, v) in enumerate(value)
-            _walk!(g, v, string(path, "/", i - 1), model_name, index_sets, id_to_addr)
+            _walk!(g, v, string(path, "/", i - 1), model_name, index_sets, variables, id_to_addr)
         end
     end
     return g
 end
 
+# Collect every explicit expression-node id under one model's `value`, keyed by
+# id, under a model-qualified path.
+function _collect_ids!(nodes::OrderedDict{String,_RefNode}, value, path::AbstractString,
+                       model_name::AbstractString)
+    if value isa AbstractDict
+        if _is_node(value)
+            nid = _nonempty_str(_get(value, "id"))
+            if nid !== nothing
+                qualified = string("models/", model_name, "/", path)
+                if haskey(nodes, nid)
+                    throw(ReferenceResolutionError(
+                        E_REF_DUPLICATE_NODE_ID,
+                        "duplicate expression-node id '$(nid)' in document " *
+                        "(at $(qualified) and $(nodes[nid].path))"))
+                end
+                nodes[nid] = _RefNode(nid, qualified, _as_str(_get(value, "op")))
+            end
+        end
+        for k in _str_keys(value)
+            _collect_ids!(nodes, _get(value, k), string(path, "/", k), model_name)
+        end
+    elseif value isa AbstractVector
+        for (i, v) in enumerate(value)
+            _collect_ids!(nodes, v, string(path, "/", i - 1), model_name)
+        end
+    end
+    return nodes
+end
+
 """
-    build_reference_graph(model::AbstractDict, model_name="") -> ReferenceGraph
+    _collect_document_node_ids(document) -> OrderedDict{String,_RefNode}
+
+Every explicit expression-node `id` in `document`, keyed by id.
+
+`from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+`index_sets` entry is visible to every model, so the node it names may live in
+ANY of them. This pass therefore runs over all models BEFORE any single model's
+graph is built.
+
+Because ids from different models share one namespace, uniqueness is a
+DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
+`E_REF_DUPLICATE_NODE_ID`.
+"""
+function _collect_document_node_ids(document::AbstractDict)
+    nodes = OrderedDict{String,_RefNode}()
+    models = _as_dict(_get(document, "models"))
+    models === nothing && return nodes
+    for name in _str_keys(models)
+        model = _as_dict(_get(models, name))
+        model === nothing && continue
+        for root in _WALK_ROOTS
+            v = _get(model, root)
+            v === nothing || _collect_ids!(nodes, v, root, name)
+        end
+    end
+    return nodes
+end
+
+# Union of the document-scoped registry and any model-nested one, with the
+# model's entries taking precedence. Returns `nothing` when neither exists, so
+# the "no registry at all" branches below stay unchanged.
+function _merge_index_sets(model_sets::Union{Nothing,AbstractDict},
+                           doc_sets::Union{Nothing,AbstractDict})
+    doc_sets === nothing && return model_sets
+    model_sets === nothing && return doc_sets
+    merged = OrderedDict{String,Any}()
+    for k in _str_keys(doc_sets)
+        merged[k] = _get(doc_sets, k)
+    end
+    for k in _str_keys(model_sets)
+        merged[k] = _get(model_sets, k)
+    end
+    return merged
+end
+
+"""
+    build_reference_graph(model::AbstractDict, model_name="", index_sets=nothing)
+        -> ReferenceGraph
 
 Resolve the reference edges of one `model` dict into a graph. Throws a
 [`ReferenceResolutionError`](@ref) on a duplicate node id, an undeclared
 `ranges[*].from` index set, a `from_faq` naming no node, or an unresolved
 `join.on` factor. (Cycles are reported lazily by [`topological_order`](@ref), or
 eagerly by [`resolve_references`](@ref).)
+
+`index_sets` is the **document-scoped** index-set registry (RFC §5.2). Since
+v0.8.0 that registry is a sibling of `models` at the top level of the document,
+not a key on each model, and in esm 1.0.0 it is the only place it may appear
+(`esm-schema.json` declares `index_sets` at `/properties/index_sets` and
+nowhere else). [`resolve_references`](@ref) threads the document's registry in
+for every model; a caller holding only a raw model dict may pass it explicitly,
+or omit it and get the pre-0.8.0 model-nested `index_sets` key as a fallback.
+
+Until API_SPEC.md §8 item 17 this method read ONLY `model["index_sets"]` and
+took no registry argument, so on any v0.8.0+ document every `ranges[*].from`
+target was undeclared and the pass raised `undeclared_index_set` where Python,
+Rust and Go all built the graph. The optional trailing argument is the shape
+Python (`index_sets=`) and Go (`docIndexSets`) already use; Rust spells it as
+the separate `build_reference_graph_with_index_sets`.
+
+`from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5). A caller holding one
+model gets that model as its own document, which is the right answer for a
+one-model document; [`resolve_references`](@ref) is the document-scoped entry
+point and resolves against every model's nodes.
 """
-function build_reference_graph(model::AbstractDict, model_name::AbstractString = "")
+function build_reference_graph(model::AbstractDict, model_name::AbstractString = "",
+                               index_sets::Union{Nothing,AbstractDict} = nothing)
+    return _build_reference_graph(model, model_name, index_sets, nothing)
+end
+
+# `build_reference_graph`, plus the document-wide `from_faq` scope.
+# `document_nodes` is the map `_collect_document_node_ids` builds over every
+# model; when it is `nothing` the model's own nodes are the scope.
+function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
+                                index_sets::Union{Nothing,AbstractDict},
+                                document_nodes::Union{Nothing,OrderedDict{String,_RefNode}})
     g = ReferenceGraph(model_name)
-    index_sets = _as_dict(_get(model, "index_sets"))
+    # Merge the document-scoped registry (v0.8.0+) with any model-nested one
+    # (pre-0.8.0); model-level entries win a key collision, matching Rust and
+    # Go. For a schema-valid 1.0.0 document only one of the two is ever
+    # non-empty, so the merge is observationally the same as Python's
+    # "document registry, else the model key" fallback.
+    index_sets = _merge_index_sets(_as_dict(_get(model, "index_sets")), index_sets)
 
     # Pass 1 — register declared index sets as vertices.
     if index_sets !== nothing
@@ -448,27 +624,43 @@ function build_reference_graph(model::AbstractDict, model_name::AbstractString =
     # Pass 2 — walk every expression node: assign a stable address, register
     # aggregate / id-bearing nodes, add within-node reference edges
     # (ranges[*].from, join.on), and build id -> address for from_faq.
-    id_to_addr = OrderedDict{String,Tuple{String,String}}()
-    for root in ("equations", "initialization_equations")
+    # The model's declared variable registry. A `join` `on` key column may name a
+    # declared component-local variable — a value-invention bin buffer written by
+    # an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
+    # an `on` column polymorphic over. See `_join_binder_class`.
+    variables = _as_dict(_get(model, "variables"))
+
+    id_to_addr = OrderedDict{String,_RefNode}()
+    for root in _WALK_ROOTS
         v = _get(model, root)
-        v === nothing || _walk!(g, v, root, model_name, index_sets, id_to_addr)
+        v === nothing || _walk!(g, v, root, model_name, index_sets, variables, id_to_addr)
     end
 
-    # Pass 3 — derived index sets resolve their from_faq to a node by id.
+    # Pass 3 — derived index sets resolve their from_faq to a node by id, at
+    # DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+    # model, since the registry entry naming it is visible to all of them.
+    faq_scope = document_nodes === nothing ? id_to_addr : document_nodes
     if index_sets !== nothing
         for name in _str_keys(index_sets)
             entry = _as_dict(_get(index_sets, name))
             entry === nothing && continue
             _as_str(_get(entry, "kind")) == "derived" || continue
             faq = _as_str(_get(entry, "from_faq"))
-            if faq === nothing || !haskey(id_to_addr, faq)
+            if faq === nothing || !haskey(faq_scope, faq)
                 throw(ReferenceResolutionError(
                     E_REF_UNKNOWN_FAQ_NODE,
                     "derived index set '$(name)' references from_faq " *
                     "'$(faq === nothing ? "" : faq)', which is not the id of any " *
-                    "expression node in model '$(model_name)'"))
+                    "expression node in the document"))
             end
-            _add_edge!(g, _index_set_key(name), _node_key(id_to_addr[faq][1]), REF_EDGE_FROM_FAQ)
+            target = faq_scope[faq]
+            # The producer may belong to another model; give this graph a vertex
+            # for it so the edge has a real endpoint. `_ensure_vertex!` is
+            # idempotent: a local producer was already registered in pass 2.
+            _ensure_vertex!(g, ReferenceVertex(
+                _node_key(target.addr), REF_VERTEX_NODE, target.addr,
+                target.op, faq, target.path))
+            _add_edge!(g, _index_set_key(name), _node_key(target.addr), REF_EDGE_FROM_FAQ)
         end
     end
 
@@ -481,15 +673,24 @@ end
 Resolve reference edges for every model in `document`. Throws a
 [`ReferenceResolutionError`](@ref) on any unresolved reference *or* reference
 cycle (each model's graph is checked acyclic eagerly here).
+
+The document's top-level `index_sets` registry is threaded into every model's
+[`build_reference_graph`](@ref) call — that is where esm 1.0.0 puts it.
+
+Node ids are collected from EVERY model first, so a derived index set's
+`from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a duplicate
+id anywhere in the document is an error.
 """
 function resolve_references(document::AbstractDict)
     out = OrderedDict{String,ReferenceGraph}()
     models = _as_dict(_get(document, "models"))
     models === nothing && return out
+    doc_index_sets = _as_dict(_get(document, "index_sets"))
+    document_nodes = _collect_document_node_ids(document)
     for name in _str_keys(models)
         model = _as_dict(_get(models, name))
         model === nothing && continue
-        g = build_reference_graph(model, name)
+        g = _build_reference_graph(model, name, doc_index_sets, document_nodes)
         cyc = detect_cycle(g)
         cyc !== nothing && throw(ReferenceResolutionError(
             E_REF_CYCLE, "reference cycle in model '$(name)': " * join(cyc, " -> "), cyc))

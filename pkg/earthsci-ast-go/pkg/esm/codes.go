@@ -145,6 +145,25 @@ const (
 	CodeCouplingRoleUnused = "coupling_role_unused"
 )
 
+// --- Diagnostic codes: §10.3 / esm-libraries-spec §4.7.2 `couple` connector
+// semantics (raised from flatten.go's applyCouple). ---
+const (
+	// CodeCoupleMultiplicativeNoTendency: a `couple` connector equation applies
+	// the `multiplicative` transform to a `to` target that has no `D(to)`
+	// equation in the flattened system — a parameter, an observed, an algebraic
+	// unknown, or an undefined name. Both esm-spec §10.3 and §4.7.2 define
+	// `multiplicative` against the target's EXISTING ODE right-hand side, so
+	// there is nothing to multiply and the operation has no meaning. Silently
+	// dropping the connector equation — what this binding did before — is the
+	// one outcome a coupling mis-specification must not have: the document
+	// declares a coupling and the flattened system carries no trace of it.
+	//
+	// `additive` deliberately has NO counterpart code: zero is the additive
+	// identity, so an additive term against an absent tendency simply becomes
+	// the tendency. There is no multiplicative identity that would do the same.
+	CodeCoupleMultiplicativeNoTendency = "couple_multiplicative_no_tendency"
+)
+
 // --- Diagnostic codes: §4.7 subsystem refs. Shared with the structural
 // validator, which reports the same two conditions for a document whose refs
 // were never resolved (tests/invalid/subsystem_ref_not_found.esm,
@@ -198,7 +217,7 @@ const (
 	ErrorNullReaction       = "null_reaction"
 	ErrorEventVarUndeclared = "event_var_undeclared"
 	ErrorUnitInconsistency  = "unit_inconsistency"
-	ErrorIcInReactionSystem = "ic_in_reaction_system"
+	ErrorICInReactionSystem = "ic_in_reaction_system"
 	// ErrorUnitParseError is a declared unit string that denotes no real unit
 	// ("not_a_unit"). It is a defect in the FILE — a hard error, distinct from
 	// `unit_inconsistency` (a provable dimensional mismatch between two
@@ -293,12 +312,34 @@ const DefaultIndepVar = "t"
 // equations and in event affects alike — and never an undeclared variable.
 const operatorPlaceholderVar = "_var"
 
+// --- Diagnostic SEVERITY levels: the values StructuralError.Level and
+// ValidationMessage.Level carry on the wire.
+//
+// These are the last diagnostic vocabulary validate.go still spelled as bare
+// literals after the Error* / Code* blocks moved here, and they are the same
+// kind of thing: a value a consumer compares against, so the string is a
+// contract and belongs beside the codes it qualifies. The values are unchanged.
+//
+// Only two are emitted. "info" appears in ValidationMessage.Level's field
+// comment as an admissible value but is produced nowhere, so it gets no
+// constant — a constant for a level nothing raises would advertise a severity
+// this binding cannot report. ---
+const (
+	// LevelError is a document-INVALIDATING finding. It is also the value of an
+	// UNSET Level: a StructuralError built without one is an error, which is why
+	// isWarning tests for the warning rather than against the error.
+	LevelError = "error"
+	// LevelWarning is an ADVISORY finding that does not invalidate the document
+	// (e.g. duplicate_reaction_species).
+	LevelWarning = "warning"
+)
+
 // --- Render format discriminator (display.go; compared ~50× as a bare
 // string). ---
 const (
 	FmtUnicode = "unicode"
 	FmtLatex   = "latex"
-	FmtAscii   = "ascii"
+	FmtASCII   = "ascii"
 	// FmtUnicodeSpaced is FmtUnicode with the multiplication operator rendered
 	// as " · " (spaced) instead of "·". The spacing is applied where the
 	// operator is emitted, so it never touches a "·" occurring inside a
@@ -307,11 +348,11 @@ const (
 )
 
 // DiagnosticError is implemented by the package's code-bearing error types
-// (EvaluationError, ExpressionTemplateError, RuleEngineError, LowerEnumsError,
-// ClosedFunctionError). It lets a caller recover the stable diagnostic code
-// from any of them uniformly — errors.As(err, &de) then de.DiagnosticCode() —
-// without switching over the concrete types. All five render Error() in the
-// shared "[code] message" form.
+// (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
+// recover the stable diagnostic code from any of them uniformly —
+// errors.As(err, &de) then de.DiagnosticCode() — without switching over the
+// concrete types. All six render Error() in the shared "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -323,6 +364,7 @@ var (
 	_ DiagnosticError = (*EvaluationError)(nil)
 	_ DiagnosticError = (*ExpressionTemplateError)(nil)
 	_ DiagnosticError = (*RuleEngineError)(nil)
-	_ DiagnosticError = (*LowerEnumsError)(nil)
+	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
+	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
 )

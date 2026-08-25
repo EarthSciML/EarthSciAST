@@ -20,8 +20,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate::SimulateError;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::SimulateError;
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -37,12 +37,12 @@ fn read_json(path: &PathBuf) -> serde_json::Value {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
 
-fn opts() -> SimulateOptions {
-    SimulateOptions {
-        solver: SolverChoice::Erk,
+fn opts() -> SolveOptions {
+    SolveOptions {
+        alg: Alg::Erk,
         reltol: 1e-12,
         abstol: 1e-14,
-        output_times: Some(vec![1.0]),
+        saveat: Some(vec![1.0]),
         ..Default::default()
     }
 }
@@ -101,8 +101,18 @@ fn override_key_outcomes_match_the_manifest() {
 
     // Non-vacuity: the fixture integrates on its own, so every rejection below
     // is about the KEY and not about the document.
-    let base = simulate(&file, (0.0, 1.0), &HashMap::new(), &HashMap::new(), &opts())
-        .expect("defaults simulate");
+    let base = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: HashMap::new().clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts()))
+    .expect("defaults simulate");
     for (name, want) in fx["defaults_at_t1"].as_object().expect("defaults_at_t1") {
         let want = want.as_f64().expect("default value");
         assert!(close(at_t1(&base, name), want), "defaults: {name}");
@@ -113,7 +123,17 @@ fn override_key_outcomes_match_the_manifest() {
         let value = case["value"].as_f64().expect("value");
         let outcome = case["outcome"].as_str().expect("outcome");
         let params = HashMap::from([(key.to_string(), value)]);
-        let got = simulate(&file, (0.0, 1.0), &params, &HashMap::new(), &opts());
+        let got = earthsci_ast::esm_problem(
+            &file,
+            (0.0, 1.0),
+            earthsci_ast::ProblemOptions {
+                p: params.clone(),
+                u0: HashMap::new().clone(),
+                compile: earthsci_ast::Compile::Always,
+                ..Default::default()
+            },
+        )
+        .and_then(|prob| earthsci_ast::solve(&prob, &opts()));
 
         match outcome {
             "resolved" => {

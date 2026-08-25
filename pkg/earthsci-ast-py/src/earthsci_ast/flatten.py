@@ -47,6 +47,14 @@ from .index_ranges import expand_range as _expand_range
 from .reactions import derive_odes
 from .substitute import has_var_placeholder, substitute
 
+#: The operator-model placeholder (esm-spec §6.4). A GLOBAL sentinel: it is
+#: never namespaced, and it is exempt from ``translate``-endpoint qualification.
+PLACEHOLDER_VAR = "_var"
+
+#: The independent TIME variable. A differential taken with respect to anything
+#: else names a spatial axis (esm-libraries-spec §4.7.6 step 2).
+TIME_VAR = "t"
+
 # ============================================================================
 # Errors (spec §4.7.5 + §4.7.6 — names mirror Rust's FlattenError enum
 # variants for cross-language error-name parity)
@@ -59,6 +67,25 @@ class FlattenError(EarthSciAstError):
 
 class ConflictingDerivativeError(FlattenError):
     """Two systems define non-additive equations for the same dependent variable."""
+
+
+class CoupleMultiplicativeNoTendencyError(FlattenError):
+    """A ``multiplicative`` connector transform targets something with no tendency.
+
+    esm-spec §10.3 and esm-libraries-spec §4.7.2 define ``multiplicative``
+    against the target's EXISTING ODE right-hand side. When ``to`` names a
+    parameter, an observed, an algebraic unknown, or an undefined name, there is
+    no ``D(to)`` to multiply and the operation has no meaning.
+
+    Silently dropping the connector equation -- what this binding did before --
+    is the one outcome a coupling mis-specification must not have: the document
+    declares a coupling and the flattened system carries no trace of it.
+
+    ``additive`` has no counterpart error because zero is the additive identity,
+    so an additive term against an absent tendency simply becomes the tendency.
+    """
+
+    code = "couple_multiplicative_no_tendency"
 
 
 class DimensionPromotionError(FlattenError):
@@ -113,7 +140,7 @@ class CyclicPromotionError(FlattenError):
 class UnsupportedDimensionalityError(FlattenError):
     """The flattened system has a dimensionality the simulator cannot handle.
 
-    Raised by simulate() when the flattened system still contains a spatial
+    Raised by esm_problem() when the flattened system still contains a spatial
     independent variable. Such a system carries an *undiscretized* spatial
     operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
     discretization rule reduced to a stencil, so it surfaces the uniform
@@ -276,7 +303,7 @@ class FlattenedSystem:
     # Data-loader variables lowered to observed arrays (RFC pure-io-data-loaders
     # §4.3). Each is an external input the simulator executes at the loader's
     # cadence and binds into the RHS as a read-only array (see LoaderField).
-    # Empty ⇒ the system has no data-loader subsystems, so simulate() behaves
+    # Empty ⇒ the system has no data-loader subsystems, so solve() behaves
     # exactly as before (no injection path).
     loader_fields: list[LoaderField] = field(default_factory=list)
     # Concrete integer grid shapes assigned by the pointwise spatial lift
@@ -655,9 +682,27 @@ def _spatial_dims_in_expr(expr: Expr) -> list[str]:
     # array layout follows.
     out: list[str] = []
     for node in walk(expr):
-        if isinstance(node, ExprNode) and node.dim:
+        if not isinstance(node, ExprNode):
+            continue
+        if node.dim:
             if node.dim not in out:
                 out.append(node.dim)
+        # `wrt` is the OTHER axis-naming scalar field, and a differential taken
+        # with respect to anything but time names a spatial axis exactly as
+        # `dim` does. §4.7.6 step 2 lists it alongside grad/div/laplacian:
+        # "`D` with `wrt != "t"`".
+        #
+        # This is not a return to op-name matching -- the docstring's argument
+        # stands, and `wrt` is a structural field test, not a name test. It was
+        # lost when the op-name list was removed, and losing it is not cosmetic:
+        # a pure 1-D vertical-diffusion model written only with `D(c)/Dz` came
+        # out with `independent_variables == ["t"]` and classified as an ODE.
+        # Found by the Rust arm, which had a spec-citing test pinning the
+        # correct behaviour and correctly refused to delete it to match a corpus.
+        wrt = getattr(node, "wrt", None)
+        if isinstance(wrt, str) and wrt and wrt != TIME_VAR:
+            if wrt not in out:
+                out.append(wrt)
     return out
 
 
@@ -671,15 +716,49 @@ def _describe_coupling(entry: CouplingEntry) -> str:
         systems = " + ".join(entry.systems)
         rule = f"operator_compose({systems})"
         if entry.translate:
+            def _tr(v: object) -> str:
+                # Same leak as the transform above, latent: an object-valued
+                # translate entry would otherwise render as a Python dict repr.
+                #
+                # The factor is coerced to float rather than interpolated as
+                # authored. This text is NORMATIVE cross-language corpus content,
+                # and interpolating the raw JSON value makes it depend on the
+                # value's JSON TYPE: a factor written `2` would render "2" while
+                # `2.0` renders "2.0", for the same number. Every other binding
+                # renders a float. No fixture in the tree authors an integer
+                # factor today, so this is a no-op on the current corpus and a
+                # landmine removed rather than a change.
+                if isinstance(v, dict):
+                    target = v.get("to") or v.get("target") or v.get("var") or "?"
+                    factor = v.get("factor")
+                    if factor is None:
+                        return f"{target}"
+                    try:
+                        factor = float(factor)
+                    except (TypeError, ValueError):
+                        pass  # a non-numeric factor is a validation error, not ours
+                    return f"{target}*{factor}"
+                return str(v)
+
             rule += (
-                " [translate: " + ", ".join(f"{k}->{v}" for k, v in entry.translate.items()) + "]"
+                " [translate: "
+                + ", ".join(f"{k}->{_tr(v)}" for k, v in entry.translate.items())
+                + "]"
             )
         return rule
     if isinstance(entry, CouplingCouple):
         systems = " <-> ".join(entry.systems)
         return f"couple({systems})"
     if isinstance(entry, VariableMapCoupling):
-        rule = f"variable_map({entry.from_var} -> {entry.to_var}, transform={entry.transform})"
+        # A §10.4 Expression transform is an ExprNode, and interpolating it here
+        # emits the DATACLASS REPR -- ~900 characters naming forty None-valued
+        # optional fields of a Python implementation detail. That string then got
+        # pinned in the shared corpus as normative cross-language text, which no
+        # other binding can reproduce and which changes whenever the dataclass
+        # gains a field. Julia, TypeScript and Go all render the word
+        # `expression` here; match them.
+        transform = entry.transform if isinstance(entry.transform, str) else "expression"
+        rule = f"variable_map({entry.from_var} -> {entry.to_var}, transform={transform})"
         if entry.factor is not None:
             rule += f" [factor={entry.factor}]"
         return rule
@@ -944,7 +1023,7 @@ def _collect_model(
             component.observed[namespaced] = flat_var
 
     # _var is a placeholder used by operator_compose; never namespace it.
-    leave_alone = {"t", "_var"}
+    leave_alone = {"t", PLACEHOLDER_VAR}
     # Subsystem keys mounted on this model (nested models): references rooted at
     # one of these are subsystem-LOCAL and must be qualified with the model
     # prefix to match the lowered subsystem name (see _namespace_expr).
@@ -1004,7 +1083,7 @@ def _collect_reaction_system(
     if has_reactions:
         derived = derive_odes(rs)
 
-    leave_alone = {"t", "_var"}
+    leave_alone = {"t", PLACEHOLDER_VAR}
 
     for species in rs.species:
         namespaced = f"{full_prefix}.{species.name}"
@@ -1070,23 +1149,67 @@ def _collect_reaction_system(
 # ============================================================================
 
 
-def _build_translate_map(entry: OperatorComposeCoupling) -> dict[str, tuple[str, float]]:
-    """Normalize the operator_compose ``translate`` dict.
+def _qualify_translate_endpoint(name: str, system: str) -> str:
+    """Put one ``translate`` endpoint into the namespaced form the matcher uses.
 
-    Each entry maps a scoped reference in system A to a scoped reference in
-    system B (or vice versa), optionally with a conversion factor.
+    ``translate`` endpoints are authored in either form -- bare (``"O3"``) or
+    fully namespaced (``"ChemistrySystem.O3"``) -- but matching runs against the
+    NAMESPACED dependent variable of a flattened equation. An endpoint left bare
+    can therefore never match, which is why a correctly spelled bare map was a
+    silent no-op: the lookup missed, and the bare-name fallback then searched A
+    for the wrong short name (B's spelling, not A's) and missed too.
+
+    A bare endpoint is qualified with the system it belongs to, per §10.2's
+    direction rule: a KEY belongs to ``systems[0]``, a VALUE to ``systems[1]``.
+    An endpoint that already carries a dot is left ALONE -- it is either already
+    namespaced or names a subsystem path, and re-prefixing it would break it.
+
+    ``_var`` is exempt in both forms. It is a GLOBAL sentinel (esm-spec §6.4),
+    never namespaced; a value of ``"B._var"`` is the redundant spelling §10.2
+    requires to stay harmless, and it stays harmless here because placeholder
+    expansion has already turned that equation into a DIRECT match, which takes
+    precedence over this map.
+    """
+    if not name or name == PLACEHOLDER_VAR or name.endswith("." + PLACEHOLDER_VAR):
+        return name
+    if "." in name or not system:
+        return name
+    return f"{system}.{name}"
+
+
+def _build_translate_map(
+    entry: OperatorComposeCoupling,
+) -> dict[str, tuple[str, float]]:
+    """Normalize the operator_compose ``translate`` dict, INVERTED for matching.
+
+    The authored direction is normative and is not symmetric (esm-spec §10.2,
+    esm-libraries-spec §4.7.1 step 2): for ``"systems": [A, B]`` every KEY names
+    a variable of ``A`` and every VALUE names a variable of ``B``.
+
+    The matching loop in :func:`_apply_operator_compose` walks *B's* equations,
+    so it needs the map the other way round. This returns the INVERSE:
+    ``{b_name: (a_name, factor)}``. Indexing the authored (A-keyed) map by B's
+    dependent variable is the bug this function exists to prevent -- it makes a
+    correctly spelled ``translate`` map match nothing at all.
+
+    Both endpoints are put into namespaced form first; see
+    :func:`_qualify_translate_endpoint`.
     """
     out: dict[str, tuple[str, float]] = {}
     if not entry.translate:
         return out
-    for k, v in entry.translate.items():
+    systems = list(entry.systems or [])
+    a_sys = systems[0] if len(systems) > 0 else ""
+    b_sys = systems[1] if len(systems) > 1 else ""
+    for a_name, v in entry.translate.items():
+        a_q = _qualify_translate_endpoint(a_name, a_sys)
         if isinstance(v, dict):
-            target = v.get("to") or v.get("target") or v.get("var")
+            b_name = v.get("to") or v.get("target") or v.get("var")
             factor = float(v.get("factor", 1.0))
-            if target:
-                out[k] = (target, factor)
+            if b_name:
+                out[_qualify_translate_endpoint(b_name, b_sys)] = (a_q, factor)
         elif isinstance(v, str):
-            out[k] = (v, 1.0)
+            out[_qualify_translate_endpoint(v, b_sys)] = (a_q, 1.0)
     return out
 
 
@@ -1118,6 +1241,8 @@ def _apply_operator_compose(
             a_index[dep] = i
 
     surviving_b: list[FlattenedEquation] = []
+    # b_dep -> target_dep for every match that RENAMED the dependent variable.
+    merged_away: dict[str, str] = {}
 
     for b_eq in b.equations:
         b_dep = _lhs_dependent_var(b_eq.lhs)
@@ -1125,12 +1250,21 @@ def _apply_operator_compose(
             surviving_b.append(b_eq)
             continue
 
-        # Determine the A target for this dependent variable.
+        # Determine the A target for this dependent variable. Spec §4.7.1 step 3
+        # lists the match kinds in precedence order: DIRECT first, then
+        # TRANSLATION, then the bare-name fallback. Direct-first is load-bearing,
+        # not cosmetic: placeholder expansion has already rewritten `_var` to A's
+        # own variable name, so an expanded equation IS a direct match. Consulting
+        # `translate` first would let a map keyed by A's names hit spuriously on
+        # that rewritten name and redirect the match to a target that does not
+        # exist -- turning a working composition into an over-determination error
+        # (the `translate: {"A.x": "B._var"}` redundancy invariant, §10.2).
         target_dep = b_dep
         factor = 1.0
-        if b_dep in translate:
-            t, factor = translate[b_dep]
-            target_dep = t
+        if b_dep in a_index:
+            pass  # direct match; `target_dep` is already right
+        elif b_dep in translate:
+            target_dep, factor = translate[b_dep]
         else:
             # Try mapping bare names from B back to A's equivalent.
             short = b_dep.split(".", 1)[1] if "." in b_dep else b_dep
@@ -1151,10 +1285,49 @@ def _apply_operator_compose(
                 rhs=new_rhs,
                 source_system=a_eq.source_system,
             )
+            if target_dep != b_dep:
+                merged_away[b_dep] = target_dep
         else:
             surviving_b.append(b_eq)
 
     b.equations = surviving_b
+
+    # A renaming match CONSUMES B's defining equation, so B's declaration of that
+    # name is left with nothing to constrain it -- an algebraic unknown with no
+    # equation, which is exactly the structurally singular system step 4 exists
+    # to prevent. §10.2 says the pair names ONE quantity, so the name does not
+    # survive the merge: every remaining reference to it is retargeted at A's
+    # spelling and the stranded declaration is dropped.
+    #
+    # The retarget is document-wide, not B-local: a third system is free to
+    # reference `B.x` by its scoped name, and pruning the declaration while
+    # leaving that reference dangling would trade one broken system for another.
+    if merged_away:
+        _retarget_merged_names(components, merged_away)
+        for gone in merged_away:
+            b.state_vars.pop(gone, None)
+            b.observed.pop(gone, None)
+
+
+def _retarget_merged_names(
+    components: OrderedDict[str, _ComponentSystem],
+    renames: dict[str, str],
+) -> None:
+    """Rewrite every reference to a merged-away dependent variable, everywhere.
+
+    Applied after an ``operator_compose`` translation match folds ``B.x`` into
+    ``A.y``: the two spellings named one quantity, only ``A.y`` still exists, so
+    every equation side in the whole document is rewritten off the dead name.
+    An observed variable's defining expression is one of those equations (it is
+    not carried on :class:`FlattenedVariable`), so this covers it too.
+    """
+    for comp in components.values():
+        for i, eq in enumerate(comp.equations):
+            comp.equations[i] = FlattenedEquation(
+                lhs=substitute(eq.lhs, renames),
+                rhs=substitute(eq.rhs, renames),
+                source_system=eq.source_system,
+            )
 
 
 def _add_exprs(left: Expr, right: Expr) -> Expr:
@@ -1198,10 +1371,27 @@ def _apply_couple(
             if dep is not None:
                 eq_index[dep] = (sys_name, i)
 
+    # Which targets carry a TENDENCY (`D(x)`), as opposed to merely some defining
+    # equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2).
+    tendencies: set[str] = set()
+    for comp in components.values():
+        for eq in comp.equations:
+            if isinstance(eq.lhs, ExprNode) and eq.lhs.op == "D":
+                dep = _lhs_dependent_var(eq.lhs)
+                if dep is not None:
+                    tendencies.add(dep)
+
     for ceq in entry.connector.equations:
         target = ceq.to_var
         if not target:
             continue
+        if ceq.transform == "multiplicative" and target not in tendencies:
+            raise CoupleMultiplicativeNoTendencyError(
+                f"couple connector 'multiplicative' transform targets {target!r}, "
+                f"which has no tendency (D({target})) to multiply (esm-spec §10.3). "
+                f"To scale a constant parameter by a factor, use a variable_map "
+                f"entry with an Expression transform (esm-spec §10.4) instead."
+            )
         if target not in eq_index:
             continue
         sys_name, i = eq_index[target]
@@ -1668,7 +1858,7 @@ def _apply_domain(esm_file: EsmFile, flat: FlattenedSystem) -> None:
     """Pass the file's ``domain`` section through unchanged.
 
     The Python tier does not currently apply dimension-promotion rules from
-    §4.7.6 — only the spatial-rejection check in simulate() distinguishes
+    §4.7.6 — only the spatial-rejection check in esm_problem() distinguishes
     discretized systems (time-only) from an undiscretized spatial operator that
     survived into the flattened system.
     """
@@ -2488,7 +2678,7 @@ def infer_variable_shapes(flat: FlattenedSystem) -> dict[str, tuple[int, ...]]:
             # 1-based: length = max index (under the convention that index 1
             # is the first slot). Offset indices like u[i-1] where i starts at
             # 2 still max out at the highest element. An index below 1 is out of
-            # range under this convention — the max is kept as-is and simulate()
+            # range under this convention — the max is kept as-is and solve()
             # errors later if the variable is ever flat-indexed.
             length = max(per_dim_max[d], 1)
             shape.append(length)

@@ -69,6 +69,32 @@ type ConflictingDerivativeError struct{ Message string }
 
 func (e *ConflictingDerivativeError) Error() string { return e.Message }
 
+// CoupleMultiplicativeNoTendencyError reports that a `couple` connector equation
+// applies the `multiplicative` transform to a target with no `D(to)` equation in
+// the flattened system (esm-spec §10.3, esm-libraries-spec §4.7.2).
+//
+// Both sections define `multiplicative` against the target's EXISTING ODE
+// right-hand side. When `to` names a parameter, an observed, an algebraic
+// unknown, or a name nothing defines, there is no tendency to multiply and the
+// operation has no meaning — so the entry is rejected rather than dropped.
+//
+// `additive` has no counterpart error: zero is the additive identity, so an
+// additive term against an absent tendency simply becomes the tendency.
+type CoupleMultiplicativeNoTendencyError struct {
+	// Target is the connector equation's `to` scoped reference.
+	Target  string
+	Message string
+}
+
+func (e *CoupleMultiplicativeNoTendencyError) Error() string {
+	return fmt.Sprintf("[%s] %s", CodeCoupleMultiplicativeNoTendency, e.Message)
+}
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *CoupleMultiplicativeNoTendencyError) DiagnosticCode() string {
+	return CodeCoupleMultiplicativeNoTendency
+}
+
 // DimensionPromotionError reports that a variable or equation cannot be
 // promoted onto the target grid (esm-libraries-spec §4.7.6): here, that the
 // pointwise spatial lift (esm-spec §10.5) could not read the spatial loop
@@ -194,7 +220,7 @@ type LiftedShape struct {
 // LHS/RHS were strings rendered by a flatten-local pretty printer, which made
 // every downstream pass re-parse text and made Go's equation rendering
 // disagree with the shared display corpus. They are trees now; render them with
-// ToAscii / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
+// ToASCII / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
 type FlattenedEquation struct {
 	LHS          Expression
 	RHS          Expression
@@ -203,11 +229,11 @@ type FlattenedEquation struct {
 
 // LHSString renders the equation's left-hand side with the shared ASCII
 // renderer (the one tests/display and tests/conformance/flatten pin).
-func (e FlattenedEquation) LHSString() string { return ToAscii(e.LHS) }
+func (e FlattenedEquation) LHSString() string { return ToASCII(e.LHS) }
 
 // RHSString renders the equation's right-hand side with the shared ASCII
 // renderer.
-func (e FlattenedEquation) RHSString() string { return ToAscii(e.RHS) }
+func (e FlattenedEquation) RHSString() string { return ToASCII(e.RHS) }
 
 // FlattenMetadata records provenance information about the flattening operation.
 type FlattenMetadata struct {
@@ -362,7 +388,7 @@ func (f *FlattenedSystem) SystemKind() string {
 		return SystemKindODE
 	}
 	model := f.classificationView()
-	return SystemKind(&model, f.Domain)
+	return SystemKind(&model)
 }
 
 // numericDefault coerces a declared `default` to a float64 initial value, or
@@ -749,22 +775,6 @@ var arrayOps = map[string]struct{}{
 	"intersect_polygon": {}, "polygon_intersection_area": {},
 }
 
-// spatialDimsInExpr returns the spatial dimension labels named by an
-// UNDISCRETIZED spatial differential in expr.
-//
-// Harvested STRUCTURALLY from every node's `dim` axis field (esm-spec §4.9.1),
-// NOT from a list of op names: the open-tier sugar ops grad/div/laplacian/curl
-// carry no spatial-detection privilege, and only an undiscretized differential
-// node carries a `dim`. A discretized system has folded its spatial axes into
-// array dimensions and yields the empty set, staying a pure ODE.
-func spatialDimsInExpr(expr Expression, out map[string]bool) {
-	walkExprNodes(expr, func(n ExprNode) {
-		if n.Dim != nil && *n.Dim != "" {
-			out[*n.Dim] = true
-		}
-	})
-}
-
 // addExprs sums two expressions, normalizing the trivial zero cases.
 func addExprs(left, right Expression) Expression {
 	if isNumericZero(left) {
@@ -835,7 +845,7 @@ func describeCoupling(entry CouplingEntry, file *ESMFile, index int) string {
 		if len(c.Translate) > 0 {
 			parts := make([]string, 0, len(c.Translate))
 			for _, k := range orderedKeys(c.Translate, file.declarationOrder(fmt.Sprintf("/coupling/%d/translate", index))) {
-				parts = append(parts, fmt.Sprintf("%s->%v", k, c.Translate[k]))
+				parts = append(parts, fmt.Sprintf("%s->%s", k, describeTranslateTarget(c.Translate[k])))
 			}
 			rule += " [translate: " + strings.Join(parts, ", ") + "]"
 		}
@@ -859,6 +869,31 @@ func describeCoupling(entry CouplingEntry, file *ESMFile, index int) string {
 	default:
 		return fmt.Sprintf("unknown(%T)", entry)
 	}
+}
+
+// describeTranslateTarget renders one `translate` VALUE for the metadata line.
+// An object-valued entry renders as `target` or `target*factor`; a string-valued
+// one renders as itself. Without this an object entry leaked its decoded
+// representation (Go's `map[factor:1 var:ozone_conc]`, Python's dict repr) into
+// what is a cross-binding surface. The AUTHORED spellings are rendered, not the
+// namespace-qualified ones the matcher uses: this line reports the document.
+func describeTranslateTarget(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	target := "?"
+	for _, key := range []string{"to", "target", "var"} {
+		if s, ok := m[key].(string); ok && s != "" {
+			target = s
+			break
+		}
+	}
+	f, ok := exprNumber(m["factor"])
+	if !ok {
+		return target
+	}
+	return target + "*" + formatFactor(f)
 }
 
 // formatFactor renders a coupling `factor` for the metadata line. An
@@ -1257,24 +1292,43 @@ func inlinedUnknownSet(model *Model) map[string]bool {
 // Coupling resolution
 // ============================================================================
 
-// translateEntry is one normalized `operator_compose` translate rule: a target
-// scoped reference plus an optional conversion factor.
+// translateEntry is one normalized `operator_compose` translate rule: the
+// system-A variable a system-B variable translates TO, plus an optional
+// conversion factor.
 type translateEntry struct {
 	target string
 	factor float64
 }
 
+// buildTranslateMap normalizes the `operator_compose` translate map, INVERTED
+// for matching.
+//
+// The authored direction is normative and is not symmetric (esm-spec §10.2,
+// esm-libraries-spec §4.7.1 step 2): for `"systems": [A, B]` every KEY names a
+// variable of A (`systems[0]`) and every VALUE names a variable of B
+// (`systems[1]`).
+//
+// applyOperatorCompose walks B's equations, so it needs the map the other way
+// round; this returns the INVERSE, `{b_name: (a_name, factor)}`. Indexing the
+// authored (A-keyed) map by B's dependent variable — what this binding did
+// before — is the bug this function exists to prevent: a correctly spelled
+// `translate` map then matches nothing at all and the whole entry is a silent
+// no-op.
 func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry {
 	out := map[string]translateEntry{}
-	for k, v := range entry.Translate {
+	aSys, bSys := entry.Systems[0], entry.Systems[1]
+	for aName, v := range entry.Translate {
+		aQ := qualifyTranslateEndpoint(aName, aSys)
 		switch t := v.(type) {
 		case string:
-			out[k] = translateEntry{target: t, factor: 1.0}
+			if t != "" {
+				out[qualifyTranslateEndpoint(t, bSys)] = translateEntry{target: aQ, factor: 1.0}
+			}
 		case map[string]any:
-			target := ""
+			bName := ""
 			for _, key := range []string{"to", "target", "var"} {
 				if s, ok := t[key].(string); ok && s != "" {
-					target = s
+					bName = s
 					break
 				}
 			}
@@ -1282,12 +1336,42 @@ func buildTranslateMap(entry OperatorComposeCoupling) map[string]translateEntry 
 			if f, ok := exprNumber(t["factor"]); ok {
 				factor = f
 			}
-			if target != "" {
-				out[k] = translateEntry{target: target, factor: factor}
+			if bName != "" {
+				out[qualifyTranslateEndpoint(bName, bSys)] = translateEntry{target: aQ, factor: factor}
 			}
 		}
 	}
 	return out
+}
+
+// qualifyTranslateEndpoint puts one `translate` endpoint into the NAMESPACED
+// form the matcher uses (esm-spec §10.2, esm-libraries-spec §4.7.1 step 2).
+//
+// An endpoint may be authored either bare ("O3") or fully scoped
+// ("ChemistrySystem.O3"), but matching runs against the namespaced dependent
+// variable of a flattened equation, so a bare endpoint left as written can
+// never match. That was the second half of the direction defect and it fails
+// the same silent way: the lookup misses, the bare-name fallback then searches
+// A for B's short name and misses too, and the whole entry no-ops.
+//
+// A bare endpoint is qualified with the system it belongs to under the
+// direction rule — a KEY against systems[0], a VALUE against systems[1]. An
+// endpoint that already carries a dot is left ALONE: it is either already
+// namespaced or names a subsystem path, and re-prefixing it would break it.
+//
+// `_var` is exempt in either position. It is a GLOBAL sentinel (esm-spec §6.4),
+// never namespaced; a value of "B._var" is the redundant spelling §10.2
+// requires to stay harmless, and it stays harmless here because placeholder
+// expansion has already turned that equation into a DIRECT match, which takes
+// precedence over this map.
+func qualifyTranslateEndpoint(name, system string) string {
+	if name == "" || name == operatorPlaceholderVar || strings.HasSuffix(name, "."+operatorPlaceholderVar) {
+		return name
+	}
+	if system == "" || strings.Contains(name, ".") {
+		return name
+	}
+	return system + "." + name
 }
 
 // expandOperatorComposePlaceholders expands `_var` placeholders in B's equations
@@ -1346,17 +1430,34 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	}
 
 	var surviving []FlattenedEquation
+	// bDep -> targetDep for every match that RENAMED the dependent variable.
+	mergedAway := map[string]string{}
+	var mergedAwayOrder []string
 	for _, bEq := range b.equations {
 		bDep := lhsDependentVar(bEq.LHS)
 		if bDep == "" {
 			surviving = append(surviving, bEq)
 			continue
 		}
+		// esm-libraries-spec §4.7.1 step 3 lists the match kinds in precedence
+		// order: DIRECT first, then TRANSLATION, then the bare-name fallback.
+		// Direct-first is load-bearing, not cosmetic: placeholder expansion has
+		// already rewritten `_var` to A's own variable name, so an expanded
+		// equation IS a direct match. Consulting `translate` first would let a
+		// map keyed by A's names hit spuriously on that rewritten name and
+		// redirect the match to a target that does not exist — turning a working
+		// composition into an over-determination error (the
+		// `translate: {"A.x": "B._var"}` redundancy invariant, esm-spec §10.2).
 		targetDep := bDep
 		factor := 1.0
-		if t, ok := translate[bDep]; ok {
+		_, direct := aIndex[bDep]
+		t, hasTranslation := translate[bDep]
+		switch {
+		case direct:
+			// Direct match; `targetDep` is already right.
+		case hasTranslation:
 			targetDep, factor = t.target, t.factor
-		} else {
+		default:
 			// Map a bare name from B back to A's equivalent.
 			short := bDep
 			if _, rest, found := strings.Cut(bDep, "."); found {
@@ -1375,6 +1476,16 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			continue
 		}
 		aEq := a.equations[i]
+		// §4.7.1 step 4: on a TRANSLATION match, B's dependent variable is
+		// rewritten to A's target throughout `rhs_B` before summing — a
+		// `translate` pair names two spellings of the SAME quantity (§10.2), and
+		// leaving `rhs_B` in B's spelling strands that variable as an unknown
+		// nothing defines, since its own defining equation was just consumed by
+		// this merge. The same argument applies to the bare-name fallback above.
+		// On a DIRECT match, and on a PLACEHOLDER match (where expansion already
+		// substituted), the two names are equal and this rewrite is the identity.
+		// Only the dependent variable is rewritten; B's parameters and observeds
+		// keep their names.
 		rhs := substituteExpr(bEq.RHS, map[string]Expression{bDep: targetDep})
 		if factor != 1.0 {
 			rhs = ExprNode{Op: "*", Args: []any{factor, rhs}}
@@ -1384,27 +1495,90 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			RHS:          addExprs(aEq.RHS, rhs),
 			SourceSystem: aEq.SourceSystem,
 		}
+		if targetDep != bDep {
+			if _, seen := mergedAway[bDep]; !seen {
+				mergedAwayOrder = append(mergedAwayOrder, bDep)
+			}
+			mergedAway[bDep] = targetDep
+		}
 	}
 	b.equations = surviving
+
+	// §4.7.1 step 4, "the merged-away name does not survive": a RENAMING match
+	// (a translation match, or the bare-name fallback, which is a name-based
+	// translation) has just consumed B's defining equation, so B's declaration
+	// of that name is left constraining nothing — an unknown with no equation,
+	// which classifies as ALGEBRAIC (§6.3.1) and makes the flattened system
+	// structurally singular. §10.2 says the pair names ONE quantity, so only A's
+	// spelling survives: every remaining reference is retargeted at it and the
+	// stranded declaration is dropped.
+	//
+	// The retarget runs FIRST and is DOCUMENT-WIDE, not B-local: a third system
+	// may reference `B.x` by its scoped name, and pruning the declaration while
+	// leaving that reference dangling would trade one broken system for another.
+	if len(mergedAway) > 0 {
+		retargetMergedNames(components, mergedAway)
+		for _, gone := range mergedAwayOrder {
+			b.stateVars.remove(gone)
+			b.observed.remove(gone)
+		}
+	}
+}
+
+// retargetMergedNames rewrites every reference to a merged-away dependent
+// variable, everywhere in the document.
+//
+// Applied after an `operator_compose` renaming match folds `B.x` into `A.y`:
+// the two spellings named one quantity, only `A.y` still exists, so every
+// equation side in every component is rewritten off the dead name. An observed
+// variable's defining expression is one of those equations (it is not carried
+// on FlattenedVariable), so this covers it too.
+func retargetMergedNames(components map[string]*componentSystem, renames map[string]string) {
+	bindings := make(map[string]Expression, len(renames))
+	for from, to := range renames {
+		bindings[from] = to
+	}
+	for _, comp := range components {
+		for i, eq := range comp.equations {
+			comp.equations[i] = FlattenedEquation{
+				LHS:          substituteExpr(eq.LHS, bindings),
+				RHS:          substituteExpr(eq.RHS, bindings),
+				SourceSystem: eq.SourceSystem,
+			}
+		}
+	}
 }
 
 // applyCouple resolves a `couple` connector by injecting source/sink terms: each
 // connector equation appends its expression to (or multiplies it with, or
 // replaces) the target variable's equation.
-func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple) {
+//
+// It fails with *CoupleMultiplicativeNoTendencyError when a `multiplicative`
+// equation targets something with no `D(to)` tendency to multiply (esm-spec
+// §10.3, esm-libraries-spec §4.7.2).
+func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple) error {
 	if len(entry.Connector.Equations) == 0 {
-		return
+		return nil
 	}
 	type eqRef struct {
 		system string
 		index  int
 	}
 	eqIndex := map[string]eqRef{}
+	// Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME
+	// defining equation: `multiplicative` is defined against an ODE right-hand
+	// side, not against an algebraic or observed definition (§10.3, §4.7.2).
+	tendencies := map[string]bool{}
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
-			if dep := lhsDependentVar(eq.LHS); dep != "" {
-				eqIndex[dep] = eqRef{system: sysName, index: i}
+			dep := lhsDependentVar(eq.LHS)
+			if dep == "" {
+				continue
+			}
+			eqIndex[dep] = eqRef{system: sysName, index: i}
+			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpDerivative {
+				tendencies[dep] = true
 			}
 		}
 	}
@@ -1412,6 +1586,16 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 	for _, ceq := range entry.Connector.Equations {
 		if ceq.To == "" {
 			continue
+		}
+		if ceq.Transform == "multiplicative" && !tendencies[ceq.To] {
+			return &CoupleMultiplicativeNoTendencyError{
+				Target: ceq.To,
+				Message: fmt.Sprintf(
+					"couple connector 'multiplicative' transform targets %q, which has no "+
+						"tendency (D(%s)) to multiply (esm-spec §10.3). To scale a constant "+
+						"parameter by a factor, use a variable_map entry with an Expression "+
+						"transform (esm-spec §10.4) instead.", ceq.To, ceq.To),
+			}
 		}
 		ref, ok := eqIndex[ceq.To]
 		if !ok {
@@ -1438,6 +1622,7 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 			SourceSystem: existing.SourceSystem,
 		}
 	}
+	return nil
 }
 
 // applyVariableMap substitutes the target parameter with the source variable.
@@ -1788,7 +1973,9 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		applyOperatorCompose(components, oc)
 	}
 	for _, cp := range couples {
-		applyCouple(components, order, cp)
+		if err := applyCouple(components, order, cp); err != nil {
+			return err
+		}
 	}
 	loaderNames := map[string]bool{}
 	for k := range file.DataSources {
@@ -1838,7 +2025,7 @@ func assembleSystem(file *ESMFile, components map[string]*componentSystem, order
 		isArrayEq := exprHasArrayOp(eq.LHS) || exprHasArrayOp(eq.RHS)
 		if dep != "" && !isArrayEq {
 			if existing, ok := seen[dep]; ok {
-				if ToAscii(existing.RHS) == ToAscii(eq.RHS) {
+				if ToASCII(existing.RHS) == ToASCII(eq.RHS) {
 					continue
 				}
 				// A single source system that authored two equations with the
@@ -1949,13 +2136,27 @@ func namespaceAffects(affects []AffectEquation, bare map[string]Expression) []Af
 func deriveIndependentVars(flat *FlattenedSystem) {
 	seen := map[string]bool{}
 	names := make([]string, 0, 4)
+	add := func(axis string) {
+		if axis == "" || seen[axis] {
+			return
+		}
+		seen[axis] = true
+		names = append(names, axis)
+	}
 	appendDims := func(expr Expression) {
 		walkExprNodes(expr, func(n ExprNode) {
-			if n.Dim == nil || *n.Dim == "" || seen[*n.Dim] {
-				return
+			if n.Dim != nil {
+				add(*n.Dim)
 			}
-			seen[*n.Dim] = true
-			names = append(names, *n.Dim)
+			// `wrt` is the other axis-naming scalar field, and a differential
+			// taken with respect to anything but time names a spatial axis
+			// exactly as `dim` does -- §4.7.6 step 2 lists it alongside
+			// grad/div/laplacian as "`D` with `wrt != \"t\"`". Scanning `dim`
+			// alone made `D(u,t) = k * D(u,x)`, the heat equation, come out as
+			// a pure ODE.
+			if n.Wrt != nil && *n.Wrt != DefaultIndepVar {
+				add(*n.Wrt)
+			}
 		})
 	}
 	for _, eq := range flat.Equations {

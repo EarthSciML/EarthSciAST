@@ -41,7 +41,7 @@
 //!   shifted-slice `index` gathers, broadcast kernels, einsum folds.
 //! * [`rhs`] — per-call RHS evaluation: the zero-allocation scratch/buffer
 //!   pool (ess-mro), observed-rule materialization, and the rule driver.
-//! * [`driver`] — diffsol solver plumbing (`simulate`/`simulate_inspect`,
+//! * [`driver`] — diffsol solver plumbing (`solve`/`solve_inspect`,
 //!   `debug_*` entry points) and the external refreshable forcing channel
 //!   (PR-1, ess-14f.7) exposed via `forcing_handle`.
 //! * [`layout`] — column-major flat↔multi index/array conversion helpers.
@@ -54,7 +54,7 @@
 // This runtime is compiled for wasm too (EarthSciAST-akz): it reaches
 // s2geometry only through the already-wasm-safe `crate::geometry` API (planar
 // clips work; spherical/geodesic returns a runtime `GeometryError` stub on
-// wasm), and its solver is the same diffsol/Faer path the scalar `simulate`
+// wasm), and its solver is the same diffsol/Faer path the scalar solver
 // export already runs client-side — so no native-only dependency remains, and
 // planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
 #![allow(
@@ -364,7 +364,7 @@ enum AlgebraicRule {
 
 /// Build/run observability record — the Rust mirror of the Julia binding's
 /// `BuildInspection` (`build_evaluator(…; inspect=BuildInspection())`). Pass
-/// one to [`crate::simulate::simulate_with_inspection`] (or
+/// one to a EsmProblem built with [`crate::problem::ProblemOptions::inspect`] (or
 /// [`ArrayCompiled::simulate_inspect`]) and the run fills it with named
 /// build-time products that are otherwise internal to the runtime:
 ///

@@ -11,7 +11,7 @@ Deep ModelingToolkit/Catalyst integration is provided by package extensions
 (`EarthSciASTMTKExt`, `EarthSciASTCatalystExt`) that load
 automatically when the user imports `ModelingToolkit` or `Catalyst`. Without
 those packages loaded, `flatten` still produces a pure-Julia `FlattenedSystem`
-snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `simulate`)
+snapshot, and the MTK-free tree-walk runtime (`build_evaluator`, `esm_problem`)
 runs it end to end.
 
 Two features live in namespaced submodules rather than the flat namespace:
@@ -116,7 +116,7 @@ include("area_faq.jl")
 # dependency-free brute-force reference + the generic seam whose fast STRtree
 # method lives in EarthSciASTGeometryOpsExt.
 include("broad_phase.jl")
-# MTK-free runtime (tree-walk evaluator, refresh, simulate, cadence)
+# MTK-free runtime (tree-walk evaluator, refresh, the run Problem, cadence)
 include("tree_walk.jl")
 include("unit_conversion.jl")
 include("data_refresh.jl")
@@ -166,13 +166,24 @@ export
     # Derived classification (esm-spec §6.3.1) — the ONLY sanctioned way to ask
     # which unknowns are ODE states / observed / algebraic and which parameters
     # are Brownian / discrete / sampled / constant.
-    unknown_names, parameter_names,
+    # `unknowns` / `parameters` are the canonical cross-binding names
+    # (API_SPEC.md §8 item 6); `unknown_names` / `parameter_names` stay
+    # exported alongside them — not for one minor but indefinitely — because
+    # the bare names collide in Julia's flat namespace (`ModelingToolkit`
+    # exports both), so a consumer needs an unambiguous spelling.
+    unknowns, parameters, unknown_names, parameter_names,
     ode_states, is_ode_state, observed_unknowns, algebraic_unknowns,
     solver_unknowns,
     observed_definitions, observed_definition,
     brownian_parameters, discrete_parameters, sampled_parameters,
     constant_parameters,
-    system_kind, declared_system_kind_mismatch,
+    # The `system_kind` family (API_SPEC.md §8 item 11) is three distinct
+    # questions: `system_kind` DERIVES the kind from the equations and
+    # parameters, `declared_system_kind` reads the explicit field (`nothing`
+    # when absent), and `effective_system_kind` is `declared ?? derived` — the
+    # question a caller choosing a solver asks. The Julia-only
+    # `declared_system_kind_mismatch` was deleted in favour of the pair.
+    system_kind, declared_system_kind, effective_system_kind,
     has_spatial_derivative, has_time_derivative,
     assert_classification_partitions,
     # Event types
@@ -224,7 +235,12 @@ export
     # Coupling serialization functions
     serialize_coupling_entry, coerce_coupling_entry,
     # Structural validation
+    # `validate` takes a TYPED document in every binding (API_SPEC.md §8
+    # item 13); the path and text conveniences are `validate_path` and
+    # `validate_text`, which additionally render a load-time rejection as the
+    # structural finding the corpus pins.
     StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
+    validate_path, validate_text,
     validate_reaction_rate_units,
     # Expression operations. Expression containment extends `Base.contains`
     # (always in scope for consumers), so `contains` is not re-exported.
@@ -237,9 +253,11 @@ export
     # Graph analysis (Section 4.8)
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
-    to_dot, to_mermaid,
-    # `to_json` carries BOTH the graph method (graph.jl) and the document
-    # serializer (serialize.jl); they dispatch on their argument type.
+    # The canonical graph-rendering trio (API_SPEC.md §8 item 8).
+    to_dot, to_mermaid, to_json_graph,
+    # `to_json` is the DOCUMENT serializer (§8 item 2). Its `Graph` methods are
+    # a deprecated alias of `to_json_graph`, kept one minor per §10; they
+    # dispatch on the argument type and render byte-identical output.
     to_json,
     # Chemical subscript rendering
     render_chemical_formula, format_node_label,
@@ -300,7 +318,7 @@ export
     # The parameter PARTITION (differentiability plan §3 Phase 5): which
     # parameters are `:numeric` (in the runtime `p` — differentiable, and
     # overridable at solve time), which are `:structural` (read at build time,
-    # so changing one is a re-`prepare`), and which never reach `p` at all
+    # so changing one is a rebuild), and which never reach `p` at all
     # (`:const_folded` / `:forcing`). `remake_parameters` is the `p`-swap that
     # applies the numeric half — the SciML `remake` shape, deliberately NOT a
     # rebuild.
@@ -349,12 +367,15 @@ export
     # Trace-time `(tensor, window)` read-interning counters (ess-oop-intern):
     # the engagement witness for the out-of-place emitter's traced read memo.
     oop_intern_stats, oop_intern_stats_reset!,
-    # One-call run entry (load → discretize → build_evaluator → seed → refresh →
-    # solve); the solve lives in the SciMLBase extension (JL-J3, Phase 5).
-    # `prepare` runs the deterministic-per-document pipeline ONCE into a cached
-    # `PreparedModel`; `simulate(prep, tspan; …)` skips prep/build entirely.
-    simulate, SimulationResult, SimulateError, seed_expression_ic!, final_state,
-    prepare, PreparedModel, observed_field,
+    # The simulation Problem (esm-libraries-spec §2.5, API_SPEC §5.8): ONE noun
+    # and ONE verb. `esm_problem` absorbs the whole deterministic-per-document
+    # pipeline (load → discretize → build_evaluator → seed → callbacks); the
+    # verb is SciML's own `solve`, specialized on `EsmProblem` in the SciMLBase
+    # extension — which is also where `init` / `step!` / `solve!` / `remake` /
+    # `EnsembleProblem` come from, so EarthSciAST exports none of those names
+    # and cannot collide with the solver package that defines them.
+    esm_problem, EsmProblem, callbacks, SimulateError, seed_expression_ic!,
+    final_state, observed_field,
     # Inline-test runner (esm-ol5qa; spec §6.6)
     AssertionStatus, AssertionResult, PASS, FAIL, ERROR, SKIP,
     esm_root, esm_path,
@@ -364,7 +385,11 @@ export
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, evaluate_closed_function_ad,
     closed_function_names, ClosedFunctionError,
-    lower_enums!,
+    # `lower_enums` is the PURE form at the canonical name (API_SPEC.md §8
+    # item 15); `lower_enums!` is the in-place twin under Julia's `!`
+    # convention (§2.2). Both raise `EnumLoweringError`, as every other
+    # binding does — this used to raise `ParseError`.
+    lower_enums, lower_enums!, EnumLoweringError,
     # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,
     ExpressionTemplateError,

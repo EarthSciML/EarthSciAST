@@ -18,7 +18,7 @@ Kept a `weakdep` extension (mirroring `SimulateExt` / `DataRefreshExt`) so
 the base package carries no MTK dependency; without it loaded, the core
 stubs in src/mtk_export.jl throw an `ArgumentError` naming what to load,
 and the MTK-free path (`flatten` → `FlattenedSystem`, `build_evaluator`,
-`simulate`) remains fully available.
+`esm_problem`) remains fully available.
 """
 module EarthSciASTMTKExt
 

@@ -7,9 +7,10 @@
 //! `gt-v8v` acceptance criteria — those cases raise
 //! `FlattenError::UnsupportedMapping`.
 
-use earthsci_ast::types::{
+use earthsci_ast::extension::types::Parameter;
+use earthsci_ast::{
     CouplingEntry, Equation, EsmFile, Expr, ExpressionNode, Metadata, Model, ModelVariable,
-    Parameter, Reaction, ReactionSystem, Species, StoichiometricEntry, VariableType,
+    Reaction, ReactionSystem, Species, StoichiometricEntry, VariableType,
 };
 use earthsci_ast::{FlattenError, flatten, flatten_model};
 use indexmap::IndexMap;
@@ -701,7 +702,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     let coupling = vec![CouplingEntry::VariableMap {
         from: "S.T_out".to_string(),
         to: "M.T".to_string(),
-        transform: earthsci_ast::types::VariableMapTransform::Named("param_to_var".to_string()),
+        transform: earthsci_ast::VariableMapTransform::Named("param_to_var".to_string()),
         factor: None,
         description: None,
     }];
@@ -934,7 +935,7 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
 
     // The `unlowered_operator` refusal still exists, for a consumer that
     // requires a DISCRETIZED system and says so.
-    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+    let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
         .expect_err("an undiscretized grad must be rejected on demand");
     let msg = format!("{err}");
     match err {
@@ -1015,7 +1016,7 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     assert_eq!(flat.system_kind().as_str(), "pde");
 
     // ...and it is still rejected on demand, with the offending op name `"D"`.
-    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+    let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
         .expect_err("an undiscretized spatial D must be rejected on demand");
     let msg = format!("{err}");
     match err {
@@ -1041,4 +1042,434 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     let msg = format!("{err_slice}");
     assert!(msg.contains("slice"));
     assert!(msg.contains("Rust Core tier"));
+}
+
+// ---------------------------------------------------------------------------
+// esm-libraries-spec §4.7.1 / §4.7.2 — the two `operator_compose` mechanisms
+// and the `multiplicative` precondition.
+//
+// These pin the pieces the shared flatten corpus cannot: a `translate` map with
+// a CONVERSION FACTOR (no fixture in the tree carries one) and the
+// `couple_multiplicative_no_tendency` refusal (the four fixtures that used to
+// trip it were migrated to `variable_map` Expression transforms).
+// ---------------------------------------------------------------------------
+
+/// The rendered form of the one equation defining `target`, for assertions
+/// that care about the whole merged RHS rather than its variable set.
+fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> String {
+    let eq = flat
+        .equations
+        .iter()
+        .find(|eq| match &eq.lhs {
+            Expr::Operator(n) if n.op == "D" => {
+                matches!(&n.args[0], Expr::Variable(v) if v == target)
+            }
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("no D({target}) equation in the flattened system"));
+    earthsci_ast::to_ascii(&eq.rhs)
+}
+
+/// §4.7.1 step 3, placeholder expansion: ONE `_var` equation in the operator
+/// model becomes one merged term per ODE state of the target system.
+#[test]
+fn operator_compose_expands_the_var_placeholder_over_every_state() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "O3": {"type": "unknown", "default": 1.0},
+            "NO": {"type": "unknown", "default": 2.0},
+            "k":  {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"}, "rhs": {"op": "-", "args": ["k"]}},
+            {"lhs": {"op": "D", "args": ["NO"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Adv": {
+          "variables": {"u": {"type": "parameter", "default": 3.0}},
+          "equations": [
+            {"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["u", "_var"]}}
+          ]
+        }
+      },
+      "coupling": [
+        {"type": "operator_compose", "systems": ["Chem", "Adv"]}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+
+    // The single placeholder equation was cloned once per state of Chem and
+    // merged into each — the operator model contributes no equation of its own.
+    assert_eq!(flat.equations.len(), 2, "equations: {:?}", flat.equations);
+    assert_eq!(rendered_rhs(&flat, "Chem.O3"), "-Chem.k + Adv.u * Chem.O3");
+    assert_eq!(rendered_rhs(&flat, "Chem.NO"), "Chem.k + Adv.u * Chem.NO");
+
+    // `_var` is a GLOBAL sentinel: it must survive nowhere, neither bare nor
+    // namespaced to the operator model that spelled it.
+    for eq in &flat.equations {
+        let rendered = format!(
+            "{} ~ {}",
+            earthsci_ast::to_ascii(&eq.lhs),
+            earthsci_ast::to_ascii(&eq.rhs)
+        );
+        assert!(
+            !rendered.contains("_var"),
+            "the `_var` sentinel leaked into the flattened system: {rendered}"
+        );
+    }
+}
+
+/// §4.7.1 steps 2–4: the authored `translate` direction is `{A_name: B_name}`,
+/// a value may carry a conversion `factor`, and on a translation match B's
+/// dependent variable is rewritten to A's target throughout `rhs_B`.
+#[test]
+fn operator_compose_translate_is_a_keyed_and_carries_the_factor() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "ozone": {"type": "unknown", "default": 1.0},
+            "k": {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Photo": {
+          "variables": {
+            "O3": {"type": "unknown", "default": 1.0},
+            "j": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["j", "O3"]}}
+          ]
+        }
+      },
+      "coupling": [
+        {"type": "operator_compose", "systems": ["Chem", "Photo"],
+         "translate": {"Chem.ozone": {"var": "Photo.O3", "factor": 1e-9}}}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+
+    // The map is keyed by A's name and valued by B's, so the entry MATCHES —
+    // indexing it by B's dependent variable would find nothing and silently
+    // compose nothing at all.
+    assert_eq!(flat.equations.len(), 1, "equations: {:?}", flat.equations);
+    // The factor scales `rhs_B`, and `Photo.O3` — the same physical quantity as
+    // `Chem.ozone`, whose own defining equation was just consumed — is rewritten
+    // to A's spelling. `Photo.j`, a parameter of B, keeps its name.
+    assert_eq!(
+        rendered_rhs(&flat, "Chem.ozone"),
+        "Chem.k + 1.0e-9 * Photo.j * Chem.ozone"
+    );
+}
+
+/// §10.2 "Either name form is admitted": a `translate` endpoint authored BARE
+/// denotes the same variable as the fully scoped spelling and MUST produce the
+/// same flattened system.
+///
+/// Matching runs against a flattened equation's NAMESPACED dependent variable,
+/// so a bare endpoint that is not qualified first can never match. That was a
+/// silent no-op, not a loud one: the lookup missed, the bare-name fallback then
+/// searched A for B's short name (`ozone_conc`, which A does not have) and
+/// missed too, and the whole entry composed nothing.
+#[test]
+fn operator_compose_translate_endpoints_may_be_authored_bare() {
+    let body = r#"
+      "models": {
+        "Chem": {
+          "variables": {
+            "ozone": {"type": "unknown", "default": 1.0},
+            "k": {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Diff": {
+          "variables": {
+            "ozone_conc": {"type": "unknown", "default": 1.0},
+            "kh": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone_conc"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["kh", "ozone_conc"]}}
+          ]
+        }
+      },"#;
+    let mk = |translate: &str| {
+        let doc = format!(
+            r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+            "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Diff"],
+                          "translate": {translate}}}]}}"#
+        );
+        flatten(&earthsci_ast::load_string(&doc).expect("loads")).expect("flattens")
+    };
+    let bare = mk(r#"{"ozone": {"var": "ozone_conc", "factor": 1.0}}"#);
+    let scoped = mk(r#"{"Chem.ozone": {"var": "Diff.ozone_conc", "factor": 1.0}}"#);
+
+    assert_eq!(
+        rendered_rhs(&bare, "Chem.ozone"),
+        "Chem.k + Diff.kh * Chem.ozone",
+        "a bare translate endpoint must be qualified before matching"
+    );
+    assert_eq!(
+        rendered_rhs(&bare, "Chem.ozone"),
+        rendered_rhs(&scoped, "Chem.ozone"),
+        "the two admitted name forms must denote the same variable"
+    );
+    assert_eq!(bare.equations.len(), scoped.equations.len());
+    assert_eq!(
+        bare.state_variables
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect::<Vec<_>>(),
+        scoped
+            .state_variables
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// §4.7.1 step 4, "the merged-away name does not survive": a renaming match
+/// consumes B's defining equation, so B's declaration is pruned — and every
+/// surviving reference to it is retargeted at A's spelling FIRST, DOCUMENT-WIDE.
+///
+/// `Obs` here is the third system the rule exists for: it references `Diff.c` by
+/// scoped name and belongs to neither side of the coupling entry, so a B-local
+/// retarget would leave its reference dangling at a name nothing declares.
+#[test]
+fn operator_compose_prunes_the_merged_away_name_after_a_document_wide_retarget() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "ozone": {"type": "unknown", "default": 1.0},
+            "k": {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["ozone"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Diff": {
+          "variables": {
+            "c": {"type": "unknown", "default": 1.0},
+            "kh": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["kh", "c"]}}
+          ]
+        },
+        "Obs": {
+          "variables": {"burden": {"type": "unknown", "default": 0.0}},
+          "equations": [
+            {"lhs": "burden", "rhs": {"op": "*", "args": [2.0, "Diff.c"]}}
+          ]
+        }
+      },
+      "coupling": [
+        {"type": "operator_compose", "systems": ["Chem", "Diff"],
+         "translate": {"ozone": "c"}}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+
+    // The stranded declaration is gone: an unknown with no defining equation
+    // classifies as ALGEBRAIC (§6.3.1) and would make the system structurally
+    // singular.
+    let states: Vec<String> = flat
+        .state_variables
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect();
+    assert_eq!(states, vec!["Chem.ozone".to_string()], "states: {states:?}");
+
+    // ...and the THIRD system's scoped reference now points at A's spelling
+    // rather than at the pruned name.
+    let obs = flat
+        .equations
+        .iter()
+        .find(|eq| matches!(&eq.lhs, Expr::Variable(v) if v == "Obs.burden"))
+        .expect("Obs.burden equation survives");
+    assert_eq!(
+        earthsci_ast::to_ascii(&obs.rhs),
+        "2 * Chem.ozone",
+        "a document-wide retarget must reach a third system's reference"
+    );
+}
+
+/// §10.2's redundancy invariant: a `translate` value of `"B._var"` asks for
+/// something placeholder expansion already does, so writing it MUST produce the
+/// same flattened system as omitting it.
+#[test]
+fn operator_compose_translate_to_the_placeholder_is_harmless() {
+    let body = r#"
+      "models": {
+        "Chem": {
+          "variables": {
+            "O3": {"type": "unknown", "default": 1.0},
+            "k":  {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Adv": {
+          "variables": {"u": {"type": "parameter", "default": 3.0}},
+          "equations": [
+            {"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+             "rhs": {"op": "*", "args": ["u", "_var"]}}
+          ]
+        }
+      },"#;
+    let without = format!(
+        r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+        "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Adv"]}}]}}"#
+    );
+    let with = format!(
+        r#"{{"esm": "1.0.0", "metadata": {{"name": "T"}},{body}
+        "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Adv"],
+                      "translate": {{"Chem.O3": "Adv._var"}}}}]}}"#
+    );
+    let flat_without =
+        flatten(&earthsci_ast::load_string(&without).expect("loads")).expect("flattens");
+    let flat_with = flatten(&earthsci_ast::load_string(&with).expect("loads")).expect("flattens");
+
+    assert_eq!(
+        rendered_rhs(&flat_without, "Chem.O3"),
+        rendered_rhs(&flat_with, "Chem.O3"),
+        "a redundant translate-to-placeholder entry changed the composition"
+    );
+    assert_eq!(flat_with.equations.len(), flat_without.equations.len());
+}
+
+/// esm-spec §10.3 / §4.7.2: `multiplicative` is defined against an EXISTING
+/// tendency, so a `to` with no `D(to)` equation is an error — never a silently
+/// dropped connector equation.
+#[test]
+fn couple_multiplicative_without_a_tendency_is_an_error() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "O3": {"type": "unknown", "default": 1.0},
+            "k":  {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Surface": {
+          "variables": {"resistance": {"type": "parameter", "default": 100.0}},
+          "equations": []
+        }
+      },
+      "coupling": [
+        {"type": "couple", "systems": ["Chem", "Surface"],
+         "connector": {"equations": [
+           {"from": "Chem.O3", "to": "Surface.resistance",
+            "transform": "multiplicative", "expression": "Chem.O3"}
+         ]}}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    match flatten(&file) {
+        Err(FlattenError::CoupleMultiplicativeNoTendency { target }) => {
+            assert_eq!(target, "Surface.resistance");
+        }
+        other => panic!("expected CoupleMultiplicativeNoTendency, got {other:?}"),
+    }
+}
+
+/// The deliberate asymmetry (§4.7.2): `additive` against an absent tendency is
+/// well defined — zero is the additive identity — so the same shape with
+/// `transform: "additive"` must NOT raise.
+#[test]
+fn couple_additive_without_a_tendency_is_not_an_error() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "O3": {"type": "unknown", "default": 1.0},
+            "k":  {"type": "parameter", "default": 0.5}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["O3"], "wrt": "t"}, "rhs": "k"}
+          ]
+        },
+        "Surface": {
+          "variables": {"resistance": {"type": "parameter", "default": 100.0}},
+          "equations": []
+        }
+      },
+      "coupling": [
+        {"type": "couple", "systems": ["Chem", "Surface"],
+         "connector": {"equations": [
+           {"from": "Chem.O3", "to": "Surface.resistance",
+            "transform": "additive", "expression": "Chem.O3"}
+         ]}}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    flatten(&file).expect("an additive connector against an absent tendency is legal");
+}
+
+/// esm-spec §6.2: a nested subsystem is lowered with the compound prefix
+/// `<parent>.<key>` and folded into its parent — its variables, parameters and
+/// equations all reach the flattened system, and a parent-level reference
+/// rooted at the subsystem key resolves to the lowered name.
+#[test]
+fn nested_subsystems_are_lowered_into_the_parent() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Outer": {
+          "variables": {"x": {"type": "unknown", "default": 1.0}},
+          "equations": [
+            {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "Inner.y"}
+          ],
+          "subsystems": {
+            "Inner": {
+              "variables": {
+                "y": {"type": "unknown", "default": 2.0},
+                "r": {"type": "parameter", "default": 3.0}
+              },
+              "equations": [
+                {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": "r"}
+              ]
+            }
+          }
+        }
+      }
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+
+    assert!(flat.state_variables.contains_key("Outer.Inner.y"));
+    assert!(flat.parameters.contains_key("Outer.Inner.r"));
+    assert_eq!(rendered_rhs(&flat, "Outer.Inner.y"), "Outer.Inner.r");
+    // The parent's bare `Inner.y` is subsystem-LOCAL, not an already-absolute
+    // cross-component reference, so it lifts to the lowered name.
+    assert_eq!(rendered_rhs(&flat, "Outer.x"), "Outer.Inner.y");
 }

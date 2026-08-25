@@ -1526,10 +1526,9 @@ def _eval_arrayop_vectorized(
         # provider-/loader-injected array lives (and where a dependency-ordered
         # observed hoist parks each materialized array observed). Omitting it made
         # this path decline for ANY data-driven contraction — the einsum fast path
-        # only ever engaged for state-based models. ISRM's per-receptor
+        # only ever engaged for state-based models. A source-receptor contraction
         # `conc[rcv] = Σ_s SR[s,rcv]·E[s]` is exactly the pattern this is for, and
-        # it was falling through to the scalar loop: measured 2.93 s at |ppl|=9,
-        # i.e. ~500 s per pathway at the full 1,520.
+        # it was falling through to the per-element scalar loop.
         if var_name in ctx.derived_rings:
             arr = np.asarray(ctx.derived_rings[var_name], dtype=float)
         elif var_name in ctx.input_arrays:

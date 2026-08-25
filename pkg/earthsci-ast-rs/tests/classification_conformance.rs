@@ -16,7 +16,7 @@
 //! NODE — a subsystem's equations classify the subsystem's variables, which is
 //! what `subsystem_scope` discriminates.
 
-use earthsci_ast::classification::Classification;
+use earthsci_ast::Classification;
 use earthsci_ast::{Model, SystemKind};
 use serde_json::Value;
 use std::path::PathBuf;

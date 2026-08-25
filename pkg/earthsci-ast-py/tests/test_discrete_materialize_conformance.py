@@ -37,6 +37,7 @@ import pytest
 
 from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_path
+from earthsci_ast.problem import ReturnCode
 from earthsci_ast.simulation_array import _simulate_with_numpy
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "discrete_materialize"
@@ -95,7 +96,7 @@ def test_discrete_materialize_trajectory_matches_golden() -> None:
             atol=1e-12,
             loader_arrays={_SRC_KEY: snap},
         )
-        assert res.success, res.message
+        assert (res.retcode is ReturnCode.Success), res.message
         idx = {name: k for k, name in enumerate(res.vars)}
         # Single-model states surface as bare slot names (`c[1]`); accept either.
         ics = {

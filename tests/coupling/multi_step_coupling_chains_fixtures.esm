@@ -644,23 +644,6 @@
                 "AtmosphereChemistry.O3"
               ]
             }
-          },
-          {
-            "from": "AtmosphereChemistry.O3",
-            "to": "LandVegetation.photosynthesis_rate",
-            "transform": "multiplicative",
-            "expression": {
-              "op": "exp",
-              "args": [
-                {
-                  "op": "*",
-                  "args": [
-                    -0.1,
-                    "AtmosphereChemistry.O3"
-                  ]
-                }
-              ]
-            }
           }
         ]
       },
@@ -683,6 +666,30 @@
         }
       },
       "description": "STEP 10: Apply transport to dissolved ocean tracers (creates new variables)"
+    },
+    {
+      "type": "variable_map",
+      "from": "AtmosphereChemistry.O3",
+      "to": "LandVegetation.photosynthesis_rate",
+      "transform": {
+        "op": "*",
+        "args": [
+          1e-07,
+          {
+            "op": "exp",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  -0.1,
+                  "AtmosphereChemistry.O3"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Scale photosynthesis_rate by a factor computed from AtmosphereChemistry.O3"
     }
   ]
 }

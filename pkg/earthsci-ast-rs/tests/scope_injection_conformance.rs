@@ -8,7 +8,7 @@
 //! conformance fixtures under `tests/conformance/expression_templates/` against
 //! the Julia-generated goldens.
 
-use earthsci_ast::pde_inline_tests::ephemeral_injected_file;
+use earthsci_ast::ephemeral_injected_file;
 use earthsci_ast::{load_path, to_json};
 use serde_json::Value;
 use std::path::{Path, PathBuf};

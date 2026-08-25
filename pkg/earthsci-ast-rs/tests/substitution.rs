@@ -1,4 +1,3 @@
-#![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 //! Substitution tests matching fixtures
 //!
 //! Tests the variable and expression substitution functionality.
@@ -44,7 +43,7 @@ fn test_simple_var_replace() {
             serde_json::from_str(&expected_str).expect("Failed to parse expected result");
 
         // Perform substitution
-        let result = substitute_in_expression(&input, &substitutions);
+        let result = substitute(&input, &substitutions);
 
         // Compare results (this is simplified - real comparison would be more sophisticated)
         assert_eq!(
@@ -92,7 +91,7 @@ fn test_nested_substitution() {
             serde_json::from_str(&expected_str).expect("Failed to parse expected result");
 
         // Perform substitution
-        let result = substitute_in_expression(&input, &substitutions);
+        let result = substitute(&input, &substitutions);
 
         // Compare results
         assert_eq!(
@@ -140,7 +139,7 @@ fn test_scoped_reference() {
             serde_json::from_str(&expected_str).expect("Failed to parse expected result");
 
         // Perform substitution
-        let result = substitute_in_expression(&input, &substitutions);
+        let result = substitute(&input, &substitutions);
 
         // Compare results
         assert_eq!(
@@ -374,7 +373,7 @@ fn test_complex_substitution_patterns() {
     substitutions.insert("c".to_string(), Expr::Number(1.0));
 
     // Perform substitution
-    let result = substitute_in_expression(&complex_expr, &substitutions);
+    let result = substitute(&complex_expr, &substitutions);
 
     // Verify that substitution occurred in nested structures
     if let Expr::Operator(result_node) = result {
@@ -388,7 +387,7 @@ fn test_identity_substitution() {
     let expr = Expr::Variable("x".to_string());
     let substitutions = HashMap::new(); // No substitutions
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     // Should return unchanged expression
     assert_eq!(
@@ -405,7 +404,7 @@ fn test_substitution_variable_not_present() {
     let mut substitutions = HashMap::new();
     substitutions.insert("y".to_string(), Expr::Number(42.0)); // Different variable
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     // Should return unchanged expression since 'x' is not in substitutions
     assert_eq!(
@@ -441,7 +440,7 @@ fn test_substitute_circular_reference_single_pass() {
     substitutions.insert("x".to_string(), Expr::Variable("y".to_string()));
     substitutions.insert("y".to_string(), Expr::Variable("x".to_string()));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     // Single-pass: x -> y (the y is NOT re-substituted back to x)
     assert_eq!(
@@ -458,7 +457,7 @@ fn test_substitute_self_reference_terminates() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Variable("x".to_string()));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     assert_eq!(
         result,
@@ -492,7 +491,7 @@ fn test_substitute_self_reference_in_nested_expression() {
         }),
     );
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     // Each occurrence of x is replaced once; the inner `x` inside the
     // replacement is NOT further substituted.
@@ -530,7 +529,7 @@ fn test_substitute_mutual_reference_compound() {
     substitutions.insert("a".to_string(), Expr::Variable("b".to_string()));
     substitutions.insert("b".to_string(), Expr::Variable("a".to_string()));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     if let Expr::Operator(node) = result {
         assert_eq!(node.args[0], Expr::Variable("b".to_string()));
@@ -562,7 +561,7 @@ fn test_substitute_deep_nesting() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Number(1.0));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     // Verify the innermost `x` was replaced, by walking down the left spine.
     let mut cursor = &result;
@@ -599,7 +598,7 @@ fn test_substitute_operator_with_empty_args() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Variable("y".to_string()));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     if let Expr::Operator(node) = result {
         assert_eq!(node.op, "+");
@@ -631,7 +630,7 @@ fn test_substitute_empty_substitutions_on_compound() {
     });
     let substitutions: HashMap<String, Expr> = HashMap::new();
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     assert_eq!(
         serde_json::to_value(&result).unwrap(),
@@ -654,7 +653,7 @@ fn test_substitute_preserves_operator_metadata() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Number(2.5));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     if let Expr::Operator(node) = result {
         assert_eq!(node.op, "D");

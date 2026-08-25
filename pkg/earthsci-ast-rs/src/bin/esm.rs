@@ -3,15 +3,16 @@
 //! Command-line interface for working with ESM files
 
 use clap::{Parser, Subcommand};
-use earthsci_ast::analysis::{
+use earthsci_ast::extension::analysis::{
     collect_unit_types, collect_variables, contains_common_subexpressions,
     contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
     count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    component_exists, component_graph, load_string, to_json, to_json_compact, validate,
-    validate_complete,
+    ExpressionGraphOptions, component_exists, component_graph, expression_graph,
+    expression_graph_with_options, load_string, stoichiometric_matrix, to_json, to_json_compact,
+    validate, validate_text,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -981,7 +982,7 @@ fn perform_deep_coupling_analysis(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
+fn analyze_coupling_patterns(graph: &earthsci_ast::ComponentGraph) {
     println!("\n=== COUPLING PATTERNS ===");
 
     // Pattern 1: Fan-out (one component affects many others)
@@ -1031,7 +1032,7 @@ fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
 }
 
 fn analyze_coupling_strength(
-    _graph: &earthsci_ast::graph::ComponentGraph,
+    _graph: &earthsci_ast::ComponentGraph,
     esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING STRENGTH ANALYSIS ===");
@@ -1099,7 +1100,7 @@ fn analyze_coupling_strength(
 }
 
 fn detect_coupling_antipatterns(
-    graph: &earthsci_ast::graph::ComponentGraph,
+    graph: &earthsci_ast::ComponentGraph,
     _esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING ANTI-PATTERNS ===");
@@ -1460,13 +1461,22 @@ fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::e
 /// Time repeated 1-time-unit simulations from default initial conditions.
 fn bench_simulate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
     let esm_file = load_string(content)?;
-    let opts = earthsci_ast::SimulateOptions::default();
-    let params = HashMap::new();
-    let initial_conditions = HashMap::new();
+    let opts = earthsci_ast::SolveOptions::default();
+    // Build the EsmProblem ONCE, outside the loop, and time only the solve. That
+    // split is the point of the EsmProblem/`solve` surface: construction is
+    // deterministic per document, `solve` is what a benchmark should measure.
+    let prob = earthsci_ast::esm_problem(
+        &esm_file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("problem build failed: {e}"))?;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        earthsci_ast::simulate(&esm_file, (0.0, 1.0), &params, &initial_conditions, &opts)
-            .map_err(|e| format!("simulation failed: {e}"))?;
+        earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
     }
     let duration = start.elapsed();
     println!(
@@ -1600,7 +1610,7 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
     // real path so a document with relative refs is not spuriously
     // rejected (stdin has no directory → process CWD).
     let base_dir = file.parent();
-    let validation_result = validate_complete(&content, base_dir);
+    let validation_result = validate_text(&content, base_dir);
 
     if validation_result.is_valid {
         println!("✓ Validation passed");
@@ -1797,44 +1807,30 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
         if let Some(rs) = reaction_systems.get(&system) {
             println!("Stoichiometric matrix for reaction system '{system}':");
 
-            // Build a stable (sorted) species order and index map
-            let mut sorted_species: Vec<&String> = rs.species.keys().collect();
-            sorted_species.sort();
-            let species_index: HashMap<String, usize> = sorted_species
-                .iter()
-                .enumerate()
-                .map(|(i, name)| ((*name).clone(), i))
-                .collect();
+            // The matrix is the LIBRARY's `stoichiometric_matrix`, not a second
+            // computation. This used to rebuild it by hand from a SORTED
+            // species order, which was harmless while the library sorted too and
+            // wrong the moment it stopped: species order is declaration order in
+            // every binding now (API_SPEC.md §5.10), so a hand-rolled sort here
+            // would print the rows of one matrix under the column labels of
+            // another.
+            //
+            // The library returns species-by-reaction; this view is its
+            // TRANSPOSE — one line per reaction, one column per species — which
+            // is a presentation choice, not a second answer.
+            let matrix = stoichiometric_matrix(rs);
+            let species: Vec<&String> = rs.species.keys().collect();
 
-            // Print species header
             print!("{:>15}", "");
-            for name in &sorted_species {
+            for name in &species {
                 print!("{name:>10}");
             }
             println!();
 
-            // Print reaction stoichiometry
-            for (reaction_idx, reaction) in rs.reactions.iter().enumerate() {
+            for reaction_idx in 0..rs.reactions.len() {
                 print!("Reaction {:>3}:", reaction_idx + 1);
-
-                let mut coeffs = vec![0.0; rs.species.len()];
-
-                // Substrates (negative coefficients)
-                for substrate in reaction.substrates.iter().flatten() {
-                    if let Some(&idx) = species_index.get(&substrate.species) {
-                        coeffs[idx] -= substrate.coefficient;
-                    }
-                }
-
-                // Products (positive coefficients)
-                for product in reaction.products.iter().flatten() {
-                    if let Some(&idx) = species_index.get(&product.species) {
-                        coeffs[idx] += product.coefficient;
-                    }
-                }
-
-                for coeff in coeffs {
-                    print!("{coeff:>10.1}");
+                for row in &matrix {
+                    print!("{:>10.1}", row[reaction_idx]);
                 }
                 println!();
             }
@@ -1849,6 +1845,37 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// Render a graph in one of the three §4.8.3 formats.
+///
+/// The renderers are the LIBRARY's — `earthsci_ast::to_dot` / `to_mermaid` /
+/// `to_json_graph`, generic over the `Graph` trait that both `ComponentGraph`
+/// and `ExpressionGraph` implement. This subcommand used to roll its own, which
+/// made `esm graph` a SECOND, unpinned renderer of the same graphs, and the two
+/// had drifted: the CLI wrote `[label="x", shape=y]` where the library writes
+/// `[label="x" shape=y]`, it interpolated ids and labels without `escape_dot` /
+/// `mermaid_label` (so a component name containing a quote produced malformed
+/// DOT), and its `--format json` emitted a different document entirely — node
+/// key `type` instead of `component_type`, edge keys `from`/`to`/`type` instead
+/// of `source`/`target`/`data`, no `metadata`, and no `adjacency` map at all,
+/// even though esm-libraries-spec §5.4.5 calls that output "JSON adjacency
+/// list".
+///
+/// Phase 6 made the library renderers canonical and pinned them with
+/// `tests/conformance/graph/cases.json`. A second path to the same renderings is
+/// the defect §8 item 8 removed from Go; this removes it from the CLI.
+fn render_graph<G: earthsci_ast::Graph>(
+    graph: &G,
+    format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match format {
+        "dot" => println!("{}", earthsci_ast::to_dot(graph)),
+        "mermaid" => println!("{}", earthsci_ast::to_mermaid(graph)),
+        "json" => println!("{}", earthsci_ast::to_json_graph(graph)),
+        _ => reject_unknown("graph format", format, "Use dot, mermaid, or json."),
+    }
+    Ok(())
+}
+
 fn run_graph(
     file: PathBuf,
     level: String,
@@ -1859,95 +1886,49 @@ fn run_graph(
     let esm_file = load_string(&content)?;
 
     match level.as_str() {
-        "component" => {
-            let graph = component_graph(&esm_file);
-
-            match format.as_str() {
-                "dot" => {
-                    // Same headers the library exporters emit: a component
-                    // graph is `digraph ComponentGraph` / `graph TD`
-                    // (esm-libraries-spec §4.8.3). This subcommand rolls its own
-                    // rendering, so it has to say so itself.
-                    println!("digraph ComponentGraph {{");
-                    println!("  rankdir=LR;");
-                    println!("  node [shape=box];");
-                    println!();
-
-                    // Nodes
-                    for node in &graph.nodes {
-                        let label = node.name.as_deref().unwrap_or(&node.id);
-                        let shape = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "ellipse",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "box",
-                        };
-                        println!("  \"{}\" [label=\"{}\", shape={}];", node.id, label, shape);
-                    }
-
-                    println!();
-
-                    // Edges
-                    for edge in &graph.edges {
-                        println!(
-                            "  \"{}\" -> \"{}\" [label=\"{}\"];",
-                            edge.from, edge.to, edge.coupling_type
-                        );
-                    }
-
-                    println!("}}");
-                }
-                "mermaid" => {
-                    println!("graph TD");
-
-                    for node in &graph.nodes {
-                        let label = node.name.as_deref().unwrap_or(&node.id);
-                        let shape_open = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "(",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "[",
-                        };
-                        let shape_close = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => ")",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "]",
-                        };
-                        println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
-                    }
-
-                    for edge in &graph.edges {
-                        println!("  {} -->|{}| {}", edge.from, edge.coupling_type, edge.to);
-                    }
-                }
-                "json" => {
-                    let json_graph = serde_json::json!({
-                        "nodes": graph.nodes.iter().map(|n| serde_json::json!({
-                            "id": n.id,
-                            "type": match n.component_type {
-                                earthsci_ast::graph::ComponentType::Model => "model",
-                                earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
-                            },
-                            "name": n.name
-                        })).collect::<Vec<_>>(),
-                        "edges": graph.edges.iter().map(|e| serde_json::json!({
-                            "from": e.from,
-                            "to": e.to,
-                            "type": e.coupling_type
-                        })).collect::<Vec<_>>()
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json_graph)?);
-                }
-                _ => reject_unknown("graph format", &format, "Use dot, mermaid, or json."),
-            }
-        }
+        "component" => render_graph(&component_graph(&esm_file), &format),
         "expression" => {
-            // Expression-level graphs not yet implemented
-            if let Some(ref _sys) = system {
-                eprintln!("Expression-level graphs for system '{_sys}' not yet implemented");
-            } else {
-                eprintln!("Expression-level graphs not yet implemented");
+            // Both forms esm-libraries-spec §5.4.5 documents. `--level=expression`
+            // used to print "not yet implemented" and exit 1 — writing it meant
+            // writing a second expression renderer, which routing through the
+            // library makes unnecessary.
+            match system {
+                // A single named system: the ExpressionGraphInput impls for
+                // Model and ReactionSystem.
+                Some(name) => {
+                    if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(&name)) {
+                        render_graph(&expression_graph(model), &format)
+                    } else if let Some(rs) = esm_file
+                        .reaction_systems
+                        .as_ref()
+                        .and_then(|r| r.get(&name))
+                    {
+                        render_graph(&expression_graph(rs), &format)
+                    } else {
+                        // reject_unknown diverges (`-> !`), so this arm needs
+                        // no Ok.
+                        reject_unknown(
+                            "system",
+                            &name,
+                            "Name a model or reaction system declared in this file.",
+                        )
+                    }
+                }
+                // "all systems merged": the whole-document graph with
+                // `variable_map` coupling folded into cross-system edges.
+                None => render_graph(
+                    &expression_graph_with_options(
+                        &esm_file,
+                        &ExpressionGraphOptions {
+                            merge_coupled: true,
+                        },
+                    ),
+                    &format,
+                ),
             }
-            std::process::exit(1);
         }
         _ => reject_unknown("graph level", &level, "Use component or expression."),
     }
-    Ok(())
 }
 
 fn run_convert(
@@ -2139,17 +2120,31 @@ fn run_simulate(
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
 
-    let opts = earthsci_ast::SimulateOptions::default();
-    let params = HashMap::new();
-    let initial_conditions = HashMap::new();
-    let sol = earthsci_ast::simulate(&esm_file, (0.0, time), &params, &initial_conditions, &opts)
-        .map_err(|e| format!("simulation failed: {e}"))?;
+    let opts = earthsci_ast::SolveOptions::default();
+    let prob = earthsci_ast::esm_problem(
+        &esm_file,
+        (0.0, time),
+        earthsci_ast::ProblemOptions {
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("problem build failed: {e}"))?;
+    let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
 
     println!(
-        "✓ Simulation complete: {} output points, solver {}",
+        "✓ Simulation complete: {} output points, alg {}, retcode {}",
         sol.time.len(),
-        sol.metadata.solver
+        sol.metadata.alg,
+        sol.retcode
     );
+    if !sol.retcode.is_success() {
+        println!(
+            "⚠ The run did NOT reach t = {time}: it stopped at t = {} with retcode {}",
+            sol.time.last().copied().unwrap_or(0.0),
+            sol.retcode
+        );
+    }
     if let Some(&t_final) = sol.time.last() {
         println!("Final state at t = {t_final}:");
         for (name, series) in sol.state_variable_names.iter().zip(sol.state.iter()) {
@@ -2164,7 +2159,8 @@ fn run_simulate(
             "time": sol.time,
             "state": sol.state,
             "state_variable_names": sol.state_variable_names,
-            "solver": sol.metadata.solver,
+            "alg": sol.metadata.alg,
+            "retcode": sol.retcode.name(),
         });
         fs::write(&output_path, serde_json::to_string_pretty(&out)?)?;
         println!("Results written to: {}", output_path.display());
@@ -2635,7 +2631,7 @@ fn run_validate_fixtures(
                 continue;
             }
         };
-        let result = validate_complete(&content, path.parent());
+        let result = validate_text(&content, path.parent());
         if result.is_valid {
             println!("✓ {}", path.display());
             passed += 1;
@@ -2824,7 +2820,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 //
 // Every validation entry runs the full **load → resolve → validate** pipeline.
 // `load_path` resolves §4.7 subsystem refs against the file's own directory; the
-// producer used to call `validate_complete(&content)` on the file's TEXT, which
+// producer used to call `validate_text(&content)` on the file's TEXT, which
 // takes no base path, so no `{ref}` could ever resolve here.
 //
 // See `scripts/run-python-conformance.py` for the emitted wire shape; every
@@ -3071,10 +3067,10 @@ fn run_conformance_test(
                 // Schema validation judges the document AS WRITTEN, so it runs
                 // on the raw text; structural validation judges the RESOLVED
                 // form, so it runs on the loaded file (which has its §4.7 refs
-                // spliced in). `validate_complete` is the only exported entry
+                // spliced in). `validate_text` is the only exported entry
                 // that reports schema errors, so its structural half is
                 // discarded — it saw the unresolved document.
-                let schema = validate_complete(&content, path.parent());
+                let schema = validate_text(&content, path.parent());
                 let structural = validate(esm_file);
                 record.insert(
                     "schema_errors".into(),
@@ -3111,18 +3107,18 @@ fn run_conformance_test(
                 record.insert("is_valid".into(), json!(false));
                 // Raw document: the load-phase rejection still yields whatever
                 // structured findings the binding is able to enumerate.
-                // `validate_complete` now itself recovers the typed structural
+                // `validate_text` now itself recovers the typed structural
                 // `(code, path)` records on a load rejection (best-effort raw parse
                 // + typed `validate()`), so a document rejected at load no longer
                 // records `is_valid:false` with an EMPTY `structural_errors`
                 // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
                 // `validate()` here, or every such record would be duplicated.
-                let raw = validate_complete(&content, path.parent());
+                let raw = validate_text(&content, path.parent());
                 let mut structural_errors: Vec<earthsci_ast::StructuralError> =
                     raw.structural_errors.clone();
                 // A subsystem `ref` that could not be resolved (missing file) or is
                 // ambiguous (resolves to a file with != 1 top-level system) aborts
-                // the load before any typed pass AND before `validate_complete` can
+                // the load before any typed pass AND before `validate_text` can
                 // deserialize the document, so those findings are recovered here
                 // directly from the raw document against the file's own directory.
                 structural_errors.extend(collect_subsystem_ref_errors(&content, &path));

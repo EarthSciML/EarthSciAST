@@ -17,7 +17,7 @@
 use indexmap::IndexMap;
 use std::path::PathBuf;
 
-use earthsci_ast::registered_functions::{ClosedArg, ClosedValue, evaluate_closed_function};
+use earthsci_ast::{ClosedArg, ClosedValue, evaluate_closed_function};
 use earthsci_ast::{EsmFile, Expr, ExpressionNode, load_path};
 use serde_json::Value;
 

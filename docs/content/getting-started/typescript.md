@@ -261,28 +261,36 @@ watch(() => props.esmData, loadModel, { immediate: true });
 
 ## Interactive Components (SolidJS)
 
-The package includes interactive editing components built with SolidJS:
+The editing components ship in a **separate package**, `@earthsciml/ast-editor`
+(`pkg/earthsci-ast-editor/`), and are SolidJS components:
 
-```typescript
-import { ExpressionEditor, ModelEditor } from '@earthsciml/ast/interactive';
+```bash
+npm install @earthsciml/ast-editor
+```
 
-// Use as SolidJS components
-function App() {
-  const [expression, setExpression] = createSignal({ op: '+', args: ['x', 'y'] });
+It exports `ModelEditor`, `EquationEditor`, `ExpressionNode`, `ReactionEditor`,
+`CouplingGraph`, `ValidationPanel`, and `FileSummary`, each with a matching
+`*Props` type.
+
+```tsx
+import { createSignal } from 'solid-js';
+import { ModelEditor, EquationEditor } from '@earthsciml/ast-editor';
+import type { Model, Equation } from '@earthsciml/ast';
+
+function App(props: { initial: Model }) {
+  const [model, setModel] = createSignal<Model>(props.initial);
 
   return (
     <div>
-      <ExpressionEditor
-        value={expression()}
-        onChange={setExpression}
-        showUnicode={true}
-        showLatex={true}
-      />
-
       <ModelEditor
         model={model()}
-        onChange={setModel}
-        enableValidation={true}
+        name="AtmosphericChemistry"
+        onModelChange={setModel}
+      />
+
+      <EquationEditor
+        equation={model().equations[0] as Equation}
+        onEquationChange={(eq) => console.log('edited', eq)}
       />
     </div>
   );
@@ -409,13 +417,16 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 ## Performance Optimization
 
 ### Lazy Loading
-```typescript
-// Dynamically import heavy components
-const ModelEditor = lazy(() => import('@earthsciml/ast/interactive').then(m => ({ default: m.ModelEditor })));
+```tsx
+import { lazy, Suspense } from 'solid-js';
 
-// Use in React with Suspense
-<Suspense fallback={<div>Loading model editor...</div>}>
-  <ModelEditor model={model} />
+// Dynamically import the editor package so it stays out of the initial bundle
+const ModelEditor = lazy(async () => ({
+  default: (await import('@earthsciml/ast-editor')).ModelEditor,
+}));
+
+<Suspense fallback={<div>Loading model editor…</div>}>
+  <ModelEditor model={model()} />
 </Suspense>
 ```
 

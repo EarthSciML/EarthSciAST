@@ -108,6 +108,7 @@ from .flatten import (
     FlattenMetadata,
     FlattenError,
     ConflictingDerivativeError,
+    CoupleMultiplicativeNoTendencyError,
     DimensionPromotionError,
     UnmappedDomainError,
     UnsupportedMappingError,
@@ -118,8 +119,23 @@ from .flatten import (
     UnsupportedDimensionalityError,
 )
 
+# The diagnostic-code registry (API_SPEC.md §8). Canonical spelling in every
+# binding; the VALUES are a cross-binding contract.
+from .error_handling import ERROR_CODES
+
 # Validation (Core tier requirement)
-from .validation import validate, ValidationResult, ValidationError
+from .validation import (
+    validate,
+    validate_path,
+    validate_text,
+    ValidationResult,
+    ValidationError,
+    UnitWarning,
+)
+
+# Enum lowering (esm-spec §9.3). `lower_enums` is PURE and `lower_enums_mut` is
+# the in-place twin, per API_SPEC.md §8 item 15.
+from .registered_functions import EnumLoweringError, lower_enums, lower_enums_mut
 
 # Expression engine (Core tier requirement)
 from .expression import (
@@ -213,6 +229,7 @@ from .classification import (
     brownian_parameters,
     constant_parameters,
     declared_system_kind,
+    effective_system_kind,
     discrete_parameters,
     is_ode_state,
     model_nodes,
@@ -246,6 +263,10 @@ from .units import (
     convert_units,
     UnitValidator,
     UnitValidationResult,
+    UnitFinding,
+    UNIT_FINDING_DIMENSIONAL_MISMATCH,
+    UNIT_FINDING_UNPARSEABLE,
+    UNIT_FINDING_ANALYSIS,
     UnitConversionResult,
 )
 
@@ -254,6 +275,24 @@ from .edit import (
     ESMEditor,
     EditOperation,
     EditResult,
+    # Canonical bare-verb spellings (API_SPEC.md 8 item 7).
+    add_variable,
+    rename_variable,
+    remove_variable,
+    add_equation,
+    remove_equation,
+    add_reaction,
+    remove_reaction,
+    add_species,
+    remove_species,
+    add_continuous_event,
+    add_discrete_event,
+    remove_event,
+    add_coupling,
+    remove_coupling,
+    merge,
+    extract,
+    # Deprecated container-suffixed aliases, kept for one minor (API_SPEC.md 10).
     add_variable_to_model,
     rename_variable_in_model,
     remove_variable_from_model,
@@ -273,16 +312,17 @@ from .edit import (
 )
 
 # Simulation tier - box-model ODE and discretized-PDE simulation.
-# scipy is a HARD dependency (declared unconditionally in pyproject.toml), so this
-# import normally succeeds; the try/except is belt-and-suspenders that degrades
-# gracefully in a broken/partial install rather than a real optionality knob.
+# scipy is an OPTIONAL dependency (the `simulate` extra; esm-libraries-spec
+# §2.5.9 forbids a library embedding a solver as a runtime dependency). These
+# modules are written to import WITHOUT it — the solver import is guarded at
+# module scope and `solve` reports the miss at call time — so this block
+# normally succeeds on a base install too, and the guard is the backstop for a
+# genuinely broken install.
 _has_simulation = False
 try:
     from .simulation import (  # noqa: F401 — re-exported via __all__ below
-        simulate,
         evaluate_rhs,
         BuildInspection,
-        SimulationResult,
         SimulationError,
     )
 
@@ -291,18 +331,31 @@ except ImportError:
     # scipy (a hard dep) missing only in a broken install; skip the sim tier.
     pass
 
-# Build-time public surface (Phase 3 clean consolidation): the Julia-parity
-# prepare()/observed_field() entry points and the raw-dict pushdown desugar.
-_has_prepare = False
+# The simulation EsmProblem surface (esm-libraries-spec §2.5, API_SPEC §5.8): one
+# noun and one verb, plus the raw-dict pushdown desugar. `simulate` / `prepare`
+# / `PreparedModel` are DELETED, not deprecated — EsmProblem construction absorbs
+# what `prepare` did, and `solve` is the run.
+_has_problem = False
 try:
-    from .prepare import (  # noqa: F401 — re-exported via __all__ below
-        PreparedModel,
+    from .problem import (  # noqa: F401 — re-exported via __all__ below
+        CallbackSet,
+        EnsembleProblem,
+        Integrator,
+        EsmProblem,
+        ReturnCode,
+        Solution,
+        callbacks,
+        esm_problem,
+        init,
         observed_field,
-        prepare,
+        remake,
+        solve,
+        solve_all,
+        step,
     )
     from .pushdown_rewrite import desugar_pushdown, pushdown_diagnostics  # noqa: F401
 
-    _has_prepare = True
+    _has_problem = True
 except ImportError:
     pass
 
@@ -352,40 +405,26 @@ from .codegen import (
     to_python_code,
 )
 
-# Runtime data-source readers (dispatch on DataSource.kind)
-from .data_sources import (
-    UrlTemplateError,
-    expand_url_template,
-    expand_with_mirrors,
-    template_placeholders,
-    TimeResolutionError,
-    parse_iso_duration,
-    file_anchor_for_time,
-    file_anchors_in_range,
-    records_for_file,
-    MirrorFallbackError,
-    open_with_fallback,
-    CacheMiss,
-    cache_path_for_url,
-    cached_fetcher,
-    cached_opener,
-    resolve_data_dir,
+# Unit conversion on a data-source binding (esm-spec §8.4). These three are
+# CORE, not part of the loader tier: Julia defines them in `src/unit_conversion.jl`
+# and exports them from the main module (not from `EarthSciASTEarthSciIOExt`),
+# TypeScript exports `UnitConversionError` from its index, and API_SPEC.md §6
+# carries all three as `stable`. They are pure — sympy/pint arithmetic over a
+# declared conversion, no file ever opened — so they stay at the top level even
+# though this binding happens to file them under `data_sources/`.
+#
+# The REST of `data_sources` (the loader stack proper: url templates, time
+# resolution, mirror fallback, the cache, and the grid/points/static readers) is
+# NO LONGER re-exported here — phase-6 H-4. Import it from its own package:
+#
+#     from earthsci_ast.data_sources import load_grid, expand_url_template
+#
+# `__getattr__` below turns the old top-level spellings into an AttributeError
+# that says exactly that, rather than a bare "module has no attribute".
+from .data_sources.variables import (
     UnitConversionError,
-    apply_variable_mapping,
     apply_unit_conversion,
     parse_unit_conversion,
-    GridLoaderError,
-    GridLoader,
-    load_grid,
-    PointsLoaderError,
-    PointsLoader,
-    load_points,
-    StaticLoaderError,
-    StaticLoader,
-    load_static,
-    DataSourceDispatchError,
-    load_data,
-    resolve_files,
 )
 
 # Single source of truth: the installed distribution metadata (pyproject.toml).
@@ -415,6 +454,7 @@ __all__ = [
     "constant_parameters",
     "system_kind",
     "declared_system_kind",
+    "effective_system_kind",
     "unknowns",
     "observed_definitions",
     "assert_partitions",
@@ -482,7 +522,14 @@ __all__ = [
     "expand_coupling_imports",
     "is_coupling_library_doc",
     # Validation
+    "ERROR_CODES",
     "validate",
+    "validate_path",
+    "validate_text",
+    "UnitWarning",
+    "lower_enums",
+    "lower_enums_mut",
+    "EnumLoweringError",
     "ValidationResult",
     "ValidationError",
     "SchemaValidationError",
@@ -498,6 +545,7 @@ __all__ = [
     "FlattenMetadata",
     "FlattenError",
     "ConflictingDerivativeError",
+    "CoupleMultiplicativeNoTendencyError",
     "DimensionPromotionError",
     "UnmappedDomainError",
     "UnsupportedMappingError",
@@ -569,11 +617,33 @@ __all__ = [
     "convert_units",
     "UnitValidator",
     "UnitValidationResult",
+    "UnitFinding",
+    "UNIT_FINDING_DIMENSIONAL_MISMATCH",
+    "UNIT_FINDING_UNPARSEABLE",
+    "UNIT_FINDING_ANALYSIS",
     "UnitConversionResult",
     # Editing operations
     "ESMEditor",
     "EditOperation",
     "EditResult",
+    # Editing -- canonical bare-verb names (API_SPEC.md 8 item 7).
+    "add_variable",
+    "rename_variable",
+    "remove_variable",
+    "add_equation",
+    "remove_equation",
+    "add_reaction",
+    "remove_reaction",
+    "add_species",
+    "remove_species",
+    "add_continuous_event",
+    "add_discrete_event",
+    "remove_event",
+    "add_coupling",
+    "remove_coupling",
+    "merge",
+    "extract",
+    # Editing -- deprecated container-suffixed aliases (API_SPEC.md 10).
     "add_variable_to_model",
     "rename_variable_in_model",
     "remove_variable_from_model",
@@ -620,61 +690,105 @@ __all__ = [
     # Code generation
     "to_julia_code",
     "to_python_code",
-    # Runtime data loaders
-    "UrlTemplateError",
-    "expand_url_template",
-    "expand_with_mirrors",
-    "template_placeholders",
-    "TimeResolutionError",
-    "parse_iso_duration",
-    "file_anchor_for_time",
-    "file_anchors_in_range",
-    "records_for_file",
-    "MirrorFallbackError",
-    "open_with_fallback",
-    "CacheMiss",
-    "cache_path_for_url",
-    "cached_fetcher",
-    "cached_opener",
-    "resolve_data_dir",
+    # Unit conversion on a data-source binding (esm-spec §8.4) — core, shared
+    # with Julia and (for the error) TypeScript. The loader stack that used to
+    # be listed here now lives in `earthsci_ast.data_sources`; see H-4.
     "UnitConversionError",
-    "apply_variable_mapping",
     "apply_unit_conversion",
     "parse_unit_conversion",
-    "GridLoaderError",
-    "GridLoader",
-    "load_grid",
-    "PointsLoaderError",
-    "PointsLoader",
-    "load_points",
-    "StaticLoaderError",
-    "StaticLoader",
-    "load_static",
-    "DataSourceDispatchError",
-    "load_data",
-    "resolve_files",
 ]
 
-# Add simulation components (scipy is a hard dep, so this normally runs; guarded
-# only for a broken/partial install — see the import block above).
+# Add simulation components. scipy is optional (the `simulate` extra) but these
+# modules import without it, so this normally runs on a base install; the guard
+# is the backstop for a broken install — see the import block above.
 if _has_simulation:
     __all__.extend(
         [
-            "simulate",
             "evaluate_rhs",
             "BuildInspection",
-            "SimulationResult",
             "SimulationError",
         ]
     )
 
-if _has_prepare:
+if _has_problem:
     __all__.extend(
         [
-            "prepare",
-            "PreparedModel",
+            "esm_problem",
+            "EsmProblem",
+            "solve",
+            "Solution",
+            "ReturnCode",
+            "remake",
+            "callbacks",
+            "CallbackSet",
+            "init",
+            "Integrator",
+            "step",
+            "solve_all",
+            "EnsembleProblem",
             "observed_field",
             "desugar_pushdown",
             "pushdown_diagnostics",
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Retired top-level spellings (phase-6 H-4)
+# ---------------------------------------------------------------------------
+#: The loader-stack names this module used to re-export. They were never
+#: deleted — they moved one level down, to the package that defines them — so a
+#: plain "module has no attribute" would be a bad answer. `__getattr__` below
+#: answers with the import line that works.
+_MOVED_TO_DATA_SOURCES = frozenset(
+    {
+        "UrlTemplateError",
+        "expand_url_template",
+        "expand_with_mirrors",
+        "template_placeholders",
+        "TimeResolutionError",
+        "parse_iso_duration",
+        "file_anchor_for_time",
+        "file_anchors_in_range",
+        "records_for_file",
+        "MirrorFallbackError",
+        "open_with_fallback",
+        "CacheMiss",
+        "cache_path_for_url",
+        "cached_fetcher",
+        "cached_opener",
+        "resolve_data_dir",
+        "apply_variable_mapping",
+        "GridLoaderError",
+        "GridLoader",
+        "load_grid",
+        "PointsLoaderError",
+        "PointsLoader",
+        "load_points",
+        "StaticLoaderError",
+        "StaticLoader",
+        "load_static",
+        "DataSourceDispatchError",
+        "load_data",
+        "resolve_files",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Explain the H-4 move instead of a bare missing-attribute error.
+
+    Raises :class:`AttributeError` either way — this is NOT a compatibility
+    shim, and the name is genuinely not re-exported here any more (see
+    ``API_SPEC.md`` §8 row H-4). It only makes the failure self-diagnosing.
+    """
+    if name in _MOVED_TO_DATA_SOURCES:
+        raise AttributeError(
+            f"`earthsci_ast.{name}` moved to the data-loading tier in phase-6 "
+            f"H-4 and is no longer re-exported at the top level. Import it "
+            f"from its own package instead:\n\n"
+            f"    from earthsci_ast.data_sources import {name}\n\n"
+            f"The base install carries that package; only the xarray-backed "
+            f'grid/static openers need the extra: pip install "earthsci-ast[data]".'
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

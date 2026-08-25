@@ -104,15 +104,29 @@ _graph_rsys() = ReactionSystem(
         @test occursin("\"M.x\"", dot)
     end
 
-    @testset "to_json dispatches per graph type" begin
+    # API_SPEC.md §8 item 8: the canonical graph-rendering trio is
+    # `to_dot` / `to_mermaid` / `to_json_graph`. `to_json` is the DOCUMENT
+    # serializer (§8 item 2); its `Graph` methods stay one minor as an alias
+    # and must render byte-identical output.
+    @testset "to_json_graph dispatches per graph type" begin
         file = EsmFile("0.1.0", metadata,
                        models=Dict("M" => _graph_model()),
                        coupling=CouplingEntry[CouplingOperatorCompose(["M", "M"])])
-        cg_json = to_json(component_graph(file))
+        cg = component_graph(file)
+        eg = expression_graph(file)
+
+        cg_json = to_json_graph(cg)
         @test occursin("\"nodes\"", cg_json)
         @test occursin("\"adjacency\"", cg_json)
-        eg_json = to_json(expression_graph(file))
+        eg_json = to_json_graph(eg)
         @test occursin("\"kind\"", eg_json)
+
+        # The deprecated alias is byte-identical, not merely equivalent.
+        @test to_json(cg) == cg_json
+        @test to_json(eg) == eg_json
+
+        # `to_json` still means the DOCUMENT serializer for an EsmFile.
+        @test occursin("\"esm\"", to_json(file))
     end
 
     @testset "component_graph handles reaction-only files" begin

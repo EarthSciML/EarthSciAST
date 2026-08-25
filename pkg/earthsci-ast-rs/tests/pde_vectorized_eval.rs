@@ -17,7 +17,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, SolverChoice, load_string, simulate};
+use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -274,16 +274,27 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
 
     // Integrate end-to-end. t=0.1 advects the pulse by v*t/dx = 2 cells.
     let t_end = 0.1f64;
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-10,
         reltol: 1e-8,
-        max_steps: 100_000,
-        output_times: Some(vec![t_end]),
+        maxiters: 100_000,
+        saveat: Some(vec![t_end]),
         progress: None,
+        callback: None,
     };
-    let sol = simulate(&file, (0.0, t_end), &HashMap::new(), &ic, &opts)
-        .expect("advection simulate failed");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, t_end),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("advection simulate failed");
 
     // Pull the final state in grid order and check the centre of mass moved
     // downstream — the unambiguous signature of advection. `sol.state` is
@@ -1012,15 +1023,27 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
         ("identity", 4.0),
     ];
 
-    let opts = SimulateOptions {
-        solver: SolverChoice::Bdf,
+    let opts = SolveOptions {
+        alg: Alg::Bdf,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 100_000,
-        output_times: Some(vec![1.0]),
+        maxiters: 100_000,
+        saveat: Some(vec![1.0]),
         progress: None,
+        callback: None,
     };
-    let sol = simulate(&file, (0.0, 1.0), &HashMap::new(), &ic, &opts).expect("simulate fixture");
+    let sol = earthsci_ast::esm_problem(
+        &file,
+        (0.0, 1.0),
+        earthsci_ast::ProblemOptions {
+            p: HashMap::new().clone(),
+            u0: ic.clone(),
+            compile: earthsci_ast::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .and_then(|prob| earthsci_ast::solve(&prob, &opts))
+    .expect("simulate fixture");
     let last = sol.time.len() - 1;
     for (name, want) in &expected {
         let j = sol

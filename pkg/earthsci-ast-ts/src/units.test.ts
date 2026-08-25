@@ -9,7 +9,7 @@ import {
   type CanonicalDims,
 } from './units.js'
 import { loadString } from './parse.js'
-import { validate } from './validate.js'
+import { validateText } from './validate.js'
 import { readFixture } from './test-helpers.js'
 import type { Expression, EsmFile } from './types.js'
 
@@ -830,7 +830,7 @@ describe('Unit parsing and dimensional analysis', () => {
       })
 
       it(`validate() accepts ${fname}`, () => {
-        const result = validate(readFixture('valid', fname))
+        const result = validateText(readFixture('valid', fname))
         expect(result.structural_errors.map((e) => `[${e.code}] ${e.path}: ${e.message}`)).toEqual(
           [],
         )
@@ -845,7 +845,7 @@ describe('Unit parsing and dimensional analysis', () => {
   // not `unit_error` at the enclosing model.
   describe('unit errors use the corpus-pinned code and path (T4)', () => {
     it('reports an inconsistent equation at /models/<M>/equations/<i>', () => {
-      const result = validate(readFixture('invalid', 'units_incompatible_assignment.esm'))
+      const result = validateText(readFixture('invalid', 'units_incompatible_assignment.esm'))
       expect(result.is_valid).toBe(false)
       expect(
         result.structural_errors.some(
@@ -855,7 +855,7 @@ describe('Unit parsing and dimensional analysis', () => {
     })
 
     it('reports an inconsistent observed variable at /models/<M>/variables/<v>', () => {
-      const result = validate(readFixture('invalid', 'units_inconsistent_addition.esm'))
+      const result = validateText(readFixture('invalid', 'units_inconsistent_addition.esm'))
       expect(result.is_valid).toBe(false)
       expect(
         result.structural_errors.some(
@@ -870,7 +870,7 @@ describe('Unit parsing and dimensional analysis', () => {
       // Previously hard-quarantined in conformance.test.ts's
       // PENDING_BINDING_PHASE: TS returned is_valid:true for a fixture the
       // corpus pins invalid.
-      const result = validate(readFixture('invalid', 'units_invalid_logarithm.esm'))
+      const result = validateText(readFixture('invalid', 'units_invalid_logarithm.esm'))
       expect(result.is_valid).toBe(false)
       expect(
         result.structural_errors.some(

@@ -5,7 +5,7 @@ These exercise each array op (arrayop, makearray, index, broadcast, reshape,
 transpose, concat) and a sampling of scalar ops in isolation, using a
 synthetic :class:`EvalContext` that binds a handful of state variables to a
 flat numpy vector. The goal is to catch regressions in individual ops
-without relying on the end-to-end ``simulate()`` pipeline.
+without relying on the end-to-end ``esm_problem()``/``solve()`` pipeline.
 """
 
 from __future__ import annotations

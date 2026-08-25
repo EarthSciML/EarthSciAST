@@ -2,12 +2,12 @@
 //!
 //! ## Why
 //!
-//! A §9.7-expanded discretization repeats the same subtrees relentlessly:
-//! measured on `simpleclimate.esm` at the production grid, the typed model
-//! holds 1.21M expression-node occurrences but only 6,961 structurally
-//! distinct subtrees (0.58%). With an inline `ExpressionNode` payload every
-//! occurrence was a full ~832-byte copy — ~978 MiB of typed AST, the dominant
-//! load-phase allocation. [`Expr::Operator`] now carries
+//! A §9.7-expanded discretization repeats the same subtrees relentlessly: on a
+//! real model the typed AST holds millions of expression-node occurrences but
+//! only a few thousand structurally distinct subtrees. With an inline
+//! `ExpressionNode` payload every occurrence was a full several-hundred-byte
+//! copy, which made the typed AST the dominant load-phase allocation.
+//! [`Expr::Operator`] now carries
 //! `Arc<ExpressionNode>`, and this module collapses structurally identical
 //! nodes onto one allocation **while they are being deserialized**, so the
 //! duplicate copies never exist even transiently.

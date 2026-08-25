@@ -65,6 +65,48 @@ def canonical(name: str) -> str:
     return "_".join(merged)
 
 
+# A deprecation alias created by a RENAME cannot be folded by `canonical()`,
+# which only knows about SPELLING differences (Julia's `!`, camel vs snake). Yet
+# API_SPEC.md §10 requires an alias to be "a manifest entry with multiple
+# spellings for that binding ... in the same tier" — so without this table the
+# old name lands as its own `extension` symbol and the surface stops recording
+# that the two are one thing.
+#
+# Keyed (binding, exact spelling) -> canonical name. Every entry here is a name
+# kept for one minor per §10; delete the entry when the alias is removed.
+ALIAS_OVERRIDES: dict[tuple[str, str], str] = {
+    # §8 item 7 — Python's edit operations dropped their container suffix.
+    ("python", "add_variable_to_model"): "add_variable",
+    ("python", "rename_variable_in_model"): "rename_variable",
+    ("python", "remove_variable_from_model"): "remove_variable",
+    ("python", "add_equation_to_model"): "add_equation",
+    ("python", "remove_equation_from_model"): "remove_equation",
+    ("python", "add_reaction_to_system"): "add_reaction",
+    ("python", "remove_reaction_from_system"): "remove_reaction",
+    ("python", "add_species_to_system"): "add_species",
+    ("python", "remove_species_from_system"): "remove_species",
+    ("python", "add_continuous_event_to_model"): "add_continuous_event",
+    ("python", "add_discrete_event_to_model"): "add_discrete_event",
+    ("python", "remove_event_from_model"): "remove_event",
+    ("python", "add_coupling_to_file"): "add_coupling",
+    ("python", "remove_coupling_from_file"): "remove_coupling",
+    ("python", "merge_esm_files"): "merge",
+    ("python", "extract_component_from_file"): "extract",
+    # §8 item 6 — Julia's bare `unknowns` / `parameters` collide with MTK and
+    # Catalyst, so the `*_names` spellings stay exported alongside them.
+    ("julia", "unknown_names"): "unknowns",
+    ("julia", "parameter_names"): "parameters",
+    # G-2 — the `get` prefix came off in phase 6.
+    ("typescript", "getSupportedMigrationTargets"): "supported_migration_targets",
+    ("rust", "get_supported_migration_targets"): "supported_migration_targets",
+    # §8 item 10 — Rust's error joined the cross-binding name.
+    ("rust", "ReferenceError"): "reference_resolution_error",
+    # §8 item 13 / item 17 — Rust renames.
+    ("rust", "validate_complete"): "validate_text",
+    ("rust", "build_reference_graph_with_index_sets"): "build_reference_graph",
+}
+
+
 def kind_of(name: str) -> str:
     """Infer a symbol kind from its spelling.
 
@@ -266,23 +308,14 @@ PLANNED = [
                       "`output_times` -> `saveat`.",
         "affects": ["python", "rust"],
     },
-    {
-        "canonical": "closed_function_names",
-        "issue": "Julia, Rust and Go export a FUNCTION; TypeScript exports a "
-                 "CONSTANT array `CLOSED_FUNCTION_NAMES`.",
-        "resolution": "TypeScript adds `closedFunctionNames()`; the constant stays one "
-                      "minor as a deprecated alias.",
-        "affects": ["typescript"],
-    },
-    {
-        "canonical": "derive_odes",
-        "issue": "TypeScript spells it `deriveODEs`, violating the §2 rule that "
-                 "TypeScript is lowerCamelCase of the canonical name (`deriveOdes`). "
-                 "TypeScript already spells the sibling `odeStates` / `isOdeState` "
-                 "correctly.",
-        "resolution": "Rename to `deriveOdes`; `deriveODEs` stays one minor as an alias.",
-        "affects": ["typescript"],
-    },
+    # `closed_function_names` (§8 item 4), `derive_odes` (item 5),
+    # `component_graph` (item 20) and `supported_migration_targets` (gap G-2)
+    # used to live here. All four landed in phase 6 on the TypeScript side:
+    # `closedFunctionNames()` and `supportedMigrationTargets()` are now
+    # functions at the canonical name with the old spellings kept as deprecated
+    # aliases (§10), `deriveOdes` replaced the §2.1-violating `deriveODEs`
+    # (also aliased), and the snake_case `component_graph` alias was dropped.
+    # Each alias pair is a single manifest entry with two TypeScript spellings.
     {
         "canonical": "unknowns / parameters",
         "issue": "TypeScript and Python export `unknowns` / `parameters`; Julia "
@@ -335,13 +368,15 @@ PLANNED = [
                  "TypeScript exports both the function `systemKind` and the type "
                  "`SystemKind`, and Go additionally has `EffectiveSystemKind` with "
                  "no counterpart elsewhere.",
-        "resolution": "Keep the function/type pair (they are distinct symbols under "
-                      "the (name, kind) identity rule). Decide whether "
-                      "`EffectiveSystemKind` is `declared_system_kind`'s peer or a "
-                      "Go-only convenience, and harmonise the trio "
-                      "`system_kind` / `declared_system_kind` / "
-                      "`declared_system_kind_mismatch`, which currently exists in "
-                      "three different two-binding subsets.",
+        "resolution": "RULED (phase 6, API_SPEC.md §8 item 11): the family is three "
+                      "distinct questions plus one composition. `system_kind(model)` "
+                      "derives, `declared_system_kind(model)` reads the field, and "
+                      "`effective_system_kind(model)` is `declared ?? derived` — the "
+                      "question a caller choosing a solver actually asks. "
+                      "`declared_system_kind_mismatch` is deleted. TypeScript has all "
+                      "three as of phase 6; Julia, Python and Go still owe "
+                      "`effective_system_kind`. The function/type pair stays (they are "
+                      "distinct symbols under the (name, kind) identity rule).",
         "affects": ["julia", "typescript", "python", "go"],
     },
 ]
@@ -364,7 +399,8 @@ def build() -> dict:
     )
     for binding, names in live.items():
         for name in sorted(names):
-            table[(canonical(name), kind_for(binding, name))][binding].append(name)
+            key = ALIAS_OVERRIDES.get((binding, name)) or canonical(name)
+            table[(key, kind_for(binding, name))][binding].append(name)
 
     symbols = []
     for (name, kind), bindings in sorted(table.items()):

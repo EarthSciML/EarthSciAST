@@ -748,16 +748,6 @@
           "update_kinds": [],
           "distribution_kind": null,
           "source_system": "Chemistry"
-        },
-        {
-          "name": "Transport.u",
-          "role": "state",
-          "units": "mol/mol",
-          "default": 0.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "Transport"
         }
       ],
       "parameters": [
@@ -772,16 +762,6 @@
           ],
           "distribution_kind": null,
           "source_system": "Chemistry"
-        },
-        {
-          "name": "Surface.surface_resistance",
-          "role": "parameter",
-          "units": "s/m",
-          "default": 100.0,
-          "shape": null,
-          "update_kinds": [],
-          "distribution_kind": null,
-          "source_system": "Surface"
         },
         {
           "name": "Transport.wind_speed",
@@ -826,6 +806,16 @@
           "update_kinds": [],
           "distribution_kind": null,
           "source_system": "Surface"
+        },
+        {
+          "name": "Surface.surface_resistance",
+          "role": "observed",
+          "units": "s/m",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Surface"
         }
       ],
       "algebraic_variables": [],
@@ -838,12 +828,12 @@
       "equations": [
         {
           "lhs": "D(Chemistry.O3)/Dt",
-          "rhs": "-0.1 * Chemistry.O3 * Chemistry.NO + (-Surface.deposition_velocity) * Chemistry.O3",
+          "rhs": "-0.1 * Chemistry.O3 * Chemistry.NO + (-Transport.wind_speed) * grad(Chemistry.O3) + Transport.diffusivity * laplacian(Chemistry.O3) + (-Surface.deposition_velocity) * Chemistry.O3",
           "source_system": "Chemistry"
         },
         {
           "lhs": "D(Chemistry.NO)/Dt",
-          "rhs": "-0.1 * Chemistry.O3 * Chemistry.NO",
+          "rhs": "-0.1 * Chemistry.O3 * Chemistry.NO + (-Transport.wind_speed) * grad(Chemistry.NO) + Transport.diffusivity * laplacian(Chemistry.NO)",
           "source_system": "Chemistry"
         },
         {
@@ -857,9 +847,9 @@
           "source_system": "Surface"
         },
         {
-          "lhs": "D(Transport.u)/Dt",
-          "rhs": "(-Transport.wind_speed) * grad(Transport.u) + Transport.diffusivity * laplacian(Transport.u)",
-          "source_system": "Transport"
+          "lhs": "Surface.surface_resistance",
+          "rhs": "100 * (1 + 0.1 * Chemistry.O3)",
+          "source_system": "Surface"
         }
       ],
       "continuous_events": [],
@@ -877,6 +867,7 @@
         ],
         "coupling_rules": [
           "couple(Chemistry <-> Surface)",
+          "variable_map(Chemistry.O3 -> Surface.surface_resistance, transform=expression)",
           "operator_compose(Chemistry + Transport) [translate: Chemistry.O3->Transport._var, Chemistry.NO->Transport._var]",
           "callback(DiagnosticOutput)"
         ],
@@ -895,10 +886,6 @@
         },
         {
           "state": "Chemistry.NO",
-          "expr": "1.0e-9"
-        },
-        {
-          "state": "Transport.u",
           "expr": "1.0e-9"
         }
       ],
@@ -1064,9 +1051,7 @@
         }
       ],
       "observed_variables": [],
-      "algebraic_variables": [
-        "AtmosphericChemistry.OH"
-      ],
+      "algebraic_variables": [],
       "brownian_parameters": [],
       "discrete_parameters": [
         "Transport.u",
@@ -1077,23 +1062,23 @@
       "equation_count": 4,
       "equations": [
         {
-          "lhs": "D(Transport.u)/Dt",
-          "rhs": "(-Transport.u) * grad(Transport.u) + (-Transport.v) * grad(Transport.u) + (-Transport.w) * grad(Transport.u) + Transport.K_h * laplacian(Transport.u) + Transport.K_v * laplacian(Transport.u)",
+          "lhs": "D(AtmosphericChemistry.OH)/Dt",
+          "rhs": "(-Transport.u) * grad(AtmosphericChemistry.OH) + (-Transport.v) * grad(AtmosphericChemistry.OH) + (-Transport.w) * grad(AtmosphericChemistry.OH) + Transport.K_h * laplacian(AtmosphericChemistry.OH) + Transport.K_v * laplacian(AtmosphericChemistry.OH)",
           "source_system": "Transport"
         },
         {
           "lhs": "D(AtmosphericChemistry.O3)/Dt",
-          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + (-Transport.u) * grad(AtmosphericChemistry.O3) + (-Transport.v) * grad(AtmosphericChemistry.O3) + (-Transport.w) * grad(AtmosphericChemistry.O3) + Transport.K_h * laplacian(AtmosphericChemistry.O3) + Transport.K_v * laplacian(AtmosphericChemistry.O3)",
           "source_system": "AtmosphericChemistry"
         },
         {
           "lhs": "D(AtmosphericChemistry.NO)/Dt",
-          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + (-Transport.u) * grad(AtmosphericChemistry.NO) + (-Transport.v) * grad(AtmosphericChemistry.NO) + (-Transport.w) * grad(AtmosphericChemistry.NO) + Transport.K_h * laplacian(AtmosphericChemistry.NO) + Transport.K_v * laplacian(AtmosphericChemistry.NO)",
           "source_system": "AtmosphericChemistry"
         },
         {
           "lhs": "D(AtmosphericChemistry.NO2)/Dt",
-          "rhs": "1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3",
+          "rhs": "1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.M * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + (-Transport.u) * grad(AtmosphericChemistry.NO2) + (-Transport.v) * grad(AtmosphericChemistry.NO2) + (-Transport.w) * grad(AtmosphericChemistry.NO2) + Transport.K_h * laplacian(AtmosphericChemistry.NO2) + Transport.K_v * laplacian(AtmosphericChemistry.NO2)",
           "source_system": "AtmosphericChemistry"
         }
       ],
@@ -1101,7 +1086,7 @@
         {
           "name": "concentration_limit",
           "conditions": [
-            "Transport.u - 1.0e-3"
+            "_var - 1.0e-3"
           ],
           "affects": [
             "_var = 1.0e-3"
@@ -2072,6 +2057,705 @@
           "cadence": "const"
         }
       ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "minimal_chemistry",
+      "tier": "operator_compose",
+      "fixture": "valid/minimal_chemistry.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t",
+        "x",
+        "y"
+      ],
+      "state_variables": [
+        {
+          "name": "SimpleOzone.O3",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        },
+        {
+          "name": "SimpleOzone.NO",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        },
+        {
+          "name": "SimpleOzone.NO2",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Advection.u_wind",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Advection"
+        },
+        {
+          "name": "Advection.v_wind",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Advection"
+        },
+        {
+          "name": "SimpleOzone.T",
+          "role": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        },
+        {
+          "name": "SimpleOzone.M",
+          "role": "parameter",
+          "units": "molec/cm^3",
+          "default": 2.46e+19,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        },
+        {
+          "name": "SimpleOzone.jNO2",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.005,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleOzone"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "Advection.u_wind",
+        "Advection.v_wind"
+      ],
+      "equation_count": 3,
+      "equations": [
+        {
+          "lhs": "D(SimpleOzone.O3)/Dt",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2 + (-Advection.u_wind) * grad(SimpleOzone.O3) + (-Advection.v_wind) * grad(SimpleOzone.O3)",
+          "source_system": "SimpleOzone"
+        },
+        {
+          "lhs": "D(SimpleOzone.NO)/Dt",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2 + (-Advection.u_wind) * grad(SimpleOzone.NO) + (-Advection.v_wind) * grad(SimpleOzone.NO)",
+          "source_system": "SimpleOzone"
+        },
+        {
+          "lhs": "D(SimpleOzone.NO2)/Dt",
+          "rhs": "1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 + -1 * SimpleOzone.jNO2 * SimpleOzone.NO2 + (-Advection.u_wind) * grad(SimpleOzone.NO2) + (-Advection.v_wind) * grad(SimpleOzone.NO2)",
+          "source_system": "SimpleOzone"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": "Float32",
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "Advection",
+          "SimpleOzone"
+        ],
+        "coupling_rules": [
+          "operator_compose(SimpleOzone + Advection)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [
+        {
+          "name": "Advection.u_wind",
+          "owner": "Advection",
+          "source": "GEOSFP",
+          "file_variable": "u",
+          "cadence": "const"
+        },
+        {
+          "name": "Advection.v_wind",
+          "owner": "Advection",
+          "source": "GEOSFP",
+          "file_variable": "v",
+          "cadence": "const"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "metadata_inheritance_coupled",
+      "tier": "operator_compose",
+      "fixture": "valid/metadata_inheritance_coupled.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t",
+        "x",
+        "y"
+      ],
+      "state_variables": [
+        {
+          "name": "AtmosphericChemistry.O3",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AtmosphericChemistry"
+        },
+        {
+          "name": "AtmosphericChemistry.NO",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 1e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AtmosphericChemistry"
+        },
+        {
+          "name": "AtmosphericChemistry.NO2",
+          "role": "species",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AtmosphericChemistry"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "AdvectionTransport.u_wind",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 5.0,
+          "shape": null,
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "AdvectionTransport"
+        },
+        {
+          "name": "AdvectionTransport.v_wind",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "AdvectionTransport"
+        },
+        {
+          "name": "AtmosphericChemistry.T",
+          "role": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AtmosphericChemistry"
+        },
+        {
+          "name": "AtmosphericChemistry.jNO2",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.005,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AtmosphericChemistry"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "AdvectionTransport.u_wind",
+        "AdvectionTransport.v_wind"
+      ],
+      "equation_count": 3,
+      "equations": [
+        {
+          "lhs": "D(AtmosphericChemistry.O3)/Dt",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2 + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.O3) + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.O3)",
+          "source_system": "AtmosphericChemistry"
+        },
+        {
+          "lhs": "D(AtmosphericChemistry.NO)/Dt",
+          "rhs": "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2 + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.NO) + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.NO)",
+          "source_system": "AtmosphericChemistry"
+        },
+        {
+          "lhs": "D(AtmosphericChemistry.NO2)/Dt",
+          "rhs": "1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * AtmosphericChemistry.O3 + -1 * AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2 + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.NO2) + (-AdvectionTransport.v_wind) * grad(AtmosphericChemistry.NO2)",
+          "source_system": "AtmosphericChemistry"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "AdvectionTransport",
+          "AtmosphericChemistry"
+        ],
+        "coupling_rules": [
+          "operator_compose(AtmosphericChemistry + AdvectionTransport)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [
+        {
+          "name": "AdvectionTransport.u_wind",
+          "owner": "AdvectionTransport",
+          "source": "MeteorologicalData",
+          "file_variable": "u",
+          "cadence": "const"
+        },
+        {
+          "name": "AdvectionTransport.v_wind",
+          "owner": "AdvectionTransport",
+          "source": "MeteorologicalData",
+          "file_variable": "v",
+          "cadence": "const"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "bare_reference_resolution",
+      "tier": "operator_compose",
+      "fixture": "scoping/bare_reference_resolution.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "SimpleChemistry.O3",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "name": "SimpleChemistry.NO",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "name": "SimpleChemistry.NO2",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "name": "SimpleChemistry.Photochemistry.NO2_photo",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1e-09,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry.Photochemistry"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "SimpleChemistry.k_rate",
+          "role": "parameter",
+          "units": "cm^3/molec/s",
+          "default": 1.8e-12,
+          "shape": null,
+          "update_kinds": [
+            "crossing"
+          ],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "name": "SimpleChemistry.temperature",
+          "role": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "shape": null,
+          "update_kinds": [
+            "crossing"
+          ],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "name": "SimpleChemistry.Photochemistry.photolysis_rate",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 1e-05,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry.Photochemistry"
+        },
+        {
+          "name": "SimpleChemistry.Photochemistry.solar_zenith",
+          "role": "parameter",
+          "units": "rad",
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "SimpleChemistry.Photochemistry"
+        },
+        {
+          "name": "Transport.diffusivity",
+          "role": "parameter",
+          "units": "m^2/s",
+          "default": 100.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Transport"
+        },
+        {
+          "name": "Transport.velocity",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 5.0,
+          "shape": null,
+          "update_kinds": [
+            "data"
+          ],
+          "distribution_kind": null,
+          "source_system": "Transport"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [
+        "SimpleChemistry.k_rate",
+        "SimpleChemistry.temperature",
+        "Transport.velocity"
+      ],
+      "equation_count": 4,
+      "equations": [
+        {
+          "lhs": "D(SimpleChemistry.O3)/Dt",
+          "rhs": "(-SimpleChemistry.k_rate) * SimpleChemistry.O3 * SimpleChemistry.NO + Transport.diffusivity * laplacian(SimpleChemistry.O3) + (-Transport.velocity) * grad(SimpleChemistry.O3)",
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "lhs": "D(SimpleChemistry.NO)/Dt",
+          "rhs": "(-SimpleChemistry.k_rate) * SimpleChemistry.O3 * SimpleChemistry.NO + Transport.diffusivity * laplacian(SimpleChemistry.NO) + (-Transport.velocity) * grad(SimpleChemistry.NO)",
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "lhs": "D(SimpleChemistry.NO2)/Dt",
+          "rhs": "SimpleChemistry.k_rate * SimpleChemistry.O3 * SimpleChemistry.NO + Transport.diffusivity * laplacian(SimpleChemistry.NO2) + (-Transport.velocity) * grad(SimpleChemistry.NO2)",
+          "source_system": "SimpleChemistry"
+        },
+        {
+          "lhs": "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt",
+          "rhs": "(-SimpleChemistry.Photochemistry.photolysis_rate) * SimpleChemistry.Photochemistry.NO2_photo * cos(SimpleChemistry.Photochemistry.solar_zenith) + Transport.diffusivity * laplacian(SimpleChemistry.Photochemistry.NO2_photo) + (-Transport.velocity) * grad(SimpleChemistry.Photochemistry.NO2_photo)",
+          "source_system": "SimpleChemistry.Photochemistry"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "SimpleChemistry",
+          "Transport"
+        ],
+        "coupling_rules": [
+          "operator_compose(SimpleChemistry + Transport) [translate: SimpleChemistry.O3->Transport._var, SimpleChemistry.NO->Transport._var, SimpleChemistry.NO2->Transport._var]"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [
+        {
+          "state": "SimpleChemistry.O3",
+          "expr": "4.0e-8"
+        },
+        {
+          "state": "SimpleChemistry.NO",
+          "expr": "1.0e-10"
+        },
+        {
+          "state": "SimpleChemistry.NO2",
+          "expr": "1.0e-9"
+        },
+        {
+          "state": "SimpleChemistry.Photochemistry.NO2_photo",
+          "expr": "1.0e-9"
+        }
+      ],
+      "loader_fields": [
+        {
+          "name": "Transport.velocity",
+          "owner": "Transport",
+          "source": "MeteoData",
+          "file_variable": "wind_speed",
+          "cadence": "const"
+        }
+      ],
+      "lifted_shapes": {}
+    },
+    {
+      "id": "operator_compose_translate",
+      "tier": "operator_compose",
+      "fixture": "coupling/operator_compose_resolution_fixtures.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t",
+        "z",
+        "x",
+        "y"
+      ],
+      "state_variables": [
+        {
+          "name": "ChemistrySystem.O3",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 4e-08,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.NO",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.NO2",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 2e-10,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "ChemistrySystem.k1",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 1e-05,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "ChemistrySystem.k2",
+          "role": "parameter",
+          "units": "cm^3/molec/s",
+          "default": 1.8e-12,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "name": "AdvectionSystem.u",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "name": "AdvectionSystem.v",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 4.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "name": "DiffusionSystem.kh",
+          "role": "parameter",
+          "units": "m^2/s",
+          "default": 10.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiffusionSystem"
+        },
+        {
+          "name": "DiffusionSystem.kv",
+          "role": "parameter",
+          "units": "m^2/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DiffusionSystem"
+        },
+        {
+          "name": "DepositionSystem.deposition_velocity",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 0.01,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "DepositionSystem.surface_flux",
+          "role": "observed",
+          "units": "mol/m^2/s",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "D(ChemistrySystem.O3)/Dt",
+          "rhs": "-1 * ChemistrySystem.k1 * ChemistrySystem.O3 + DiffusionSystem.kh * laplacian(ChemistrySystem.O3) + DiffusionSystem.kv * D(ChemistrySystem.O3)/Dz",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(ChemistrySystem.NO)/Dt",
+          "rhs": "ChemistrySystem.k2 * ChemistrySystem.NO2 + DiffusionSystem.kh * laplacian(ChemistrySystem.NO) + DiffusionSystem.kv * D(ChemistrySystem.NO)/Dz",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(ChemistrySystem.NO2)/Dt",
+          "rhs": "-1 * ChemistrySystem.k2 * ChemistrySystem.NO2",
+          "source_system": "ChemistrySystem"
+        },
+        {
+          "lhs": "D(AdvectionSystem.u)/Dt",
+          "rhs": "(-AdvectionSystem.u) * grad(AdvectionSystem.u) + (-AdvectionSystem.v) * grad(AdvectionSystem.u)",
+          "source_system": "AdvectionSystem"
+        },
+        {
+          "lhs": "DepositionSystem.surface_flux",
+          "rhs": "DepositionSystem.deposition_velocity * DepositionSystem.O3",
+          "source_system": "DepositionSystem"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "ChemistrySystem",
+          "AdvectionSystem",
+          "DiffusionSystem",
+          "DepositionSystem"
+        ],
+        "coupling_rules": [
+          "operator_compose(ChemistrySystem + AdvectionSystem)",
+          "operator_compose(ChemistrySystem + DiffusionSystem) [translate: O3->ozone_conc*1.0, NO->nitrogen_oxide*1.0]",
+          "operator_compose(ChemistrySystem + AdvectionSystem) [translate: O3->O3*1.0, NO->NO*0.5, NO2->NO2*2.0]",
+          "operator_compose(DiffusionSystem + DepositionSystem) [translate: ozone_conc->O3*1.0]"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
       "lifted_shapes": {}
     },
     {
@@ -3263,6 +3947,11 @@
       "fixture": "valid/template_import_lib.esm",
       "error": "ValueError",
       "reason": "a pure template LIBRARY: templates and no component. There is nothing to flatten, and a library file must stay generic (its metaparameters bind per import edge), so flatten refuses rather than instantiating it at its defaults."
+    },
+    {
+      "fixture": "coupling/couple_multiplicative_no_tendency.esm",
+      "error": "CoupleMultiplicativeNoTendencyError",
+      "reason": "a `couple` connector applies `multiplicative` to `Surface.resistance`, a constant parameter with no `D(...)` tendency. esm-spec §10.3 and libraries §4.7.2 both define the transform against the target's EXISTING ODE RHS, so there is nothing to multiply. Four of five bindings used to drop the connector equation SILENTLY -- the document declared a coupling and the flattened system carried no trace of it. This case exists so `couple_multiplicative_no_tendency` cannot rot the way `operator_compose` did: every fixture that used the idiom was migrated to the §10.4 `variable_map` spelling, which left the diagnostic with no fixture at all. It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and structurally valid -- `tests/invalid/` means `validate()` must reject, and this document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
     },
     {
       "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",

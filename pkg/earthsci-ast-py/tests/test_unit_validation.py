@@ -16,7 +16,7 @@ import pytest
 from conftest import CORPUS_UNIT_DEFECTS, VALID_DIR
 from pint import UnitRegistry, DimensionalityError
 from earthsci_ast import load_string
-from earthsci_ast.validation import validate
+from earthsci_ast.validation import validate, validate_text
 from earthsci_ast.esm_types import (
     ModelVariable,
     Parameter,
@@ -899,7 +899,7 @@ class TestUnparseableUnitIsAnError:
                 }
             },
         }
-        result = validate(json.dumps(doc))
+        result = validate_text(json.dumps(doc))
         assert result.is_valid is False
         offenders = [
             e
@@ -997,7 +997,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                 }
             },
         }
-        result = validate(json.dumps(doc))
+        result = validate_text(json.dumps(doc))
         assert result.is_valid is False, f"{op}(L) with L in metres must be rejected"
         offenders = [
             e
@@ -1029,7 +1029,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                 }
             },
         }
-        result = validate(json.dumps(doc))
+        result = validate_text(json.dumps(doc))
         assert result.is_valid is True, result.structural_errors
 
     def test_sqrt_is_not_in_the_rule(self):
@@ -1050,7 +1050,7 @@ class TestTranscendentalArgumentMustBeDimensionless:
                 }
             },
         }
-        result = validate(json.dumps(doc))
+        result = validate_text(json.dumps(doc))
         assert result.is_valid is True, result.structural_errors
 
 

@@ -26,18 +26,33 @@ classifiers = [
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
 
-# scipy / xarray / netcdf4 are required: the simulation and IO tiers (exercised
-# by the test suite) hard-depend on them. matplotlib is genuinely optional — it
-# is used lazily only by SimulationResult.plot behind an import guard — so it
-# lives in the `plot` extra, not here.
+# The BASE install is the format library: parse / validate / serialize /
+# display / canonicalize / graph / edit / flatten / classify, plus expression
+# evaluation. Nothing here reads a data file off a URL, so nothing here needs a
+# netCDF stack.
+#
+# xarray / netcdf4 are NOT base dependencies (phase-6 H-4). The comment they
+# replace claimed "the IO tier hard-depends on them"; that was measured false —
+# no module under `earthsci_ast/` imports either at module scope. `xarray` is
+# imported inside `data_sources._xarray._default_xarray_opener`, and `netcdf4`
+# is never imported by this package at all: it is the ENGINE xarray selects to
+# open a netCDF URL. Both now live in the `data` extra, which is the Python
+# analogue of the Rust crate's `esio` feature and of `EarthSciASTEarthSciIOExt`
+# in Julia — the opt-in that turns on reading real gridded data.
+#
+# scipy is NOT a base dependency either: esm-libraries-spec §2.5.9 keeps the
+# SOLVER optional in every binding. Building a Problem — load, flatten, provider
+# fetch, compile — never touches it; only `solve` / `init` / `step` /
+# `solve_all` do, and they report a missing SciPy rather than failing at import.
+# It lives in the `simulate` extra (and in `test`, which exercises the solver).
+#
+# matplotlib is optional for the same shape of reason — used lazily only by
+# Solution.plot behind an import guard — so it lives in the `plot` extra.
 dependencies = [
     "jsonschema>=4.0",
     "sympy>=1.9",
     "pint>=0.20",
     "numpy>=1.20",
-    "scipy>=1.7",
-    "xarray>=0.20",
-    "netcdf4>=1.5",
 ]
 
 [project.urls]
@@ -46,16 +61,32 @@ Repository = "https://github.com/EarthSciML/EarthSciAST.git"
 Documentation = "https://github.com/EarthSciML/EarthSciAST#readme"
 Issues = "https://github.com/EarthSciML/EarthSciAST/issues"
 
-[project.scripts]
-earthsci-determinism-adapter-python = "earthsci_ast.cli.determinism_adapter:main"
-earthsci-cadence-adapter-python = "earthsci_ast.cli.cadence_adapter:main"
-# The pde-simulation conformance harness probes PATH for
-# ``earthsci-pde-sim-adapter-<binding>`` (scripts/run-pde-simulation-conformance.py);
-# register the Python adapter under that exact name.
-earthsci-pde-sim-adapter-python = "earthsci_ast.cli.pde_simulation_adapter:main"
-
 [project.optional-dependencies]
-# Plotting is optional: only SimulationResult.plot imports matplotlib, lazily and
+# The data-loading tier (phase-6 H-4): `earthsci_ast.data_sources` reading a
+# REAL gridded or static source off a URL. The pure-Python parts of that package
+# — URL-template expansion, ISO-8601 time resolution, mirror fallback, the cache
+# index, unit conversion, and the CSV/JSON `points` loader — need none of this
+# and work on the base install; only the xarray-backed `grid` / `static`
+# openers do. A missing extra is reported by
+# `data_sources._xarray._default_xarray_opener` as an `XarrayLoaderError`
+# naming this extra, not as a bare ImportError.
+#
+# Cross-binding: this is the same seam as the Rust crate's non-default `esio`
+# feature and Julia's `EarthSciASTEarthSciIOExt` extension. It is spelled
+# `data` rather than `esio` because what it installs is the netCDF reader
+# stack (xarray + its netcdf4 engine), NOT EarthSciIO — the Python EarthSciIO
+# bridge (`data_sources.esio_provider`) imports `earthsciio` lazily and is
+# opt-in by virtue of never being declared here at all.
+data = [
+    "xarray>=0.20",
+    "netcdf4>=1.5",
+]
+# The solver (esm-libraries-spec §2.5.9). `esm_problem` never needs it; `solve`,
+# `init`, `step` and `solve_all` do.
+simulate = [
+    "scipy>=1.7",
+]
+# Plotting is optional: only Solution.plot imports matplotlib, lazily and
 # behind an import guard, so the core toolkit never requires it.
 plot = [
     "matplotlib>=3.5",
@@ -68,9 +99,38 @@ dev = [
     "build>=0.8",
     "twine>=4.0",
 ]
+# The cross-language conformance ADAPTERS (determinism, cadence, PDE
+# simulation). These are development tooling, not a product surface: `esm` (the
+# Rust binary) is the only command-line tool this project ships, so the adapters
+# are NOT installed as console scripts. They are run as modules:
+#
+#     python3 -m earthsci_ast.cli.determinism_adapter    --manifest M --output O
+#     python3 -m earthsci_ast.cli.cadence_adapter        --manifest M --output O
+#     python3 -m earthsci_ast.cli.pde_simulation_adapter --manifest M --output O
+#
+# The harness (scripts/conformance_lib.py, AdapterHarness.discover) resolves an
+# adapter from `$EARTHSCI_<SUITE>_ADAPTER_<BINDING>` FIRST and only then falls
+# back to probing PATH for `earthsci-<suite>-adapter-<binding>`. Every Python
+# producer in scripts/test-conformance.sh sets that variable to the `python3 -m`
+# form above, with PYTHONPATH pinned to this worktree's src -- deliberately, so
+# the adapter runs THIS checkout rather than whatever a stray install left on
+# PATH. Dropping the console scripts therefore changes nothing the harness uses,
+# and removes a way to accidentally conformance-test the wrong code.
+conformance = [
+    "numpy>=1.20",
+    # The PDE-simulation adapter integrates trajectories with scipy solve_ivp.
+    "scipy>=1.7",
+]
 test = [
     "pytest>=6.0",
     "pytest-cov>=3.0",
+    # The test suite integrates real problems end to end (esm-libraries-spec
+    # §2.4.2), so the optional solver is a TEST dependency here.
+    "scipy>=1.7",
+    # The loader tests open real netCDF fixtures through the xarray openers, so
+    # the `data` extra's contents are TEST dependencies here too (phase-6 H-4).
+    "xarray>=0.20",
+    "netcdf4>=1.5",
     # Required for jsonschema FormatChecker to validate date-time and uri formats
     "rfc3339-validator",
     "rfc3986-validator",

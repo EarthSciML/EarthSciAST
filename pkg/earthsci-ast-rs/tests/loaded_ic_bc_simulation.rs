@@ -18,11 +18,11 @@
 //! Grid convention: `[lon, lat]` = row=lon, col=lat; indices are 1-based in state
 //! names (`Chemistry.O3[1,1]`), 0-based internally.
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::load_path;
 use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
 use earthsci_ast::simulate_array::ArrayCompiled;
-use earthsci_ast::{SimulateOptions, Solution, SolverChoice};
+use earthsci_ast::{Alg, Solution, SolveOptions};
 use ndarray::{ArrayD, IxDyn};
 use std::collections::HashMap;
 
@@ -150,16 +150,17 @@ fn loaded_ic_bc_simulation_provider_injection() {
     }
 
     // ---- Simulate 0 -> 600 ---------------------------------------------------
-    let opts = SimulateOptions {
-        solver: SolverChoice::Erk,
+    let opts = SolveOptions {
+        alg: Alg::Erk,
         abstol: 1e-12,
         reltol: 1e-10,
-        max_steps: 10_000_000,
-        output_times: Some(vec![0.0, 600.0]),
+        maxiters: 10_000_000,
+        saveat: Some(vec![0.0, 600.0]),
         progress: None,
+        callback: None,
     };
     let sol = compiled
-        .simulate((0.0, 600.0), &HashMap::new(), &HashMap::new(), &opts)
+        .solve((0.0, 600.0), &HashMap::new(), &HashMap::new(), &opts)
         .expect("simulate the loaded-IC/BC system");
 
     // ---- Assertions: the fixture's inline `tests` block ----------------------

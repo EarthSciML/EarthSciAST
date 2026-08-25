@@ -20,7 +20,7 @@
 //! This test closes the gap: it is the same corpus the other four bindings
 //! already check, so a future divergence fails here rather than surviving.
 
-use earthsci_ast::{to_ascii, to_latex, to_unicode, types::Expr};
+use earthsci_ast::{Expr, to_ascii, to_latex, to_unicode};
 
 /// Repo-root-relative path to the shared display fixtures.
 fn fixture_path(name: &str) -> std::path::PathBuf {

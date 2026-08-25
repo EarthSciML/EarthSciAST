@@ -23,8 +23,9 @@ use std::rc::Rc;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareOptions, PrepareProvider, prepare};
-use earthsci_ast::pushdown_rewrite::desugar_pushdown;
+use earthsci_ast::desugar_pushdown;
+use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 fn ix(f: &str, idx: &[Value]) -> Value {
     let mut args = vec![json!(f)];
@@ -52,54 +53,54 @@ fn doc() -> Value {
              "args": [ix("cell_ring", &[json!("c")]), ix("rec_ring", &[json!("r")])]},
             ix("cell_area", &[json!("c")])]}]});
     json!({
-        "esm": "1.0.0",
-        "metadata": {"name": "pushdown_cell_geometry"},
-        "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
-        "index_sets": {
-            "src_cells": {"kind": "interval", "size": 4},
-            "rcv_cells": {"kind": "interval", "size": 2},
-            "emis_records": {"kind": "interval", "size": 3},
-            "ring_vertex": {"kind": "interval", "size": 5},
-            "xy": {"kind": "interval", "size": 2},
+    "esm": "1.0.0",
+    "metadata": {"name": "pushdown_cell_geometry"},
+    "data_sources": {"MockSR": {"kind": "static", "source": {"url_template": "mock://sr"}}},
+    "index_sets": {
+        "src_cells": {"kind": "interval", "size": 4},
+        "rcv_cells": {"kind": "interval", "size": 2},
+        "emis_records": {"kind": "interval", "size": 3},
+        "ring_vertex": {"kind": "interval", "size": 5},
+        "xy": {"kind": "interval", "size": 2},
+    },
+    "models": {"Binned": {
+        "variables": {
+            "src_W": param(&["src_cells"]),
+            "src_S": param(&["src_cells"]),
+            "src_E": param(&["src_cells"]),
+            "src_N": param(&["src_cells"]),
+            "cell_area": param(&["src_cells"]),
+            "cell_ring": param(&["src_cells", "ring_vertex", "xy"]),
+            "rec_ring": param(&["emis_records", "ring_vertex", "xy"]),
+            "rec_xmin": param(&["emis_records"]),
+            "rec_ymin": param(&["emis_records"]),
+            "rec_xmax": param(&["emis_records"]),
+            "rec_ymax": param(&["emis_records"]),
+            "emis_annual": param(&["emis_records"]),
+            "SR_PM25": {"type": "parameter", "default": 0.0, "units": "1",
+                        "shape": ["src_cells", "rcv_cells"],
+                        "update": {"kind": "data", "source": "MockSR",
+                                   "from": {"file_variable": "PM25"}}},
+            "E_PM25": {"type": "unknown", "shape": ["src_cells"]},
+            "conc_PM25": {"type": "unknown", "shape": ["rcv_cells"]},
         },
-        "models": {"Binned": {
-            "variables": {
-                "src_W": param(&["src_cells"]),
-                "src_S": param(&["src_cells"]),
-                "src_E": param(&["src_cells"]),
-                "src_N": param(&["src_cells"]),
-                "cell_area": param(&["src_cells"]),
-                "cell_ring": param(&["src_cells", "ring_vertex", "xy"]),
-                "rec_ring": param(&["emis_records", "ring_vertex", "xy"]),
-                "rec_xmin": param(&["emis_records"]),
-                "rec_ymin": param(&["emis_records"]),
-                "rec_xmax": param(&["emis_records"]),
-                "rec_ymax": param(&["emis_records"]),
-                "emis_annual": param(&["emis_records"]),
-                "SR_PM25": {"type": "parameter", "default": 0.0, "units": "1",
-                            "shape": ["src_cells", "rcv_cells"],
-                            "update": {"kind": "data", "source": "MockSR",
-                                       "from": {"file_variable": "PM25"}}},
-                "E_PM25": {"type": "unknown", "shape": ["src_cells"]},
-                "conc_PM25": {"type": "unknown", "shape": ["rcv_cells"]},
-            },
-            "equations": [
-                {"lhs": "E_PM25", "rhs": {
-                    "op": "aggregate", "reduce": "+", "output_idx": ["c"],
-                    "ranges": {"c": {"from": "src_cells"}, "r": {"from": "emis_records"}},
-                    "args": ["src_W", "src_S", "src_E", "src_N",
-                             "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
-                             "cell_ring", "cell_area", "rec_ring", "emis_annual"],
-                    "expr": {"op": "*", "args": [
-                        {"op": "ifelse", "args": [env_overlap, 1.0, 0.0]}, weight]}}},
-                {"lhs": "conc_PM25", "rhs": {
-                    "op": "aggregate", "reduce": "+", "output_idx": ["rcv"],
-                    "ranges": {"rcv": {"from": "rcv_cells"}, "s": {"from": "src_cells"}},
-                    "args": ["SR_PM25", "E_PM25"],
-                    "expr": {"op": "*", "args": [
-                        ix("SR_PM25", &[json!("s"), json!("rcv")]),
-                        ix("E_PM25", &[json!("s")])]}}},
-            ]}}})
+        "equations": [
+            {"lhs": "E_PM25", "rhs": {
+                "op": "aggregate", "reduce": "+", "output_idx": ["c"],
+                "ranges": {"c": {"from": "src_cells"}, "r": {"from": "emis_records"}},
+                "args": ["src_W", "src_S", "src_E", "src_N",
+                         "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
+                         "cell_ring", "cell_area", "rec_ring", "emis_annual"],
+                "expr": {"op": "*", "args": [
+                    {"op": "ifelse", "args": [env_overlap, 1.0, 0.0]}, weight]}}},
+            {"lhs": "conc_PM25", "rhs": {
+                "op": "aggregate", "reduce": "+", "output_idx": ["rcv"],
+                "ranges": {"rcv": {"from": "rcv_cells"}, "s": {"from": "src_cells"}},
+                "args": ["SR_PM25", "E_PM25"],
+                "expr": {"op": "*", "args": [
+                    ix("SR_PM25", &[json!("s"), json!("rcv")]),
+                    ix("E_PM25", &[json!("s")])]}}},
+        ]}}})
 }
 
 fn defs(out: &Value) -> Vec<(String, Value)> {
@@ -257,7 +258,10 @@ fn an_array_off_the_cell_axis_is_left_alone() {
     d["index_sets"]["all_cells"] = json!({"kind": "interval", "size": 8});
     d["models"]["Binned"]["variables"]["temperature"] = param(&["all_cells"]);
     let rhs = &mut d["models"]["Binned"]["equations"][0]["rhs"];
-    rhs["args"].as_array_mut().unwrap().push(json!("temperature"));
+    rhs["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("temperature"));
     let prev = rhs["expr"].clone();
     rhs["expr"] = json!({"op": "*", "args": [
         prev, ix("temperature", &[json!({"op": "+", "args": ["c", 4]})])]});
@@ -382,18 +386,21 @@ impl PrepareProvider for MockGated {
 fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
     // The DENSE arm, checked against a hand oracle first, so a shared bug in
     // both arms cannot pass this test by agreeing with itself.
-    let dense = prepare(
+    let dense = esm_problem(
         &doc(),
-        const_arrays(),
-        Vec::new(),
-        &PrepareOptions {
-            model_name: Some("Binned".into()),
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: const_arrays(),
+            build_providers: Vec::new(),
+            ..ProblemOptions {
+                model_name: Some("Binned".into()),
+                ..Default::default()
+            }
         },
     )
     .expect("dense prepare");
-    let e_dense = dense.observed_field("E_PM25").unwrap().clone();
-    let conc_dense = dense.observed_field("conc_PM25").unwrap().clone();
+    let e_dense = observed_field(&dense, "E_PM25").unwrap().clone();
+    let conc_dense = observed_field(&dense, "conc_PM25").unwrap().clone();
     for (got, want) in e_dense.iter().zip(EXPECT_E.iter()) {
         assert!((got - want).abs() < 1e-12, "{e_dense:?} != {EXPECT_E:?}");
     }
@@ -410,21 +417,24 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
             calls: calls.clone(),
         }),
     )];
-    let push = prepare(
+    let push = esm_problem(
         &doc(),
-        ca,
-        providers,
-        &PrepareOptions {
-            model_name: Some("Binned".into()),
-            pushdown_rewrite: true,
-            ..Default::default()
+        (0.0, 0.0),
+        ProblemOptions {
+            const_arrays: ca,
+            build_providers: providers,
+            ..ProblemOptions {
+                model_name: Some("Binned".into()),
+                pushdown_rewrite: true,
+                ..Default::default()
+            }
         },
     )
     .expect("pushdown prepare");
-    let members = &push.members["pd_faq__src_cells"];
+    let members = &push.members()["pd_faq__src_cells"];
     assert_eq!(members, &vec![1, 2, 4]); // 1-based; cell 3 is met by nothing
 
-    let e_push = push.observed_field("E_PM25").unwrap();
+    let e_push = observed_field(&push, "E_PM25").unwrap();
     assert_eq!(e_push.len(), members.len());
     for (i, m) in members.iter().enumerate() {
         let want = EXPECT_E[(*m - 1) as usize];
@@ -435,9 +445,12 @@ fn rewritten_polygon_allocation_matches_the_dense_evaluation() {
         );
     }
     // `conc` is on the full receptor axis either way, so it compares exactly.
-    let conc_push = push.observed_field("conc_PM25").unwrap();
+    let conc_push = observed_field(&push, "conc_PM25").unwrap();
     for (got, want) in conc_push.iter().zip(conc_dense.iter()) {
-        assert!((got - want).abs() < 1e-12, "{conc_push:?} != {conc_dense:?}");
+        assert!(
+            (got - want).abs() < 1e-12,
+            "{conc_push:?} != {conc_dense:?}"
+        );
     }
 
     // And the gate did its job: the SR rows were selected, not taken wholesale.
