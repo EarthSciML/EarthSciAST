@@ -20,7 +20,13 @@ import numpy as np
 
 from .errors import AmbiguousParameterError, UnknownParameterError
 
-# Optional scipy import - only needed for actual simulation
+# Optional scipy import - only needed for actual simulation.
+#
+# esm-libraries-spec §2.4 / §2.5.9: a library MUST NOT embed a solver as a
+# runtime dependency, so SciPy is an OPTIONAL extra here (`simulate`), the
+# counterpart of Rust's non-default `solve` feature and Julia's
+# `EarthSciASTSimulateExt`. Problem CONSTRUCTION never touches it; only the
+# actual integration does.
 try:
     from scipy.integrate import solve_ivp
 
@@ -29,6 +35,20 @@ except (ImportError, ValueError):
     # ValueError can occur due to numpy/scipy compatibility issues
     SCIPY_AVAILABLE = False
     solve_ivp = None
+
+#: The message a solver entry point reports when SciPy is missing. Names the
+#: extra that supplies it, so a caller is not left to guess which of the several
+#: optional extras carries the solver (phase-6 H-4).
+SCIPY_MISSING_HINT = (
+    "SciPy is an OPTIONAL dependency of earthsci-ast (a library must not embed "
+    "a solver as a runtime dependency; esm-libraries-spec §2.4). Install it "
+    'with `pip install "earthsci-ast[simulate]"`.'
+)
+
+
+def _scipy_missing_message(action: str) -> str:
+    """Compose the missing-solver message for ``action`` (e.g. ``"solve"``)."""
+    return f"SciPy is required to {action} an EsmProblem but is not installed. {SCIPY_MISSING_HINT}"
 
 # Dense-output point budget: the minimum number of uniform sampling nodes a
 # ``solve_ivp`` dense solution is resampled onto

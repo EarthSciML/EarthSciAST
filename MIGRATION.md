@@ -72,6 +72,89 @@ raw-model callers are unaffected. Regression coverage:
 `pkg/EarthSciAST.jl/test/reference_graph_test.jl`, testset
 `"index_sets at DOCUMENT scope (esm 1.0.0 flat shape)"`.
 
+### Python
+
+#### The `data_sources` loader stack is no longer re-exported at the top level
+
+`earthsci_ast` is the **format** library: parse / validate / serialize /
+display / canonicalize / graph / edit / flatten / classify. The runtime
+data-loading tier now lives only in its own package, matching the Rust crate's
+non-default `esio` feature and Julia's `EarthSciASTEarthSciIOExt` extension.
+
+| Before | After |
+|---|---|
+| `from earthsci_ast import load_grid` | `from earthsci_ast.data_sources import load_grid` |
+| `from earthsci_ast import load_points, load_static, load_data, resolve_files` | `from earthsci_ast.data_sources import load_points, load_static, load_data, resolve_files` |
+| `from earthsci_ast import GridLoader, PointsLoader, StaticLoader` | `from earthsci_ast.data_sources import GridLoader, PointsLoader, StaticLoader` |
+| `from earthsci_ast import expand_url_template, expand_with_mirrors, template_placeholders` | `from earthsci_ast.data_sources import ...` |
+| `from earthsci_ast import parse_iso_duration, file_anchor_for_time, file_anchors_in_range, records_for_file` | `from earthsci_ast.data_sources import ...` |
+| `from earthsci_ast import cache_path_for_url, cached_fetcher, cached_opener, resolve_data_dir, CacheMiss` | `from earthsci_ast.data_sources import ...` |
+| `from earthsci_ast import open_with_fallback, apply_variable_mapping` | `from earthsci_ast.data_sources import ...` |
+| `from earthsci_ast import UrlTemplateError, TimeResolutionError, MirrorFallbackError, GridLoaderError, PointsLoaderError, StaticLoaderError, DataSourceDispatchError` | `from earthsci_ast.data_sources import ...` |
+
+29 spellings in total. **The functions did not move and did not change** — only
+the namespace they are re-exported through. `earthsci_ast.data_sources` ships
+in the base install, so no extra is needed just to import them.
+
+Nothing is aliased: the old top-level spelling raises `AttributeError`. It is a
+*self-diagnosing* one, naming the import that works:
+
+```
+>>> earthsci_ast.load_grid
+AttributeError: `earthsci_ast.load_grid` moved to the data-loading tier in
+phase-6 H-4 and is no longer re-exported at the top level. Import it from its
+own package instead:
+
+    from earthsci_ast.data_sources import load_grid
+```
+
+**Three names deliberately stay** on the top level — `apply_unit_conversion`,
+`parse_unit_conversion` and `UnitConversionError`. They are `stable`, not
+`extension`: Julia exports them from core (`src/unit_conversion.jl`, not the
+EarthSciIO extension) and TypeScript exports `UnitConversionError` from its
+index. They are pure arithmetic over a declared conversion and open no file, so
+they belong to the format library even though this binding files them under
+`data_sources/`.
+
+#### `xarray` and `netcdf4` left the base dependency set
+
+```
+pip install earthsci-ast            # format library — no netCDF stack
+pip install "earthsci-ast[data]"    # + xarray + netcdf4: the grid/static readers
+```
+
+Most of the loader tier needs **neither**, and keeps working on a base install:
+URL-template expansion, ISO-8601 time resolution, mirror fallback, the cache
+index, unit conversion, and the CSV/JSON `points` loader. Only the xarray-backed
+`grid` / `static` openers do. Asking for one without the extra is an error that
+names the extra rather than an `ImportError` from three frames down:
+
+```
+XarrayLoaderError: the default data-loader opener needs `xarray`, which is not
+installed. This is an OPTIONAL dependency: install the data-loading extra with
+`pip install "earthsci-ast[data]"`, or pass an explicit `opener=` to the loader.
+```
+
+A loader handed an explicit `opener=` never needed xarray in the first place and
+is unaffected.
+
+#### `scipy`: no change to the dependency set, clearer message
+
+`scipy` had **already** left the base set in an earlier round (the `simulate`
+extra), which is what esm-libraries-spec §2.4 / §2.5.9 requires — a library must
+not embed a solver as a runtime dependency. Two stale comments claiming it was
+"a HARD dependency (declared unconditionally in pyproject.toml)" are corrected.
+Behaviour is unchanged: `esm_problem(...)` builds without SciPy, and `solve`
+returns `ReturnCode.Failure` rather than raising on import. The message now
+names the extra:
+
+```
+SciPy is required to solve an EsmProblem but is not installed. SciPy is an
+OPTIONAL dependency of earthsci-ast (a library must not embed a solver as a
+runtime dependency; esm-libraries-spec §2.4). Install it with
+`pip install "earthsci-ast[simulate]"`.
+```
+
 ---
 
 ## Phase 4 — the simulation surface: `Problem` + `solve`

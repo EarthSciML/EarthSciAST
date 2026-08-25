@@ -83,6 +83,7 @@ from .simulation_common import (
     _failure_result,
     _limit_iters,
     _retcode_for_error,
+    _scipy_missing_message,
     check_parameter_override_keys,
 )
 from .simulation_loaders import (
@@ -771,7 +772,7 @@ def solve(
             maxiters=maxiters,
         )
     if not SCIPY_AVAILABLE:
-        return _failure_result("SciPy is required to solve a EsmProblem but is not available.")
+        return _failure_result(_scipy_missing_message("solve"))
 
     # §2.5.4: an explicit `callback` REPLACES the EsmProblem's set. `None` means
     # "not given", which is what leaves the EsmProblem's own set in force.
@@ -1027,7 +1028,7 @@ class Integrator:
         maxiters: int | None = None,
     ) -> None:
         if not SCIPY_AVAILABLE:
-            raise SimulationError("SciPy is required to step a EsmProblem but is not available.")
+            raise SimulationError(_scipy_missing_message("step"))
         if prob.pathway in ("loaders", "discrete_providers"):
             raise SimulationError(
                 f"init: the {prob.pathway!r} pathway rebuilds its right-hand side at "

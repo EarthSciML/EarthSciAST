@@ -26,7 +26,9 @@ from typing import Dict, List
 
 import pytest
 
-from earthsci_ast import (
+# The loader stack is imported from its own package, not the top-level
+# namespace: phase-6 H-4 stopped re-exporting it through `earthsci_ast.__all__`.
+from earthsci_ast.data_sources import (
     CacheMiss,
     MirrorFallbackError,
     cache_path_for_url,
@@ -379,8 +381,8 @@ def test_existing_default_opener_path_unchanged(tmp_path):
         DataSourceLocation,
         DataSourceBinding,
         DataSourceTemporal,
-        GridLoader,
     )
+    from earthsci_ast.data_sources import GridLoader
 
     dl = DataSource(
         name="fake",

@@ -9,6 +9,23 @@ expressions.
 pip install -e .
 ```
 
+The base install is the **format** library — parse, validate, serialize,
+display, canonicalize, graph, edit, flatten, classify — and pulls no netCDF or
+solver stack. The heavier tiers are opt-in extras:
+
+```bash
+pip install "earthsci-ast[data]"      # xarray + netcdf4: the grid/static readers
+pip install "earthsci-ast[simulate]"  # scipy: the ODE solver behind `solve`
+pip install "earthsci-ast[plot]"      # matplotlib: Solution.plot
+pip install "earthsci-ast[geometry]"  # spherely: spherical/geodesic clipping
+```
+
+This mirrors the Rust crate's non-default `esio` / `solve` features and Julia's
+package extensions. `earthsci_ast.data_sources` itself ships in the base
+install: URL templates, time resolution, mirror fallback, the cache index, unit
+conversion and the CSV/JSON `points` loader all work without `[data]` — only
+the xarray-backed openers need it, and they say so by name if it is missing.
+
 ## Features
 
 - Type definitions for mathematical expressions and equations

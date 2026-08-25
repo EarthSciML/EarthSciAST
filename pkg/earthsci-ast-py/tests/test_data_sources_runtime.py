@@ -13,23 +13,28 @@ from typing import List
 
 import pytest
 
+# Document types and the (core) unit-conversion trio come from the top-level
+# namespace; the loader stack comes from `earthsci_ast.data_sources`, which is
+# where phase-6 H-4 left it.
 from earthsci_ast import (
     DataSource,
     DataSourceKind,
     DataSourceLocation,
     DataSourceTemporal,
     DataSourceBinding,
-    DataSourceDispatchError,
     ExprNode,
+    apply_unit_conversion,
+    parse_unit_conversion,
+)
+from earthsci_ast.data_sources import (
+    DataSourceDispatchError,
     GridLoader,
     MirrorFallbackError,
     PointsLoader,
     StaticLoader,
     TimeResolutionError,
     UrlTemplateError,
-    apply_unit_conversion,
     apply_variable_mapping,
-    parse_unit_conversion,
     expand_url_template,
     expand_with_mirrors,
     file_anchor_for_time,
