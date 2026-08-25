@@ -199,7 +199,7 @@ pub use graph::{
     ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
     DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions,
     VariableKind, VariableNode, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, get_component_type,
+    expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };
 pub use parse::{
     LoadOptions, load_document, load_document_with_options, load_path, load_path_with_options,
@@ -276,7 +276,11 @@ pub use edit::{
 };
 pub use error::EsmError;
 pub use lower_enums::{EnumLoweringError, lower_enums};
-pub use migration::{MigrationError, can_migrate, get_supported_migration_targets, migrate};
+pub use migration::{MigrationError, can_migrate, migrate, supported_migration_targets};
+// Deprecated alias of `supported_migration_targets`, kept for one minor per
+// API_SPEC.md §10 (phase-6 G-2 dropped the `get_` prefix).
+#[allow(deprecated)]
+pub use migration::get_supported_migration_targets;
 
 pub use compile_error::CompileError;
 

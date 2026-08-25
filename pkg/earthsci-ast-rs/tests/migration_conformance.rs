@@ -13,7 +13,7 @@
 //! expectations hold in TypeScript, Python and Go.
 
 use earthsci_ast::{
-    EsmFile, SCHEMA_VERSION, can_migrate, get_supported_migration_targets, load_string, migrate,
+    EsmFile, SCHEMA_VERSION, can_migrate, supported_migration_targets, load_string, migrate,
 };
 use serde_json::Value;
 
@@ -85,7 +85,7 @@ fn matrix_fixture_versions_have_targets_only_on_the_additive_line() {
             // Not a well-formed semver (`not.a.version`, a prerelease): no
             // targets, unconditionally.
             assert!(
-                get_supported_migration_targets(file_version).is_empty(),
+                supported_migration_targets(file_version).is_empty(),
                 "malformed {file_version} must have no targets"
             );
             checked += 1;
@@ -93,7 +93,7 @@ fn matrix_fixture_versions_have_targets_only_on_the_additive_line() {
         };
         let on_line = version.0 == current.0 && version >= (1, 0, 0) && version <= current;
         assert_eq!(
-            !get_supported_migration_targets(file_version).is_empty(),
+            !supported_migration_targets(file_version).is_empty(),
             on_line,
             "fixture version {file_version}: on_additive_line={on_line}"
         );
@@ -130,7 +130,7 @@ fn the_matrix_migration_pair_is_a_rewrite_not_an_automated_migration() {
 
     // The source is pre-break: no automated path off it, to the target's
     // version or to any other.
-    assert!(get_supported_migration_targets(source_version).is_empty());
+    assert!(supported_migration_targets(source_version).is_empty());
     assert!(!can_migrate(source_version, target_version));
     let err = migrate(&file_at(source_version), target_version)
         .expect_err("a 0.x source must not migrate");

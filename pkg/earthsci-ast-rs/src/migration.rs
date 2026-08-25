@@ -39,7 +39,7 @@
 //! current". Sources outside that line (newer than current, a different major,
 //! or malformed) yield no supported targets.
 //!
-//! [`get_supported_migration_targets`] is the single source of truth:
+//! [`supported_migration_targets`] is the single source of truth:
 //! [`can_migrate`] is defined as membership in it and [`migrate`] refuses
 //! anything `can_migrate` rejects, so a caller can never be told a pair works
 //! and then handed a [`MigrationError`]. The semantics match the other four
@@ -117,21 +117,34 @@ fn on_additive_line(version: SemVer) -> bool {
 ///
 /// This is the single source of truth for the whole module: [`can_migrate`] is
 /// membership in this list and [`migrate`] refuses whatever it omits.
-pub fn get_supported_migration_targets(from_version: &str) -> Vec<String> {
+pub fn supported_migration_targets(from_version: &str) -> Vec<String> {
     match crate::diagnostic::parse_semver(from_version) {
         Some(version) if on_additive_line(version) => vec![crate::SCHEMA_VERSION.to_string()],
         _ => Vec::new(),
     }
 }
 
+/// Deprecated alias of [`supported_migration_targets`].
+///
+/// API_SPEC.md §8 / phase-6 G-2: Go, Julia and Python all export
+/// `supported_migration_targets`; this binding and TypeScript alone carried a
+/// `get_` prefix. Kept for one minor per API_SPEC.md §10.
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `supported_migration_targets` (API_SPEC.md phase-6 G-2)"
+)]
+pub fn get_supported_migration_targets(from_version: &str) -> Vec<String> {
+    supported_migration_targets(from_version)
+}
+
 /// Whether [`migrate`] would succeed for this version pair — i.e. whether
-/// `to_version` is among [`get_supported_migration_targets`]`(from_version)`.
+/// `to_version` is among [`supported_migration_targets`]`(from_version)`.
 ///
 /// Deliberately consults the same single source of truth `migrate` does, so a
 /// caller is never told a pair is migratable and then handed a
 /// [`MigrationError`].
 pub fn can_migrate(from_version: &str, to_version: &str) -> bool {
-    get_supported_migration_targets(from_version)
+    supported_migration_targets(from_version)
         .iter()
         .any(|target| target == to_version)
 }
@@ -194,7 +207,7 @@ mod tests {
     fn no_target_for_any_0x_source_the_clean_break_being_uncrossable() {
         for source in ["0.0.1", "0.0.5", "0.1.0", "0.3.0", "0.8.0", "0.9.0"] {
             assert_eq!(
-                get_supported_migration_targets(source),
+                supported_migration_targets(source),
                 Vec::<String>::new(),
                 "0.x source {source} must have no automated target"
             );
@@ -205,7 +218,7 @@ mod tests {
     fn additive_line_sources_bump_to_the_current_schema() {
         for source in ["1.0.0", CURRENT] {
             assert_eq!(
-                get_supported_migration_targets(source),
+                supported_migration_targets(source),
                 vec![CURRENT.to_string()],
                 "additive-line source {source}"
             );
@@ -217,7 +230,7 @@ mod tests {
         // Past the ceiling, and other majors in both directions.
         for source in ["1.99.0", "2.0.0", "12.34.56"] {
             assert_eq!(
-                get_supported_migration_targets(source),
+                supported_migration_targets(source),
                 Vec::<String>::new()
             );
         }
@@ -235,7 +248,7 @@ mod tests {
             "1.0.0.0",
         ] {
             assert_eq!(
-                get_supported_migration_targets(source),
+                supported_migration_targets(source),
                 Vec::<String>::new(),
                 "malformed source {source:?}"
             );
@@ -248,11 +261,11 @@ mod tests {
         // large patch of the current minor is off it too. A string comparison
         // would get "1.10.0" < "1.9.0" and could place either on the line.
         assert_eq!(
-            get_supported_migration_targets("1.10.0"),
+            supported_migration_targets("1.10.0"),
             Vec::<String>::new()
         );
         assert_eq!(
-            get_supported_migration_targets("1.0.100"),
+            supported_migration_targets("1.0.100"),
             Vec::<String>::new()
         );
     }
@@ -284,7 +297,7 @@ mod tests {
 
     /// The equivalence that makes the three entry points agree BY CONSTRUCTION:
     /// over a source × target grid, `can_migrate` is exactly membership in
-    /// `get_supported_migration_targets`, and `migrate` succeeds on exactly the
+    /// `supported_migration_targets`, and `migrate` succeeds on exactly the
     /// pairs `can_migrate` accepts. A caller is therefore never told a pair
     /// works and then handed a `MigrationError` — the self-contradiction this
     /// module carried before the 1.0.0 re-base.
@@ -296,7 +309,7 @@ mod tests {
         let targets = [CURRENT, "0.1.0", "1.0.0", "1.0.1", "2.0.0", "nonsense"];
 
         for source in sources {
-            let supported = get_supported_migration_targets(source);
+            let supported = supported_migration_targets(source);
             for target in targets {
                 let listed = supported.iter().any(|t| t == target);
                 assert_eq!(

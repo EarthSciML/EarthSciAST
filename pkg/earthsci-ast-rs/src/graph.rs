@@ -1402,6 +1402,72 @@ impl ExpressionGraph {
     }
 }
 
+/// The graph kinds the esm-libraries-spec §4.8.3 text exporters render.
+///
+/// API_SPEC.md §8 item 8 rules the canonical renderer trio to be
+/// [`to_dot`] / [`to_mermaid`] / [`to_json_graph`], one free function each,
+/// dispatching on the graph kind — the spelling TypeScript, Python and Julia
+/// already share. This trait is that dispatch: it is implemented by
+/// [`ComponentGraph`] and [`ExpressionGraph`] and by nothing else, and each
+/// method forwards to the graph's own inherent renderer, so the rendered
+/// bytes are unchanged (they are pinned by `tests/conformance/graph`).
+///
+/// It is deliberately NOT re-exported from the crate root: §8 item 8 adds
+/// three functions to the surface, not a fourth name.
+pub trait Graph {
+    /// This graph rendered as Graphviz DOT.
+    fn render_dot(&self) -> String;
+    /// This graph rendered as Mermaid.
+    fn render_mermaid(&self) -> String;
+    /// This graph rendered as a JSON adjacency-list document.
+    fn render_json_graph(&self) -> String;
+}
+
+impl Graph for ComponentGraph {
+    fn render_dot(&self) -> String {
+        ComponentGraph::to_dot(self)
+    }
+    fn render_mermaid(&self) -> String {
+        ComponentGraph::to_mermaid(self)
+    }
+    fn render_json_graph(&self) -> String {
+        ComponentGraph::to_json_graph(self)
+    }
+}
+
+impl Graph for ExpressionGraph {
+    fn render_dot(&self) -> String {
+        ExpressionGraph::to_dot(self)
+    }
+    fn render_mermaid(&self) -> String {
+        ExpressionGraph::to_mermaid(self)
+    }
+    fn render_json_graph(&self) -> String {
+        ExpressionGraph::to_json_graph(self)
+    }
+}
+
+/// Render `graph` as Graphviz DOT (esm-libraries-spec §4.8.3).
+///
+/// The canonical free-function spelling (API_SPEC.md §8 item 8). Equivalent to
+/// the graph's own `to_dot` method; the byte-level output is pinned by
+/// `tests/conformance/graph/cases.json`.
+pub fn to_dot<G: Graph>(graph: &G) -> String {
+    graph.render_dot()
+}
+
+/// Render `graph` as Mermaid (esm-libraries-spec §4.8.3). See [`to_dot`].
+pub fn to_mermaid<G: Graph>(graph: &G) -> String {
+    graph.render_mermaid()
+}
+
+/// Render `graph` as a JSON adjacency-list document (esm-libraries-spec
+/// §4.8.3). Named `to_json_graph`, not `to_json`, because `to_json` is the
+/// DOCUMENT serializer (API_SPEC.md §8 item 2). See [`to_dot`].
+pub fn to_json_graph<G: Graph>(graph: &G) -> String {
+    graph.render_json_graph()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2042,5 +2108,26 @@ mod tests {
         assert_eq!(edges[0]["data"]["coupling_type"], "variable_map");
         assert_eq!(json["adjacency"]["source"][0], "target");
         assert_eq!(json["adjacency"]["target"][0], "source");
+    }
+
+    /// API_SPEC.md §8 item 8: the canonical free-function trio dispatches on
+    /// the graph kind and must render EXACTLY what the inherent methods do —
+    /// the output is pinned by `tests/conformance/graph/cases.json`.
+    #[test]
+    fn canonical_renderers_match_the_inherent_methods() {
+        let esm_file = EsmFile {
+            models: Some(IndexMap::from([("m".to_string(), test_model("M"))])),
+            ..empty_file()
+        };
+
+        let cg = component_graph(&esm_file);
+        assert_eq!(super::to_dot(&cg), cg.to_dot());
+        assert_eq!(super::to_mermaid(&cg), cg.to_mermaid());
+        assert_eq!(super::to_json_graph(&cg), cg.to_json_graph());
+
+        let eg = expression_graph(&esm_file);
+        assert_eq!(super::to_dot(&eg), eg.to_dot());
+        assert_eq!(super::to_mermaid(&eg), eg.to_mermaid());
+        assert_eq!(super::to_json_graph(&eg), eg.to_json_graph());
     }
 }
