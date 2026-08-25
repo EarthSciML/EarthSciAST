@@ -864,7 +864,8 @@ function _check_update_unit_conversions!(errors::Vector{StructuralError}, file::
             isa(uc, ASTExpr) || continue
             append!(errors, validate_expression_references(
                 file, uc,
-                "$path/variables/$name/update/$(ri-1)/from/unit_conversion";
+                _update_rule_path("$path/variables/$name", rules, ri) *
+                    "/from/unit_conversion";
                 scope=scope))
         end
     end
@@ -1779,7 +1780,9 @@ function validate_model_references(file::EsmFile, model::Model, path::String;
             for (field, e) in (("when", rule.when), ("expression", rule.expression))
                 e === nothing && continue
                 append!(errors, validate_expression_references(
-                    file, e, "$path/variables/$name/update/$(ri-1)/$field"; scope=scope))
+                    file, e,
+                    _update_rule_path("$path/variables/$name", rules, ri) * "/$field";
+                    scope=scope))
             end
         end
     end

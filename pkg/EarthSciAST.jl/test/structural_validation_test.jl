@@ -635,4 +635,142 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    # -----------------------------------------------------------------------
+    # A diagnostic pointer must address the document AS WRITTEN.
+    #
+    # Julia's typed model normalizes a scalar `update` into a one-element
+    # `Vector{ParameterUpdate}` at parse time (types.jl `_coerce_update_vector`),
+    # and the three passes that walk update rules interpolated that SYNTHETIC
+    # index unconditionally — so a document writing `update: {...}` was told
+    # about `/update/0/from/unit_conversion`, a pointer that resolves to nothing
+    # in its own source. The corpus pin for
+    # tests/invalid/undefined_variable_in_unit_conversion.esm, and the
+    # TypeScript, Python and Go bindings, all say `/update/from/unit_conversion`.
+    #
+    # The discriminator is `length(rules) == 1`, which is exact rather than a
+    # heuristic: `esm-schema.json`'s `ParameterUpdateSpec` array branch is
+    # `minItems: 2`. The last testset below pins that schema fact, because if it
+    # ever relaxed to `minItems: 1` the length rule would silently become wrong
+    # and Julia would need a real wire-form marker instead.
+    # -----------------------------------------------------------------------
+    @testset "update JSON pointers address the wire form, not the normalized vector" begin
+        _bad_expr() = EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[
+            EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("undefined_xyz")])
+
+        function _file(update)
+            variables = Dict(
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units="1"),
+                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
+                                                 units="1", default=1.0),
+                "v" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
+                                                 units="1", default=0.0,
+                                                 update=update))
+            eq = EarthSciAST.Equation(
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt="t"),
+                EarthSciAST.VarExpr("k"))
+            model = EarthSciAST.Model(variables, EarthSciAST.Equation[eq])
+            return EarthSciAST.EsmFile("1.0.0", EarthSciAST.Metadata("UpdatePointer"),
+                                       models=Dict("M" => model)), model
+        end
+
+        data_rule(expr) = EarthSciAST.ParameterUpdate("data"; source="L",
+            from=EarthSciAST.DataSourceBinding("v"; unit_conversion=expr))
+        cond_rule(expr) = EarthSciAST.ParameterUpdate("condition";
+            when=EarthSciAST.OpExpr(">", EarthSciAST.ASTExpr[
+                EarthSciAST.VarExpr("y"), EarthSciAST.NumExpr(0.0)]),
+            expression=expr)
+
+        undef_paths(file, model) = sort!(String[
+            e.path for e in EarthSciAST.validate_model_references(file, model, "/models/M")
+            if e.error_type == "undefined_variable"])
+
+        @testset "object form: no index segment" begin
+            # `unit_conversion`, via _check_update_unit_conversions!
+            file, model = _file(data_rule(_bad_expr()))
+            errs = EarthSciAST.validate_structural(file)
+            paths = String[e.path for e in errs if e.error_type == "undefined_variable"]
+            @test "/models/M/variables/v/update/from/unit_conversion" in paths
+            @test !any(p -> occursin("/update/0/", p), paths)
+
+            # `when` / `expression`, via validate_model_references
+            file2, model2 = _file(cond_rule(_bad_expr()))
+            @test undef_paths(file2, model2) ==
+                  ["/models/M/variables/v/update/expression"]
+        end
+
+        @testset "array form: the index is real and kept" begin
+            file, model = _file([data_rule(_bad_expr()), cond_rule(_bad_expr())])
+            errs = EarthSciAST.validate_structural(file)
+            paths = String[e.path for e in errs if e.error_type == "undefined_variable"]
+            @test "/models/M/variables/v/update/0/from/unit_conversion" in paths
+
+            # `validate_model_references` walks `when` / `expression`;
+            # `unit_conversion` is the separate `_check_update_unit_conversions!`
+            # pass asserted just above. Both index off the same helper.
+            @test undef_paths(file, model) ==
+                  ["/models/M/variables/v/update/1/expression"]
+        end
+
+        @testset "unit findings use the same pointers" begin
+            # A dimensional mismatch inside an update `expression`: `k` is "1"
+            # and `y` is "s", so `k + y` is provably inconsistent.
+            variables = Dict(
+                "y" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable; units="s"),
+                "k" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
+                                                 units="1", default=1.0),
+                "v" => EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
+                                                 units="1", default=0.0))
+            bad = EarthSciAST.OpExpr("+", EarthSciAST.ASTExpr[
+                EarthSciAST.VarExpr("k"), EarthSciAST.VarExpr("y")])
+            eq = EarthSciAST.Equation(
+                EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("y")]; wrt="t"),
+                EarthSciAST.NumExpr(1.0))
+
+            scalar_vars = copy(variables)
+            scalar_vars["v"] = EarthSciAST.reconstruct(variables["v"];
+                update=cond_rule(bad))
+            scalar_model = EarthSciAST.Model(scalar_vars, EarthSciAST.Equation[eq])
+            scalar_paths = String[f.subpath for f in EarthSciAST.model_unit_findings(scalar_model)]
+            @test "variables/v/update/expression" in scalar_paths
+            @test !any(p -> occursin("/update/0/", p), scalar_paths)
+            # The message drops the meaningless "update rule 0" too.
+            @test !any(f -> occursin("update rule", f.message),
+                       EarthSciAST.model_unit_findings(scalar_model))
+
+            array_vars = copy(variables)
+            array_vars["v"] = EarthSciAST.reconstruct(variables["v"];
+                update=[cond_rule(bad), cond_rule(bad)])
+            array_model = EarthSciAST.Model(array_vars, EarthSciAST.Equation[eq])
+            array_paths = String[f.subpath for f in EarthSciAST.model_unit_findings(array_model)]
+            @test "variables/v/update/0/expression" in array_paths
+            @test "variables/v/update/1/expression" in array_paths
+            @test any(f -> occursin("update rule 1", f.message),
+                      EarthSciAST.model_unit_findings(array_model))
+        end
+
+        @testset "the pointer and the emitted document agree" begin
+            # One predicate decides both, so a round trip cannot land the rule
+            # somewhere the diagnostic did not point.
+            for (update, key) in ((data_rule(_bad_expr()), "object"),
+                                  ([data_rule(_bad_expr()), cond_rule(_bad_expr())], "array"))
+                file, _ = _file(update)
+                emitted = EarthSciAST.serialize_esm_file(file)
+                wire = emitted["models"]["M"]["variables"]["v"]["update"]
+                @test (wire isa AbstractVector) == (key == "array")
+            end
+        end
+
+        @testset "a one-element array is not a document Julia must represent" begin
+            # The length rule is exact only because the schema forbids `[{...}]`.
+            # If this ever relaxes, `_update_is_scalar_form` needs a real marker.
+            schema = EarthSciAST.JSON3.read(read(
+                joinpath(TESTUTILS_REPO_ROOT, "esm-schema.json"), String))
+            spec = schema[Symbol("\$defs")][:ParameterUpdateSpec]
+            array_branch = only(filter(b -> get(b, :type, nothing) == "array", spec[:oneOf]))
+            @test array_branch[:minItems] == 2
+            @test isfile(joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                  "parameter_update_singleton_array.esm"))
+        end
+    end
+
 end

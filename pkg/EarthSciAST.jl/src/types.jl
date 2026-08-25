@@ -1002,6 +1002,48 @@ _coerce_update_vector(u::Vector{ParameterUpdate}) = u
 _coerce_update_vector(u::AbstractVector) = ParameterUpdate[x for x in u]
 
 """
+    _update_is_scalar_form(rules::AbstractVector) -> Bool
+
+Whether an `update` vector came from the wire's OBJECT form (one rule) rather
+than its ARRAY form. `length(rules) == 1` decides it, and that is sound rather
+than a heuristic: `esm-schema.json`'s `ParameterUpdateSpec` is
+`oneOf: [ParameterUpdate, {type: array, minItems: 2}]`, so a one-element array
+is not a valid document — `tests/invalid/parameter_update_singleton_array.esm`
+exists for the sole purpose of pinning that, because representation uniqueness
+is what makes the round trip idempotent.
+
+This is the SINGLE place that decision is made. Both consumers must agree or
+the document a diagnostic addresses is not the document the serializer emits:
+
+- [`_emit_parameter_update_spec`](@ref) picks the wire form to write;
+- [`_update_rule_path`](@ref) builds the JSON Pointer a diagnostic reports.
+
+The Go binding derives it identically (`single := len(copied) == 1` in
+`expr_walk.go`); TypeScript reads the wire form directly (`Array.isArray`)
+because its typed layer keeps the union. On every schema-valid document all
+three agree.
+"""
+_update_is_scalar_form(rules::AbstractVector) = length(rules) == 1
+
+"""
+    _update_rule_path(base::AbstractString, rules, ri::Integer) -> String
+
+The JSON Pointer addressing update rule `ri` (1-based) of `rules`, under
+`base` — `"\$base/update"` for the object form, `"\$base/update/\$(ri-1)"` for
+the array form.
+
+A diagnostic pointer must address the document **as written**. Julia's typed
+model normalizes a scalar `update` into a one-element `Vector` at parse time
+(see [`_coerce_update_vector`](@ref)), and the three passes that walk update
+rules used to interpolate that synthetic index unconditionally — so a document
+writing `update: {...}` was told about `/update/0/from/unit_conversion`, a
+pointer resolving to nothing in its own source. The corpus pin and the
+TypeScript, Python and Go bindings all say `/update/from/unit_conversion`.
+"""
+_update_rule_path(base::AbstractString, rules::AbstractVector, ri::Integer) =
+    _update_is_scalar_form(rules) ? "$base/update" : "$base/update/$(ri - 1)"
+
+"""
     reconstruct(v::ModelVariable; <any ModelVariable field>=…) -> ModelVariable
 
 Rebuild a `ModelVariable`, copying every field from `v` by default and
