@@ -29,14 +29,17 @@ describe('CouplingGraph', () => {
         },
       },
       {
-        id: 'loader1',
-        name: 'Data Loader',
-        type: 'data_loader',
-        description: 'Loads atmospheric data',
+        // esm 1.0.0 has exactly two component kinds: a data source is ingest
+        // configuration, not a node and not a coupling endpoint (esm-spec §5.5),
+        // so the second endpoint here is a reaction system.
+        id: 'chem1',
+        name: 'Gas Chemistry',
+        type: 'reaction_system',
+        description: 'Gas-phase chemical mechanism',
         metadata: {
           var_count: 2,
           eq_count: 0,
-          species_count: 0,
+          species_count: 4,
         },
       },
       {
@@ -54,11 +57,11 @@ describe('CouplingGraph', () => {
 
     const edges = [
       {
-        source: 'loader1',
+        source: 'chem1',
         target: 'op1',
         data: {
           id: 'edge1',
-          from: 'loader1',
+          from: 'chem1',
           to: 'op1',
           type: 'variable_map' as const,
           label: 'Temperature Data',
@@ -107,7 +110,7 @@ describe('CouplingGraph', () => {
 
     // Check that all nodes are rendered
     expect(screen.getByText('Atmospheric Model')).toBeInTheDocument()
-    expect(screen.getByText('Data Loader')).toBeInTheDocument()
+    expect(screen.getByText('Gas Chemistry')).toBeInTheDocument()
     expect(screen.getByText('Interpolation Op')).toBeInTheDocument()
   })
 

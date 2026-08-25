@@ -181,9 +181,7 @@ describe('EquationEditor — click-to-edit (math by default, DSL on click)', () 
   it('clears the description when blanked', () => {
     const withComment = { lhs: 'x', rhs: { op: '+', args: ['y', 2] }, _comment: 'note' }
     const onEquationChange = vi.fn()
-    const { container } = render(() => (
-      <EquationEditor equation={withComment} onEquationChange={onEquationChange} />
-    ))
+    render(() => <EquationEditor equation={withComment} onEquationChange={onEquationChange} />)
     // Clicking the description opens the editor focused there.
     fireEvent.click(screen.getByText('note'))
     fireEvent.input(descInput(), { target: { value: '' } })

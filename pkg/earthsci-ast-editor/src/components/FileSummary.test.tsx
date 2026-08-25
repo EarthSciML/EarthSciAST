@@ -27,14 +27,14 @@ describe('FileSummary', () => {
     models: {
       TestModel: {
         variables: {
-          x: { type: 'state', units: 'm', description: 'Position' },
+          x: { type: 'unknown', units: 'm', description: 'Position' },
           v: { type: 'parameter', units: 'm/s', description: 'Velocity' },
         },
         equations: [{ lhs: { op: 'D', args: ['x', 't'] }, rhs: 'v' }],
         subsystems: {
           SubModel: {
             variables: {
-              y: { type: 'state', units: 'm', description: 'Y position' },
+              y: { type: 'unknown', units: 'm', description: 'Y position' },
             },
             equations: [],
           },
@@ -60,13 +60,13 @@ describe('FileSummary', () => {
         ],
       },
     },
-    data_loaders: {
+    // esm 1.0.0: a data source is ingest configuration, not a component, and
+    // declares no variables of its own -- a model draws from it through a
+    // parameter's `update.from` (esm-spec §5.5).
+    data_sources: {
       WeatherData: {
         kind: 'grid',
         source: { url_template: 'weather.csv' },
-        variables: {
-          temperature: { file_variable: 'T', units: 'K' },
-        },
       },
     },
     coupling: [
@@ -131,10 +131,10 @@ describe('FileSummary', () => {
     expect(screen.getByText('2 species, 1 parameters, 1 reactions')).toBeInTheDocument()
   })
 
-  it('renders data loaders summary', () => {
+  it('renders data sources summary', () => {
     render(() => <FileSummary esmFile={complexEsmFile} />)
 
-    expect(screen.getByText(/Data Loaders \(\d+\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Data Sources \(\d+\)/)).toBeInTheDocument()
     expect(screen.getByText('WeatherData')).toBeInTheDocument()
     expect(screen.getByText('Type: grid | Source: weather.csv')).toBeInTheDocument()
   })

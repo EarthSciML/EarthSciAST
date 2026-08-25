@@ -63,25 +63,25 @@ describe('Coupling Graph Interaction', () => {
       'Atmospheric_Chemistry': {
         type: 'model',
         variables: {
-          'O3': { type: 'state', units: 'mol/mol', description: 'Ozone' },
-          'NO2': { type: 'state', units: 'mol/mol', description: 'Nitrogen dioxide' },
-          'temperature': { type: 'state', units: 'K', description: 'Temperature' }
+          'O3': { type: 'unknown', units: 'mol/mol', description: 'Ozone' },
+          'NO2': { type: 'unknown', units: 'mol/mol', description: 'Nitrogen dioxide' },
+          'temperature': { type: 'unknown', units: 'K', description: 'Temperature' }
         },
         equations: []
       },
       'Surface_Chemistry': {
         type: 'model',
         variables: {
-          'ozone_flux': { type: 'state', units: 'mol/m^2/s', description: 'Ozone surface flux' },
-          'surface_temp': { type: 'state', units: 'K', description: 'Surface temperature' }
+          'ozone_flux': { type: 'unknown', units: 'mol/m^2/s', description: 'Ozone surface flux' },
+          'surface_temp': { type: 'unknown', units: 'K', description: 'Surface temperature' }
         },
         equations: []
       },
       'Emission_Sources': {
         type: 'model',
         variables: {
-          'NO_emission': { type: 'state', units: 'mol/s', description: 'NO emission rate' },
-          'VOC_emission': { type: 'state', units: 'mol/s', description: 'VOC emission rate' }
+          'NO_emission': { type: 'unknown', units: 'mol/s', description: 'NO emission rate' },
+          'VOC_emission': { type: 'unknown', units: 'mol/s', description: 'VOC emission rate' }
         },
         equations: []
       }
@@ -654,8 +654,8 @@ describe('Coupling Graph Interaction', () => {
         largeEsmFile.components[`Component_${i}`] = {
           type: 'model',
           variables: {
-            [`var_${i}_1`]: { type: 'state', units: 'unit', description: `Variable ${i}-1` },
-            [`var_${i}_2`]: { type: 'state', units: 'unit', description: `Variable ${i}-2` }
+            [`var_${i}_1`]: { type: 'unknown', units: 'unit', description: `Variable ${i}-1` },
+            [`var_${i}_2`]: { type: 'unknown', units: 'unit', description: `Variable ${i}-2` }
           },
           equations: []
         };

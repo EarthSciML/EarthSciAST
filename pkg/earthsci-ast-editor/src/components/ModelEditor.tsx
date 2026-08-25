@@ -3,7 +3,7 @@
  *
  * This component provides a comprehensive view for editing entire models,
  * including:
- * - Variables panel grouped by type (state/parameter/observed/...) with badges, units, and defaults
+ * - Variables panel grouped by type (unknown/parameter) with badges, units, and defaults
  * - Equation list with each equation as an EquationEditor
  * - Event editors for both continuous and discrete events
  * - UI for adding/removing variables and equations

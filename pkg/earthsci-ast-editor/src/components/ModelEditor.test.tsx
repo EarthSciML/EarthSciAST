@@ -7,7 +7,7 @@ describe('ModelEditor', () => {
   const mockModel: Model = {
     variables: {
       x: {
-        type: 'state',
+        type: 'unknown',
         default: 1.0,
         units: 'm',
         description: 'Position variable',

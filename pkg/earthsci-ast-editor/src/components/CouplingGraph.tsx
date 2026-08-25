@@ -60,7 +60,6 @@ type PositionMap = Map<string, { x: number; y: number }>
  */
 export const NODE_FILL: Record<ComponentNode['type'] | 'default', string> = {
   model: '#4CAF50',
-  data_loader: '#2196F3',
   reaction_system: '#9C27B0',
   default: '#607D8B',
 }
@@ -329,18 +328,6 @@ export const CouplingGraph: Component<CouplingGraphProps> = (props) => {
             y={pos(node.id).y - 15}
             width="50"
             height="30"
-            {...style()}
-            {...commonHandlers}
-          />
-        )
-
-      case 'data_loader':
-        return (
-          <ellipse
-            cx={pos(node.id).x}
-            cy={pos(node.id).y}
-            rx="25"
-            ry="15"
             {...style()}
             {...commonHandlers}
           />
