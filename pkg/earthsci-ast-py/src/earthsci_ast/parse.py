@@ -2411,9 +2411,13 @@ def _load_data(
     # Lower `enum` op nodes to `const` integers using the file's `enums` block
     # (esm-spec §9.3). Runs after subsystem resolution so every expression
     # tree — including those in resolved subsystems — sees the integer values.
-    from .registered_functions import lower_enums
+    # The MUTATING twin: `lower_enums` is pure (API_SPEC.md §8 item 15) and
+    # returns a new document, but subsystem resolution just above may have
+    # aliased Model / ReactionSystem objects into places that must see the
+    # lowered trees, so the load path lowers `esm_file` in place.
+    from .registered_functions import lower_enums_mut
 
-    lower_enums(esm_file)
+    lower_enums_mut(esm_file)
 
     # Append top-level events that were stripped earlier
     if top_continuous_events:

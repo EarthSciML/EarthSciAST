@@ -36,7 +36,20 @@ from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import EvalContext, NumpyInterpreterError, eval_expr
 from earthsci_ast.parse import load_string
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.validation import validate
+from earthsci_ast.validation import validate_text
+
+
+def _verdict(doc: dict):
+    """Structural verdict for a document held as a ``dict``.
+
+    ``validate`` takes a typed ``EsmFile`` (API_SPEC.md §8 item 13); the two
+    untyped entry points are ``validate_path`` and ``validate_text``. These
+    tests build documents as plain dicts, so they go in through ``validate_text``
+    -- which also turns a LOAD failure into a ``ValidationResult`` rather than
+    raising, which is what a test asserting ``is_valid`` is after.
+    """
+    return validate_text(doc)
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -112,12 +125,12 @@ def _run(doc: str, shape: tuple[int, ...]) -> np.ndarray:
 
 
 def _errors(doc: str) -> list[str]:
-    report = validate(doc)
+    report = validate_text(doc)
     return [e.message for e in (report.schema_errors or []) + (report.structural_errors or [])]
 
 
 def _codes(doc: str) -> set[str]:
-    report = validate(doc)
+    report = validate_text(doc)
     return {e.code for e in (report.schema_errors or []) + (report.structural_errors or [])}
 
 
@@ -224,7 +237,7 @@ def _broadcast_doc(node: dict) -> str:
 def test_unregistered_broadcast_fn_is_a_validation_error() -> None:
     """``fn: "not_a_real_op"`` used to validate CLEAN and fail only at run time."""
     doc = _broadcast_doc({"op": "broadcast", "fn": "not_a_real_op", "args": ["q"]})
-    report = validate(doc)
+    report = validate_text(doc)
     assert not report.is_valid
     assert "invalid_broadcast_fn" in _codes(doc)
     assert any("not_a_real_op" in e and "not a registered operator" in e for e in _errors(doc))
@@ -240,7 +253,7 @@ def test_missing_broadcast_fn_is_a_validation_error() -> None:
     gate bypassed, and the evaluator keeps its own backstop.
     """
     doc = _broadcast_doc({"op": "broadcast", "args": ["q"]})
-    assert not validate(doc).is_valid
+    assert not validate_text(doc).is_valid
     assert any("fn" in e for e in _errors(doc))
 
 
@@ -252,7 +265,7 @@ def test_non_scalar_broadcast_fn_is_a_validation_error(fn: str) -> None:
     cell-wise, so it cannot be the element-wise operator of a ``broadcast``.
     """
     doc = _broadcast_doc({"op": "broadcast", "fn": fn, "args": ["q"]})
-    assert not validate(doc).is_valid
+    assert not validate_text(doc).is_valid
     assert any("non-scalar" in e and fn in e for e in _errors(doc))
 
 
@@ -265,7 +278,7 @@ def test_broadcast_fn_arity_mismatch_is_a_validation_error() -> None:
     looks exactly like a correct answer.
     """
     doc = _broadcast_doc({"op": "broadcast", "fn": "min", "args": ["q"]})
-    assert not validate(doc).is_valid
+    assert not validate_text(doc).is_valid
     assert any("requires at least 2 operand" in e for e in _errors(doc))
 
 
@@ -284,8 +297,8 @@ def test_one_operand_nary_arithmetic_is_legal_and_is_the_identity(fn: str) -> No
     ``tests/property_corpus/expressions/expr_039.json`` and ``expr_040.json``
     both spell ``broadcast(fn="+", args=[1])``.
     """
-    assert validate(_broadcast_doc({"op": "broadcast", "fn": fn, "args": ["q"]})).is_valid
-    assert validate(_broadcast_doc({"op": fn, "args": ["q"]})).is_valid
+    assert _verdict(_broadcast_doc({"op": "broadcast", "fn": fn, "args": ["q"]})).is_valid
+    assert _verdict(_broadcast_doc({"op": fn, "args": ["q"]})).is_valid
 
     x = np.array([3.0, -4.0])
     ctx = _ctx({"x": x})
@@ -314,7 +327,7 @@ def test_the_property_corpus_one_operand_broadcast_validates() -> None:
 def test_broadcast_fn_over_arity_is_a_validation_error() -> None:
     """``/`` is strictly binary; three operands is a defect, not a fold."""
     doc = _broadcast_doc({"op": "broadcast", "fn": "/", "args": ["q", "q", "q"]})
-    assert not validate(doc).is_valid
+    assert not validate_text(doc).is_valid
     assert any("accepts at most 2 operand" in e for e in _errors(doc))
 
 
@@ -327,7 +340,7 @@ def test_valid_broadcast_still_validates() -> None:
         {"op": "broadcast", "fn": "min", "args": ["q", "q", "q"]},
         {"op": "broadcast", "fn": "**", "args": ["q", 2.0]},
     ):
-        assert validate(_broadcast_doc(node)).is_valid, node
+        assert _verdict(_broadcast_doc(node)).is_valid, node
 
 
 def test_bad_broadcast_fn_still_raises_at_evaluation() -> None:
@@ -580,7 +593,7 @@ def test_operand_with_an_index_set_absent_from_the_result_is_rejected() -> None:
         {"dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
         _bare_eq("z1"),
     )
-    report = validate(doc)
+    report = validate_text(doc)
     assert not report.is_valid
     assert "array_shape_mismatch" in _codes(doc)
     message = "\n".join(_errors(doc))
@@ -600,7 +613,7 @@ def test_the_emitted_record_matches_the_shared_fixture_contract() -> None:
         {"dp": {"type": "unknown", "shape": ["lon", "lat"], "default": 0.0}, "z1": _Z1},
         _bare_eq({"op": "*", "args": ["dp", "z1"]}),
     )
-    records = [e for e in validate(doc).structural_errors if e.code == "array_shape_mismatch"]
+    records = [e for e in validate_text(doc).structural_errors if e.code == "array_shape_mismatch"]
     assert len(records) == 1, "one finding per operand, not one per offending axis"
     r = records[0]
     assert r.path == "/models/M/equations/0/rhs"  # JSON Pointer: /0/, not [0]
@@ -680,7 +693,7 @@ def test_unalignable_operand_is_rejected_inside_a_compound_expression() -> None:
         },
         _bare_eq({"op": "+", "args": [{"op": "*", "args": ["w2", 2.0]}, "z1"]}),
     )
-    assert not validate(doc).is_valid
+    assert not validate_text(doc).is_valid
     assert any("'z1'" in e for e in _errors(doc))
 
 
@@ -691,7 +704,7 @@ def test_alignable_operands_do_not_trigger_the_error() -> None:
         ({"dp": _STATE3, "w2": _W2, "z1": _Z1}, {"op": "*", "args": ["w2", "z1"]}),
         ({"dp": _STATE3, "w1": _W1}, "w1"),
     ):
-        assert validate(_doc(variables, _bare_eq(rhs))).is_valid
+        assert _verdict(_doc(variables, _bare_eq(rhs))).is_valid
 
 
 def test_an_index_use_of_a_foreign_index_set_is_not_flagged() -> None:
@@ -705,7 +718,7 @@ def test_an_index_use_of_a_foreign_index_set_is_not_flagged() -> None:
         {"dp": _STATE3, "z1": _Z1},
         _agg_eq({"op": "index", "args": ["z1", "k"]}),
     )
-    assert validate(doc).is_valid
+    assert validate_text(doc).is_valid
     out = _run(doc, (3, 2, 2))
     np.testing.assert_allclose([out[0, 0, 0], out[0, 0, 1]], [100, 200])
 

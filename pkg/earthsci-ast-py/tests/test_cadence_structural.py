@@ -35,7 +35,7 @@ from typing import List
 import pytest
 from conftest import VALID_DIR
 
-from earthsci_ast.validation import validate
+from earthsci_ast.validation import validate, validate_text
 
 
 _FIXTURES_DIR = VALID_DIR / "cadence"
@@ -78,7 +78,7 @@ def test_cadence_fixture_structurally_valid(fixture_path: Path) -> None:
     """A cadence fixture must pass both schema and structural validation."""
     data = json.loads(fixture_path.read_text())
 
-    result = validate(data)
+    result = validate_text(json.dumps(data))
 
     assert not result.schema_errors, (
         f"{fixture_path.name}: unexpected schema errors: "

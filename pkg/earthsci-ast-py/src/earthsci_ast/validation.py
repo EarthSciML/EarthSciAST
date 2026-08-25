@@ -32,7 +32,6 @@ Layer boundary (what lives where):
 
 from __future__ import annotations
 
-import os
 import math
 import traceback
 from dataclasses import dataclass
@@ -43,7 +42,8 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from .classification import observed_definitions, observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
-from .parse import SchemaValidationError, SubsystemRefError, load_document, load_path, load_string
+from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
+from .units import UNIT_FINDING_ANALYSIS
 
 
 @dataclass
@@ -62,10 +62,42 @@ class ValidationError:
 
 @dataclass
 class UnitWarning:
-    """Represents a unit validation warning."""
+    """A single dimensional-analysis finding.
+
+    Field names and their JSON spellings are a CROSS-BINDING CONTRACT, matching
+    Go's ``UnitWarning`` (``pkg/earthsci-ast-go/pkg/esm/validate.go``), Julia's,
+    Rust's and TypeScript's, and the shape pinned by CONFORMANCE_SPEC.md §3.1:
+
+    * ``path`` — RFC-6901 JSON Pointer to the offending equation / expression,
+      the document root being ``""`` (the same addressing as
+      :class:`ValidationError`). ``""`` when the raise site has no pointer.
+    * ``code`` — the finding kind, decided AT THE POINT the finding was raised
+      and never recovered from the prose, so rewording a message can never
+      silently reclassify it. One of
+      :data:`~earthsci_ast.units.UNIT_FINDING_DIMENSIONAL_MISMATCH`,
+      :data:`~earthsci_ast.units.UNIT_FINDING_UNPARSEABLE`,
+      :data:`~earthsci_ast.units.UNIT_FINDING_ANALYSIS`. This is the SECOND,
+      smaller unit vocabulary — NOT the ``unit_inconsistency`` /
+      ``unit_parse_error`` pair, which names the STRUCTURAL error a finding is
+      promoted to.
+    * ``message`` — human-readable description (binding-local prose).
+    * ``lhs_units`` / ``rhs_units`` — the inferred units of each side, ``""``
+      when the raise site does not know them (the norm for an ``analysis``
+      finding — not determining a dimension is what makes it one).
+
+    ``details`` is a Python-only extra carrying local diagnostic context; it is
+    not part of the cross-binding contract and no other binding has it.
+
+    Despite the name — kept for wire compatibility, it is the ``unit_warnings``
+    field of the spec's :class:`ValidationResult` — a ``UnitWarning`` is not
+    necessarily advisory: the codes that state a defect in the FILE are what the
+    structural checks report as hard ``unit_inconsistency`` /
+    ``unit_parse_error`` errors, and those are what invalidate the document.
+    """
 
     path: str
     message: str
+    code: str = UNIT_FINDING_ANALYSIS
     lhs_units: str = ""
     rhs_units: str = ""
     details: dict[str, Any] = None
@@ -140,9 +172,20 @@ def _convert_jsonschema_error(error: JsonSchemaValidationError) -> ValidationErr
     )
 
 
-def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
+def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationResult:
     """
-    Validate an ESM file against schema, structural, and unit requirements.
+    Validate a parsed ESM document against structural and unit requirements.
+
+    ``esm_file`` is a **typed** :class:`~earthsci_ast.esm_types.EsmFile` — the
+    one input type ``validate`` accepts in every binding (API_SPEC.md §8
+    item 13). It does **not** sniff a path, JSON text or a raw ``dict`` out of
+    its argument: that is exactly the defect §8 item 1 removed from ``load``,
+    where one name taking one argument type meant opposite things in different
+    bindings. Use the explicit entry points instead:
+
+    * a filesystem path -> :func:`validate_path`;
+    * JSON text -> :func:`validate_text`;
+    * an already-decoded ``dict`` -> ``validate(load_document(data))``.
 
     This function implements comprehensive validation including:
     1. Equation-unknown balance
@@ -151,131 +194,33 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
     4. Event consistency (condition types, affect vars, functional affect refs)
 
     Args:
-        esm_file: The EsmFile object, JSON string, or dict to validate
+        esm_file: The parsed :class:`EsmFile` to validate.
         base_path: Directory that relative ``{"ref": ...}`` subsystem/model mounts
             (§4.7) and ``expression_template_imports`` (§9.7.2) resolve against.
 
-            Validating a document that mounts another file is only meaningful if
-            the mount target can be OPENED: whether a ref resolves — and whether
-            the index sets it merges in conflict — is not decidable from the
-            document's own bytes. When the caller passes the JSON *content* (as a
-            conformance harness does, holding the fixture text rather than its
-            path), there is nothing to anchor a relative ref to, and every
-            subsystem-ref and template-import fixture becomes unsatisfiable.
-            Passing the fixture's directory here makes those pins reachable: a
-            MISSING target yields ``unresolved_subsystem_ref`` (or the
+            A document that came through :func:`load_path` resolved its mounts
+            already, so this mainly matters on the :func:`validate_text` /
+            :func:`validate_path` paths, which forward it to the loader: text
+            carries no location of its own, and without an anchor every
+            subsystem-ref and template-import fixture becomes unsatisfiable. A
+            MISSING target then yields ``unresolved_subsystem_ref`` (or the
             template-import equivalent) at the mount's pointer, and a PRESENT one
             validates through.
 
-            Omitted, behaviour is unchanged: relative refs are resolved against
-            the process CWD, so an unopenable target is still reported as an
-            unresolved ref — never silently accepted. Passing a *file path* as
-            ``esm_file`` needs no ``base_path``; the file's own directory anchors
-            it.
-
     Returns:
         ValidationResult containing schema_errors, structural_errors, unit_warnings, and is_valid flag
+
+    Raises:
+        TypeError: if ``esm_file`` is not an :class:`EsmFile`.
     """
-    # Handle JSON string or dict input by parsing first.
-    #
-    # `validate` documents accepting EITHER a file path OR the JSON content
-    # itself (a conformance harness holds the fixture text, not its path).
-    # The loader no longer sniffs its argument, so the sniff that this
-    # function's own contract requires lives here, in the open, instead of
-    # being an invisible property of `load`.
-    if isinstance(esm_file, (str, dict)):
-        try:
-            if isinstance(esm_file, dict):
-                esm_file = load_document(esm_file, base_path=base_path)
-            elif os.path.exists(esm_file):
-                esm_file = load_path(esm_file, base_path=base_path)
-            else:
-                esm_file = load_string(esm_file, base_path=base_path)
-        except SchemaValidationError as e:
-            # A STRUCTURAL failure (StructuralValidationError subclasses
-            # SchemaValidationError) carries machine-readable records — a stable
-            # diagnostic `code` and a JSON-Pointer `path` each. Re-emit those as
-            # structured structural_errors instead of collapsing them into one
-            # opaque `$` prose blob filed under schema_errors: the shared
-            # contract in tests/invalid/expected_errors.json pins these fixtures
-            # as `"schema_errors": []` plus a coded structural error at a
-            # specific path (e.g. `unit_inconsistency` @
-            # `/models/BadUnitsModel/equations/0`).
-            records = getattr(e, "records", None)
-            if records:
-                return ValidationResult(
-                    is_valid=False,
-                    schema_errors=[],
-                    structural_errors=[
-                        ValidationError(
-                            path=r.get("path", ""),
-                            message=r.get("message", ""),
-                            code=r.get("code", ""),
-                            details=r.get("details", {}),
-                        )
-                        for r in records
-                    ],
-                )
-            # A jsonschema failure now arrives with the FULL list of per-node
-            # violations attached (parse.load collects them via iter_errors).
-            # Emit one structured schema_error each — a JSON-Pointer path + the
-            # failing keyword — instead of collapsing them into a single opaque
-            # blob at the document root (CONFORMANCE_SPEC §7.1.2).
-            js_errors = getattr(e, "schema_errors", None)
-            if js_errors:
-                seen: set[tuple[str, str]] = set()
-                converted: list[ValidationError] = []
-                for je in _flatten_schema_errors(js_errors):
-                    ve = _convert_jsonschema_error(je)
-                    # Dedup on the exact (keyword, path) the comparator matches
-                    # on, so a combinator that fans out to the same leaf across
-                    # branches contributes one record, not many.
-                    key = (ve.code, ve.path)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    converted.append(ve)
-                # Stable output: `iter_errors` order is not guaranteed, so sort
-                # by the (path, keyword) the comparator matches on.
-                converted.sort(key=lambda ve: (ve.path, ve.code))
-                return ValidationResult(
-                    is_valid=False,
-                    schema_errors=converted,
-                    structural_errors=[],
-                )
-            return ValidationResult(
-                is_valid=False,
-                schema_errors=[
-                    ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)
-                ],
-                structural_errors=[],
-            )
-        except SubsystemRefError as e:
-            # A §4.7 mount that does not resolve is a STRUCTURAL defect at the
-            # pointer of the mount, not a parse failure of the document as a
-            # whole: `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
-            # `/models/<M>/subsystems/<name>` (tests/invalid/expected_errors.json
-            # pins these fixtures as `"schema_errors": []`).
-            return ValidationResult(
-                is_valid=False,
-                schema_errors=[],
-                structural_errors=[
-                    ValidationError(
-                        path=getattr(e, "path", "") or "",
-                        message=str(e),
-                        code=getattr(e, "code", "") or ErrorCode.PARSE.value,
-                        details=getattr(e, "details", None) or {},
-                    )
-                ],
-            )
-        except Exception as e:
-            return ValidationResult(
-                is_valid=False,
-                schema_errors=[
-                    ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)
-                ],
-                structural_errors=[],
-            )
+    if not isinstance(esm_file, EsmFile):
+        raise TypeError(
+            "validate() takes a parsed EsmFile, not "
+            f"{type(esm_file).__name__}: use validate_path(path) for a file, "
+            "validate_text(text) for JSON text, or "
+            "validate(load_document(data)) for a decoded dict "
+            "(API_SPEC.md §8 item 13)."
+        )
 
     schema_errors = []
     structural_errors = []
@@ -335,6 +280,139 @@ def validate(esm_file, *, base_path: str | None = None) -> ValidationResult:
         structural_errors=structural_errors,
         unit_warnings=unit_warnings,
     )
+
+
+
+# ===========================================================================
+# Path / text convenience (API_SPEC.md §8 item 13).
+#
+# `validate` itself is typed-only. These two are the sanctioned way to reach it
+# from the two untyped inputs a caller actually holds, named so the argument
+# type is in the NAME rather than sniffed out of the value.
+# ===========================================================================
+
+
+def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
+    """Load a document with ``loader``, then validate it, reporting a LOAD
+    failure as a :class:`ValidationResult` rather than raising.
+
+    A caller asking "is this document valid?" wants a verdict for a malformed
+    one too, so the schema / structural / subsystem-ref failures the loader
+    raises are converted into the corresponding records here. Shared verbatim by
+    :func:`validate_path` and :func:`validate_text` so the two agree on every
+    conversion.
+    """
+    try:
+        esm_file = loader()
+    except SchemaValidationError as e:
+        # A STRUCTURAL failure (StructuralValidationError subclasses
+        # SchemaValidationError) carries machine-readable records — a stable
+        # diagnostic `code` and a JSON-Pointer `path` each. Re-emit those as
+        # structured structural_errors instead of collapsing them into one
+        # opaque `$` prose blob filed under schema_errors: the shared
+        # contract in tests/invalid/expected_errors.json pins these fixtures
+        # as `"schema_errors": []` plus a coded structural error at a
+        # specific path (e.g. `unit_inconsistency` @
+        # `/models/BadUnitsModel/equations/0`).
+        records = getattr(e, "records", None)
+        if records:
+            return ValidationResult(
+                is_valid=False,
+                schema_errors=[],
+                structural_errors=[
+                    ValidationError(
+                        path=r.get("path", ""),
+                        message=r.get("message", ""),
+                        code=r.get("code", ""),
+                        details=r.get("details", {}),
+                    )
+                    for r in records
+                ],
+            )
+        # A jsonschema failure now arrives with the FULL list of per-node
+        # violations attached (parse.load collects them via iter_errors).
+        # Emit one structured schema_error each — a JSON-Pointer path + the
+        # failing keyword — instead of collapsing them into a single opaque
+        # blob at the document root (CONFORMANCE_SPEC §7.1.2).
+        js_errors = getattr(e, "schema_errors", None)
+        if js_errors:
+            seen: set[tuple[str, str]] = set()
+            converted: list[ValidationError] = []
+            for je in _flatten_schema_errors(js_errors):
+                ve = _convert_jsonschema_error(je)
+                # Dedup on the exact (keyword, path) the comparator matches
+                # on, so a combinator that fans out to the same leaf across
+                # branches contributes one record, not many.
+                key = (ve.code, ve.path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                converted.append(ve)
+            # Stable output: `iter_errors` order is not guaranteed, so sort
+            # by the (path, keyword) the comparator matches on.
+            converted.sort(key=lambda ve: (ve.path, ve.code))
+            return ValidationResult(
+                is_valid=False,
+                schema_errors=converted,
+                structural_errors=[],
+            )
+        return ValidationResult(
+            is_valid=False,
+            schema_errors=[
+                ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)
+            ],
+            structural_errors=[],
+        )
+    except SubsystemRefError as e:
+        # A §4.7 mount that does not resolve is a STRUCTURAL defect at the
+        # pointer of the mount, not a parse failure of the document as a
+        # whole: `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
+        # `/models/<M>/subsystems/<name>` (tests/invalid/expected_errors.json
+        # pins these fixtures as `"schema_errors": []`).
+        return ValidationResult(
+            is_valid=False,
+            schema_errors=[],
+            structural_errors=[
+                ValidationError(
+                    path=getattr(e, "path", "") or "",
+                    message=str(e),
+                    code=getattr(e, "code", "") or ErrorCode.PARSE.value,
+                    details=getattr(e, "details", None) or {},
+                )
+            ],
+        )
+    except Exception as e:
+        return ValidationResult(
+            is_valid=False,
+            schema_errors=[
+                ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)
+            ],
+            structural_errors=[],
+        )
+    return validate(esm_file, base_path=base_path)
+
+
+def validate_path(path: str, *, base_path: str | None = None) -> ValidationResult:
+    """Validate the ESM document stored at ``path`` (API_SPEC.md §8 item 13).
+
+    Convenience over ``validate(load_path(path))`` that additionally reports a
+    LOAD failure as a :class:`ValidationResult` instead of raising.
+    ``base_path`` defaults to the file's own directory inside :func:`load_path`,
+    so relative §4.7 mounts resolve without being told where they are.
+    """
+    return _validate_loaded(lambda: load_path(path, base_path=base_path), base_path)
+
+
+def validate_text(text: str, *, base_path: str | None = None) -> ValidationResult:
+    """Validate an ESM document held as JSON **text** (API_SPEC.md §8 item 13).
+
+    Convenience over ``validate(load_string(text))`` that additionally reports a
+    LOAD failure as a :class:`ValidationResult` instead of raising. Text carries
+    no location of its own, so pass ``base_path`` when the document has relative
+    §4.7 mounts or §9.7.2 template imports — a conformance harness holding
+    fixture text should pass the fixture's directory.
+    """
+    return _validate_loaded(lambda: load_string(text, base_path=base_path), base_path)
 
 
 def _validate_content_presence(esm_file: EsmFile, structural_errors: list[ValidationError]) -> None:
@@ -1254,23 +1332,21 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # Validate the entire ESM file
         unit_result = validator.validate_esm_file(esm_file)
 
-        # Convert validation errors to warnings (as per function contract)
-        for error_msg in unit_result.errors:
+        # Emit one UnitWarning per CODED finding. The code comes from the raise
+        # site inside units.py -- `UnparseableUnitError` -> unparseable_unit, a
+        # `DimensionalMismatchError` or a failed dimension comparison ->
+        # dimensional_mismatch, a pint failure or an undeterminable dimension ->
+        # analysis -- and is never recovered from the message text, so rewording
+        # a message cannot silently reclassify its severity.
+        for finding in unit_result.findings:
             unit_warnings.append(
                 UnitWarning(
-                    path="unit_validation",
-                    message=error_msg,
+                    path="",
+                    message=finding.message,
+                    code=finding.code,
+                    lhs_units=finding.lhs_units,
+                    rhs_units=finding.rhs_units,
                     details={"validation_type": "dimensional_analysis"},
-                )
-            )
-
-        # Convert validation warnings to our warning format
-        for warning_msg in unit_result.warnings:
-            unit_warnings.append(
-                UnitWarning(
-                    path="unit_validation",
-                    message=warning_msg,
-                    details={"validation_type": "unit_warning"},
                 )
             )
 
@@ -1278,8 +1354,14 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # If pint is not available, add a warning about missing unit validation
         unit_warnings.append(
             UnitWarning(
-                path="unit_validation",
-                message="Unit validation skipped: pint library not available. Install with: pip install pint",
+                path="",
+                message=(
+                    "Unit validation skipped: pint library not available. "
+                    "Install with: pip install pint"
+                ),
+                # A missing checker is a limit of the ANALYSIS, never a defect
+                # in the file.
+                code=UNIT_FINDING_ANALYSIS,
                 details={"validation_type": "dependency_missing"},
             )
         )
@@ -1287,8 +1369,10 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # If unit validation fails for any reason, add a warning but don't break validation
         unit_warnings.append(
             UnitWarning(
-                path="unit_validation",
+                path="",
                 message=f"Unit validation failed: {str(e)}",
+                # The checker blew up; that says nothing about the file.
+                code=UNIT_FINDING_ANALYSIS,
                 details={"validation_type": "validation_error", "exception": str(e)},
             )
         )

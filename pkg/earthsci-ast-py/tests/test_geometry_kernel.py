@@ -45,7 +45,7 @@ from earthsci_ast.numpy_interpreter import (
 )
 from earthsci_ast.parse import load_path
 from earthsci_ast.serialize import to_json
-from earthsci_ast.validation import validate
+from earthsci_ast.validation import validate, validate_text
 
 
 _VALID_GEOM = VALID_DIR / "geometry"
@@ -91,7 +91,7 @@ def test_geometry_fixtures_present() -> None:
 @pytest.mark.parametrize("fixture", _valid_fixtures(), ids=lambda p: p.name)
 def test_valid_geometry_fixture_is_valid(fixture: Path) -> None:
     """Every shared valid geometry fixture passes schema + structural validation."""
-    result = validate(json.loads(fixture.read_text()))
+    result = validate_text(fixture.read_text())
     assert not result.schema_errors, (
         f"{fixture.name}: schema errors {[e.message for e in result.schema_errors]}"
     )
@@ -109,7 +109,7 @@ def test_invalid_geometry_fixture_is_rejected(fixture: Path) -> None:
     esm-spec §9.6.4 — the schema admits any string there since the §9.6.1
     scalar-field substitution-site widening). Both surface as load-time
     rejection through ``validate``."""
-    result = validate(json.loads(fixture.read_text()))
+    result = validate_text(fixture.read_text())
     assert result.schema_errors or result.structural_errors, (
         f"{fixture.name}: expected load-time rejection (missing manifold / 3 operands / "
         f"out-of-set manifold) but validation passed"

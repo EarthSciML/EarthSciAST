@@ -119,8 +119,23 @@ from .flatten import (
     UnsupportedDimensionalityError,
 )
 
+# The diagnostic-code registry (API_SPEC.md §8). Canonical spelling in every
+# binding; the VALUES are a cross-binding contract.
+from .error_handling import ERROR_CODES
+
 # Validation (Core tier requirement)
-from .validation import validate, ValidationResult, ValidationError
+from .validation import (
+    validate,
+    validate_path,
+    validate_text,
+    ValidationResult,
+    ValidationError,
+    UnitWarning,
+)
+
+# Enum lowering (esm-spec §9.3). `lower_enums` is PURE and `lower_enums_mut` is
+# the in-place twin, per API_SPEC.md §8 item 15.
+from .registered_functions import EnumLoweringError, lower_enums, lower_enums_mut
 
 # Expression engine (Core tier requirement)
 from .expression import (
@@ -214,6 +229,7 @@ from .classification import (
     brownian_parameters,
     constant_parameters,
     declared_system_kind,
+    effective_system_kind,
     discrete_parameters,
     is_ode_state,
     model_nodes,
@@ -247,6 +263,10 @@ from .units import (
     convert_units,
     UnitValidator,
     UnitValidationResult,
+    UnitFinding,
+    UNIT_FINDING_DIMENSIONAL_MISMATCH,
+    UNIT_FINDING_UNPARSEABLE,
+    UNIT_FINDING_ANALYSIS,
     UnitConversionResult,
 )
 
@@ -255,6 +275,24 @@ from .edit import (
     ESMEditor,
     EditOperation,
     EditResult,
+    # Canonical bare-verb spellings (API_SPEC.md 8 item 7).
+    add_variable,
+    rename_variable,
+    remove_variable,
+    add_equation,
+    remove_equation,
+    add_reaction,
+    remove_reaction,
+    add_species,
+    remove_species,
+    add_continuous_event,
+    add_discrete_event,
+    remove_event,
+    add_coupling,
+    remove_coupling,
+    merge,
+    extract,
+    # Deprecated container-suffixed aliases, kept for one minor (API_SPEC.md 10).
     add_variable_to_model,
     rename_variable_in_model,
     remove_variable_from_model,
@@ -427,6 +465,7 @@ __all__ = [
     "constant_parameters",
     "system_kind",
     "declared_system_kind",
+    "effective_system_kind",
     "unknowns",
     "observed_definitions",
     "assert_partitions",
@@ -494,7 +533,14 @@ __all__ = [
     "expand_coupling_imports",
     "is_coupling_library_doc",
     # Validation
+    "ERROR_CODES",
     "validate",
+    "validate_path",
+    "validate_text",
+    "UnitWarning",
+    "lower_enums",
+    "lower_enums_mut",
+    "EnumLoweringError",
     "ValidationResult",
     "ValidationError",
     "SchemaValidationError",
@@ -582,11 +628,33 @@ __all__ = [
     "convert_units",
     "UnitValidator",
     "UnitValidationResult",
+    "UnitFinding",
+    "UNIT_FINDING_DIMENSIONAL_MISMATCH",
+    "UNIT_FINDING_UNPARSEABLE",
+    "UNIT_FINDING_ANALYSIS",
     "UnitConversionResult",
     # Editing operations
     "ESMEditor",
     "EditOperation",
     "EditResult",
+    # Editing -- canonical bare-verb names (API_SPEC.md 8 item 7).
+    "add_variable",
+    "rename_variable",
+    "remove_variable",
+    "add_equation",
+    "remove_equation",
+    "add_reaction",
+    "remove_reaction",
+    "add_species",
+    "remove_species",
+    "add_continuous_event",
+    "add_discrete_event",
+    "remove_event",
+    "add_coupling",
+    "remove_coupling",
+    "merge",
+    "extract",
+    # Editing -- deprecated container-suffixed aliases (API_SPEC.md 10).
     "add_variable_to_model",
     "rename_variable_in_model",
     "remove_variable_from_model",

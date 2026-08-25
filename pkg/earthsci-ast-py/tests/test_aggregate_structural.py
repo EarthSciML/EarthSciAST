@@ -30,7 +30,7 @@ from typing import List
 import pytest
 from conftest import VALID_DIR
 
-from earthsci_ast.validation import validate
+from earthsci_ast.validation import validate, validate_text
 
 
 _FIXTURES_DIR = VALID_DIR / "aggregate"
@@ -51,7 +51,7 @@ def test_aggregate_fixture_structurally_valid(fixture_path: Path) -> None:
     """A schema-valid aggregate fixture must also pass the structural verdict."""
     data = json.loads(fixture_path.read_text())
 
-    result = validate(data)
+    result = validate_text(json.dumps(data))
 
     assert not result.schema_errors, (
         f"{fixture_path.name}: unexpected schema errors: "

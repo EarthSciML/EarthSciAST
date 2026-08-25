@@ -111,8 +111,13 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 # without it a ref that resolves to a multi-system file degrades
                 # to `unresolved_subsystem_ref` (target not found relative to the
                 # CWD) instead of its true `ambiguous_subsystem_ref`.
-                result = earthsci_ast.validate(
-                    json.loads(path.read_text()), base_path=str(path.parent)
+                # `validate` takes a typed document (API_SPEC.md §8 item 13);
+                # `validate_text` is the entry point for a document held as
+                # text, and it converts a LOAD failure into a ValidationResult
+                # -- which is exactly what this branch needs, since it only runs
+                # when the load phase already rejected the file.
+                result = earthsci_ast.validate_text(
+                    path.read_text(), base_path=str(path.parent)
                 )
             record["schema_errors"] = [_error_to_dict(e) for e in (result.schema_errors or [])]
             record["structural_errors"] = [
