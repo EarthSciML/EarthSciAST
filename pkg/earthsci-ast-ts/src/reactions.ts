@@ -31,7 +31,7 @@ import type {
  * @param system ReactionSystem to derive ODEs from
  * @returns Model with species as state variables, derived ODEs plus constraints
  */
-export function deriveODEs(system: ReactionSystem): Model {
+export function deriveOdes(system: ReactionSystem): Model {
   const variables: { [key: string]: ModelVariable } = {}
   const equations: Equation[] = []
 
@@ -340,3 +340,12 @@ export function productMatrix(system: ReactionSystem): number[][] {
 
   return matrix
 }
+
+/**
+ * @deprecated Spelling alias for {@link deriveOdes}, kept for one minor per
+ * API_SPEC.md §10. `deriveODEs` violated §2/§2.1: the canonical name is
+ * `derive_odes`, whose TypeScript transliteration is `deriveOdes`, and this
+ * binding already spelled the siblings `odeStates` / `isOdeState` that way.
+ * Removed at the next major.
+ */
+export const deriveODEs = deriveOdes

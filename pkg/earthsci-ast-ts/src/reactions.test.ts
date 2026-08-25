@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { deriveODEs, stoichiometricMatrix, substrateMatrix, productMatrix } from './reactions.js'
+import {
+  deriveOdes,
+  deriveODEs,
+  stoichiometricMatrix,
+  substrateMatrix,
+  productMatrix,
+} from './reactions.js'
 import { isExprNode } from './expression.js'
 import type { ReactionSystem } from './types.js'
 
 describe('Reaction system ODE derivation', () => {
-  describe('deriveODEs', () => {
+  describe('deriveOdes', () => {
     it('should handle simple single reaction', () => {
       const system: ReactionSystem = {
         species: {
@@ -24,7 +30,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // Check variables
       expect(model.variables.A).toEqual({
@@ -87,7 +93,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[A]/dt = k_source (direct production)
       const eqnA = model.equations.find(
@@ -115,7 +121,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[A]/dt = -k_sink * A (direct loss)
       const eqnA = model.equations.find(
@@ -147,7 +153,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[A]/dt = -2 * k1 * A^2
       const eqnA = model.equations.find(
@@ -197,7 +203,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[A]/dt = -(k1 * A) - (k2 * A) = -(k1 + k2) * A (summed terms)
       const eqnA = model.equations.find(
@@ -253,7 +259,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[B]/dt = 0 (no reactions affect B)
       const eqnB = model.equations.find(
@@ -289,7 +295,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // Should have 2 ODEs + 1 constraint = 3 equations total
       expect(model.equations).toHaveLength(3)
@@ -322,7 +328,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       expect(model.reference).toEqual({ doi: '10.1000/test', url: 'https://example.com' })
     })
@@ -350,7 +356,7 @@ describe('Reaction system ODE derivation', () => {
         ],
       }
 
-      const model = deriveODEs(system)
+      const model = deriveOdes(system)
 
       // d[A]/dt = -(k_base * exp(1000/T)) * A
       const eqnA = model.equations.find(
@@ -728,5 +734,11 @@ describe('Reaction system ODE derivation', () => {
         [0, 3], // C: not product in R1, product in R2 with stoich 3
       ])
     })
+  })
+})
+
+describe('deriveODEs (deprecated §2.1 spelling)', () => {
+  it('is the same function object as deriveOdes', () => {
+    expect(deriveODEs).toBe(deriveOdes)
   })
 })
