@@ -633,22 +633,22 @@ fn bin2_arith(op: BinCode) -> bool {
 
 /// Which superops the peephole may form. All settings are bit-identical (a
 /// superop applies the identical scalar kernels in the identical order); the
-/// knobs exist because the WIN is configuration-dependent, and were set by
-/// measurement on simpleclimate.esm (36×19×10, medians of ≥7 interleaved,
-/// AVX-512 clones active).
+/// knobs exist because the WIN is configuration-dependent, and the defaults were
+/// set by measurement on one model, one grid and one SIMD width. Re-measure
+/// before trusting them for a different shape of workload.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SuperopCfg {
-    /// Merge `+ - * /` three-op chains into [`MicroOp::Bin3`]. Default OFF:
-    /// measured at ~+0.2 ms/RHS — the chunked executor is bound by the
-    /// per-op loads/stores through the (L2-resident) register file, not by
-    /// dispatch, and Bin3's all-pointer form adds a fourth input stream plus
-    /// splat-register traffic that outweighs the two intermediate
-    /// round-trips it saves. Opt-in via `ESS_TAPE_BIN3=1`.
+    /// Merge `+ - * /` three-op chains into [`MicroOp::Bin3`]. Default OFF: it
+    /// measured slower — the chunked executor is bound by the per-op loads/stores
+    /// through the (L2-resident) register file, not by dispatch, and Bin3's
+    /// all-pointer form adds a fourth input stream plus splat-register traffic
+    /// that outweighs the two intermediate round-trips it saves. Opt-in via
+    /// `ESS_TAPE_BIN3=1`.
     pub bin3: bool,
     /// Extend Bin2 beyond the `+ - * /` square to the mask/clamp pairs of
-    /// [`bin2_pair_ok`]. Default ON: −0.2 ms/RHS generic, neutral under the
-    /// SIMD clones, and 8% fewer element-ops. `ESS_TAPE_EXTPAIR_DISABLE=1`
-    /// reverts.
+    /// [`bin2_pair_ok`]. Default ON: faster in the generic build, neutral under
+    /// the SIMD clones, and fewer element-ops either way.
+    /// `ESS_TAPE_EXTPAIR_DISABLE=1` reverts.
     pub ext_pairs: bool,
 }
 

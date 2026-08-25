@@ -1056,9 +1056,9 @@ function _classify_parameters(model::Model, param_names::Vector{String},
     # The INJECTED data channels. A document's `"type": "parameter"` field may
     # stop being a parameter variable by the time the evaluator is built: a
     # coupling `variable_map` rewires the consumer's declared field onto the
-    # LOADER's variable, which flattening emits as an observed (measured on
-    # reseact.esm: `NEIRegrid.F_NO` is gone, and the emission field the regrid
-    # actually folds is `NEI2016Emis.NEI2016.NO`). The surviving name is still
+    # LOADER's variable, which flattening emits as an observed — so the declared
+    # field name is gone and the one the consumer actually folds is the loader's.
+    # The surviving name is still
     # something a caller may try to override — and it is exactly the case a
     # gradient lies about, since the value was frozen into the build. So class
     # every caller-supplied array by its REGISTRY, keeping only names the model
@@ -1363,7 +1363,7 @@ const _EMPTY_NAME_SET = Set{String}()
 # The ARRAY paths (arrayop kernels, stencil/affine builds, discrete-cadence
 # fills) keep receiving the FULL resolved map and inline exactly as before; a
 # kernel's inlined copy of a slotted observed is later collapsed onto the
-# observed's slot by `_share_lane_invariants!` when the value numbers match.
+# observed's slot by `_share_kernel_invariants!` when the value numbers match.
 #
 # Returns `(; defs, inline, n_inlined)`:
 #   defs      — dependency-ordered `name => body` pairs; each body is the RAW
@@ -1504,14 +1504,14 @@ end
 #     callback write needs `u_modified!(true)` ⇒ trajectory re-init each
 #     boundary. Forcing is exogenous, not a state.
 #   • an array field in the SAME `p`, read via `getfield(p, n.sym)` (the plan's
-#     literal mechanism) — MEASURED to allocate: a runtime-symbol `getfield` on
-#     a heterogeneous NamedTuple boxes the union (~48 B/call) and regresses the
-#     EXISTING scalar `_NK_PARAM` path too. "Monomorphic getfield" holds only
+#     literal mechanism) — allocates: a runtime-symbol `getfield` on a
+#     heterogeneous NamedTuple boxes the union, and regresses the EXISTING scalar
+#     `_NK_PARAM` path too. "Monomorphic getfield" holds only
 #     for a compile-time-literal symbol, never the tree-walk's runtime `n.sym`.
 # CONCLUSION: node JUSTIFIED. Realize the read as a build-time-CAPTURED,
 # by-reference flat `Vector{Float64}` aliasing the caller's dense buffer
 # (`vec` shares storage; the J1 refresh callback's in-place `.=` shows
-# through). `_NK_PARAM_GATHER` (+ vectorized `_VK_PGATHER`) is the zero-alloc
+# through). `_NK_PARAM_GATHER` is the zero-alloc
 # dual of the const-fold: the SAME `index` IR, rerouted by binding-time cadence
 # class. No new IR op / schema field / declarative vocabulary; disjoint from
 # the scalar `p`, so existing scalar reads stay byte-identical.
@@ -2112,10 +2112,10 @@ function _build_lower_and_classify(model::Model;
     # BOTH EMITTERS. This was `:inplace`-only, on the reasoning that the `:oop`
     # emitter builds its own `du` and had no buffer to fill. That made inlining
     # MANDATORY under `:oop`, and inlining is superlinear: a reader spliced with
-    # a reduction body pays the whole body per output cell. Measured on ReSEACT
-    # at 7×7×8 — the smallest grid that model builds — the SAME emitter takes
-    # 2 GiB materialized and OOMs past 39 GiB inlined, so the traced build was
-    # not merely slower, it was impossible. `_make_rhs_oop` now fills the same
+    # a reduction body pays the whole body per output cell. On a real chemistry
+    # model that is the difference between a build that fits in memory and one
+    # that exhausts the host, so the traced build was not merely slower, it was
+    # impossible. `_make_rhs_oop` now fills the same
     # observed block through the `_oop_du_zeros`/`_oop_store` seam that already
     # exists for exactly this reason (a backend may implement the writes
     # functionally on an immutable traced value).
@@ -2606,11 +2606,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # GATHER `index(<def>, i…)` (see `_materialized_fill_equation` for why that
     # spelling, and what handing it the bare aggregate would reach). An observed
     # whose own body is a prefix reduction therefore keeps the triangular path —
-    # exactly as it did BEFORE this change, where it was inlined into a reader
-    # and the scan sat buried inside that reader's body. Measured, both ways, on
-    # `S[i] = Σ_{j<=i} u[j]`: `n_scan_folds == 0` under the factored build, the
-    # inlining build, and pristine pre-change `main`. What the scan path does
-    # keep, unchanged, is the shape it was written for — a STATE equation that is
+    # exactly as it did when it was inlined into a reader with the scan buried in
+    # that reader's body: for `S[i] = Σ_{j<=i} u[j]`, `n_scan_folds == 0` under
+    # both the factored and the inlining build. What the scan path does keep,
+    # unchanged, is the shape it was written for — a STATE equation that is
     # itself a prefix reduction — including in a model that also materializes
     # observeds, where the two mechanisms compose bit-for-bit.
     # `mat_levels` carries the `:inplace` shape `(scalars, _KernelSection, scans)`
@@ -2670,12 +2669,10 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
 
     # ---- Kernel-CLASS merge (oop_merge.jl), for BOTH emitters ----
     # Collapse per-cell-fragmented same-structure kernels into lane-batched
-    # class kernels — value-exact (bit-identical output on every runner), and
-    # a large constant-factor win on class-fragmented models (ReSEACT
-    # transport 7×7×8: 4,119 → 346 kernels; the in-place RHS 2.2× faster with
-    # codegen disabled, codegen source generation 3.4× faster; for the :oop
-    # emitter it is the difference between an XLA trace that finishes in
-    # minutes and one that runs for hours). MUST run here, before the xcse
+    # class kernels — value-exact (bit-identical output on every runner), and on a
+    # class-fragmented model an order-of-magnitude reduction in kernel count. For
+    # the `:oop` emitter it is the difference between an XLA trace that finishes
+    # and one that does not. MUST run here, before the xcse
     # gate below: xcse rewrites kernel invariant-tier defs into SCALAR-cache
     # reads (`_NK_CACHED` payloads that are no kernel's scratch), which the
     # merge signature/clone does not model — merge first, then xcse runs over
@@ -2782,12 +2779,11 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # it additionally skips while `(p, t, forcing epoch)` stand still (the FD
     # Jacobian's same-`t` columns).
     #
-    # The `_VecNode`-overlay fields (`n_vec_kernels`, `template_node_count`, the
-    # `n_invariant_*` and `n_vec_*` triples) are RETAINED AS HARD ZEROS: the
-    # overlay was deleted when the access-kernel IR became the only array
-    # runtime, and a large body of tests (and downstream tooling) asserts
-    # `n_vec_kernels == 0` — meaning "the unified IR owns every array
-    # equation" — which is now true by construction.
+    # `n_vec_kernels`, `template_node_count` and the `n_invariant_*` / `n_vec_*`
+    # triples are RETAINED AS HARD ZEROS. They belonged to a separate array
+    # overlay that the access-kernel IR replaced; a large body of tests and
+    # downstream tooling asserts `n_vec_kernels == 0`, meaning "the unified IR
+    # owns every array equation", which is now true by construction.
     # `n_acc_kernels` (and the slot sums below) count the POST-class-merge
     # list — the kernels the emitted RHS actually carries — deliberately: the
     # N-independence property still holds (a class is a structural fact of the
@@ -2889,8 +2885,8 @@ function _build_evaluator_impl_inner(model::Model;
                          const_arrays::AbstractDict=Dict{String,Vector{Float64}}(),
                          # Live forcing buffers bound BY REFERENCE (ess-14f.3, JL-J0).
                          # Each value MUST be a dense `Array{Float64}`; its `index(…)`
-                         # reads compile to live `_NK_PARAM_GATHER`/`_VK_PGATHER`
-                         # nodes over an aliased flat view, so a discrete-cadence
+                         # reads compile to live `_NK_PARAM_GATHER` nodes over an
+                         # aliased flat view, so a discrete-cadence
                          # refresh callback's in-place `buffer .= …` is seen by the
                          # RHS with zero reallocation. This is the discrete-cadence
                          # channel; const-cadence data stays on `const_arrays` (frozen
@@ -3330,26 +3326,18 @@ end
 # contraction loop. The affine build is then handed `index(<contracting
 # aggregate>, i…)` directly, which `_stencilize_indexed` cannot model
 # ("index(aggregate) with contracted index"), so the whole equation lands on the
-# per-cell tier at O(#cells) IR. ReSEACT's `Transport3D.Mz` (a staggered prefix
-# scan, ~90% of that model's build cost) and its column integrals `divh_col` /
-# `dp_col` all declined here rather than at any tier's own guard.
+# per-cell tier at O(#cells) IR. On a real transport model a staggered prefix scan
+# and its column integrals all declined here rather than at any tier's own guard.
 #
-# WHY THIS IS NOW SAFE FOR MORE THAN A SCAN. This unwrap was originally admitted
-# for prefix scans ALONE, and the exception was justified by a hazard downstream:
-# `_derive_lane_repl` (stencil_affine.jl) used to decide a const lane was
-# loop-invariant by comparing its VALUES at the box CORNERS, so a const gather
-# that agreed at the corners and differed inside — a regrid weight column
-# (0, 0.5, 0) — folded to a literal and silently zeroed the interior cell. A scan
-# never reaches that fold (it lowers as an elementwise term body plus an O(N)
-# accumulation), which is what made the narrow exception sound while the general
-# relaxation was not.
-#
-# That hazard is GONE: `_derive_lane_repl` no longer samples values at all. It
-# derives invariance STRUCTURALLY from the resolved linear INDEX — an all-zero
-# stride vector over the box — and its remaining corner evaluations only pin an
-# affine map that is affine by construction. The fold "cannot be fooled by
-# adversarial data", so the reason to withhold the unwrap from non-scan
-# producers no longer exists.
+# WHY IT IS SAFE FOR MORE THAN A SCAN. This unwrap was originally admitted for
+# prefix scans ALONE, because `_derive_lane_repl` (stencil_affine.jl) used to
+# decide a const lane was loop-invariant by comparing its VALUES at the box
+# CORNERS: a const gather that agreed at the corners and differed inside — a
+# regrid weight column (0, 0.5, 0) — folded to a literal and silently zeroed the
+# interior cell. A scan never reaches that fold. `_derive_lane_repl` no longer
+# samples values at all; it derives invariance STRUCTURALLY from the resolved
+# linear INDEX (an all-zero stride vector over the box), so the fold cannot be
+# fooled by adversarial data and the restriction is no longer needed.
 #
 # STILL DELIBERATELY NARROW: the bare form is adopted only when it UNLOCKS
 # something — i.e. only when the producer actually contracts. A non-contracting
@@ -3855,8 +3843,8 @@ function _compile_arrayop_percell!(percell_scalar, acc_kernels, covered::BitVect
         else
             # Generalized einsum: compile each contracted-index term
             # separately, then accumulate at runtime using _NK_CONTRACTION
-            # (an allocation-free sequential ⊕-fold for every semiring —
-            # `_eval_contraction` scalar, or `_VK_REDUCE` once vectorized).
+            # (`_eval_contraction`: an allocation-free sequential ⊕-fold for
+            # every semiring).
             # Constant-bound contracted ranges reuse the global iterator;
             # expression-valued ones are expanded for THIS output cell from
             # the current `idx_env` (variable-valence segment reduction —

@@ -61,7 +61,7 @@ on its own.
 """
 function mtk2esm end
 # Fallback fired when no extension method matched (same stub pattern as
-# `_simulate_solve` in simulate.jl / `provider_refresh_times` in
+# `_solve_problem` in simulate.jl / `provider_refresh_times` in
 # data_refresh.jl): the extension methods are typed on MTK/Catalyst system
 # types, so any call reaching this untyped method means the extension that
 # defines them is not loaded.
@@ -88,11 +88,8 @@ mtk2esm_gaps(sys) = throw(ArgumentError(
 # ========================================
 # MTK-independent export helpers
 # ========================================
-# Shared by EarthSciASTMTKExt and EarthSciASTCatalystExt
-# (both previously carried private copies — `_meta_string`/`_rmeta_string`,
-# duplicated `_strip_time`, inline TODO_GAP strings and @warn blocks).
-# None of these touch MTK/Catalyst types, so they live here next to
-# `GapReport`.
+# Shared by EarthSciASTMTKExt and EarthSciASTCatalystExt. None of these touch
+# MTK/Catalyst types, so they live here next to `GapReport`.
 
 "Strip a trailing `(t)` time-dependence suffix from a printed symbolic name."
 _strip_time(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s

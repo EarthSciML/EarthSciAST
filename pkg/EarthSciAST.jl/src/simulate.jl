@@ -111,8 +111,9 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
         # point — and the affine-stencil compile-once tier factors each body once
         # per (use site, region class) instead of fusing it into every branch
-        # spine (RFC out-of-line-expression-templates step c; ~50x fewer
-        # node-lowerings on the ESD PPM stack). The downstream shape transforms
+        # spine (RFC out-of-line-expression-templates step c), which is an
+        # order-of-magnitude reduction in node lowerings on a deep template stack.
+        # The downstream shape transforms
         # below only inspect equation LHS / infer shapes from already-shaped
         # operands, so a surviving `apply_expression_template` node rides through
         # them untouched.
@@ -422,7 +423,7 @@ end
 #
 # Returns `(metaparameters, discovered)`: the caller's bindings PLUS whatever
 # the loaders measured, and the sampled arrays themselves so the injection loop
-# reuses them instead of re-reading (the 69 MB FF10 zip is decoded once).
+# reuses them instead of re-reading (a zipped inventory is decoded once).
 # --------------------------------------------------------------------------- #
 function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::Float64)
     out = Dict{String,Int}(String(k) => Int(v) for (k, v) in metaparameters)
@@ -586,7 +587,7 @@ function esm_problem(input, tspan;
     # ---- extent discovery: a loader that measures its OWN record count ------
     # FIRST, because a discovered extent CLOSES a metaparameter and every load
     # below binds metaparameters at the loader API (esm-spec §9.7.6 site 3). The
-    # sampled arrays are kept and reused at injection, so a 69 MB FF10 zip is
+    # sampled arrays are kept and reused at injection, so a zipped inventory is
     # decoded once, not once here and again there.
     metaparams, discovered = _discover_loader_extents(providers, metaparameters, t_sample)
     # `load` is where a metaparameter closes, so an ALREADY-loaded carrier has

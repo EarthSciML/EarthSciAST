@@ -478,7 +478,7 @@ def _pd_detect_binning(ev: Any, agg: Any, out_set: str, out_is_cell: bool | None
 #
 # Under Option B (§9.6.4) ``load`` PRESERVES ``apply_expression_template``
 # references: they ride to the build boundary, where they are expanded ONCE with
-# site recording (the ~50x node-lowering win). ``esm_problem`` therefore hands
+# site recording. ``esm_problem`` therefore hands
 # ``desugar_pushdown`` a document whose binning body may be a surviving reference
 # rather than the containment ``ifelse`` the recogniser looks for.
 #

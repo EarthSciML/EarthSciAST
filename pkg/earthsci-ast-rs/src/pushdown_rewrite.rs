@@ -532,7 +532,7 @@ fn pd_detect_binning(
 //
 // Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
 // references: they ride to the build boundary, where they are expanded ONCE with
-// site recording (the ~50x node-lowering win). `prepare` therefore hands
+// site recording. `prepare` therefore hands
 // `desugar_pushdown` a document whose binning body may be a surviving reference
 // rather than the containment `ifelse` the recogniser looks for.
 //

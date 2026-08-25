@@ -81,7 +81,7 @@ end
 # never `setindex!`/`push!`/`merge!` into one. Writing to a sentinel would
 # silently leak state into every later build in the process. Code paths that
 # need a mutable dict must branch to a fresh instance (see e.g. the
-# `_derived_extents` selection in `_build_evaluator_impl`). The invariant is
+# `derived_extents` selection in `_build_evaluator_impl`). The invariant is
 # pinned by a test that asserts each sentinel is still empty after a full
 # build+evaluate cycle (tree_walk_op_table_test.jl).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,15 +227,14 @@ end
 # `map_children` already declines to REBUILD an unchanged node, which keeps a
 # shared DAG shared on the way out — but the WALK itself was per-PATH, so a node
 # reachable by 2^d paths was re-entered 2^d times even when nothing changed and
-# nothing was rebuilt. On dag_walk_memo_test.jl's depth-32 chain that was 457 s,
-# and 6245 of 6255 profiler samples at depth 28.
+# nothing was rebuilt. dag_walk_memo_test.jl's depth-32 chain pins that case.
 #
 # The obvious fix — memoize every node on identity — is sound (the rewrite is a
 # pure, context-free function of the node) but it is NOT free: an `IdDict` probe
-# plus insert per node MEASURED 2.6× the un-memoized walk on trees with no
-# sharing (55 → 142 ns/node), and an ordinary model's equations are exactly that
-# shape. Paying a constant-factor tax on every build to defend against a
-# pathological one is the wrong trade.
+# plus insert per node costs several times the un-memoized walk on trees with no
+# sharing, and an ordinary model's equations are exactly that shape. Paying a
+# constant-factor tax on every build to defend against a pathological one is the
+# wrong trade.
 #
 # So: walk UN-MEMOIZED under a visit BUDGET, and only if the budget is exhausted
 # — which only a shared DAG with an exponential path count can do — redo the walk
@@ -244,15 +243,11 @@ end
 # reached twice to the same output object rather than two equal copies, which is
 # the DAG-preserving direction and already what the unchanged case did.
 #
-# MEASURED. Unshared trees: back to the original walk cost (the residue is one
-# `Ref` decrement per node), against 2.6× for the unconditional memo. The 64×64
-# advection build of tree_walk_test.jl — 4096 equations, ~40k nodes, no sharing —
-# runs 0.54 s against its 5.0 s budget. Doubling DAGs: FLAT ~0.3 s for the whole
-# depth-8-through-40 build, of which ~0.25 s is the budget burned before the
-# switch. That burn is a one-time CONSTANT, not a scaling term, and it buys the
-# common case paying nothing. Tripping the budget is not an error condition — a
-# legitimately huge single expression simply takes the memoized path, which is
-# the linear one.
+# So an unshared tree pays only one `Ref` decrement per node, and a doubling DAG
+# pays the budget once before switching to the linear memoized walk. That burn is
+# a one-time CONSTANT, not a scaling term. Tripping the budget is not an error
+# condition — a legitimately huge single expression simply takes the memoized
+# path, which is the linear one.
 const _LOWER_BCAST_BUDGET = 1 << 21     # ~2.1M node visits, ~0.1 s un-memoized
 
 struct _BroadcastBudgetExceeded <: EarthSciASTError end

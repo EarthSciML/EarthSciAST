@@ -114,15 +114,12 @@ _dual_codegen_node_budget() =
 # The SAME overflow generated function, called at Float64 too — so a
 # budget-declined kernel runs compiled code, like every other kernel. The
 # overflow RGF is eltype-generic and its emission is already paid at build (a
-# few ms); what this routing adds is the residual kernels' NATIVE compile at
-# the first Float64 call — measured at ~0.13-0.15 s per 1000 emitted nodes
-# (roughly linear, the per-function ESS_CODEGEN_FN_NODE_CAP chunking is what
-# keeps it linear), the same latency a Dual caller already pays at its first
-# call. With Polyester threading active, the overflow RGF runs CHUNKED on its
-# own threaded cell axis (see "Threaded cell axis for the codegen tier" below)
-# — measured on reseact.esm at 8 threads with the whole mechanism forced onto
-# the overflow tier via budget 0: chemistry 2.44 ms/call chunked RGF vs 3.55 ms
-# for the (since-retired) threaded Float64 lane tape.
+# few ms); what this routing adds is the residual kernels' NATIVE compile at the
+# first Float64 call — roughly linear in emitted nodes, the per-function
+# `ESS_CODEGEN_FN_NODE_CAP` chunking being what keeps it linear, and the same
+# latency a Dual caller already pays at its first call. With Polyester threading
+# active, the overflow RGF runs CHUNKED on its own threaded cell axis (see
+# "Threaded cell axis for the codegen tier" below).
 #
 # Kill switch ESS_F64_OVERFLOW_CODEGEN=0 routes every residual Float64 kernel
 # to the per-cell interpreter instead — the differential oracle for this

@@ -38,65 +38,24 @@
 # (resolve.jl). Note that build.jl is included BEFORE compile.jl — its
 # function signatures therefore must not annotate compile-layer types
 # (they are used at runtime only; see `_compile_arrayop_equation!`).
-#
-#   errors.jl          §1   TreeWalkError + E_TREEWALK_* codes
-#   geometry_setup.jl  §2   build-time geometry kernels (clip / fused area /
-#                           ranged clips / binning coordinates); the geometry
-#                           BODY COMPILER is §2c (geometry_compile.jl, below)
-#   build_helpers.jl        _EMPTY_* sentinels, const-array boundary policy,
-#                           whole-array lift, WS4 elementwise fold
-#   build.jl           §2b  BuildInspection, build-pipeline stages,
-#                           _build_evaluator_impl, build_evaluator entry
-#                           points, evaluate_expr; §2b-f the FACTORED
-#                           array-observed buffers (an array observed is
-#                           evaluated once per RHS call into a buffer above
-#                           the state instead of being inlined into every
-#                           reader — `ESS_ARRAY_OBS_INLINE=1` restores the
-#                           inlining build)
-#   compile.jl         §3-4 _Node IR compilation, CSE (ess-r7h), the compiled
-#                           scalar walker (zero-alloc hot path), the RHS value
-#                           type (_rhs_value_type) both walkers compute in
-#   geometry_compile.jl §2c setup-time geometry BODY COMPILER: lowers geometry
-#                           bodies once per materialization sweep into the
-#                           _Node IR (compile-once, evaluate-per-cell —
-#                           retires the former _geo_eval interpreter)
-#   access_kernel.jl   §4b  the UNIFIED array-kernel IR (_AccKernel): access
-#                           descriptors, the eltype-generic scalar runner, the
-#                           per-cell/invariant CSE tiers, and the shared
-#                           threading infrastructure (batch runner, partition)
-#   oop.jl             §4d  out-of-place emitter over the SAME IR: eltype-generic
-#                           f(u,p,t) → du, the AD / device path (`form = :oop`)
-#   acc_merge.jl       §4e  the per-cell fallback's whole-array host (grouping
-#                           signature + indirect-outs merge) and _make_rhs,
-#                           the in-place RHS closure generator
-#   const_tier.jl      §4g  partitions the (final) scalar prelude by cadence:
-#                           slots that depend only on `p` are refilled only when
-#                           `p` moves, not once per stage of every step (4qf)
-#   stencil.jl         §4c  symbolic stencilizer (sentinel spines + lane
-#                           recipes — the affine box processor's front half)
-#   helpers.jl         §5-5b misc + array-variable helpers (_cell_key /
-#                           _parse_cell_key, field ICs, _eval_const_int)
-#   semiring.jl        §5c  semiring registry + join-gate resolution
-#   resolve.jl         §5d  index-set + build-time index resolution,
-#                           _PGatherArray, cell discovery, model selection
 # ─────────────────────────────────────────────────────────────────────────────
 
-include("tree_walk/errors.jl")
-include("tree_walk/geometry_setup.jl")
-include("tree_walk/build_helpers.jl")
-include("tree_walk/scan.jl")           # ess-scan: `_ScanFold` (annotated in build.jl)
-include("tree_walk/build.jl")
-include("tree_walk/compile.jl")
-include("tree_walk/geometry_compile.jl")   # §2c: needs _Node (compile.jl)
-include("tree_walk/access_kernel.jl")
-include("tree_walk/oop.jl")
-include("tree_walk/acc_merge.jl")     # per-cell → indirect-outs _AccKernels + _make_rhs
-include("tree_walk/oop_merge.jl")     # :oop kernel-CLASS merge (lane-batching pass)
-include("tree_walk/xcse.jl")          # §4e: cross-kernel/kernel↔prelude fn-CSE (plan B4)
-include("tree_walk/codegen_kernel.jl") # §4f: B1 Julia-codegen tier for access kernels (RGF)
-include("tree_walk/const_tier.jl")
-include("tree_walk/stencil.jl")
-include("tree_walk/stencil_affine.jl")
-include("tree_walk/helpers.jl")
-include("tree_walk/semiring.jl")
-include("tree_walk/resolve.jl")
+include("tree_walk/errors.jl")           # §1   TreeWalkError + E_TREEWALK_* codes
+include("tree_walk/geometry_setup.jl")   # §2   build-time geometry materialization
+include("tree_walk/build_helpers.jl")    #      sentinels, boundary policy, folds
+include("tree_walk/scan.jl")             #      prefix-scan detection + `_ScanFold`
+include("tree_walk/build.jl")            # §2b  build pipeline, `build_evaluator`
+include("tree_walk/compile.jl")          # §3-4 `_Node` IR, scalar CSE, scalar walker
+include("tree_walk/geometry_compile.jl") # §2c  geometry body compiler (needs `_Node`)
+include("tree_walk/access_kernel.jl")    # §4b  unified array-kernel IR (`_AccKernel`)
+include("tree_walk/oop.jl")              # §4d  out-of-place emitter over the same IR
+include("tree_walk/acc_merge.jl")        # §4e  per-cell merge + `_make_rhs`
+include("tree_walk/oop_merge.jl")        #      `:oop` kernel-CLASS merge
+include("tree_walk/xcse.jl")             #      cross-kernel / kernel↔prelude fn-CSE
+include("tree_walk/codegen_kernel.jl")   # §4f  Julia-codegen tier for access kernels
+include("tree_walk/const_tier.jl")       # §4g  cadence partition of the scalar prelude
+include("tree_walk/stencil.jl")          # §4c  symbolic stencilizer (spines + recipes)
+include("tree_walk/stencil_affine.jl")   #      affine box processor (the default build)
+include("tree_walk/helpers.jl")          # §5   misc + array-variable helpers
+include("tree_walk/semiring.jl")         # §5c  semiring registry + join-gate resolution
+include("tree_walk/resolve.jl")          # §5d  index resolution, `_PGatherArray`

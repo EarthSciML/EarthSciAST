@@ -262,7 +262,7 @@ Write the freshly sampled `var` field (from a [`provider_sample`](@ref) result)
 into `buffer` IN PLACE and return it. The native field lands directly in the
 buffer — any regrid onto the sim grid is an in-model coupling expression the RHS
 evaluates downstream, not a refresh-time transform. The copy is
-column-major-linear, matching the `_VK_PGATHER` linearization (ess-14f.3); it
+column-major-linear, matching the `_NK_PARAM_GATHER` linearization; it
 mutates `buffer` (never rebinds), since the buffer aliases the `param_arrays`
 storage the RHS gathers live.
 """

@@ -11,10 +11,9 @@
 #
 #     ((0̄ ⊕ g_1) ⊕ g_2) ⊕ … ⊕ g_N,     g_j = ifelse(j ⋚ i, term_j, 0̄)
 #
-# — N terms at every one of N cells. Measured on this build: an elementwise
-# equation over 2048 cells costs ~1.5 µs per RHS call, the same-sized prefix
-# sum ~18 ms. The affine + codegen tiers both FIRE; they are simply being
-# asked to do O(N²) arithmetic.
+# — N terms at every one of N cells, i.e. O(N²) arithmetic per RHS call against
+# O(N) for an elementwise equation of the same size. The affine and codegen tiers
+# both FIRE; they are simply being asked to do quadratic work.
 #
 # THE REWRITE. Consecutive output cells of a FORWARD scan share a prefix:
 # acc_i = acc_{i-1} ⊕ term_i. So the whole equation is two O(N) passes:

@@ -128,7 +128,7 @@ _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
 #
 # Under Option B (§9.6.4) `load` PRESERVES `apply_expression_template`
 # references: they ride to the build boundary where `_build_evaluator_impl`
-# expands them with site recording (the ~50x node-lowering win, simulate.jl).
+# expands them with site recording (see simulate.jl).
 # `prepare` therefore hands `desugar_pushdown` a document whose binning body may
 # be a surviving reference rather than the containment `ifelse` the recogniser
 # looks for.
@@ -700,8 +700,8 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         if bind === nothing || !bind.out_is_cell                  # FORWARD arm only
             # `ev` is the rank-1 factor of a `+`-mat-vec against a
             # provider-backed `[c_set, r_set]` array: the join position. If it is
-            # ALSO binning-shaped but unreadable, say so — silence here is the
-            # 330 GB fetch that surfaces hours later as a memory failure.
+            # ALSO binning-shaped but unreadable, say so — silence here means an
+            # unpruned fetch that surfaces hours later as a memory failure.
             if bind === nothing
                 why = _pd_binning_refusal(ev, edef, String(c_set))
                 why === nothing || push!(diags, Dict{String,Any}(

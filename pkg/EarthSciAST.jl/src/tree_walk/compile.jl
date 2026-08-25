@@ -357,9 +357,10 @@ end
 # in `_FN_CONST_ARG_SPECS` `const_positions` order). Runs the SAME validation +
 # `Float64` coercion the runtime kernels require, ONCE at build time — a bad
 # axis throws its pinned `ClosedFunctionError` here (fail-fast). Shared by the
-# scalar `_compile_op` and the vectorized `_merge_fn_node`, so both ends build
-# the same spec object from the one table. `fname` MUST be a `_fn_const_arg_spec`
-# name (the caller gates on that); the `else` is an internal-consistency guard.
+# scalar `_compile_op` and the array-kernel merge (`_acc_merge_nodes`), so both
+# ends build the same spec object from the one table. `fname` MUST be a
+# `_fn_const_arg_spec` name (the caller gates on that); the `else` is an
+# internal-consistency guard.
 #
 # The freshly built spec is routed through the build-scoped lane-table intern
 # pool (`_lane_intern`, acc_merge.jl): within one build, content-equal specs —
@@ -665,125 +666,86 @@ end
 # 3b. Common-subexpression elimination (ess-r7h) — eval-time memo, approach (a)
 # ============================================================
 #
-# APPROACH (a) — eval-time memoization. The serialized IR and the canonical
-# goldens are UNCHANGED: CSE only restructures how the *compiled* tree-walk
-# evaluator computes a RHS, so results are numerically identical and the
-# cross-binding PDE-sim conformance suite (ess-fmw, rhs_rtol=1e-9) is untouched
-# by construction. Lives only in this Julia evaluator (the bead's named main
-# beneficiary); other bindings need no change because numeric output is the same.
+# APPROACH: eval-time memoization. The serialized IR and the canonical goldens are
+# UNCHANGED — CSE only restructures how the compiled tree-walk evaluator computes a
+# RHS, so results are numerically identical and the cross-binding conformance suite
+# is untouched by construction. Lives only in this Julia evaluator.
 #
-# KEY = `canonical_json(expr)` from canonicalize.jl — the existing,
-# cross-binding-identical canonical form. Two subexpressions are "common" iff
-# their canonical_json bytes are equal; keying on this is conformance-safe by
-# construction (the same identity all five bindings already agree on). NO
-# parallel canonicalizer is introduced — `canonical_json` IS the key.
+# KEY = `canonical_json(expr)` (canonicalize.jl), the existing cross-binding
+# canonical form. Two subexpressions are "common" iff their canonical bytes are
+# equal, which makes keying on it conformance-safe by construction. No parallel
+# canonicalizer is introduced.
 #
-# SHARING HANDLE = a value-number (Int cache slot) per distinct canonical key.
-# This realizes the RFC §6.1 "node id as a DAG vertex" role in compiled space:
-# a shared subexpression is named once and referenced from each use site by a
-# `_NK_CACHED` leaf carrying that slot.
+# SHARING HANDLE = a value-number (Int cache slot) per distinct key. A shared
+# subexpression is named once and referenced from each use site by a `_NK_CACHED`
+# leaf carrying that slot. Children are compiled (and hoisted) before their parent,
+# so a cached subexpression's slot is always lower than the slots referencing it and
+# the prelude is topologically ordered by construction.
 #
-# DAG = the value-numbered data-dependency graph `_compile_cse` walks: children
-# are compiled (and hoisted) before their parent, so a cached subexpression's
-# slot is always lower than the slots referencing it — the prelude is therefore
-# already topologically ordered. (cadence.jl's §5.7 graph is index-set cycle
-# detection over raw JSON, not an expression-CSE DAG; the reuse here is of the
-# *canonical identity*, not that specific pass.)
+# MEMO POINT = a per-`f!`-call scratch `cache::Vector{Float64}`. The prelude
+# evaluates each distinct cached subexpression exactly ONCE per call, in slot order;
+# every occurrence then reads `cache[slot]`.
 #
-# EVALUATOR MEMO POINT = a per-`f!`-call scratch `cache::Vector{Float64}`. The
-# prelude evaluates each distinct cached subexpression exactly ONCE per RHS call
-# into `cache` (slot order); every occurrence then reads `cache[slot]` via
-# `_NK_CACHED`. A subexpression occurring K times is thus evaluated once.
-#
-# IDENTITY IS CANONICAL, NOT STRUCTURAL — and that is a decision, not an accident.
-# `canonical_json` CANONICALIZES before it emits (canonicalize.jl): n-ary `+`/`*`
-# are flattened and their arguments sorted. Three consequences, stated exactly:
-#
-#   (a) CSE keys on CANONICAL identity. Two subexpressions share a slot iff their
-#       canonical forms are equal — the same identity all five bindings already
-#       agree on, which is what makes keying on it conformance-safe.
-#   (b) Reassociation-equivalent expressions therefore SHARE A SLOT. `(a+b)+c` and
-#       `a+(b+c)` have one key, `{"args":["a","b","c"],"op":"+"}`, hence one slot.
-#   (c) The FIRST-SEEN operand order is what every occurrence reads back. The slot's
-#       def is compiled from the first occurrence encountered (`_cse_rebuild`), so
-#       the other occurrences get that association order, not their own.
+# IDENTITY IS CANONICAL, NOT STRUCTURAL — a decision, not an accident.
+# `canonical_json` flattens n-ary `+`/`*` and sorts their arguments, so
+# reassociation-equivalent expressions SHARE A SLOT (`(a+b)+c` and `a+(b+c)` have
+# one key), and the FIRST-SEEN operand order is what every occurrence reads back
+# (the slot's def is compiled from the first occurrence — `_cse_rebuild`).
 #
 # The consequence is worth naming, because it is surprising: since float `+`/`*` are
 # not associative, an equation's numeric output is NOT a function of that equation
 # alone — adding a canonically-equal expression elsewhere in the model can shift it.
 # The difference is bounded by float reassociation of a CANONICALLY EQUAL expression
 # (normally sub-ulp; catastrophic cancellation can amplify it), and the format
-# already reassociates freely as a matter of course: `discretize` canonicalizes each
-# per-cell RHS before it is ever compiled, so canonical form *is* this format's
-# notion of expression identity and a conforming reader may associate `+(a,b,c)`
-# however it likes. Keying CSE structurally instead would restore per-equation
-# locality, but it would lose commutative sharing (which tree_walk_cse_test.jl pins)
-# and would itself change the numbers of models that work today. So: the key stays
-# canonical, and this property is PINNED by a test rather than left latent.
+# already reassociates freely: `discretize` canonicalizes each per-cell RHS before it
+# is ever compiled, so canonical form IS this format's notion of expression identity.
+# Keying structurally instead would restore per-equation locality but lose
+# commutative sharing (which tree_walk_cse_test.jl pins) and would itself change the
+# numbers of models that work today. The property is PINNED by a test, not latent.
 #
-# What IS bit-exact: a model with nothing to share gets an empty prelude, and
-# `_compile_cse` then produces the identical `_Node` tree `_compile` would — so f!
-# is unchanged, instruction for instruction, for models with no common subexpression.
+# A model with nothing to share gets an empty prelude, and `_compile_cse` then
+# produces the identical `_Node` tree `_compile` would.
 #
 # GUARDS — the prelude is UNCONDITIONAL, the walker is LAZY. `_make_rhs` fills every
-# slot at the top of every call, before any equation runs, while `_eval_node_op` is
-# lazy for `ifelse` (only the taken branch is walked) and short-circuits `and`/`or`.
-# Hoisting a subexpression that occurs ONLY under a guard would therefore evaluate it
-# when no guard fires — turning `ifelse(a >= 0, sqrt(a), 0)` at `a = -1` into a
-# `DomainError`, and making whether a guard protects its operand depend on how many
-# times that operand happens to appear in the model. So a key is hoisted iff
+# slot at the top of every call, while `_eval_node_op` is lazy for `ifelse` and
+# short-circuits `and`/`or`. Hoisting a subexpression that occurs ONLY under a guard
+# would evaluate it when no guard fires — turning `ifelse(a >= 0, sqrt(a), 0)` at
+# `a = -1` into a `DomainError`. So a key is hoisted iff
 #
 #     total_occurrences >= 2   AND   unconditional_occurrences >= 1
 #
-# (see `_cse_count!`). If a key has an unconditional occurrence the original walk
+# (`_cse_count!`). If a key has an unconditional occurrence the original walk
 # evaluates it anyway at that occurrence, so evaluating it once in the prelude is
-# exactly as safe — no new throw, no new NaN — and the GUARDED occurrences of that
-# same key may then freely read the cache (`_compile_cse` needs no guard logic: slot
-# membership already implies an unconditional occurrence). A key occurring only under
-# guards is left inline, where its guard still protects it. Note this is deliberately
-# not "refuse to recurse into guarded arms", which would lose legitimate sharing
-# within an arm and between an arm and an unconditional occurrence.
+# exactly as safe, and the GUARDED occurrences may then freely read the cache. A key
+# occurring only under guards is left inline, where its guard still protects it.
+# This is deliberately not "refuse to recurse into guarded arms", which would lose
+# legitimate sharing within an arm and between an arm and an unconditional one.
 #
-# Guard laziness holds only on the two SCALAR walkers (`_eval_node`, `_oop_eval`).
-# The access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
+# Guard laziness holds only on the SCALAR walkers (`_eval_node`, `_oop_eval`). The
+# access-kernel `_eval_acc` is EAGER for `ifelse`/`and`/`or` BY CONSTRUCTION — it
 # broadcasts over lanes, and per-lane laziness would need masked evaluation — so a
 # guarded-domain expression inside an `arrayop` is NOT protected by its guard, with
-# or without CSE. That is a known, deliberate divergence between the scalar and
-# array paths (see the `ifelse` arm of `_eval_acc` in access_kernel.jl), and it is why
-# the guard rule above lives in the scalar CSE pass only.
+# or without CSE. That is a deliberate scalar/array divergence (see the `ifelse` arm
+# of `_eval_acc`), and it is why the guard rule lives in the scalar pass only.
 #
-# SCOPE — why CSE lives on the scalar tree-walk path, not the vectorized
-# (ess-dhq) arrayop path. After ess-dhq, redundancy is removed at three layers:
-#   * cross-grid-cell  — eliminated by whole-array kernels (one broadcast per
-#                        structural cell group), so the same stencil is never
-#                        re-walked per cell;
-#   * intra-expression — eliminated at DISCRETIZE time: `discretize` canonicalizes
-#                        each per-cell RHS (discretize.jl), and canonicalization
-#                        already merges like additive/multiplicative terms. The
-#                        2D-Laplacian interior body, for instance, lands as
-#                        `16*(u[i-1,j]+u[i+1,j]+u[i,j-1]+u[i,j+1]+(-4*u[i,j]))`
-#                        — every gather appears exactly once, nothing to share;
-#   * cross-equation / intra-RHS-across-nonlinear-contexts — SURVIVES canonicalize
-#                        (it normalizes one expression at a time, and does not
-#                        combine `sin(a+b)` with `cos(a+b)` or a shared reaction
-#                        flux `k*A*B` across several species balances). This is
-#                        exactly the scalar/indexed-D tree-walk path, and it is
-#                        where this CSE pass fires.
-# Conformance PDE fixtures are pure single-field arrayops (n_scalar_entries==0)
-# whose canonicalized templates carry no duplicate sub-node, so vectorized-path
-# CSE would be a no-op on them. Cross-KERNEL sharing for COUPLED multi-field PDEs
-# (one array subexpression reused across several arrayop equations) is a genuine
-# future case — keyed structurally on the post-merge kernel spine rather than on
-# `canonical_json`, with a per-call vector cache — and is tracked as a follow-up.
+# SCOPE — why this pass is scalar-only. Redundancy is removed at three layers:
+#   * cross-grid-cell  — by whole-array kernels (one broadcast per structural cell
+#                        group), so a stencil is never re-walked per cell;
+#   * intra-expression — at DISCRETIZE time, since canonicalization already merges
+#                        like additive/multiplicative terms;
+#   * cross-equation / intra-RHS across nonlinear contexts — SURVIVES canonicalize,
+#                        which normalizes one expression at a time and does not
+#                        combine `sin(a+b)` with `cos(a+b)`, or share a reaction flux
+#                        `k*A*B` across several species balances. That is this pass.
+# Cross-KERNEL sharing of a lane-invariant subtree across several arrayop equations
+# is a separate pass, keyed structurally on the kernel spine rather than on
+# `canonical_json`: see tree_walk/xcse.jl.
 #
-# WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. A
-# scalar observed used to be spliced into every reader, and this pass then
-# re-discovered the declared sharing through canonical keys. Scalar observeds
-# now compile as NAMED PRELUDE DEFS in this same prelude (`_plan_observed_slots`
-# in build.jl; the `obs_defs` argument of `_cse_compile_scalar` below), so what
-# is left for the canonical-key machinery is exactly the ANONYMOUS repeats —
-# a subexpression written twice without a name, within one RHS, across
-# equations, or between an observed def and an equation.
+# WHAT THIS PASS NO LONGER CARRIES (ess-obs-slots): AUTHOR-NAMED sharing. Scalar
+# observeds now compile as NAMED PRELUDE DEFS in this same prelude
+# (`_plan_observed_slots` in build.jl; the `obs_defs` argument of
+# `_cse_compile_scalar`), so what is left for the canonical-key machinery is exactly
+# the ANONYMOUS repeats — a subexpression written twice without a name.
 
 # Ops CSE must not look at: array/aggregate producers, const/enum data carriers,
 # and the unresolved/illegal-in-RHS markers. CSE never hoists a node rooted at
@@ -1365,8 +1327,8 @@ end
 # fine and then throw `Float64(::Dual)` on the first store.
 #
 # Every argument's TYPE determines the answer, so inference constant-folds this to
-# a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf`/`_vbuf`
-# static dispatches and keeps the Float64 path byte-for-byte what it was.
+# a `Type{…}` at each `f!` specialization — which is what makes `_cse_buf` a
+# static dispatch and keeps the Float64 path byte-for-byte what it was.
 #
 # (oop.jl's `_oop_value_type` is this same function under the emitter-local
 # name — `const _oop_value_type = _rhs_value_type` — so the two emitters agree
@@ -1638,8 +1600,8 @@ end
 # ============================================================
 
 # The value type `T` is threaded through the whole walk (rather than re-derived at
-# each node) so that every `Type{T}`-dispatched scratch lookup — `_cse_read` here,
-# `_vbuf` on the vectorized side — is resolved statically.
+# each node) so that every `Type{T}`-dispatched scratch lookup (`_cse_read`,
+# `_cse_buf`) is resolved statically.
 #
 # NOTHING in this walker CONVERTS to `T`. A leaf returns whatever it natively holds
 # and Julia's promotion does the rest: a `Float64` literal beside a `Dual` state
@@ -1878,11 +1840,10 @@ end
 # while the primal value still looks perfect. Because `_NK_LITERAL` returns its
 # raw `Float64` (see `_eval_node` — nothing in the walker converts leaves into
 # `T`), the generated `x ^ y` compiles to `Dual^Float64` — the power rule,
-# defined on the whole domain `^` is. (The vectorized twin gets the same
-# protection from `_VK_LITERAL`/`_VK_CONSTVEC` staying `Vector{Float64}`.) An
-# exponent that genuinely depends on a differentiated variable still lands on
-# `Dual^Dual`, which is correct. The protection lives in the LEAVES, so the arm
-# itself is mechanical and safe to generate.
+# defined on the whole domain `^` is. An exponent that genuinely depends on a
+# differentiated variable still lands on `Dual^Dual`, which is correct. The
+# protection lives in the LEAVES, so the arm itself is mechanical and safe to
+# generate.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
         arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),

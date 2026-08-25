@@ -126,7 +126,7 @@ for structure-preserving rewrites use `map_children`.
 """
 # Apply `f` to each immediate child WITHOUT materializing a `child_exprs`
 # vector — same generated field set, same order. Used by the hot read-only
-# walks (`foreach_subexpr`, `_stencil_var_set`) so a whole-tree scan allocates
+# walks (`foreach_subexpr`, `foreach_subexpr_once`) so a whole-tree scan allocates
 # nothing on the common args-only node.
 @eval function foreach_child(f, e::OpExpr)
     $(_opexpr_child_stmts(x -> :(f($x)))...)

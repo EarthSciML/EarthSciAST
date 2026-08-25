@@ -24,9 +24,9 @@
 #   4. Lower the sentinel spine to an access spine with `_lower_to_access` (below)
 #      and emit one `_AccKernel` with the box's `_CellSet`.
 #
-# `_lower_to_access` is the analog of the deleted `_lower_template` (stencil.jl): same tree
-# shape, but each `_NK_STATE(idx=-k)` lane leaf becomes either a literal (ghost /
-# invariant-folded lane) or an `_NK_ACCESS` into a per-kernel descriptor table,
+# `_lower_to_access` keeps the spine's tree shape, but each `_NK_STATE(idx=-k)`
+# lane leaf becomes either a literal (ghost / invariant-folded lane) or an
+# `_NK_ACCESS` into a per-kernel descriptor table,
 # and each invariant fixed-slot leaf (`_NK_STATE idx≥0`, `_NK_PARAM_GATHER`)
 # becomes a fixed-read descriptor. Because the spine's OP structure is the exact
 # `_compile` output (only leaves are swapped), the arithmetic — operand order,
@@ -186,8 +186,7 @@ end
 # The DEFAULT array-kernel build. Returns kernels or `nothing` (fall back to the
 # existing symbolic-stencil / per-cell chain, `covered` untouched).
 # `ESS_STENCIL_DISABLE=1` forces the per-cell reference — the differential-test
-# escape hatch and the sole remaining switch (the old opt-in `ESS_AFFINE` was
-# retired when the affine path became the default).
+# escape hatch, and the only switch on this path.
 
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
@@ -639,8 +638,8 @@ _obsref_disabled() = get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
 # Mz/OMEGA pattern); the clamp makes the flat index non-affine across a box,
 # and — pgather transitions being invisible to the per-cell cut signature —
 # the corner verification then threw the WHOLE equation onto the per-cell
-# fallback (measured on the 72-level GEOS-FP transport: the mass equation
-# alone was ~910k `_compile` calls, ~40% of the warm build). Lowering the lane
+# fallback — which on a real multi-level transport equation is a large fraction
+# of the whole warm build. Lowering the lane
 # to `_AccArrTblBox` instead mirrors `_materialize_state_tbl`: one
 # `_eval_recipe` per box cell — the SAME index resolution the per-cell
 # fallback would run — stored densely in box-local layout. The table holds
@@ -891,7 +890,7 @@ function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_arg
 end
 
 # Compile a no-contraction array equation via the affine polyhedral build.
-# Same inputs the deleted `_try_symbolic_stencil` took; returns `Vector{_AccKernel}` or nothing.
+# Returns `Vector{_AccKernel}`, or `nothing` to fall back to the per-cell chain.
 function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              range_iters, lhs_body::OpExpr,
                              resolved_obs::Dict{String,ASTExpr},

@@ -232,13 +232,13 @@ Operator expression node containing:
 # ever copies-with-changes through `reconstruct` (fields are never assigned after
 # construction). Mutability buys true POINTER-IDENTITY for the build-time
 # memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the `_stencil_var_set` cache in tree_walk/stencil.jl). With an *immutable*
+# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
 # `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
 # are STRUCTURAL — every memo probe re-hashes the `op` String and walks all ~35
-# fields (measured ~17× slower per probe than pointer identity), and those probes
-# dominate the `build_evaluator` profile. A mutable struct makes `objectid`/`===`
-# (hence `IdDict` and the `r !== args[i]` "did this subtree change" identity checks
-# throughout the tree walk) pointer-based, so the memos become the O(1) identity
+# fields, and those probes are a large share of the `build_evaluator` profile. A
+# mutable struct makes `objectid`/`===` (hence `IdDict` and the `r !== args[i]`
+# "did this subtree change" identity checks throughout the tree walk)
+# pointer-based, so the memos become the O(1) identity
 # caches they were always meant to be. No custom `==`/`hash` is defined: `OpExpr`
 # is never a *value*-keyed `Dict`/`Set` key anywhere (only ever an `IdDict` key),
 # and default `==` was already non-structural for trees — two distinct-but-equal

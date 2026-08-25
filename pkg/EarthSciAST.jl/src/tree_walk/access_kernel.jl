@@ -9,12 +9,10 @@
 # WHY THIS EXISTS. The previous array paths materialised a per-lane slot vector
 # for every gather (and, in the symbolic-stencil path, re-stencilised the whole
 # rule body once per structural "branch"). Both are O(#cells): a 1e6-cell mesh
-# builds 1e6-long vectors, and the monotone-PPM rule — whose lowered body is a
-# ~160k-node DAG — took tens of minutes because ~343 branches each re-walked it.
-# Here the BUILD is O(#structural groups): a gather stores ONE descriptor, never
-# a per-lane array, and the runtime computes the slot on the fly. See
-# scratchpad prototypes (affine + unstructured) for the measured 15000x build
-# speedups and the bit-identical differential checks this design reproduces.
+# builds 1e6-long vectors, and a monotone-PPM rule — whose lowered body is a
+# large DAG — takes minutes because every branch re-walks it. Here the BUILD is
+# O(#structural groups): a gather stores ONE descriptor, never a per-lane array,
+# and the runtime computes the slot on the fly.
 #
 # TWO ACCESS FAMILIES, ONE EVALUATOR:
 #   * STRUCTURED (Cartesian) — a gather is affine in the cell index, so the
@@ -58,12 +56,11 @@ const _NK_SUBCALL = UInt8(22)  # template-body sub-kernel (payload = _AccKernel)
 
 # ---- Access descriptors: how one leaf resolves to a value at (cell c, nbr n) ----
 #
-# ONE CONCRETE TAGGED STRUCT, not an abstract-type hierarchy — the same design as
-# the deleted `_VecNode` overlay used, and for the same reason. A per-kernel descriptor
-# TABLE is a `Vector{_AccDesc}`; if the element type were an abstract `_Access`,
+# ONE CONCRETE TAGGED STRUCT, not an abstract-type hierarchy. A per-kernel
+# descriptor TABLE is a `Vector{_AccDesc}`; if the element type were abstract,
 # every `_fetch(table[i], …)` would be a DYNAMIC DISPATCH on the boxed subtype,
 # which infers as `Any`, boxes each gathered value, and allocates O(#access-nodes
-# × #cells) per RHS call (measured ~140 B/cell — fatal at 1e6 cells). A concrete
+# × #cells) per RHS call — fatal at large cell counts. A concrete
 # struct dispatched by a `kind::UInt8` tag makes `_fetch` a branch ladder with
 # concrete field reads: no dynamic dispatch, no boxing, zero allocation at
 # `Float64`, and a small `Union{Float64,eltype(u)}` result under AD that the
@@ -214,8 +211,7 @@ struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count 
 # of arbitrary output slots — cell ordinal c ∈ 1:length(outs) writes `du[outs[c]]`,
 # `midx == (c, 1, 1)`, and the box-addressed descriptors (CONST_BOX /
 # STATE_TBL_BOX / ARR_TBL_BOX with s1=1, off=1) index their per-cell tables by
-# that ordinal. `outs` is the same O(#cells) data the deleted `_VecKernel` out_slots
-# vector always carried — no new memory class.
+# that ordinal.
 struct _CellSet
     strides::Vector{Int}
     ranges::Vector{UnitRange{Int}}
@@ -346,7 +342,7 @@ function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         return t
     elseif k === _NK_CACHED
         # A CSE reference: the value was computed once for THIS cell by the box
-        # loop's prelude (`_fill_cse!`) into the per-cell scratch captured in
+        # loop's `cse.recipes` fill into the per-cell scratch captured in
         # `payload` — or, for an inv-tier def the cross-kernel sharing pass
         # (xcse.jl, plan B4) rewrote, once per CALL into the SCALAR prelude's
         # `_CSECache` (filled by `_make_rhs` before any kernel runs). The `isa`
@@ -1006,10 +1002,8 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # ("Threaded cell axis for the codegen tier", codegen_kernel.jl): the section
 # builder proves at build time that every emitted `du` slot is globally unique,
 # and the runtime then runs the generated function as `nchunks` static
-# contiguous cell-ordinal chunks. (This infrastructure predates that tier — it
-# was built for the retired Float64 lane tape's per-kernel cell axis — but the
-# pieces are tier-agnostic: an env-gated batch-runner hook, a verdict tally,
-# and the static partition arithmetic.)
+# contiguous cell-ordinal chunks. The pieces below are tier-agnostic: an
+# env-gated batch-runner hook, a verdict tally, and the partition arithmetic.
 #
 # WHY THE CELL AXIS IS THE SAFE ONE. Every ⊕-fold a kernel hosts is WITHIN a
 # cell (`_NK_REDUCE` / `_NK_CONTRACTION` loops are per-cell); nothing
@@ -1021,10 +1015,10 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 # front.
 #
 # OPT-IN, and deliberately so. Threading the cell axis is a large WIN on an
-# isolated RHS but can be a LOSS inside the ODE solve that RHS actually lives
-# in (measured on the native ReSEACT runner: the stiff half calls the RHS in
-# short bursts separated by linear-algebra work, so the pool sleeps between
-# calls and each dispatch pays a wake-up latency). The default is therefore
+# isolated RHS but can be a LOSS inside the ODE solve that RHS actually lives in:
+# a stiff solver calls the RHS in short bursts separated by linear-algebra work,
+# so the pool sleeps between calls and each dispatch pays a wake-up latency
+# — which is easily more than the parallel speedup. The default is therefore
 # OFF, and the opt-in is LOADING POLYESTER: the batch runner lives in
 # `EarthSciASTPolyesterExt` and is null until the user does `using Polyester`
 # (which activates the extension and calls `_set_batch_runner!`).

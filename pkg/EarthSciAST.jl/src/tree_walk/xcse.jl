@@ -35,7 +35,7 @@
 #      `_AK_SCALAR` ≡ `_NK_LITERAL`) so a kernel-side `u[5]` matches a
 #      prelude-side `u[5]`;
 #   3. a value number seen by ≥ 2 kernel defs whose body is at least as
-#      expensive as an fn/interp call (the `_xcse_expensive` gate — a `:fn`
+#      expensive as an fn/interp call (the `:xcse_expensive` registry gate — a `:fn`
 #      node or a transcendental; never bare arithmetic) gets ONE new prelude
 #      slot, built by TRANSLATING the first-seen kernel def into scalar `_Node`
 #      form (its inv-slot refs become shared-slot refs, hoisted as
@@ -87,8 +87,9 @@
 # SCOPE / FORM. The pass runs for `form = :inplace` ONLY. The `:oop` emitter
 # fills its OWN per-call prelude vector (`_make_rhs_oop`), never the
 # `_CSECache` this pass's kernel-side reads would consult, so rewritten kernels
-# would read unfilled slots there. (`:oop` kernels are left byte-identical;
-# sharing for the oop/traced tier is future work.)
+# would read unfilled slots there. `:oop` kernels are left byte-identical; the
+# traced tier removes its own redundancy at EMISSION instead, by value-numbering
+# emitted SSA values (ess-oop-gvn, tree_walk/oop.jl).
 #
 # KILL SWITCH: ESS_XCSE_DISABLE=1 skips the pass entirely; the build is then
 # byte-identical to the pre-B4 engine. Fixture-level differential oracles

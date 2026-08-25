@@ -3,39 +3,23 @@
 //!
 //! ## Why
 //!
-//! A discretization template is expanded at every reference site, so the
-//! lowered body of one tendency is enormously redundant. Measured over
-//! `simpleclimate.esm` at 12×7×7 (every observed body plus every equation RHS,
-//! counting `Expr::Operator` nodes — the metric in which `advx_theta` is
-//! 45,791 nodes and `advz_theta` 57,484):
+//! A discretization template is expanded at every reference site, so the lowered
+//! body of one tendency is enormously redundant: across a real model's bodies,
+//! only a small percentage of operator-node occurrences are structurally
+//! distinct, and scope-exact CSE cuts the number of distinct *evaluations* by
+//! more than an order of magnitude.
 //!
-//! ```text
-//! operator-node occurrences, all bodies : 482,961
-//! distinct structural classes           :   6,814   (1.41%)
-//! distinct evaluations, scope-exact CSE :  14,208   (34.0x fewer)
-//! ```
-//!
-//! The vectorized overlay pays ~0.5 µs of fixed per-node overhead (pool
-//! check-out, shape/origin bookkeeping, kernel dispatch) on top of ~1 ns per
-//! element, so at practical grid sizes the RHS cost is proportional to that
-//! node *count*, not to the number of cells. Evaluating each distinct subtree
-//! once per scope and letting every other occurrence read the result is
+//! The vectorized overlay pays a fixed per-node overhead (pool check-out,
+//! shape/origin bookkeeping, kernel dispatch) that is large next to the
+//! per-element cost, so at practical grid sizes the RHS cost is proportional to
+//! that node *count*, not to the number of cells. Evaluating each distinct
+//! subtree once per scope and letting every other occurrence read the result is
 //! therefore the dominant lever. It is the same move the Julia binding made for
-//! array observeds — factor a repeated array-valued computation into a
-//! per-call buffer instead of inlining it at every reader.
+//! array observeds — factor a repeated array-valued computation into a per-call
+//! buffer instead of inlining it at every reader.
 //!
-//! Outcome on that model, RHS wall time at u0, bit-identical throughout:
-//!
-//! ```text
-//!                        12x7x7      24x13x13    ratio (6.9x the cells)
-//!   before (ef51292c)    0.3332 s    0.7303 s    2.19x
-//!   after                0.0136 s    0.0479 s    3.52x
-//! ```
-//!
-//! The ratio moving toward the cell ratio is the point: what was removed is the
-//! FIXED per-node component, so what is left is closer to real per-element work.
-//! A 0.25-day solve of `simpleclimate.esm` goes 360.2 s -> 60.1 s (the Julia
-//! reference for the same run is 92 s).
+//! Bit-identical throughout, and the RHS cost scales closer to the cell count
+//! afterwards, because what CSE removes is the FIXED per-node component.
 //!
 //! ## The equivalence relation (this is the part that must be right)
 //!
@@ -140,11 +124,10 @@
 //!
 //! Both of the overlay's per-node questions — "is this node memoizable, and
 //! under what class?" and "is that class already evaluated in this scope?" —
-//! are asked once per node VISIT, ~483k times per RHS call and ~1.9e9 times
-//! over a 0.25-day solve of `simpleclimate.esm`. Asking them of a `HashMap` put
-//! the answer behind a hash and two cache misses, which measured at 8.6% of the
-//! solve (7.1% of it in `class_of` alone) — a third of what the overlay had left
-//! per node visit.
+//! are asked once per node VISIT — hundreds of thousands of times per RHS call,
+//! and so billions of times over a solve. Asking them of a `HashMap` puts the
+//! answer behind a hash and two cache misses, which is a significant fraction of
+//! what the overlay has left per node visit.
 //!
 //! Neither question needs a hash, because both key spaces are fixed once the
 //! analysis has run:
@@ -153,7 +136,7 @@
 //!   [`CseRt::retarget`] guarantees), so it is resolved, at [`CseRt::analyse`]
 //!   time, into [`AddrClasses`] — a flat open-addressed table keyed by a 32-bit
 //!   node ordinal, one cache line per probe.
-//! * class ids are DENSE (6,734 of them here against 662k classified nodes), so
+//! * class ids are DENSE — orders of magnitude fewer than classified nodes — so
 //!   the memo is a dense row of class-indexed cells per open scope, stamped with
 //!   the scope that wrote it. See [`Inner::memo`].
 //!

@@ -309,11 +309,10 @@ pub enum Expr {
     /// Operator node with children.
     ///
     /// The payload is an `Arc<ExpressionNode>`, not an inline `ExpressionNode`:
-    /// a §9.7-expanded discretization repeats the same subtree tens of
-    /// thousands of times (measured on `simpleclimate.esm` at the production
-    /// grid: 1.21M operator/leaf occurrences, 6,961 distinct subtrees — 0.58%),
-    /// and with an unboxed 832-byte node every occurrence was a full copy
-    /// (~978 MiB). Sharing the payload lets the load-time interner
+    /// a §9.7-expanded discretization repeats the same subtree tens of thousands
+    /// of times — on a real model, millions of occurrences over a few thousand
+    /// distinct subtrees — and with an unboxed several-hundred-byte node every
+    /// occurrence was a full copy. Sharing the payload lets the load-time interner
     /// ([`crate::intern`]) collapse structurally identical subtrees to one
     /// allocation, and makes `Expr::clone` O(1) for operator trees. `Arc`
     /// rather than `Rc` so `Expr` stays `Send + Sync` (the feature-gated
@@ -356,12 +355,10 @@ impl From<ExpressionNode> for Expr {
 // and then replaying it against each variant in turn until one sticks. `Expr`
 // is the crate's most common node type and it nests (an operator node's `args`
 // are themselves `Expr`s), so every level of an expression re-buffered its own
-// subtree: a load-phase profile of simpleclimate.esm attributed ~88% of the
-// 15 s load to serde, of which `content_clone` (8.9% self), the matching
-// `drop_in_place::<Content>` (8.9% self) and the allocator traffic they drive
-// (`_int_malloc` 22%, `malloc_consolidate` 11%, `cfree` 10%, `_int_free` 7%)
-// were the bulk. The failed-variant attempts also each construct a discarded
-// `serde_json::Error` (`make_error`, 0.5% self).
+// subtree. On a real model that made serde the overwhelming majority of load
+// time, nearly all of it in `Content` cloning/dropping and the allocator traffic
+// they drive. The failed-variant attempts also each construct a discarded
+// `serde_json::Error`.
 //
 // The hand-written impl below dispatches on the token type the deserializer
 // reports, which is exactly the decision the untagged derive reached by trial:
