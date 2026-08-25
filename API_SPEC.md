@@ -362,13 +362,16 @@ Total: it reports, it does not raise.
 
 - **Input type.** Rust and Go accept only a typed `&EsmFile` / `*ESMFile`.
   TypeScript accepts JSON text or an object. Julia accepts an `EsmFile` **or a
-  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**.
-- **Return shape.** Julia, TypeScript, Python and Rust return the four-field
-  result. **Go's `Validate` returns the legacy `*DetailedValidationResult`
-  (`Valid` + a flat `Messages` list).** Go's four-field equivalent is a
-  *different function*, `ValidateFile(file, jsonStr) *ValidationResult`.
-- Rust's `validate` performs **no schema validation at all** — its
-  `schema_errors` is empty by construction.
+  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**. Go's
+  text convenience is the separate `ValidateText(jsonStr)` (§8 item 13).
+- **Return shape.** All five return the four-field result. Go's `Validate`
+  returned the legacy `*DetailedValidationResult` (`Valid` + a flat `Messages`
+  list) until phase 6, with the four-field shape on a different function,
+  `ValidateFile(file, jsonStr)`; that function is now `ValidateText(jsonStr)`
+  and `ValidateStructural` is what still returns the legacy shape.
+- Rust's and Go's `validate` perform **no schema validation at all** — their
+  `schema_errors` is empty by construction, because a typed document can only
+  exist by having already passed the schema at load.
 
 #### `validate_schema`
 
@@ -410,10 +413,13 @@ bindings export the family; all are total and return sorted names.
 
 Divergences:
 
-- **`system_kind` arity.** Go alone takes a second argument,
-  `SystemKind(model *Model, domain *Domain)`, documented as accepted only so
-  callers need not change. Go also exports `EffectiveSystemKind` with no
-  counterpart anywhere.
+- **`system_kind` arity.** Settled in phase 6 (§8 item 11): Go took a second
+  `domain *Domain` argument that neither its `SystemKind` nor its
+  `EffectiveSystemKind` body read, and has dropped it. All five now take the
+  model and nothing else. Go now exports the whole family the item rules —
+  `system_kind` (derived), `declared_system_kind` (the explicit field, nullable)
+  and `effective_system_kind` (`declared ?? derived`); the other four are
+  landing theirs.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -470,7 +476,7 @@ Divergences:
 | Python | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 | Julia | all of the above | **`Expr`/`Equation` only — containers throw `ArgumentError`** |
 | Rust | **`&Expr` only** | `&Expr` only |
-| Go | **`Expression` only** | `Expression` only |
+| Go | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 
 ### 5.6 Flatten
 
@@ -489,7 +495,7 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
 |---|---|---|---|---|---|
-| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | mutates, returns `*LowerEnumsError` |
+| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
 | `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)`, raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | takes a raw `&mut Value` + `&Path` | returns `error` |
 | `resolve_template_machinery` | `(raw, base_path; metaparameters, load_ref)` | `(rawData, basePath, {metaparameters, readFile, validateSchema})` | `(raw, base_path, metaparameters)` — no loader seam | `(&Value, &Path, &BTreeMap)` — no loader seam | **not exported** |
 | `expand_coupling_imports` | returns the coupling list | returns `CouplingEntry[] \| undefined` | returns the list | returns `Result<Option<Vec<_>>, _>` | **not exported** |
@@ -622,12 +628,20 @@ not implement the semiring-FAQ node addressing of RFC §6.1.
 ### 5.10 Reactions
 
 `derive_odes(system) -> Model` and `stoichiometric_matrix(system) -> Matrix`
-(rows = species, columns = reactions). Julia, TypeScript, Python and Rust; Go
-exports neither.
+(rows = species, columns = reactions). All five, as of phase 6 — Go exported
+neither, which made its declared Analysis tier (`esm-libraries-spec.md` §1.2,
+§5.5) false while its symbol COUNT was the largest of the five.
 
-Rust alone has an error channel (`DeriveError`). **TypeScript alone returns a
-struct** from `stoichiometric_matrix` — `{matrix, species, reactions}` — so
-TypeScript is the only binding where the row and column labels are recoverable.
+Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
+**TypeScript alone returns a struct** from `stoichiometric_matrix` —
+`{matrix, species, reactions}` — so TypeScript is the only binding where the row
+and column labels are recoverable.
+
+**Species ORDER is not harmonized and is observable.** Julia, TypeScript and
+Python hold `species` as an ordered list and use declaration order; Rust and Go
+hold it as a map and sort by name, which for them is the only deterministic
+option. Nothing in `tests/` pins it. Settling it means either a shared fixture
+or a return shape that carries the labels (TypeScript's), and is follow-up work.
 
 ---
 
