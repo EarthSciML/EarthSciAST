@@ -615,10 +615,16 @@ function validate(file::EsmFile)::ValidationResult
 end
 
 """
-    validate(path::AbstractString) -> ValidationResult
+    validate_path(path::AbstractString) -> ValidationResult
 
 Validate the document at `path`, INCLUDING the failures that happen while
 loading it.
+
+`validate` itself takes a TYPED document in every binding (API_SPEC.md §8
+item 13) — it used to be a second `validate` method here, which made one name
+mean "check this document" in four bindings and "read this file and check it"
+in Julia. The file convenience keeps its behaviour under a name that says it
+does I/O.
 
 An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
 pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
@@ -631,7 +637,7 @@ built, and callers that want the exception keep it. This entry point is the one
 the conformance harness wants — it renders the throw as the structural error it
 always was.
 """
-function validate(path::AbstractString)::ValidationResult
+function validate_path(path::AbstractString)::ValidationResult
     file = try
         load_path(path)
     catch e
@@ -658,7 +664,7 @@ otherwise leave `structural_errors` empty even though the document is invalid
 - a structured `ParseError` (`code` non-empty) — currently the §11.4.1
   `ic_in_reaction_system` rejection — carries its own code, pointer and details.
 
-Both the file entry point [`validate(::AbstractString)`](@ref) and the
+Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
 in the same shape every other binding reports it.
 """
