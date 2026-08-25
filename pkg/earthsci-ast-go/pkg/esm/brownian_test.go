@@ -86,7 +86,7 @@ func TestBrownianParametersClassification(t *testing.T) {
 		t.Errorf("SampledParameters = %v, want none — Bw has an update, so it is Brownian, not sampled", got)
 	}
 	// Any Brownian parameter promotes the model to an SDE.
-	if got := SystemKind(&model, parsed.Domain); got != SystemKindSDE {
+	if got := SystemKind(&model); got != SystemKindSDE {
 		t.Errorf("SystemKind = %q, want %q", got, SystemKindSDE)
 	}
 }

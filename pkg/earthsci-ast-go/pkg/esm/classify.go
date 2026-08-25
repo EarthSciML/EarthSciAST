@@ -178,11 +178,11 @@ func ConstantParameters(model *Model) []string {
 // Detection is a property of the EQUATIONS, never of the `domain` block: v0.8.0
 // removed Domain.spatial, so `domain` carries nothing spatial and the earlier
 // "spatial domain plus differential operators" rule named a test no binding
-// could perform.
-//
-// `domain` is still accepted so callers need not change, and is used only for
-// the independent-variable name.
-func SystemKind(model *Model, domain *Domain) string {
+// could perform. A vestigial `domain` parameter outlived that removal by two
+// releases, unread by this body and by EffectiveSystemKind's, and is gone as of
+// API_SPEC.md §8 item 11: `system_kind(model)` takes the model and nothing else
+// in all five bindings.
+func SystemKind(model *Model) string {
 	if model == nil {
 		return SystemKindODE
 	}
@@ -198,20 +198,33 @@ func SystemKind(model *Model, domain *Domain) string {
 	return SystemKindODE
 }
 
-// EffectiveSystemKind is what a consumer should branch on: the DECLARED
-// `system_kind` when the model carries one, and the SystemKind derivation
-// otherwise (esm-spec §6.3.1, "a binding uses the derivation when the field is
-// absent"). The two are checked against each other by the structural validator,
-// which reports `system_kind_mismatch` when a present field contradicts the
-// derivation — so by the time a document validates, the two agree.
-func EffectiveSystemKind(model *Model, domain *Domain) string {
+// DeclaredSystemKind returns the model's EXPLICIT `system_kind` field, or nil
+// when the document declares none.
+//
+// It is the third of the three distinct questions the §6.3.1 system-kind family
+// answers, and the only one that can say "the document did not say"
+// (API_SPEC.md §8 item 11): SystemKind always derives an answer, and
+// EffectiveSystemKind always produces one. Comparing this against SystemKind is
+// what detects `system_kind_mismatch`.
+func DeclaredSystemKind(model *Model) *string {
 	if model == nil {
-		return SystemKindODE
+		return nil
 	}
-	if model.SystemKind != nil {
-		return *model.SystemKind
+	return model.SystemKind
+}
+
+// EffectiveSystemKind is what a consumer choosing a solver should branch on:
+// the DECLARED `system_kind` when the model carries one, and the SystemKind
+// derivation otherwise (esm-spec §6.3.1, "a binding uses the derivation when
+// the field is absent") — i.e. `declared ?? derived`. The two are checked
+// against each other by the structural validator, which reports
+// `system_kind_mismatch` when a present field contradicts the derivation — so
+// by the time a document validates, the two agree.
+func EffectiveSystemKind(model *Model) string {
+	if declared := DeclaredSystemKind(model); declared != nil {
+		return *declared
 	}
-	return SystemKind(model, domain)
+	return SystemKind(model)
 }
 
 // --- shared derivation ------------------------------------------------------

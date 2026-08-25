@@ -1393,7 +1393,7 @@ func computeEquationBalance(model *Model, indep string) (EquationBalance, bool) 
 	if len(model.Subsystems) > 0 {
 		return bal, true
 	}
-	if EffectiveSystemKind(model, nil) == SystemKindPDE {
+	if EffectiveSystemKind(model) == SystemKindPDE {
 		return bal, true
 	}
 
@@ -1479,15 +1479,12 @@ func equationCreditTargets(eq Equation, indep string) []string {
 // `system_kind` contradicts the esm-spec §6.3.1 derivation. A model that
 // declares nothing is not checked — the derivation simply IS its kind.
 func (s *structuralScan) validateSystemKind(modelName string, model *Model, basePath string) {
-	if model.SystemKind == nil {
+	declared := DeclaredSystemKind(model)
+	if declared == nil {
 		return
 	}
-	var domain *Domain
-	if s.file != nil {
-		domain = s.file.Domain
-	}
-	derived := SystemKind(model, domain)
-	if *model.SystemKind == derived {
+	derived := SystemKind(model)
+	if *declared == derived {
 		return
 	}
 	s.addErr(StructuralError{

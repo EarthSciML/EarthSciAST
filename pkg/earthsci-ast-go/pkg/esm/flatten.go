@@ -388,7 +388,7 @@ func (f *FlattenedSystem) SystemKind() string {
 		return SystemKindODE
 	}
 	model := f.classificationView()
-	return SystemKind(&model, f.Domain)
+	return SystemKind(&model)
 }
 
 // numericDefault coerces a declared `default` to a float64 initial value, or

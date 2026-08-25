@@ -149,14 +149,11 @@ func TestClassificationConformanceGoldens(t *testing.T) {
 				check("sampled_parameters", SampledParameters(model), want.SampledParameters)
 				check("constant_parameters", ConstantParameters(model), want.ConstantParameters)
 
-				if got := SystemKind(model, file.Domain); got != want.SystemKind {
+				if got := SystemKind(model); got != want.SystemKind {
 					t.Errorf("%s: system_kind = %q, want %q", path, got, want.SystemKind)
 				}
 				// declared_system_kind is the model's explicit field, or null.
-				var declared *string
-				if model.SystemKind != nil {
-					declared = model.SystemKind
-				}
+				declared := DeclaredSystemKind(model)
 				switch {
 				case want.DeclaredSystemKind == nil && declared != nil:
 					t.Errorf("%s: declared_system_kind = %q, want null", path, *declared)
@@ -164,6 +161,17 @@ func TestClassificationConformanceGoldens(t *testing.T) {
 					t.Errorf("%s: declared_system_kind = null, want %q", path, *want.DeclaredSystemKind)
 				case want.DeclaredSystemKind != nil && *declared != *want.DeclaredSystemKind:
 					t.Errorf("%s: declared_system_kind = %q, want %q", path, *declared, *want.DeclaredSystemKind)
+				}
+
+				// effective_system_kind is `declared ?? derived` — asserted as
+				// that composition rather than against a golden column the
+				// corpus does not carry.
+				wantEffective := want.SystemKind
+				if want.DeclaredSystemKind != nil {
+					wantEffective = *want.DeclaredSystemKind
+				}
+				if got := EffectiveSystemKind(model); got != wantEffective {
+					t.Errorf("%s: effective_system_kind = %q, want %q", path, got, wantEffective)
 				}
 
 				// IsODEState is the membership test for the first set, and must
@@ -288,7 +296,7 @@ func TestClassificationSpecWorkedExample(t *testing.T) {
 			t.Errorf("%s = %v, want %v", tc.label, tc.got, tc.want)
 		}
 	}
-	if got := SystemKind(&model, file.Domain); got != SystemKindSDE {
+	if got := SystemKind(&model); got != SystemKindSDE {
 		t.Errorf("system_kind = %q, want %q", got, SystemKindSDE)
 	}
 }
@@ -340,7 +348,7 @@ func TestODEStatesIgnoreSpatialDerivatives(t *testing.T) {
 	// and no time derivative does not fall through: it maps to PDESystem, and
 	// the earlier order silently called it nonlinear. Pinned across the
 	// bindings by tests/conformance/classification/system_kind_pde.
-	if got := SystemKind(model, nil); got != SystemKindPDE {
+	if got := SystemKind(model); got != SystemKindPDE {
 		t.Errorf("system_kind = %q, want %q (a spatial derivative and no time derivative is a steady-state PDE)", got, SystemKindPDE)
 	}
 }
