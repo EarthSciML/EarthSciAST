@@ -642,6 +642,44 @@ _COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
 _DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true"})
 
 
+#: The unit-finding vocabulary -- the SECOND, smaller unit code set, shared
+#: with Go's ``UnitFinding*``, Rust's ``UNIT_FINDING_*`` and TypeScript's
+#: ``UnitWarning['code']`` union. It is NOT the ``unit_inconsistency`` /
+#: ``unit_parse_error`` pair, which names the STRUCTURAL error a finding is
+#: promoted to; these name the finding itself.
+#:
+#: A finding is either a defect in the FILE -- which invalidates the document --
+#: or a limit of the ANALYSIS, which does not. The classification is decided AT
+#: THE POINT the finding is raised and never recovered from the prose, so
+#: rewording a message can never silently change its severity.
+
+#: A PROVABLE inconsistency: metres added to kilograms, an equation whose sides
+#: cannot agree. The file is wrong.
+UNIT_FINDING_DIMENSIONAL_MISMATCH = "dimensional_mismatch"
+#: A declared unit string that denotes no real unit. Meaningless declaration,
+#: so a defect in the FILE, not in the checker.
+UNIT_FINDING_UNPARSEABLE = "unparseable_unit"
+#: The checker could not DETERMINE a dimension -- a symbolic exponent, an
+#: operator with no dimensional rule, an unknown variable, a missing pint.
+#: A statement about the checker, not the file.
+UNIT_FINDING_ANALYSIS = "analysis"
+
+
+@dataclass
+class UnitFinding:
+    """One coded dimensional-analysis finding.
+
+    Carries the ``code`` decided at the raise site alongside the prose, so
+    :func:`~earthsci_ast.validation.validate` can build a
+    :class:`~earthsci_ast.validation.UnitWarning` without parsing the message.
+    """
+
+    code: str
+    message: str
+    lhs_units: str = ""
+    rhs_units: str = ""
+
+
 @dataclass
 class UnitValidationResult:
     """Result of unit validation check."""
@@ -651,6 +689,24 @@ class UnitValidationResult:
     warnings: list[str] = field(default_factory=list)
     unit_registry: dict[str, str] = field(default_factory=dict)  # variable_name -> unit_string
     dimensional_analysis: dict[str, Any] = field(default_factory=dict)
+    #: The same findings as ``errors`` + ``warnings``, but CODED. The two prose
+    #: lists are kept in step by :meth:`add_error` / :meth:`add_warning` and stay
+    #: byte-identical to what they always held, so nothing reading them changes.
+    findings: list[UnitFinding] = field(default_factory=list)
+
+    def add_error(self, code: str, message: str, lhs_units: str = "", rhs_units: str = "") -> None:
+        """Record a hard finding: the prose in ``errors``, the code in
+        ``findings``."""
+        self.errors.append(message)
+        self.findings.append(UnitFinding(code, message, lhs_units, rhs_units))
+
+    def add_warning(
+        self, code: str, message: str, lhs_units: str = "", rhs_units: str = ""
+    ) -> None:
+        """Record an advisory finding: the prose in ``warnings``, the code in
+        ``findings``."""
+        self.warnings.append(message)
+        self.findings.append(UnitFinding(code, message, lhs_units, rhs_units))
 
 
 @dataclass
@@ -711,6 +767,17 @@ class UnitValidator:
             sub = validator(component)
             result.errors.extend(f"{prefix} {component.name}: {e}" for e in sub.errors)
             result.warnings.extend(f"{prefix} {component.name}: {w}" for w in sub.warnings)
+            # Findings carry the same prose, prefixed identically, plus the code
+            # decided at the raise site.
+            result.findings.extend(
+                UnitFinding(
+                    f.code,
+                    f"{prefix} {component.name}: {f.message}",
+                    f.lhs_units,
+                    f.rhs_units,
+                )
+                for f in sub.findings
+            )
             result.unit_registry.update(sub.unit_registry)
 
     def validate_model(self, model: Model) -> UnitValidationResult:
@@ -747,8 +814,9 @@ class UnitValidator:
                     # still omitted from known_units, so it propagates as an
                     # unknown dimension and cannot ALSO manufacture a spurious
                     # dimensional-mismatch error downstream.
-                    result.errors.append(
-                        f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}"
+                    result.add_error(
+                        UNIT_FINDING_UNPARSEABLE,
+                        f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}",
                     )
 
         # Validate equations. An observed unknown's DEFINING equation is
@@ -764,6 +832,7 @@ class UnitValidator:
                 eq_result = self.validate_equation(equation, f"eq_{i}")
                 result.errors.extend(eq_result.errors)
                 result.warnings.extend(eq_result.warnings)
+                result.findings.extend(eq_result.findings)
 
         # Validate each observed unknown's DEFINING EXPRESSION -- its
         # bare-variable-LHS equation's RHS (esm-spec §6.3.1). Before 1.0.0 this
@@ -774,6 +843,12 @@ class UnitValidator:
             expr_result = self.validate_expression(definition, var_name)
             if expr_result.errors:
                 result.errors.extend([f"Variable {var_name}: {e}" for e in expr_result.errors])
+                result.findings.extend(
+                    UnitFinding(
+                        f.code, f"Variable {var_name}: {f.message}", f.lhs_units, f.rhs_units
+                    )
+                    for f in expr_result.findings
+                )
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -805,8 +880,9 @@ class UnitValidator:
                         # Unparseable unit is a HARD ERROR (see validate_model);
                         # the species is still omitted from known_units, so it is
                         # treated as unknown downstream.
-                        result.errors.append(
-                            f"Invalid unit '{species.units}' for species '{species.name}': {e}"
+                        result.add_error(
+                            UNIT_FINDING_UNPARSEABLE,
+                            f"Invalid unit '{species.units}' for species '{species.name}': {e}",
                         )
 
         # Register parameter units
@@ -821,8 +897,9 @@ class UnitValidator:
                         # Unparseable unit is a HARD ERROR (see validate_model);
                         # the parameter is still omitted from known_units, so it
                         # is treated as unknown downstream.
-                        result.errors.append(
-                            f"Invalid unit '{param.units}' for parameter '{param.name}': {e}"
+                        result.add_error(
+                            UNIT_FINDING_UNPARSEABLE,
+                            f"Invalid unit '{param.units}' for parameter '{param.name}': {e}",
                         )
 
         # Validate reactions
@@ -831,6 +908,7 @@ class UnitValidator:
                 reaction_result = self._validate_reaction(reaction)
                 result.errors.extend(reaction_result.errors)
                 result.warnings.extend(reaction_result.warnings)
+                result.findings.extend(reaction_result.findings)
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -854,21 +932,27 @@ class UnitValidator:
 
             if lhs_dim is not None and rhs_dim is not None:
                 if not self._dimensions_compatible(lhs_dim, rhs_dim):
-                    result.errors.append(
+                    result.add_error(
+                        UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Dimensional mismatch - "
-                        f"LHS has dimension {lhs_dim}, RHS has dimension {rhs_dim}"
+                        f"LHS has dimension {lhs_dim}, RHS has dimension {rhs_dim}",
+                        lhs_units=str(lhs_dim),
+                        rhs_units=str(rhs_dim),
                     )
         # A PROVABLE inconsistency inside the expression tree is an ERROR — it
         # used to be filed as a "could not validate" warning, which meant a
         # detected mismatch could never fail validation.
         except DimensionalMismatchError as e:
-            result.errors.append(f"Equation {equation_id}: {e}")
+            result.add_error(UNIT_FINDING_DIMENSIONAL_MISMATCH, f"Equation {equation_id}: {e}")
         # PintError means we could not PARSE/convert a unit — genuinely
         # indeterminate, so a warning. Nothing broader is caught here: a bare
         # ValueError/AssertionError is a bug and must propagate rather than be
         # silently downgraded (this is exactly how C5 hid for so long).
         except pint.PintError as e:
-            result.warnings.append(f"Could not validate dimensions for equation {equation_id}: {e}")
+            result.add_warning(
+                UNIT_FINDING_ANALYSIS,
+                f"Could not validate dimensions for equation {equation_id}: {e}",
+            )
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -905,9 +989,14 @@ class UnitValidator:
         # warning (see validate_equation). Nothing broader is caught, so a real
         # bug propagates instead of masquerading as a unit finding.
         except DimensionalMismatchError as e:
-            result.errors.append(f"Expression validation failed for {context}: {e}")
+            result.add_error(
+                UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                f"Expression validation failed for {context}: {e}",
+            )
         except pint.PintError as e:
-            result.warnings.append(f"Could not validate dimensions for {context}: {e}")
+            result.add_warning(
+                UNIT_FINDING_ANALYSIS, f"Could not validate dimensions for {context}: {e}"
+            )
 
         result.is_valid = len(result.errors) == 0
         return result
@@ -1171,8 +1260,9 @@ class UnitValidator:
         if hasattr(reaction, "rate_constant") and reaction.rate_constant:
             if isinstance(reaction.rate_constant, (int, float, str)):
                 # For now, just warn if no units specified
-                result.warnings.append(
-                    f"Reaction {reaction.name}: Rate constant has no explicit units"
+                result.add_warning(
+                    UNIT_FINDING_ANALYSIS,
+                    f"Reaction {reaction.name}: Rate constant has no explicit units",
                 )
             elif isinstance(reaction.rate_constant, ExprNode):
                 # Validate the rate constant expression
@@ -1181,6 +1271,7 @@ class UnitValidator:
                 )
                 result.errors.extend(expr_result.errors)
                 result.warnings.extend(expr_result.warnings)
+                result.findings.extend(expr_result.findings)
 
         result.is_valid = len(result.errors) == 0
         return result

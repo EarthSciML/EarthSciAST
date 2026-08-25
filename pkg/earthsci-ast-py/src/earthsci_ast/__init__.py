@@ -119,8 +119,19 @@ from .flatten import (
     UnsupportedDimensionalityError,
 )
 
+# The diagnostic-code registry (API_SPEC.md §8). Canonical spelling in every
+# binding; the VALUES are a cross-binding contract.
+from .error_handling import ERROR_CODES
+
 # Validation (Core tier requirement)
-from .validation import validate, validate_path, validate_text, ValidationResult, ValidationError
+from .validation import (
+    validate,
+    validate_path,
+    validate_text,
+    ValidationResult,
+    ValidationError,
+    UnitWarning,
+)
 
 # Enum lowering (esm-spec §9.3). `lower_enums` is PURE and `lower_enums_mut` is
 # the in-place twin, per API_SPEC.md §8 item 15.
@@ -252,6 +263,10 @@ from .units import (
     convert_units,
     UnitValidator,
     UnitValidationResult,
+    UnitFinding,
+    UNIT_FINDING_DIMENSIONAL_MISMATCH,
+    UNIT_FINDING_UNPARSEABLE,
+    UNIT_FINDING_ANALYSIS,
     UnitConversionResult,
 )
 
@@ -518,9 +533,11 @@ __all__ = [
     "expand_coupling_imports",
     "is_coupling_library_doc",
     # Validation
+    "ERROR_CODES",
     "validate",
     "validate_path",
     "validate_text",
+    "UnitWarning",
     "lower_enums",
     "lower_enums_mut",
     "EnumLoweringError",
@@ -611,6 +628,10 @@ __all__ = [
     "convert_units",
     "UnitValidator",
     "UnitValidationResult",
+    "UnitFinding",
+    "UNIT_FINDING_DIMENSIONAL_MISMATCH",
+    "UNIT_FINDING_UNPARSEABLE",
+    "UNIT_FINDING_ANALYSIS",
     "UnitConversionResult",
     # Editing operations
     "ESMEditor",

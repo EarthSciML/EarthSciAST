@@ -43,6 +43,7 @@ from .classification import observed_definitions, observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
+from .units import UNIT_FINDING_ANALYSIS
 
 
 @dataclass
@@ -61,10 +62,42 @@ class ValidationError:
 
 @dataclass
 class UnitWarning:
-    """Represents a unit validation warning."""
+    """A single dimensional-analysis finding.
+
+    Field names and their JSON spellings are a CROSS-BINDING CONTRACT, matching
+    Go's ``UnitWarning`` (``pkg/earthsci-ast-go/pkg/esm/validate.go``), Julia's,
+    Rust's and TypeScript's, and the shape pinned by CONFORMANCE_SPEC.md §3.1:
+
+    * ``path`` — RFC-6901 JSON Pointer to the offending equation / expression,
+      the document root being ``""`` (the same addressing as
+      :class:`ValidationError`). ``""`` when the raise site has no pointer.
+    * ``code`` — the finding kind, decided AT THE POINT the finding was raised
+      and never recovered from the prose, so rewording a message can never
+      silently reclassify it. One of
+      :data:`~earthsci_ast.units.UNIT_FINDING_DIMENSIONAL_MISMATCH`,
+      :data:`~earthsci_ast.units.UNIT_FINDING_UNPARSEABLE`,
+      :data:`~earthsci_ast.units.UNIT_FINDING_ANALYSIS`. This is the SECOND,
+      smaller unit vocabulary — NOT the ``unit_inconsistency`` /
+      ``unit_parse_error`` pair, which names the STRUCTURAL error a finding is
+      promoted to.
+    * ``message`` — human-readable description (binding-local prose).
+    * ``lhs_units`` / ``rhs_units`` — the inferred units of each side, ``""``
+      when the raise site does not know them (the norm for an ``analysis``
+      finding — not determining a dimension is what makes it one).
+
+    ``details`` is a Python-only extra carrying local diagnostic context; it is
+    not part of the cross-binding contract and no other binding has it.
+
+    Despite the name — kept for wire compatibility, it is the ``unit_warnings``
+    field of the spec's :class:`ValidationResult` — a ``UnitWarning`` is not
+    necessarily advisory: the codes that state a defect in the FILE are what the
+    structural checks report as hard ``unit_inconsistency`` /
+    ``unit_parse_error`` errors, and those are what invalidate the document.
+    """
 
     path: str
     message: str
+    code: str = UNIT_FINDING_ANALYSIS
     lhs_units: str = ""
     rhs_units: str = ""
     details: dict[str, Any] = None
@@ -1299,23 +1332,21 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # Validate the entire ESM file
         unit_result = validator.validate_esm_file(esm_file)
 
-        # Convert validation errors to warnings (as per function contract)
-        for error_msg in unit_result.errors:
+        # Emit one UnitWarning per CODED finding. The code comes from the raise
+        # site inside units.py -- `UnparseableUnitError` -> unparseable_unit, a
+        # `DimensionalMismatchError` or a failed dimension comparison ->
+        # dimensional_mismatch, a pint failure or an undeterminable dimension ->
+        # analysis -- and is never recovered from the message text, so rewording
+        # a message cannot silently reclassify its severity.
+        for finding in unit_result.findings:
             unit_warnings.append(
                 UnitWarning(
-                    path="unit_validation",
-                    message=error_msg,
+                    path="",
+                    message=finding.message,
+                    code=finding.code,
+                    lhs_units=finding.lhs_units,
+                    rhs_units=finding.rhs_units,
                     details={"validation_type": "dimensional_analysis"},
-                )
-            )
-
-        # Convert validation warnings to our warning format
-        for warning_msg in unit_result.warnings:
-            unit_warnings.append(
-                UnitWarning(
-                    path="unit_validation",
-                    message=warning_msg,
-                    details={"validation_type": "unit_warning"},
                 )
             )
 
@@ -1323,8 +1354,14 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # If pint is not available, add a warning about missing unit validation
         unit_warnings.append(
             UnitWarning(
-                path="unit_validation",
-                message="Unit validation skipped: pint library not available. Install with: pip install pint",
+                path="",
+                message=(
+                    "Unit validation skipped: pint library not available. "
+                    "Install with: pip install pint"
+                ),
+                # A missing checker is a limit of the ANALYSIS, never a defect
+                # in the file.
+                code=UNIT_FINDING_ANALYSIS,
                 details={"validation_type": "dependency_missing"},
             )
         )
@@ -1332,8 +1369,10 @@ def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None
         # If unit validation fails for any reason, add a warning but don't break validation
         unit_warnings.append(
             UnitWarning(
-                path="unit_validation",
+                path="",
                 message=f"Unit validation failed: {str(e)}",
+                # The checker blew up; that says nothing about the file.
+                code=UNIT_FINDING_ANALYSIS,
                 details={"validation_type": "validation_error", "exception": str(e)},
             )
         )
