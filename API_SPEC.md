@@ -629,8 +629,12 @@ not implement the semiring-FAQ node addressing of RFC §6.1.
 
 `derive_odes(system) -> Model` and `stoichiometric_matrix(system) -> Matrix`
 (rows = species, columns = reactions). All five, as of phase 6 — Go exported
-neither, which made its declared Analysis tier (`esm-libraries-spec.md` §1.2,
-§5.5) false while its symbol COUNT was the largest of the five.
+neither, so two symbols that four bindings agreed on were `stable` with a hole
+in exactly one column, which is the drift §2 and §3 exist to catch. (It is NOT
+a tier violation: `esm-libraries-spec.md` §5.5 declares Go "Core", not
+"Core + Analysis" — see §3's capability table, which says so and calls that
+label the one part of §5 still accurate. Phase 5's G-3 item named
+"Core + Analysis parity" as a GOAL; the spec never declared it as fact.)
 
 Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
 **TypeScript alone returns a struct** from `stoichiometric_matrix` —
