@@ -1,4 +1,3 @@
-#![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 //! Basic functionality tests
 //!
 //! Tests basic parsing, serialization, and core functionality with simple valid examples.
@@ -169,7 +168,7 @@ fn test_expression_operations() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Number(20.0));
 
-    let substituted = substitute_in_expression(&expr, &substitutions);
+    let substituted = substitute(&expr, &substitutions);
     if let Expr::Operator(node) = substituted
         && let Expr::Number(val) = &node.args[0]
     {

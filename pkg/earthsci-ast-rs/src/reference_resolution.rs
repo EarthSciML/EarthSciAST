@@ -45,13 +45,25 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use thiserror::Error;
 
+/// Deprecated alias of [`ReferenceResolutionError`].
+///
+/// API_SPEC.md §8 item 10: Julia, Python and Go all raise
+/// `ReferenceResolutionError`; this binding alone spelled it `ReferenceError`.
+/// The canonical spelling is now `ReferenceResolutionError`; this alias is kept
+/// for one minor per API_SPEC.md §10 and will be removed at the next major.
+#[deprecated(
+    since = "0.2.0",
+    note = "renamed to `ReferenceResolutionError` (API_SPEC.md §8 item 10)"
+)]
+pub type ReferenceError = ReferenceResolutionError;
+
 /// A reference could not be resolved, or the reference graph has a cycle.
 ///
 /// Variant names are deliberately cross-language-compatible so the Julia,
 /// Python, and Rust bindings report the same failure mode under the same name
 /// (mirrors the `E_REF_*` codes in the Python binding).
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
-pub enum ReferenceError {
+pub enum ReferenceResolutionError {
     /// A `ranges[*].from` names an index set not declared in `index_sets`.
     #[error(
         "undeclared index set '{name}' referenced by range '{index}' of node {node} (model '{model}', at {path})"
@@ -257,10 +269,10 @@ impl ReferenceGraph {
 
     /// Bottom-up order (dependencies before dependents).
     ///
-    /// Errors with [`ReferenceError::ReferenceCycle`] if the graph is cyclic —
+    /// Errors with [`ReferenceResolutionError::ReferenceCycle`] if the graph is cyclic —
     /// a cycle among reference edges is an out-of-scope implicit/iterative solve
     /// (RFC §6.1 "Acyclicity").
-    pub fn topological_order(&self) -> Result<Vec<String>, ReferenceError> {
+    pub fn topological_order(&self) -> Result<Vec<String>, ReferenceResolutionError> {
         // Two deliberate passes rather than one Kahn sweep: `detect_cycle`'s
         // DFS reports the actual cycle PATH (Kahn's leftover-vertex set
         // cannot name the path), and the wave loop below emits ready vertices
@@ -269,7 +281,7 @@ impl ReferenceGraph {
         // is irrelevant; after the cycle check the no-progress break is
         // unreachable.
         if let Some(cyc) = self.detect_cycle() {
-            return Err(ReferenceError::ReferenceCycle { path: cyc });
+            return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
         let mut emitted: Vec<String> = Vec::new();
         let mut done: HashSet<String> = HashSet::new();
@@ -344,7 +356,7 @@ fn register_and_process(
     index_sets: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
     id_to_addr: &mut IndexMap<String, (String, String)>,
-) -> Result<(), ReferenceError> {
+) -> Result<(), ReferenceResolutionError> {
     let op = map.get("op").and_then(|v| v.as_str());
     let nid = nonempty_str(map.get("id"));
     let is_agg = op.map(crate::aggregate::is_aggregate_op).unwrap_or(false);
@@ -360,7 +372,7 @@ fn register_and_process(
 
     if let Some(id) = nid {
         if let Some((_, first_path)) = id_to_addr.get(id) {
-            return Err(ReferenceError::DuplicateNodeId {
+            return Err(ReferenceResolutionError::DuplicateNodeId {
                 id: id.to_string(),
                 model: model_name.to_string(),
                 path: path.to_string(),
@@ -388,7 +400,7 @@ fn register_and_process(
                 let target = from.as_str().unwrap_or("");
                 let declared = index_sets.map(|m| m.contains_key(target)).unwrap_or(false);
                 if target.is_empty() || !declared {
-                    return Err(ReferenceError::UndeclaredIndexSet {
+                    return Err(ReferenceResolutionError::UndeclaredIndexSet {
                         name: target.to_string(),
                         index: idx_name.clone(),
                         node: key.clone(),
@@ -427,7 +439,7 @@ fn register_and_process(
                         graph.add_edge(&key, &factor_key(r), EdgeKind::JoinFactor);
                     }
                     other => {
-                        return Err(ReferenceError::UnresolvedJoinFactor {
+                        return Err(ReferenceResolutionError::UnresolvedJoinFactor {
                             factor: other.unwrap_or("").to_string(),
                             node: key.clone(),
                             model: model_name.to_string(),
@@ -449,7 +461,7 @@ fn walk(
     index_sets: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
     id_to_addr: &mut IndexMap<String, (String, String)>,
-) -> Result<(), ReferenceError> {
+) -> Result<(), ReferenceResolutionError> {
     match value {
         Value::Object(map) => {
             if map.contains_key("op") {
@@ -492,7 +504,7 @@ fn walk(
 pub fn build_reference_graph(
     model: &Value,
     model_name: &str,
-) -> Result<ReferenceGraph, ReferenceError> {
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
     build_reference_graph_with_index_sets(model, model_name, None)
 }
 
@@ -510,7 +522,7 @@ pub fn build_reference_graph_with_index_sets(
     model: &Value,
     model_name: &str,
     doc_index_sets: Option<&Map<String, Value>>,
-) -> Result<ReferenceGraph, ReferenceError> {
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
     let mut graph = ReferenceGraph {
         model: model_name.to_string(),
         ..Default::default()
@@ -567,7 +579,7 @@ pub fn build_reference_graph_with_index_sets(
                         graph.add_edge(&index_set_key(name), &node_key(addr), EdgeKind::FromFaq);
                     }
                     None => {
-                        return Err(ReferenceError::UnknownFaqNode {
+                        return Err(ReferenceResolutionError::UnknownFaqNode {
                             index_set: name.clone(),
                             from_faq: faq.unwrap_or("").to_string(),
                             model: model_name.to_string(),
@@ -587,7 +599,7 @@ pub fn build_reference_graph_with_index_sets(
 /// reference *or* reference cycle (each model's graph is checked acyclic).
 pub fn resolve_references(
     document: &Value,
-) -> Result<IndexMap<String, ReferenceGraph>, ReferenceError> {
+) -> Result<IndexMap<String, ReferenceGraph>, ReferenceResolutionError> {
     let mut out = IndexMap::new();
     let models = match document.get("models").and_then(|v| v.as_object()) {
         Some(m) => m,
@@ -599,7 +611,7 @@ pub fn resolve_references(
     for (model_name, model) in models {
         let graph = build_reference_graph_with_index_sets(model, model_name, doc_index_sets)?;
         if let Some(cyc) = graph.detect_cycle() {
-            return Err(ReferenceError::ReferenceCycle { path: cyc });
+            return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
         out.insert(model_name.clone(), graph);
     }
@@ -656,7 +668,7 @@ mod tests {
             "equations": [{"lhs": agg(json!({"id": "present"})), "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UnknownFaqNode { .. }));
+        assert!(matches!(err, ReferenceResolutionError::UnknownFaqNode { .. }));
     }
 
     #[test]
@@ -668,7 +680,7 @@ mod tests {
             ]
         });
         let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::DuplicateNodeId { .. }));
+        assert!(matches!(err, ReferenceResolutionError::DuplicateNodeId { .. }));
     }
 
     // ranges[*].from resolves to an index set -------------------------------
@@ -698,7 +710,7 @@ mod tests {
             "equations": [{"lhs": node, "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UndeclaredIndexSet { .. }));
+        assert!(matches!(err, ReferenceResolutionError::UndeclaredIndexSet { .. }));
     }
 
     #[test]
@@ -771,7 +783,7 @@ mod tests {
             "equations": [{"lhs": node, "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M").unwrap_err();
-        assert!(matches!(err, ReferenceError::UnresolvedJoinFactor { .. }));
+        assert!(matches!(err, ReferenceResolutionError::UnresolvedJoinFactor { .. }));
     }
 
     // (3) edges are queryable by the partition pass -------------------------
@@ -814,7 +826,7 @@ mod tests {
 
         let doc = json!({"models": {"M": model}});
         let err = resolve_references(&doc).unwrap_err();
-        assert!(matches!(err, ReferenceError::ReferenceCycle { .. }));
+        assert!(matches!(err, ReferenceResolutionError::ReferenceCycle { .. }));
     }
 
     // additive: no references -> empty graph --------------------------------

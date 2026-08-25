@@ -1,4 +1,3 @@
-#![allow(deprecated)] // exercises the deprecated `substitute_in_expression` alias on purpose
 use earthsci_ast::*;
 use indexmap::IndexMap;
 
@@ -278,7 +277,7 @@ fn test_editing_operations() {
     let mut substitutions = HashMap::new();
     substitutions.insert("x".to_string(), Expr::Number(5.0));
 
-    let result = substitute_in_expression(&expr, &substitutions);
+    let result = substitute(&expr, &substitutions);
 
     if let Expr::Operator(node) = result {
         assert_eq!(node.op, "+");
