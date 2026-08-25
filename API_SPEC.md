@@ -652,6 +652,7 @@ reading that as a gap.
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
+| `derive_odes` | function | `derive_odes` | `deriveODEs` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `expression_parse_error` | error | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` |
 | `flatten` | function | `flatten` | `flatten` | `flatten` | `flatten` | `Flatten` |
@@ -674,9 +675,10 @@ reading that as a gap.
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
 | `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
+| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
-| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToAscii` |
+| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
@@ -711,7 +713,6 @@ reading that as a gap.
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `derive_odes` | function | `derive_odes` | `deriveODEs` | `derive_odes` | `derive_odes` | – |
 | `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
@@ -723,6 +724,7 @@ reading that as a gap.
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
+| `graph` | type | `Graph` | `Graph` | `Graph` | – | `Graph` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
@@ -744,9 +746,10 @@ reading that as a gap.
 | `resolve_references` | function | `resolve_references` | – | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
-| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | `ToDOT` |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | `ToMermaid` |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 
 #### Exported by three of the five
@@ -765,9 +768,11 @@ reading that as a gap.
 | `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
+| `declared_system_kind` | function | – | `declaredSystemKind` | `declared_system_kind` | – | `DeclaredSystemKind` |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | `EnumLoweringError` |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -780,7 +785,6 @@ reading that as a gap.
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
 | `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
-| `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
@@ -795,8 +799,7 @@ reading that as a gap.
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
-| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
+| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | `ToJSONGraph` |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
 | `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
@@ -819,7 +822,6 @@ reading that as a gap.
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
 | `dae_info` | type | – | – | – | `DaeInfo` | `DAEInfo` |
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
-| `declared_system_kind` | function | – | `declaredSystemKind` | `declared_system_kind` | – | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
 | `derive_output_meta` | function | `derive_output_meta` | – | – | `derive_output_meta` | – |
 | `derive_output_plan` | function | `derive_output_plan` | – | – | `derive_output_plan` | – |
@@ -832,7 +834,6 @@ reading that as a gap.
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
 | `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
-| `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
 | `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
@@ -888,12 +889,14 @@ reading that as a gap.
 | `solve` | function | – | – | `solve` | `solve` | – |
 | `step` | function | – | – | `step` | `step` | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
+| `substitute_in_model_with_context` | function | – | – | – | `substitute_in_model_with_context` | `SubstituteInModelWithContext` |
+| `substitute_in_reaction_system_with_context` | function | – | – | – | `substitute_in_reaction_system_with_context` | `SubstituteInReactionSystemWithContext` |
+| `substitute_with_context` | function | – | – | – | `substitute_with_context` | `SubstituteWithContext` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |

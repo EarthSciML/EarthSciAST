@@ -312,6 +312,28 @@ const DefaultIndepVar = "t"
 // equations and in event affects alike — and never an undeclared variable.
 const operatorPlaceholderVar = "_var"
 
+// --- Diagnostic SEVERITY levels: the values StructuralError.Level and
+// ValidationMessage.Level carry on the wire.
+//
+// These are the last diagnostic vocabulary validate.go still spelled as bare
+// literals after the Error* / Code* blocks moved here, and they are the same
+// kind of thing: a value a consumer compares against, so the string is a
+// contract and belongs beside the codes it qualifies. The values are unchanged.
+//
+// Only two are emitted. "info" appears in ValidationMessage.Level's field
+// comment as an admissible value but is produced nowhere, so it gets no
+// constant — a constant for a level nothing raises would advertise a severity
+// this binding cannot report. ---
+const (
+	// LevelError is a document-INVALIDATING finding. It is also the value of an
+	// UNSET Level: a StructuralError built without one is an error, which is why
+	// isWarning tests for the warning rather than against the error.
+	LevelError = "error"
+	// LevelWarning is an ADVISORY finding that does not invalidate the document
+	// (e.g. duplicate_reaction_species).
+	LevelWarning = "warning"
+)
+
 // --- Render format discriminator (display.go; compared ~50× as a bare
 // string). ---
 const (

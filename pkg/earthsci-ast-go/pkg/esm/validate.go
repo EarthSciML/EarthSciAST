@@ -33,7 +33,7 @@ type StructuralError struct {
 
 // isWarning reports whether se is an advisory warning (Level "warning") rather
 // than a document-invalidating error (Level "" or "error").
-func (se StructuralError) isWarning() bool { return se.Level == "warning" }
+func (se StructuralError) isWarning() bool { return se.Level == LevelWarning }
 
 // countStructuralErrorLevel returns how many entries are hard errors (not
 // warnings) — the count that determines validity.
@@ -238,7 +238,7 @@ func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 	if err := file.ValidateStruct(); err != nil {
 		result.Valid = false
 		result.Messages = append(result.Messages, ValidationMessage{
-			Level:   "error",
+			Level:   LevelError,
 			Message: fmt.Sprintf("Basic validation failed: %v", err),
 			Path:    "",
 		})
@@ -364,9 +364,9 @@ func structuralErrorToLegacyMessage(se StructuralError) ValidationMessage {
 	case ErrorUndefinedVariable, ErrorUndefinedSpecies, ErrorUndefinedSystem, ErrorEventVarUndeclared:
 		msg = strings.Replace(msg, "Undefined", "Unknown", 1)
 	}
-	level := "error"
+	level := LevelError
 	if se.isWarning() {
-		level = "warning"
+		level = LevelWarning
 	}
 	return ValidationMessage{Level: level, Message: msg, Path: se.Path}
 }
@@ -441,7 +441,7 @@ func (s *structuralScan) addWarning(code, path, message string, details map[stri
 		Code:    code,
 		Message: message,
 		Details: details,
-		Level:   "warning",
+		Level:   LevelWarning,
 	})
 }
 

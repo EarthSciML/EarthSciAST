@@ -146,19 +146,19 @@
     }
   },
   "counts": {
-    "symbols": 972,
+    "symbols": 959,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 290,
       "typescript": 220,
       "python": 244,
       "rust": 311,
-      "go": 385,
+      "go": 383,
       "editor": 71
     },
     "by_tier": {
-      "extension": 708,
-      "stable": 264
+      "extension": 692,
+      "stable": 267
     }
   },
   "planned": [
@@ -2270,6 +2270,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "DeclaredSystemKind",
         "python": "declared_system_kind",
         "typescript": "declaredSystemKind"
       }
@@ -2411,12 +2412,13 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "DeriveODEs",
         "julia": "derive_odes",
         "python": "derive_odes",
         "rust": "derive_odes",
         "typescript": "deriveODEs"
       },
-      "notes": "spelling differs from the §2 rule: typescript=deriveODEs (expected deriveOdes)"
+      "notes": "spelling differs from the §2 rule: go=DeriveODEs (expected DeriveOdes); typescript=deriveODEs (expected deriveOdes)"
     },
     {
       "name": "derive_output_gridding",
@@ -2687,14 +2689,6 @@
       }
     },
     {
-      "name": "dot_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "DOTExporter"
-      }
-    },
-    {
       "name": "e_canonical_divby_zero",
       "kind": "constant",
       "tier": "extension",
@@ -2836,6 +2830,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "go": "EnumLoweringError",
         "rust": "EnumLoweringError",
         "typescript": "EnumLoweringError"
       }
@@ -3002,9 +2997,8 @@
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "ErrorIcInReactionSystem"
-      },
-      "notes": "spelling differs from the §2 rule: go=ErrorIcInReactionSystem (expected ErrorICInReactionSystem)"
+        "go": "ErrorICInReactionSystem"
+      }
     },
     {
       "name": "error_null_reaction",
@@ -3391,54 +3385,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "expanded_model"
-      }
-    },
-    {
-      "name": "export_component_graph_dot",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphDOT"
-      }
-    },
-    {
-      "name": "export_component_graph_json",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphJSON"
-      }
-    },
-    {
-      "name": "export_component_graph_mermaid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportComponentGraphMermaid"
-      }
-    },
-    {
-      "name": "export_expression_graph_dot",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphDOT"
-      }
-    },
-    {
-      "name": "export_expression_graph_json",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphJSON"
-      }
-    },
-    {
-      "name": "export_expression_graph_mermaid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ExportExpressionGraphMermaid"
       }
     },
     {
@@ -3975,9 +3921,8 @@
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "FmtAscii"
-      },
-      "notes": "spelling differs from the §2 rule: go=FmtAscii (expected FmtASCII)"
+        "go": "FmtASCII"
+      }
     },
     {
       "name": "fmt_latex",
@@ -4259,6 +4204,7 @@
       "tier": "stable",
       "bindings": {
         "editor": "Graph",
+        "go": "Graph",
         "julia": "Graph",
         "python": "Graph",
         "typescript": "Graph"
@@ -4583,14 +4529,6 @@
       }
     },
     {
-      "name": "json_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "JSONExporter"
-      }
-    },
-    {
       "name": "key",
       "kind": "type",
       "tier": "extension",
@@ -4604,6 +4542,22 @@
       "tier": "extension",
       "bindings": {
         "typescript": "leafCadence"
+      }
+    },
+    {
+      "name": "level_error",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "LevelError"
+      }
+    },
+    {
+      "name": "level_warning",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "LevelWarning"
       }
     },
     {
@@ -4774,11 +4728,11 @@
       }
     },
     {
-      "name": "lower_enums_error",
-      "kind": "error",
+      "name": "lower_enums_mut",
+      "kind": "function",
       "tier": "extension",
       "bindings": {
-        "go": "LowerEnumsError"
+        "go": "LowerEnumsMut"
       }
     },
     {
@@ -4885,14 +4839,6 @@
       "tier": "extension",
       "bindings": {
         "python": "merge_esm_files"
-      }
-    },
-    {
-      "name": "mermaid_exporter",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "go": "MermaidExporter"
       }
     },
     {
@@ -5063,30 +5009,6 @@
       "tier": "extension",
       "bindings": {
         "go": "NewCadenceClassifier"
-      }
-    },
-    {
-      "name": "new_dot_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewDOTExporter"
-      }
-    },
-    {
-      "name": "new_json_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewJSONExporter"
-      }
-    },
-    {
-      "name": "new_mermaid_exporter",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "NewMermaidExporter"
       }
     },
     {
@@ -7212,6 +7134,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "StoichiometricMatrix",
         "julia": "stoichiometric_matrix",
         "python": "stoichiometric_matrix",
         "rust": "stoichiometric_matrix",
@@ -7338,11 +7261,11 @@
       }
     },
     {
-      "name": "substitute_in_file_with_scoped",
+      "name": "substitute_in_file_with_context",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "go": "SubstituteInFileWithScoped"
+        "go": "SubstituteInFileWithContext"
       }
     },
     {
@@ -7359,17 +7282,10 @@
     {
       "name": "substitute_in_model_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteInModelWithContext",
         "rust": "substitute_in_model_with_context"
-      }
-    },
-    {
-      "name": "substitute_in_model_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteInModelWithScoped"
       }
     },
     {
@@ -7386,33 +7302,19 @@
     {
       "name": "substitute_in_reaction_system_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteInReactionSystemWithContext",
         "rust": "substitute_in_reaction_system_with_context"
-      }
-    },
-    {
-      "name": "substitute_in_reaction_system_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteInReactionSystemWithScoped"
       }
     },
     {
       "name": "substitute_with_context",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "SubstituteWithContext",
         "rust": "substitute_with_context"
-      }
-    },
-    {
-      "name": "substitute_with_scoped",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "SubstituteWithScoped"
       }
     },
     {
@@ -7631,19 +7533,19 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "go": "ToAscii",
+        "go": "ToASCII",
         "julia": "to_ascii",
         "python": "to_ascii",
         "rust": "to_ascii",
         "typescript": "toAscii"
-      },
-      "notes": "spelling differs from the §2 rule: go=ToAscii (expected ToASCII)"
+      }
     },
     {
       "name": "to_dot",
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToDOT",
         "julia": "to_dot",
         "python": "to_dot",
         "typescript": "toDot"
@@ -7678,6 +7580,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToJSONGraph",
         "python": "to_json_graph",
         "typescript": "toJsonGraph"
       }
@@ -7724,6 +7627,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "go": "ToMermaid",
         "julia": "to_mermaid",
         "python": "to_mermaid",
         "typescript": "toMermaid"
@@ -8186,14 +8090,6 @@
       }
     },
     {
-      "name": "validate_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "ValidateFile"
-      }
-    },
-    {
       "name": "validate_file_dimensions",
       "kind": "function",
       "tier": "extension",
@@ -8273,6 +8169,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ValidateStructuralWithCodes"
+      }
+    },
+    {
+      "name": "validate_text",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "go": "ValidateText"
       }
     },
     {
