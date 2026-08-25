@@ -46,9 +46,15 @@ document-scoped derived index set whose producer lives in a different model is
 therefore unresolvable, and this fixture is exactly that shape: the atmosphere
 model consuming a candidate-pair set produced by the ocean model.
 
-Needs a ruling before code moves: is `from_faq` document-scoped, matching the
-registry that declares it? If yes, at least Python and TypeScript are wrong
-together, and Rust and Go should be checked for the same scoping.
+**RULED (phase 6): `from_faq` is document-scoped.** `esm-spec.md` §9.7.5 now
+states it normatively, and `esm-schema.json`'s `id` description widens node-id
+uniqueness from per-model to per-document to match — a document-scoped registry
+whose entries could only name one model's nodes is incoherent, and per-model
+uniqueness would leave a cross-model reference ambiguous. Verified before
+ruling: **no fixture in `tests/` reuses an `id` across models**, so the widened
+uniqueness requirement invalidates nothing that exists. All five bindings resolve
+`from_faq` per-model today and all five need the change; once they have it, this
+fixture is valid and stops being a defect.
 
 ## 3. `geometry/conservative_regrid_assembly.esm` — undiagnosed
 

@@ -857,6 +857,24 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 **Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
 
+**`from_faq` resolves at DOCUMENT scope, and `id` is unique per document.**
+A `kind: "derived"` index set names its producing node via `from_faq`. Since
+`index_sets` is a **document-scoped** registry (§3 field table), an entry in it
+that could only name a node inside one model would be incoherent: the same
+registry entry is visible to, and usable by, every model in the document.
+Therefore `from_faq` MUST be resolved against the expression nodes of the
+**whole document**, not of one model, and an expression-node `id` MUST be unique
+across the document rather than merely within its model. A duplicate `id`
+anywhere in a document is a load-time error; a `from_faq` naming no node in the
+document is `unknown_faq_node`.
+
+This is a phase-6 correction. Every binding previously resolved `from_faq`
+within a single model, which made a cross-model derived index set unresolvable —
+`tests/valid/wildfire_atmosphere_ocean.esm`, where the atmosphere model consumes
+a candidate-pair set produced by the ocean model, could not resolve in any
+binding. No fixture in `tests/` reuses an `id` across models, so widening the
+uniqueness requirement invalidates nothing that exists.
+
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
 **Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.
