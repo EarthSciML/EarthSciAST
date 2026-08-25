@@ -164,26 +164,26 @@ func runValidation(root string, m *manifest) map[string]any {
 		}
 
 		// SCHEMA judges the document AS WRITTEN and STRUCTURAL judges the
-		// RESOLVED form. ValidateFile does exactly that split — it schema-checks
-		// `raw` and only then structurally checks `file` — and it returns early
-		// when the schema fails, so the empty placeholder below is never
-		// structurally walked. Running it even on a load-phase rejection is what
-		// lets a schema-invalid fixture have its pinned (keyword, path) findings
-		// checked at all.
-		target := file
-		if target == nil {
-			target = &esm.ESMFile{}
-		}
-		result := esm.ValidateFile(target, string(raw))
-		record["schema_errors"] = schemaErrors(result.SchemaErrors)
+		// RESOLVED form, so the two halves are asked separately: ValidateText
+		// over `raw` for the schema verdict (which is the only one a fixture
+		// that never loaded can have), esm.Validate over the resolved `file`
+		// for the structural one. This used to be one esm.ValidateFile call
+		// taking both, with an empty placeholder document standing in when the
+		// load failed; the placeholder existed only because the schema half
+		// needed a typed argument it never read.
+		schemaResult := esm.ValidateText(string(raw))
+		record["schema_errors"] = schemaErrors(schemaResult.SchemaErrors)
+
+		var structural []esm.StructuralError
 		if file != nil {
-			record["structural_errors"] = structuralErrors(result.StructuralErrors)
+			structural = esm.Validate(file).StructuralErrors
+			record["structural_errors"] = structuralErrors(structural)
 		}
 
 		// The verdict is "did this binding accept the document", regardless of
 		// WHICH phase answered. A rejection at resolve is still a rejection.
-		schemaClean := len(result.SchemaErrors) == 0
-		structuralClean := file != nil && len(result.StructuralErrors) == 0
+		schemaClean := len(schemaResult.SchemaErrors) == 0
+		structuralClean := file != nil && len(structural) == 0
 		valid := loadErr == nil && schemaClean && structuralClean
 		record["is_valid"] = valid
 		if valid {
@@ -229,7 +229,7 @@ func runDisplay(m *manifest) map[string]any {
 		}
 		record["unicode"] = esm.ToUnicode(target)
 		record["latex"] = esm.ToLatex(target)
-		record["ascii"] = esm.ToAscii(target)
+		record["ascii"] = esm.ToASCII(target)
 		results[c.ID] = record
 	}
 

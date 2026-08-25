@@ -22,12 +22,12 @@ import (
 // substitution family; single-pass substitution over a decoded expression has
 // no failure mode of its own.
 func Substitute(expr Expression, bindings map[string]Expression) (Expression, error) {
-	return substituteRecursiveWithScoped(expr, bindings, nil, "")
+	return substituteRecursiveWithContext(expr, bindings, nil, "")
 }
 
-// substituteRecursiveWithScoped is the internal recursive substitution entry
+// substituteRecursiveWithContext is the internal recursive substitution entry
 // with scoped-reference support (file != nil enables dotted-name resolution).
-func substituteRecursiveWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
+func substituteRecursiveWithContext(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
 	return substituteRec(expr, bindings, file, currentSystem)
 }
 
@@ -136,11 +136,11 @@ func substituteScalarField(field *string, bindings map[string]Expression, file *
 
 // SubstituteInEquation substitutes variables in both LHS and RHS of an equation.
 func SubstituteInEquation(eq Equation, bindings map[string]Expression) (Equation, error) {
-	lhs, err := substituteRecursiveWithScoped(eq.LHS, bindings, nil, "")
+	lhs, err := substituteRecursiveWithContext(eq.LHS, bindings, nil, "")
 	if err != nil {
 		return Equation{}, err
 	}
-	rhs, err := substituteRecursiveWithScoped(eq.RHS, bindings, nil, "")
+	rhs, err := substituteRecursiveWithContext(eq.RHS, bindings, nil, "")
 	if err != nil {
 		return Equation{}, err
 	}
@@ -150,7 +150,7 @@ func SubstituteInEquation(eq Equation, bindings map[string]Expression) (Equation
 // SubstituteInAffectEquation substitutes variables in an affect equation.
 // Note: LHS is a variable name (string) so it's not substituted, only RHS.
 func SubstituteInAffectEquation(affect AffectEquation, bindings map[string]Expression) (AffectEquation, error) {
-	rhs, err := substituteRecursiveWithScoped(affect.RHS, bindings, nil, "")
+	rhs, err := substituteRecursiveWithContext(affect.RHS, bindings, nil, "")
 	if err != nil {
 		return AffectEquation{}, err
 	}
@@ -158,16 +158,16 @@ func SubstituteInAffectEquation(affect AffectEquation, bindings map[string]Expre
 }
 
 // SubstituteInModel performs substitution across an entire model. It is the
-// scope-free case of SubstituteInModelWithScoped (file=nil disables dotted-name
+// scope-free case of SubstituteInModelWithContext (file=nil disables dotted-name
 // resolution), so it delegates rather than duplicating the traversal.
 func SubstituteInModel(model Model, bindings map[string]Expression) (Model, error) {
-	return SubstituteInModelWithScoped(model, bindings, nil, "")
+	return SubstituteInModelWithContext(model, bindings, nil, "")
 }
 
 // SubstituteInReactionSystem performs substitution across an entire reaction
-// system. Scope-free delegation to SubstituteInReactionSystemWithScoped.
+// system. Scope-free delegation to SubstituteInReactionSystemWithContext.
 func SubstituteInReactionSystem(system ReactionSystem, bindings map[string]Expression) (ReactionSystem, error) {
-	return SubstituteInReactionSystemWithScoped(system, bindings, nil, "")
+	return SubstituteInReactionSystemWithContext(system, bindings, nil, "")
 }
 
 // SubstituteInFile performs substitution across an entire ESM file.
@@ -216,17 +216,24 @@ func PartialSubstitute(expr Expression, bindings map[string]Expression, keepSymb
 		}
 	}
 
-	return substituteRecursiveWithScoped(expr, filteredBindings, nil, "")
+	return substituteRecursiveWithContext(expr, filteredBindings, nil, "")
 }
 
-// SubstituteWithScoped performs variable substitution with scoped reference support.
-func SubstituteWithScoped(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
-	return substituteRecursiveWithScoped(expr, bindings, file, currentSystem)
+// SubstituteWithContext performs variable substitution in a SCOPE CONTEXT: the
+// (file, currentSystem) pair against which a dotted binding key like
+// "OtherModel.x" is resolved. Canonical `substitute_with_context`
+// (API_SPEC.md §8 item 9) — the family was spelled `*WithScoped` here and
+// `*_with_context` in Rust, which names the same context a `ScopedContext`.
+//
+// Passing a nil file and an empty currentSystem disables dotted-name
+// resolution and makes this exactly Substitute.
+func SubstituteWithContext(expr Expression, bindings map[string]Expression, file *ESMFile, currentSystem string) (Expression, error) {
+	return substituteRecursiveWithContext(expr, bindings, file, currentSystem)
 }
 
-// SubstituteInModelWithScoped performs substitution across an entire model with
+// SubstituteInModelWithContext performs substitution across an entire model with
 // scoped reference support.
-func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, file *ESMFile, modelName string) (Model, error) {
+func SubstituteInModelWithContext(model Model, bindings map[string]Expression, file *ESMFile, modelName string) (Model, error) {
 	newModel := model // Copy the struct
 
 	// sub applies substitution and latches the first error, so the traversal
@@ -237,7 +244,7 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 		if firstErr != nil {
 			return e
 		}
-		out, err := substituteRecursiveWithScoped(e, bindings, file, modelName)
+		out, err := substituteRecursiveWithContext(e, bindings, file, modelName)
 		if err != nil {
 			firstErr = err
 			return e
@@ -311,9 +318,9 @@ func SubstituteInModelWithScoped(model Model, bindings map[string]Expression, fi
 	return newModel, nil
 }
 
-// SubstituteInReactionSystemWithScoped performs substitution across an entire
+// SubstituteInReactionSystemWithContext performs substitution across an entire
 // reaction system with scoped reference support.
-func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[string]Expression, file *ESMFile, systemName string) (ReactionSystem, error) {
+func SubstituteInReactionSystemWithContext(system ReactionSystem, bindings map[string]Expression, file *ESMFile, systemName string) (ReactionSystem, error) {
 	newSystem := system // Copy the struct
 
 	var firstErr error
@@ -321,7 +328,7 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 		if firstErr != nil {
 			return e
 		}
-		out, err := substituteRecursiveWithScoped(e, bindings, file, systemName)
+		out, err := substituteRecursiveWithContext(e, bindings, file, systemName)
 		if err != nil {
 			firstErr = err
 			return e
@@ -390,14 +397,14 @@ func SubstituteInReactionSystemWithScoped(system ReactionSystem, bindings map[st
 	return newSystem, nil
 }
 
-// SubstituteInFileWithScoped performs substitution across an entire ESM file
+// SubstituteInFileWithContext performs substitution across an entire ESM file
 // with scoped reference support.
-func SubstituteInFileWithScoped(file ESMFile, bindings map[string]Expression) (ESMFile, error) {
+func SubstituteInFileWithContext(file ESMFile, bindings map[string]Expression) (ESMFile, error) {
 	newFile := file // Copy the struct
 
 	newModels := make(map[string]Model)
 	for name, model := range file.Models {
-		out, err := SubstituteInModelWithScoped(model, bindings, &file, name)
+		out, err := SubstituteInModelWithContext(model, bindings, &file, name)
 		if err != nil {
 			return ESMFile{}, err
 		}
@@ -407,7 +414,7 @@ func SubstituteInFileWithScoped(file ESMFile, bindings map[string]Expression) (E
 
 	newReactionSystems := make(map[string]ReactionSystem)
 	for name, system := range file.ReactionSystems {
-		out, err := SubstituteInReactionSystemWithScoped(system, bindings, &file, name)
+		out, err := SubstituteInReactionSystemWithContext(system, bindings, &file, name)
 		if err != nil {
 			return ESMFile{}, err
 		}

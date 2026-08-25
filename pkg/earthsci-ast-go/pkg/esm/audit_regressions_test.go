@@ -391,7 +391,7 @@ func TestAuditG7_DataSourceIsNotAnEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := ValidateFile(file, src)
+	res := Validate(file)
 	if !res.IsValid {
 		t.Errorf("the 1.0.0 spelling must validate: %+v", res.StructuralErrors)
 	}
@@ -414,7 +414,7 @@ func TestAuditG7_DataSourceIsNotAnEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	badRes := ValidateFile(badFile, bad)
+	badRes := Validate(badFile)
 	if !hasCode(badRes, ErrorUndefinedSystem) {
 		t.Errorf("a data source used as a coupling endpoint must be undefined_system: %+v",
 			badRes.StructuralErrors)
@@ -676,10 +676,11 @@ func TestAuditG15_LowerEnumsReachesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LowerEnums(file); err != nil {
+	lowered, err := LowerEnums(file)
+	if err != nil {
 		t.Fatalf("LowerEnums: %v", err)
 	}
-	ev := file.Models["M"].DiscreteEvents[0]
+	ev := lowered.Models["M"].DiscreteEvents[0]
 	trig, err := SerializeExpression(ev.Trigger.Expression)
 	if err != nil {
 		t.Fatal(err)
@@ -785,8 +786,8 @@ var unitsDimensionalFixtures = map[string][]string{
 func TestAuditT4_DimensionalMismatchIsAHardError(t *testing.T) {
 	for name, wantPaths := range unitsDimensionalFixtures {
 		t.Run(name, func(t *testing.T) {
-			file, content := loadInvalidFixture(t, name)
-			result := ValidateFile(file, content)
+			file, _ := loadInvalidFixture(t, name)
+			result := Validate(file)
 
 			if result.IsValid {
 				t.Fatalf("%s is pinned is_valid:false in expected_errors.json; Go accepted it", name)
@@ -1196,7 +1197,7 @@ func validateSrc(t *testing.T, src string) *ValidationResult {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	return ValidateFile(file, src)
+	return Validate(file)
 }
 
 // loadInvalidFixtureByPath Loads a shared tests/invalid fixture through the REAL
@@ -1440,8 +1441,8 @@ func TestCheckerB_E_NonlinearEquationBalance(t *testing.T) {
 // LOAD (Load walks the refs), and carry the settled §4.7 codes.
 func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 	t.Run("undefined_system", func(t *testing.T) {
-		file, content := loadInvalidFixture(t, "undefined_system.esm")
-		result := ValidateFile(file, content)
+		file, _ := loadInvalidFixture(t, "undefined_system.esm")
+		result := Validate(file)
 		if !hasCode(result, ErrorUndefinedSystem) {
 			t.Errorf("want undefined_system: %+v", result.StructuralErrors)
 		}
@@ -1451,8 +1452,8 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 	})
 
 	t.Run("circular_coupling", func(t *testing.T) {
-		file, content := loadInvalidFixture(t, "circular_coupling.esm")
-		result := ValidateFile(file, content)
+		file, _ := loadInvalidFixture(t, "circular_coupling.esm")
+		result := Validate(file)
 		if !hasCode(result, ErrorCircularDependency) {
 			t.Errorf("want circular_dependency: %+v", result.StructuralErrors)
 		}
@@ -1513,8 +1514,8 @@ func TestCheckerB_F_CouplingAndSubsystemRefPins(t *testing.T) {
 func TestCheckerB_EventAffectsParameter(t *testing.T) {
 	for _, name := range []string{"invalid_discrete_param.esm", "invalid_discrete_param_not_parameter.esm"} {
 		t.Run(name, func(t *testing.T) {
-			file, content := loadInvalidFixture(t, name)
-			result := ValidateFile(file, content)
+			file, _ := loadInvalidFixture(t, name)
+			result := Validate(file)
 			if !hasCode(result, ErrorEventAffectsParameter) {
 				t.Errorf("want event_affects_parameter: %+v", result.StructuralErrors)
 			}
@@ -1528,8 +1529,8 @@ func TestCheckerB_EventAffectsParameter(t *testing.T) {
 // A `default_units` that needs an AFFINE conversion to the declared `units`
 // (25 degC is 298.15 K, not 25 K) cannot be applied to a scalar default.
 func TestCheckerB_DefaultUnitsAffineMismatch(t *testing.T) {
-	file, content := loadInvalidFixture(t, "units_parameter_default_mismatch.esm")
-	result := ValidateFile(file, content)
+	file, _ := loadInvalidFixture(t, "units_parameter_default_mismatch.esm")
+	result := Validate(file)
 	if !hasStructuralError(result, ErrorUnitInconsistency, "/models/BadUnitsModel/variables/temperature") {
 		t.Errorf("want unit_inconsistency @ /models/BadUnitsModel/variables/temperature: %+v",
 			result.StructuralErrors)

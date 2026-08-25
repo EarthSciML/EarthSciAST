@@ -141,11 +141,7 @@ func assertStructuralRejection(t *testing.T, path, name string, pin expectedPin)
 	if err != nil {
 		t.Fatalf("structural fixture %s must pass schema validation, got error: %v", name, err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	result := ValidateFile(file, string(raw))
+	result := Validate(file)
 	if result.IsValid {
 		t.Fatalf("expected %s to be rejected by validate(), but it was reported valid", name)
 	}

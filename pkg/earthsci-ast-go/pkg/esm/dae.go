@@ -239,12 +239,8 @@ func isDifferentialEquation(eq Equation, indep string) bool {
 // the model carries one, and the esm-spec §6.3.1 derivation otherwise. Before
 // 1.0.0 an undeclared model was assumed ODE, which quietly ran the factoring
 // over algebraic-only (nonlinear) systems that merely omitted the field.
-func isDAETargetSystem(file *ESMFile, model *Model) bool {
-	var domain *Domain
-	if file != nil {
-		domain = file.Domain
-	}
-	return EffectiveSystemKind(model, domain) == SystemKindODE
+func isDAETargetSystem(_ *ESMFile, model *Model) bool {
+	return EffectiveSystemKind(model) == SystemKindODE
 }
 
 // fileIndepVar returns the independent (time) variable for the document. Every

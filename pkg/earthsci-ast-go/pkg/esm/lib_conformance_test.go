@@ -41,7 +41,7 @@ func TestShippedLibraryValidatesClean(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a shipped library must load: %v", err)
 			}
-			result := ValidateFile(file, string(content))
+			result := Validate(file)
 			for _, se := range result.StructuralErrors {
 				if se.Level == "" {
 					t.Errorf("%s: %s @ %s :: %s", name, se.Code, se.Path, se.Message)

@@ -236,7 +236,7 @@ func TestSubstitutionWithComplexScopedReferences(t *testing.T) {
 	}
 
 	// Perform substitution with scoped reference support
-	result, err := SubstituteWithScoped(expr, bindings, file, "ModelA")
+	result, err := SubstituteWithContext(expr, bindings, file, "ModelA")
 	assert.NoError(t, err)
 
 	// Verify the result

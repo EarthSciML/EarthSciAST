@@ -49,8 +49,8 @@ func TestExpressionParseConformance(t *testing.T) {
 				}
 				assertSerializesTo(t, "parse(text)", parsed, c.AST)
 
-				if got := ToAscii(parsed); got != c.Reprint {
-					t.Errorf("ToAscii(ParseExpression(%q)) = %q, want %q", c.Text, got, c.Reprint)
+				if got := ToASCII(parsed); got != c.Reprint {
+					t.Errorf("ToASCII(ParseExpression(%q)) = %q, want %q", c.Text, got, c.Reprint)
 				}
 
 				reparsed, err := ParseExpression(c.Reprint)

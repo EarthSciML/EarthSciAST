@@ -217,7 +217,7 @@ const (
 	ErrorNullReaction       = "null_reaction"
 	ErrorEventVarUndeclared = "event_var_undeclared"
 	ErrorUnitInconsistency  = "unit_inconsistency"
-	ErrorIcInReactionSystem = "ic_in_reaction_system"
+	ErrorICInReactionSystem = "ic_in_reaction_system"
 	// ErrorUnitParseError is a declared unit string that denotes no real unit
 	// ("not_a_unit"). It is a defect in the FILE — a hard error, distinct from
 	// `unit_inconsistency` (a provable dimensional mismatch between two
@@ -312,12 +312,34 @@ const DefaultIndepVar = "t"
 // equations and in event affects alike — and never an undeclared variable.
 const operatorPlaceholderVar = "_var"
 
+// --- Diagnostic SEVERITY levels: the values StructuralError.Level and
+// ValidationMessage.Level carry on the wire.
+//
+// These are the last diagnostic vocabulary validate.go still spelled as bare
+// literals after the Error* / Code* blocks moved here, and they are the same
+// kind of thing: a value a consumer compares against, so the string is a
+// contract and belongs beside the codes it qualifies. The values are unchanged.
+//
+// Only two are emitted. "info" appears in ValidationMessage.Level's field
+// comment as an admissible value but is produced nowhere, so it gets no
+// constant — a constant for a level nothing raises would advertise a severity
+// this binding cannot report. ---
+const (
+	// LevelError is a document-INVALIDATING finding. It is also the value of an
+	// UNSET Level: a StructuralError built without one is an error, which is why
+	// isWarning tests for the warning rather than against the error.
+	LevelError = "error"
+	// LevelWarning is an ADVISORY finding that does not invalidate the document
+	// (e.g. duplicate_reaction_species).
+	LevelWarning = "warning"
+)
+
 // --- Render format discriminator (display.go; compared ~50× as a bare
 // string). ---
 const (
 	FmtUnicode = "unicode"
 	FmtLatex   = "latex"
-	FmtAscii   = "ascii"
+	FmtASCII   = "ascii"
 	// FmtUnicodeSpaced is FmtUnicode with the multiplication operator rendered
 	// as " · " (spaced) instead of "·". The spacing is applied where the
 	// operator is emitted, so it never touches a "·" occurring inside a
@@ -326,7 +348,7 @@ const (
 )
 
 // DiagnosticError is implemented by the package's code-bearing error types
-// (EvaluationError, ExpressionTemplateError, RuleEngineError, LowerEnumsError,
+// (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
 // ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
 // recover the stable diagnostic code from any of them uniformly —
 // errors.As(err, &de) then de.DiagnosticCode() — without switching over the
@@ -342,7 +364,7 @@ var (
 	_ DiagnosticError = (*EvaluationError)(nil)
 	_ DiagnosticError = (*ExpressionTemplateError)(nil)
 	_ DiagnosticError = (*RuleEngineError)(nil)
-	_ DiagnosticError = (*LowerEnumsError)(nil)
+	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
 )

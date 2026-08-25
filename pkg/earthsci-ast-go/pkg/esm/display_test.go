@@ -526,3 +526,74 @@ func TestModelSummary(t *testing.T) {
 	assert.Contains(t, result, "operator_compose: SimpleOzone + Advection")
 	assert.Contains(t, result, "2024-05-01 to 2024-05-03")
 }
+
+// TestDisplayDomainAcceptsContainers pins API_SPEC.md §8 item 18: ToUnicode,
+// ToLatex and ToASCII accept the FULL domain — expressions AND containers — in
+// every binding. Go accepted expressions only, and fell through to a Go
+// `%v` struct dump for everything else.
+func TestDisplayDomainAcceptsContainers(t *testing.T) {
+	src := `{
+	  "esm":"1.0.0",
+	  "metadata":{"name":"Domain"},
+	  "models":{"M":{
+	    "variables":{"x":{"type":"unknown","default":0.0},"k":{"type":"parameter","default":1.0}},
+	    "equations":[{"lhs":{"op":"D","args":["x"],"wrt":"t"},"rhs":{"op":"*","args":["k","x"]}}]}},
+	  "reaction_systems":{"R":{
+	    "species":{"NO":{"units":"ppb"},"O3":{"units":"ppb"}},
+	    "parameters":{"k1":{"default":1.0}},
+	    "reactions":[{"id":"r1","substrates":[{"species":"NO","stoichiometry":1}],
+	                  "products":[{"species":"O3","stoichiometry":1}],"rate":"k1"}]}}}`
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	model := file.Models["M"]
+	rs := file.ReactionSystems["R"]
+
+	cases := []struct {
+		what   string
+		target Expression
+		want   string
+	}{
+		{"esm_file", file, "ESM v1.0.0: Domain (1 models, 1 reaction systems, 0 data sources)"},
+		{"reaction_system", rs, "ReactionSystem (2 species, 1 reactions)"},
+		{"equation", model.Equations[0], "∂x/∂t = k·x"},
+	}
+	for _, c := range cases {
+		if got := ToUnicode(c.target); got != c.want {
+			t.Errorf("ToUnicode(%s) = %q, want %q", c.what, got, c.want)
+		}
+	}
+
+	// A model summary is the counts plus one line per equation.
+	gotModel := ToUnicode(model)
+	if !strings.HasPrefix(gotModel, "(1 parameters, 1 equation)") {
+		t.Errorf("ToUnicode(model) = %q, want it to start with the §6.3 counts", gotModel)
+	}
+	if !strings.Contains(gotModel, "∂x/∂t = k·x") {
+		t.Errorf("ToUnicode(model) = %q, want it to list the equation", gotModel)
+	}
+
+	// Every renderer must accept every member of the domain: none may fall
+	// through to Go's `%v` struct dump, which is what "expressions only" looked
+	// like from the outside.
+	for _, target := range []Expression{file, model, rs, model.Equations[0]} {
+		for name, render := range map[string]func(Expression) string{
+			"ToUnicode": ToUnicode, "ToLatex": ToLatex, "ToASCII": ToASCII,
+		} {
+			got := render(target)
+			if got == "" || strings.Contains(got, "map[") || strings.Contains(got, "0x") {
+				t.Errorf("%s(%T) fell through to a struct dump: %q", name, target, got)
+			}
+		}
+	}
+
+	// Pointers are accepted alongside values, since that is how a caller holding
+	// a document actually has one.
+	if ToUnicode(file) != ToUnicode(*file) {
+		t.Errorf("*ESMFile and ESMFile must render alike")
+	}
+	if ToUnicode(&model) != ToUnicode(model) {
+		t.Errorf("*Model and Model must render alike")
+	}
+}

@@ -362,13 +362,16 @@ Total: it reports, it does not raise.
 
 - **Input type.** Rust and Go accept only a typed `&EsmFile` / `*ESMFile`.
   TypeScript accepts JSON text or an object. Julia accepts an `EsmFile` **or a
-  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**.
-- **Return shape.** Julia, TypeScript, Python and Rust return the four-field
-  result. **Go's `Validate` returns the legacy `*DetailedValidationResult`
-  (`Valid` + a flat `Messages` list).** Go's four-field equivalent is a
-  *different function*, `ValidateFile(file, jsonStr) *ValidationResult`.
-- Rust's `validate` performs **no schema validation at all** — its
-  `schema_errors` is empty by construction.
+  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**. Go's
+  text convenience is the separate `ValidateText(jsonStr)` (§8 item 13).
+- **Return shape.** All five return the four-field result. Go's `Validate`
+  returned the legacy `*DetailedValidationResult` (`Valid` + a flat `Messages`
+  list) until phase 6, with the four-field shape on a different function,
+  `ValidateFile(file, jsonStr)`; that function is now `ValidateText(jsonStr)`
+  and `ValidateStructural` is what still returns the legacy shape.
+- Rust's and Go's `validate` perform **no schema validation at all** — their
+  `schema_errors` is empty by construction, because a typed document can only
+  exist by having already passed the schema at load.
 
 #### `validate_schema`
 
@@ -410,10 +413,13 @@ bindings export the family; all are total and return sorted names.
 
 Divergences:
 
-- **`system_kind` arity.** Go alone takes a second argument,
-  `SystemKind(model *Model, domain *Domain)`, documented as accepted only so
-  callers need not change. Go also exports `EffectiveSystemKind` with no
-  counterpart anywhere.
+- **`system_kind` arity.** Settled in phase 6 (§8 item 11): Go took a second
+  `domain *Domain` argument that neither its `SystemKind` nor its
+  `EffectiveSystemKind` body read, and has dropped it. All five now take the
+  model and nothing else. Go now exports the whole family the item rules —
+  `system_kind` (derived), `declared_system_kind` (the explicit field, nullable)
+  and `effective_system_kind` (`declared ?? derived`); the other four are
+  landing theirs.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -470,7 +476,7 @@ Divergences:
 | Python | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 | Julia | all of the above | **`Expr`/`Equation` only — containers throw `ArgumentError`** |
 | Rust | **`&Expr` only** | `&Expr` only |
-| Go | **`Expression` only** | `Expression` only |
+| Go | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
 
 ### 5.6 Flatten
 
@@ -489,7 +495,7 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
 |---|---|---|---|---|---|
-| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | mutates, returns `*LowerEnumsError` |
+| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
 | `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)`, raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | takes a raw `&mut Value` + `&Path` | returns `error` |
 | `resolve_template_machinery` | `(raw, base_path; metaparameters, load_ref)` | `(rawData, basePath, {metaparameters, readFile, validateSchema})` | `(raw, base_path, metaparameters)` — no loader seam | `(&Value, &Path, &BTreeMap)` — no loader seam | **not exported** |
 | `expand_coupling_imports` | returns the coupling list | returns `CouplingEntry[] \| undefined` | returns the list | returns `Result<Option<Vec<_>>, _>` | **not exported** |
@@ -622,12 +628,24 @@ not implement the semiring-FAQ node addressing of RFC §6.1.
 ### 5.10 Reactions
 
 `derive_odes(system) -> Model` and `stoichiometric_matrix(system) -> Matrix`
-(rows = species, columns = reactions). Julia, TypeScript, Python and Rust; Go
-exports neither.
+(rows = species, columns = reactions). All five, as of phase 6 — Go exported
+neither, so two symbols that four bindings agreed on were `stable` with a hole
+in exactly one column, which is the drift §2 and §3 exist to catch. (It is NOT
+a tier violation: `esm-libraries-spec.md` §5.5 declares Go "Core", not
+"Core + Analysis" — see §3's capability table, which says so and calls that
+label the one part of §5 still accurate. Phase 5's G-3 item named
+"Core + Analysis parity" as a GOAL; the spec never declared it as fact.)
 
-Rust alone has an error channel (`DeriveError`). **TypeScript alone returns a
-struct** from `stoichiometric_matrix` — `{matrix, species, reactions}` — so
-TypeScript is the only binding where the row and column labels are recoverable.
+Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
+**TypeScript alone returns a struct** from `stoichiometric_matrix` —
+`{matrix, species, reactions}` — so TypeScript is the only binding where the row
+and column labels are recoverable.
+
+**Species ORDER is not harmonized and is observable.** Julia, TypeScript and
+Python hold `species` as an ordered list and use declaration order; Rust and Go
+hold it as a map and sort by name, which for them is the only deterministic
+option. Nothing in `tests/` pins it. Settling it means either a shared fixture
+or a return shape that carries the labels (TypeScript's), and is follow-up work.
 
 ---
 
@@ -653,6 +671,7 @@ reading that as a gap.
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
+| `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
 | `discrete_parameters` | function | `discrete_parameters` | `discreteParameters` | `discrete_parameters` | `discrete_parameters` | `DiscreteParameters` |
 | `expression_parse_error` | error | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` | `ExpressionParseError` |
 | `flatten` | function | `flatten` | `flatten` | `flatten` | `flatten` | `Flatten` |
@@ -679,9 +698,10 @@ reading that as a gap.
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
 | `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
+| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
-| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToAscii` |
+| `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
 | `to_json_compact` | function | `to_json_compact` | `toJsonCompact` | `to_json_compact` | `to_json_compact` | `ToJSONCompact` |
 | `to_latex` | function | `to_latex` | `toLatex` | `to_latex` | `to_latex` | `ToLatex` |
@@ -716,19 +736,21 @@ reading that as a gap.
 | `data_source_determinism` | type | `DataSourceDeterminism` | – | `DataSourceDeterminism` | `DataSourceDeterminism` | `DataSourceDeterminism` |
 | `data_source_location` | type | `DataSourceLocation` | – | `DataSourceLocation` | `DataSourceLocation` | `DataSourceLocation` |
 | `data_source_temporal` | type | `DataSourceTemporal` | – | `DataSourceTemporal` | `DataSourceTemporal` | `DataSourceTemporal` |
-| `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | – |
+| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | `DeclaredSystemKind` |
 | `dimension_promotion_error` | error | `DimensionPromotionError` | `DimensionPromotionError` | `DimensionPromotionError` | – | `DimensionPromotionError` |
 | `discrete_event` | type | `DiscreteEvent` | – | `DiscreteEvent` | `DiscreteEvent` | `DiscreteEvent` |
 | `discrete_event_trigger` | type | `DiscreteEventTrigger` | – | `DiscreteEventTrigger` | `DiscreteEventTrigger` | `DiscreteEventTrigger` |
 | `distribution` | type | `Distribution` | – | `Distribution` | `Distribution` | `Distribution` |
 | `domain` | type | `Domain` | – | `Domain` | `Domain` | `Domain` |
 | `edge_kind` | type | – | `EdgeKind` | `EdgeKind` | `EdgeKind` | `EdgeKind` |
+| `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | – | `EnumLoweringError` | `EnumLoweringError` |
 | `equation` | type | `Equation` | – | `Equation` | `Equation` | `Equation` |
 | `esm_file` | type | `EsmFile` | – | `EsmFile` | `EsmFile` | `ESMFile` |
 | `expand_coupling_imports` | function | `expand_coupling_imports` | `expandCouplingImports` | `expand_coupling_imports` | `expand_coupling_imports` | – |
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
+| `graph` | type | `Graph` | `Graph` | `Graph` | – | `Graph` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_enums` | function | `lower_enums` / `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
@@ -747,10 +769,12 @@ reading that as a gap.
 | `remove_variable` | function | `remove_variable` | `removeVariable` | – | `remove_variable` | `RemoveVariable` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
-| `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
 | `supported_migration_targets` | function | `supported_migration_targets` | `supportedMigrationTargets` | `supported_migration_targets` | – | `SupportedMigrationTargets` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | `ToDOT` |
+| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | – | `ToJSONGraph` |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | `ToMermaid` |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
@@ -769,11 +793,9 @@ reading that as a gap.
 | `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
-| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
 | `effective_system_kind` | function | `effective_system_kind` | `effectiveSystemKind` | – | – | `EffectiveSystemKind` |
-| `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -786,7 +808,6 @@ reading that as a gap.
 | `free_parameters` | function | – | `freeParameters` | `free_parameters` | `free_parameters` | – |
 | `function_table` | type | `FunctionTable` | – | `FunctionTable` | – | `FunctionTable` |
 | `function_table_axis` | type | `FunctionTableAxis` | – | `FunctionTableAxis` | – | `FunctionTableAxis` |
-| `graph` | type | `Graph` | `Graph` | `Graph` | – | – |
 | `is_coupling_library_doc` | function | – | `isCouplingLibraryDoc` | `is_coupling_library_doc` | `is_coupling_library_doc` | – |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
@@ -799,9 +820,6 @@ reading that as a gap.
 | `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
-| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
-| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | – | – |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
 | `unknowns` | function | `unknowns` | `unknowns` | `unknowns` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
@@ -892,6 +910,9 @@ reading that as a gap.
 | `solve` | function | – | – | `solve` | `solve` | – |
 | `step` | function | – | – | `step` | `step` | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
+| `substitute_in_model_with_context` | function | – | – | – | `substitute_in_model_with_context` | `SubstituteInModelWithContext` |
+| `substitute_in_reaction_system_with_context` | function | – | – | – | `substitute_in_reaction_system_with_context` | `SubstituteInReactionSystemWithContext` |
+| `substitute_with_context` | function | – | – | – | `substitute_with_context` | `SubstituteWithContext` |
 | `substrate_matrix` | function | – | `substrateMatrix` | `substrate_matrix` | – | – |
 | `subsystem_ref_error` | error | `SubsystemRefError` | – | `SubsystemRefError` | – | – |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
@@ -908,6 +929,7 @@ reading that as a gap.
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |
 | `validate_schema` | function | `validate_schema` | `validateSchema` | – | – | – |
 | `validate_structural` | function | `validate_structural` | – | – | – | `ValidateStructural` |
+| `validate_text` | function | – | `validateText` | – | – | `ValidateText` |
 | `validate_units` | function | – | `validateUnits` | `validate_units` | – | – |
 | `validation_error` | type | – | `ValidationError` | `ValidationError` | – | – |
 | `value_invention_error` | error | – | – | `ValueInventionError` | `ValueInventionError` | – |

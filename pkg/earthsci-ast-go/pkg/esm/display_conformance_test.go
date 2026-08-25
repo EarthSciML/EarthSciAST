@@ -43,7 +43,7 @@ func TestAllOperatorsDisplayConformance(t *testing.T) {
 		}
 		// Not every fixture pins every format.
 		if c.Ascii != nil {
-			if got := ToAscii(expr); got != *c.Ascii {
+			if got := ToASCII(expr); got != *c.Ascii {
 				t.Errorf("case %d ascii: want %q, got %q", i, *c.Ascii, got)
 			}
 		}

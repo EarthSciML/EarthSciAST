@@ -1079,12 +1079,10 @@ func (e *ESMFile) ValidateStruct() error {
 	// This is the invariant for an ASSEMBLY document — one that declares
 	// components. It is NOT universal: the schema's root `anyOf` also admits two
 	// LIBRARY file kinds (`expression_templates` per esm-spec §9.7,
-	// `coupling_roles` per §10.9) that carry no components at all. A library's
-	// §9.7 constructs are stripped during parse by design ("no §9.7 construct
-	// survives parse → emit", template_resolve.go), so a loaded library is
-	// indistinguishable HERE from an empty document — the two are told apart from
-	// the RAW document, which is what ValidateFile does (see isLibraryDocumentJSON).
-	// Callers holding only a typed ESMFile keep the strict invariant.
+	// `coupling_roles` per §10.9) that carry no components at all. Both blocks
+	// survive parse (ESMFile.ExpressionTemplates / .CouplingRoles), so a library
+	// is told apart from an empty document by the typed value alone — which is
+	// what the payload test below, and validate.go's isLibraryDocument, do.
 	// The five top-level PAYLOAD keys of the schema's `anyOf`: models,
 	// reaction_systems, data_sources, expression_templates, coupling_roles. A
 	// template-library file's payload is its `expression_templates` registry
