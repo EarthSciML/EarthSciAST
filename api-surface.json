@@ -149,7 +149,7 @@
     "symbols": 972,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 290,
+      "julia": 297,
       "typescript": 220,
       "python": 244,
       "rust": 311,
@@ -157,8 +157,8 @@
       "editor": 71
     },
     "by_tier": {
-      "extension": 708,
-      "stable": 264
+      "extension": 706,
+      "stable": 266
     }
   },
   "planned": [
@@ -2270,16 +2270,9 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "julia": "declared_system_kind",
         "python": "declared_system_kind",
         "typescript": "declaredSystemKind"
-      }
-    },
-    {
-      "name": "declared_system_kind_mismatch",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "declared_system_kind_mismatch"
       }
     },
     {
@@ -2782,9 +2775,10 @@
     {
       "name": "effective_system_kind",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "EffectiveSystemKind"
+        "go": "EffectiveSystemKind",
+        "julia": "effective_system_kind"
       }
     },
     {
@@ -2836,6 +2830,7 @@
       "kind": "error",
       "tier": "stable",
       "bindings": {
+        "julia": "EnumLoweringError",
         "rust": "EnumLoweringError",
         "typescript": "EnumLoweringError"
       }
@@ -4768,10 +4763,14 @@
       "tier": "stable",
       "bindings": {
         "go": "LowerEnums",
-        "julia": "lower_enums!",
+        "julia": [
+          "lower_enums",
+          "lower_enums!"
+        ],
         "rust": "lower_enums",
         "typescript": "lowerEnums"
-      }
+      },
+      "notes": "multiple spellings exported by: julia"
     },
     {
       "name": "lower_enums_error",
@@ -5499,8 +5498,9 @@
     {
       "name": "parameters",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "julia": "parameters",
         "typescript": "parameters"
       }
     },
@@ -7678,6 +7678,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "julia": "to_json_graph",
         "python": "to_json_graph",
         "typescript": "toJsonGraph"
       }
@@ -7997,6 +7998,7 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
+        "julia": "unknowns",
         "python": "unknowns",
         "typescript": "unknowns"
       }
@@ -8215,6 +8217,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "validate_model_dimensions"
+      }
+    },
+    {
+      "name": "validate_path",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "validate_path"
       }
     },
     {

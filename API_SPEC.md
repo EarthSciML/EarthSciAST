@@ -724,7 +724,7 @@ reading that as a gap.
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
-| `lower_enums` | function | `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
+| `lower_enums` | function | `lower_enums` / `lower_enums!` | `lowerEnums` | – | `lower_enums` | `LowerEnums` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
@@ -765,9 +765,11 @@ reading that as a gap.
 | `couple_multiplicative_no_tendency_error` | error | – | `CoupleMultiplicativeNoTendencyError` | `CoupleMultiplicativeNoTendencyError` | – | `CoupleMultiplicativeNoTendencyError` |
 | `coupling_import` | type | `CouplingImport` | – | `CouplingImport` | – | `CouplingImport` |
 | `coupling_import_options` | type | – | `CouplingImportOptions` | – | `CouplingImportOptions` | `CouplingImportOptions` |
+| `declared_system_kind` | function | `declared_system_kind` | `declaredSystemKind` | `declared_system_kind` | – | – |
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `enum_lowering_error` | error | `EnumLoweringError` | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -796,8 +798,10 @@ reading that as a gap.
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
+| `to_json_graph` | function | `to_json_graph` | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
+| `unknowns` | function | `unknowns` | `unknowns` | `unknowns` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
 | `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
 
@@ -819,7 +823,6 @@ reading that as a gap.
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
 | `dae_info` | type | – | – | – | `DaeInfo` | `DAEInfo` |
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
-| `declared_system_kind` | function | – | `declaredSystemKind` | `declared_system_kind` | – | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
 | `derive_output_meta` | function | `derive_output_meta` | – | – | `derive_output_meta` | – |
 | `derive_output_plan` | function | `derive_output_plan` | – | – | `derive_output_plan` | – |
@@ -828,11 +831,11 @@ reading that as a gap.
 | `distinct` | function | – | – | `distinct` | `distinct` | – |
 | `domain_extent_mismatch_error` | error | `DomainExtentMismatchError` | – | `DomainExtentMismatchError` | – | – |
 | `earth_sci_ast_error` | error | `EarthSciASTError` | – | `EarthSciAstError` | – | – |
+| `effective_system_kind` | function | `effective_system_kind` | – | – | – | `EffectiveSystemKind` |
 | `emit_document` | function | – | `emitDocument` | `emit_document` | – | – |
 | `emit_esm_string` | function | – | `emitEsmString` | `emit_esm_string` | – | – |
 | `ensemble_problem` | type | – | – | `EnsembleProblem` | `EnsembleProblem` | – |
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
-| `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
 | `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
@@ -866,6 +869,7 @@ reading that as a gap.
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
 | `output_plan` | type | `OutputPlan` | – | – | `OutputPlan` | – |
+| `parameters` | function | `parameters` | `parameters` | – | – | – |
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
@@ -893,7 +897,6 @@ reading that as a gap.
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |
@@ -901,7 +904,6 @@ reading that as a gap.
 | `unit_finding_analysis` | constant | – | – | – | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
 | `unit_finding_dimensional_mismatch` | constant | – | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
 | `unit_finding_unparseable` | constant | – | – | – | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
-| `unknowns` | function | – | `unknowns` | `unknowns` | – | – |
 | `unmapped_domain_error` | error | `UnmappedDomainError` | – | `UnmappedDomainError` | – | – |
 | `unsupported_mapping_error` | error | `UnsupportedMappingError` | – | `UnsupportedMappingError` | – | – |
 | `validate_schema` | function | `validate_schema` | `validateSchema` | – | – | – |
