@@ -160,6 +160,27 @@ function _scalar_interp_bilinear_model()
     ESM.Model(vars, [ESM.Equation(_D("z"), body)])
 end
 
+# Bytes a scalar `_NK_CONTRACTION` `:+` fold over `n` states allocates per call,
+# plus the folded value. Measured INSIDE a function — the discipline
+# `rhs_alloc_bytes` follows, and the way the RHS actually calls the walker. At
+# `@testset` scope the enclosing block's bindings box the returned `Float64` on
+# Julia < 1.12 (a flat 16 B, the same at n=6 and n=6000), which measures the
+# probe rather than the fold.
+function _contract_fold_alloc(n; warmup::Int=3, samples::Int=5)
+    u = collect(1.0:n)
+    p = (;)
+    kids = ESM._Node[ESM._mknode(kind=ESM._NK_STATE, idx=k) for k in 1:n]
+    cnode = ESM._mknode(kind=ESM._NK_CONTRACTION, op=:+, literal=0.0, children=kids)
+    for _ in 1:warmup
+        ESM._eval_node(cnode, u, p, 0.0)
+    end
+    best = typemax(Int)
+    for _ in 1:samples
+        best = min(best, @allocated ESM._eval_node(cnode, u, p, 0.0))
+    end
+    return (best, ESM._eval_node(cnode, u, p, 0.0), sum(u))
+end
+
 @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
 
     @testset "scalar interp.* observed RHS: 0 bytes (perf-interp-alloc)" begin
@@ -239,12 +260,12 @@ end
         # `@tullio s = …` site, ~80 B/reduced cell): a hand-built
         # `_NK_CONTRACTION` node summed via `_eval_node` must be 0-alloc and
         # equal to the seeded fold, bit-identical to the prior Tullio sum.
-        u = collect(1.0:6.0)
-        p = (;)
-        kids = ESM._Node[ESM._mknode(kind=ESM._NK_STATE, idx=k) for k in 1:6]
-        cnode = ESM._mknode(kind=ESM._NK_CONTRACTION, op=:+, literal=0.0, children=kids)
-        ESM._eval_node(cnode, u, p, 0.0)             # warmup/compile
-        @test ESM._eval_node(cnode, u, p, 0.0) == sum(u)
-        @test (@allocated ESM._eval_node(cnode, u, p, 0.0)) == 0
+        # Two lengths, so the property is fold-length-independent the way the
+        # rest of this file is grid-size-independent.
+        for n in (6, 600)
+            bytes, got, want = _contract_fold_alloc(n)
+            @test got == want
+            @test bytes == 0
+        end
     end
 end
