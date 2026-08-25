@@ -5,7 +5,7 @@ Rust implementation of the EarthSciML Serialization Format (ESM).
 ## Features
 
 - **Core**: Parse, serialize, pretty-print, substitute, validate (schema + structural)
-- **Analysis**: Unit checking, equation counting, structural validation, component graphs
+- **Analysis**: Unit checking, stoichiometric matrices, structural validation, component graphs
 - **Simulation**: diffsol-backed ODE integration plus a vectorized array/PDE runtime
 - **CLI Tool**: `esm` command-line interface for validation, conversion, analysis, and simulation
 - **WASM**: WebAssembly compilation for in-browser loading, validation, and 0-D simulation

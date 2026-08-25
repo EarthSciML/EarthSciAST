@@ -33,18 +33,22 @@ Each library implementation is classified into tiers:
 | Tier | Capabilities | Required for |
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
-| **Analysis** | Unit checking, equation counting, stoichiometric matrix computation, conservation law detection | All languages |
-
-> **Two of those four are aspirational.** As of phase 6, `stoichiometric_matrix`
-> and the unit-checking surface exist in all five bindings, but **no binding
-> implements conservation-law detection or equation counting under any exported
-> name** — `api-surface.json` has no `conservation_laws` / `detect_conservation_laws`
-> or `equation_count` / `count_equations` symbol in any column. Either the tier
-> definition drops them or someone owes five implementations; recorded here
-> rather than left for the next reader to rediscover.
+| **Analysis** | Unit checking, stoichiometric matrix computation | All languages |
 | **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `earthsci-ast-editor` (SolidJS) |
 | **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
+
+> **Retracted from the Analysis tier: conservation-law detection and equation
+> counting.** Both were listed here as required of all languages, and **no
+> binding has ever implemented either under any exported name** —
+> `api-surface.json` carries no `conservation_laws` / `detect_conservation_laws`
+> and no `equation_count` / `count_equations` in any of the six columns. (The
+> two near-misses are unrelated: Go's `ErrorEquationCountMismatch` is a
+> validation error CODE, and `substitute_in_equations` is a substitution
+> helper.) Phase 6 recorded the gap; the 1.0.0 release removes the claim rather
+> than shipping a tier definition that five bindings do not meet. Restoring
+> either capability means implementing it in all five and re-adding the row —
+> not editing this table alone.
 
 ---
 
