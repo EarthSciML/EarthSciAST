@@ -195,17 +195,10 @@ which is itself a symptom. Julia additionally validates `overlap`'s
 `src_env` / `tgt_env` against the same incomplete scope and will misfire the
 same way.
 
-### ⚠ This blocks defect 2, and the ordering matters
+### ⚠ A second instance, and what defect 2 did to it
 
-`wildfire_atmosphere_ocean.esm` has the **identical latent failure**. Resolving
-its `OceanDynamics` model directly raises `E_REF_UNRESOLVED_JOIN_FACTOR` on
-`rg_src_bin` at `/models/OceanDynamics/equations/2/rhs`. It is masked today only
-because `AtmosphericDynamics` is reached first and raises
-`E_REF_UNKNOWN_FAQ_NODE` before `OceanDynamics` is ever walked.
-
-**So fixing defect 2 without fixing this one does not make
-`wildfire_atmosphere_ocean.esm` resolve — it changes which error it raises.**
-This defect must land with or before defect 2.
+This defect has TWO instances. See the detail below — defect 2 landed
+first, and unmasked the second rather than repairing it.
 
 ### Why this is not fixed here
 
@@ -240,9 +233,12 @@ order) — always before `OceanDynamics`, so the join error never fired. With #2
 fixed the fixture now raises `E_REF_UNRESOLVED_JOIN_FACTOR` for `'rg_src_bin'`
 instead.
 
-So the corpus sweep count did **not** drop from 3 to 2: it is 3 of 93 (the 93rd
-fixture is the new `cross_model_from_faq.esm`, which resolves). Repairing #3
-repairs both fixtures at once. Every binding pins `wildfire_atmosphere_ocean.esm`
+So repairing #3 repairs both fixtures at once, and the sweep did not fall by
+two when defect 2 landed — one of the two fixtures defect 2 fixed simply began
+failing here instead. **Measured on the merged tree: 93 fixtures, 91 resolve, 2
+raise**, both with `E_REF_UNRESOLVED_JOIN_FACTOR`. (Two counts recorded during
+phase 6b read 3 of 93; each was measured on a branch holding only one of the two
+fixes, and neither is the merged number.) Every binding pins `wildfire_atmosphere_ocean.esm`
 under the join code, so the change of failure mode is visible rather than
 silent.
 
