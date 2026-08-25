@@ -1,6 +1,6 @@
 ---
 title: "Calculus"
-description: "D, ic, and the rewrite-target sugar grad / div / laplacian."
+description: "D, ic, and the rewrite-target sugar grad / div / laplacian / integral."
 ---
 
 ## `D` — derivative
@@ -12,6 +12,9 @@ description: "D, ic, and the rewrite-target sugar grad / div / laplacian."
 `wrt: "t"` (or `wrt` absent, which means `t`) is the structural time derivative.
 It is **strictly unary**: `args` holds exactly the differentiated variable.
 
+```text
+D(N)/Dt
+```
 ```json
 { "op": "D", "args": ["N"], "wrt": "t" }
 ```
@@ -19,6 +22,9 @@ It is **strictly unary**: `args` holds exactly the differentiated variable.
 This is what makes a variable an ODE state, and it belongs on an equation's
 **left-hand side**, where system assembly consumes it:
 
+```text
+D(N)/Dt = (-lambda) * N
+```
 ```json
 {
   "lhs": { "op": "D", "args": ["N"], "wrt": "t" },
@@ -36,6 +42,9 @@ Any other `wrt` — or *any* `D` appearing on a right-hand side — has **no
 evaluator**. It must be lowered to a stencil by a
 [rewrite rule](../../templates/) before the document can run.
 
+```text
+D(C)/Dx
+```
 ```json
 { "op": "D", "args": ["C"], "wrt": "x" }
 ```
@@ -67,6 +76,9 @@ that does not consume the boundary data cannot silently discard it.
 Used as an equation LHS. `args[0]` is the ODE state; the RHS is its initial
 field.
 
+```text
+ic(N) = 100
+```
 ```json
 {
   "lhs": { "op": "ic", "args": ["N"] },
@@ -77,6 +89,9 @@ field.
 An initial condition may be an expression, not just a literal — which is how a
 spatially varying initial field is written:
 
+```text
+ic(C) = exp(-x^2)
+```
 ```json
 {
   "lhs": { "op": "ic", "args": ["C"] },
@@ -98,15 +113,30 @@ and they mean exactly what their `D` expansions mean:
 | `div(F)` | `Σᵢ D(Fᵢ, wrt: xᵢ)` |
 | `laplacian(u)` | `Σᵢ D(D(u, wrt: xᵢ), wrt: xᵢ)` |
 
-This format ships **no** rewrite rules for them. The discretization standard
-library lives in
+```text
+laplacian(u)
+```
+```json
+{ "op": "laplacian", "args": ["u"] }
+```
+
+The axis-carrying form puts the axis name in `dim`, an ordinary scalar field
+with no privileged status:
+
+```json
+{ "op": "grad", "args": ["f"], "dim": "x" }
+```
+
+This format ships **no** rewrite rules for any of them. The discretization
+standard library lives in
 [EarthSciDiscretizations](https://github.com/EarthSciML/EarthSciDiscretizations).
 
 As open-tier rewrite targets they get no privileges: their result dimension is
 undeterminable until lowered, so a checker reports it as `unknown` and skips the
 enclosing check rather than inventing a coordinate-divided dimension. A binding
 must not single these names out — they are matched, lowered, and checked by the
-same machinery as any operator you invent yourself.
+same machinery as any operator you invent yourself. A custom operator carries
+its scheme parameters in `attrs`.
 
 ## `integral`
 
@@ -114,12 +144,32 @@ A spatial partial integral, for partial integro-differential equations.
 `args[0]` is the integrand; `var` names the spatial variable integrated over;
 `lower` and `upper` are the bounds.
 
-Two modes:
+Whole-domain — both bounds constant, giving a spatially uniform value, consumed
+through an auxiliary variable plus boundary extraction:
 
-- **cumulative** — `"upper": "x"`, the spatial variable itself, giving a field
-  cumulative up to the current grid point;
-- **whole-domain** — both bounds constant, giving a spatially uniform value,
-  consumed through an auxiliary variable plus boundary extraction.
+```text
+integral(f, x, 0, 1)
+```
+```json
+{ "op": "integral", "args": ["f"], "var": "x", "lower": 0, "upper": 1 }
+```
 
-`integral` carries **no in-repo lowering**: a file using it loads but cannot
-simulate.
+Cumulative — `upper` is the spatial variable itself, giving a field cumulative
+up to the current grid point:
+
+```text
+integral(u, x, x_min, x)
+```
+```json
+{ "op": "integral", "args": ["u"], "var": "x", "lower": "x_min", "upper": "x" }
+```
+
+`integral` carries **no in-repo lowering**: a file using it loads,
+pretty-prints, and validates, then fails at evaluation with
+`unlowered_operator` unless you supply a rewrite rule. Its bounds carry no
+measure, because the format has none.
+
+**Do not reach for `integral` to write a discrete cumulative sum.** A running
+total, a cumulative distribution, or a column-integrated burden over a
+discretized axis is an ordinary [`aggregate`](../aggregation/) with a monotone
+`filter` — in the evaluable core, and running in every executing binding today.

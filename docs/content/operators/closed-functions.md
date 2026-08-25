@@ -1,6 +1,6 @@
 ---
 title: "Closed functions"
-description: "The fn op and the closed function registry."
+description: "The fn op, the closed function registry, and table_lookup."
 ---
 
 ## `fn`
@@ -14,6 +14,9 @@ functions and no handler lookup.
 | `name` | Dotted path of a registry function, e.g. `"interp.linear"`. |
 | `args` | Sub-expressions, evaluated in the current context and passed positionally. |
 
+```text
+datetime.julian_day(t_utc)
+```
 ```json
 { "op": "fn", "name": "datetime.julian_day", "args": ["t_utc"] }
 ```
@@ -51,15 +54,18 @@ All take a UTC time and return an integer component.
 | `datetime.is_leap_year` | `1` or `0` |
 | `datetime.julian_day` | Julian day number |
 
+```text
+datetime.hour(t_utc)
+```
+```json
+{ "op": "fn", "name": "datetime.hour", "args": ["t_utc"] }
+```
+
 The calendar is proleptic Gregorian and is computed as **branch-free
 arithmetic**, not by calling a host date library. That is what lets it be traced
 onto a device and differentiated, and what keeps the bindings in agreement.
 Resolution is milliseconds: the sub-millisecond remainder of the input is
-truncated (toward zero), matching the reference implementation.
-
-```json
-{ "op": "fn", "name": "datetime.hour", "args": ["t_utc"] }
-```
+truncated toward zero.
 
 ### `interp.*` — table interpolation
 
@@ -79,6 +85,9 @@ edge value rather than extrapolating. With `table = [10, 20, 30]` over
 and `5.0` (one past the end) above it. That makes it the natural way to turn a
 continuous quantity into a categorical one:
 
+```text
+deposition_table[interp.searchsorted(sza, [0, 0.5, 1, 1.5])]
+```
 ```json
 {
   "op": "index",
@@ -91,14 +100,76 @@ continuous quantity into a categorical one:
 }
 ```
 
-The table and axis arguments are ordinarily `const` nodes or references to
-[`function_tables`](../../file-structure/data-and-shape/) entries. Large tables
-belong in `function_tables` or a data source, not inline.
+The table and axis arguments are ordinarily `const` nodes. Large tables belong
+in `function_tables` or a data source, not inline.
 
-## `call`
+## `table_lookup`
 
-`call` is the generic invocation node. In practice `fn` is what you write —
-`call` exists for the machinery that builds and rewrites expression trees.
+Evaluates a **sampled function table** declared in the top-level
+`function_tables` block. It is sugar: a `table_lookup` lowers at load to the
+equivalent `interp.linear` / `interp.bilinear` / `index` form and must be
+bit-equivalent to it.
+
+| Field | Meaning |
+|---|---|
+| `table` | The id of a `function_tables` entry. |
+| `axes` | Map from each declared axis name to the scalar input expression supplying that coordinate. Every declared axis must appear; extras are rejected. |
+| `output` | Which output of a multi-output table to return — a 0-based integer or a name from the table's `outputs`. Optional for single-output tables. |
+| `args` | MUST be empty — the per-axis expressions live in `axes`. |
+
+Its text surface is bracket-and-axis, not a call:
+
+```text
+visc[T=temp]
+```
+```json
+{ "op": "table_lookup", "table": "visc", "axes": { "T": "temp" }, "args": [] }
+```
+
+A two-axis table with an output selector:
+
+```text
+k_rate[T=temp, p=pres]:1
+```
+```json
+{ "op": "table_lookup", "table": "k_rate", "axes": { "T": "temp", "p": "pres" }, "output": 1, "args": [] }
+```
+
+The table it refers to declares its axes, its interpolation kind, its
+out-of-bounds policy, and its data:
+
+```json
+{
+  "esm": "1.0.0",
+  "metadata": { "name": "TableLookupExample" },
+  "function_tables": {
+    "visc": {
+      "description": "Dynamic viscosity of air as a function of temperature",
+      "axes": [{ "name": "T", "values": [250.0, 275.0, 300.0] }],
+      "interpolation": "linear",
+      "out_of_bounds": "clamp",
+      "data": [1.60e-5, 1.73e-5, 1.85e-5]
+    }
+  },
+  "models": {
+    "Air": {
+      "variables": {
+        "temp": { "type": "parameter", "units": "K", "default": 288.0 },
+        "mu": { "type": "unknown", "units": "Pa*s" }
+      },
+      "equations": [
+        { "lhs": "mu",
+          "rhs": { "op": "table_lookup", "table": "visc", "axes": { "T": "temp" }, "args": [] } }
+      ]
+    }
+  }
+}
+```
+
+A reference to an undeclared table is rejected at load with
+`table_lookup_unknown_table`; a missing or extra axis with
+`table_lookup_axis_name_mismatch`; an out-of-range output with
+`table_lookup_output_out_of_range`.
 
 ## Choosing between `fn` and plain operators
 
@@ -107,4 +178,5 @@ written with the arithmetic and elementary operators, write it that way: it
 stays visible to canonicalization, common-subexpression elimination,
 dimensional analysis, and rewrite rules. Reach for `fn` when the operation is
 genuinely a primitive the AST cannot express — a calendar decomposition, a table
-lookup — not to shorten an expression you could have written out.
+lookup — not to shorten an expression you could have written out. A `fn` that
+only re-implements `min`/`max` clamping in disguise is rejected in review.

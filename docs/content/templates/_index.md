@@ -58,6 +58,9 @@ With no `match`, a template is applied only where you invoke it.
 
 Invoked as:
 
+```text
+arrhenius<A_pre=1.8e-12, Ea=1370>
+```
 ```json
 {
   "op": "apply_expression_template",
