@@ -10,8 +10,9 @@ use earthsci_ast::analysis::{
     find_longest_dependency_chain, find_strongly_connected_components,
 };
 use earthsci_ast::{
-    component_exists, component_graph, load_string, to_json, to_json_compact, validate,
-    validate_text,
+    ExpressionGraphOptions, component_exists, component_graph, expression_graph,
+    expression_graph_with_options, load_string, stoichiometric_matrix, to_json, to_json_compact,
+    validate, validate_text,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -1806,44 +1807,30 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
         if let Some(rs) = reaction_systems.get(&system) {
             println!("Stoichiometric matrix for reaction system '{system}':");
 
-            // Build a stable (sorted) species order and index map
-            let mut sorted_species: Vec<&String> = rs.species.keys().collect();
-            sorted_species.sort();
-            let species_index: HashMap<String, usize> = sorted_species
-                .iter()
-                .enumerate()
-                .map(|(i, name)| ((*name).clone(), i))
-                .collect();
+            // The matrix is the LIBRARY's `stoichiometric_matrix`, not a second
+            // computation. This used to rebuild it by hand from a SORTED
+            // species order, which was harmless while the library sorted too and
+            // wrong the moment it stopped: species order is declaration order in
+            // every binding now (API_SPEC.md §5.10), so a hand-rolled sort here
+            // would print the rows of one matrix under the column labels of
+            // another.
+            //
+            // The library returns species-by-reaction; this view is its
+            // TRANSPOSE — one line per reaction, one column per species — which
+            // is a presentation choice, not a second answer.
+            let matrix = stoichiometric_matrix(rs);
+            let species: Vec<&String> = rs.species.keys().collect();
 
-            // Print species header
             print!("{:>15}", "");
-            for name in &sorted_species {
+            for name in &species {
                 print!("{name:>10}");
             }
             println!();
 
-            // Print reaction stoichiometry
-            for (reaction_idx, reaction) in rs.reactions.iter().enumerate() {
+            for reaction_idx in 0..rs.reactions.len() {
                 print!("Reaction {:>3}:", reaction_idx + 1);
-
-                let mut coeffs = vec![0.0; rs.species.len()];
-
-                // Substrates (negative coefficients)
-                for substrate in reaction.substrates.iter().flatten() {
-                    if let Some(&idx) = species_index.get(&substrate.species) {
-                        coeffs[idx] -= substrate.coefficient;
-                    }
-                }
-
-                // Products (positive coefficients)
-                for product in reaction.products.iter().flatten() {
-                    if let Some(&idx) = species_index.get(&product.species) {
-                        coeffs[idx] += product.coefficient;
-                    }
-                }
-
-                for coeff in coeffs {
-                    print!("{coeff:>10.1}");
+                for row in &matrix {
+                    print!("{:>10.1}", row[reaction_idx]);
                 }
                 println!();
             }
@@ -1858,6 +1845,37 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// Render a graph in one of the three §4.8.3 formats.
+///
+/// The renderers are the LIBRARY's — `earthsci_ast::to_dot` / `to_mermaid` /
+/// `to_json_graph`, generic over the `Graph` trait that both `ComponentGraph`
+/// and `ExpressionGraph` implement. This subcommand used to roll its own, which
+/// made `esm graph` a SECOND, unpinned renderer of the same graphs, and the two
+/// had drifted: the CLI wrote `[label="x", shape=y]` where the library writes
+/// `[label="x" shape=y]`, it interpolated ids and labels without `escape_dot` /
+/// `mermaid_label` (so a component name containing a quote produced malformed
+/// DOT), and its `--format json` emitted a different document entirely — node
+/// key `type` instead of `component_type`, edge keys `from`/`to`/`type` instead
+/// of `source`/`target`/`data`, no `metadata`, and no `adjacency` map at all,
+/// even though esm-libraries-spec §5.4.5 calls that output "JSON adjacency
+/// list".
+///
+/// Phase 6 made the library renderers canonical and pinned them with
+/// `tests/conformance/graph/cases.json`. A second path to the same renderings is
+/// the defect §8 item 8 removed from Go; this removes it from the CLI.
+fn render_graph<G: earthsci_ast::graph::Graph>(
+    graph: &G,
+    format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match format {
+        "dot" => println!("{}", earthsci_ast::to_dot(graph)),
+        "mermaid" => println!("{}", earthsci_ast::to_mermaid(graph)),
+        "json" => println!("{}", earthsci_ast::to_json_graph(graph)),
+        _ => reject_unknown("graph format", format, "Use dot, mermaid, or json."),
+    }
+    Ok(())
+}
+
 fn run_graph(
     file: PathBuf,
     level: String,
@@ -1868,95 +1886,49 @@ fn run_graph(
     let esm_file = load_string(&content)?;
 
     match level.as_str() {
-        "component" => {
-            let graph = component_graph(&esm_file);
-
-            match format.as_str() {
-                "dot" => {
-                    // Same headers the library exporters emit: a component
-                    // graph is `digraph ComponentGraph` / `graph TD`
-                    // (esm-libraries-spec §4.8.3). This subcommand rolls its own
-                    // rendering, so it has to say so itself.
-                    println!("digraph ComponentGraph {{");
-                    println!("  rankdir=LR;");
-                    println!("  node [shape=box];");
-                    println!();
-
-                    // Nodes
-                    for node in &graph.nodes {
-                        let label = node.name.as_deref().unwrap_or(&node.id);
-                        let shape = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "ellipse",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "box",
-                        };
-                        println!("  \"{}\" [label=\"{}\", shape={}];", node.id, label, shape);
-                    }
-
-                    println!();
-
-                    // Edges
-                    for edge in &graph.edges {
-                        println!(
-                            "  \"{}\" -> \"{}\" [label=\"{}\"];",
-                            edge.from, edge.to, edge.coupling_type
-                        );
-                    }
-
-                    println!("}}");
-                }
-                "mermaid" => {
-                    println!("graph TD");
-
-                    for node in &graph.nodes {
-                        let label = node.name.as_deref().unwrap_or(&node.id);
-                        let shape_open = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "(",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "[",
-                        };
-                        let shape_close = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => ")",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "]",
-                        };
-                        println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
-                    }
-
-                    for edge in &graph.edges {
-                        println!("  {} -->|{}| {}", edge.from, edge.coupling_type, edge.to);
-                    }
-                }
-                "json" => {
-                    let json_graph = serde_json::json!({
-                        "nodes": graph.nodes.iter().map(|n| serde_json::json!({
-                            "id": n.id,
-                            "type": match n.component_type {
-                                earthsci_ast::graph::ComponentType::Model => "model",
-                                earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
-                            },
-                            "name": n.name
-                        })).collect::<Vec<_>>(),
-                        "edges": graph.edges.iter().map(|e| serde_json::json!({
-                            "from": e.from,
-                            "to": e.to,
-                            "type": e.coupling_type
-                        })).collect::<Vec<_>>()
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json_graph)?);
-                }
-                _ => reject_unknown("graph format", &format, "Use dot, mermaid, or json."),
-            }
-        }
+        "component" => render_graph(&component_graph(&esm_file), &format),
         "expression" => {
-            // Expression-level graphs not yet implemented
-            if let Some(ref _sys) = system {
-                eprintln!("Expression-level graphs for system '{_sys}' not yet implemented");
-            } else {
-                eprintln!("Expression-level graphs not yet implemented");
+            // Both forms esm-libraries-spec §5.4.5 documents. `--level=expression`
+            // used to print "not yet implemented" and exit 1 — writing it meant
+            // writing a second expression renderer, which routing through the
+            // library makes unnecessary.
+            match system {
+                // A single named system: the ExpressionGraphInput impls for
+                // Model and ReactionSystem.
+                Some(name) => {
+                    if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(&name)) {
+                        render_graph(&expression_graph(model), &format)
+                    } else if let Some(rs) = esm_file
+                        .reaction_systems
+                        .as_ref()
+                        .and_then(|r| r.get(&name))
+                    {
+                        render_graph(&expression_graph(rs), &format)
+                    } else {
+                        // reject_unknown diverges (`-> !`), so this arm needs
+                        // no Ok.
+                        reject_unknown(
+                            "system",
+                            &name,
+                            "Name a model or reaction system declared in this file.",
+                        )
+                    }
+                }
+                // "all systems merged": the whole-document graph with
+                // `variable_map` coupling folded into cross-system edges.
+                None => render_graph(
+                    &expression_graph_with_options(
+                        &esm_file,
+                        &ExpressionGraphOptions {
+                            merge_coupled: true,
+                        },
+                    ),
+                    &format,
+                ),
             }
-            std::process::exit(1);
         }
         _ => reject_unknown("graph level", &level, "Use component or expression."),
     }
-    Ok(())
 }
 
 fn run_convert(

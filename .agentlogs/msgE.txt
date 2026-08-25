@@ -1,0 +1,62 @@
+refactor(rust): route the esm CLI through the library renderers
+
+BEHAVIOUR CHANGE: `esm graph` output changes in all three formats. That is the
+point of this commit -- read on before assuming a regression.
+
+`esm graph` rendered graphs with its own private renderer instead of the
+library's to_dot / to_mermaid / to_json_graph, which made the CLI a SECOND,
+unpinned path to the same renderings. Phase 6 made the library trio canonical
+and pinned it with tests/conformance/graph/cases.json; a second renderer beside
+it is the same defect section 8 item 8 removed from Go, whose exporter structs
+were a second public path to one rendering. The two had already drifted:
+
+  - DOT: the CLI wrote `[label="x", shape=y]`, the library writes
+    `[label="x" shape=y]` -- a byte diff on every node line.
+  - DOT/Mermaid: the CLI interpolated ids and labels raw, with no escape_dot or
+    mermaid_label, so a component name containing a quote or backslash produced
+    MALFORMED DOT from the CLI and correct DOT from the library.
+  - JSON: an entirely different document. Node key `type` not `component_type`,
+    edge keys from/to/type not source/target/data, no `metadata`, and NO
+    `adjacency` map at all -- even though esm-libraries-spec section 5.4.5 calls
+    that output "JSON adjacency list". The CLI did not honour its own spec.
+
+Routing through the library fixes all four, and `--format=json` now actually
+emits an adjacency list.
+
+Two consequences worth calling out:
+
+`--level=expression` now WORKS. It used to print "not yet implemented" and exit
+1, contradicting esm-libraries-spec section 5.4.5, which documents both the
+merged and the --system form. Writing it meant writing a second expression
+renderer; routing through the library made it a lookup plus a call. Bare
+--level=expression is the whole-document graph with merge_coupled ("all systems
+merged"); --system=X takes the ExpressionGraphInput impl for a Model or
+ReactionSystem, and an unknown name is rejected the way every other unknown
+CLI value is.
+
+`esm stoich` was ALSO hand-rolling the stoichiometric matrix, from a sorted
+species order. That was harmless while the library sorted too, and wrong the
+moment it stopped -- species order is declaration order in every binding as of
+this branch, so the hand-rolled version would have printed the rows of one
+matrix under the column labels of another. It now calls the library's
+stoichiometric_matrix and only transposes it for display, which is a
+presentation choice rather than a second answer.
+
+NOTHING IN THIS REPO PINNED THE OLD CLI OUTPUT. Searched Rust tests, assert_cmd
+/ trycmd / insta (no such dependency anywhere), scripts/, .github/workflows/,
+every *.md, and every golden/snapshot file: no test, script, CI step or doc
+executes `esm graph` and asserts its output. The binary is only ever built
+(binary-release.yml), never exercised. The only docs that mention the subcommand
+are esm-libraries-spec section 5.4.5's invocation examples, which this change
+makes the CLI SATISFY rather than contradict.
+
+Scope kept to src/bin/esm.rs -- no restructuring of the crate's visibility, and
+the graph module's public surface is used as-is (to_dot / to_mermaid /
+to_json_graph, generic over the already-public graph::Graph trait).
+
+Verified: cargo build, cargo fmt --check, cargo clippy --all-targets all clean
+with zero warnings; cargo test 1202 passing, 0 failed. All three formats and
+both expression forms exercised by hand against tests/valid/full_coupled.esm.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_015G5k2t4qajtwFdXSExSegh
