@@ -1377,7 +1377,7 @@ fn merge_scope(
             &mut dst.templates,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "template",
             origin,
         )?;
@@ -1387,7 +1387,7 @@ fn merge_scope(
             &mut dst.index_sets,
             &n,
             d,
-            "template_import_index_set_conflict",
+            codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
             "index set",
             origin,
         )?;
@@ -1397,7 +1397,7 @@ fn merge_scope(
             &mut dst.metaparams,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "metaparameter",
             origin,
         )?;
@@ -1736,7 +1736,7 @@ fn process_library(
             &mut scope.templates,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "template",
             origin,
         )?;
@@ -1748,7 +1748,7 @@ fn process_library(
                 &mut scope.index_sets,
                 n,
                 d.clone(),
-                "template_import_index_set_conflict",
+                codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
                 "index set",
                 origin,
             )?;
@@ -1760,7 +1760,7 @@ fn process_library(
             &mut scope.metaparams,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "metaparameter",
             origin,
         )?;
@@ -1981,7 +1981,7 @@ fn resolve_top_level_scope(
             &mut top_scope.templates,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "template",
             "document",
         )?;
@@ -1991,7 +1991,7 @@ fn resolve_top_level_scope(
             doc_isets,
             &n,
             d,
-            "template_import_index_set_conflict",
+            codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
             "index set",
             "document",
         )?;
@@ -2001,7 +2001,7 @@ fn resolve_top_level_scope(
             doc_meta,
             &n,
             d,
-            "template_import_name_conflict",
+            codes::TEMPLATE_IMPORT_NAME_CONFLICT,
             "metaparameter",
             "document",
         )?;
@@ -2054,7 +2054,7 @@ fn resolve_component_imports(
                         &mut cscope.templates,
                         &n,
                         d,
-                        "template_import_name_conflict",
+                        codes::TEMPLATE_IMPORT_NAME_CONFLICT,
                         "template",
                         &corigin,
                     )?;
@@ -2065,7 +2065,7 @@ fn resolve_component_imports(
                     doc_isets,
                     &n,
                     d,
-                    "template_import_index_set_conflict",
+                    codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
                     "index set",
                     &corigin,
                 )?;
@@ -2075,7 +2075,7 @@ fn resolve_component_imports(
                     doc_meta,
                     &n,
                     d,
-                    "template_import_name_conflict",
+                    codes::TEMPLATE_IMPORT_NAME_CONFLICT,
                     "metaparameter",
                     &corigin,
                 )?;

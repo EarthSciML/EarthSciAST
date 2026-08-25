@@ -363,7 +363,7 @@ run_determinism_conformance_rust() {
         return 1
     fi
     log "Running determinism conformance with the Rust relational engine..."
-    EARTHSCI_DETERMINISM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-determinism-adapter-rust --" \
+    EARTHSCI_DETERMINISM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-determinism-adapter-rust --" \
         python3 "$SCRIPT_DIR/run-determinism-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/determinism/rust_report.json"
@@ -467,7 +467,7 @@ run_cadence_conformance_rust() {
         return 1
     fi
     log "Running cadence-partition conformance with the Rust partition pass..."
-    EARTHSCI_CADENCE_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-cadence-adapter-rust --" \
+    EARTHSCI_CADENCE_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-cadence-adapter-rust --" \
         python3 "$SCRIPT_DIR/run-cadence-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/cadence/rust_report.json"
@@ -545,7 +545,7 @@ run_pde_simulation_conformance_rust() {
         return 1
     fi
     log "Running PDE-simulation conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust --" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --bindings rust \
             --output "$OUTPUT_DIR/pde_simulation/rust_report.json"
@@ -619,7 +619,7 @@ run_pde_pipeline_conformance_rust() {
         return 1
     fi
     log "Running full-pipeline PDE conformance with the Rust vectorized simulator..."
-    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --bin earthsci-pde-sim-adapter-rust --" \
+    EARTHSCI_PDE_SIM_ADAPTER_RUST="cargo run --quiet --manifest-path $RUST_DIR/Cargo.toml --features conformance-adapters --bin earthsci-pde-sim-adapter-rust --" \
         python3 "$SCRIPT_DIR/run-pde-simulation-conformance.py" \
             --manifest "$PDE_PIPELINE_MANIFEST" \
             --bindings rust \

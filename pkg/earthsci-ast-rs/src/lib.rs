@@ -286,6 +286,11 @@ pub use edit::{
     remove_species, remove_variable, replace_coupling, replace_equation, update_model_metadata,
 };
 pub use error::EsmError;
+// The central diagnostic-code registry (phase-6 H-2). `diagnostic::codes` is
+// the per-code constant form that raise sites reference; `ERROR_CODES` is its
+// enumerable `(name, value)` table, the Rust twin of Julia's `ERROR_CODES`
+// NamedTuple, TypeScript's `ERROR_CODES` object and Go's `codes.go`.
+pub use diagnostic::{ERROR_CODES, error_code_names};
 pub use lower_enums::{EnumLoweringError, lower_enums, lower_enums_mut, lower_enums_raw};
 pub use migration::{MigrationError, can_migrate, migrate, supported_migration_targets};
 // Deprecated alias of `supported_migration_targets`, kept for one minor per

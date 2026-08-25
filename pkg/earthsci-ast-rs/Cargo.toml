@@ -21,6 +21,30 @@ path = "src/bin/esm.rs"
 # target when the `cli` feature is off — no per-item cfg gates needed.
 required-features = ["cli"]
 
+# The cross-language conformance ADAPTER binaries. Phase-6 H-5: `esm` is the
+# only shipped command-line tool, so these three are behind a NON-DEFAULT
+# feature and are not built, installed or published by a default `cargo build`
+# / `cargo install`. They are still first-class targets — the conformance
+# runner builds them with
+#     cargo run --features conformance-adapters --bin <adapter>
+# (see `scripts/test-conformance.sh`). Declaring them explicitly rather than
+# letting cargo auto-discover `src/bin/*.rs` is what makes the gate possible:
+# `required-features` only applies to a declared target.
+[[bin]]
+name = "earthsci-cadence-adapter-rust"
+path = "src/bin/earthsci-cadence-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
+[[bin]]
+name = "earthsci-determinism-adapter-rust"
+path = "src/bin/earthsci-determinism-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
+[[bin]]
+name = "earthsci-pde-sim-adapter-rust"
+path = "src/bin/earthsci-pde-sim-adapter-rust.rs"
+required-features = ["conformance-adapters"]
+
 [lib]
 name = "earthsci_ast"
 crate-type = ["cdylib", "rlib"]
@@ -147,6 +171,10 @@ required-features = ["benchmarks"]
 [features]
 default = ["cli", "solve"]
 cli = ["clap"]
+# The cross-language conformance adapter binaries (phase-6 H-5). OFF by
+# default: `esm` is the only command-line tool this crate ships. The PDE
+# adapter integrates trajectories, so the feature pulls in `solve`.
+conformance-adapters = ["solve"]
 # The ODE solver. See the `diffsol` dependency comment and
 # esm-libraries-spec.md §2.5.9: Problem CONSTRUCTION never needs this; only
 # `solve`, `init` and `solve_to_completion` do.
