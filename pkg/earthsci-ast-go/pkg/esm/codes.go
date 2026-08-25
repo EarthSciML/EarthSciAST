@@ -217,7 +217,7 @@ const (
 	ErrorNullReaction       = "null_reaction"
 	ErrorEventVarUndeclared = "event_var_undeclared"
 	ErrorUnitInconsistency  = "unit_inconsistency"
-	ErrorIcInReactionSystem = "ic_in_reaction_system"
+	ErrorICInReactionSystem = "ic_in_reaction_system"
 	// ErrorUnitParseError is a declared unit string that denotes no real unit
 	// ("not_a_unit"). It is a defect in the FILE — a hard error, distinct from
 	// `unit_inconsistency` (a provable dimensional mismatch between two
@@ -317,7 +317,7 @@ const operatorPlaceholderVar = "_var"
 const (
 	FmtUnicode = "unicode"
 	FmtLatex   = "latex"
-	FmtAscii   = "ascii"
+	FmtASCII   = "ascii"
 	// FmtUnicodeSpaced is FmtUnicode with the multiplication operator rendered
 	// as " · " (spaced) instead of "·". The spacing is applied where the
 	// operator is emitted, so it never touches a "·" occurring inside a

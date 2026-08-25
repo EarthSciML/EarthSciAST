@@ -196,7 +196,7 @@ func TestICInReactionSystemFixtureRejected(t *testing.T) {
 	}
 	var found *StructuralError
 	for i, e := range result.StructuralErrors {
-		if e.Code == ErrorIcInReactionSystem {
+		if e.Code == ErrorICInReactionSystem {
 			found = &result.StructuralErrors[i]
 			break
 		}
@@ -251,7 +251,7 @@ func TestReactionSystemNonICConstraintOK(t *testing.T) {
 	}
 	result := ValidateFile(file, jsonStr)
 	for _, e := range result.StructuralErrors {
-		if e.Code == ErrorIcInReactionSystem {
+		if e.Code == ErrorICInReactionSystem {
 			t.Fatalf("unexpected ic_in_reaction_system false positive: %+v", e)
 		}
 	}

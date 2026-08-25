@@ -203,7 +203,7 @@ func TestFlatten_VariableMapSubstitutionIsTokenExact(t *testing.T) {
 // equation renders through the SHARED display renderer: (a^b)^c must not come
 // out as a^b^c, which reparses right-associatively. Flatten used to carry its own
 // pretty-printer, which is why this assertion lived on that printer; the trees
-// now render with ToAscii, which the cross-language display corpus pins.
+// now render with ToASCII, which the cross-language display corpus pins.
 func TestFlattenEquationRendering_PowIsLeftAssociative(t *testing.T) {
 	inner := ExprNode{Op: "^", Args: []any{"a", "b"}}
 	eq := FlattenedEquation{RHS: ExprNode{Op: "^", Args: []any{inner, "c"}}}
@@ -283,13 +283,13 @@ func TestFlattenOperatorCompose_TranslateIsAKeyedBValued(t *testing.T) {
 			len(flat.Equations), flat.Equations)
 	}
 	eq := flat.Equations[0]
-	if got := ToAscii(eq.LHS); got != "D(A.x)/Dt" {
+	if got := ToASCII(eq.LHS); got != "D(A.x)/Dt" {
 		t.Errorf("merged LHS = %q, want %q (A's spelling survives)", got, "D(A.x)/Dt")
 	}
 	// §4.7.1 step 4: on a TRANSLATION match B's dependent variable is rewritten
 	// to A's target throughout rhs_B. Leaving `B.y` there would strand it as an
 	// unknown nothing defines — its own equation was just consumed by the merge.
-	rhs := ToAscii(eq.RHS)
+	rhs := ToASCII(eq.RHS)
 	if strings.Contains(rhs, "B.y") {
 		t.Errorf("merged RHS = %q; B's dependent variable must be rewritten to A.x", rhs)
 	}
@@ -314,7 +314,7 @@ func TestFlattenOperatorCompose_TranslateFactorScalesBsRHS(t *testing.T) {
 	if len(flat.Equations) != 1 {
 		t.Fatalf("expected one merged equation, got %d", len(flat.Equations))
 	}
-	if rhs := ToAscii(flat.Equations[0].RHS); !strings.Contains(rhs, "1.0e-9") {
+	if rhs := ToASCII(flat.Equations[0].RHS); !strings.Contains(rhs, "1.0e-9") {
 		t.Errorf("merged RHS = %q; the translate factor must scale B's RHS", rhs)
 	}
 }
@@ -366,7 +366,7 @@ func TestFlattenOperatorCompose_DirectMatchBeatsTranslate(t *testing.T) {
 		t.Fatalf("expected one merged equation either way, got %d and %d",
 			len(plain.Equations), len(redundant.Equations))
 	}
-	if a, b := ToAscii(redundant.Equations[0].RHS), ToAscii(plain.Equations[0].RHS); a != b {
+	if a, b := ToASCII(redundant.Equations[0].RHS), ToASCII(plain.Equations[0].RHS); a != b {
 		t.Errorf("the redundant translate entry changed the result:\n  with:    %s\n  without: %s", a, b)
 	}
 }
@@ -450,10 +450,10 @@ func TestFlattenCouple_MultiplicativeWithTendencyScalesIt(t *testing.T) {
 		t.Fatalf("Flatten: %v", err)
 	}
 	for _, eq := range flat.Equations {
-		if ToAscii(eq.LHS) != "D(A.x)/Dt" {
+		if ToASCII(eq.LHS) != "D(A.x)/Dt" {
 			continue
 		}
-		if rhs := ToAscii(eq.RHS); !strings.Contains(rhs, "B.s") {
+		if rhs := ToASCII(eq.RHS); !strings.Contains(rhs, "B.s") {
 			t.Errorf("D(A.x) RHS = %q; the multiplicative term must be applied", rhs)
 		}
 		return

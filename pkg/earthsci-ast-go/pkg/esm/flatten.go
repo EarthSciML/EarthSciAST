@@ -220,7 +220,7 @@ type LiftedShape struct {
 // LHS/RHS were strings rendered by a flatten-local pretty printer, which made
 // every downstream pass re-parse text and made Go's equation rendering
 // disagree with the shared display corpus. They are trees now; render them with
-// ToAscii / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
+// ToASCII / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
 type FlattenedEquation struct {
 	LHS          Expression
 	RHS          Expression
@@ -229,11 +229,11 @@ type FlattenedEquation struct {
 
 // LHSString renders the equation's left-hand side with the shared ASCII
 // renderer (the one tests/display and tests/conformance/flatten pin).
-func (e FlattenedEquation) LHSString() string { return ToAscii(e.LHS) }
+func (e FlattenedEquation) LHSString() string { return ToASCII(e.LHS) }
 
 // RHSString renders the equation's right-hand side with the shared ASCII
 // renderer.
-func (e FlattenedEquation) RHSString() string { return ToAscii(e.RHS) }
+func (e FlattenedEquation) RHSString() string { return ToASCII(e.RHS) }
 
 // FlattenMetadata records provenance information about the flattening operation.
 type FlattenMetadata struct {
@@ -2025,7 +2025,7 @@ func assembleSystem(file *ESMFile, components map[string]*componentSystem, order
 		isArrayEq := exprHasArrayOp(eq.LHS) || exprHasArrayOp(eq.RHS)
 		if dep != "" && !isArrayEq {
 			if existing, ok := seen[dep]; ok {
-				if ToAscii(existing.RHS) == ToAscii(eq.RHS) {
+				if ToASCII(existing.RHS) == ToASCII(eq.RHS) {
 					continue
 				}
 				// A single source system that authored two equations with the

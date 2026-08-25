@@ -1715,7 +1715,7 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 		}
 		s.addErr(StructuralError{
 			Path: fmt.Sprintf("/reaction_systems/%s/constraint_equations/%d", systemName, i),
-			Code: ErrorIcInReactionSystem,
+			Code: ErrorICInReactionSystem,
 			Message: "ic equation not allowed in a reaction system; a reaction system has no equations " +
 				"field and hosts no ic equations (ICs are model-hosted: species.default, or a " +
 				"scoped-reference ic equation in a model, spec §11.4.1)",

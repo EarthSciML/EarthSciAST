@@ -49,10 +49,10 @@ func ToLatex(target Expression) string {
 	return formatExpression(target, FmtLatex)
 }
 
-// ToAscii converts an expression to a plain-text string using the ascii render
+// ToASCII converts an expression to a plain-text string using the ascii render
 // format (function-call notation, no Unicode symbols in the operator layer).
-func ToAscii(target Expression) string {
-	return formatExpression(target, FmtAscii)
+func ToASCII(target Expression) string {
+	return formatExpression(target, FmtASCII)
 }
 
 // formatExpression is the internal function that handles different output formats
@@ -235,7 +235,7 @@ func isGreekLetterKey(v string) bool {
 // (not followed by an uppercase letter or '}' — already inside \mathrm{}) to its
 // command. Go's regexp lacks lookahead, so the name+lookahead scan is manual.
 func convertGreekLetters(text, format string) string {
-	if format == FmtAscii {
+	if format == FmtASCII {
 		var b strings.Builder
 		for _, r := range text {
 			if nm, ok := greekCharToName[r]; ok {
@@ -337,8 +337,8 @@ func opDisplayName(name, format string) string {
 // subscripting (formatChemical*) and then Greek conversion.
 func formatVariable(varName string, format string) string {
 	switch format {
-	case FmtAscii:
-		return convertGreekLetters(varName, FmtAscii)
+	case FmtASCII:
+		return convertGreekLetters(varName, FmtASCII)
 	case FmtLatex:
 		return convertGreekLetters(formatChemicalLatex(varName), FmtLatex)
 	default: // FmtUnicode, FmtUnicodeSpaced
@@ -843,7 +843,7 @@ func formatExprNode(node ExprNode, format string) string {
 				return "\\frac{" + raw(args[0]) + "}{" + raw(args[1]) + "}"
 			}
 			sep := "/"
-			if format == FmtAscii {
+			if format == FmtASCII {
 				sep = " / "
 			}
 			return arg(args[0], false) + sep + arg(args[1], true)
@@ -1162,7 +1162,7 @@ func comparisonSymbol(op, format string) string {
 		}
 		return "<="
 	case "==", "=":
-		if format == FmtAscii {
+		if format == FmtASCII {
 			return "=="
 		}
 		return "="
@@ -1385,8 +1385,8 @@ func summarizeDomain(b *strings.Builder, esm *ESMFile) {
 // shared fixtures in tests/display/structural_ops.json. See
 // tests/display/RENDERING_CONTRACT.md for the exact per-op rules.
 //
-// Go exposes only the unicode and latex formats (there is no ToAscii); the
-// ascii branches below exist for completeness and internal reuse.
+// All three text formats (unicode, latex, ascii) are exposed — see ToUnicode /
+// ToLatex / ToASCII above.
 // ============================================================================
 
 // isOpNodeValue reports whether a value is an operator node (ExprNode or a raw
@@ -1568,7 +1568,7 @@ func formatRangesClause(ranges map[string]any, format string) string {
 	switch format {
 	case FmtLatex:
 		inSym = " \\in "
-	case FmtAscii:
+	case FmtASCII:
 		inSym = " in "
 	}
 	keys := make([]string, 0, len(ranges))

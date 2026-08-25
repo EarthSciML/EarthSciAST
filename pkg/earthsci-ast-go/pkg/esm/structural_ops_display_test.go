@@ -14,7 +14,7 @@ import (
 // contract fixtures at tests/display/structural_ops.json through the Go
 // pretty-printer. Every structural / array-query op MUST render byte-identically
 // across all bindings (TypeScript is the reference). Go implements the unicode
-// and latex formats (there is no ToAscii), so this asserts those two against the
+// and latex formats (there is no ToASCII), so this asserts those two against the
 // fixture's canonical strings. See tests/display/RENDERING_CONTRACT.md.
 func TestStructuralOpsDisplayFixtures(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))

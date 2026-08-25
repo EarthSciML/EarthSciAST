@@ -156,8 +156,8 @@ func renderExpression(expr esm.Expression, format string) string {
 	switch format {
 	case esm.FmtLatex:
 		return esm.ToLatex(expr)
-	case esm.FmtAscii:
-		return esm.ToAscii(expr)
+	case esm.FmtASCII:
+		return esm.ToASCII(expr)
 	default:
 		return esm.ToUnicode(expr)
 	}

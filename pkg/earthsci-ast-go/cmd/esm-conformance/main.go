@@ -229,7 +229,7 @@ func runDisplay(m *manifest) map[string]any {
 		}
 		record["unicode"] = esm.ToUnicode(target)
 		record["latex"] = esm.ToLatex(target)
-		record["ascii"] = esm.ToAscii(target)
+		record["ascii"] = esm.ToASCII(target)
 		results[c.ID] = record
 	}
 
