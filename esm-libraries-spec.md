@@ -2377,7 +2377,7 @@ Go is useful for server-side tooling, CI/CD validation, and API backends.
 > This section described a "minimal scope" binding until phase 6, and was badly
 > stale: it predated the phase-5 work that roughly doubled Go's public surface.
 > Go is now the LARGEST surface of the six (383 exported spellings against
-> Rust's 322 and Julia's 297). The tier label moved from Core to Core +
+> Rust's 323 and Julia's 298). The tier label moved from Core to Core +
 > Analysis in phase 6, when `DeriveODEs` and `StoichiometricMatrix` closed the
 > last two Analysis capabilities Go lacked.
 
