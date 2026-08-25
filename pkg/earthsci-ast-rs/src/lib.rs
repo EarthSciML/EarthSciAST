@@ -217,6 +217,10 @@ pub use reference_resolution::{
     EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,
     build_reference_graph, resolve_references,
 };
+// Deprecated alias of `build_reference_graph`, kept for one minor per
+// API_SPEC.md §10 (§8 item 17 folded the registry into a trailing argument).
+#[allow(deprecated)]
+pub use reference_resolution::build_reference_graph_with_index_sets;
 // Deprecated alias of `ReferenceResolutionError`, kept for one minor per
 // API_SPEC.md §10 (§8 item 10 renamed it). Re-exported behind
 // `allow(deprecated)` so the re-export itself does not warn.
@@ -251,8 +255,12 @@ pub use types::{
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
-    validate_complete,
+    validate_text,
 };
+// Deprecated alias of `validate_text`, kept for one minor per API_SPEC.md §10
+// (§8 item 13 named the text convenience `validate_text`).
+#[allow(deprecated)]
+pub use validate::validate_complete;
 pub use value_invention::{
     BoundaryKind, ValueInventionError, ValueInventionResult, apply_value_invention,
     materialize_value_invention,

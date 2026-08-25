@@ -495,30 +495,44 @@ fn walk(
     Ok(())
 }
 
-/// Resolve the reference edges of one `model` value into a graph.
+/// Deprecated alias of [`build_reference_graph`].
+///
+/// API_SPEC.md §8 item 17: a binding that exposes the explicit index-set
+/// registry keeps it as an optional TRAILING argument of
+/// `build_reference_graph`, not as a separate name. Kept for one minor per
+/// API_SPEC.md §10.
+#[deprecated(
+    since = "0.2.0",
+    note = "the registry is now the trailing argument of `build_reference_graph` (API_SPEC.md §8 item 17)"
+)]
+pub fn build_reference_graph_with_index_sets(
+    model: &Value,
+    model_name: &str,
+    doc_index_sets: Option<&Map<String, Value>>,
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
+    build_reference_graph(model, model_name, doc_index_sets)
+}
+
+/// Resolve the reference edges of one `model` value into a graph, against the
+/// **document-scoped** `index_sets` registry.
+///
+/// One name, with the registry as an optional TRAILING argument (API_SPEC.md
+/// §8 item 17) — the shape Python (`index_sets=None`) and Go (`docIndexSets`)
+/// already have. Pass `None` for a direct caller holding only a raw model;
+/// [`resolve_references`], which is the DOCUMENT-scoped entry point, derives
+/// the registry from the document itself and threads it in for every model.
+///
+/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
+/// every model, rather than nested inside each model (mirrors
+/// [`crate::cadence::model_with_loaders`]). Any (pre-0.8.0) model-nested
+/// `index_sets` is *merged* on top — a model-level entry wins on a key
+/// collision — so the older nested shape keeps working unchanged.
 ///
 /// Errors on a duplicate node id, an undeclared `ranges[*].from` index set, a
 /// `from_faq` naming no node, or an unresolved `join.on` factor. Cycles are
 /// reported lazily by [`ReferenceGraph::topological_order`], or eagerly by
 /// [`resolve_references`].
 pub fn build_reference_graph(
-    model: &Value,
-    model_name: &str,
-) -> Result<ReferenceGraph, ReferenceResolutionError> {
-    build_reference_graph_with_index_sets(model, model_name, None)
-}
-
-/// As [`build_reference_graph`], but also honours the **document-scoped**
-/// `index_sets` registry.
-///
-/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
-/// every model, rather than nested inside each model (mirrors
-/// [`crate::cadence::model_with_loaders`]). [`resolve_references`] passes that
-/// document-level registry here so a schema-conformant document's
-/// `ranges[*].from` still resolves against it. Any (pre-0.8.0) model-nested
-/// `index_sets` is *merged* on top — a model-level entry wins on a key
-/// collision — so the older nested shape keeps working unchanged.
-pub fn build_reference_graph_with_index_sets(
     model: &Value,
     model_name: &str,
     doc_index_sets: Option<&Map<String, Value>>,
@@ -609,7 +623,7 @@ pub fn resolve_references(
     // `models`); thread it down so each model's ranges[*].from resolves.
     let doc_index_sets = document.get("index_sets").and_then(|v| v.as_object());
     for (model_name, model) in models {
-        let graph = build_reference_graph_with_index_sets(model, model_name, doc_index_sets)?;
+        let graph = build_reference_graph(model, model_name, doc_index_sets)?;
         if let Some(cyc) = graph.detect_cycle() {
             return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
@@ -646,7 +660,7 @@ mod tests {
             },
             "equations": [{"lhs": producer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let from_faq = g.edges_of_kind(EdgeKind::FromFaq);
         assert_eq!(from_faq.len(), 1);
         assert_eq!(from_faq[0].source, "index_set:edges");
@@ -667,7 +681,7 @@ mod tests {
             "index_sets": {"edges": {"kind": "derived", "from_faq": "missing"}},
             "equations": [{"lhs": agg(json!({"id": "present"})), "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
         assert!(matches!(err, ReferenceResolutionError::UnknownFaqNode { .. }));
     }
 
@@ -679,7 +693,7 @@ mod tests {
                 {"lhs": agg(json!({"id": "dup"})), "rhs": 0}
             ]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
         assert!(matches!(err, ReferenceResolutionError::DuplicateNodeId { .. }));
     }
 
@@ -692,7 +706,7 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 4}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let rf = g.edges_of_kind(EdgeKind::RangeFrom);
         assert_eq!(rf.len(), 1);
         assert_eq!(rf[0].target, "index_set:cells");
@@ -709,7 +723,7 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 4}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
         assert!(matches!(err, ReferenceResolutionError::UndeclaredIndexSet { .. }));
     }
 
@@ -717,7 +731,7 @@ mod tests {
     fn dense_tuple_ranges_make_no_edge() {
         let node = agg(json!({"output_idx": ["i"], "ranges": {"i": [1, 64]}}));
         let model = json!({"equations": [{"lhs": node, "rhs": 0}]});
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         assert!(g.edges.is_empty());
     }
 
@@ -738,7 +752,7 @@ mod tests {
             },
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let jf = g.edges_of_kind(EdgeKind::JoinFactor);
         assert_eq!(jf.len(), 1);
         assert_eq!(jf[0].target, "factor:activity");
@@ -764,7 +778,7 @@ mod tests {
             },
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let jf = g.edges_of_kind(EdgeKind::JoinFactor);
         assert_eq!(jf.len(), 1);
         assert_eq!(jf[0].target, "factor:src");
@@ -782,7 +796,7 @@ mod tests {
             "index_sets": {"cells": {"kind": "interval", "size": 2}},
             "equations": [{"lhs": node, "rhs": 0}]
         });
-        let err = build_reference_graph(&model, "M").unwrap_err();
+        let err = build_reference_graph(&model, "M", None).unwrap_err();
         assert!(matches!(err, ReferenceResolutionError::UnresolvedJoinFactor { .. }));
     }
 
@@ -800,7 +814,7 @@ mod tests {
             },
             "equations": [{"lhs": producer, "rhs": 0}, {"lhs": consumer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let order = g.topological_order().unwrap();
         assert_eq!(order.len(), g.vertices.len());
         let pos = |k: &str| order.iter().position(|x| x == k).unwrap();
@@ -818,7 +832,7 @@ mod tests {
             "index_sets": {"edges": {"kind": "derived", "from_faq": "edge_faq"}},
             "equations": [{"lhs": producer, "rhs": 0}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         let cyc = g.detect_cycle().expect("cycle");
         assert_eq!(cyc.first(), cyc.last());
         assert!(cyc.contains(&"node:edge_faq".to_string()));
@@ -837,7 +851,7 @@ mod tests {
             "variables": {"u": {"type": "unknown"}},
             "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": -1}]
         });
-        let g = build_reference_graph(&model, "M").unwrap();
+        let g = build_reference_graph(&model, "M", None).unwrap();
         assert!(g.edges.is_empty());
         assert!(g.detect_cycle().is_none());
     }
@@ -896,5 +910,30 @@ mod tests {
         assert_eq!(g.edges_of_kind(EdgeKind::RangeFrom).len(), 2);
         assert!(g.vertices.contains_key("index_set:faces"));
         assert!(g.vertices.contains_key("index_set:cells"));
+    }
+
+
+    /// API_SPEC.md §8 item 17: ONE name, with the document-scoped registry as
+    /// an optional TRAILING argument rather than a second function.
+    #[test]
+    fn document_registry_is_a_trailing_argument() {
+        let node = agg(json!({"output_idx": ["i"], "ranges": {"i": {"from": "cells"}}}));
+        let model = json!({"equations": [{"lhs": node, "rhs": 0}]});
+        let registry: Map<String, Value> = json!({"cells": {"kind": "interval", "size": 4}})
+            .as_object()
+            .expect("object")
+            .clone();
+
+        // Without the registry the range names an undeclared index set.
+        let e = build_reference_graph(&model, "M", None).unwrap_err();
+        assert!(matches!(
+            e,
+            ReferenceResolutionError::UndeclaredIndexSet { .. }
+        ));
+
+        // With it, the range resolves against the document scope.
+        let g = build_reference_graph(&model, "M", Some(&registry)).expect("resolves");
+        assert!(g.vertices.contains_key("index_set:cells"));
+        assert_eq!(g.edges_of_kind(EdgeKind::RangeFrom).len(), 1);
     }
 }

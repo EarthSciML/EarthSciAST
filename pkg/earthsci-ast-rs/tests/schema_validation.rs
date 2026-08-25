@@ -71,7 +71,7 @@ fn test_invalid_enum_values_schema_error() {
 fn test_empty_required_arrays_is_an_unbalanced_system() {
     let fixture = include_str!("../../../tests/invalid/empty_required_arrays.esm");
 
-    let r = earthsci_ast::validate_complete(fixture, None);
+    let r = earthsci_ast::validate_text(fixture, None);
     assert!(r.schema_errors.is_empty(), "{:?}", r.schema_errors);
     assert!(
         r.structural_errors.iter().any(|e| matches!(
