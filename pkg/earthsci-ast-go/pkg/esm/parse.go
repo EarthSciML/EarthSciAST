@@ -199,6 +199,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams
 	esmFile.keyOrders = authoredOrders
+	// Replay the authored `species` key order onto each reaction system itself.
+	// DeriveODEs and StoichiometricMatrix take a bare *ReactionSystem and so
+	// cannot reach esmFile.keyOrders, but species declaration order is
+	// observable in both their results (API_SPEC.md §5.10). See
+	// ReactionSystem.speciesOrder.
+	attachSpeciesOrders(&esmFile)
 	esmFile.componentTemplates = componentTemplates
 
 	// v0.3.0 closes the function registry (closed-function-registry RFC).

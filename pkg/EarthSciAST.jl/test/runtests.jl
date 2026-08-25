@@ -34,6 +34,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("structural_validation_test.jl")
     include("expression_test.jl")
     include("reactions_test.jl")
+    include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
     include("display_test.jl")
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle

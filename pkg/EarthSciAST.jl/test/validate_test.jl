@@ -170,4 +170,44 @@ include("testutils.jl")
         end
     end
 
+    # `validate_text` is the TEXT twin of `validate_path` (API_SPEC.md §8 item
+    # 13). Julia was the last of the five bindings without it; Go, Python, Rust
+    # and TypeScript all had it after phase 6.
+    @testset "validate_text is the text entry point and never raises on bad text" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "coordinates_registry.esm")
+        @test isfile(path)
+        text = read(path, String)
+
+        # It agrees with the typed entry point on a good document.
+        typed = validate(EarthSciAST.load_string(text; base_path=dirname(path)))
+        by_text = validate_text(text; base_path=dirname(path))
+        @test by_text isa ValidationResult
+        @test by_text.is_valid == typed.is_valid
+        @test [e.error_type for e in by_text.structural_errors] ==
+              [e.error_type for e in typed.structural_errors]
+
+        # A caller asking "is this valid?" gets a VERDICT for a bad document too,
+        # not an exception — the whole reason this entry point exists, and what
+        # Python's validate_text and Go's ValidateText both do. Text is the only
+        # input that can carry SCHEMA errors, since a typed EsmFile can exist
+        # only by having passed the schema at load.
+        schema_bad = validate_text("""{"esm":"1.0.0","metadata":{"name":"x"}}""")
+        @test !schema_bad.is_valid
+        @test !isempty(schema_bad.schema_errors)
+
+        malformed = validate_text("{not json")
+        @test !malformed.is_valid
+        @test !isempty(malformed.schema_errors)
+        @test malformed.schema_errors[1].keyword == "parse"
+
+        # A (code, path)-carrying load rejection still lands in the STRUCTURAL
+        # channel, through the same helper validate_path uses.
+        ic_bad = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "ic_in_reaction_system.esm")
+        if isfile(ic_bad)
+            res = validate_text(read(ic_bad, String); base_path=dirname(ic_bad))
+            @test !res.is_valid
+            @test !isempty(res.structural_errors)
+        end
+    end
+
 end

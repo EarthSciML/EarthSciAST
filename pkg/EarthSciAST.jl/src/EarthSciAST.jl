@@ -236,10 +236,11 @@ export
     serialize_coupling_entry, coerce_coupling_entry,
     # Structural validation
     # `validate` takes a TYPED document in every binding (API_SPEC.md §8
-    # item 13); the path convenience is `validate_path`, which additionally
-    # renders a load-time rejection as the structural finding the corpus pins.
+    # item 13); the path and text conveniences are `validate_path` and
+    # `validate_text`, which additionally render a load-time rejection as the
+    # structural finding the corpus pins.
     StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
-    validate_path,
+    validate_path, validate_text,
     validate_reaction_rate_units,
     # Expression operations. Expression containment extends `Base.contains`
     # (always in scope for consumers), so `contains` is not re-exported.

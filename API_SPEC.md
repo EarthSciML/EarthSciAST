@@ -641,40 +641,79 @@ Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
 `{matrix, species, reactions}` — so TypeScript is the only binding where the row
 and column labels are recoverable.
 
-**Species ORDER is not harmonized and is observable — and it splits differently
-per function.** An earlier draft of this paragraph said "Rust and Go hold
-`species` as a map and sort by name". That is wrong about Rust, and it conflated
-two different functions. Measured, per binding:
+**Species ORDER is DECLARATION order, in both functions, in all five bindings**
+— the order the document writes the `species` object's keys in. It is
+observable: it is the ROW order of the stoichiometric matrix and the EQUATION
+order of the derived model. Pinned cross-binding by
+`tests/conformance/reactions/species_order.json` (README beside it), driven by a
+test in each of the five bindings.
+
+It was not harmonized before phase 6b, and nothing in `tests/` asserted it,
+which is why five bindings had drifted into three different answers without a
+single failure. Measured before the change:
 
 | | `derive_odes` | `stoichiometric_matrix` |
 |---|---|---|
 | Julia | declaration | declaration |
 | Python | declaration | declaration |
 | TypeScript | declaration | declaration |
-| Rust | **declaration** | **sorted by name** |
+| Rust | declaration | **sorted by name** |
 | Go | **sorted by name** | **sorted by name** |
 
-Rust's `species` is an `IndexMap`, which preserves insertion order, so
-`derive_odes` iterates in declaration order like the other three; the sort is a
-deliberate local choice in `stoichiometric_matrix` alone
-(`reactions.rs:357` — "so indices are reproducible"). Julia, Python and
-TypeScript contain no `sort` at all in their reaction modules.
+Declaration order was canonical on both counts: it is the majority in both
+columns, and it is what this section already said. Two bindings moved.
 
-So there are two separate divergences:
+**Rust** dropped the sort in `stoichiometric_matrix` (`src/reactions.rs`) and in
+its `parallel`-feature twin (`src/performance.rs`, which sorted to stay
+consistent with it). The sort's stated justification was "so indices are
+reproducible" — but `ReactionSystem.species` is an `IndexMap`, whose key
+iteration is already deterministic AND already the authored order, so the sort
+bought nothing the container had not already given and cost the agreement with
+Rust's own `derive_odes`, which never sorted.
 
-1. **`stoichiometric_matrix`** — Rust and Go sort, the other three do not.
-   Pre-existing, and the row labels are unrecoverable in the three bindings
-   whose return is a bare matrix (only TypeScript returns
-   `{matrix, species, reactions}`), which is what makes it observable.
-2. **`derive_odes`** — Go alone sorts, as of phase 6. This is **forced, not
-   chosen**: Go's `ReactionSystem.Species` is a `map[string]Species`, a genuinely
-   unordered Go map that has already lost declaration order by the time
-   `DeriveODEs` runs. Sorting is the only deterministic option available without
-   changing Go's decode representation to carry the key order alongside the map.
+**Go** moved both functions, and this one was not free. `ReactionSystem.Species`
+is a `map[string]Species` — a genuinely unordered Go map that has lost
+declaration order by the time either function runs — so sorting really was Go's
+only deterministic option *at that call site*. It was not Go's only option in
+the package: `ESMFile.keyOrders` already records the authored JSON key order of
+every object in the document, captured by `LoadString` before the template pass
+re-marshals (Go's encoder writes map keys sorted, so the order has to be taken
+from the text), and `flatten` has read species order from it all along via
+`orderedKeys`. What was missing was a route from a bare `*ReactionSystem` back
+to it. `ReactionSystem` now carries an unexported `speciesOrder []string` that
+`LoadString` fills from `keyOrders`, and both functions iterate
+`orderedKeys(system.Species, system.speciesOrder)`.
 
-Nothing in `tests/` pins either. Settling them means a shared fixture, and for
-(2) either accepting Go as the documented exception or giving Go an ordered
-species representation.
+The field is unexported and untagged: it widens neither the API surface nor the
+wire. `orderedKeys` falls back to sorted-name order for any species the recorded
+order does not mention, so the two places with no authored order to prefer — a
+`*ReactionSystem` built directly in code, and one reached through a subsystem
+mount (held as `any` and decoded on demand) — keep the previous behaviour and
+stay deterministic. That is the same fallback `ESMFile.declarationOrder` already
+documents.
+
+**A separate defect the new corpus caught on its first run.** TypeScript's
+`derive_odes` ignored `constant: true`: a reservoir species was typed `unknown`
+and given a `D(s, t) = 0` equation, where esm-spec §7.4 holds it fixed and the
+other four bindings lower it to a `parameter` with no ODE. TypeScript's own
+`flatten` path already did the right thing, and two of the other bindings'
+comments cite TypeScript as doing it. Fixed in `src/reactions.ts`, and pinned by
+the reservoir case in the corpus. This is a SEMANTIC divergence, not an ordering
+one; it is recorded here because this corpus is what found it.
+
+**Still open, deliberately out of scope of the ordering work:**
+
+1. **The return SHAPE of `stoichiometric_matrix`.** TypeScript returns
+   `{matrix, species, reactions}`; the other four return a bare matrix. So
+   TypeScript is the only binding in which the row and column labels are
+   recoverable at all — which is also why its corpus driver can make a stronger
+   assertion than the other four (it compares the row labels directly, where
+   they compare the matrix and infer the order from it). Harmonizing this is a
+   `stable` return-type change and therefore major-or-aliased under §10.
+2. **A non-reservoir species with no net contribution from any reaction.** Rust
+   and Go emit no equation for it; TypeScript emits `D(s, t) = 0`. Not exercised
+   by the corpus (its only zero-contribution species is also a reservoir) and
+   not measured in Julia or Python.
 
 ---
 
@@ -753,6 +792,7 @@ reading that as a gap.
 | `to_unicode` | function | `to_unicode` | `toUnicode` | `to_unicode` | `to_unicode` | `ToUnicode` |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` | `UnitWarning` |
 | `validate` | function | `validate` | `validate` | `validate` | `validate` | `Validate` |
+| `validate_text` | function | `validate_text` | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `validation_result` | type | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` | `ValidationResult` |
 | `variable_node` | type | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` | `VariableNode` |
 | `write_path` | function | `write_path` | `writePath` | `write_path` | `write_path` | `WritePath` |
@@ -813,7 +853,6 @@ reading that as a gap.
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `validate_text` | function | – | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by three of the five
@@ -1036,13 +1075,13 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 10 | `reference_resolution_error` | Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`. | Rust renames, keeping a type alias for one minor. **DONE (phase 6).** Rust renamed; `ReferenceError` kept as a `#[deprecated]` type alias for one minor. | Rust |
 | 11 | `system_kind` family | `system_kind` is a function everywhere but takes an extra `domain` in Go; `declared_system_kind` exists in TypeScript and Python; `declared_system_kind_mismatch` only in Julia; `EffectiveSystemKind` only in Go. Three overlapping two-binding subsets. | **Ruled (phase 6).** The four spellings are three distinct questions plus one composition. `system_kind(model)` is the *derived* kind — Go drops the `domain` argument, which both Go bodies already ignore. `declared_system_kind(model)` reads the explicit field, nullable. `effective_system_kind(model)` is `declared ?? derived` — the question a caller choosing a solver actually asks. All three become `stable` in all five. Julia's `declared_system_kind_mismatch` is **deleted**: it is one line over the other two, and the only 1-of-5 member of the family. **TypeScript DONE (phase 6):** `effectiveSystemKind(model)` added alongside the existing `systemKind` / `declaredSystemKind`. | Julia, TS, Python, Go |
 | 12 | `validate` return shape | Go's `Validate` returns the legacy `DetailedValidationResult`; the four-field shape everyone else returns is Go's *other* function, `ValidateFile`. | Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folds into it. **DONE (phase 6).** Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folded in. `SchemaErrors` is always empty, because a `*ESMFile` can only exist by having passed the schema at load — matching Rust's documented behaviour. | Go |
-| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. | all five |
+| 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. **CLOSED (phase 6b): Julia gained `validate_text(text; base_path)`, so the symbol is 5/5.** Phase 6's Julia agent correctly declined it at the time — this row scoped the work to RENAMING an existing convenience, and Julia had no text one to rename — but at four bindings out of five it had become a parity hole rather than a rename, which is a different question. Julia's version is the text twin of its existing `validate_path` and shares `load_failure_structural_error` with it. Its bad-input behaviour was MEASURED against the other four rather than assumed: Python's `validate_text` and Go's `ValidateText` both return `is_valid=false` with populated `schema_errors` for schema-invalid AND malformed text and neither raises, so Julia renders three channels — a `SchemaValidationError`'s structured errors straight into `schema_errors`, a codeless `ParseError` (malformed JSON) as one root `SchemaError` under the `parse` keyword, and a `(code, path)`-carrying rejection into `structural_errors`. Julia now returns the same error counts as Python on both bad inputs. **One residual, recorded not fixed:** `validate_path` renders only the third channel and still RAISES on schema-invalid or malformed input, so Julia's two convenience entry points differ on bad input. Changing `validate_path` is a behaviour change to a `stable` function nobody asked for and is left alone. | all five |
 | 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. **PARTLY DONE, PARTLY REFUSED (phase 6).** `lower_enums` and `resolve_subsystem_refs` gained typed wrappers with `*_raw` seams. `prepare` is moot — phase 4 deleted it. `resolve_template_machinery` was REFUSED with evidence: the premise says every other binding takes a typed document, and all three measured take raw — Python `(raw: Any, …)`, Julia `(raw_data, …)`, TypeScript `(rawData: unknown, …)`. A typed wrapper would have made Rust the only non-conformant binding. | Rust |
 | 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. **TypeScript VERIFIED (phase 6):** `lowerEnums(file)` returns a new document and shares unchanged subtrees with the input — it never writes through its argument — and raises `EnumLoweringError` (an `EsmDiagnosticError` subclass carrying a registry-backed `code`), not a bare `Error`. Nothing to change. | Julia, Python, Rust, Go |
 | 16 | `substitute` cycles | ~~Only Go detects substitution cycles; the other four loop.~~ **RESOLVED — the premise was false, and inverted.** The other four never looped: all four are single-pass, so a cyclic binding set terminates on its own, exactly as CONFORMANCE_SPEC.md §2.2.3 rule 1 requires. Go was the sole non-conformant binding: it expanded replacements *transitively*, which (a) silently corrupted chained renames — `substitute("a", {a: b, b: c})` returned `"c"`, not `"b"`, mis-applying every overlapping rename through `renameRawExpr` — and (b) made cyclic sets non-terminating, which was then patched with cycle detection instead of by removing the transitivity. | Go made single-pass; `SubstitutionError` / `cyclic_substitution` removed as unnecessary. Pinned cross-binding by `tests/substitution/cyclic_bindings.json`. | Go (done) |
 | 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | **Ruled (phase 6), after a correction.** The first ruling said the canonical signature was `build_reference_graph(document)`. That is not implementable: the function builds the graph of ONE MODEL and takes the model name in all four bindings that have it, and the document-level entry point already exists as `resolve_references(document)`. The Julia agent refused it and was right. Canonical is **`build_reference_graph(model, model_name, index_sets = <none>)`** — the document-scoped registry is an OPTIONAL TRAILING argument, not a separate function name and not required. Omitted, it falls back to a model-nested `index_sets` (the pre-0.8.0 shape); on a collision the model-nested one wins, which is Go's existing merge rule. Rust folds `build_reference_graph_with_index_sets` in; Python already conforms; Go's third argument becomes optional; TypeScript gains the function. **The Julia bug is real and confirmed**: Julia read `model["index_sets"]` where `esm-schema.json` declares `index_sets` only at `/properties/index_sets`, so `resolve_references` THREW `ReferenceResolutionError(E_REF_UNDECLARED_INDEX_SET)` on any 1.0.0 document with a top-level registry, where Python, Rust and Go all returned a graph. **TypeScript ADDED (phase 6):** ported from Python (the most complete of the four: it registers every node before resolving any reference, so a forward `from_faq` resolves), except for the registry rule, which follows Go and Rust: the model-nested pre-0.8.0 `index_sets` is MERGED on top of the document-scoped one, so a model-level entry wins a collision, where Python treats the two as either/or. Verified against the Python binding over all shared `tests/valid/**` fixtures — vertices, edges and topological order identical, zero mismatches, under both registry rules, because no shared fixture carries the two shapes at once. | Julia, Rust, Go, TypeScript |
 | 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. | Julia, Rust, Go |
-| 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`. Deliberately NOT renamed — struct fields are not manifest symbols, and their `lhs_units` / `rhs_units` JSON tags are cross-binding wire contract. Open for a ruling. | Go |
+| 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`, left open for a ruling. **CLOSED (phase 6b): renamed to `LHSUnits` / `RHSUnits`.** The ruling is that Go's own house style already decided it — `FlattenedEquation.LHSString` / `.RHSString` (`pkg/esm/flatten.go`) spell the same two initialisms uppercase, so these two fields were the outliers, not the precedent. The wire contract is untouched and was VERIFIED so: the `json:"lhs_units"` / `json:"rhs_units"` tags are unchanged, and a `UnitWarning` marshal→unmarshal→marshal round trip is byte-identical before and after the rename. The `"lhs_units"` / `"rhs_units"` keys `promoteUnitFindings` writes into `StructuralError.Details` are likewise unchanged. Struct fields remain non-manifest symbols, so `api-surface.json` does not move. | Go |
 | 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the editor's web-components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
 | G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. Rust still owes the rename, so the `get_supported_migration_targets` manifest entry survives one more round. | TypeScript, Rust |
 | G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |

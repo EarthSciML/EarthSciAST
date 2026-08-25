@@ -354,14 +354,19 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
     // Initialize matrix with zeros
     let mut matrix = vec![vec![0.0f64; num_reactions]; num_species];
 
-    // Build a stable species ordering (sorted by name) so indices are reproducible
-    // across runs and match the ordering used by derive_odes / lower_reactions_to_equations.
-    let mut sorted_species_names: Vec<&String> = system.species.keys().collect();
-    sorted_species_names.sort();
-    let species_index: HashMap<String, usize> = sorted_species_names
-        .iter()
+    // ROW ORDER IS DECLARATION ORDER (API_SPEC.md §5.10). `system.species` is an
+    // `IndexMap`, so iterating its keys is already deterministic across runs AND
+    // already the order the document declares. This used to `.sort()` the names
+    // first, justified as "so indices are reproducible" — but reproducibility is
+    // what the container was chosen to give, so the sort bought nothing and cost
+    // the agreement with `derive_odes` / `lower_reactions_to_equations`, which
+    // never sorted, and with Julia, Python and TypeScript, which never sorted
+    // either.
+    let species_index: HashMap<String, usize> = system
+        .species
+        .keys()
         .enumerate()
-        .map(|(idx, name)| ((*name).clone(), idx))
+        .map(|(idx, name)| (name.clone(), idx))
         .collect();
 
     // Fill in the matrix

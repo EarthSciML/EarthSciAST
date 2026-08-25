@@ -170,14 +170,16 @@ func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
 // exact partition — accepted vs rejected — rather than the weaker "never
 // errors", which the corpus does not satisfy.
 //
-//   - skolem_distinct_rank.esm / wildfire_atmosphere_ocean.esm: a derived index
-//     set's `from_faq` names a producer id that appears only in a `_comment`,
-//     never as a node `id`, so nothing is addressable by it.
+//   - wildfire_atmosphere_ocean.esm: a derived index set's `from_faq` names a
+//     producer id that no expression node in the same model carries.
+//     (skolem_distinct_rank.esm was in this list until phase 6b. Its producer
+//     node was there all along, complete, and only its one-line `id` field was
+//     missing; adding it made the fixture resolve. See tests/CORPUS_DEFECTS.md
+//     defect 1.)
 //   - conservative_regrid_assembly.esm: an aggregate `join.on` names a factor
 //     (`src_bin`) that is not among the node's string args, range keys, or
 //     symbolic output_idx.
 var referenceCorpusRejections = map[string]string{
-	"aggregate/skolem_distinct_rank.esm":        CodeRefUnknownFAQNode,
 	"geometry/conservative_regrid_assembly.esm": CodeRefUnresolvedJoinFactor,
 	"wildfire_atmosphere_ocean.esm":             CodeRefUnknownFAQNode,
 }

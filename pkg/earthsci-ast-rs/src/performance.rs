@@ -113,14 +113,15 @@ impl ParallelEvaluator {
         let num_species = system.species.len();
         let num_reactions = system.reactions.len();
 
-        // Build a stable, sorted species ordering so indices are reproducible
-        // and match `stoichiometric_matrix` in src/reactions.rs.
-        let mut sorted_species_names: Vec<&String> = system.species.keys().collect();
-        sorted_species_names.sort();
-        let species_index: HashMap<String, usize> = sorted_species_names
-            .iter()
+        // Declaration order, matching `stoichiometric_matrix` in src/reactions.rs
+        // (API_SPEC.md §5.10). `species` is an `IndexMap`, so key iteration is
+        // both deterministic and the authored order; the `.sort()` this used to
+        // do made the parallel matrix disagree with every other binding's rows.
+        let species_index: HashMap<String, usize> = system
+            .species
+            .keys()
             .enumerate()
-            .map(|(idx, name)| ((*name).clone(), idx))
+            .map(|(idx, name)| (name.clone(), idx))
             .collect();
 
         self.thread_pool.install(|| {

@@ -60,8 +60,8 @@ type UnitWarning struct {
 	Path     string `json:"path"`      // RFC 6901 JSON Pointer to the equation/expression (see StructuralError.Path)
 	Code     string `json:"code"`      // UnitFindingDimensionalMismatch | UnitFindingUnparseable | UnitFindingAnalysis
 	Message  string `json:"message"`   // Human-readable description
-	LhsUnits string `json:"lhs_units"` // Inferred units of the LHS
-	RhsUnits string `json:"rhs_units"` // Inferred units of the RHS
+	LHSUnits string `json:"lhs_units"` // Inferred units of the LHS
+	RHSUnits string `json:"rhs_units"` // Inferred units of the RHS
 }
 
 // isPromotable reports whether a unit finding invalidates the document — i.e.
@@ -339,8 +339,8 @@ func promoteUnitFindings(findings []UnitWarning) []StructuralError {
 			Message: w.Message,
 			Details: map[string]any{
 				"finding":   w.Code,
-				"lhs_units": w.LhsUnits,
-				"rhs_units": w.RhsUnits,
+				"lhs_units": w.LHSUnits,
+				"rhs_units": w.RHSUnits,
 			},
 		})
 	}
