@@ -1,17 +1,20 @@
 # Known defects in the shared corpus
 
 Fixtures under `tests/valid/` are the cross-binding definition of "a valid
-document": every binding drives its conformance suite from them. Three of the 92
+document": every binding drives its conformance suite from them. Three of them
 did **not** survive reference resolution when this file was opened in phase 6,
 found while adding `build_reference_graph` to TypeScript and checking it against
 Python — the two bindings agreed exactly on all three, which is why it had gone
 unnoticed: no binding was running the resolver over the whole valid corpus.
 
-Defect 1 is now **fixed** (phase 6b). Defect 2 is **ruled** and awaiting its
-five-binding implementation. Defect 3 is **diagnosed** (phase 6b) and, unlike
-the other two, is a bug in the five bindings rather than in the corpus.
+Defect 1 is **fixed** (phase 6b) and its recorded diagnosis turned out to be
+wrong. Defect 2 is **ruled and implemented** in all five bindings (phase 6b).
+Defect 3 is **diagnosed** (phase 6b) and, unlike the other two, is a bug in the
+five bindings rather than in the corpus — and it has TWO instances, the second
+of which defect 2 was hiding.
 
-Reproduce (92 fixtures; 90 resolve and 2 raise as of the defect-1 fix):
+Reproduce (measured on the merged phase-6b tree: **93 fixtures, 91 resolve,
+2 raise** — both remaining are defect 3, with the same error code):
 
 ```bash
 PYTHONPATH=pkg/earthsci-ast-py/src python3 - <<'PY'
@@ -23,7 +26,9 @@ PY
 ```
 
 Each section below carries its own status; read it before assuming the fixture
-is at fault, because for two of the three it was not.
+is at fault, because for two of the three it was not. Note that the failure
+count did not fall by two: fixing defect 2 unmasked a second instance of
+defect 3 on the same fixture — see #3.
 
 ## 1. `aggregate/skolem_distinct_rank.esm` — FIXED (phase 6b)
 
@@ -73,29 +78,41 @@ Unpinned in the two bindings that recorded the rejection —
 `pkg/earthsci-ast-ts/src/reference-resolution.test.ts` (`KNOWN_UNRESOLVED`) —
 which is the failure those pins exist to produce.
 
-## 2. `wildfire_atmosphere_ocean.esm` — a RESOLVER/SPEC defect
+## 2. `wildfire_atmosphere_ocean.esm` — a RESOLVER/SPEC defect — **FIXED**
 
-`E_REF_UNKNOWN_FAQ_NODE`: `index_sets.rg_candidate_pairs.from_faq` names
+`E_REF_UNKNOWN_FAQ_NODE`: `index_sets.rg_candidate_pairs.from_faq` named
 `"rg_candidate_set"`, and **that node exists** — at
-`/models/OceanDynamics/equations/2/rhs`. The error says it "is not the id of any
+`/models/OceanDynamics/equations/2/rhs`. The error said it "is not the id of any
 expression node in model `'AtmosphericDynamics'`".
 
-That is the bug. `index_sets` is **document-scoped** (`esm-schema.json` declares
+That was the bug. `index_sets` is **document-scoped** (`esm-schema.json` declares
 it only at `/properties/index_sets` — the same scoping fact behind API_SPEC §8
-item 17), but `from_faq` is resolved within **one model's** scope. A
-document-scoped derived index set whose producer lives in a different model is
+item 17), but `from_faq` was resolved within **one model's** scope. A
+document-scoped derived index set whose producer lives in a different model was
 therefore unresolvable, and this fixture is exactly that shape: the atmosphere
 model consuming a candidate-pair set produced by the ocean model.
 
-**RULED (phase 6): `from_faq` is document-scoped.** `esm-spec.md` §9.7.5 now
-states it normatively, and `esm-schema.json`'s `id` description widens node-id
+**RULED (phase 6): `from_faq` is document-scoped.** `esm-spec.md` §9.7.5 states
+it normatively, and `esm-schema.json`'s `id` description widens node-id
 uniqueness from per-model to per-document to match — a document-scoped registry
 whose entries could only name one model's nodes is incoherent, and per-model
 uniqueness would leave a cross-model reference ambiguous. Verified before
 ruling: **no fixture in `tests/` reuses an `id` across models**, so the widened
-uniqueness requirement invalidates nothing that exists. All five bindings resolve
-`from_faq` per-model today and all five need the change; once they have it, this
-fixture is valid and stops being a defect.
+uniqueness requirement invalidates nothing that exists.
+
+**LANDED in all five bindings.** Each collects node ids from every model in the
+document before any single model's graph is built; a `from_faq` may name a
+producer in any model, and the consuming model's graph gains a real vertex for
+the foreign node (path `models/<Model>/<local path>`) so the partition pass can
+walk `index_set → node` across the model boundary. A `from_faq` naming no node
+in the document is still `unknown_faq_node`; the same `id` in two models is now
+`E_REF_DUPLICATE_NODE_ID`.
+
+`tests/valid/aggregate/cross_model_from_faq.esm` is the minimal cross-binding
+fixture for the ruling, and every binding pins it.
+
+**This defect is closed.** The `wildfire_atmosphere_ocean.esm` fixture still
+does not resolve — but for defect #3's reason, not this one; see below.
 
 ## 3. `geometry/conservative_regrid_assembly.esm` — a RESOLVER defect (diagnosed, NOT fixed)
 
@@ -210,9 +227,30 @@ diagnose against the variable and index-set registries" unimplemented in all
 five bindings. If it is taken for scheduling reasons it should be recorded as a
 workaround, not as the diagnosis.
 
+**Second instance, exposed by the defect-#2 fix:**
+`wildfire_atmosphere_ocean.esm` has the same shape. Its producing node
+`rg_candidate_set` (`/models/OceanDynamics/equations/2/rhs`) carries
+`join: [{"on": [["rg_src_bin", "rg_tgt_bin"]]}]`, and `rg_src_bin` /
+`rg_tgt_bin` are model **variables** — defined at equations 0 and 1 with an
+indexed LHS — not that node's args, range keys, or `output_idx`. Defect #2 had
+been masking this: `index_sets` is document-scoped, so the `from_faq` lookup ran
+for EVERY model's graph and failed on whichever model each binding built first
+(`AtmosphericDynamics` in document order, `AirSeaFluxCalculator` in Go's sorted
+order) — always before `OceanDynamics`, so the join error never fired. With #2
+fixed the fixture now raises `E_REF_UNRESOLVED_JOIN_FACTOR` for `'rg_src_bin'`
+instead.
+
+So the corpus sweep count did **not** drop from 3 to 2: it is 3 of 93 (the 93rd
+fixture is the new `cross_model_from_faq.esm`, which resolves). Repairing #3
+repairs both fixtures at once. Every binding pins `wildfire_atmosphere_ocean.esm`
+under the join code, so the change of failure mode is visible rather than
+silent.
+
 ---
 
 TypeScript (`src/reference-resolution.test.ts`) and Go
-(`pkg/esm/reference_graph_test.go`) each pin the remaining rejections by name,
-so a repair surfaces as a test failure rather than silently changing the corpus.
-Defect 1's entry has been removed from both, which is what its fix had to do.
+(`pkg/esm/reference_graph_test.go`) pin the remaining rejections by name, with
+their codes, so a repair surfaces as a test failure rather than silently
+changing the corpus. Python, Rust and Julia pin `wildfire_atmosphere_ocean.esm`
+individually for the same reason. Defect 1's entry was removed from all of them,
+which is what its fix had to do.

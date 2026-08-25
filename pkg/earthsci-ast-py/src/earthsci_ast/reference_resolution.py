@@ -55,9 +55,9 @@ __all__ = [
 
 #: undeclared name in a ``ranges[*].from`` reference.
 E_REF_UNDECLARED_INDEX_SET = "E_REF_UNDECLARED_INDEX_SET"
-#: a ``kind:"derived"`` index set's ``from_faq`` names no node id in the model.
+#: a ``kind:"derived"`` index set's ``from_faq`` names no node id in the document.
 E_REF_UNKNOWN_FAQ_NODE = "E_REF_UNKNOWN_FAQ_NODE"
-#: two expression nodes in the same model share an explicit ``id``.
+#: two expression nodes in the same document share an explicit ``id``.
 E_REF_DUPLICATE_NODE_ID = "E_REF_DUPLICATE_NODE_ID"
 #: a ``join.on`` factor reference names nothing in the node's scope.
 E_REF_UNRESOLVED_JOIN_FACTOR = "E_REF_UNRESOLVED_JOIN_FACTOR"
@@ -270,6 +270,72 @@ def _is_node(value) -> bool:
     return isinstance(value, dict) and "op" in value
 
 
+#: the model members whose expression trees carry addressable nodes.
+_WALK_ROOTS = ("equations", "initialization_equations")
+
+
+@dataclass(frozen=True)
+class _DocNode:
+    """One id-bearing expression node, as the ``from_faq`` scope sees it."""
+
+    addr: str
+    path: str
+    op: str | None
+    model: str
+
+
+def _walk_id_bearing_nodes(value, path: str, out: list[tuple[dict, str]]) -> None:
+    """Collect ``(node, path)`` for every operator node under ``value``."""
+    if isinstance(value, dict):
+        if _is_node(value):
+            out.append((value, path))
+        for k, v in value.items():
+            _walk_id_bearing_nodes(v, f"{path}/{k}", out)
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _walk_id_bearing_nodes(v, f"{path}/{i}", out)
+
+
+def _collect_document_node_ids(document: dict) -> dict[str, _DocNode]:
+    """Every explicit expression-node ``id`` in ``document``, keyed by id.
+
+    ``from_faq`` resolves at **document** scope (esm-spec.md §9.7.5): a
+    document-scoped ``index_sets`` entry is visible to every model, so the node
+    it names may live in any of them. This pass therefore runs over all models
+    *before* any single model's graph is built.
+
+    Because ids from different models share one namespace, uniqueness is a
+    **document**-wide requirement: a duplicate ``id`` anywhere in the document
+    is ``E_REF_DUPLICATE_NODE_ID``.
+    """
+    nodes: dict[str, _DocNode] = {}
+    models = document.get("models") or {}
+    if not isinstance(models, dict):
+        return nodes
+    for model_name, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        for root in _WALK_ROOTS:
+            found: list[tuple[dict, str]] = []
+            _walk_id_bearing_nodes(model.get(root), root, found)
+            for node, path in found:
+                nid = node.get("id")
+                if not isinstance(nid, str) or not nid:
+                    continue
+                qualified = f"models/{model_name}/{path}"
+                first = nodes.get(nid)
+                if first is not None:
+                    raise ReferenceResolutionError(
+                        E_REF_DUPLICATE_NODE_ID,
+                        f"duplicate expression-node id '{nid}' in document "
+                        f"(at {qualified} and {first.path})",
+                    )
+                nodes[nid] = _DocNode(
+                    addr=nid, path=qualified, op=node.get("op"), model=model_name
+                )
+    return nodes
+
+
 def build_reference_graph(
     model: dict,
     model_name: str = "",
@@ -280,25 +346,45 @@ def build_reference_graph(
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
     as of v0.8.0 lives at the top level of the document rather than on each
     model. :func:`resolve_references` threads the document registry in for every
-    model. When ``index_sets`` is omitted (a direct caller passing a raw model
-    dict), it falls back to a ``model["index_sets"]`` key for backward
-    compatibility.
+    model. Any (pre-0.8.0) model-nested ``index_sets`` key is **merged** on top
+    of it — a model-level entry wins a key collision — matching Julia,
+    TypeScript, Rust and Go.
 
     Raises :class:`ReferenceResolutionError` on a duplicate node id, an
     undeclared ``ranges[*].from`` index set, a ``from_faq`` naming no node, or
     an unresolved ``join.on`` factor. (Cycles are reported lazily by
     :meth:`ReferenceGraph.topological_order`, or eagerly by
     :func:`resolve_references`.)
+
+    ``from_faq`` resolves at DOCUMENT scope (esm-spec.md §9.7.5). A caller
+    holding only one model gets that model as its own document, which is the
+    right answer for a one-model document; :func:`resolve_references` is the
+    document-scoped entry point and resolves against every model's nodes.
+    """
+    return _build_reference_graph(model, model_name, index_sets, None)
+
+
+def _build_reference_graph(
+    model: dict,
+    model_name: str,
+    index_sets: dict | None,
+    document_nodes: dict[str, _DocNode] | None,
+) -> ReferenceGraph:
+    """:func:`build_reference_graph`, plus the document-wide ``from_faq`` scope.
+
+    ``document_nodes`` is the map :func:`_collect_document_node_ids` builds over
+    every model. When it is ``None`` the model's own nodes are the scope.
     """
     graph = ReferenceGraph(model=model_name)
 
-    # Pass 1 — register declared index sets as vertices. Prefer the
-    # document-scoped registry; fall back to a model-local ``index_sets`` key
-    # only when no registry was supplied (direct raw-model callers).
-    if index_sets is None:
-        index_sets = model.get("index_sets") or {}
+    # Pass 1 — register declared index sets as vertices. Merge the
+    # document-scoped registry (v0.8.0+) with any model-nested one (pre-0.8.0);
+    # a model-level entry wins a key collision.
     if not isinstance(index_sets, dict):
         index_sets = {}
+    model_index_sets = model.get("index_sets")
+    if isinstance(model_index_sets, dict):
+        index_sets = {**index_sets, **model_index_sets}
     for name in index_sets:
         graph._ensure_vertex(
             ReferenceVertex(key=_index_set_key(name), kind=VertexKind.INDEX_SET, name=name)
@@ -306,12 +392,8 @@ def build_reference_graph(
 
     # Pass 2 — walk every expression node; assign a stable address, register
     # aggregate / id-bearing nodes, and add the within-node reference edges
-    # (ranges[*].from, join.on). Also build id -> address for from_faq.
-    id_to_addr: dict[str, str] = {}
-
-    def addr_of(node: dict, path: str) -> str:
-        nid = node.get("id")
-        return nid if isinstance(nid, str) and nid else path
+    # (ranges[*].from, join.on). Also build id -> node for from_faq.
+    local_nodes: dict[str, _DocNode] = {}
 
     def register_node(node: dict, path: str) -> str | None:
         op = node.get("op")
@@ -325,13 +407,13 @@ def build_reference_graph(
         addr = nid or path
         key = _node_key(addr)
         if nid is not None:
-            if nid in id_to_addr:
+            if nid in local_nodes:
                 raise ReferenceResolutionError(
                     E_REF_DUPLICATE_NODE_ID,
                     f"duplicate expression-node id '{nid}' in model "
-                    f"'{model_name}' (at {path} and {_node_key(id_to_addr[nid])})",
+                    f"'{model_name}' (at {path} and {local_nodes[nid].path})",
                 )
-            id_to_addr[nid] = addr
+            local_nodes[nid] = _DocNode(addr=addr, path=path, op=op, model=model_name)
         graph._ensure_vertex(
             ReferenceVertex(key=key, kind=VertexKind.NODE, name=addr, op=op, node_id=nid, path=path)
         )
@@ -406,26 +488,42 @@ def build_reference_graph(
             for i, v in enumerate(value):
                 walk(v, f"{path}/{i}")
 
-    for root_key in ("equations", "initialization_equations"):
+    for root_key in _WALK_ROOTS:
         walk(model.get(root_key), root_key)
 
     for node, key, path in pending:
         process_node_refs(node, key, path)
 
-    # Pass 3 — derived index sets resolve their from_faq to a node by id.
+    # Pass 3 — derived index sets resolve their from_faq to a node by id, at
+    # DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+    # model, since the registry entry naming it is visible to all of them.
+    faq_scope = local_nodes if document_nodes is None else document_nodes
     for name, entry in index_sets.items():
         if not isinstance(entry, dict):
             continue
         if entry.get("kind") == "derived":
             faq = entry.get("from_faq")
-            if not isinstance(faq, str) or faq not in id_to_addr:
+            target = faq_scope.get(faq) if isinstance(faq, str) else None
+            if target is None:
                 raise ReferenceResolutionError(
                     E_REF_UNKNOWN_FAQ_NODE,
                     f"derived index set '{name}' references from_faq '{faq}', "
-                    f"which is not the id of any expression node in model "
-                    f"'{model_name}'",
+                    "which is not the id of any expression node in the document",
                 )
-            graph._add_edge(_index_set_key(name), _node_key(id_to_addr[faq]), EdgeKind.FROM_FAQ)
+            # The producer may belong to another model; give this graph a
+            # vertex for it so the edge has a real endpoint. Idempotent: a
+            # local producer was already registered in pass 2.
+            graph._ensure_vertex(
+                ReferenceVertex(
+                    key=_node_key(target.addr),
+                    kind=VertexKind.NODE,
+                    name=target.addr,
+                    op=target.op,
+                    node_id=faq,
+                    path=target.path,
+                )
+            )
+            graph._add_edge(_index_set_key(name), _node_key(target.addr), EdgeKind.FROM_FAQ)
 
     return graph
 
@@ -436,6 +534,10 @@ def resolve_references(document: dict) -> dict[str, ReferenceGraph]:
     Returns a ``{model_name: ReferenceGraph}`` map. Raises
     :class:`ReferenceResolutionError` on any unresolved reference *or* reference
     cycle (each model's graph is checked acyclic eagerly here).
+
+    Node ids are collected from **every** model first, so a derived index set's
+    ``from_faq`` may name a producer in any model (esm-spec.md §9.7.5) and a
+    duplicate id anywhere in the document is an error.
     """
     out: dict[str, ReferenceGraph] = {}
     models = document.get("models") or {}
@@ -446,10 +548,11 @@ def resolve_references(document: dict) -> dict[str, ReferenceGraph]:
     doc_index_sets = document.get("index_sets") or {}
     if not isinstance(doc_index_sets, dict):
         doc_index_sets = {}
+    document_nodes = _collect_document_node_ids(document)
     for model_name, model in models.items():
         if not isinstance(model, dict):
             continue
-        graph = build_reference_graph(model, model_name, index_sets=doc_index_sets)
+        graph = _build_reference_graph(model, model_name, doc_index_sets, document_nodes)
         cyc = graph.detect_cycle()
         if cyc is not None:
             raise ReferenceResolutionError(

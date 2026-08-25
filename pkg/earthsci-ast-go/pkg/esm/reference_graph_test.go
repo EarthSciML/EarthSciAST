@@ -170,18 +170,21 @@ func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
 // exact partition — accepted vs rejected — rather than the weaker "never
 // errors", which the corpus does not satisfy.
 //
-//   - wildfire_atmosphere_ocean.esm: a derived index set's `from_faq` names a
-//     producer id that no expression node in the same model carries.
-//     (skolem_distinct_rank.esm was in this list until phase 6b. Its producer
-//     node was there all along, complete, and only its one-line `id` field was
-//     missing; adding it made the fixture resolve. See tests/CORPUS_DEFECTS.md
-//     defect 1.)
-//   - conservative_regrid_assembly.esm: an aggregate `join.on` names a factor
-//     (`src_bin`) that is not among the node's string args, range keys, or
-//     symbolic output_idx.
+//   - conservative_regrid_assembly.esm and wildfire_atmosphere_ocean.esm: an
+//     aggregate `join.on` names a factor (`src_bin` / `rg_src_bin`) that is not
+//     among the node's string args, range keys, or symbolic output_idx
+//     (tests/CORPUS_DEFECTS.md defect 3). wildfire's instance was MASKED until
+//     phase 6b moved `from_faq` to document scope (esm-spec §9.7.5): it used to
+//     fail earlier, with E_REF_UNKNOWN_FAQ_NODE, because its producer lives in
+//     another model, so the resolver never reached the join factor.
+//
+//     skolem_distinct_rank.esm was in this list until phase 6b. Its recorded
+//     diagnosis was wrong: the producer node was there all along and complete,
+//     and only its one-line `id` field was missing. Adding the `id` made the
+//     fixture resolve (defect 1, now closed).
 var referenceCorpusRejections = map[string]string{
 	"geometry/conservative_regrid_assembly.esm": CodeRefUnresolvedJoinFactor,
-	"wildfire_atmosphere_ocean.esm":             CodeRefUnknownFAQNode,
+	"wildfire_atmosphere_ocean.esm":             CodeRefUnresolvedJoinFactor,
 }
 
 // TestReferenceGraphOverValidCorpus resolves EVERY schema-valid fixture in the
@@ -496,4 +499,147 @@ func asReferenceError(err error, out **ReferenceResolutionError) bool {
 		*out = re
 	}
 	return ok
+}
+
+// --- from_faq resolves at DOCUMENT scope (esm-spec.md §9.7.5) ---------------
+//
+// `index_sets` is a document-scoped registry, so a `kind:"derived"` entry is
+// visible to every model and its producing node may live in ANY of them. Every
+// binding used to resolve `from_faq` against one model's expression nodes,
+// which made the cross-model shape unresolvable even though the node plainly
+// existed. The consequence: node ids are unique per DOCUMENT, not per model.
+
+// TestFromFAQResolvesProducerInAnotherModel is the ruling in its minimal form.
+func TestFromFAQResolvesProducerInAnotherModel(t *testing.T) {
+	doc := map[string]any{
+		"index_sets": map[string]any{
+			"faces": map[string]any{"kind": "interval", "size": float64(8)},
+			"edges": map[string]any{"kind": "derived", "from_faq": "edge_faq"},
+		},
+		"models": map[string]any{
+			"Consumer": map[string]any{"equations": []any{map[string]any{
+				"lhs": "c",
+				"rhs": map[string]any{
+					"op": "aggregate", "args": []any{}, "output_idx": []any{},
+					"ranges": map[string]any{"e": map[string]any{"from": "edges"}},
+				},
+			}}},
+			"Producer": map[string]any{"equations": []any{map[string]any{
+				"lhs": "p",
+				"rhs": map[string]any{
+					"op": "aggregate", "args": []any{}, "id": "edge_faq",
+					"output_idx": []any{"edge"},
+					"ranges":     map[string]any{"f": map[string]any{"from": "faces"}},
+				},
+			}}},
+		},
+	}
+	graphs, err := ResolveReferences(doc)
+	if err != nil {
+		t.Fatalf("ResolveReferences: %v", err)
+	}
+	// BOTH graphs carry the edge: the registry entry is document-scoped, so
+	// every model sees the same derived set and the same producer.
+	for _, name := range []string{"Consumer", "Producer"} {
+		faq := graphs[name].EdgesOfKind(EdgeKindFromFAQ)
+		if len(faq) != 1 {
+			t.Fatalf("%s: from_faq edges = %d, want 1", name, len(faq))
+		}
+		if faq[0].Source != indexSetKey("edges") || faq[0].Target != nodeKey("edge_faq") {
+			t.Fatalf("%s: edge = %s -> %s", name, faq[0].Source, faq[0].Target)
+		}
+	}
+	// The consumer's graph gained a real vertex for the foreign producer, so
+	// the partition pass can walk index_set -> node across the model boundary.
+	v, ok := graphs["Consumer"].Vertex(nodeKey("edge_faq"))
+	if !ok {
+		t.Fatal("consumer graph has no vertex for the foreign producer")
+	}
+	if v.NodeID != "edge_faq" || v.Path != "models/Producer/equations/0/rhs" {
+		t.Fatalf("foreign vertex = %+v", v)
+	}
+}
+
+// TestFromFAQUnknownAcrossDocumentStillErrors: widening the scope to the
+// document does not weaken the error — a name no node carries still fails.
+func TestFromFAQUnknownAcrossDocumentStillErrors(t *testing.T) {
+	agg := func(id string) map[string]any {
+		return map[string]any{"op": "aggregate", "id": id, "args": []any{}, "output_idx": []any{}}
+	}
+	doc := map[string]any{
+		"index_sets": map[string]any{
+			"edges": map[string]any{"kind": "derived", "from_faq": "nowhere"},
+		},
+		"models": map[string]any{
+			"A": map[string]any{"equations": []any{map[string]any{"lhs": "a", "rhs": agg("here")}}},
+			"B": map[string]any{"equations": []any{map[string]any{"lhs": "b", "rhs": agg("there")}}},
+		},
+	}
+	_, err := ResolveReferences(doc)
+	var refErr *ReferenceResolutionError
+	if err == nil || !asReferenceError(err, &refErr) || refErr.Code != CodeRefUnknownFAQNode {
+		t.Fatalf("want E_REF_UNKNOWN_FAQ_NODE, got %v", err)
+	}
+}
+
+// TestDuplicateNodeIDAcrossModels: legal before the §9.7.5 ruling, a load-time
+// error now — one document-wide id namespace cannot hold two.
+func TestDuplicateNodeIDAcrossModels(t *testing.T) {
+	agg := func() map[string]any {
+		return map[string]any{"op": "aggregate", "id": "dup", "args": []any{}, "output_idx": []any{}}
+	}
+	doc := map[string]any{
+		"models": map[string]any{
+			"A": map[string]any{"equations": []any{map[string]any{"lhs": "a", "rhs": agg()}}},
+			"B": map[string]any{"equations": []any{map[string]any{"lhs": "b", "rhs": agg()}}},
+		},
+	}
+	_, err := ResolveReferences(doc)
+	var refErr *ReferenceResolutionError
+	if err == nil || !asReferenceError(err, &refErr) || refErr.Code != CodeRefDuplicateNodeID {
+		t.Fatalf("want E_REF_DUPLICATE_NODE_ID, got %v", err)
+	}
+	// Model-qualified on both sides, so the cross-model clash is visible.
+	if !strings.Contains(refErr.Message, "models/A/") || !strings.Contains(refErr.Message, "models/B/") {
+		t.Fatalf("message does not name both models: %s", refErr.Message)
+	}
+}
+
+// TestCrossModelFromFAQCorpusFixture drives the shared cross-binding fixture.
+func TestCrossModelFromFAQCorpusFixture(t *testing.T) {
+	doc := readRawDocument(t, filepath.Join(
+		repoTestsDir(t), "valid", "aggregate", "cross_model_from_faq.esm"))
+	graphs, err := ResolveReferences(doc)
+	if err != nil {
+		t.Fatalf("ResolveReferences: %v", err)
+	}
+	if len(graphs) != 2 {
+		t.Fatalf("graphs = %d, want 2", len(graphs))
+	}
+	faq := graphs["FluxConsumer"].EdgesOfKind(EdgeKindFromFAQ)
+	if len(faq) != 1 || faq[0].Source != indexSetKey("edges") || faq[0].Target != nodeKey("edge_enum") {
+		t.Fatalf("FluxConsumer from_faq edges = %+v", faq)
+	}
+}
+
+// TestWildfireFixtureNoLongerUnknownFAQNode: CORPUS_DEFECTS #2 is fixed; what
+// remains on that fixture is #3. `rg_candidate_pairs.from_faq` names
+// `rg_candidate_set`, which lives in OceanDynamics while the registry entry is
+// document-scoped — that resolves now. The producing node's
+// `join.on == [["rg_src_bin","rg_tgt_bin"]]` names model variables rather than
+// node-local binders, which is defect #3's shape, previously masked.
+func TestWildfireFixtureNoLongerUnknownFAQNode(t *testing.T) {
+	doc := readRawDocument(t, filepath.Join(
+		repoTestsDir(t), "valid", "wildfire_atmosphere_ocean.esm"))
+	_, err := ResolveReferences(doc)
+	var refErr *ReferenceResolutionError
+	if err == nil || !asReferenceError(err, &refErr) {
+		t.Fatalf("want a *ReferenceResolutionError, got %v", err)
+	}
+	if refErr.Code != CodeRefUnresolvedJoinFactor {
+		t.Fatalf("code = %q, want the defect-#3 join error", refErr.Code)
+	}
+	if !strings.Contains(refErr.Message, "rg_src_bin") {
+		t.Fatalf("message does not name the unresolved factor: %s", refErr.Message)
+	}
 }
