@@ -129,6 +129,14 @@ pub mod edit {
     };
 }
 
+/// The shared single-message error newtype that `CadenceError`,
+/// `JoinError` and friends alias. `EsmError` (the crate-wide enum) is the
+/// stable tier, at the crate root; this is the newtype those aliases wrap, and
+/// `wildlandfire.esm/run-model-rs` names it directly.
+pub mod error {
+    pub use crate::error::MessageError;
+}
+
 /// Flatten-pass internals.
 pub mod flatten {
     pub use crate::flatten::reject_unlowered_operators;
