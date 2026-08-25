@@ -13,15 +13,15 @@ docs/
 ├── static/                # Static assets, incl. lib/*.esm standard library
 └── content/               # All documentation pages
     ├── _index.md          # Landing page and canonical table of contents
-    ├── api/               # Hand-maintained API overview per language
-    ├── examples/          # Worked examples (some generated from tests)
-    ├── getting-started/   # Installation, quick start, per-language guides
-    ├── troubleshooting/   # Validation, expression, performance, platform
-    ├── rfcs/              # Design proposals and extensions
+    ├── file-structure/    # The sections of an .esm document, with examples
+    ├── operators/         # The expression vocabulary, one page per family
+    ├── coupling/          # Composing components
+    ├── templates/         # Rewrite rules and discretization
+    ├── rfcs/              # Design proposals and the reasoning behind them
     ├── historical/        # Superseded documents, kept for reference
-    ├── tutorial/          # Placeholder — not yet written
-    ├── guides/            # Placeholder — not yet written
-    ├── standard_library.md, registered_functions.md, units-standard.md
+    ├── standard_library.md, units-standard.md
+    ├── RELEASE_PIPELINE.md, RELEASE_PROCESS.md
+    ├── SCHEMA_CHANGE_PROCEDURE.md, STRUCTURAL_ERROR_TEST_FIXTURES.md
     └── generated/         # Build-time output; not checked in
 ```
 
@@ -63,7 +63,7 @@ so a broken relative link fails the deploy rather than shipping.
 1. Add the Markdown file under the appropriate `content/` subdirectory.
 2. Give it Hugo front matter (`title`, `description`) — see any existing page.
 3. Link it from `content/_index.md` or the relevant section `_index.md`. Hugo
-   resolves links as site URLs (`getting-started/installation/`), not file paths.
+   resolves links as site URLs (`operators/arrays/`), not file paths.
 4. Verify with `hugo server --source docs` before pushing; `pages.yml` will
    reject a broken internal link.
 
