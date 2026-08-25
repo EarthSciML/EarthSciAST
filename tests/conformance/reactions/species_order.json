@@ -1,0 +1,103 @@
+{
+  "description": "Cross-binding pin for SPECIES ORDER in the two Analysis-tier reaction operations, derive_odes and stoichiometric_matrix (API_SPEC.md §5.10). Canonical order is DECLARATION order -- the order the document writes the `species` object's keys in -- in both operations, in all five bindings. Every case below declares its species in an order that is NOT their sorted order, so a binding that sorts fails rather than passing by coincidence. Hand-written; unlike tests/conformance/graph/cases.json there is no generator and no oracle binding.",
+  "why": "Five bindings diverged here unnoticed for the length of the project because nothing in tests/ pinned it: Go sorted in both operations, Rust sorted in stoichiometric_matrix only, and Julia, Python and TypeScript used declaration order in both. Species order is observable -- it is the ROW order of the stoichiometric matrix and the EQUATION order of the derived model -- so it is a contract, not an implementation detail.",
+  "how_to_drive": "For each case: load `document` through the binding's load_document / load_string, take the reaction system named by `system`, and call both operations on it. `stoichiometric_matrix` is compared as a whole nested array (rows are species in declaration order, columns are reactions in declaration order, entries are products - substrates). For derive_odes, compare the ORDER of the derived model's equations by reading each equation's LHS `D(<species>, t)` node and taking its first argument; that list must equal `derive_odes_equation_species`. Do NOT compare via ode_states / ODEStates -- that operation sorts its result by design (esm-spec §6.3.1) and would pass vacuously. Python's stoichiometric_matrix returns a numpy array, so its driver compares `np.asarray(...).tolist()`; TypeScript's returns `{matrix, species, reactions}` rather than a bare matrix, so its driver compares the `matrix` member (that return-shape split is recorded in API_SPEC.md §5.10 and is deliberately NOT what this corpus pins).",
+  "cases": [
+    {
+      "name": "reservoir_and_fractional",
+      "description": "Species declared NO, NO2, O3, M; sorted order would be M, NO, NO2, O3, so the reservoir row moves from first to last under a sort. M is a reservoir (`constant: true`), so it is a PARAMETER of the derived model with no ODE -- it still occupies a stoichiometric matrix ROW (all zeros here) but contributes no equation. r2 gives O3 a fractional coefficient.",
+      "system": "R",
+      "species_declaration_order": ["NO", "NO2", "O3", "M"],
+      "species_sorted_order": ["M", "NO", "NO2", "O3"],
+      "derive_odes_equation_species": ["NO", "NO2", "O3"],
+      "stoichiometric_matrix": [
+        [-1, 1],
+        [1, -1],
+        [-1, 0.5],
+        [0, 0]
+      ],
+      "document": {
+        "esm": "1.0.0",
+        "metadata": { "name": "species_order_reservoir" },
+        "reaction_systems": {
+          "R": {
+            "species": {
+              "NO": { "units": "ppb", "default": 1.0 },
+              "NO2": { "units": "ppb", "default": 0.0 },
+              "O3": { "units": "ppb", "default": 30.0 },
+              "M": { "units": "molec/cm^3", "default": 2.5e19, "constant": true }
+            },
+            "parameters": {
+              "k1": { "default": 1.8e-12 },
+              "jNO2": { "default": 0.01 }
+            },
+            "reactions": [
+              {
+                "id": "r1",
+                "substrates": [
+                  { "species": "NO", "stoichiometry": 1 },
+                  { "species": "O3", "stoichiometry": 1 }
+                ],
+                "products": [{ "species": "NO2", "stoichiometry": 1 }],
+                "rate": "k1"
+              },
+              {
+                "id": "r2",
+                "substrates": [{ "species": "NO2", "stoichiometry": 1 }],
+                "products": [
+                  { "species": "NO", "stoichiometry": 1 },
+                  { "species": "O3", "stoichiometry": 0.5 }
+                ],
+                "rate": "jNO2"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "reverse_alphabetical",
+      "description": "A linear chain Z -> Y -> X declared in exactly reverse sorted order. A binding that sorts returns the matrix rows fully reversed and the equations fully reversed, so this case cannot pass by accident under any partial fix. No reservoir species, so the derived equation list and the matrix rows cover the same three species.",
+      "system": "Chain",
+      "species_declaration_order": ["Z", "Y", "X"],
+      "species_sorted_order": ["X", "Y", "Z"],
+      "derive_odes_equation_species": ["Z", "Y", "X"],
+      "stoichiometric_matrix": [
+        [-1, 0],
+        [1, -1],
+        [0, 1]
+      ],
+      "document": {
+        "esm": "1.0.0",
+        "metadata": { "name": "species_order_chain" },
+        "reaction_systems": {
+          "Chain": {
+            "species": {
+              "Z": { "units": "mol/m^3", "default": 1.0 },
+              "Y": { "units": "mol/m^3", "default": 0.0 },
+              "X": { "units": "mol/m^3", "default": 0.0 }
+            },
+            "parameters": {
+              "kzy": { "default": 0.5 },
+              "kyx": { "default": 0.25 }
+            },
+            "reactions": [
+              {
+                "id": "zy",
+                "substrates": [{ "species": "Z", "stoichiometry": 1 }],
+                "products": [{ "species": "Y", "stoichiometry": 1 }],
+                "rate": "kzy"
+              },
+              {
+                "id": "yx",
+                "substrates": [{ "species": "Y", "stoichiometry": 1 }],
+                "products": [{ "species": "X", "stoichiometry": 1 }],
+                "rate": "kyx"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

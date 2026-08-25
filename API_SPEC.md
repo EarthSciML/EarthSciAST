@@ -641,40 +641,79 @@ Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
 `{matrix, species, reactions}` — so TypeScript is the only binding where the row
 and column labels are recoverable.
 
-**Species ORDER is not harmonized and is observable — and it splits differently
-per function.** An earlier draft of this paragraph said "Rust and Go hold
-`species` as a map and sort by name". That is wrong about Rust, and it conflated
-two different functions. Measured, per binding:
+**Species ORDER is DECLARATION order, in both functions, in all five bindings**
+— the order the document writes the `species` object's keys in. It is
+observable: it is the ROW order of the stoichiometric matrix and the EQUATION
+order of the derived model. Pinned cross-binding by
+`tests/conformance/reactions/species_order.json` (README beside it), driven by a
+test in each of the five bindings.
+
+It was not harmonized before phase 6b, and nothing in `tests/` asserted it,
+which is why five bindings had drifted into three different answers without a
+single failure. Measured before the change:
 
 | | `derive_odes` | `stoichiometric_matrix` |
 |---|---|---|
 | Julia | declaration | declaration |
 | Python | declaration | declaration |
 | TypeScript | declaration | declaration |
-| Rust | **declaration** | **sorted by name** |
+| Rust | declaration | **sorted by name** |
 | Go | **sorted by name** | **sorted by name** |
 
-Rust's `species` is an `IndexMap`, which preserves insertion order, so
-`derive_odes` iterates in declaration order like the other three; the sort is a
-deliberate local choice in `stoichiometric_matrix` alone
-(`reactions.rs:357` — "so indices are reproducible"). Julia, Python and
-TypeScript contain no `sort` at all in their reaction modules.
+Declaration order was canonical on both counts: it is the majority in both
+columns, and it is what this section already said. Two bindings moved.
 
-So there are two separate divergences:
+**Rust** dropped the sort in `stoichiometric_matrix` (`src/reactions.rs`) and in
+its `parallel`-feature twin (`src/performance.rs`, which sorted to stay
+consistent with it). The sort's stated justification was "so indices are
+reproducible" — but `ReactionSystem.species` is an `IndexMap`, whose key
+iteration is already deterministic AND already the authored order, so the sort
+bought nothing the container had not already given and cost the agreement with
+Rust's own `derive_odes`, which never sorted.
 
-1. **`stoichiometric_matrix`** — Rust and Go sort, the other three do not.
-   Pre-existing, and the row labels are unrecoverable in the three bindings
-   whose return is a bare matrix (only TypeScript returns
-   `{matrix, species, reactions}`), which is what makes it observable.
-2. **`derive_odes`** — Go alone sorts, as of phase 6. This is **forced, not
-   chosen**: Go's `ReactionSystem.Species` is a `map[string]Species`, a genuinely
-   unordered Go map that has already lost declaration order by the time
-   `DeriveODEs` runs. Sorting is the only deterministic option available without
-   changing Go's decode representation to carry the key order alongside the map.
+**Go** moved both functions, and this one was not free. `ReactionSystem.Species`
+is a `map[string]Species` — a genuinely unordered Go map that has lost
+declaration order by the time either function runs — so sorting really was Go's
+only deterministic option *at that call site*. It was not Go's only option in
+the package: `ESMFile.keyOrders` already records the authored JSON key order of
+every object in the document, captured by `LoadString` before the template pass
+re-marshals (Go's encoder writes map keys sorted, so the order has to be taken
+from the text), and `flatten` has read species order from it all along via
+`orderedKeys`. What was missing was a route from a bare `*ReactionSystem` back
+to it. `ReactionSystem` now carries an unexported `speciesOrder []string` that
+`LoadString` fills from `keyOrders`, and both functions iterate
+`orderedKeys(system.Species, system.speciesOrder)`.
 
-Nothing in `tests/` pins either. Settling them means a shared fixture, and for
-(2) either accepting Go as the documented exception or giving Go an ordered
-species representation.
+The field is unexported and untagged: it widens neither the API surface nor the
+wire. `orderedKeys` falls back to sorted-name order for any species the recorded
+order does not mention, so the two places with no authored order to prefer — a
+`*ReactionSystem` built directly in code, and one reached through a subsystem
+mount (held as `any` and decoded on demand) — keep the previous behaviour and
+stay deterministic. That is the same fallback `ESMFile.declarationOrder` already
+documents.
+
+**A separate defect the new corpus caught on its first run.** TypeScript's
+`derive_odes` ignored `constant: true`: a reservoir species was typed `unknown`
+and given a `D(s, t) = 0` equation, where esm-spec §7.4 holds it fixed and the
+other four bindings lower it to a `parameter` with no ODE. TypeScript's own
+`flatten` path already did the right thing, and two of the other bindings'
+comments cite TypeScript as doing it. Fixed in `src/reactions.ts`, and pinned by
+the reservoir case in the corpus. This is a SEMANTIC divergence, not an ordering
+one; it is recorded here because this corpus is what found it.
+
+**Still open, deliberately out of scope of the ordering work:**
+
+1. **The return SHAPE of `stoichiometric_matrix`.** TypeScript returns
+   `{matrix, species, reactions}`; the other four return a bare matrix. So
+   TypeScript is the only binding in which the row and column labels are
+   recoverable at all — which is also why its corpus driver can make a stronger
+   assertion than the other four (it compares the row labels directly, where
+   they compare the matrix and infer the order from it). Harmonizing this is a
+   `stable` return-type change and therefore major-or-aliased under §10.
+2. **A non-reservoir species with no net contribution from any reaction.** Rust
+   and Go emit no equation for it; TypeScript emits `D(s, t) = 0`. Not exercised
+   by the corpus (its only zero-contribution species is also a reservoir) and
+   not measured in Julia or Python.
 
 ---
 

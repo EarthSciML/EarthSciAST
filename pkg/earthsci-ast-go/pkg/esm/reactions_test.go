@@ -39,18 +39,21 @@ func reactionsFixtureSystem(t *testing.T) *ReactionSystem {
 }
 
 // TestStoichiometricMatrix pins the shape and the sign convention: rows are
-// species SORTED BY NAME, columns are reactions in declaration order, and an
-// entry is products − substrates.
+// species in DECLARATION order (API_SPEC.md §5.10), columns are reactions in
+// declaration order, and an entry is products − substrates.
+//
+// The fixture declares NO, NO2, O3, M — deliberately not its own sorted order
+// (M, NO, NO2, O3), so this assertion distinguishes the two. It used to expect
+// the sorted order.
 func TestStoichiometricMatrix(t *testing.T) {
 	rs := reactionsFixtureSystem(t)
 	got := StoichiometricMatrix(rs)
 
-	// Sorted species order is M, NO, NO2, O3.
 	want := [][]float64{
-		{0, 0},     // M   — a reservoir takes part in no reaction here
 		{-1, +1},   // NO  — consumed by r1, produced by r2
 		{+1, -1},   // NO2 — produced by r1, consumed by r2
 		{-1, +0.5}, // O3  — consumed by r1, produced fractionally by r2
+		{0, 0},     // M   — a reservoir takes part in no reaction here
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("stoichiometric matrix =\n%v\nwant\n%v", got, want)

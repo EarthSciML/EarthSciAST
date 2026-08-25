@@ -1,0 +1,76 @@
+fix(reactions): make species order declaration order in all five bindings
+
+API_SPEC 5.10 documented species order as an open divergence and recorded the
+measurement rather than fixing it. Measured again before changing anything, and
+the recorded table was right:
+
+                    derive_odes     stoichiometric_matrix
+  Julia             declaration     declaration
+  Python            declaration     declaration
+  TypeScript        declaration     declaration
+  Rust              declaration     sorted by name
+  Go                sorted by name  sorted by name
+
+Declaration order is canonical: it is the majority in both columns and it is
+what the document already said. Species order is observable -- it IS the row
+order of the stoichiometric matrix and the equation order of the derived model
+-- so it is a contract, not an implementation detail.
+
+RUST. Dropped the sort in stoichiometric_matrix and in its parallel-feature twin
+in performance.rs, which sorted only to stay consistent with it. The sort's
+stated justification was "so indices are reproducible", but ReactionSystem.
+species is an IndexMap: key iteration is already deterministic AND already the
+authored order, so the sort bought nothing the container had not already given,
+and cost the agreement with Rust's own derive_odes, which never sorted.
+
+GO. Not a free change, and the substance of this commit. Species is a
+map[string]Species, genuinely unordered, and by the time either function runs
+declaration order is gone -- so sorting really was the only deterministic option
+AT THAT CALL SITE. It was not the only option in the package. ESMFile.keyOrders
+already records the authored JSON key order of every object in the document,
+captured by LoadString from the text before the template pass re-marshals (Go's
+encoder writes map keys sorted, which is why the order has to be taken early),
+and flatten has read species order from it all along through orderedKeys. What
+was missing was a route from a bare *ReactionSystem back to it.
+
+ReactionSystem now carries an unexported, untagged speciesOrder []string that
+LoadString fills from keyOrders, and both entry points iterate
+orderedKeys(system.Species, system.speciesOrder). The field widens neither the
+API surface nor the wire. orderedKeys falls back to sorted-name order wherever
+no authored order exists -- a system built in code, or one reached through a
+subsystem mount (held as `any` and decoded on demand) -- so those keep today's
+behaviour and stay deterministic. That is the same fallback
+ESMFile.declarationOrder already documents.
+
+PINNED. tests/conformance/reactions/species_order.json is a new hand-written
+cross-binding corpus, with a README and a driver in each of the five bindings.
+Nothing in tests/ pinned species order before, which is exactly why five
+bindings diverged unnoticed. Every case declares its species in an order that is
+NOT their sorted order, and reverse_alphabetical declares them in exactly
+reverse sorted order, so a sorting binding is fully reversed and cannot pass by
+partial coincidence. The corpus carries both the declared and the sorted order
+so each driver can assert they still differ. Drivers deliberately do NOT read
+order through ode_states / ODEStates: that operation sorts by design (esm-spec
+6.3.1) and the assertion would pass vacuously in all five.
+
+A SEPARATE DEFECT the corpus caught on its first run. TypeScript's deriveOdes
+ignored `constant: true`: a reservoir species was typed `unknown` and given a
+D(s,t) = 0 equation, where esm-spec 7.4 holds it fixed and the other four
+bindings lower it to a parameter with no ODE. TypeScript's OWN flatten path
+already did the right thing, and two of the other bindings' comments cite
+TypeScript as doing it. Fixed in src/reactions.ts and pinned by the corpus's
+reservoir case, rather than left as a masked xfail in a brand-new pin.
+
+Two things deliberately left open and recorded in 5.10: the return SHAPE of
+stoichiometric_matrix (TypeScript returns {matrix, species, reactions}, the
+other four a bare matrix -- a major-or-aliased change under 10), and what a
+NON-reservoir species with no net contribution should get (Rust and Go emit no
+equation, TypeScript emits D(s,t) = 0; unmeasured in Julia and Python).
+
+Verified: Go 1396 -> 1399 passing, 0 failures, vet and gofmt clean. Rust
+1199 -> 1202 passing, 0 failures, fmt clean. TypeScript 63 files / 2347 tests
+passing, eslint and prettier clean. Python driver 7 passing, ruff clean. Julia
+driver 29 passing.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_015G5k2t4qajtwFdXSExSegh

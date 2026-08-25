@@ -9,13 +9,20 @@ package esm
 // but reachable only by flattening a whole document, which is not the question
 // "what ODEs does THIS reaction system imply".
 //
-// SPECIES ORDER. Both functions order species lexicographically by name.
-// ReactionSystem.Species is a map here, exactly as it is in Rust, and a bare
-// *ReactionSystem carries no declaration order to recover — sorting is the only
-// deterministic answer available, and it is the one Rust's stoichiometric_matrix
-// already gives for the same reason. (Julia, Python and TypeScript hold species
-// as an ordered list and use declaration order. The bindings genuinely differ
-// here; no shared fixture pins it.)
+// SPECIES ORDER. Both functions order species in DECLARATION order — the order
+// the document writes the `species` object's keys in. That is canonical across
+// all five bindings (API_SPEC.md §5.10) and is pinned cross-binding by
+// tests/conformance/reactions/species_order.json.
+//
+// Both functions previously sorted lexicographically, on the grounds that
+// ReactionSystem.Species is a map[string]Species and a bare *ReactionSystem
+// carries no declaration order to recover. The first half of that was true and
+// the second was not: this package already records the authored key order of
+// every object in the document (ESMFile.keyOrders), and LoadString now replays
+// the `species` slice of it onto each reaction system as
+// ReactionSystem.speciesOrder. orderedKeys falls back to sorted-name order for
+// a system built in code or reached through a subsystem mount, so the previous
+// behaviour survives exactly where no authored order exists to prefer.
 
 // DeriveODEs converts a reaction network into a Model whose equations are the
 // species' ODEs under mass-action kinetics (esm-spec §7.4).
@@ -40,7 +47,7 @@ func DeriveODEs(system *ReactionSystem) (*Model, error) {
 		return nil, nil
 	}
 
-	speciesOrder := sortedKeys(system.Species)
+	speciesOrder := orderedKeys(system.Species, system.speciesOrder)
 	variables := make(map[string]ModelVariable, len(system.Species)+len(system.Parameters))
 	for _, name := range speciesOrder {
 		sp := system.Species[name]
@@ -105,8 +112,8 @@ func DeriveODEs(system *ReactionSystem) (*Model, error) {
 }
 
 // StoichiometricMatrix returns the NET stoichiometric matrix of a reaction
-// network: rows are species (sorted by name, see the file header), columns are
-// reactions in declaration order, and entry [i][j] is
+// network: rows are species in declaration order (see the file header), columns
+// are reactions in declaration order, and entry [i][j] is
 // `products − substrates` for species i in reaction j. Negative means consumed,
 // positive means produced.
 //
@@ -122,7 +129,7 @@ func StoichiometricMatrix(system *ReactionSystem) [][]float64 {
 	if system == nil {
 		return nil
 	}
-	speciesOrder := sortedKeys(system.Species)
+	speciesOrder := orderedKeys(system.Species, system.speciesOrder)
 	index := make(map[string]int, len(speciesOrder))
 	for i, name := range speciesOrder {
 		index[name] = i

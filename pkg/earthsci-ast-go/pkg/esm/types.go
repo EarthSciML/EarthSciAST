@@ -431,6 +431,24 @@ type ReactionSystem struct {
 	Tests []Test `json:"tests,omitempty"`
 	// Analyses are inline illustrative runs + plot specs (esm-spec §6.7).
 	Analyses []Analysis `json:"analyses,omitempty"`
+
+	// speciesOrder is the AUTHORED key order of this system's `species` object,
+	// the ReactionSystem-scoped twin of ESMFile.keyOrders. Species declaration
+	// order is observable through DeriveODEs (which emits one equation per
+	// species, in this order) and StoichiometricMatrix (whose ROWS are species
+	// in this order), and API_SPEC.md §5.10 makes declaration order canonical
+	// across all five bindings. `Species` is a map[string]Species, which has
+	// lost that order by the time either entry point runs, so it is recorded
+	// here at load and replayed through orderedKeys.
+	//
+	// Populated by LoadString from ESMFile.keyOrders; nil for a system built
+	// directly in code or decoded by a bare json.Unmarshal, in which case both
+	// entry points fall back to sorted-name order — the same fallback
+	// ESMFile.declarationOrder documents, and still deterministic.
+	//
+	// It is unexported and carries no JSON tag, so it neither widens the API
+	// surface nor appears on the wire.
+	speciesOrder []string
 }
 
 // ========================================
