@@ -149,7 +149,7 @@
     "symbols": 938,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 297,
+      "julia": 298,
       "typescript": 231,
       "python": 272,
       "rust": 322,
@@ -8133,6 +8133,7 @@
       "tier": "stable",
       "bindings": {
         "go": "ValidateText",
+        "julia": "validate_text",
         "python": "validate_text",
         "rust": [
           "validate_complete",

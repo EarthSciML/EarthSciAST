@@ -1,0 +1,46 @@
+feat(julia): add validate_text, closing the last 4-of-5 parity hole
+
+After phase 6, validate_text was stable in four bindings -- Go ValidateText,
+Python validate_text, Rust validate_text, TypeScript validateText -- and absent
+in Julia. The phase-6 Julia agent was right to decline it then: API_SPEC section
+8 item 13 scoped that row to RENAMING an existing convenience, and Julia had no
+text one to rename. At four out of five it is a parity hole, not a rename, which
+is a different question.
+
+Julia's validate_text(text; base_path=pwd()) is the TEXT twin of its existing
+validate_path and shares load_failure_structural_error with it.
+
+Its bad-input behaviour was MEASURED against the other four rather than assumed.
+Python's validate_text and Go's ValidateText both return is_valid=false with
+populated schema_errors for schema-invalid AND for malformed text, and neither
+raises. Text is the only input that CAN carry schema errors, since a typed
+EsmFile exists only by having passed the schema at load. So three channels are
+rendered:
+
+  - a SchemaValidationError carries its structured SchemaErrors straight into
+    schema_errors;
+  - a codeless ParseError -- malformed JSON, a violation of no node -- becomes
+    one SchemaError at the document root under the `parse` keyword, where Go and
+    Python put it too;
+  - a (code, path)-carrying rejection (an unresolvable {ref}, the 11.4.1
+    ic_in_reaction_system case) becomes a StructuralError, through the same
+    helper validate_path uses.
+
+Anything else still propagates. Julia now returns the same error counts as
+Python on both bad inputs: 2 schema errors for schema-invalid text, 1 for
+malformed.
+
+ONE RESIDUAL, recorded and deliberately not fixed: validate_path renders only
+the third channel and still RAISES on schema-invalid or malformed input, so
+Julia's two convenience entry points differ on bad input. Changing validate_path
+is a behaviour change to a stable function that nobody asked for.
+
+API_SPEC section 8 row 13 records the closure; api-surface.json regenerated, and
+validate_text moves from the four-of-five table to the all-five table in section
+6. No hand edits to either.
+
+Verified: Julia validate_test.jl 47 passing, api_surface_test.jl 7 passing;
+scripts/extract-api-surface.py --check green for all six bindings.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_015G5k2t4qajtwFdXSExSegh
