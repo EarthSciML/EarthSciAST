@@ -7,7 +7,11 @@ in ``tests/conformance/cadence/manifest.json``. The runner discovers it via
 ``$EARTHSCI_CADENCE_ADAPTER_PYTHON`` or as ``earthsci-cadence-adapter-python`` on
 ``PATH`` and calls::
 
-    earthsci-cadence-adapter-python --manifest <manifest.json> --output <result.json>
+    python3 -m earthsci_ast.cli.cadence_adapter --manifest <manifest.json> --output <result.json>
+
+This package installs no console script for it -- ``esm`` (Rust) is the only
+command-line tool the project ships -- so the env override above is the
+supported invocation, and it is what ``scripts/test-conformance.sh`` sets.
 
 For each fixture it runs the real partition pass over the (value-free) ESM model
 to derive the class summary and the materialization-point set, and folds the

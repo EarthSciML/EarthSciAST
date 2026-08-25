@@ -7,7 +7,11 @@ fixtures in ``tests/conformance/determinism/manifest.json``. The runner discover
 it via ``$EARTHSCI_DETERMINISM_ADAPTER_PYTHON`` or as
 ``earthsci-determinism-adapter-python`` on ``PATH`` and calls::
 
-    earthsci-determinism-adapter-python --manifest <manifest.json> --output <result.json>
+    python3 -m earthsci_ast.cli.determinism_adapter --manifest <manifest.json> --output <result.json>
+
+This package installs no console script for it -- ``esm`` (Rust) is the only
+command-line tool the project ships -- so the env override above is the
+supported invocation, and it is what ``scripts/test-conformance.sh`` sets.
 
 For each fixture it runs the real producers over ``inputs.canonical`` and writes
 the canonical index set, its byte-form serialization, and the dense-ID array in

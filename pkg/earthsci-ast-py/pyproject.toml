@@ -51,14 +51,6 @@ Repository = "https://github.com/EarthSciML/EarthSciAST.git"
 Documentation = "https://github.com/EarthSciML/EarthSciAST#readme"
 Issues = "https://github.com/EarthSciML/EarthSciAST/issues"
 
-[project.scripts]
-earthsci-determinism-adapter-python = "earthsci_ast.cli.determinism_adapter:main"
-earthsci-cadence-adapter-python = "earthsci_ast.cli.cadence_adapter:main"
-# The pde-simulation conformance harness probes PATH for
-# ``earthsci-pde-sim-adapter-<binding>`` (scripts/run-pde-simulation-conformance.py);
-# register the Python adapter under that exact name.
-earthsci-pde-sim-adapter-python = "earthsci_ast.cli.pde_simulation_adapter:main"
-
 [project.optional-dependencies]
 # The solver (esm-libraries-spec §2.5.9). `esm_problem` never needs it; `solve`,
 # `init`, `step` and `solve_all` do.
@@ -77,6 +69,28 @@ dev = [
     "mypy>=0.990",
     "build>=0.8",
     "twine>=4.0",
+]
+# The cross-language conformance ADAPTERS (determinism, cadence, PDE
+# simulation). These are development tooling, not a product surface: `esm` (the
+# Rust binary) is the only command-line tool this project ships, so the adapters
+# are NOT installed as console scripts. They are run as modules:
+#
+#     python3 -m earthsci_ast.cli.determinism_adapter    --manifest M --output O
+#     python3 -m earthsci_ast.cli.cadence_adapter        --manifest M --output O
+#     python3 -m earthsci_ast.cli.pde_simulation_adapter --manifest M --output O
+#
+# The harness (scripts/conformance_lib.py, AdapterHarness.discover) resolves an
+# adapter from `$EARTHSCI_<SUITE>_ADAPTER_<BINDING>` FIRST and only then falls
+# back to probing PATH for `earthsci-<suite>-adapter-<binding>`. Every Python
+# producer in scripts/test-conformance.sh sets that variable to the `python3 -m`
+# form above, with PYTHONPATH pinned to this worktree's src -- deliberately, so
+# the adapter runs THIS checkout rather than whatever a stray install left on
+# PATH. Dropping the console scripts therefore changes nothing the harness uses,
+# and removes a way to accidentally conformance-test the wrong code.
+conformance = [
+    "numpy>=1.20",
+    # The PDE-simulation adapter integrates trajectories with scipy solve_ivp.
+    "scipy>=1.7",
 ]
 test = [
     "pytest>=6.0",

@@ -12,7 +12,11 @@ Drives the shared, pre-discretized method-of-lines fixtures listed in
 
 The runner discovers it via ``$EARTHSCI_PDE_SIM_ADAPTER_PYTHON`` or on PATH:
 
-    earthsci-pde-sim-adapter-python --manifest <manifest.json> --output <out.json>
+    python3 -m earthsci_ast.cli.pde_simulation_adapter --manifest <manifest.json> --output <out.json>
+
+This package installs no console script for it -- ``esm`` (Rust) is the only
+command-line tool the project ships -- so the env override above is the
+supported invocation, and it is what ``scripts/test-conformance.sh`` sets.
 
 Emits ``{"binding":"python","fixtures":{<id>:{"rhs":{<probe>:{name:val}},
 "trajectory":{<tstr>:{name:val}}}}}`` with bare ``u[i]`` element names.
