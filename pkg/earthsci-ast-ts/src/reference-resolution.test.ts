@@ -202,24 +202,37 @@ describe('buildReferenceGraph', () => {
       )
     })
 
-    it('a model-local index_sets key is a fallback only, never a preference', () => {
-      // Julia's bug (API_SPEC.md §8 item 17) was reading ONLY the nested,
-      // pre-0.8.0 shape. This binding reads the 1.0.0 document-scoped registry
-      // whenever one is supplied, and falls back to the nested key only when
-      // the argument is omitted entirely — matching Python and Rust.
+    it('merges a model-nested index_sets on TOP of the document registry', () => {
+      // Go's rule (reference_graph.go) and Rust's, matched exactly: the
+      // document-scoped registry is the base and a pre-0.8.0 model-nested key
+      // is merged over it, so a model-level entry wins a collision. Reading
+      // ONLY the nested key is the Julia bug of API_SPEC.md §8 item 17.
       const nested = {
         index_sets: { local: {} },
         equations: [
           { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'local' } } }, rhs: 0 },
         ],
       }
+      // Nested-only, no argument: still resolves.
       expect(buildReferenceGraph(model(nested), 'M').edgesOfKind(EdgeKind.RANGE_FROM)).toHaveLength(
         1,
       )
-      // Supplying the document registry means the nested one is NOT consulted.
-      expect(() => buildReferenceGraph(model(nested), 'M', { other: {} })).toThrow(
-        expect.objectContaining({ code: E_REF_UNDECLARED_INDEX_SET }) as unknown as Error,
-      )
+      // Document registry supplied as well: BOTH are visible.
+      const merged = buildReferenceGraph(model(nested), 'M', { doc: {} })
+      expect([...merged.vertices.keys()].sort()).toEqual([
+        `${VertexKind.INDEX_SET}:doc`,
+        `${VertexKind.INDEX_SET}:local`,
+        `${VertexKind.NODE}:a`,
+      ])
+      // A document-scoped set alone still resolves a range that names it.
+      const docOnly = {
+        equations: [
+          { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'doc' } } }, rhs: 0 },
+        ],
+      }
+      expect(
+        buildReferenceGraph(model(docOnly), 'M', { doc: {} }).edgesOfKind(EdgeKind.RANGE_FROM),
+      ).toHaveLength(1)
     })
   })
 })

@@ -280,16 +280,17 @@ const AGGREGATE_OPS = new Set(['aggregate'])
  *
  * @param model - the raw model object (as parsed, not the typed layer)
  * @param modelName - the model's key in the document, used in diagnostics
- * @param indexSets - the DOCUMENT-SCOPED `index_sets` registry. Since v0.8.0
- *   the registry is a sibling of `models` rather than nested inside each model,
- *   and 1.0.0 keeps it there; {@link resolveReferences} reads it once from the
- *   document root and threads it into every model. It is an OPTIONAL TRAILING
- *   argument, not a separate function and not required (API_SPEC.md §8 item 17).
- *   When it is omitted entirely, a model-local `index_sets` key is read as a
- *   fallback so a caller holding only a raw model still resolves — the same
- *   fallback Python and Rust apply, and the reason the corpus agrees. Note that
- *   this binding NEVER reads the model-nested shape in preference to the
- *   document-scoped one.
+ * @param indexSets - the DOCUMENT-SCOPED `index_sets` registry. `esm-schema.json`
+ *   declares `index_sets` only at document scope: since v0.8.0 it is a sibling
+ *   of `models` rather than nested inside each model, and 1.0.0 keeps it there.
+ *   {@link resolveReferences} reads it once from the document root and threads
+ *   it into every model, which is how a caller normally arrives here. It is an
+ *   OPTIONAL TRAILING argument — not a separate function, and not required
+ *   (API_SPEC.md §8 item 17). A model-nested `index_sets` key (pre-0.8.0) is
+ *   merged ON TOP, so a model-level entry wins a key collision, matching Go and
+ *   Rust exactly. Reading ONLY the nested key is the Julia bug §8 item 17
+ *   records — it threw on any 1.0.0 document with a top-level registry — and
+ *   this binding does not reproduce it.
  *
  * Throws {@link ReferenceResolutionError} on a duplicate node id, an undeclared
  * `ranges[*].from` index set, a `from_faq` naming no node, or an unresolved
@@ -305,13 +306,19 @@ export function buildReferenceGraph(
   const graph = new ReferenceGraph(modelName)
   const raw = model as RawObject
 
-  // Prefer the document-scoped registry; fall back to a model-local
-  // `index_sets` key only when no registry was supplied at all.
-  let sets: RawObject = {}
-  if (indexSets !== undefined) {
-    if (isObject(indexSets)) sets = indexSets
-  } else if (isObject(raw.index_sets)) {
-    sets = raw.index_sets
+  // MERGE the document-scoped registry (1.0.0 / v0.8.0+, where `index_sets` is
+  // a sibling of `models`) with any model-nested one (the pre-0.8.0 shape);
+  // a model-level entry takes precedence on a key collision. This is Go's rule
+  // in `reference_graph.go` verbatim, and Rust's; Python instead treats the two
+  // as either/or. No shared fixture carries both shapes at once, so the three
+  // agree on the corpus either way — but the merge is what two of the four
+  // existing implementations do, so it is what this one does.
+  const sets: RawObject = {}
+  if (isObject(indexSets)) {
+    for (const [k, v] of Object.entries(indexSets)) sets[k] = v
+  }
+  if (isObject(raw.index_sets)) {
+    for (const [k, v] of Object.entries(raw.index_sets)) sets[k] = v
   }
 
   // Pass 1 — register declared index sets as vertices.
