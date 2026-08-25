@@ -7,14 +7,15 @@ found while adding `build_reference_graph` to TypeScript and checking it against
 Python — the two bindings agreed exactly on all three, which is why it had gone
 unnoticed: no binding was running the resolver over the whole valid corpus.
 
-Defect 1 is **fixed** (phase 6b) and its recorded diagnosis turned out to be
-wrong. Defect 2 is **ruled and implemented** in all five bindings (phase 6b).
-Defect 3 is **diagnosed** (phase 6b) and, unlike the other two, is a bug in the
-five bindings rather than in the corpus — and it has TWO instances, the second
-of which defect 2 was hiding.
+**All three defects are now closed.** Defect 1 is **fixed** and its recorded
+diagnosis turned out to be wrong. Defect 2 is **ruled and implemented** in all
+five bindings. Defect 3 is **fixed** and, unlike the other two, was a bug in the
+five bindings rather than in the corpus — it had TWO instances, the second of
+which defect 2 was hiding, and one change repaired both.
 
-Reproduce (measured on the merged phase-6b tree: **93 fixtures, 91 resolve,
-2 raise** — both remaining are defect 3, with the same error code):
+Reproduce (measured **93 fixtures, 93 resolve, 0 raise**; before the defect-3
+fix it was 93 / 91 / 2, both remaining raises being defect 3 with the same error
+code):
 
 ```bash
 PYTHONPATH=pkg/earthsci-ast-py/src python3 - <<'PY'
@@ -25,10 +26,10 @@ for f in sorted(glob.glob("tests/valid/**/*.esm", recursive=True)):
 PY
 ```
 
-Each section below carries its own status; read it before assuming the fixture
-is at fault, because for two of the three it was not. Note that the failure
-count did not fall by two: fixing defect 2 unmasked a second instance of
-defect 3 on the same fixture — see #3.
+Each section below carries its own status; read it, because for two of the three
+the fixture was not at fault. Note that the failure count did not fall by two
+when defect 2 landed: fixing it unmasked a second instance of defect 3 on the
+same fixture, and only defect 3's repair cleared both — see #3.
 
 ## 1. `aggregate/skolem_distinct_rank.esm` — FIXED (phase 6b)
 
@@ -111,25 +112,25 @@ in the document is still `unknown_faq_node`; the same `id` in two models is now
 `tests/valid/aggregate/cross_model_from_faq.esm` is the minimal cross-binding
 fixture for the ruling, and every binding pins it.
 
-**This defect is closed.** The `wildfire_atmosphere_ocean.esm` fixture still
-does not resolve — but for defect #3's reason, not this one; see below.
+**This defect is closed.** After it landed, `wildfire_atmosphere_ocean.esm`
+still did not resolve — but for defect #3's reason, not this one. That is fixed
+too now; see below.
 
-## 3. `geometry/conservative_regrid_assembly.esm` — a RESOLVER defect (diagnosed, NOT fixed)
+## 3. `geometry/conservative_regrid_assembly.esm` — a RESOLVER defect — **FIXED**
 
-`E_REF_UNRESOLVED_JOIN_FACTOR`: join factor `'src_bin'` of node
+It used to raise `E_REF_UNRESOLVED_JOIN_FACTOR`: join factor `'src_bin'` of node
 `node:candidate_set` (`/models/ConservativeRegridAssembly/equations/2/rhs`)
 "names no factor, range, or output index in scope". Six equations in the model
 carry the same `join: [{"on": [["src_bin", "tgt_bin"]]}]`.
 
 The open question was whether the fixture omits a binder or the resolver fails
-to see one. **It is the resolver, in all five bindings.** The fixture is not
-repaired here, because repairing it means changing
-`reference_resolution.*` / `reference_graph.*` in every binding — see "Why this
-is not fixed here" below.
+to see one. **It was the resolver, in all five bindings.** The fixtures are
+unchanged; `reference_resolution.*` / `reference_graph.*` changed in every
+binding — see "The fix, as landed" below.
 
-### The evidence
+### The evidence (unchanged; this is what the repair was built on)
 
-**1. The normative text names three binder classes; the resolvers implement
+**1. The normative text names three binder classes; the resolvers implemented
 one.** `esm-spec.md` §4.9.5 says an `on` key column is **polymorphic** — a loop
 symbol bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or
 a declared component-local variable — and that a binding diagnosing such a name
@@ -138,7 +139,7 @@ a declared component-local variable — and that a binding diagnosing such a nam
 first, then a declared local variable, then anything else is left alone. It
 names the third class explicitly, as a "value-invention bin buffer".
 
-Every binding's `factor_scope` helper consults exactly three **node-local**
+Every binding's `factor_scope` helper consulted exactly three **node-local**
 sources — the node's string `args`, its `ranges` keys, and its symbolic
 `output_idx` — and neither registry, even though `build_reference_graph` holds
 both (it already uses `index_sets` for `ranges[*].from`).
@@ -158,69 +159,26 @@ drives the whole fixture end-to-end. `validate_path` returns `is_valid: True`
 with no structural error and no unit warning. A document the semantic engines
 run is not reference-broken.
 
-**3. The scope set is self-inconsistent on fixtures everyone already accepts.**
+**3. The scope set was self-inconsistent on fixtures everyone already accepts.**
 `tests/valid/aggregate/join_filter.esm` and
 `.../join_moves_running_exhaust.esm` join on `["src", "sourceType"]` — and
 `sourceType` is a document-scoped index set, in no `args`, no `ranges` key and
-no `output_idx`. They pass only because no binding validates `pair[1]` at all;
-the resolvers check the left column and ignore the right. Apply the existing
-scope test to the right column and an accepted, canonical fixture starts
-failing. So the implemented rule cannot be the intended rule even on the corpus
-it currently passes.
+no `output_idx`. They passed only because no binding validated `pair[1]` at all;
+the resolvers checked the left column and ignored the right. Applying the OLD
+scope test to the right column would have made an accepted, canonical fixture
+fail. So the implemented rule could not have been the intended rule even on the
+corpus it passed.
 
 **4. Nothing requires a join key column to appear in the node's `args`.** Not
 `esm-schema.json` (`on` items are just `[left, right]` strings), not RFC
-semiring-faq-unified-ir §5.3, not the spec. The three fixtures that resolve
-today do so because whoever authored them happened to list the columns in
-`args`. That is a coincidence of authorship, not a binder.
+semiring-faq-unified-ir §5.3, not the spec. The three fixtures that resolved
+under the old rule did so because whoever authored them happened to list the
+columns in `args`. That is a coincidence of authorship, not a binder.
 `E_REF_UNRESOLVED_JOIN_FACTOR` itself appears in no spec, no schema and no RFC —
 only in the five bindings and their tests.
 
-### What the fix is
-
-In each binding's join handling, scope assembly must be layered, in this order
-(the order is normative per CONFORMANCE_SPEC §5.5.6, because a node-local binder
-SHADOWS a same-named variable):
-
-1. node-local binders — `ranges` keys and symbolic `output_idx` entries;
-2. node-local string `args`;
-3. **the model's variable registry** — where a bin buffer or envelope factor
-   lives. This is the omitted step that produces the failure;
-4. **the document-scoped index-set registry** — already threaded in for
-   `ranges[*].from`. Its absence is currently hidden by (5);
-5. only then `E_REF_UNRESOLVED_JOIN_FACTOR`.
-
-And the check must then be applied to `pair[1]` as well — today it cannot be,
-which is itself a symptom. Julia additionally validates `overlap`'s
-`src_env` / `tgt_env` against the same incomplete scope and will misfire the
-same way.
-
 ### ⚠ A second instance, and what defect 2 did to it
 
-This defect has TWO instances. See the detail below — defect 2 landed
-first, and unmasked the second rather than repairing it.
-
-### Why this is not fixed here
-
-The repair is a five-binding change to `reference_resolution.*` /
-`reference_graph.*`, the same modules being rewritten for defect 2's
-document-scope ruling. Landing two independent rewrites of one module in
-parallel is how the drift this file records got made. The diagnosis is the
-deliverable; the implementation belongs with defect 2's.
-
-### The fixture-side workaround, and why it is not the answer
-
-A mechanical repair exists: add `"args": ["src_bin", "tgt_bin"]` to each of the
-six aggregates here and the five in wildfire's `OceanDynamics`, matching how
-`bin_skolem_spatial_join.esm` and `conservative_regrid_overlap_join.esm` were
-authored. It is semantically harmless. But adopting it as *the* fix would ratify
-a rule the spec does not state, would leave `join_filter.esm`'s index-set column
-unresolvable the moment `pair[1]` is checked, and would leave §4.9.5's "must
-diagnose against the variable and index-set registries" unimplemented in all
-five bindings. If it is taken for scheduling reasons it should be recorded as a
-workaround, not as the diagnosis.
-
-**Second instance, exposed by the defect-#2 fix:**
 `wildfire_atmosphere_ocean.esm` has the same shape. Its producing node
 `rg_candidate_set` (`/models/OceanDynamics/equations/2/rhs`) carries
 `join: [{"on": [["rg_src_bin", "rg_tgt_bin"]]}]`, and `rg_src_bin` /
@@ -230,23 +188,96 @@ been masking this: `index_sets` is document-scoped, so the `from_faq` lookup ran
 for EVERY model's graph and failed on whichever model each binding built first
 (`AtmosphericDynamics` in document order, `AirSeaFluxCalculator` in Go's sorted
 order) — always before `OceanDynamics`, so the join error never fired. With #2
-fixed the fixture now raises `E_REF_UNRESOLVED_JOIN_FACTOR` for `'rg_src_bin'`
+fixed the fixture raised `E_REF_UNRESOLVED_JOIN_FACTOR` for `'rg_src_bin'`
 instead.
 
-So repairing #3 repairs both fixtures at once, and the sweep did not fall by
-two when defect 2 landed — one of the two fixtures defect 2 fixed simply began
-failing here instead. **Measured on the merged tree: 93 fixtures, 91 resolve, 2
-raise**, both with `E_REF_UNRESOLVED_JOIN_FACTOR`. (Two counts recorded during
-phase 6b read 3 of 93; each was measured on a branch holding only one of the two
-fixes, and neither is the merged number.) Every binding pins `wildfire_atmosphere_ocean.esm`
-under the join code, so the change of failure mode is visible rather than
-silent.
+So the sweep did not fall by two when defect 2 landed — one of the two fixtures
+defect 2 fixed simply began failing here instead. One change repairs both.
+
+### The fix, as landed
+
+`factor_scope` is gone from all five bindings. In its place each carries a
+`join_binder_class` (`joinBinderClass` in TypeScript and Go,
+`_join_binder_class` in Julia) which reports WHICH binder class a join name
+resolves to, testing the classes in the order CONFORMANCE_SPEC §5.5.6 fixes —
+the order is normative because a node-local binder SHADOWS a same-named
+variable (esm-spec §4.3.1 permits one string to be a variable reference outside
+an aggregate and an index symbol inside one):
+
+1. node-local binders — `ranges` keys and symbolic `output_idx` entries, FIRST;
+2. node-local string factor `args`;
+3. **the model's variable registry** — where a value-invention bin buffer or an
+   overlap envelope factor lives. This was the omitted step that produced the
+   failure;
+4. **the document-scoped index-set registry** — already threaded in for
+   `ranges[*].from`, and previously never consulted here;
+5. only then `E_REF_UNRESOLVED_JOIN_FACTOR`.
+
+The check is now applied to **both** key columns of every `on` pair, which it
+could not be before (see evidence 3). Only the LEFT column carries the
+`join_factor` graph edge — the right column is frequently a document-scoped
+index set, which already has its own vertex kind, and inventing a
+`factor:sourceType` twin of `index_set:sourceType` would be worse than leaving
+it un-edged. A non-string right column is left to the schema, where
+`tests/invalid/aggregate/join_on_key_not_string.esm` already pins it; the left
+column keeps its existing "non-string ⇒ unresolved factor" behaviour.
+
+Julia additionally validates `overlap`'s `src_env` / `tgt_env` against the same
+scope and was misfiring the same way; it now resolves them through class 3,
+which CONFORMANCE_SPEC §5.5.6 says is where envelope factors always live. (The
+other four bindings still do not validate `overlap` names at all — a separate,
+pre-existing divergence, not part of this defect.)
+
+The error message changed in all five, identically:
+`join factor '<name>' of node <key> names no range, output index, factor arg,
+declared variable, or index set in scope (model '<M>', at <path>)`.
+
+**Measured, whole `tests/valid` corpus:**
+
+| | before | after |
+|---|---|---|
+| fixtures | 93 | 93 |
+| resolve | 91 | **93** |
+| raise | 2 | **0** |
+
+Both raises were `E_REF_UNRESOLVED_JOIN_FACTOR`, on the two fixtures above. Each
+binding runs the sweep in its own suite (Python `test_reference_resolution.py`,
+TypeScript `reference-resolution.test.ts`, Go `TestReferenceGraphOverValidCorpus`,
+Julia `reference_graph_test.jl`), and the five-binding conformance run
+(`compare-conformance-outputs.py` over all 245 validation files) still passes.
+
+`tests/valid/aggregate/join_filter.esm` was the live trap here: it joins on
+`["src", "sourceType"]`, where `sourceType` is a document-scoped index set in no
+`args`, no `ranges` key and no `output_idx`. It survived only because `pair[1]`
+was never validated. It resolves under the new rule through class 4, which is
+the direct check that the widening is the SPEC's rule and not merely a
+convenience for the two broken fixtures.
+
+**This is not "accept anything".** Each binding carries a negative test — a
+document declaring a variable, an index set, a bound range and a string arg, so
+every registry the check consults is non-empty — asserting that a name in NONE
+of the four classes still raises `E_REF_UNRESOLVED_JOIN_FACTOR`, on either key
+column.
+
+### The fixture-side workaround, and why it was not taken
+
+A mechanical repair existed: add `"args": ["src_bin", "tgt_bin"]` to each of the
+six aggregates here and the five in wildfire's `OceanDynamics`, matching how
+`bin_skolem_spatial_join.esm` and `conservative_regrid_overlap_join.esm` were
+authored. It is semantically harmless. But adopting it as *the* fix would have
+ratified a rule the spec does not state, would have left `join_filter.esm`'s
+index-set column unresolvable the moment `pair[1]` is checked, and would have
+left §4.9.5's "must diagnose against the variable and index-set registries"
+unimplemented in all five bindings. It was **not** taken.
 
 ---
 
-TypeScript (`src/reference-resolution.test.ts`) and Go
-(`pkg/esm/reference_graph_test.go`) pin the remaining rejections by name, with
-their codes, so a repair surfaces as a test failure rather than silently
-changing the corpus. Python, Rust and Julia pin `wildfire_atmosphere_ocean.esm`
-individually for the same reason. Defect 1's entry was removed from all of them,
-which is what its fix had to do.
+The pins that recorded these rejections are updated rather than deleted.
+TypeScript's `KNOWN_UNRESOLVED` and Go's `referenceCorpusRejections` are now
+EMPTY maps, still asserted as an exact partition, so a regression that starts
+rejecting a valid fixture surfaces as a partition failure rather than as the
+weaker "never errors". The per-fixture pins in Python, Rust, Go and Julia
+(`wildfire_fixture_no_longer_raises_unknown_faq_node` and friends) became
+positive assertions: the fixture resolves, and the `join_factor` edge to
+`factor:rg_src_bin` exists. Defect 1's entry was removed from all of them, which
+is what its fix had to do.

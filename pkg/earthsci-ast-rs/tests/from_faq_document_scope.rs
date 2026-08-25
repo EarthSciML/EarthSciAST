@@ -110,23 +110,68 @@ fn cross_model_from_faq_corpus_fixture_resolves() {
     assert_eq!(faq[0].target, "node:edge_enum");
 }
 
-/// CORPUS_DEFECTS #2 is fixed; what remains on this fixture is #3.
+/// CORPUS_DEFECTS #2 AND #3 are both fixed on this fixture, and it was the
+/// SECOND instance of #3 — masked until #2 landed.
 ///
-/// `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives in
-/// `OceanDynamics` while the registry entry is document-scoped. That resolves
-/// now. The fixture still does not resolve as a whole: the producing node
-/// carries `join.on == [["rg_src_bin", "rg_tgt_bin"]]`, naming model variables
-/// rather than node-local binders — the SAME undiagnosed shape as corpus defect
-/// #3 (`geometry/conservative_regrid_assembly.esm`), which defect #2 used to
-/// mask by erroring first.
+///   - #2: `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives
+///     in `OceanDynamics` while the registry entry is document-scoped.
+///   - #3: that producing node carries `join.on == [["rg_src_bin",
+///     "rg_tgt_bin"]]`, naming declared model VARIABLES — per-cell
+///     value-invention bin buffers written by equations 0 and 1 — rather than
+///     node-local binders. Both columns now resolve through the variable class
+///     of `join_binder_class`.
 #[test]
-fn wildfire_fixture_no_longer_raises_unknown_faq_node() {
+fn wildfire_fixture_resolves_fully() {
     let doc = fixture_json("valid/wildfire_atmosphere_ocean.esm");
-    let e = resolve_references(&doc).unwrap_err();
-    match &e {
-        ReferenceResolutionError::UnresolvedJoinFactor { factor, .. } => {
-            assert_eq!(factor, "rg_src_bin");
+    let graphs = resolve_references(&doc).expect("wildfire_atmosphere_ocean.esm should resolve");
+    let ocean = graphs.get("OceanDynamics").expect("an OceanDynamics graph");
+    assert!(
+        ocean
+            .edges_of_kind(EdgeKind::JoinFactor)
+            .iter()
+            .any(|e| e.target == "factor:rg_src_bin"),
+        "no join_factor edge to factor:rg_src_bin"
+    );
+}
+
+/// The other instance of CORPUS_DEFECTS #3: six aggregates in
+/// `ConservativeRegridAssembly` join on `[["src_bin", "tgt_bin"]]`, both
+/// declared model variables shaped over the join's range index sets.
+#[test]
+fn conservative_regrid_assembly_resolves() {
+    let doc = fixture_json("valid/geometry/conservative_regrid_assembly.esm");
+    resolve_references(&doc).expect("conservative_regrid_assembly.esm should resolve");
+}
+
+/// The corpus-wide sweep: EVERY schema-valid fixture resolves. This is the
+/// acceptance test for `tests/CORPUS_DEFECTS.md` and the Rust counterpart of the
+/// Python / TypeScript / Go / Julia corpus sweeps — the five agree on the
+/// partition, which is EMPTY of rejections.
+#[test]
+fn every_shared_valid_fixture_resolves() {
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read tests/valid") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect(&path, out);
+            } else if path.extension().is_some_and(|e| e == "esm") {
+                out.push(path);
+            }
         }
-        other => panic!("want the defect-#3 join error, got {other:?}"),
     }
+    let valid = common::repo_fixture("valid");
+    let mut files = Vec::new();
+    collect(&valid, &mut files);
+    files.sort();
+    assert!(files.len() > 50, "corpus too small: {}", files.len());
+
+    let mut failures = Vec::new();
+    for path in &files {
+        let text = std::fs::read_to_string(path).expect("read fixture");
+        let doc: Value = serde_json::from_str(&text).expect("parse fixture");
+        if let Err(e) = resolve_references(&doc) {
+            failures.push(format!("{}: {e}", path.display()));
+        }
+    }
+    assert!(failures.is_empty(), "unresolved fixtures: {failures:#?}");
 }

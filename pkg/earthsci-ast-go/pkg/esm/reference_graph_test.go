@@ -163,29 +163,25 @@ func TestReferenceGraphRejectsUndeclaredIndexSet(t *testing.T) {
 // referenceCorpusRejections records the schema-valid fixtures that the
 // reference pass nevertheless refuses, and why.
 //
-// These are NOT Go bugs and NOT fixture bugs this task may fix: each is a
-// pre-existing gap in the shared corpus, and the Python binding
-// (`build_reference_graph`) rejects every one of them with the SAME code and
-// the same message. They are pinned here so the sweep below can assert the
-// exact partition — accepted vs rejected — rather than the weaker "never
-// errors", which the corpus does not satisfy.
+// It is EMPTY, and the sweep below asserts that: every one of the 93 fixtures
+// under tests/valid resolves. The map is kept so a regression that starts
+// rejecting a valid fixture surfaces as an exact-partition failure rather than
+// as a weaker "never errors" assertion.
 //
-//   - conservative_regrid_assembly.esm and wildfire_atmosphere_ocean.esm: an
-//     aggregate `join.on` names a factor (`src_bin` / `rg_src_bin`) that is not
-//     among the node's string args, range keys, or symbolic output_idx
-//     (tests/CORPUS_DEFECTS.md defect 3). wildfire's instance was MASKED until
-//     phase 6b moved `from_faq` to document scope (esm-spec §9.7.5): it used to
-//     fail earlier, with E_REF_UNKNOWN_FAQ_NODE, because its producer lives in
-//     another model, so the resolver never reached the join factor.
+// The three entries it used to hold are all closed (tests/CORPUS_DEFECTS.md):
 //
-//     skolem_distinct_rank.esm was in this list until phase 6b. Its recorded
-//     diagnosis was wrong: the producer node was there all along and complete,
-//     and only its one-line `id` field was missing. Adding the `id` made the
-//     fixture resolve (defect 1, now closed).
-var referenceCorpusRejections = map[string]string{
-	"geometry/conservative_regrid_assembly.esm": CodeRefUnresolvedJoinFactor,
-	"wildfire_atmosphere_ocean.esm":             CodeRefUnresolvedJoinFactor,
-}
+//   - skolem_distinct_rank.esm (defect 1): its recorded diagnosis was wrong —
+//     the producer node was there all along and only its one-line `id` was
+//     missing.
+//   - wildfire_atmosphere_ocean.esm (defect 2): `from_faq` now resolves at
+//     DOCUMENT scope (esm-spec §9.7.5), so a producer in another model is found.
+//   - conservative_regrid_assembly.esm and wildfire_atmosphere_ocean.esm
+//     (defect 3): an aggregate `join.on` names `src_bin` / `rg_src_bin`, which
+//     are declared MODEL VARIABLES — value-invention bin buffers — rather than
+//     node-local binders. `joinBinderClass` now diagnoses an `on` column against
+//     all four binder classes esm-spec §4.9.5 and CONFORMANCE_SPEC §5.5.6
+//     require, in their order, so both fixtures resolve.
+var referenceCorpusRejections = map[string]string{}
 
 // TestReferenceGraphOverValidCorpus resolves EVERY schema-valid fixture in the
 // shared corpus and asserts the accepted/rejected partition recorded in
@@ -271,11 +267,16 @@ func TestReferenceGraphOverValidCorpus(t *testing.T) {
 }
 
 // TestReferenceGraphJoinFactors pins the third edge kind: an aggregate `join.on`
-// reference resolving to a factor in the node's scope — its string args, its
-// declared range keys, or its symbolic output_idx — and the refusal when it
-// resolves to none of them.
+// reference resolving in the node's join-name scope — a node-local binder (a
+// `ranges` key or a symbolic `output_idx`), a string factor `arg`, a declared
+// model VARIABLE, or a document-scoped INDEX SET — and the refusal when it
+// resolves in none of them.
+//
+// Both key columns of every pair are diagnosed (esm-spec §4.9.5); only the left
+// one carries the join_factor edge.
 func TestReferenceGraphJoinFactors(t *testing.T) {
 	model := map[string]any{
+		"variables": map[string]any{"tgt": map[string]any{"type": "parameter"}},
 		"equations": []any{
 			map[string]any{
 				"lhs": "y",
@@ -284,11 +285,14 @@ func TestReferenceGraphJoinFactors(t *testing.T) {
 					"id":         "joined",
 					"args":       []any{"src"},
 					"output_idx": []any{"cell"},
-					"ranges":     map[string]any{"i": map[string]any{"from": "cells"}},
+					"ranges":     map[string]any{"i": map[string]any{"from": "cells"}, "j": map[string]any{"from": "cells"}},
 					"join": []any{
+						// right column: a declared model variable
 						map[string]any{"on": []any{[]any{"src", "tgt"}}},
+						// right column: a node-local range key
 						map[string]any{"on": []any{[]any{"i", "j"}}},
-						map[string]any{"on": []any{[]any{"cell", "k"}}},
+						// right column: a document-scoped index set
+						map[string]any{"on": []any{[]any{"cell", "cells"}}},
 					},
 				},
 			},
@@ -334,6 +338,67 @@ func TestReferenceGraphJoinFactors(t *testing.T) {
 	var refErr *ReferenceResolutionError
 	if err == nil || !asReferenceError(err, &refErr) || refErr.Code != CodeRefUnresolvedJoinFactor {
 		t.Fatalf("want E_REF_UNRESOLVED_JOIN_FACTOR, got %v", err)
+	}
+}
+
+// TestReferenceGraphJoinBinderClasses is the NEGATIVE guard on the four-class
+// join scope (esm-spec §4.9.5 / CONFORMANCE_SPEC §5.5.6). Widening the scope to
+// the variable and index-set registries must not degrade into "accept any
+// string": a name declared in NONE of the four registries is still a typo and
+// must still raise E_REF_UNRESOLVED_JOIN_FACTOR, on either key column.
+//
+// The document here declares a variable (`bin`) and an index set (`cells`) and
+// binds a range (`i`) and an arg (`w`), so all four registries are non-empty —
+// the check is genuinely reached rather than trivially satisfied.
+func TestReferenceGraphJoinBinderClasses(t *testing.T) {
+	doc := func(on []any) map[string]any {
+		return map[string]any{
+			"variables": map[string]any{"bin": map[string]any{"type": "parameter"}, "w": map[string]any{"type": "parameter"}},
+			"equations": []any{
+				map[string]any{
+					"lhs": "y",
+					"rhs": map[string]any{
+						"op":         "aggregate",
+						"id":         "j",
+						"args":       []any{"w"},
+						"output_idx": []any{},
+						"ranges":     map[string]any{"i": map[string]any{"from": "cells"}},
+						"join":       []any{map[string]any{"on": []any{on}}},
+					},
+				},
+			},
+		}
+	}
+	sets := map[string]any{"cells": map[string]any{"kind": "interval", "size": 4}}
+
+	// Each of the four binder classes resolves, on both columns.
+	for _, pair := range [][]any{
+		{"i", "i"},         // 1. node-local binder (ranges key)
+		{"w", "w"},         // 2. node-local string factor arg
+		{"bin", "bin"},     // 3. declared model variable — the defect-#3 class
+		{"cells", "cells"}, // 4. document-scoped index set
+	} {
+		if _, err := BuildReferenceGraph(doc(pair), "M", sets); err != nil {
+			t.Fatalf("join on %v should resolve: %v", pair, err)
+		}
+	}
+
+	// A name in none of the four is STILL an error — on the left column…
+	var refErr *ReferenceResolutionError
+	_, err := BuildReferenceGraph(doc([]any{"no_such_name", "bin"}), "M", sets)
+	if err == nil || !asReferenceError(err, &refErr) || refErr.Code != CodeRefUnresolvedJoinFactor {
+		t.Fatalf("undefined LEFT column: want E_REF_UNRESOLVED_JOIN_FACTOR, got %v", err)
+	}
+	if !strings.Contains(refErr.Message, "no_such_name") {
+		t.Fatalf("message does not name the offender: %s", refErr.Message)
+	}
+	// …and on the right column, which was never validated before this fix.
+	_, err = BuildReferenceGraph(doc([]any{"bin", "no_such_name"}), "M", sets)
+	if err == nil || !asReferenceError(err, &refErr) || refErr.Code != CodeRefUnresolvedJoinFactor {
+		t.Fatalf("undefined RIGHT column: want E_REF_UNRESOLVED_JOIN_FACTOR, got %v", err)
+	}
+	if !strings.Contains(refErr.Message, "no_such_name") {
+		t.Fatalf("message does not name the offender: %s", refErr.Message)
 	}
 }
 
@@ -622,24 +687,47 @@ func TestCrossModelFromFAQCorpusFixture(t *testing.T) {
 	}
 }
 
-// TestWildfireFixtureNoLongerUnknownFAQNode: CORPUS_DEFECTS #2 is fixed; what
-// remains on that fixture is #3. `rg_candidate_pairs.from_faq` names
-// `rg_candidate_set`, which lives in OceanDynamics while the registry entry is
-// document-scoped — that resolves now. The producing node's
-// `join.on == [["rg_src_bin","rg_tgt_bin"]]` names model variables rather than
-// node-local binders, which is defect #3's shape, previously masked.
-func TestWildfireFixtureNoLongerUnknownFAQNode(t *testing.T) {
+// TestWildfireFixtureResolvesFully: CORPUS_DEFECTS #2 and #3 are both fixed on
+// this fixture, and it was the SECOND instance of #3 — masked until #2 landed.
+//
+//   - #2: `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives in
+//     OceanDynamics while the registry entry is document-scoped.
+//   - #3: that producing node's `join.on == [["rg_src_bin","rg_tgt_bin"]]` names
+//     declared model VARIABLES — per-cell value-invention bin buffers written by
+//     equations 0 and 1 — rather than node-local binders. Both columns now
+//     resolve through the variable class of `joinBinderClass`.
+func TestWildfireFixtureResolvesFully(t *testing.T) {
 	doc := readRawDocument(t, filepath.Join(
 		repoTestsDir(t), "valid", "wildfire_atmosphere_ocean.esm"))
-	_, err := ResolveReferences(doc)
-	var refErr *ReferenceResolutionError
-	if err == nil || !asReferenceError(err, &refErr) {
-		t.Fatalf("want a *ReferenceResolutionError, got %v", err)
+	graphs, err := ResolveReferences(doc)
+	if err != nil {
+		t.Fatalf("wildfire_atmosphere_ocean.esm should resolve: %v", err)
 	}
-	if refErr.Code != CodeRefUnresolvedJoinFactor {
-		t.Fatalf("code = %q, want the defect-#3 join error", refErr.Code)
+	g, ok := graphs["OceanDynamics"]
+	if !ok {
+		t.Fatalf("no OceanDynamics graph; got %v", graphs)
 	}
-	if !strings.Contains(refErr.Message, "rg_src_bin") {
-		t.Fatalf("message does not name the unresolved factor: %s", refErr.Message)
+	// The join column that used to fail now carries its edge.
+	var found bool
+	for _, e := range g.EdgesOfKind(EdgeKindJoinFactor) {
+		if e.Target == factorKeyOf("rg_src_bin") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no join_factor edge to factor:rg_src_bin in %v",
+			edgeStrings(g.EdgesOfKind(EdgeKindJoinFactor)))
+	}
+}
+
+// TestConservativeRegridAssemblyResolves is the other instance of
+// CORPUS_DEFECTS #3: six aggregates in ConservativeRegridAssembly join on
+// [["src_bin","tgt_bin"]], both declared model variables shaped over the join's
+// range index sets.
+func TestConservativeRegridAssemblyResolves(t *testing.T) {
+	doc := readRawDocument(t, filepath.Join(
+		repoTestsDir(t), "valid", "geometry", "conservative_regrid_assembly.esm"))
+	if _, err := ResolveReferences(doc); err != nil {
+		t.Fatalf("conservative_regrid_assembly.esm should resolve: %v", err)
 	}
 }

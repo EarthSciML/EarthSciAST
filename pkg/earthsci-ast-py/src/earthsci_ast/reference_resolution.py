@@ -390,6 +390,14 @@ def _build_reference_graph(
             ReferenceVertex(key=_index_set_key(name), kind=VertexKind.INDEX_SET, name=name)
         )
 
+    # The model's declared variable registry. A `join` `on` key column may name
+    # a declared component-local variable — a value-invention bin buffer written
+    # by an earlier equation — which is one of the three binder classes
+    # esm-spec §4.9.5 makes an `on` column polymorphic over. See
+    # `join_binder_class` below.
+    model_variables = model.get("variables")
+    variables: dict = model_variables if isinstance(model_variables, dict) else {}
+
     # Pass 2 — walk every expression node; assign a stable address, register
     # aggregate / id-bearing nodes, and add the within-node reference edges
     # (ranges[*].from, join.on). Also build id -> node for from_faq.
@@ -419,20 +427,61 @@ def _build_reference_graph(
         )
         return key
 
-    def factor_scope(node: dict) -> set:
-        """Names a ``join.on`` reference may resolve to: the node's string
-        factor-args, its declared range keys, and its symbolic output_idx."""
-        names = set()
-        for a in node.get("args") or []:
-            if isinstance(a, str):
-                names.add(a)
+    def join_binder_class(node: dict, name: object) -> str | None:
+        """Which binder class a ``join`` name resolves to, or ``None``.
+
+        An ``on`` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a
+        loop symbol bound by the enclosing ``ranges``, a document-scoped index
+        set (§9.7.5), or a declared component-local variable — a value-invention
+        bin buffer. A binding that diagnoses such a name "must do so against the
+        variable AND index-set registries", not against node-local names alone.
+
+        The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes,
+        because a node-local binder SHADOWS a same-named declared variable
+        (esm-spec §4.3.1 permits one string to be a variable reference outside an
+        aggregate and an index symbol inside one):
+
+        1. a name the node BINDS — a ``ranges`` key or a symbolic ``output_idx``
+           entry — tested FIRST;
+        2. a node-local string factor ``arg``;
+        3. a declared component-local variable (the model's variable registry);
+        4. a document-scoped index set.
+
+        Anything else is unresolvable and raises
+        ``E_REF_UNRESOLVED_JOIN_FACTOR``. Nothing here widens the check to
+        "accept any string": a name in none of the four registries is still a
+        typo and is still reported.
+        """
+        if not isinstance(name, str) or not name:
+            return None
+        # 1. node-local binders (these shadow a same-named variable)
         ranges = node.get("ranges")
-        if isinstance(ranges, dict):
-            names.update(ranges.keys())
+        if isinstance(ranges, dict) and name in ranges:
+            return "range"
         for o in node.get("output_idx") or []:
-            if isinstance(o, str):
-                names.add(o)
-        return names
+            if o == name:
+                return "output_idx"
+        # 2. node-local string factor args
+        for a in node.get("args") or []:
+            if a == name:
+                return "arg"
+        # 3. the model's variable registry — where a bin buffer lives
+        if name in variables:
+            return "variable"
+        # 4. the document-scoped index-set registry
+        if name in index_sets:
+            return "index_set"
+        return None
+
+    def check_join_name(node: dict, name: object, key: str, path: str) -> None:
+        if join_binder_class(node, name) is None:
+            raise ReferenceResolutionError(
+                E_REF_UNRESOLVED_JOIN_FACTOR,
+                f"join factor '{name if isinstance(name, str) else ''}' of node {key} "
+                f"names no range, output index, factor arg, declared variable, "
+                f"or index set in scope "
+                f"(model '{model_name}', at {path})",
+            )
 
     def process_node_refs(node: dict, key: str, path: str) -> None:
         # ranges[*].from -> index set
@@ -452,7 +501,6 @@ def _build_reference_graph(
         # join[*].on[*] -> factor
         join = node.get("join")
         if isinstance(join, list):
-            scope = factor_scope(node)
             for clause in join:
                 if not isinstance(clause, dict):
                     continue
@@ -460,13 +508,22 @@ def _build_reference_graph(
                     if not isinstance(pair, (list, tuple)) or not pair:
                         continue
                     ref = pair[0]
-                    if not isinstance(ref, str) or ref not in scope:
-                        raise ReferenceResolutionError(
-                            E_REF_UNRESOLVED_JOIN_FACTOR,
-                            f"join factor '{ref}' of node {key} names no factor, "
-                            f"range, or output index in scope "
-                            f"(model '{model_name}', at {path})",
-                        )
+                    check_join_name(node, ref, key, path)
+                    # BOTH key columns are references (esm-spec §4.9.5). Only the
+                    # LEFT one carries the graph edge: the JOIN_FACTOR edge kind
+                    # records the node's own key-column dependency, and the right
+                    # column is frequently a document-scoped index set, which
+                    # already has its own vertex kind. The right column is
+                    # DIAGNOSED here and left un-edged, which is what makes
+                    # `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+                    # through the index-set class without inventing a
+                    # `factor:sourceType` twin of `index_set:sourceType`.
+                    #
+                    # A non-string right column is a SCHEMA defect
+                    # (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                    # there) and is not re-diagnosed as a reference error.
+                    if len(pair) > 1 and isinstance(pair[1], str):
+                        check_join_name(node, pair[1], key, path)
                     graph._ensure_vertex(
                         ReferenceVertex(key=_factor_key(ref), kind=VertexKind.FACTOR, name=ref)
                     )

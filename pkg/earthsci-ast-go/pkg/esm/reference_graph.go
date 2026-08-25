@@ -410,31 +410,74 @@ func sortedRawKeys(m map[string]any) []string {
 	return keys
 }
 
-// factorScope returns the names a `join.on` reference on this node may resolve
-// to: the node's string factor-args, its declared range keys, and its symbolic
-// output_idx.
-func factorScope(node map[string]any) map[string]bool {
-	names := map[string]bool{}
-	if args, ok := rawArray(node["args"]); ok {
-		for _, a := range args {
-			if s, ok := a.(string); ok {
-				names[s] = true
-			}
-		}
+// joinBinderClass reports which binder class a `join` name resolves to, or ""
+// when it resolves nowhere.
+//
+// An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop symbol
+// bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a
+// declared component-local variable — a value-invention bin buffer. A binding
+// that diagnoses such a name "must do so against the variable AND index-set
+// registries", not against node-local names alone.
+//
+// The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+// node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+// permits one string to be a variable reference outside an aggregate and an
+// index symbol inside one):
+//
+//  1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+//     tested FIRST;
+//  2. a node-local string factor `arg`;
+//  3. a declared component-local variable (the model's variable registry);
+//  4. a document-scoped index set.
+//
+// Anything else is unresolvable and raises E_REF_UNRESOLVED_JOIN_FACTOR.
+// Nothing here widens the check to "accept any string": a name in none of the
+// four registries is still a typo and is still reported.
+func joinBinderClass(node map[string]any, name string, variables, indexSets map[string]any) string {
+	if name == "" {
+		return ""
 	}
+	// 1. node-local binders (these shadow a same-named variable)
 	if ranges, ok := rawObject(node["ranges"]); ok {
-		for k := range ranges {
-			names[k] = true
+		if _, bound := ranges[name]; bound {
+			return "range"
 		}
 	}
 	if outputIdx, ok := rawArray(node["output_idx"]); ok {
 		for _, o := range outputIdx {
-			if s, ok := o.(string); ok {
-				names[s] = true
+			if s, isStr := o.(string); isStr && s == name {
+				return "output_idx"
 			}
 		}
 	}
-	return names
+	// 2. node-local string factor args
+	if args, ok := rawArray(node["args"]); ok {
+		for _, a := range args {
+			if s, isStr := a.(string); isStr && s == name {
+				return "arg"
+			}
+		}
+	}
+	// 3. the model's variable registry — where a bin buffer lives
+	if _, declared := variables[name]; declared {
+		return "variable"
+	}
+	// 4. the document-scoped index-set registry
+	if _, declared := indexSets[name]; declared {
+		return "index_set"
+	}
+	return ""
+}
+
+// checkJoinName diagnoses one `join` name, returning the unresolved-join-factor
+// error when it resolves in none of the four binder classes.
+func checkJoinName(node map[string]any, name string, variables, indexSets map[string]any, key, modelName, path string) error {
+	if joinBinderClass(node, name, variables, indexSets) != "" {
+		return nil
+	}
+	return refErr(CodeRefUnresolvedJoinFactor,
+		"join factor '%s' of node %s names no range, output index, factor arg, declared variable, or index set in scope (model '%s', at %s)",
+		name, key, modelName, path)
 }
 
 // nodeAddr records one id-bearing expression node, as the `from_faq` scope sees
@@ -520,6 +563,7 @@ func registerAndProcess(
 	node map[string]any,
 	path, modelName string,
 	indexSets map[string]any,
+	variables map[string]any,
 	idToAddr map[string]nodeAddr,
 ) error {
 	op, _ := node["op"].(string)
@@ -572,7 +616,6 @@ func registerAndProcess(
 
 	// join[*].on[*] -> factor
 	if join, ok := rawArray(node["join"]); ok {
-		scope := factorScope(node)
 		for _, clause := range join {
 			clauseObj, ok := rawObject(clause)
 			if !ok {
@@ -592,11 +635,29 @@ func registerAndProcess(
 				if !ok || len(pairArr) == 0 {
 					continue
 				}
-				ref, isStr := pairArr[0].(string)
-				if !isStr || !scope[ref] {
-					return refErr(CodeRefUnresolvedJoinFactor,
-						"join factor '%s' of node %s names no factor, range, or output index in scope (model '%s', at %s)",
-						ref, key, modelName, path)
+				ref, _ := pairArr[0].(string)
+				if err := checkJoinName(node, ref, variables, indexSets, key, modelName, path); err != nil {
+					return err
+				}
+				// BOTH key columns are references (esm-spec §4.9.5). Only the
+				// LEFT one carries the graph edge: the join_factor edge kind
+				// records the node's own key-column dependency, and the right
+				// column is frequently a document-scoped index set, which
+				// already has its own vertex kind. The right column is
+				// DIAGNOSED here and left un-edged, which is what makes
+				// `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+				// through the index-set class without inventing a
+				// `factor:sourceType` twin of `index_set:sourceType`.
+				//
+				// A non-string right column is a SCHEMA defect
+				// (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+				// there) and is not re-diagnosed as a reference error.
+				if len(pairArr) > 1 {
+					if right, isStr := pairArr[1].(string); isStr {
+						if err := checkJoinName(node, right, variables, indexSets, key, modelName, path); err != nil {
+							return err
+						}
+					}
 				}
 				g.ensureVertex(ReferenceVertex{
 					Key: factorKeyOf(ref), Kind: VertexKindFactor, Name: ref,
@@ -616,23 +677,24 @@ func walkReferences(
 	value any,
 	path, modelName string,
 	indexSets map[string]any,
+	variables map[string]any,
 	idToAddr map[string]nodeAddr,
 ) error {
 	switch v := value.(type) {
 	case map[string]any:
 		if _, isNode := v["op"]; isNode {
-			if err := registerAndProcess(g, v, path, modelName, indexSets, idToAddr); err != nil {
+			if err := registerAndProcess(g, v, path, modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
 		for _, k := range sortedRawKeys(v) {
-			if err := walkReferences(g, v[k], path+"/"+k, modelName, indexSets, idToAddr); err != nil {
+			if err := walkReferences(g, v[k], path+"/"+k, modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, el := range v {
-			if err := walkReferences(g, el, fmt.Sprintf("%s/%d", path, i), modelName, indexSets, idToAddr); err != nil {
+			if err := walkReferences(g, el, fmt.Sprintf("%s/%d", path, i), modelName, indexSets, variables, idToAddr); err != nil {
 				return err
 			}
 		}
@@ -692,6 +754,12 @@ func buildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 		})
 	}
 
+	// The model's declared variable registry. A `join` `on` key column may name a
+	// declared component-local variable — a value-invention bin buffer written by
+	// an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
+	// an `on` column polymorphic over. See joinBinderClass.
+	variables, _ := rawObject(model["variables"])
+
 	// Pass 2 — walk every expression node: assign a stable address, register
 	// aggregate / id-bearing nodes, and add the within-node reference edges
 	// (ranges[*].from, join.on). Builds id -> address for from_faq.
@@ -701,7 +769,7 @@ func buildReferenceGraph(model map[string]any, modelName string, docIndexSets ma
 		if !has {
 			continue
 		}
-		if err := walkReferences(g, v, root, modelName, indexSets, idToAddr); err != nil {
+		if err := walkReferences(g, v, root, modelName, indexSets, variables, idToAddr); err != nil {
 			return nil, err
 		}
 	}

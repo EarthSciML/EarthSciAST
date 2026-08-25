@@ -346,25 +346,99 @@ def test_cross_model_from_faq_corpus_fixture_resolves():
     ]
 
 
-def test_wildfire_fixture_no_longer_raises_unknown_faq_node():
-    """CORPUS_DEFECTS #2 is fixed; what remains on this fixture is #3.
+def test_wildfire_fixture_resolves_fully():
+    """CORPUS_DEFECTS #2 AND #3 are both fixed on this fixture.
 
-    ``rg_candidate_pairs.from_faq`` names ``rg_candidate_set``, which lives in
-    ``OceanDynamics`` while the registry entry is document-scoped. That is
-    resolved now. The fixture still does not resolve as a whole: its producing
-    node carries ``join.on == [["rg_src_bin", "rg_tgt_bin"]]``, naming model
-    variables rather than node-local binders — the SAME undiagnosed shape as
-    corpus defect #3 (``geometry/conservative_regrid_assembly.esm``), which
-    defect #2 used to mask by erroring first.
+    It was the SECOND instance of #3, masked until #2 landed:
+
+    * #2 — ``rg_candidate_pairs.from_faq`` names ``rg_candidate_set``, which
+      lives in ``OceanDynamics`` while the registry entry is document-scoped.
+    * #3 — that producing node carries
+      ``join.on == [["rg_src_bin", "rg_tgt_bin"]]``, naming declared model
+      VARIABLES (per-cell value-invention bin buffers written by equations 0 and
+      1) rather than node-local binders. Both columns now resolve through the
+      variable class of ``join_binder_class``.
     """
     from conftest import load_fixture
 
     doc = load_fixture("valid/wildfire_atmosphere_ocean.esm")
+    graphs = resolve_references(doc)
+    ocean = graphs["OceanDynamics"]
+    targets = {e.target for e in ocean.edges_of_kind(EdgeKind.JOIN_FACTOR)}
+    assert f"{VertexKind.FACTOR}:rg_src_bin" in targets
+
+
+def test_conservative_regrid_assembly_resolves():
+    """The other instance of CORPUS_DEFECTS #3.
+
+    Six aggregates in ``ConservativeRegridAssembly`` join on
+    ``[["src_bin", "tgt_bin"]]``; both are declared model variables shaped over
+    the join's range index sets.
+    """
+    from conftest import load_fixture
+
+    doc = load_fixture("valid/geometry/conservative_regrid_assembly.esm")
+    resolve_references(doc)
+
+
+# --- the four join binder classes (esm-spec §4.9.5 / CONFORMANCE_SPEC §5.5.6) -
+
+
+def _four_class_doc(on):
+    """One document declaring all four binder classes.
+
+    A variable (``bin``), an index set (``cells``), a bound range (``i``) and a
+    string factor arg (``w``) — so every registry the check consults is
+    non-empty and the check is genuinely reached.
+    """
+    return {
+        "index_sets": {"cells": {"kind": "interval", "size": 4}},
+        "models": {
+            "M": {
+                "variables": {"bin": {"type": "parameter"}, "w": {"type": "parameter"}},
+                "equations": [
+                    {
+                        "lhs": "y",
+                        "rhs": {
+                            "op": "aggregate",
+                            "id": "j",
+                            "args": ["w"],
+                            "output_idx": [],
+                            "ranges": {"i": {"from": "cells"}},
+                            "join": [{"on": [list(on)]}],
+                        },
+                    }
+                ],
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "on",
+    [
+        ("i", "i"),  # 1. node-local binder (ranges key)
+        ("w", "w"),  # 2. node-local string factor arg
+        ("bin", "bin"),  # 3. declared model variable — the defect-#3 class
+        ("cells", "cells"),  # 4. document-scoped index set
+    ],
+)
+def test_join_binder_classes_all_resolve_on_both_columns(on):
+    resolve_references(_four_class_doc(on))
+
+
+@pytest.mark.parametrize("on", [("no_such_name", "bin"), ("bin", "no_such_name")])
+def test_join_binder_classes_still_reject_an_undefined_name(on):
+    """The NEGATIVE guard on the widened scope.
+
+    Consulting the variable and index-set registries must not degrade into
+    "accept any string": a name in NONE of the four classes is still a typo, on
+    either key column. The right column was never validated before this fix.
+    """
     with pytest.raises(ReferenceResolutionError) as exc:
-        resolve_references(doc)
-    assert exc.value.code != E_REF_UNKNOWN_FAQ_NODE
+        resolve_references(_four_class_doc(on))
     assert exc.value.code == E_REF_UNRESOLVED_JOIN_FACTOR
-    assert "rg_src_bin" in str(exc.value)
+    assert "no_such_name" in str(exc.value)
 
 
 def test_model_nested_index_sets_merge_over_the_document_registry():

@@ -104,7 +104,7 @@ pub enum ReferenceResolutionError {
 
     /// A `join.on` factor reference names nothing in the node's scope.
     #[error(
-        "join factor '{factor}' of node {node} names no factor, range, or output index in scope (model '{model}', at {path})"
+        "join factor '{factor}' of node {node} names no range, output index, factor arg, declared variable, or index set in scope (model '{model}', at {path})"
     )]
     UnresolvedJoinFactor {
         factor: String,
@@ -329,30 +329,98 @@ fn nonempty_str(value: Option<&Value>) -> Option<&str> {
     value.and_then(|v| v.as_str()).filter(|s| !s.is_empty())
 }
 
-/// The names a `join.on` reference may resolve to: the node's string
-/// factor-args, its declared range keys, and its symbolic `output_idx`.
-fn factor_scope(map: &Map<String, Value>) -> HashSet<String> {
-    let mut names = HashSet::new();
-    if let Some(args) = map.get("args").and_then(|v| v.as_array()) {
-        for a in args {
-            if let Some(s) = a.as_str() {
-                names.insert(s.to_string());
-            }
-        }
+/// Which binder class a `join` name resolves to, or `None`.
+///
+/// An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop
+/// symbol bound by the enclosing `ranges`, a document-scoped index set
+/// (§9.7.5), or a declared component-local variable — a value-invention bin
+/// buffer. A binding that diagnoses such a name "must do so against the
+/// variable AND index-set registries", not against node-local names alone.
+///
+/// The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+/// node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+/// permits one string to be a variable reference outside an aggregate and an
+/// index symbol inside one):
+///
+/// 1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+///    tested FIRST;
+/// 2. a node-local string factor `arg`;
+/// 3. a declared component-local variable (the model's variable registry);
+/// 4. a document-scoped index set.
+///
+/// Anything else is unresolvable and raises `E_REF_UNRESOLVED_JOIN_FACTOR`.
+/// Nothing here widens the check to "accept any string": a name in none of the
+/// four registries is still a typo and is still reported.
+fn join_binder_class(
+    map: &Map<String, Value>,
+    name: &str,
+    variables: Option<&Map<String, Value>>,
+    index_sets: Option<&Map<String, Value>>,
+) -> Option<JoinBinder> {
+    if name.is_empty() {
+        return None;
     }
-    if let Some(ranges) = map.get("ranges").and_then(|v| v.as_object()) {
-        for k in ranges.keys() {
-            names.insert(k.clone());
-        }
+    // 1. node-local binders (these shadow a same-named variable)
+    if let Some(ranges) = map.get("ranges").and_then(|v| v.as_object())
+        && ranges.contains_key(name)
+    {
+        return Some(JoinBinder::Range);
     }
-    if let Some(oi) = map.get("output_idx").and_then(|v| v.as_array()) {
-        for o in oi {
-            if let Some(s) = o.as_str() {
-                names.insert(s.to_string());
-            }
-        }
+    if let Some(oi) = map.get("output_idx").and_then(|v| v.as_array())
+        && oi.iter().any(|o| o.as_str() == Some(name))
+    {
+        return Some(JoinBinder::OutputIdx);
     }
-    names
+    // 2. node-local string factor args
+    if let Some(args) = map.get("args").and_then(|v| v.as_array())
+        && args.iter().any(|a| a.as_str() == Some(name))
+    {
+        return Some(JoinBinder::Arg);
+    }
+    // 3. the model's variable registry — where a bin buffer lives
+    if variables.map(|v| v.contains_key(name)).unwrap_or(false) {
+        return Some(JoinBinder::Variable);
+    }
+    // 4. the document-scoped index-set registry
+    if index_sets.map(|v| v.contains_key(name)).unwrap_or(false) {
+        return Some(JoinBinder::IndexSet);
+    }
+    None
+}
+
+/// The binder classes a `join` name may resolve to (CONFORMANCE_SPEC §5.5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinBinder {
+    Range,
+    OutputIdx,
+    Arg,
+    Variable,
+    IndexSet,
+}
+
+/// Diagnose one `join` name, or return the unresolved-join-factor error.
+fn check_join_name(
+    map: &Map<String, Value>,
+    name: Option<&str>,
+    variables: Option<&Map<String, Value>>,
+    index_sets: Option<&Map<String, Value>>,
+    node_key: &str,
+    model_name: &str,
+    path: &str,
+) -> Result<(), ReferenceResolutionError> {
+    let resolved = name
+        .and_then(|n| join_binder_class(map, n, variables, index_sets))
+        .is_some();
+    if resolved {
+        Ok(())
+    } else {
+        Err(ReferenceResolutionError::UnresolvedJoinFactor {
+            factor: name.unwrap_or("").to_string(),
+            node: node_key.to_string(),
+            model: model_name.to_string(),
+            path: path.to_string(),
+        })
+    }
 }
 
 /// One id-bearing expression node, as the `from_faq` scope sees it.
@@ -369,6 +437,7 @@ fn register_and_process(
     path: &str,
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
+    variables: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
     id_to_addr: &mut IndexMap<String, DocNode>,
 ) -> Result<(), ReferenceResolutionError> {
@@ -437,7 +506,6 @@ fn register_and_process(
 
     // join[*].on[*] -> factor
     if let Some(join) = map.get("join").and_then(|v| v.as_array()) {
-        let scope = factor_scope(map);
         for clause in join {
             let on = match clause.get("on").and_then(|v| v.as_array()) {
                 Some(on) => on,
@@ -448,8 +516,29 @@ fn register_and_process(
                     .as_array()
                     .and_then(|p| p.first())
                     .and_then(|v| v.as_str());
+                check_join_name(
+                    map, reference, variables, index_sets, &key, model_name, path,
+                )?;
+                // BOTH key columns are references (esm-spec §4.9.5). Only the
+                // LEFT one carries the graph edge: the JoinFactor edge kind
+                // records the node's own key-column dependency, and the right
+                // column is frequently a document-scoped index set, which
+                // already has its own vertex kind. The right column is
+                // DIAGNOSED here and left un-edged, which is what makes
+                // `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+                // through the index-set class without inventing a
+                // `factor:sourceType` twin of `index_set:sourceType`.
+                //
+                // A non-string right column is a SCHEMA defect
+                // (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                // there) and is not re-diagnosed as a reference error.
+                if let Some(right) = pair.as_array().and_then(|p| p.get(1))
+                    && let Some(r) = right.as_str()
+                {
+                    check_join_name(map, Some(r), variables, index_sets, &key, model_name, path)?;
+                }
                 match reference {
-                    Some(r) if scope.contains(r) => {
+                    Some(r) => {
                         graph.ensure_vertex(ReferenceVertex {
                             key: factor_key(r),
                             kind: VertexKind::Factor,
@@ -460,14 +549,7 @@ fn register_and_process(
                         });
                         graph.add_edge(&key, &factor_key(r), EdgeKind::JoinFactor);
                     }
-                    other => {
-                        return Err(ReferenceResolutionError::UnresolvedJoinFactor {
-                            factor: other.unwrap_or("").to_string(),
-                            node: key.clone(),
-                            model: model_name.to_string(),
-                            path: path.to_string(),
-                        });
-                    }
+                    None => unreachable!("check_join_name rejects a non-string left column"),
                 }
             }
         }
@@ -476,18 +558,22 @@ fn register_and_process(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     value: &Value,
     path: &str,
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
+    variables: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
     id_to_addr: &mut IndexMap<String, DocNode>,
 ) -> Result<(), ReferenceResolutionError> {
     match value {
         Value::Object(map) => {
             if map.contains_key("op") {
-                register_and_process(map, path, model_name, index_sets, graph, id_to_addr)?;
+                register_and_process(
+                    map, path, model_name, index_sets, variables, graph, id_to_addr,
+                )?;
             }
             for (k, v) in map {
                 walk(
@@ -495,6 +581,7 @@ fn walk(
                     &format!("{path}/{k}"),
                     model_name,
                     index_sets,
+                    variables,
                     graph,
                     id_to_addr,
                 )?;
@@ -507,6 +594,7 @@ fn walk(
                     &format!("{path}/{i}"),
                     model_name,
                     index_sets,
+                    variables,
                     graph,
                     id_to_addr,
                 )?;
@@ -684,13 +772,27 @@ fn build_reference_graph_impl(
         }
     }
 
+    // The model's declared variable registry. A `join` `on` key column may name
+    // a declared component-local variable — a value-invention bin buffer written
+    // by an earlier equation — one of the three binder classes esm-spec §4.9.5
+    // makes an `on` column polymorphic over. See `join_binder_class`.
+    let variables = model.get("variables").and_then(|v| v.as_object());
+
     // Pass 2 — walk every expression node: assign a stable address, register
     // aggregate / id-bearing nodes, and add the within-node reference edges
     // (ranges[*].from, join.on). Builds id -> address for from_faq.
     let mut id_to_addr: IndexMap<String, DocNode> = IndexMap::new();
     for root in WALK_ROOTS {
         if let Some(v) = model.get(root) {
-            walk(v, root, model_name, index_sets, &mut graph, &mut id_to_addr)?;
+            walk(
+                v,
+                root,
+                model_name,
+                index_sets,
+                variables,
+                &mut graph,
+                &mut id_to_addr,
+            )?;
         }
     }
 
@@ -945,6 +1047,58 @@ mod tests {
             err,
             ReferenceResolutionError::UnresolvedJoinFactor { .. }
         ));
+    }
+
+    /// One document declaring all four binder classes: a variable (`bin`), an
+    /// index set (`cells`), a bound range (`i`) and a string arg (`w`).
+    fn four_class_model(on: serde_json::Value) -> Value {
+        json!({
+            "index_sets": {"cells": {"kind": "interval", "size": 4}},
+            "variables": {"bin": {"type": "parameter"}, "w": {"type": "parameter"}},
+            "equations": [{"lhs": agg(json!({
+                "id": "j",
+                "args": ["w"],
+                "output_idx": [],
+                "ranges": {"i": {"from": "cells"}},
+                "join": [{"on": [on]}]
+            })), "rhs": 0}]
+        })
+    }
+
+    /// A `join` `on` column resolves against ALL FOUR binder classes esm-spec
+    /// §4.9.5 / CONFORMANCE_SPEC §5.5.6 require, on BOTH key columns. The
+    /// variable class is the one corpus defect #3 was missing.
+    #[test]
+    fn join_binder_classes_all_resolve_on_both_columns() {
+        for on in [
+            json!(["i", "i"]),         // 1. node-local binder (ranges key)
+            json!(["w", "w"]),         // 2. node-local string factor arg
+            json!(["bin", "bin"]),     // 3. declared model variable — defect #3
+            json!(["cells", "cells"]), // 4. document-scoped index set
+        ] {
+            let model = four_class_model(on.clone());
+            build_reference_graph(&model, "M", None)
+                .unwrap_or_else(|e| panic!("join on {on} should resolve: {e}"));
+        }
+    }
+
+    /// The NEGATIVE guard: widening the scope to the variable and index-set
+    /// registries must not degrade into "accept any string". A name in none of
+    /// the four classes is still a typo, on either column.
+    #[test]
+    fn join_binder_classes_still_reject_an_undefined_name() {
+        for on in [
+            json!(["no_such_name", "bin"]),
+            json!(["bin", "no_such_name"]),
+        ] {
+            let err = build_reference_graph(&four_class_model(on.clone()), "M", None).unwrap_err();
+            match &err {
+                ReferenceResolutionError::UnresolvedJoinFactor { factor, .. } => {
+                    assert_eq!(factor, "no_such_name", "for {on}");
+                }
+                other => panic!("want UnresolvedJoinFactor for {on}, got {other:?}"),
+            }
+        }
     }
 
     // (3) edges are queryable by the partition pass -------------------------
