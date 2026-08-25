@@ -79,8 +79,10 @@ def test_subsystem_loader_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = solve(esm_problem(esm, (float(t0), float(t1)), loader_provider=_provider(golden)), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(esm, (float(t0), float(t1)), loader_provider=_provider(golden)), alg="LSODA"
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     assert result.vars == golden["state_order"]
 
     traj = golden["trajectory"]

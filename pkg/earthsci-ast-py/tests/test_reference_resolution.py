@@ -453,15 +453,23 @@ def test_model_nested_index_sets_merge_over_the_document_registry():
     # (a) model-nested only, with a document registry present but empty.
     doc = {
         "index_sets": {},
-        "models": {"M": {"index_sets": {"cells": {"kind": "interval", "size": 4}},
-                         "equations": [_eqn(node, 0)]}},
+        "models": {
+            "M": {
+                "index_sets": {"cells": {"kind": "interval", "size": 4}},
+                "equations": [_eqn(node, 0)],
+            }
+        },
     }
     assert len(resolve_references(doc)["M"].edges_of_kind(EdgeKind.RANGE_FROM)) == 1
     # (b) declared in both: the MODEL entry wins.
     doc = {
         "index_sets": {"cells": {"kind": "interval", "size": 9}},
-        "models": {"M": {"index_sets": {"cells": {"kind": "derived", "from_faq": "nope"}},
-                         "equations": [_eqn(node, 0)]}},
+        "models": {
+            "M": {
+                "index_sets": {"cells": {"kind": "derived", "from_faq": "nope"}},
+                "equations": [_eqn(node, 0)],
+            }
+        },
     }
     with pytest.raises(ReferenceResolutionError) as exc:
         resolve_references(doc)

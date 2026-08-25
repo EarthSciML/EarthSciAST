@@ -17,7 +17,8 @@ from earthsci_ast import (
     FunctionTable,
     FunctionTableAxis,
     load_document,
-    to_json,)
+    to_json,
+)
 
 
 FIXTURE = {

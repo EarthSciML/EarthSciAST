@@ -93,7 +93,7 @@ def test_simulate_eliminates_algebraic_states_diameter_growth():
     """``D_p[end]`` must be within 1% of the analytical 6.538e-7 m target."""
     file = _diameter_growth_model()
     result = solve(esm_problem(file, (0.0, 1200.0), p={}, u0={"D_p": 2.0e-7}), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     dp_idx = result.vars.index("DiameterGrowthRate.D_p")
     final_dp = result.y[dp_idx, -1]
@@ -108,7 +108,7 @@ def test_simulate_recovers_algebraic_values_at_output():
     """Algebraic states must track their formula along the trajectory."""
     file = _diameter_growth_model()
     result = solve(esm_problem(file, (0.0, 1200.0), p={}, u0={"D_p": 2.0e-7}), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success)
+    assert result.retcode is ReturnCode.Success
 
     a_idx = result.vars.index("DiameterGrowthRate.A")
     id_idx = result.vars.index("DiameterGrowthRate.I_D")
@@ -194,7 +194,7 @@ def test_simulate_same_lhs_dae_alias_eliminates_to_unbound_state():
     )
 
     result = solve(esm_problem(file, (0.0, 1.0), p={"T": 298.0, "H_plus": 1.0e-4}, u0={}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     k_idx = result.vars.index("Eq.K_w")
     oh_idx = result.vars.index("Eq.OH_minus")
@@ -227,7 +227,7 @@ def test_simulate_pure_ode_model_unaffected_by_algebraic_pass():
     )
 
     result = solve(esm_problem(file, (0.0, 5.0), p={}, u0={"A": 1.0, "B": 0.0}), alg="RK45")
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     a_idx = result.vars.index("Decay.A")
     b_idx = result.vars.index("Decay.B")
@@ -290,7 +290,7 @@ def test_simulate_observed_only_model_emits_observed_trajectories():
     )
 
     result = solve(esm_problem(file, (0.0, 1.0), p={"tau_c": 10.0, "g": 0.85}, u0={}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     assert "CloudAlbedo.gamma" in result.vars
     assert "CloudAlbedo.R_c" in result.vars
@@ -334,7 +334,7 @@ def test_simulate_state_plus_observed_emits_observed_alongside_states():
     )
 
     result = solve(esm_problem(file, (0.0, 2.0), p={"k": 0.5}, u0={"C": 1.0}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     c_idx = result.vars.index("Decay.C")
     a_idx = result.vars.index("Decay.C_analytical")
@@ -376,7 +376,7 @@ def test_simulate_observed_referenced_in_diff_rhs_no_namespace_leak():
     )
 
     result = solve(esm_problem(file, (0.0, 1.0), p={"k0": 2.0, "T": 300.0}, u0={"NO2": 1.0}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     no2_idx = result.vars.index("Decay.NO2")
     j_idx = result.vars.index("Decay.j_NO2")
@@ -427,7 +427,7 @@ def test_simulate_deep_algebraic_chain_sequential_evaluation():
     )
 
     result = solve(esm_problem(file, (0.0, 1.0), p={}, u0={"x": 1.0}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
     x_idx = result.vars.index("Chain.x")
     c_idx = result.vars.index("Chain.C")

@@ -932,7 +932,7 @@ class TestVersionConstraintValidation:
         # Incompatible major version - rejected by library. The current major is
         # 1, and the 1.0.0 break has NO deprecation path: a 0.x document is
         # rejected exactly as a 2.x one is.
-        from earthsci_ast.parse import UnsupportedVersionError, load_document, load_string
+        from earthsci_ast.parse import UnsupportedVersionError
 
         for version in ("0.9.0", "2.0.0"):
             invalid_data = {

@@ -116,9 +116,7 @@ def run_validation(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 # text, and it converts a LOAD failure into a ValidationResult
                 # -- which is exactly what this branch needs, since it only runs
                 # when the load phase already rejected the file.
-                result = earthsci_ast.validate_text(
-                    path.read_text(), base_path=str(path.parent)
-                )
+                result = earthsci_ast.validate_text(path.read_text(), base_path=str(path.parent))
             record["schema_errors"] = [_error_to_dict(e) for e in (result.schema_errors or [])]
             record["structural_errors"] = [
                 _error_to_dict(e) for e in (result.structural_errors or [])

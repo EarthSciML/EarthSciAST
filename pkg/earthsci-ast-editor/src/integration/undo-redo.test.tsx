@@ -73,12 +73,12 @@ describe('Undo/Redo Integration', () => {
   const initialModel: Model = {
     variables: {
       O3: {
-        type: 'state',
+        type: 'unknown',
         units: 'mol/mol',
         description: 'Ozone concentration',
       },
       NO: {
-        type: 'state',
+        type: 'unknown',
         units: 'mol/mol',
         description: 'Nitric oxide concentration',
       },
@@ -278,7 +278,7 @@ describe('Undo/Redo Integration', () => {
         variables: {
           ...editorState().model.variables,
           CO2: {
-            type: 'state',
+            type: 'unknown',
             units: 'mol/mol',
             description: 'Carbon dioxide',
           },
@@ -338,7 +338,7 @@ describe('Undo/Redo Integration', () => {
           variables: {
             ...model().variables,
             [`Variable_${i}`]: {
-              type: 'state',
+              type: 'unknown',
               units: 'units',
               description: `Generated variable ${i}`,
             },
@@ -395,7 +395,7 @@ describe('Undo/Redo Integration', () => {
         ...initialModel,
         variables: {
           ...initialModel.variables,
-          TEST: { type: 'state', units: 'test', description: 'Test variable' },
+          TEST: { type: 'unknown', units: 'test', description: 'Test variable' },
         },
       }
       handleChange(modifiedModel)

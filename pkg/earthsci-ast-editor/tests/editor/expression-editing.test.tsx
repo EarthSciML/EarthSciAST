@@ -397,12 +397,12 @@ describe('Expression Editing', () => {
             type: 'model',
             variables: {
               'O3': {
-                type: 'state',
+                type: 'unknown',
                 units: 'mol/mol',
                 description: 'Ozone concentration'
               },
               'NO2': {
-                type: 'state',
+                type: 'unknown',
                 units: 'mol/mol',
                 description: 'Nitrogen dioxide'
               }

@@ -766,9 +766,7 @@ def expression_graph(
             # to index, which is exactly what the sentinel is for. (The Equation
             # and Reaction overloads DO number their single target 0 — they are
             # positional statements; a loose expression is not.)
-            builder.add_dependency(
-                source_key, result, "multiplicative", NON_EQUATION_INDEX, target
-            )
+            builder.add_dependency(source_key, result, "multiplicative", NON_EQUATION_INDEX, target)
 
     return builder.graph()
 

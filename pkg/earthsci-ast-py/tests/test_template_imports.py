@@ -245,7 +245,8 @@ def test_loader_api_bindings_and_defaults():
     assert _defining_typed(fapi.models["Problem"], "ramp").ranges == {"i": [1, 3]}
     # Binding a name the document does not declare is an error.
     assert (
-        _err_code(lambda: load_path(problem, metaparameters={"Q": 1})) == "template_import_unknown_name"
+        _err_code(lambda: load_path(problem, metaparameters={"Q": 1}))
+        == "template_import_unknown_name"
     )
 
 
@@ -368,7 +369,9 @@ def test_import_where_rename_unknown_index_set_rejected():
     rename as spelled and is rejected at rule registration (esm-spec §9.6.6)."""
     assert (
         _err_code(
-            lambda: load_path(os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm"))
+            lambda: load_path(
+                os.path.join(CONF, "import_where_rename_unknown_index_set", "fixture.esm")
+            )
         )
         == "template_constraint_unknown_index_set"
     )
@@ -855,7 +858,9 @@ def test_cross_file_chains_accumulate_depth_under_option_b(tmp_path):
     assert "M" in f.models
     # 32-deep library + head reference = 33 → rejected in the consuming scope.
     assert (
-        _err_code(lambda: load_path(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH)))
+        _err_code(
+            lambda: load_path(_chainlib_consumer(tmp_path / "bad", MAX_TEMPLATE_EXPANSION_DEPTH))
+        )
         == "template_body_expansion_too_deep"
     )
 

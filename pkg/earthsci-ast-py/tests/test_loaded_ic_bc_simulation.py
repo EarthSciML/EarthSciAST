@@ -120,8 +120,10 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
         tspan = (float(ts["start"]), float(ts["end"]))
         test_tol = test.get("tolerance")
 
-        result = solve(esm_problem(file, tspan, providers=providers), alg="RK45", reltol=1e-10, abstol=1e-12)
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        result = solve(
+            esm_problem(file, tspan, providers=providers), alg="RK45", reltol=1e-10, abstol=1e-12
+        )
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
             total += 1

@@ -121,7 +121,7 @@ def test_inverse_trig_fixture_conformance(fixture_path: Path) -> None:
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
             result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
-            assert (result.retcode is ReturnCode.Success), (
+            assert result.retcode is ReturnCode.Success, (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 

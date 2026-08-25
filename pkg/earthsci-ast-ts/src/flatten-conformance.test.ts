@@ -259,9 +259,7 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
         expect(flat.domain.array_type ?? null).toBe(expected.domain.array_type)
       }
       expect(flat.metadata.sourceSystems).toEqual(expected.metadata.source_systems)
-      expect(flat.metadata.couplingRules).toEqual(
-        expected.metadata.coupling_rules,
-      )
+      expect(flat.metadata.couplingRules).toEqual(expected.metadata.coupling_rules)
       expect(flat.metadata.operatorApplies).toEqual(expected.metadata.operator_applies)
       expect(flat.metadata.callbacks).toEqual(expected.metadata.callbacks)
     })

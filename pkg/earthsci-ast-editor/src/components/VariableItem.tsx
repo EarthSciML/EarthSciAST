@@ -12,19 +12,23 @@ import type { Model, ModelVariable } from '@earthsciml/ast'
 /** Variable categorization, including a catch-all for unrecognized types. */
 export type VariableType = ModelVariable['type'] | 'other'
 
-/** The variable types offered in the add/edit forms. */
-export const VARIABLE_TYPES = ['state', 'parameter', 'observed', 'brownian', 'discrete'] as const
+/**
+ * The variable types offered in the add/edit forms.
+ *
+ * esm 1.0.0 declares exactly two: an `unknown` is solved for, a `parameter` is
+ * given. Whether an unknown ends up an ODE state or an observed is DERIVED from
+ * the equation that defines it (esm-spec §6.3.1), so it is not something an
+ * author picks here.
+ */
+export const VARIABLE_TYPES = ['unknown', 'parameter'] as const
 
 /** Badge configuration for the different variable types. */
 export const VARIABLE_TYPE_CONFIG: Record<
   VariableType,
   { label: string; color: string; description: string }
 > = {
-  state: { label: 'State', color: 'blue', description: 'State variable' },
+  unknown: { label: 'Unknown', color: 'blue', description: 'Unknown' },
   parameter: { label: 'Param', color: 'green', description: 'Parameter' },
-  observed: { label: 'Obs', color: 'orange', description: 'Observed variable' },
-  brownian: { label: 'Brownian', color: 'purple', description: 'Brownian variable' },
-  discrete: { label: 'Discrete', color: 'teal', description: 'Discrete variable' },
   other: { label: 'Var', color: 'gray', description: 'Variable' },
 }
 

@@ -207,7 +207,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.problem import ReturnCode, esm_problem, solve
+        from earthsci_ast.problem import esm_problem, solve
 
         rhs = ExprNode(
             op="*",
@@ -254,7 +254,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.problem import ReturnCode, esm_problem, solve
+        from earthsci_ast.problem import esm_problem, solve
 
         rhs = ExprNode(op="min", args=[0.0, ExprNode(op="-", args=["x"])])
         model = Model(
@@ -285,7 +285,7 @@ class TestEndToEndSimulation:
             ModelVariable,
             Equation,
         )
-        from earthsci_ast.problem import ReturnCode, esm_problem, solve
+        from earthsci_ast.problem import esm_problem, solve
 
         rhs = ExprNode(op="-", args=[ExprNode(op="pow", args=["x", 2])])
         model = Model(

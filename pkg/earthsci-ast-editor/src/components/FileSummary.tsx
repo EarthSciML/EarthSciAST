@@ -133,7 +133,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
   // Reactive summaries
   const modelCount = createMemo(() => countItems(props.esmFile.models))
   const reactionSystemCount = createMemo(() => countItems(props.esmFile.reaction_systems))
-  const dataLoaderCount = createMemo(() => countItems(props.esmFile.data_loaders))
+  const dataSourceCount = createMemo(() => countItems(props.esmFile.data_sources))
   const couplingCount = createMemo(() => props.esmFile.coupling?.length || 0)
 
   // Handle section click
@@ -270,30 +270,30 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
             </div>
           </Show>
 
-          {/* Data Loaders Summary */}
-          <Show when={dataLoaderCount() > 0}>
+          {/* Data Sources Summary */}
+          <Show when={dataSourceCount() > 0}>
             <div class="summary-section">
               <ClickableHeading
                 as="h4"
                 class="section-title clickable-section"
-                onActivate={() => handleSectionClick('data_loaders')}
+                onActivate={() => handleSectionClick('data_sources')}
               >
-                Data Loaders ({dataLoaderCount()}) →
+                Data Sources ({dataSourceCount()}) →
               </ClickableHeading>
               <div class="section-content">
-                <For each={Object.entries(props.esmFile.data_loaders || {})}>
-                  {([loaderName, loader]) => (
+                <For each={Object.entries(props.esmFile.data_sources || {})}>
+                  {([sourceName, source]) => (
                     <div class="system-item">
                       <ClickableHeading
                         as="div"
                         class="system-name clickable"
-                        onActivate={() => handleSectionClick('data_loaders', loaderName)}
+                        onActivate={() => handleSectionClick('data_sources', sourceName)}
                       >
-                        <strong>{loaderName}</strong> →
+                        <strong>{sourceName}</strong> →
                       </ClickableHeading>
                       <div class="system-summary">
-                        Type: {loader.kind || 'Unknown'}
-                        {loader.source?.url_template && ` | Source: ${loader.source.url_template}`}
+                        Type: {source.kind || 'Unknown'}
+                        {source.source?.url_template && ` | Source: ${source.source.url_template}`}
                       </div>
                     </div>
                   )}
@@ -371,7 +371,7 @@ export const FileSummary: Component<FileSummaryProps> = (props) => {
             when={
               modelCount() === 0 &&
               reactionSystemCount() === 0 &&
-              dataLoaderCount() === 0 &&
+              dataSourceCount() === 0 &&
               couplingCount() === 0
             }
           >

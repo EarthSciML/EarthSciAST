@@ -45,7 +45,7 @@ from earthsci_ast.numpy_interpreter import (
 )
 from earthsci_ast.parse import load_path
 from earthsci_ast.serialize import to_json
-from earthsci_ast.validation import validate, validate_text
+from earthsci_ast.validation import validate_text
 
 
 _VALID_GEOM = VALID_DIR / "geometry"

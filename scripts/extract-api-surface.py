@@ -55,7 +55,7 @@ def extract_julia() -> list[str]:
     if not m:
         raise SystemExit("EarthSciAST.jl: no `export` block found")
     lines = []
-    for line in src[m.end():].splitlines():
+    for line in src[m.end() :].splitlines():
         s = line.strip()
         # The block runs until the next top-level construct (docstring / function / end).
         if s.startswith('"""') or s.startswith("function ") or s.startswith("end "):
@@ -139,8 +139,10 @@ def extract_python() -> dict:
         return out
     # Fall back to a static parse when the package cannot be imported (no deps
     # installed): the conditional `__all__.extend([...])` tiers are literal lists.
-    sys.stderr.write("earthsci_ast import failed; static __all__ parse "
-                     "(kinds fall back to the spelling heuristic)\n")
+    sys.stderr.write(
+        "earthsci_ast import failed; static __all__ parse "
+        "(kinds fall back to the spelling heuristic)\n"
+    )
     src = open(os.path.join(pkg_src, "earthsci_ast/__init__.py")).read()
     names: set[str] = set()
     for m in re.finditer(r"__all__(?:\s*=\s*|\.extend\()\s*\[(.*?)\]", src, re.S):
@@ -181,7 +183,7 @@ def extract_rust() -> dict:
 # --------------------------------------------------------------------------
 # Go — package-level exported identifiers of package `esm`
 # --------------------------------------------------------------------------
-_GO_WALKER = r'''
+_GO_WALKER = r"""
 package main
 
 import (
@@ -254,7 +256,7 @@ func main() {
 	b, _ := json.Marshal(syms)
 	fmt.Println(string(b))
 }
-'''
+"""
 
 
 def extract_go() -> list[dict]:
@@ -312,7 +314,9 @@ def live_names(surfaces: dict) -> dict[str, set[str]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true", help="diff live surfaces against api-surface.json")
+    ap.add_argument(
+        "--check", action="store_true", help="diff live surfaces against api-surface.json"
+    )
     ap.add_argument("--binding", choices=BINDINGS, help="restrict --check / output to one binding")
     args = ap.parse_args()
 
@@ -331,8 +335,8 @@ def main() -> int:
     for binding in BINDINGS:
         if args.binding and binding != args.binding:
             continue
-        missing = sorted(declared[binding] - live[binding])   # manifest says yes, code says no
-        extra = sorted(live[binding] - declared[binding])     # code says yes, manifest says no
+        missing = sorted(declared[binding] - live[binding])  # manifest says yes, code says no
+        extra = sorted(live[binding] - declared[binding])  # code says yes, manifest says no
         if missing or extra:
             failed = True
             print(f"[{binding}] MISMATCH")
@@ -347,28 +351,34 @@ def main() -> int:
     ts_stars = manifest["binding_profiles"]["typescript"]["star_reexports"]
     if sorted(ts_stars) != surfaces["typescript"]["star_reexports"]:
         failed = True
-        print(f"[typescript] star re-export list changed: "
-              f"{surfaces['typescript']['star_reexports']} != {sorted(ts_stars)}")
+        print(
+            f"[typescript] star re-export list changed: "
+            f"{surfaces['typescript']['star_reexports']} != {sorted(ts_stars)}"
+        )
     rs_mods = manifest["binding_profiles"]["rust"]["public_modules"]
     if sorted(rs_mods) != surfaces["rust"]["modules"]:
         failed = True
-        print(f"[rust] pub mod list changed:\n"
-              f"  + {sorted(set(surfaces['rust']['modules']) - set(rs_mods))}\n"
-              f"  - {sorted(set(rs_mods) - set(surfaces['rust']['modules']))}")
+        print(
+            f"[rust] pub mod list changed:\n"
+            f"  + {sorted(set(surfaces['rust']['modules']) - set(rs_mods))}\n"
+            f"  - {sorted(set(rs_mods) - set(surfaces['rust']['modules']))}"
+        )
 
     # API_SPEC.md §6 is generated from the manifest; a stale block is a doc bug.
     if not args.binding:
         import importlib.util
-        gen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "gen-api-surface.py")
+
+        gen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gen-api-surface.py")
         gspec = importlib.util.spec_from_file_location("gen_api_surface", gen_path)
         gen = importlib.util.module_from_spec(gspec)
         gspec.loader.exec_module(gen)
         spec_md = open(os.path.join(ROOT, "API_SPEC.md")).read()
         if gen.render_spec_section(manifest) not in spec_md:
             failed = True
-            print("[API_SPEC.md] \u00a76's generated block is stale; "
-                  "run `python3 scripts/gen-api-surface.py`")
+            print(
+                "[API_SPEC.md] \u00a76's generated block is stale; "
+                "run `python3 scripts/gen-api-surface.py`"
+            )
         else:
             print("[API_SPEC.md] ok (\u00a76 matches the manifest)")
     return 1 if failed else 0

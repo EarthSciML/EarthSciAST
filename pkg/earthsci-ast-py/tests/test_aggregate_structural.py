@@ -30,7 +30,7 @@ from typing import List
 import pytest
 from conftest import VALID_DIR
 
-from earthsci_ast.validation import validate, validate_text
+from earthsci_ast.validation import validate_text
 
 
 _FIXTURES_DIR = VALID_DIR / "aggregate"

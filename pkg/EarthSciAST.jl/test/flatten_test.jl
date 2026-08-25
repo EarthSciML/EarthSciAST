@@ -737,17 +737,29 @@ end
     end
 
     @testset "Flatten valid fixtures smoke test" begin
-        # Every shared valid fixture must load and flatten cleanly (verified:
-        # none currently throws, so failures here are genuine regressions and
-        # propagate with their full stack trace).
+        # Every shared valid fixture must load, and then meet the step-0 rule:
+        # a document that declares at least one component flattens cleanly, and
+        # a COMPONENT-LESS one (a pure template library, or a file carrying only
+        # `data_sources`) is refused -- there is nothing to flatten, and the
+        # library/system distinction has to stay observable (esm-spec §9.7).
+        # The Python oracle refuses exactly the same three fixtures, so this is
+        # the shared contract rather than a Julia quirk. Failures here are
+        # genuine regressions and propagate with their full stack trace.
         valid_fixtures_dir = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
         @test isdir(valid_fixtures_dir)
         for filename in filter(f -> endswith(f, ".esm"), readdir(valid_fixtures_dir))
             filepath = joinpath(valid_fixtures_dir, filename)
             @testset "Flatten fixture: $filename" begin
                 esm_data = EarthSciAST.load_path(filepath)
-                flat = flatten(esm_data)
-                @test flat isa FlattenedSystem
+                n_components = (esm_data.models === nothing ? 0 : length(esm_data.models)) +
+                               (esm_data.reaction_systems === nothing ? 0 :
+                                length(esm_data.reaction_systems))
+                if n_components == 0
+                    @test_throws "nothing to flatten" flatten(esm_data)
+                else
+                    flat = flatten(esm_data)
+                    @test flat isa FlattenedSystem
+                end
             end
         end
     end

@@ -862,8 +862,12 @@ def _pd_detect(model: dict, index_sets: Any):
             # edits the authored body / call-site bindings, and
             # `_pd_assert_rects_rebound` proves the substitution landed.
             _pd_cell_factors(
-                observed_defs[ename], bind["c_sym"], variables, c_set,
-                cell_factors, cell_bad,
+                observed_defs[ename],
+                bind["c_sym"],
+                variables,
+                c_set,
+                cell_factors,
+                cell_bad,
             )
     # Deterministic, deduplicated diagnostic order: the same E can be reached
     # from several `conc` consumers.
@@ -985,8 +989,11 @@ def _pd_subscript_sketch(node: Any) -> str:
         op = node.get("op")
         if op == "index":
             a = node.get("args") or []
-            return f"{_pd_subscript_sketch(a[0])}[" + ", ".join(
-                _pd_subscript_sketch(x) for x in a[1:]) + "]"
+            return (
+                f"{_pd_subscript_sketch(a[0])}["
+                + ", ".join(_pd_subscript_sketch(x) for x in a[1:])
+                + "]"
+            )
         args = ", ".join(_pd_subscript_sketch(x) for x in (node.get("args") or []))
         return f"{op}({args})"
     return "?"

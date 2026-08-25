@@ -19,12 +19,12 @@ describe('Cross-Component Integration', () => {
   const validModel: Model = {
     variables: {
       O3: {
-        type: 'state',
+        type: 'unknown',
         units: 'mol/mol',
         description: 'Ozone concentration',
       },
       NO: {
-        type: 'state',
+        type: 'unknown',
         units: 'mol/mol',
         description: 'Nitric oxide concentration',
       },

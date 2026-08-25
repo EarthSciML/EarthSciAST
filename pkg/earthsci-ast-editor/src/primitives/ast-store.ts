@@ -14,7 +14,7 @@
 import type { Store, SetStoreFunction } from 'solid-js/store'
 import { createStore, produce, reconcile, unwrap } from 'solid-js/store'
 import { createSignal } from 'solid-js'
-import { validate } from '@earthsciml/ast'
+import { SCHEMA_VERSION, validate } from '@earthsciml/ast'
 import type { EsmFile } from '@earthsciml/ast'
 import { createUndoHistory, type UndoHistory, type UndoHistoryConfig } from './history.js'
 import { getValueAtPath, PathUtils, type Path, type PathSegment } from './path-utils.js'
@@ -66,7 +66,11 @@ export interface AstStore {
 function createDefaultEsmFile(): EsmFile {
   const now = new Date().toISOString()
   return {
-    esm: '0.8.0',
+    // The version the linked toolkit implements, never a literal: a document
+    // stamped with an older major is refused outright (1.0.0 is a clean break
+    // with no deprecation path), so a hard-coded string here would silently
+    // start producing files the toolkit will not load.
+    esm: SCHEMA_VERSION,
     metadata: {
       name: 'Untitled Model',
       description: 'A new ESM model',

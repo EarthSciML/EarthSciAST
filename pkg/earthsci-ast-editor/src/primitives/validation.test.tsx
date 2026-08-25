@@ -28,7 +28,7 @@ describe('validation primitive', () => {
       TestModel: {
         variables: {
           x: {
-            type: 'state',
+            type: 'unknown',
             units: 'm',
             default: 0.0,
           },

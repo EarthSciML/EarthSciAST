@@ -22,7 +22,7 @@ describe('ValidationPanel', () => {
     models: {
       TestModel: {
         variables: {
-          x: { type: 'state', units: 'm', description: 'Position' },
+          x: { type: 'unknown', units: 'm', description: 'Position' },
         },
         equations: [{ lhs: { op: 'D', args: ['x', 't'] }, rhs: 'v' }],
       },
@@ -37,7 +37,7 @@ describe('ValidationPanel', () => {
     models: {
       TestModel: {
         variables: {
-          x: { type: 'state', units: 'm', description: 'Position' },
+          x: { type: 'unknown', units: 'm', description: 'Position' },
         },
         equations: [{ lhs: { op: 'D', args: ['x', 't'] }, rhs: 'undefined_var' }],
       },
@@ -74,7 +74,7 @@ describe('ValidationPanel', () => {
           path: '/models/TestModel/variables/x/type',
           message: 'Invalid variable type',
           code: 'enum_mismatch',
-          details: { expected: ['state', 'parameter', 'observed'] },
+          details: { expected: ['unknown', 'parameter'] },
         },
       ],
       structural_errors: [],
@@ -254,7 +254,7 @@ describe('ValidationPanel', () => {
           message: 'Invalid type',
           code: 'enum_mismatch',
           details: {
-            expected: ['state', 'parameter', 'observed'],
+            expected: ['unknown', 'parameter'],
             actual: 'invalid_type',
           },
         },

@@ -162,7 +162,7 @@ def test_geometry_fixture_simulate_conformance(fixture_path: Path) -> None:
                 reltol=TEST_RELTOL,
                 abstol=TEST_ABSTOL,
             )
-            assert (result.retcode is ReturnCode.Success), (
+            assert result.retcode is ReturnCode.Success, (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 
@@ -195,7 +195,7 @@ def test_polygon_intersection_area_planar_fixture_simulates_to_one() -> None:
     fixture = _GEOM_DIR / "polygon_intersection_area_planar.esm"
     esm_file = load_path(fixture)
     result = solve(esm_problem(esm_file, (0.0, 1.0)))
-    assert (result.retcode is ReturnCode.Success), f"simulation failed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"simulation failed: {result.message}"
     area_state = _lookup(result, "area_state", 1.0)
     assert abs(area_state - 1.0) <= 1e-9, f"area_state(1.0) = {area_state}, expected 1.0"
 

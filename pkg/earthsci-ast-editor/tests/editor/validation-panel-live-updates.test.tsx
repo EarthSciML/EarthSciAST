@@ -66,9 +66,9 @@ describe('Validation Panel Live Updates', () => {
       'Chemistry': {
         type: 'model',
         variables: {
-          'O3': { type: 'state', units: 'mol/mol', description: 'Ozone concentration' },
-          'NO2': { type: 'state', units: 'mol/mol', description: 'Nitrogen dioxide' },
-          'temperature': { type: 'state', units: 'K', description: 'Temperature' }
+          'O3': { type: 'unknown', units: 'mol/mol', description: 'Ozone concentration' },
+          'NO2': { type: 'unknown', units: 'mol/mol', description: 'Nitrogen dioxide' },
+          'temperature': { type: 'unknown', units: 'K', description: 'Temperature' }
         },
         equations: [
           {
@@ -102,8 +102,8 @@ describe('Validation Panel Live Updates', () => {
       'Chemistry': {
         type: 'model',
         variables: {
-          'O3': { type: 'state', units: 'ppm', description: 'Ozone' }, // Invalid units
-          'NO2': { type: 'state', units: 'mol/mol', description: 'NO2' }
+          'O3': { type: 'unknown', units: 'ppm', description: 'Ozone' }, // Invalid units
+          'NO2': { type: 'unknown', units: 'mol/mol', description: 'NO2' }
         },
         equations: [
           {
@@ -709,7 +709,7 @@ describe('Validation Panel Live Updates', () => {
         // Add many variables per component
         for (let j = 1; j <= 20; j++) {
           largeEsmFile.components[`Component_${i}`].variables[`var_${i}_${j}`] = {
-            type: 'state',
+            type: 'unknown',
             units: 'unit',
             description: `Variable ${i}-${j}`
           };

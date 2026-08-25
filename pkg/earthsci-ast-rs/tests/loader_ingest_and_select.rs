@@ -277,8 +277,7 @@ fn prepare_discovers_n_rec_and_the_graph_is_sized_by_it() {
     )
     .expect("prepare");
 
-    let is_nox: Vec<f64> = prep
-        .observed_field("is_NOx")
+    let is_nox: Vec<f64> = observed_field(&prep, "is_NOx")
         .expect("is_NOx")
         .iter()
         .copied()

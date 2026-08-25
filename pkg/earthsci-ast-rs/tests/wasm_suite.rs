@@ -292,6 +292,6 @@ fn component_graph_and_version() {
     assert_eq!(graph.nodes.len(), 1, "one model node");
     assert_eq!(graph.nodes[0].id, "Decay");
 
-    assert!(!earthsci_ast::VERSION.is_empty());
+    assert!(!earthsci_ast::LIBRARY_VERSION.is_empty());
     assert!(!earthsci_ast::SCHEMA_VERSION.is_empty());
 }

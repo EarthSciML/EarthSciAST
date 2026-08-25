@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import FIXTURES_ROOT, VALID_DIR
+from conftest import VALID_DIR
 
 import earthsci_ast as esm
 from earthsci_ast.esm_types import (
@@ -63,7 +63,9 @@ def coupled_file():
 
 @pytest.fixture
 def variable_map_file():
-    return esm.load_string((VALID_DIR / "coupling_variable_map_identity_units_match.esm").read_text())
+    return esm.load_string(
+        (VALID_DIR / "coupling_variable_map_identity_units_match.esm").read_text()
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ interface Corpus {
 const corpus: Corpus = JSON.parse(readFixture('conformance', 'graph', 'cases.json'))
 
 /** Sort a list of records by their canonical JSON so it compares as a multiset. */
-const multiset = <T>(xs: T[]): string[] => xs.map((x) => JSON.stringify(x)).sort()
+const multiset = (xs: readonly unknown[]): string[] => xs.map((x) => JSON.stringify(x)).sort()
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const actualComponent = (g: Graph<any, any>): ComponentGraphCase => ({

@@ -39,11 +39,8 @@ export const VariablesPanel: Component<VariablesPanelProps> = (props) => {
   // Group variables by type
   const groupedVariables = createMemo(() => {
     const groups: Record<VariableType, NamedVariable[]> = {
-      state: [],
+      unknown: [],
       parameter: [],
-      observed: [],
-      brownian: [],
-      discrete: [],
       other: [],
     }
 

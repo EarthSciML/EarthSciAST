@@ -10,6 +10,8 @@ use earthsci_ast::{
     performance::CompactExpr,
 };
 #[allow(unused_imports)]
+use indexmap::IndexMap;
+#[allow(unused_imports)]
 use std::collections::HashMap;
 
 #[cfg(feature = "parallel")]
@@ -49,7 +51,7 @@ fn test_compact_expression_evaluation() {
     use earthsci_ast::performance::CompactExpr;
 
     // Test simple expression: x + 1
-    let expr = Expr::Operator(earthsci_ast::ExpressionNode {
+    let expr = Expr::operator(earthsci_ast::ExpressionNode {
         op: "+".to_string(),
         args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
         wrt: None,
@@ -123,7 +125,7 @@ fn test_fast_parse() {
     assert!(result.is_ok());
 
     let esm_file = result.unwrap();
-    assert_eq!(esm_file.esm, "0.1.0");
+    assert_eq!(esm_file.esm, "1.0.0");
     assert_eq!(esm_file.metadata.name, Some("test".to_string()));
 }
 
@@ -187,7 +189,7 @@ fn test_compact_expr_evaluation_errors() {
     );
 
     // Test division by zero
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "/".to_string(),
         args: vec![Expr::Number(1.0), Expr::Number(0.0)],
         wrt: None,
@@ -201,7 +203,7 @@ fn test_compact_expr_evaluation_errors() {
     assert!(result.unwrap_err().to_string().contains("Division by zero"));
 
     // Test invalid log argument
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "log".to_string(),
         args: vec![Expr::Number(-1.0)],
         wrt: None,
@@ -319,10 +321,10 @@ fn test_simd_operations_large_vectors() {
 #[test]
 fn test_compact_expr_complex_expressions() {
     // Test complex nested expression: (x + y) * (sin(z) - cos(w))
-    let expr = Expr::Operator(ExpressionNode {
+    let expr = Expr::operator(ExpressionNode {
         op: "*".to_string(),
         args: vec![
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "+".to_string(),
                 args: vec![
                     Expr::Variable("x".to_string()),
@@ -332,17 +334,17 @@ fn test_compact_expr_complex_expressions() {
                 dim: None,
                 ..Default::default()
             }),
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: "-".to_string(),
                 args: vec![
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "sin".to_string(),
                         args: vec![Expr::Variable("z".to_string())],
                         wrt: None,
                         dim: None,
                         ..Default::default()
                     }),
-                    Expr::Operator(ExpressionNode {
+                    Expr::operator(ExpressionNode {
                         op: "cos".to_string(),
                         args: vec![Expr::Variable("w".to_string())],
                         wrt: None,
@@ -386,7 +388,7 @@ fn test_compact_expr_all_operators() {
 
     for (op, args, expected) in test_cases {
         let expr = if args.len() == 2 {
-            Expr::Operator(ExpressionNode {
+            Expr::operator(ExpressionNode {
                 op: op.to_string(),
                 args: vec![Expr::Number(args[0]), Expr::Number(args[1])],
                 wrt: None,
@@ -415,7 +417,7 @@ fn test_compact_expr_all_operators() {
     ];
 
     for (op, arg, expected) in unary_test_cases {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: op.to_string(),
             args: vec![Expr::Number(arg)],
             wrt: None,
@@ -461,21 +463,21 @@ fn test_parallel_evaluator_complex_batch() {
 
     // Create complex expressions involving variables
     let expressions = vec![
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,
             dim: None,
             ..Default::default()
         }),
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "*".to_string(),
             args: vec![Expr::Variable("y".to_string()), Expr::Number(2.0)],
             wrt: None,
             dim: None,
             ..Default::default()
         }),
-        Expr::Operator(ExpressionNode {
+        Expr::operator(ExpressionNode {
             op: "sin".to_string(),
             args: vec![Expr::Variable("z".to_string())],
             wrt: None,
@@ -502,7 +504,7 @@ fn test_parallel_stoichiometric_matrix_computation() {
     let evaluator = ParallelEvaluator::new(Some(2)).unwrap();
 
     // Create a simple reaction system: A + B -> C (species are keyed by name)
-    let mut species = HashMap::new();
+    let mut species = IndexMap::new();
     species.insert(
         "A".to_string(),
         Species {
@@ -552,7 +554,7 @@ fn test_parallel_stoichiometric_matrix_computation() {
         reference: None,
     }];
 
-    let mut parameters = HashMap::new();
+    let mut parameters = IndexMap::new();
     // Add a simple parameter if needed
     parameters.insert(
         "k1".to_string(),
@@ -712,7 +714,7 @@ fn test_fast_parse_complete_esm_file() {
 
     let result = fast_parse(complex_json).unwrap();
 
-    assert_eq!(result.esm, "0.1.0");
+    assert_eq!(result.esm, "1.0.0");
     assert_eq!(result.metadata.name, Some("complex_model".to_string()));
     assert!(result.models.as_ref().unwrap().contains_key("chemistry"));
 }

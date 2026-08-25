@@ -81,7 +81,7 @@ def test_no_undeclared_exports(declared: set[str]) -> None:
         "exported by earthsci_ast but absent from api-surface.json:\n  "
         + "\n  ".join(extra)
         + "\nAdd them by re-running `python3 scripts/gen-api-surface.py`, then "
-          "assign each a tier in API_SPEC.md."
+        "assign each a tier in API_SPEC.md."
     )
 
 
@@ -92,7 +92,7 @@ def test_no_missing_exports(declared: set[str]) -> None:
         "declared for python in api-surface.json but not in earthsci_ast.__all__:\n  "
         + "\n  ".join(missing)
         + "\nEither restore the export or drop it from the manifest -- dropping a "
-          "`stable` symbol is a major-version break (API_SPEC.md §3)."
+        "`stable` symbol is a major-version break (API_SPEC.md §3)."
     )
 
 

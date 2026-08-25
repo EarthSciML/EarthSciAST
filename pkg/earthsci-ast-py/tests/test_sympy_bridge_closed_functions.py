@@ -67,7 +67,7 @@ def test_interp_linear_in_ode_rhs_runs_via_sympy_bridge():
     )
 
     res = solve(esm_problem(esm, (0.0, 1.0)))
-    assert (res.retcode is ReturnCode.Success), res.message
+    assert res.retcode is ReturnCode.Success, res.message
 
     x_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".x"))
     x_final = float(res.y[x_idx, -1])
@@ -116,7 +116,7 @@ def test_interp_bilinear_in_ode_rhs_runs_via_sympy_bridge():
     )
 
     res = solve(esm_problem(esm, (0.0, 1.0)))
-    assert (res.retcode is ReturnCode.Success), res.message
+    assert res.retcode is ReturnCode.Success, res.message
 
     x_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".x"))
     x_final = float(res.y[x_idx, -1])
@@ -172,7 +172,7 @@ def test_interp_bilinear_via_observed_variable_substitution():
     )
 
     res = solve(esm_problem(esm, (0.0, 1.0)))
-    assert (res.retcode is ReturnCode.Success), res.message
+    assert res.retcode is ReturnCode.Success, res.message
 
     c_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".c"))
     c_final = float(res.y[c_idx, -1])

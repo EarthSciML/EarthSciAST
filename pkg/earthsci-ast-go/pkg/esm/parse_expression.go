@@ -1192,24 +1192,14 @@ func deriveAggregateArgs(expr Expression, join []any, filter, key Expression) []
 // oracle's generic object walk does.
 func exprNodeChildValues(n ExprNode) []any {
 	children := make([]any, 0, len(n.Args)+8)
-	for _, a := range n.Args {
-		children = append(children, a)
-	}
+	children = append(children, n.Args...)
 	children = append(children,
 		n.Value, n.Expr, n.Filter, n.Key, n.Lower, n.Upper, n.Output, n.Axis)
-	for _, v := range n.Values {
-		children = append(children, v)
-	}
+	children = append(children, n.Values...)
 	children = append(children, n.Regions)
-	for _, v := range n.Shape {
-		children = append(children, v)
-	}
-	for _, v := range n.Perm {
-		children = append(children, v)
-	}
-	for _, v := range n.Join {
-		children = append(children, v)
-	}
+	children = append(children, n.Shape...)
+	children = append(children, n.Perm...)
+	children = append(children, n.Join...)
 	if n.Bindings != nil {
 		children = append(children, n.Bindings)
 	}

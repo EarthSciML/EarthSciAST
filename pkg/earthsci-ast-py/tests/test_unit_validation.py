@@ -16,7 +16,7 @@ import pytest
 from conftest import CORPUS_UNIT_DEFECTS, VALID_DIR
 from pint import UnitRegistry, DimensionalityError
 from earthsci_ast import load_string
-from earthsci_ast.validation import validate, validate_text
+from earthsci_ast.validation import validate_text
 from earthsci_ast.esm_types import (
     ModelVariable,
     Parameter,

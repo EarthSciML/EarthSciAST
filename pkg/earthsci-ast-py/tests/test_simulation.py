@@ -173,7 +173,7 @@ class TestSimpleReactionSystems:
         result = solve(esm_problem(file, (0, 10), u0={"A": 1.0}))
 
         # Check result
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
         assert len(result.t) > 1
         assert result.y.shape[0] == 1  # One species
 
@@ -209,7 +209,7 @@ class TestSimpleReactionSystems:
         result = solve(esm_problem(file, (0, 20), u0=initial))
 
         # Check success
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
         # Check conservation: A + B should be approximately constant
         a_idx = result.vars.index("Rev.A")
@@ -233,7 +233,7 @@ class TestSimpleReactionSystems:
         result = solve(esm_problem(file, (0, 1), u0={}))
 
         # Should handle empty system gracefully: a no-op success, no states.
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
         assert list(result.vars) == []
 
     def test_simulation_with_events(self):
@@ -309,14 +309,14 @@ class TestSimulationErrors:
 
         # No initial conditions: A starts at its declared default, B at 0.0.
         result = solve(esm_problem(file, (0.0, 1.0), u0={}))
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
         idx = {name: i for i, name in enumerate(result.vars)}
         assert result.y[idx["Def.A"], 0] == pytest.approx(3.0)
         assert result.y[idx["Def.B"], 0] == pytest.approx(0.0)
 
         # An explicit override still wins over the species default.
         result2 = solve(esm_problem(file, (0.0, 1.0), u0={"A": 0.5}))
-        assert (result2.retcode is ReturnCode.Success), f"solve() did not succeed: {result2.message}"
+        assert result2.retcode is ReturnCode.Success, f"solve() did not succeed: {result2.message}"
         idx2 = {name: i for i, name in enumerate(result2.vars)}
         assert result2.y[idx2["Def.A"], 0] == pytest.approx(0.5)
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot } from 'solid-js'
 import { createAstStore, PathUtils, CommonPaths } from './ast-store'
+import { SCHEMA_VERSION } from '@earthsciml/ast'
 import type { EsmFile } from '@earthsciml/ast'
 
 describe('AST Store', () => {
@@ -21,7 +22,7 @@ describe('AST Store', () => {
   // `reaction_systems`, `coupling`) — and structurally valid, so it exercises
   // the store's core-backed validation as a genuinely conformant file.
   const createTestFile = (name: string = 'Test Model'): EsmFile => ({
-    esm: '0.8.0',
+    esm: SCHEMA_VERSION,
     metadata: {
       name,
       description: 'Test model',
@@ -33,7 +34,7 @@ describe('AST Store', () => {
       Chemistry: {
         variables: {
           O3: {
-            type: 'state',
+            type: 'unknown',
             units: 'mol/mol',
             description: 'Ozone concentration',
           },
@@ -62,7 +63,7 @@ describe('AST Store', () => {
         cleanup = dispose
         const store = createAstStore()
 
-        expect(store.file.esm).toBe('0.8.0')
+        expect(store.file.esm).toBe(SCHEMA_VERSION)
         expect(store.file.metadata.name).toBe('Untitled Model')
         expect(store.file.models).toEqual({})
         expect(store.file.reaction_systems).toEqual({})
@@ -88,8 +89,8 @@ describe('AST Store', () => {
         const store = createAstStore({ initialFile: createTestFile() })
 
         expect(store.getPath(['metadata', 'name'])).toBe('Test Model')
-        expect(store.getPath(['esm'])).toBe('0.8.0')
-        expect(store.getPath(['models', 'Chemistry', 'variables', 'O3', 'type'])).toBe('state')
+        expect(store.getPath(['esm'])).toBe(SCHEMA_VERSION)
+        expect(store.getPath(['models', 'Chemistry', 'variables', 'O3', 'type'])).toBe('unknown')
         expect(store.getPath(['nonexistent'])).toBeUndefined()
 
         dispose()
@@ -142,7 +143,7 @@ describe('AST Store', () => {
 
         // Set deeply nested path that doesn't exist
         store.setPath(['models', 'NewModel', 'variables', 'CO2'], {
-          type: 'state',
+          type: 'unknown',
           units: 'ppmv',
         })
 

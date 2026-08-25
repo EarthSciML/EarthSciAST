@@ -1286,4 +1286,3 @@ def emit_esm_string(doc: Any) -> str:
     _emit_write(buf, doc, 0)
     buf.append("\n")
     return "".join(buf)
-

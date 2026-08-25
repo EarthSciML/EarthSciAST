@@ -48,7 +48,7 @@ _WORD = re.compile(r"[A-Z]{2,}s(?![a-z])|[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]
 
 def canonical(name: str) -> str:
     """Fold any binding's spelling down to the canonical snake_case key."""
-    name = name.rstrip("!").lstrip("_")          # Julia's mutating-bang suffix
+    name = name.rstrip("!").lstrip("_")  # Julia's mutating-bang suffix
     if name.isupper() and "_" not in name:
         return name.lower()
     if "_" in name:
@@ -172,9 +172,39 @@ def binding_kinds(surfaces: dict) -> dict[str, dict[str, str]]:
 # says each binding must use. Used only to FLAG divergences, never to rename.
 # ---------------------------------------------------------------------------
 INITIALISMS = {
-    "esm", "ode", "dae", "pde", "sde", "ast", "json", "xml", "url", "uri", "id",
-    "io", "dot", "cf", "ic", "rhs", "lhs", "cse", "faq", "api", "http", "https",
-    "uuid", "csv", "ascii", "html", "cli", "mtk", "db", "os", "ip", "tls", "ml",
+    "esm",
+    "ode",
+    "dae",
+    "pde",
+    "sde",
+    "ast",
+    "json",
+    "xml",
+    "url",
+    "uri",
+    "id",
+    "io",
+    "dot",
+    "cf",
+    "ic",
+    "rhs",
+    "lhs",
+    "cse",
+    "faq",
+    "api",
+    "http",
+    "https",
+    "uuid",
+    "csv",
+    "ascii",
+    "html",
+    "cli",
+    "mtk",
+    "db",
+    "os",
+    "ip",
+    "tls",
+    "ml",
 }
 
 
@@ -259,9 +289,14 @@ EXTENSION_OVERRIDES = {
 STABLE_OVERRIDES = {
     # The editor's component / primitive / store surface is that package's whole
     # public product, so it is stable even though no other binding exports it.
-    ("expression_node", "type"), ("equation_editor", "type"), ("model_editor", "type"),
-    ("reaction_editor", "type"), ("coupling_graph", "type"), ("validation_panel", "type"),
-    ("file_summary", "type"), ("create_ast_store", "function"),
+    ("expression_node", "type"),
+    ("equation_editor", "type"),
+    ("model_editor", "type"),
+    ("reaction_editor", "type"),
+    ("coupling_graph", "type"),
+    ("validation_panel", "type"),
+    ("file_summary", "type"),
+    ("create_ast_store", "function"),
     ("register_web_components", "function"),
 }
 
@@ -299,13 +334,13 @@ PLANNED = [
     {
         "canonical": "abstol / reltol / saveat / alg",
         "issue": "Python's `simulate` takes scipy's `rtol=` / `atol=` / `method=`; "
-                 "Julia and Rust take SciML's `reltol` / `abstol` and Julia takes "
-                 "`alg` / `saveat`. Rust's `SimulateOptions` spells them "
-                 "`solver` and `output_times`.",
+        "Julia and Rust take SciML's `reltol` / `abstol` and Julia takes "
+        "`alg` / `saveat`. Rust's `SimulateOptions` spells them "
+        "`solver` and `output_times`.",
         "resolution": "SciML spelling is canonical (API_SPEC.md §4): Python gains "
-                      "`reltol` / `abstol` / `alg` (old names deprecated aliases for "
-                      "one minor), Rust renames `SimulateOptions::solver` -> `alg` and "
-                      "`output_times` -> `saveat`.",
+        "`reltol` / `abstol` / `alg` (old names deprecated aliases for "
+        "one minor), Rust renames `SimulateOptions::solver` -> `alg` and "
+        "`output_times` -> `saveat`.",
         "affects": ["python", "rust"],
     },
     # `closed_function_names` (§8 item 4), `derive_odes` (item 5),
@@ -319,64 +354,62 @@ PLANNED = [
     {
         "canonical": "unknowns / parameters",
         "issue": "TypeScript and Python export `unknowns` / `parameters`; Julia "
-                 "exports `unknown_names` / `parameter_names` for the same query.",
+        "exports `unknown_names` / `parameter_names` for the same query.",
         "resolution": "Canonical is `unknowns` / `parameters`; Julia keeps "
-                      "`unknown_names` / `parameter_names` as deprecated aliases "
-                      "because the bare names collide with common downstream bindings.",
+        "`unknown_names` / `parameter_names` as deprecated aliases "
+        "because the bare names collide with common downstream bindings.",
         "affects": ["julia"],
     },
     {
         "canonical": "add_variable / remove_variable / ...",
         "issue": "Python suffixes every edit operation with its container "
-                 "(`add_variable_to_model`, `remove_coupling_from_file`, "
-                 "`extract_component_from_file`, `merge_esm_files`); Julia, "
-                 "TypeScript and Rust use the bare verb (`add_variable`).",
-        "resolution": "Python gains the bare names; the suffixed ones become "
-                      "deprecated aliases.",
+        "(`add_variable_to_model`, `remove_coupling_from_file`, "
+        "`extract_component_from_file`, `merge_esm_files`); Julia, "
+        "TypeScript and Rust use the bare verb (`add_variable`).",
+        "resolution": "Python gains the bare names; the suffixed ones become deprecated aliases.",
         "affects": ["python"],
     },
     {
         "canonical": "to_dot / to_mermaid / to_json",
         "issue": "Julia exports `to_dot` / `to_mermaid` / `to_json` and TypeScript "
-                 "`toDot` / `toMermaid` / `toJsonGraph`; Go spells the same six "
-                 "renderings `ExportComponentGraphDOT` / `ExportExpressionGraphDOT` "
-                 "and friends, plus exporter objects.",
+        "`toDot` / `toMermaid` / `toJsonGraph`; Go spells the same six "
+        "renderings `ExportComponentGraphDOT` / `ExportExpressionGraphDOT` "
+        "and friends, plus exporter objects.",
         "resolution": "Canonical `to_dot(graph)` / `to_mermaid(graph)` / "
-                      "`to_json(graph)` dispatching on graph kind; Go's `Export*` "
-                      "family becomes `ToDOT` / `ToMermaid` / `ToJSON`.",
+        "`to_json(graph)` dispatching on graph kind; Go's `Export*` "
+        "family becomes `ToDOT` / `ToMermaid` / `ToJSON`.",
         "affects": ["typescript", "go"],
     },
     {
         "canonical": "substitute_with_context",
         "issue": "Rust names the scoped substitution family `*_with_context` "
-                 "(`ScopedContext`); Go names it `*WithScoped`.",
+        "(`ScopedContext`); Go names it `*WithScoped`.",
         "resolution": "Canonical is `substitute_with_context`; Go renames to "
-                      "`SubstituteWithContext` and friends.",
+        "`SubstituteWithContext` and friends.",
         "affects": ["go"],
     },
     {
         "canonical": "reference_resolution_error",
-        "issue": "Julia and Python raise `ReferenceResolutionError`; Rust's is "
-                 "`ReferenceError`.",
+        "issue": "Julia and Python raise `ReferenceResolutionError`; Rust's is `ReferenceError`.",
         "resolution": "Canonical is `reference_resolution_error`; Rust renames, "
-                      "keeping `ReferenceError` as a type alias for one minor.",
+        "keeping `ReferenceError` as a type alias for one minor.",
         "affects": ["rust"],
     },
     {
         "canonical": "system_kind",
         "issue": "Julia / Python / Rust / Go export a FUNCTION `system_kind`; "
-                 "TypeScript exports both the function `systemKind` and the type "
-                 "`SystemKind`, and Go additionally has `EffectiveSystemKind` with "
-                 "no counterpart elsewhere.",
+        "TypeScript exports both the function `systemKind` and the type "
+        "`SystemKind`, and Go additionally has `EffectiveSystemKind` with "
+        "no counterpart elsewhere.",
         "resolution": "RULED (phase 6, API_SPEC.md §8 item 11): the family is three "
-                      "distinct questions plus one composition. `system_kind(model)` "
-                      "derives, `declared_system_kind(model)` reads the field, and "
-                      "`effective_system_kind(model)` is `declared ?? derived` — the "
-                      "question a caller choosing a solver actually asks. "
-                      "`declared_system_kind_mismatch` is deleted. TypeScript has all "
-                      "three as of phase 6; Julia, Python and Go still owe "
-                      "`effective_system_kind`. The function/type pair stays (they are "
-                      "distinct symbols under the (name, kind) identity rule).",
+        "distinct questions plus one composition. `system_kind(model)` "
+        "derives, `declared_system_kind(model)` reads the field, and "
+        "`effective_system_kind(model)` is `declared ?? derived` — the "
+        "question a caller choosing a solver actually asks. "
+        "`declared_system_kind_mismatch` is deleted. TypeScript has all "
+        "three as of phase 6; Julia, Python and Go still owe "
+        "`effective_system_kind`. The function/type pair stays (they are "
+        "distinct symbols under the (name, kind) identity rule).",
         "affects": ["julia", "typescript", "python", "go"],
     },
 ]
@@ -418,8 +451,7 @@ def build() -> dict:
             # A string when the binding has exactly one spelling; a list when it
             # exports aliases. Surface tests flatten both.
             "bindings": {
-                b: (v[0] if len(v) == 1 else sorted(v))
-                for b, v in sorted(bindings.items())
+                b: (v[0] if len(v) == 1 else sorted(v)) for b, v in sorted(bindings.items())
             },
         }
         notes = []
@@ -454,24 +486,22 @@ def build() -> dict:
             return []
         return [v] if isinstance(v, str) else v
 
-    counts_by_binding = {
-        b: sum(len(_spellings(s, b)) for s in symbols) for b in BINDINGS
-    }
+    counts_by_binding = {b: sum(len(_spellings(s, b)) for s in symbols) for b in BINDINGS}
     counts_by_tier = collections.Counter(s["tier"] for s in symbols)
 
     return {
         "$schema_note": "Companion manifest to API_SPEC.md. Regenerate with "
-                        "`python3 scripts/gen-api-surface.py`; verify with "
-                        "`python3 scripts/extract-api-surface.py --check` or each "
-                        "binding's own api-surface test.",
+        "`python3 scripts/gen-api-surface.py`; verify with "
+        "`python3 scripts/extract-api-surface.py --check` or each "
+        "binding's own api-surface test.",
         "version": 1,
         "spec": "API_SPEC.md",
         "tiers": {
             "stable": "Harmonized across bindings, surface-tested, breaks only at a major.",
             "extension": "Named and documented extension seam. May differ between "
-                         "bindings and may break at a minor.",
+            "bindings and may break at a minor.",
             "private": "Everything else. Not listed here; a symbol absent from this "
-                       "manifest MUST NOT be exported.",
+            "manifest MUST NOT be exported.",
         },
         "capability_profiles": CAPABILITY_PROFILES,
         "binding_profiles": {
@@ -486,9 +516,9 @@ def build() -> dict:
                 "surface_test": "pkg/earthsci-ast-ts/src/api-surface.test.ts",
                 "star_reexports": surfaces["typescript"]["star_reexports"],
                 "star_reexport_note": "`export * from './types.js'` re-exports the generated "
-                                      "schema type barrel wholesale. Its members are "
-                                      "schema-derived and churn with esm-schema.json, so the "
-                                      "manifest pins the barrel LIST, not its members.",
+                "schema type barrel wholesale. Its members are "
+                "schema-derived and churn with esm-schema.json, so the "
+                "manifest pins the barrel LIST, not its members.",
             },
             "python": {
                 "package": "earthsci-ast",
@@ -501,19 +531,19 @@ def build() -> dict:
                 "surface_test": "pkg/earthsci-ast-rs/tests/api_surface.rs",
                 "public_modules": surfaces["rust"]["modules"],
                 "public_module_note": "`cargo public-api` needs a nightly toolchain and is "
-                                      "not installed here, so the test is the vendored "
-                                      "equivalent: it parses the crate root, which is the "
-                                      "only source of `earthsci_ast::<name>` paths. Module "
-                                      "interiors are extension seams reachable as "
-                                      "`earthsci_ast::<module>::<name>`.",
+                "not installed here, so the test is the vendored "
+                "equivalent: it parses the crate root, which is the "
+                "only source of `earthsci_ast::<name>` paths. Module "
+                "interiors are extension seams reachable as "
+                "`earthsci_ast::<module>::<name>`.",
             },
             "go": {
                 "package": "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm",
                 "surface_declaration": "package-level exported identifiers of pkg/esm",
                 "surface_test": "pkg/earthsci-ast-go/pkg/esm/api_surface_test.go",
                 "scope_note": "Package-level func / type / const / var only. Methods on an "
-                              "exported type are covered by that type's entry, not listed "
-                              "separately.",
+                "exported type are covered by that type's entry, not listed "
+                "separately.",
             },
             "editor": {
                 "package": "@earthsciml/ast-editor",
@@ -525,7 +555,7 @@ def build() -> dict:
         "counts": {
             "symbols": len(symbols),
             "note": "`by_binding` counts exported SPELLINGS (so alias pairs count "
-                    "twice); `symbols` counts canonical (name, kind) entries.",
+            "twice); `symbols` counts canonical (name, kind) entries.",
             "by_binding": counts_by_binding,
             "by_tier": dict(sorted(counts_by_tier.items())),
         },
@@ -541,8 +571,14 @@ def build() -> dict:
 BEGIN_MARKER = "<!-- BEGIN GENERATED: stable-surface -->"
 END_MARKER = "<!-- END GENERATED: stable-surface -->"
 
-_HEADERS = {"julia": "Julia", "typescript": "TS", "python": "Python",
-            "rust": "Rust", "go": "Go", "editor": "Editor"}
+_HEADERS = {
+    "julia": "Julia",
+    "typescript": "TS",
+    "python": "Python",
+    "rust": "Rust",
+    "go": "Go",
+    "editor": "Editor",
+}
 
 
 def _cell(sym: dict, binding: str) -> str:
@@ -555,29 +591,36 @@ def _cell(sym: dict, binding: str) -> str:
 
 
 def _table(syms: list, cols: list) -> str:
-    rows = ["| Canonical | Kind | " + " | ".join(_HEADERS[b] for b in cols) + " |",
-            "|---|---|" + "---|" * len(cols)]
+    rows = [
+        "| Canonical | Kind | " + " | ".join(_HEADERS[b] for b in cols) + " |",
+        "|---|---|" + "---|" * len(cols),
+    ]
     for s in sorted(syms, key=lambda s: (s["name"], s["kind"])):
-        rows.append(f"| `{s['name']}` | {s['kind']} | "
-                    + " | ".join(_cell(s, b) for b in cols) + " |")
+        rows.append(
+            f"| `{s['name']}` | {s['kind']} | " + " | ".join(_cell(s, b) for b in cols) + " |"
+        )
     return "\n".join(rows)
 
 
 def stable_surface_tables(manifest: dict) -> str:
     stable = [s for s in manifest["symbols"] if s["tier"] == "stable"]
     core = [b for b in BINDINGS if b != "editor"]
-    counted = {s["name"] + s["kind"]: sum(b in s["bindings"] for b in core)
-               for s in stable}
+    counted = {s["name"] + s["kind"]: sum(b in s["bindings"] for b in core) for s in stable}
 
     def at(n: int) -> list:
         return [s for s in stable if counted[s["name"] + s["kind"]] == n]
 
     parts = []
-    for n, label in ((5, "all five format bindings"), (4, "four of the five"),
-                     (3, "three of the five"), (2, "two of the five")):
+    for n, label in (
+        (5, "all five format bindings"),
+        (4, "four of the five"),
+        (3, "three of the five"),
+        (2, "two of the five"),
+    ):
         parts.append(f"#### Exported by {label}\n\n" + _table(at(n), core))
-    editor_only = [s for s in stable
-                   if counted[s["name"] + s["kind"]] < 2 and "editor" in s["bindings"]]
+    editor_only = [
+        s for s in stable if counted[s["name"] + s["kind"]] < 2 and "editor" in s["bindings"]
+    ]
     parts.append("#### Editor package\n\n" + _table(editor_only, ["typescript", "editor"]))
     return "\n\n".join(parts)
 
@@ -594,7 +637,7 @@ def update_spec(manifest: dict, path: str | None = None) -> bool:
     start, end = text.find(BEGIN_MARKER), text.find(END_MARKER)
     if start < 0 or end < 0:
         raise SystemExit(f"{path}: generated-block markers not found")
-    updated = text[:start] + render_spec_section(manifest) + text[end + len(END_MARKER):]
+    updated = text[:start] + render_spec_section(manifest) + text[end + len(END_MARKER) :]
     if updated == text:
         return False
     open(path, "w").write(updated)

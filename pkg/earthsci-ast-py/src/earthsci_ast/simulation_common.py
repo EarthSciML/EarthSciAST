@@ -51,6 +51,7 @@ def _scipy_missing_message(action: str) -> str:
     """Compose the missing-solver message for ``action`` (e.g. ``"solve"``)."""
     return f"SciPy is required to {action} an EsmProblem but is not installed. {SCIPY_MISSING_HINT}"
 
+
 # Dense-output point budget: the minimum number of uniform sampling nodes a
 # ``solve_ivp`` dense solution is resampled onto
 # (:func:`simulation_array._densify_solution`). The loader-segmented path
@@ -370,7 +371,11 @@ def _observed_rows(vals, n: int, names: Sequence[str] | None = None) -> np.ndarr
     """
     block = np.empty((len(vals), n), dtype=float)
     for i, val in enumerate(vals):
-        where = f"observed '{names[i]}'" if names is not None and i < len(names) else f"observed output {i}"
+        where = (
+            f"observed '{names[i]}'"
+            if names is not None and i < len(names)
+            else f"observed output {i}"
+        )
         val = _require_real(val, where)
         if np.ndim(val) == 0:
             block[i, :] = float(val)

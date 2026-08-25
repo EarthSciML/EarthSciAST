@@ -165,7 +165,9 @@ def _execute_component_tests(
             reltol=TEST_RELTOL,
             abstol=TEST_ABSTOL,
         )
-        assert (result.retcode is ReturnCode.Success), f"{label}/{test['id']}: solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, (
+            f"{label}/{test['id']}: solve() did not succeed: {result.message}"
+        )
 
         test_tol = test.get("tolerance")
         for a in test["assertions"]:

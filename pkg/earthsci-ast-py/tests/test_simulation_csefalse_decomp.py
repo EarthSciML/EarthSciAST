@@ -157,7 +157,7 @@ def test_b_numerical_domain_agnostic_negative_state():
     )
 
     res = solve(esm_problem(esm, (0.0, 1.0)))
-    assert (res.retcode is ReturnCode.Success)
+    assert res.retcode is ReturnCode.Success
     v_idx = next(i for i, name in enumerate(res.vars) if name.endswith(".v"))
     v_final = float(res.y[v_idx, -1])
 

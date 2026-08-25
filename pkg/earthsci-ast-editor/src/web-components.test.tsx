@@ -49,7 +49,7 @@ describe('Web Components', () => {
     const validModel: Model = {
       variables: {
         O3: {
-          type: 'state',
+          type: 'unknown',
           units: 'mol/mol',
           description: 'Ozone',
         },
@@ -148,7 +148,7 @@ describe('Web Components', () => {
     const validModel: Model = {
       variables: {
         O3: {
-          type: 'state',
+          type: 'unknown',
           units: 'mol/mol',
           description: 'Ozone',
         },

@@ -566,8 +566,7 @@ def lower_enums(file: EsmFile) -> EsmFile:
     memo: dict[int, tuple[Any, Any]] = {}
     models = {k: _lower_model(m, enums, memo) for k, m in file.models.items()}
     systems = {
-        k: _lower_reaction_system(rs, enums, memo)
-        for k, rs in file.reaction_systems.items()
+        k: _lower_reaction_system(rs, enums, memo) for k, rs in file.reaction_systems.items()
     }
     unchanged = all(models[k] is v for k, v in file.models.items()) and all(
         systems[k] is v for k, v in file.reaction_systems.items()

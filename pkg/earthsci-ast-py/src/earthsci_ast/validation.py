@@ -282,7 +282,6 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
     )
 
 
-
 # ===========================================================================
 # Path / text convenience (API_SPEC.md §8 item 13).
 #
@@ -358,9 +357,7 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
             )
         return ValidationResult(
             is_valid=False,
-            schema_errors=[
-                ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)
-            ],
+            schema_errors=[ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)],
             structural_errors=[],
         )
     except SubsystemRefError as e:
@@ -384,9 +381,7 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
     except Exception as e:
         return ValidationResult(
             is_valid=False,
-            schema_errors=[
-                ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)
-            ],
+            schema_errors=[ValidationError(path="", message=str(e), code=ErrorCode.PARSE.value)],
             structural_errors=[],
         )
     return validate(esm_file, base_path=base_path)
