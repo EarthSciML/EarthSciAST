@@ -252,9 +252,11 @@ export
     # Graph analysis (Section 4.8)
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
-    to_dot, to_mermaid,
-    # `to_json` carries BOTH the graph method (graph.jl) and the document
-    # serializer (serialize.jl); they dispatch on their argument type.
+    # The canonical graph-rendering trio (API_SPEC.md §8 item 8).
+    to_dot, to_mermaid, to_json_graph,
+    # `to_json` is the DOCUMENT serializer (§8 item 2). Its `Graph` methods are
+    # a deprecated alias of `to_json_graph`, kept one minor per §10; they
+    # dispatch on the argument type and render byte-identical output.
     to_json,
     # Chemical subscript rendering
     render_chemical_formula, format_node_label,
