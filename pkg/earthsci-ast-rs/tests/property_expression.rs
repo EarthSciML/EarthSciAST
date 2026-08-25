@@ -203,8 +203,8 @@ fn op_arrayop(child: BoxedStrategy<Expr>) -> BoxedStrategy<Expr> {
         Just(Some("min".to_string())),
         Just(None::<String>),
     ];
-    let range_pair =
-        (0_i64..=8, 0_i64..=8).prop_map(|(a, b)| earthsci_ast::types::RangeSpec::Interval([a, b]));
+    let range_pair = (0_i64..=8, 0_i64..=8)
+        .prop_map(|(a, b)| earthsci_ast::extension::types::RangeSpec::Interval([a, b]));
     let ranges = prop::option::of(prop::collection::hash_map(index_name(), range_pair, 0..=3));
     let args = prop::collection::vec(child.clone(), 1..=2);
     (args, output_idx, child, reduce, ranges)

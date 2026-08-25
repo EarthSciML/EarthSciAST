@@ -32,10 +32,10 @@ use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
+use earthsci_ast::GateAxis;
 use earthsci_ast::esio_provider::{EsioProvider, providers_from_document};
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::provider::CadenceProvider;
-use earthsci_ast::pushdown_rewrite::GateAxis;
+use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::ArrayD;
 use serde_json::{Value, json};
@@ -563,7 +563,7 @@ impl PrepareProvider for SpyProvider {
         self.inner.is_const()
     }
 
-    fn gate_spec(&self) -> Option<earthsci_ast::pushdown_rewrite::ProviderGate> {
+    fn gate_spec(&self) -> Option<earthsci_ast::ProviderGate> {
         self.inner.gate_spec()
     }
 

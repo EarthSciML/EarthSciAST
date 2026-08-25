@@ -18,7 +18,7 @@
 //! Grid convention: `[lon, lat]` = row=lon, col=lat; indices are 1-based in state
 //! names (`Chemistry.O3[1,1]`), 0-based internally.
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::load_path;
 use earthsci_ast::provider::{CadenceProvider, NativeField, ProviderError};
 use earthsci_ast::simulate_array::ArrayCompiled;

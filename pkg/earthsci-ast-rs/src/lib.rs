@@ -42,59 +42,71 @@
 // sole callers of are then unreachable BY CONSTRUCTION, which is the point of
 // the feature, not a defect to chase per-item.
 #![cfg_attr(not(feature = "solve"), allow(dead_code, unused_imports))]
+// H-3 demoted ~45 modules to `pub(crate)`, so a doc link from a PUBLIC item to
+// an item that is now crate-private is expected and pervasive (74 sites). The
+// links are still correct — they resolve under `cargo doc
+// --document-private-items` and when reading the source, which is who reads
+// them now. Rewriting them all as inert code spans would delete working
+// navigation to buy silence, so the lint is turned off instead.
+#![allow(rustdoc::private_intra_doc_links)]
 
 // Conformance-harness argument parsing; callable by the conformance binaries but
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-pub mod aggregate;
+pub(crate) mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
-pub mod analysis;
+pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
-pub mod broad_phase;
-pub mod cadence;
-pub mod canonicalize;
-pub mod classification;
-pub mod coupling;
-pub mod coupling_imports;
-pub mod dae;
+pub(crate) mod broad_phase;
+pub(crate) mod cadence;
+pub(crate) mod canonicalize;
+pub(crate) mod classification;
+pub(crate) mod coupling;
+pub(crate) mod coupling_imports;
+pub(crate) mod dae;
 /// Flat→gridded simulation-output derivation (streaming-output-sinks RFC
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.
-pub mod data_output;
-pub mod diagnostic;
-pub mod display;
-pub mod edit;
-pub mod error;
-pub mod expression;
-pub mod flatten;
-pub mod geometry;
-pub mod graph;
+pub(crate) mod data_output;
+pub(crate) mod diagnostic;
+pub(crate) mod display;
+pub(crate) mod edit;
+pub(crate) mod error;
+// The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
+// where a Rust-only internal is handed to a caller. Everything reachable from
+// outside this crate is either a root `pub use` above/below (the stable tier,
+// pinned symbol-by-symbol by api-surface.json) or a member of this module.
+pub(crate) mod expression;
+pub mod extension;
+pub(crate) mod flatten;
+pub(crate) mod geometry;
+pub(crate) mod graph;
 pub mod intern;
-pub mod join;
-pub mod lower_enums;
-pub mod lower_expression_templates;
-pub mod migration;
-pub mod op_registry;
-pub mod parse;
+pub(crate) mod join;
+pub(crate) mod lower_enums;
+pub(crate) mod lower_expression_templates;
+pub(crate) mod migration;
+pub(crate) mod op_registry;
+pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
 /// (the inverse of that printer). Pure and wasm32-clean.
-pub mod parse_expression;
+pub(crate) mod parse_expression;
 pub mod provider;
-pub mod reactions;
-pub mod ref_loading;
-pub mod reference_resolution;
-pub mod registered_functions;
-pub mod relational;
-pub mod serialize;
-pub mod structural;
-pub mod substitute;
-pub mod template_imports;
-pub mod types;
-pub mod unit_conversion;
-pub mod units;
-pub mod validate;
+pub(crate) mod reactions;
+pub(crate) mod ref_loading;
+pub(crate) mod reference_resolution;
+pub(crate) mod registered_functions;
+pub(crate) mod relational;
+pub(crate) mod serialize;
+pub(crate) mod structural;
+pub(crate) mod substitute;
+pub(crate) mod template_imports;
+pub(crate) mod types;
+pub(crate) mod unit_conversion;
+pub(crate) mod units;
+pub(crate) mod validate;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -103,13 +115,13 @@ pub mod performance;
 
 // Non-gated: the `CompileError` type is also named by the WASM-compiled
 // `aggregate` / `join` passes, so it cannot live inside the gated solver module.
-pub mod compile_error;
+pub(crate) mod compile_error;
 
 // Scalar ODE simulation (gt-5ws). Compiled for wasm too: its diffsol/Faer path
 // is pure Rust (spike S1). The `simulate_array` (spatial) backend it dispatches
 // into stays native-only, so the wasm build runs pure-ODE / 0-D box models and
 // the array/spatial dispatch branch in `simulate::simulate` is `cfg`-gated off.
-pub mod simulate;
+pub(crate) mod simulate;
 
 // Compiled for wasm too (EarthSciAST-akz): the array/PDE runtime is
 // wasm-clean — planar / geometry-free PDEs run client-side; only spherical
@@ -120,23 +132,23 @@ pub mod simulate_array;
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub mod pde_inline_tests;
+pub(crate) mod pde_inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
 // the imperative `geometry::polygon_area`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod area_faq;
+pub(crate) mod area_faq;
 
 // Build-time value-invention front-door — derived index-sets (skolem/distinct/
 // rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
-pub mod value_invention;
+pub(crate) mod value_invention;
 
 // Automatic projection-pushdown desugar (the Julia/Python `desugar_pushdown`
 // port): a raw-document → raw-document transform + the record-derived provider
 // gate helpers the `prepare` entry point consumes. Raw-JSON side by design —
 // see the module docs.
-pub mod pushdown_rewrite;
+pub(crate) mod pushdown_rewrite;
 
 // The deterministic-per-document BUILD PIPELINE — rewrite → value-invention →
 // member-factor feedback → gated fetch → observed-graph evaluation, all
@@ -145,12 +157,12 @@ pub mod pushdown_rewrite;
 // public here is the provider contract and the build-observability seam.
 // Native-only (drives `simulate_array`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod prepare;
+pub(crate) mod prepare;
 
 // The EsmProblem / `solve` surface (`esm-libraries-spec.md` §2.5): one noun and
 // one verb. Construction does NOT require the solver — only `solve` / `init` /
 // `solve_to_completion` do, and those are behind the `solve` feature.
-pub mod problem;
+pub(crate) mod problem;
 
 // OPT-IN EarthSciIO bridge: a `CadenceProvider` backed by a real EarthSciIO
 // `Provider`. Behind the `esio` feature so the default build does not link
@@ -197,7 +209,7 @@ pub use geometry::{
 };
 pub use graph::{
     ComponentGraph, ComponentMetadata, ComponentNode, ComponentType, CouplingEdge, DependencyEdge,
-    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions,
+    DependencyRelationship, ExpressionGraph, ExpressionGraphInput, ExpressionGraphOptions, Graph,
     VariableKind, VariableNode, component_exists, component_graph, expression_graph,
     expression_graph_with_options, get_component_type, to_dot, to_json_graph, to_mermaid,
 };

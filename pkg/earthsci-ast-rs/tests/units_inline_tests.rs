@@ -58,7 +58,7 @@ fn resolve_tol(
 fn resolve_observed(model: &Model, bindings: &mut HashMap<String, f64>) {
     // An OBSERVED unknown's defining expression is its equation's RHS from esm
     // 1.0.0 (esm-spec §6.3.1), not a field on the variable.
-    let defs = earthsci_ast::classification::observed_definitions(model);
+    let defs = earthsci_ast::observed_definitions(model);
     let n = defs.len() + 1;
     for _ in 0..n {
         let mut progress = false;

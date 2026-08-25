@@ -20,7 +20,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate::SimulateError;
+use earthsci_ast::SimulateError;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;

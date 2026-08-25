@@ -15,9 +15,9 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::pde_inline_tests::run_pde_tests;
-use earthsci_ast::validate::{StructuralErrorCode, validate};
+use earthsci_ast::run_pde_tests;
 use earthsci_ast::{Alg, Model, SolveOptions, load_string};
+use earthsci_ast::{StructuralErrorCode, validate};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -35,7 +35,7 @@ fn opts() -> SolveOptions {
 /// Integrate a document from t=0 to t=1, sampling exactly the two endpoints.
 fn run(
     file: &earthsci_ast::EsmFile,
-) -> Result<earthsci_ast::Solution, earthsci_ast::simulate::SimulateError> {
+) -> Result<earthsci_ast::Solution, earthsci_ast::SimulateError> {
     let mut o = opts();
     o.saveat = Some(vec![0.0, 1.0]);
     earthsci_ast::esm_problem(

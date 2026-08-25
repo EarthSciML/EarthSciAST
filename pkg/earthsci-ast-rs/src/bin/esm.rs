@@ -3,7 +3,7 @@
 //! Command-line interface for working with ESM files
 
 use clap::{Parser, Subcommand};
-use earthsci_ast::analysis::{
+use earthsci_ast::extension::analysis::{
     collect_unit_types, collect_variables, contains_common_subexpressions,
     contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
     count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
@@ -982,7 +982,7 @@ fn perform_deep_coupling_analysis(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
+fn analyze_coupling_patterns(graph: &earthsci_ast::ComponentGraph) {
     println!("\n=== COUPLING PATTERNS ===");
 
     // Pattern 1: Fan-out (one component affects many others)
@@ -1032,7 +1032,7 @@ fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
 }
 
 fn analyze_coupling_strength(
-    _graph: &earthsci_ast::graph::ComponentGraph,
+    _graph: &earthsci_ast::ComponentGraph,
     esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING STRENGTH ANALYSIS ===");
@@ -1100,7 +1100,7 @@ fn analyze_coupling_strength(
 }
 
 fn detect_coupling_antipatterns(
-    graph: &earthsci_ast::graph::ComponentGraph,
+    graph: &earthsci_ast::ComponentGraph,
     _esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING ANTI-PATTERNS ===");
@@ -1863,7 +1863,7 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
 /// Phase 6 made the library renderers canonical and pinned them with
 /// `tests/conformance/graph/cases.json`. A second path to the same renderings is
 /// the defect §8 item 8 removed from Go; this removes it from the CLI.
-fn render_graph<G: earthsci_ast::graph::Graph>(
+fn render_graph<G: earthsci_ast::Graph>(
     graph: &G,
     format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {

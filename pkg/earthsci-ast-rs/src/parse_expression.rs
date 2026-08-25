@@ -1428,12 +1428,12 @@ fn flatten(e: &Expr) -> Expr {
 /// # Examples
 ///
 /// ```
-/// use earthsci_ast::parse_expression::parse_expression;
-/// use earthsci_ast::display::to_ascii;
+/// use earthsci_ast::parse_expression;
+/// use earthsci_ast::to_ascii;
 ///
 /// let e = parse_expression("k1 * NO2 * O2 - k2 * O3")?;
 /// assert_eq!(to_ascii(&e), "k1 * NO2 * O2 - k2 * O3");
-/// # Ok::<(), earthsci_ast::parse_expression::ExpressionParseError>(())
+/// # Ok::<(), earthsci_ast::ExpressionParseError>(())
 /// ```
 pub fn parse_expression(src: &str) -> Result<Expr, ExpressionParseError> {
     Parser::new(tokenize(src)?).parse_entry()
@@ -1450,13 +1450,13 @@ pub fn parse_expression(src: &str) -> Result<Expr, ExpressionParseError> {
 /// # Examples
 ///
 /// ```
-/// use earthsci_ast::parse_expression::parse_equation;
-/// use earthsci_ast::display::to_ascii;
+/// use earthsci_ast::parse_equation;
+/// use earthsci_ast::to_ascii;
 ///
 /// let eq = parse_equation("D(x)/Dt = k * A - x")?;
 /// assert_eq!(to_ascii(&eq.lhs), "D(x)/Dt");
 /// assert_eq!(to_ascii(&eq.rhs), "k * A - x");
-/// # Ok::<(), earthsci_ast::parse_expression::ExpressionParseError>(())
+/// # Ok::<(), earthsci_ast::ExpressionParseError>(())
 /// ```
 pub fn parse_equation(src: &str) -> Result<Equation, ExpressionParseError> {
     let toks = tokenize(src)?;

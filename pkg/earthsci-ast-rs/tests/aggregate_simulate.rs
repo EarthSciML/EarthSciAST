@@ -16,7 +16,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::aggregate::resolve_aggregate_ranges;
+use earthsci_ast::extension::aggregate::resolve_aggregate_ranges;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 

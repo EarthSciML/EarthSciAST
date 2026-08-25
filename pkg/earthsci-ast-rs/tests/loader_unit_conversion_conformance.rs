@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use earthsci_ast::PrepareProvider;
 use earthsci_ast::esio_provider::providers_from_document;
-use earthsci_ast::prepare::PrepareProvider;
 use serde_json::Value;
 
 fn tests_dir() -> PathBuf {

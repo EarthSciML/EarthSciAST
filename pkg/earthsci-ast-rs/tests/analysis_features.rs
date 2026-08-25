@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 fn test_analysis_features_integration() {
     // Use a simpler test that bypasses schema validation
 
-    let metadata = crate::types::Metadata {
+    let metadata = Metadata {
         name: Some("test_model".to_string()),
         description: None,
         authors: None,

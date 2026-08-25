@@ -20,8 +20,8 @@
 //! *is* cross-language agreement (`CONFORMANCE_SPEC.md` §5.7.7's rule). The
 //! Julia twin is `pkg/EarthSciAST.jl/test/output_derivation_conformance_test.jl`.
 
-use earthsci_ast::data_output::{OutputPlan, derive_output_plan};
 use earthsci_ast::{EsmFile, load_string};
+use earthsci_ast::{OutputPlan, derive_output_plan};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

@@ -31,11 +31,11 @@
 //! axes are discovered by scanning, not declared — and the comparison is an
 //! ordered one, so a binding that emitted them in scan order would fail here.
 
-use earthsci_ast::classification::SystemKind;
-use earthsci_ast::flatten::{FlattenedSystem, flatten};
-use earthsci_ast::parse::load_path;
+use earthsci_ast::SystemKind;
+use earthsci_ast::load_path;
 use earthsci_ast::to_ascii;
-use earthsci_ast::types::{ModelVariable, ParameterUpdateSpec};
+use earthsci_ast::{FlattenedSystem, flatten};
+use earthsci_ast::{ModelVariable, ParameterUpdateSpec};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

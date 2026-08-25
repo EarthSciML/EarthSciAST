@@ -7,11 +7,10 @@
 //! run does, and the plan derived from them must carry the fixture's real
 //! `index_sets` axis names, its CF coordinates, and its grid decomposition.
 
-use earthsci_ast::data_output::{
-    DTYPE_FLOAT64, OutputError, derive_output_meta, derive_output_plan, parse_cell_key,
-};
+use earthsci_ast::extension::data_output::DTYPE_FLOAT64;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{EsmFile, load_string};
+use earthsci_ast::{OutputError, derive_output_meta, derive_output_plan, parse_cell_key};
 
 /// Wave-3 streaming fixture: one array state `c` over a 3x2 `lon`/`lat` grid
 /// plus a `coordinates` registry keyed BY DIM NAME with inline values — the

@@ -24,7 +24,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::pde_inline_tests::run_pde_tests_with_base_dir;
+use earthsci_ast::run_pde_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
@@ -150,8 +150,7 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
         )
         .and_then(|prob| earthsci_ast::solve(&prob, &opts))
         .unwrap_or_else(|e| panic!("{key}: simulate failed: {e}"));
-        let cells =
-            earthsci_ast::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
+        let cells = earthsci_ast::state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), 5);
         for (cell, row) in &cells {
             assert_eq!(sol.state[*row][0], 0.0, "{key}: cell {cell:?} not zeroed");

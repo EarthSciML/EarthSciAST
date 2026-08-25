@@ -229,7 +229,7 @@ pub enum OutputError {
 /// may not itself contain `[`, so the FIRST bracket opens the index list.
 ///
 /// ```
-/// use earthsci_ast::data_output::parse_cell_key;
+/// use earthsci_ast::parse_cell_key;
 /// assert_eq!(parse_cell_key("u[2,3]"), Some(("u", vec![2, 3])));
 /// assert_eq!(parse_cell_key("Model.u[7]"), Some(("Model.u", vec![7])));
 /// assert_eq!(parse_cell_key("plain"), None);

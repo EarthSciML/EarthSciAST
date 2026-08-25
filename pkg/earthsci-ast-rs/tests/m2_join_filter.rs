@@ -18,7 +18,7 @@
 //!   column that is not a loop index errors at build (the data-derived
 //!   value-equality engine is M3), rather than silently producing the wrong sum.
 
-use earthsci_ast::types::Expr;
+use earthsci_ast::Expr;
 use earthsci_ast::{Alg, EsmFile, SolveOptions, load_string, to_json};
 use std::collections::HashMap;
 

@@ -752,6 +752,7 @@ reading that as a gap.
 | `flatten_metadata` | type | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` | `FlattenMetadata` |
 | `flattened_system` | type | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` | `FlattenedSystem` |
 | `free_variables` | function | `free_variables` | `freeVariables` | `free_variables` | `free_variables` | `FreeVariables` |
+| `graph` | type | `Graph` | `Graph` | `Graph` | `Graph` | `Graph` |
 | `is_ode_state` | function | `is_ode_state` | `isOdeState` | `is_ode_state` | `is_ode_state` | `IsODEState` |
 | `library_version` | constant | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LIBRARY_VERSION` | `LibraryVersion` |
 | `load_document` | function | `load_document` | `loadDocument` | `load_document` | `load_document` | `LoadDocument` |
@@ -835,7 +836,6 @@ reading that as a gap.
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
 | `extract` | function | `extract` | `extract` | `extract` / `extract_component_from_file` | – | `Extract` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
-| `graph` | type | `Graph` | `Graph` | `Graph` | – | `Graph` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
 | `lower_expression_templates` | function | `lower_expression_templates` | `lowerExpressionTemplates` | `lower_expression_templates` | – | `LowerExpressionTemplates` |
 | `metadata` | type | `Metadata` | – | `Metadata` | `Metadata` | `Metadata` |

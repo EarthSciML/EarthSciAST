@@ -7,9 +7,10 @@
 //! `gt-v8v` acceptance criteria — those cases raise
 //! `FlattenError::UnsupportedMapping`.
 
-use earthsci_ast::types::{
+use earthsci_ast::extension::types::Parameter;
+use earthsci_ast::{
     CouplingEntry, Equation, EsmFile, Expr, ExpressionNode, Metadata, Model, ModelVariable,
-    Parameter, Reaction, ReactionSystem, Species, StoichiometricEntry, VariableType,
+    Reaction, ReactionSystem, Species, StoichiometricEntry, VariableType,
 };
 use earthsci_ast::{FlattenError, flatten, flatten_model};
 use indexmap::IndexMap;
@@ -701,7 +702,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     let coupling = vec![CouplingEntry::VariableMap {
         from: "S.T_out".to_string(),
         to: "M.T".to_string(),
-        transform: earthsci_ast::types::VariableMapTransform::Named("param_to_var".to_string()),
+        transform: earthsci_ast::VariableMapTransform::Named("param_to_var".to_string()),
         factor: None,
         description: None,
     }];
@@ -934,7 +935,7 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
 
     // The `unlowered_operator` refusal still exists, for a consumer that
     // requires a DISCRETIZED system and says so.
-    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+    let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
         .expect_err("an undiscretized grad must be rejected on demand");
     let msg = format!("{err}");
     match err {
@@ -1015,7 +1016,7 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     assert_eq!(flat.system_kind().as_str(), "pde");
 
     // ...and it is still rejected on demand, with the offending op name `"D"`.
-    let err = earthsci_ast::flatten::reject_unlowered_operators(&flat)
+    let err = earthsci_ast::extension::flatten::reject_unlowered_operators(&flat)
         .expect_err("an undiscretized spatial D must be rejected on demand");
     let msg = format!("{err}");
     match err {
@@ -1055,7 +1056,7 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
 
 /// The rendered form of the one equation defining `target`, for assertions
 /// that care about the whole merged RHS rather than its variable set.
-fn rendered_rhs(flat: &earthsci_ast::flatten::FlattenedSystem, target: &str) -> String {
+fn rendered_rhs(flat: &earthsci_ast::FlattenedSystem, target: &str) -> String {
     let eq = flat
         .equations
         .iter()
@@ -1100,7 +1101,7 @@ fn operator_compose_expands_the_var_placeholder_over_every_state() {
         {"type": "operator_compose", "systems": ["Chem", "Adv"]}
       ]
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     let flat = flatten(&file).expect("flattens");
 
     // The single placeholder equation was cloned once per state of Chem and
@@ -1158,7 +1159,7 @@ fn operator_compose_translate_is_a_keyed_and_carries_the_factor() {
          "translate": {"Chem.ozone": {"var": "Photo.O3", "factor": 1e-9}}}
       ]
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     let flat = flatten(&file).expect("flattens");
 
     // The map is keyed by A's name and valued by B's, so the entry MATCHES —
@@ -1213,7 +1214,7 @@ fn operator_compose_translate_endpoints_may_be_authored_bare() {
             "coupling": [{{"type": "operator_compose", "systems": ["Chem", "Diff"],
                           "translate": {translate}}}]}}"#
         );
-        flatten(&earthsci_ast::parse::load_string(&doc).expect("loads")).expect("flattens")
+        flatten(&earthsci_ast::load_string(&doc).expect("loads")).expect("flattens")
     };
     let bare = mk(r#"{"ozone": {"var": "ozone_conc", "factor": 1.0}}"#);
     let scoped = mk(r#"{"Chem.ozone": {"var": "Diff.ozone_conc", "factor": 1.0}}"#);
@@ -1286,7 +1287,7 @@ fn operator_compose_prunes_the_merged_away_name_after_a_document_wide_retarget()
          "translate": {"ozone": "c"}}
       ]
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     let flat = flatten(&file).expect("flattens");
 
     // The stranded declaration is gone: an unknown with no defining equation
@@ -1347,9 +1348,8 @@ fn operator_compose_translate_to_the_placeholder_is_harmless() {
                       "translate": {{"Chem.O3": "Adv._var"}}}}]}}"#
     );
     let flat_without =
-        flatten(&earthsci_ast::parse::load_string(&without).expect("loads")).expect("flattens");
-    let flat_with =
-        flatten(&earthsci_ast::parse::load_string(&with).expect("loads")).expect("flattens");
+        flatten(&earthsci_ast::load_string(&without).expect("loads")).expect("flattens");
+    let flat_with = flatten(&earthsci_ast::load_string(&with).expect("loads")).expect("flattens");
 
     assert_eq!(
         rendered_rhs(&flat_without, "Chem.O3"),
@@ -1390,7 +1390,7 @@ fn couple_multiplicative_without_a_tendency_is_an_error() {
          ]}}
       ]
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     match flatten(&file) {
         Err(FlattenError::CoupleMultiplicativeNoTendency { target }) => {
             assert_eq!(target, "Surface.resistance");
@@ -1430,7 +1430,7 @@ fn couple_additive_without_a_tendency_is_not_an_error() {
          ]}}
       ]
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     flatten(&file).expect("an additive connector against an absent tendency is legal");
 }
 
@@ -1463,7 +1463,7 @@ fn nested_subsystems_are_lowered_into_the_parent() {
         }
       }
     }"#;
-    let file = earthsci_ast::parse::load_string(doc).expect("document loads");
+    let file = earthsci_ast::load_string(doc).expect("document loads");
     let flat = flatten(&file).expect("flattens");
 
     assert!(flat.state_variables.contains_key("Outer.Inner.y"));

@@ -26,9 +26,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use earthsci_ast::parse::load_path_with_options;
-use earthsci_ast::simulate::{Alg, SolveOptions};
-use earthsci_ast::types::Expr;
+use earthsci_ast::Expr;
+use earthsci_ast::load_path_with_options;
+use earthsci_ast::{Alg, SolveOptions};
 
 const FIXTURE: &str = "tests/fixtures/discretization/advection_1d_ppm_periodic.esm";
 

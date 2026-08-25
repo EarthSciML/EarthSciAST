@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
+use earthsci_ast::extension::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
@@ -306,12 +306,11 @@ fn rewritten_forward_binning_aggregate_is_candidate_driven() {
     });
 
     // The rewrite emits the derived gate over the COMPACT-axis envelopes.
-    let rewritten = earthsci_ast::pushdown_rewrite::desugar_pushdown(&doc, Some("Fwd"))
+    let rewritten = earthsci_ast::desugar_pushdown(&doc, Some("Fwd"))
         .expect("desugar")
         .into_owned();
-    let ov =
-        &earthsci_ast::classification::observed_definition_json(&rewritten["models"]["Fwd"], "E")
-            .expect("E defining equation")["join"][0]["overlap"];
+    let ov = &earthsci_ast::observed_definition_json(&rewritten["models"]["Fwd"], "E")
+        .expect("E defining equation")["join"][0]["overlap"];
     assert_eq!(ov["src_env"], json!(["px", "py"]));
     assert_eq!(
         ov["tgt_env"],

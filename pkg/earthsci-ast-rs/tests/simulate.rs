@@ -10,12 +10,12 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::types::{
+use earthsci_ast::{
     AffectEquation, ContinuousEvent, DiscreteEvent, DiscreteEventTrigger, Equation, ExpressionNode,
     Metadata, Model, ModelVariable, VariableType,
 };
 use earthsci_ast::{
-    Alg, CompileError, Compiled, Expr, FlattenedSystem, SimulateError, SolveOptions, types::EsmFile,
+    Alg, CompileError, Compiled, EsmFile, Expr, FlattenedSystem, SimulateError, SolveOptions,
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -1042,7 +1042,7 @@ fn test_error_grad_in_array_simulator_rejected() {
     let mut ranges = HashMap::new();
     ranges.insert(
         "i".to_string(),
-        earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
+        earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
     // NOTE: this used to carry the legacy `op: "arrayop"` spelling, which ESM
     // v0.8.0 removed (`aggregate::is_aggregate_op` no longer accepts it). The op
@@ -1103,7 +1103,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
     let mut ranges = HashMap::new();
     ranges.insert(
         "i".to_string(),
-        earthsci_ast::types::RangeSpec::Interval([1i64, 2i64]),
+        earthsci_ast::extension::types::RangeSpec::Interval([1i64, 2i64]),
     );
     let good_lhs = Expr::operator(ExpressionNode {
         op: "aggregate".to_string(),

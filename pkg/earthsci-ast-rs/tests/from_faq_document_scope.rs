@@ -9,7 +9,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::reference_resolution::{EdgeKind, ReferenceResolutionError, resolve_references};
+use earthsci_ast::{EdgeKind, ReferenceResolutionError, resolve_references};
 use serde_json::{Value, json};
 
 mod common;
