@@ -9,9 +9,11 @@ Arity 3: `ifelse(condition, then, else)`. The condition follows the usual
 convention — zero is false, non-zero is true — and the result is `then` when it
 holds, `else` otherwise.
 
+**Text**
 ```text
 ifelse(a >= 0, sqrt(a), 0)
 ```
+**JSON**
 ```json
 {
   "op": "ifelse",
@@ -32,9 +34,11 @@ are evaluated, so `ifelse` will *not* protect `sqrt` from a negative input. This
 is a deliberate, documented divergence between the scalar and array paths —
 write the guard into the argument instead:
 
+**Text**
 ```text
 sqrt(max(a, 0))
 ```
+**JSON**
 ```json
 { "op": "sqrt", "args": [{ "op": "max", "args": ["a", 0] }] }
 ```
@@ -50,9 +54,11 @@ event fired, so an affect can reference the pre-event state while assigning the
 post-event one. It has no meaning outside an event context. See
 [coupling and events](../../coupling/).
 
+**Text**
 ```text
 Pre(x)
 ```
+**JSON**
 ```json
 { "op": "Pre", "args": ["x"] }
 ```
@@ -63,9 +69,11 @@ The nullary boolean literal. `args` must be empty. Its use is as an
 always-true predicate — the body of an index-set-producing
 [`aggregate`](../aggregation/), or a join gate that admits everything.
 
+**Text**
 ```text
 true
 ```
+**JSON**
 ```json
 { "op": "true", "args": [] }
 ```
@@ -77,9 +85,11 @@ There is no `false` operator; write `0`.
 `args` MUST be empty; the value lives in a `value` field, which may be any JSON
 value — a number, an integer, or a nested array.
 
+**Text**
 ```text
 [0, 0.5, 1]
 ```
+**JSON**
 ```json
 { "op": "const", "value": [0.0, 0.5, 1.0], "args": [] }
 ```

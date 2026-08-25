@@ -32,9 +32,11 @@ result[output_idx] = ⊕ over (indices in expr but not in output_idx) of expr
 Any index appearing in `expr` but not in `output_idx` is **contracted** —
 summed over, by default. That single rule gives you matrix multiplication:
 
+**Text**
 ```text
 sum[i, j] (A[i, k] * B[k, j]) where {i in rows, j in cols, k in inner}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -56,9 +58,11 @@ sum[i, j] (A[i, k] * B[k, j]) where {i in rows, j in cols, k in inner}
 
 A full reduction is the same node with an empty `output_idx`:
 
+**Text**
 ```text
 sum[] (w[i]) where {i in cells}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -75,9 +79,11 @@ which is `Σᵢ w[i]` — a scalar.
 
 `reduce` names ⊕ alone and leaves ⊗ as `*`. A column-wise maximum:
 
+**Text**
 ```text
 max[j] (A[i, j]) where {i in rows, j in cols}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -99,9 +105,11 @@ registry is closed:
 | `max_sum`, `min_sum` | `max` / `min` | `+` | shortest and longest paths |
 | `bool_and_or` | `or` | `and` | relational queries; the semiring of `distinct` |
 
+**Text**
 ```text
 max[j] (A[i, j]) where {i in rows, j in cols} [semiring=max_product]
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -119,9 +127,11 @@ A dense `ranges` tuple iterates integers directly, which is how an explicit
 stencil is written. The 1-D second difference, with the stencil offset as a
 contracted index `k`:
 
+**Text**
 ```text
 sum[i] (ifelse(k == 0, -2, 1) * u[i + k]) where {i in 2:9, k in -1:1}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -147,9 +157,11 @@ sum[i] (ifelse(k == 0, -2, 1) * u[i + k]) where {i in 2:9, k in -1:1}
 index — the edges of a cell, the vertices of a face. This is how unstructured
 connectivity is expressed without a special block:
 
+**Text**
 ```text
 sum[i] (flux[i, k]) where {i in cells, k in edges_of_cell(i)}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -175,9 +187,11 @@ same as gating a `+` reduction.
 
 ### `filter` — a predicate gate
 
+**Text**
 ```text
 sum[j] (A[i, j]) where {i in src, j in tgt} if A[i, j] > atol
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -192,9 +206,11 @@ sum[j] (A[i, j]) where {i in src, j in tgt} if A[i, j] > atol
 A **monotone** filter turns a reduction into a prefix scan. This is the discrete
 cumulative sum — reach for it rather than `integral`, which has no evaluator:
 
+**Text**
 ```text
 sum[i] (q[k]) where {i in lev, k in lev} if k <= i
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -212,9 +228,11 @@ sum[i] (q[k]) where {i in lev, k in lev} if k <= i
 equal. It is an inner equi-join: an unmatched row contributes the ⊕ identity, so
 it adds nothing under any semiring. Many-to-many is defined, not an error.
 
+**Text**
 ```text
 sum[j] (w[i, j] * q[i]) where {i in src, j in tgt} join(src_bin=tgt_bin)
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -272,9 +290,11 @@ rather than an array: it enumerates the unique `key` values it discovers. This
 is meaningful only under `bool_and_or`. Deriving the unique undirected edges of
 a mesh from its face→vertex relation:
 
+**Text**
 ```text
 any[] (true) where {f in faces, v in verts_of_face(f), w in verts_of_face(f)} distinct key=skolem(min(v, w), max(v, w)) id=edges [semiring=bool_and_or]
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -308,9 +328,11 @@ Index-returning reductions: instead of the extremum of the body, they return the
 **index at which it is attained**. `arg` names the contracted range symbol whose
 value is returned; `expr` is the body; `ranges` is the candidate domain.
 
+**Text**
 ```text
 argmin[g] (cost[g]) where {g in gens}
 ```
+**JSON**
 ```json
 {
   "op": "argmin",
@@ -321,9 +343,11 @@ argmin[g] (cost[g]) where {g in gens}
 }
 ```
 
+**Text**
 ```text
 argmax[g] (cost[g]) where {g in gens}
 ```
+**JSON**
 ```json
 {
   "op": "argmax",
@@ -344,9 +368,11 @@ how a nearest-neighbour search is pruned to a candidate set.
 relation instance. It is how a document names a thing it has not enumerated: an
 edge, a bin, a source/target pair.
 
+**Text**
 ```text
 skolem(min(u, v), max(u, v))
 ```
+**JSON**
 ```json
 {
   "op": "skolem",
@@ -372,9 +398,11 @@ frozen into the compiled system.
 sorted `distinct` sequence of its input. Where `skolem` invents the identity,
 `rank` turns identities into contiguous array offsets:
 
+**Text**
 ```text
 area[rank(edge_key)]
 ```
+**JSON**
 ```json
 {
   "op": "index",

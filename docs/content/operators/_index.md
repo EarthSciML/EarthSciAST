@@ -16,9 +16,11 @@ An operator node always has `op` and `args`. Some operators take extra named
 fields — `wrt` on `D`, `output_idx`/`ranges` on `aggregate`, `regions`/`values`
 on `makearray` — which are listed on each operator's page.
 
+**Text**
 ```text
 k * A * B
 ```
+**JSON**
 ```json
 { "op": "*", "args": ["k", "A", "B"] }
 ```
@@ -42,16 +44,23 @@ carries its scheme parameters in `attrs` rather than in dedicated fields.
 
 ## Text form
 
-Every example on these pages is given twice — once as the text an author writes
-and once as the JSON it denotes. The two are not independent: each pair is
-checked with the shipped `parse_expression` and `to_ascii`, which are inverses,
-so the text parses to exactly the JSON shown and the JSON prints back to exactly
-the text.
+Every example on these pages is one expression shown two ways: a block labelled
+**Text**, the notation an author writes, followed by a block labelled **JSON**,
+the node it denotes. They are not two different examples, and they are not
+independent — each pair is checked with the shipped `parse_expression` and
+`to_ascii`, which are inverses, so the text parses to exactly the JSON shown and
+the JSON prints back to exactly the text.
 
-Multiplication is always explicit (`k * A`, never `kA`) because identifiers are
-multi-letter. Two operators have **no text surface yet** and are shown as JSON
-only: `broadcast` (prints as the plain operator it applies) and `enum` (prints
-as a dotted name, which re-parses as a scoped variable reference).
+Multiplication is always explicit (`k * A`, never `kA`), because identifiers are
+multi-letter.
+
+A **JSON block with no Text partner** is a form the text notation cannot spell
+today. `broadcast` and `enum` have no surface of their own — the first prints as
+the operator it applies, the second as a dotted name that re-parses as a scoped
+variable reference. `neg` shares the surface of unary `-`. And a few forms lose
+a field on the way out: a `D` carrying trailing boundary operands, a `grad`
+carrying `dim`, and an `overlap` join. Whole `.esm` documents are shown as JSON
+throughout; the text notation covers expressions and equations, not files.
 
 ## Index
 

@@ -14,18 +14,22 @@ rejected with `array_shape_mismatch`.
 Element or sub-array access. `args[0]` is the array; `args[1..]` are the index
 expressions.
 
+**Text**
 ```text
 C[i, j]
 ```
+**JSON**
 ```json
 { "op": "index", "args": ["C", "i", "j"] }
 ```
 
 Indices are expressions, so arithmetic on them is ordinary:
 
+**Text**
 ```text
 C[i - 1]
 ```
+**JSON**
 ```json
 { "op": "index", "args": ["C", { "op": "-", "args": ["i", 1] }] }
 ```
@@ -67,9 +71,11 @@ interior/boundary idiom work — fill the interior with a stencil, then overwrit
 the faces with the boundary condition. There is no boundary-condition block
 anywhere in the format; this is where a BC lives:
 
+**Text**
 ```text
 makearray([2:9] = k * C[i], [1:1] = 0, [10:10] = 0)
 ```
+**JSON**
 ```json
 {
   "op": "makearray",
@@ -101,9 +107,11 @@ stencil was instantiated below its scheme's minimum extent.
 Reshapes `args[0]` to the target `shape` field. Entries are integers or symbolic
 dimension names.
 
+**Text**
 ```text
 reshape(v, [lon, lat])
 ```
+**JSON**
 ```json
 { "op": "reshape", "args": ["v"], "shape": ["lon", "lat"] }
 ```
@@ -112,18 +120,22 @@ reshape(v, [lon, lat])
 
 Axis permutation of `args[0]`. With no `perm`, axes are reversed:
 
+**Text**
 ```text
 transpose(A)
 ```
+**JSON**
 ```json
 { "op": "transpose", "args": ["A"] }
 ```
 
 `perm` is a list of **0-based** axis indices giving the new order:
 
+**Text**
 ```text
 transpose(A, [1, 0])
 ```
+**JSON**
 ```json
 { "op": "transpose", "args": ["A"], "perm": [1, 0] }
 ```
@@ -133,9 +145,11 @@ transpose(A, [1, 0])
 Concatenates its operand arrays along `axis`, which is **0-based**. All operands
 must have identical shape on every other axis.
 
+**Text**
 ```text
 concat(A, B, axis=1)
 ```
+**JSON**
 ```json
 { "op": "concat", "args": ["A", "B"], "axis": 1 }
 ```

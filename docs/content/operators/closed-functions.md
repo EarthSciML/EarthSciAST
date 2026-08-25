@@ -14,9 +14,11 @@ functions and no handler lookup.
 | `name` | Dotted path of a registry function, e.g. `"interp.linear"`. |
 | `args` | Sub-expressions, evaluated in the current context and passed positionally. |
 
+**Text**
 ```text
 datetime.julian_day(t_utc)
 ```
+**JSON**
 ```json
 { "op": "fn", "name": "datetime.julian_day", "args": ["t_utc"] }
 ```
@@ -54,9 +56,11 @@ All take a UTC time and return an integer component.
 | `datetime.is_leap_year` | `1` or `0` |
 | `datetime.julian_day` | Julian day number |
 
+**Text**
 ```text
 datetime.hour(t_utc)
 ```
+**JSON**
 ```json
 { "op": "fn", "name": "datetime.hour", "args": ["t_utc"] }
 ```
@@ -85,9 +89,11 @@ edge value rather than extrapolating. With `table = [10, 20, 30]` over
 and `5.0` (one past the end) above it. That makes it the natural way to turn a
 continuous quantity into a categorical one:
 
+**Text**
 ```text
 deposition_table[interp.searchsorted(sza, [0, 0.5, 1, 1.5])]
 ```
+**JSON**
 ```json
 {
   "op": "index",
@@ -119,18 +125,22 @@ bit-equivalent to it.
 
 Its text surface is bracket-and-axis, not a call:
 
+**Text**
 ```text
 visc[T=temp]
 ```
+**JSON**
 ```json
 { "op": "table_lookup", "table": "visc", "axes": { "T": "temp" }, "args": [] }
 ```
 
 A two-axis table with an output selector:
 
+**Text**
 ```text
 k_rate[T=temp, p=pres]:1
 ```
+**JSON**
 ```json
 { "op": "table_lookup", "table": "k_rate", "axes": { "T": "temp", "p": "pres" }, "output": 1, "args": [] }
 ```

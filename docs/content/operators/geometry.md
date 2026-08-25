@@ -22,9 +22,11 @@ of a clip and a shoelace area. It exposes no clip ring, which is what makes it
 densely evaluable: a per-pair overlap factor is an ordinary `aggregate` with no
 ragged intermediate.
 
+**Text**
 ```text
 polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar)
 ```
+**JSON**
 ```json
 {
   "op": "polygon_intersection_area",
@@ -45,9 +47,11 @@ pair contributes the fold identity and drops out on its own.
 The idiomatic use is a whole weight matrix assembled by an `aggregate` over the
 source × target product. `A_ij` is the shared area of each surviving pair:
 
+**Text**
 ```text
 sum[i, j] (polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar)) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin)
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -70,9 +74,11 @@ sum[i, j] (polygon_intersection_area(src_poly[i], tgt_poly[j], manifold=planar))
 The row-sum normalizer drops slivers with a `filter`, which is where the
 tolerance lives — in the document, not in the kernel:
 
+**Text**
 ```text
 sum[j] (A_ij[i, j]) where {i in src_cells, j in tgt_cells} join(src_bin=tgt_bin) if A_ij[i, j] > atol
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -97,9 +103,11 @@ visits the full source × target product; with it, the cost is proportional to t
 number of candidate pairs. The bin keys are themselves computed — quantize each
 cell's representative coordinate and mint a key from the two integers:
 
+**Text**
 ```text
 sum[i] (skolem(floor(src_lon[i] / dx), floor(src_lat[i] / dy))) where {i in src_cells}
 ```
+**JSON**
 ```json
 {
   "op": "aggregate",
@@ -132,9 +140,11 @@ computation needs the geometry (a centroid, a further clip); prefer
 `polygon_intersection_area` when all you need is the measure, because the ragged
 ring it avoids is what forces a non-dense evaluation path.
 
+**Text**
 ```text
 intersect_polygon(src_poly[i], tgt_poly[j], manifold=spherical, id=overlap_clip)
 ```
+**JSON**
 ```json
 {
   "op": "intersect_polygon",

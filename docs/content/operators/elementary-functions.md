@@ -14,17 +14,21 @@ All of these are elementwise: applied to an array operand they act per element.
 | `log10` | 1 | base-10 logarithm |
 | `sqrt` | 1 | square root |
 
+**Text**
 ```text
 exp(0)
 ```
+**JSON**
 ```json
 { "op": "exp", "args": [0] }
 ```
 → `1.0`.
 
+**Text**
 ```text
 sqrt(9)
 ```
+**JSON**
 ```json
 { "op": "sqrt", "args": [9] }
 ```
@@ -32,27 +36,33 @@ sqrt(9)
 
 `log` is the natural logarithm — here a log-pressure vertical coordinate:
 
+**Text**
 ```text
 log(p0 / p)
 ```
+**JSON**
 ```json
 { "op": "log", "args": [{ "op": "/", "args": ["p0", "p"] }] }
 ```
 
 `log10` is base 10 — here pH from hydrogen-ion activity:
 
+**Text**
 ```text
 -log10(H_plus)
 ```
+**JSON**
 ```json
 { "op": "-", "args": [{ "op": "log10", "args": ["H_plus"] }] }
 ```
 
 The classic Arrhenius rate:
 
+**Text**
 ```text
 A * exp((-Ea) / (R * T))
 ```
+**JSON**
 ```json
 {
   "op": "*",
@@ -79,9 +89,11 @@ return a dimensionless result. `sqrt` halves its argument's dimension.
 
 The cosine of the solar zenith angle, the canonical use of the circular family:
 
+**Text**
 ```text
 sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(hour)
 ```
+**JSON**
 ```json
 {
   "op": "+",
@@ -95,41 +107,51 @@ sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(hour)
 }
 ```
 
+**Text**
 ```text
 tan(slope)
 ```
+**JSON**
 ```json
 { "op": "tan", "args": ["slope"] }
 ```
 
 The inverses go the other way — an angle out of a dimensionless ratio:
 
+**Text**
 ```text
 acos(cos_sza)
 ```
+**JSON**
 ```json
 { "op": "acos", "args": ["cos_sza"] }
 ```
 
+**Text**
 ```text
 asin(z / r)
 ```
+**JSON**
 ```json
 { "op": "asin", "args": [{ "op": "/", "args": ["z", "r"] }] }
 ```
 
+**Text**
 ```text
 atan(dz_dx)
 ```
+**JSON**
 ```json
 { "op": "atan", "args": ["dz_dx"] }
 ```
 
 `atan2` is the quadrant-aware form, and takes `y` first:
 
+**Text**
 ```text
 atan2(y, x)
 ```
+**JSON**
 ```json
 { "op": "atan2", "args": ["y", "x"] }
 ```
@@ -148,16 +170,20 @@ angle.
 transcendental, so all require a dimensionless argument and return a
 dimensionless result.
 
+**Text**
 ```text
 tanh(z)
 ```
+**JSON**
 ```json
 { "op": "tanh", "args": ["z"] }
 ```
 
+**Text**
 ```text
 sinh(z) / cosh(z)
 ```
+**JSON**
 ```json
 {
   "op": "/",
@@ -168,23 +194,29 @@ sinh(z) / cosh(z)
 `asinh` is defined for all reals, which makes it a useful signed log-like
 transform for a quantity that changes sign:
 
+**Text**
 ```text
 asinh(x / x0)
 ```
+**JSON**
 ```json
 { "op": "asinh", "args": [{ "op": "/", "args": ["x", "x0"] }] }
 ```
 
+**Text**
 ```text
 acosh(g)
 ```
+**JSON**
 ```json
 { "op": "acosh", "args": ["g"] }
 ```
 
+**Text**
 ```text
 atanh(r)
 ```
+**JSON**
 ```json
 { "op": "atanh", "args": ["r"] }
 ```
@@ -203,33 +235,41 @@ specification. The same is true of `asin`/`acos` outside `[-1, 1]`.
 | `abs` | 1 | absolute value |
 | `sign` | 1 | `-1.0`, `0.0`, or `1.0` |
 
+**Text**
 ```text
 floor(x)
 ```
+**JSON**
 ```json
 { "op": "floor", "args": ["x"] }
 ```
 With `x=2.7` → `2.0`.
 
+**Text**
 ```text
 ceil(x)
 ```
+**JSON**
 ```json
 { "op": "ceil", "args": ["x"] }
 ```
 With `x=2.7` → `3.0`.
 
+**Text**
 ```text
 abs(x)
 ```
+**JSON**
 ```json
 { "op": "abs", "args": ["x"] }
 ```
 With `x=-3` → `3.0`.
 
+**Text**
 ```text
 sign(x)
 ```
+**JSON**
 ```json
 { "op": "sign", "args": ["x"] }
 ```
@@ -252,17 +292,21 @@ compare by exact equality, so the float must be reduced to an integer first.
 Both are **n-ary with arity ≥ 2**; a binding must reject a one-argument `min` or
 `max`.
 
+**Text**
 ```text
 min(a, b, c)
 ```
+**JSON**
 ```json
 { "op": "min", "args": ["a", "b", "c"] }
 ```
 With `a=3, b=1, c=2` → `1.0`.
 
+**Text**
 ```text
 max(a, b)
 ```
+**JSON**
 ```json
 { "op": "max", "args": ["a", "b"] }
 ```
@@ -272,9 +316,11 @@ With `a=3, b=1` → `3.0`.
 this way rather than reaching for a [`fn`](../closed-functions/) that
 re-implements it:
 
+**Text**
 ```text
 min(max(x, lo), hi)
 ```
+**JSON**
 ```json
 { "op": "min",
   "args": [{ "op": "max", "args": ["x", "lo"] }, "hi"] }
