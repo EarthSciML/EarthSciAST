@@ -641,11 +641,40 @@ Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
 `{matrix, species, reactions}` — so TypeScript is the only binding where the row
 and column labels are recoverable.
 
-**Species ORDER is not harmonized and is observable.** Julia, TypeScript and
-Python hold `species` as an ordered list and use declaration order; Rust and Go
-hold it as a map and sort by name, which for them is the only deterministic
-option. Nothing in `tests/` pins it. Settling it means either a shared fixture
-or a return shape that carries the labels (TypeScript's), and is follow-up work.
+**Species ORDER is not harmonized and is observable — and it splits differently
+per function.** An earlier draft of this paragraph said "Rust and Go hold
+`species` as a map and sort by name". That is wrong about Rust, and it conflated
+two different functions. Measured, per binding:
+
+| | `derive_odes` | `stoichiometric_matrix` |
+|---|---|---|
+| Julia | declaration | declaration |
+| Python | declaration | declaration |
+| TypeScript | declaration | declaration |
+| Rust | **declaration** | **sorted by name** |
+| Go | **sorted by name** | **sorted by name** |
+
+Rust's `species` is an `IndexMap`, which preserves insertion order, so
+`derive_odes` iterates in declaration order like the other three; the sort is a
+deliberate local choice in `stoichiometric_matrix` alone
+(`reactions.rs:357` — "so indices are reproducible"). Julia, Python and
+TypeScript contain no `sort` at all in their reaction modules.
+
+So there are two separate divergences:
+
+1. **`stoichiometric_matrix`** — Rust and Go sort, the other three do not.
+   Pre-existing, and the row labels are unrecoverable in the three bindings
+   whose return is a bare matrix (only TypeScript returns
+   `{matrix, species, reactions}`), which is what makes it observable.
+2. **`derive_odes`** — Go alone sorts, as of phase 6. This is **forced, not
+   chosen**: Go's `ReactionSystem.Species` is a `map[string]Species`, a genuinely
+   unordered Go map that has already lost declaration order by the time
+   `DeriveODEs` runs. Sorting is the only deterministic option available without
+   changing Go's decode representation to carry the key order alongside the map.
+
+Nothing in `tests/` pins either. Settling them means a shared fixture, and for
+(2) either accepting Go as the documented exception or giving Go an ordered
+species representation.
 
 ---
 
