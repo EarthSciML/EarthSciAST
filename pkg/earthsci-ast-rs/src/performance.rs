@@ -493,7 +493,7 @@ mod tests {
     #[cfg(feature = "parallel")]
     #[test]
     fn test_fast_evaluation() {
-        let expr = Expr::Operator(ExpressionNode {
+        let expr = Expr::operator(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Variable("x".to_string()), Expr::Number(1.0)],
             wrt: None,

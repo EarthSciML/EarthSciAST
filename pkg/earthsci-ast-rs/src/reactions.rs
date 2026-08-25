@@ -416,8 +416,8 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
 /// // Assuming you have a reaction system
 /// let reaction_system = ReactionSystem {
 ///     reference: None,
-///     species: std::collections::HashMap::new(),
-///     parameters: std::collections::HashMap::new(),
+///     species: indexmap::IndexMap::new(),
+///     parameters: indexmap::IndexMap::new(),
 ///     reactions: vec![],
 ///     constraint_equations: None,
 ///     discrete_events: None,
@@ -1080,8 +1080,6 @@ mod tests {
     #[test]
     #[cfg(feature = "parallel")]
     fn test_stoichiometric_matrix_parallel() {
-        use std::collections::HashMap;
-
         let system = ReactionSystem {
             reference: None,
             species: [
@@ -1091,7 +1089,7 @@ mod tests {
             ]
             .into_iter()
             .collect::<IndexMap<_, _>>(),
-            parameters: HashMap::new(),
+            parameters: IndexMap::new(),
             reactions: vec![
                 // A -> B
                 create_test_reaction(

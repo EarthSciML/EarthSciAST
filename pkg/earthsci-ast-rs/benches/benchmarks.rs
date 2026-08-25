@@ -4,10 +4,11 @@ use earthsci_ast::{
     StoichiometricEntry, load_string, performance::CompactExpr, stoichiometric_matrix, to_json,
     validate,
 };
+use indexmap::IndexMap;
 use std::collections::HashMap;
 
 fn bin_op(op: &str, left: Expr, right: Expr) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: op.to_string(),
         args: vec![left, right],
         wrt: None,
@@ -17,7 +18,7 @@ fn bin_op(op: &str, left: Expr, right: Expr) -> Expr {
 }
 
 fn func_call(name: &str, args: Vec<Expr>) -> Expr {
-    Expr::Operator(ExpressionNode {
+    Expr::operator(ExpressionNode {
         op: name.to_string(),
         args,
         wrt: None,
@@ -34,10 +35,10 @@ use earthsci_ast::performance::simd_math;
 
 /// Create a test ESM file with varying complexity
 fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
-    let mut models = HashMap::new();
+    let mut models = IndexMap::new();
 
     for i in 0..num_models {
-        let mut variables = HashMap::new();
+        let mut variables = IndexMap::new();
         let mut equations = Vec::new();
 
         // Create variables
@@ -49,6 +50,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
                     var_type: earthsci_ast::VariableType::Unknown,
                     units: Some("m/s".to_string()),
                     default: Some(1.0),
+                    default_units: None,
                     description: None,
                     shape: None,
                     location: None,
@@ -93,7 +95,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
     EsmFile {
         coordinates: None,
         coupling_roles: None,
-        esm: "0.1.0".to_string(),
+        esm: "1.0.0".to_string(),
         metadata: Metadata {
             name: Some("benchmark_test".to_string()),
             description: Some("Benchmark test file".to_string()),
@@ -108,6 +110,9 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             discretized_from: None,
         },
         index_sets: None,
+        expression_templates: None,
+        metaparameters: None,
+        component_templates: None,
         models: Some(models),
         reaction_systems: None,
         data_sources: None,
@@ -121,7 +126,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
 
 /// Create a test reaction system with varying complexity
 fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> ReactionSystem {
-    let mut species = HashMap::new();
+    let mut species = IndexMap::new();
     let mut reactions = Vec::new();
 
     // Create species (keyed by name in the new schema)
@@ -165,7 +170,7 @@ fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> Reac
     ReactionSystem {
         reference: None,
         species,
-        parameters: HashMap::new(),
+        parameters: IndexMap::new(),
         reactions,
         constraint_equations: None,
         discrete_events: None,
