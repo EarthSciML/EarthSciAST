@@ -151,8 +151,11 @@ func Validate(file *ESMFile) *ValidationResult {
 // that Validate does not is nothing at all. Text is the only input that can
 // carry SCHEMA errors, so text is where the schema pass belongs.
 //
-// LoadOptions are forwarded to the parse, so a caller validating text read from
-// disk can pass WithBasePath to make relative subsystem references resolve.
+// LoadOptions are forwarded to the parse. WithBasePath is the one that matters
+// for text read from disk: it is what lets relative §9.7 template-library
+// imports resolve. Subsystem `$ref` MOUNTS are resolved by LoadPath and not by
+// LoadString, so a document carrying those wants LoadPath followed by Validate
+// rather than ValidateText — the same split the conformance adapter makes.
 func ValidateText(jsonStr string, opts ...LoadOption) *ValidationResult {
 	schemaResult, err := validateJSONSchema(jsonStr)
 	if err != nil {
