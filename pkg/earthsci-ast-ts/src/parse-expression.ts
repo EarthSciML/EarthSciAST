@@ -326,11 +326,7 @@ class Parser {
       // index: `=` is never an expression operator, so a `name` `=` pair inside
       // the brackets discriminates the two unambiguously. Only a bare variable
       // can name a table.
-      if (
-        typeof node === 'string' &&
-        this.peek(1).k === 'name' &&
-        this.peek(2).k === 'eq'
-      ) {
+      if (typeof node === 'string' && this.peek(1).k === 'name' && this.peek(2).k === 'eq') {
         node = this.parseTableLookup(node)
         continue
       }

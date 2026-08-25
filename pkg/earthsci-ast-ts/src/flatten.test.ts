@@ -292,11 +292,15 @@ describe('operator_compose translate direction (§10.2 / §4.7.1 step 2)', () =>
       models: {
         A: {
           variables: { x: { type: 'unknown' }, k: { type: 'parameter' } },
-          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } }],
+          equations: [
+            { lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: ['k', 'x'] } },
+          ],
         },
         B: {
           variables: { y: { type: 'unknown' }, u: { type: 'parameter' } },
-          equations: [{ lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: { op: '*', args: ['u', 'y'] } }],
+          equations: [
+            { lhs: { op: 'D', args: ['y'], wrt: 't' }, rhs: { op: '*', args: ['u', 'y'] } },
+          ],
         },
       },
       coupling: [{ type: 'operator_compose', systems: ['A', 'B'], translate }],
