@@ -341,6 +341,20 @@ export function declaredSystemKind(model: Model): SystemKind | null {
   return (model.system_kind as SystemKind | undefined) ?? null
 }
 
+/**
+ * The kind a caller choosing a solver actually asks for: the DECLARED
+ * `system_kind` when the document states one, otherwise the DERIVED kind.
+ *
+ * API_SPEC.md §8 item 11 rules the family as three distinct questions plus this
+ * one composition — {@link systemKind} derives, {@link declaredSystemKind}
+ * reads the field, and this composes them as `declared ?? derived`. It never
+ * returns `null`: an undeclared model still has a derived kind. Matches Go's
+ * `EffectiveSystemKind`.
+ */
+export function effectiveSystemKind(model: Model): SystemKind {
+  return declaredSystemKind(model) ?? systemKind(model)
+}
+
 // ---------------------------------------------------------------------------
 // Whole-model classification
 // ---------------------------------------------------------------------------
