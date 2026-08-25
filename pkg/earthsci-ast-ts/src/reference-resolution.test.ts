@@ -150,6 +150,65 @@ describe('buildReferenceGraph', () => {
     ).toThrow(expect.objectContaining({ code: E_REF_UNRESOLVED_JOIN_FACTOR }) as unknown as Error)
   })
 
+  /**
+   * The NEGATIVE guard on the four-class join scope (esm-spec §4.9.5 /
+   * CONFORMANCE_SPEC §5.5.6). Widening the scope to the variable and index-set
+   * registries must not degrade into "accept any string": a name declared in
+   * NONE of the four registries is still a typo and must still raise
+   * `E_REF_UNRESOLVED_JOIN_FACTOR`, on either key column.
+   *
+   * The document declares a variable (`bin`) and an index set (`cells`) and
+   * binds a range (`i`) and an arg (`w`), so all four registries are non-empty
+   * and the check is genuinely reached rather than trivially satisfied.
+   */
+  describe('join.on binder classes (esm-spec §4.9.5)', () => {
+    const sets = { cells: { kind: 'interval', size: 4 } }
+    const doc = (on: [string, string]) => ({
+      variables: { bin: { type: 'parameter' }, w: { type: 'parameter' } },
+      equations: [
+        {
+          lhs: {
+            op: 'aggregate',
+            id: 'j',
+            args: ['w'],
+            output_idx: [],
+            ranges: { i: { from: 'cells' } },
+            join: [{ on: [on] }],
+          },
+          rhs: 0,
+        },
+      ],
+    })
+
+    it.each([
+      ['node-local binder (ranges key)', ['i', 'i'] as [string, string]],
+      ['node-local string factor arg', ['w', 'w'] as [string, string]],
+      ['declared model variable — the defect-#3 class', ['bin', 'bin'] as [string, string]],
+      ['document-scoped index set', ['cells', 'cells'] as [string, string]],
+    ])('resolves a join column naming a %s', (_label, on) => {
+      expect(() => buildReferenceGraph(doc(on), 'M', sets)).not.toThrow()
+    })
+
+    it('still rejects a name in none of the four classes, on the LEFT column', () => {
+      expect(() => buildReferenceGraph(doc(['no_such_name', 'bin']), 'M', sets)).toThrow(
+        expect.objectContaining({
+          code: E_REF_UNRESOLVED_JOIN_FACTOR,
+          message: expect.stringContaining('no_such_name') as unknown as string,
+        }) as unknown as Error,
+      )
+    })
+
+    it('still rejects a name in none of the four classes, on the RIGHT column', () => {
+      // The right column was never validated before this fix.
+      expect(() => buildReferenceGraph(doc(['bin', 'no_such_name']), 'M', sets)).toThrow(
+        expect.objectContaining({
+          code: E_REF_UNRESOLVED_JOIN_FACTOR,
+          message: expect.stringContaining('no_such_name') as unknown as string,
+        }) as unknown as Error,
+      )
+    })
+  })
+
   it('addresses an id-less aggregate by its structural path', () => {
     const g = buildReferenceGraph(
       model({ equations: [{ lhs: { op: 'aggregate', args: [] }, rhs: 0 }] }),
@@ -245,32 +304,29 @@ describe('reference resolution over the shared corpus', () => {
     .sort()
 
   /**
-   * TWO fixtures under `tests/valid/` are rejected by the resolver — and the
-   * Python binding rejects the same two with the same codes, byte for byte.
-   * They are schema-valid but reference-broken; see `tests/CORPUS_DEFECTS.md`:
+   * EMPTY: every fixture under `tests/valid/` resolves, and every other binding
+   * agrees. The map is kept so a regression that starts rejecting a valid
+   * fixture surfaces as an exact-partition failure rather than as the weaker
+   * "never errors".
    *
-   * - `conservative_regrid_assembly` and `wildfire_atmosphere_ocean` each have
-   *   a `join.on` factor outside its node's scope — corpus defect #3. The
-   *   second instance was MASKED until phase 6b moved `from_faq` to document
-   *   scope (esm-spec §9.7.5): `wildfire_atmosphere_ocean` used to fail
-   *   earlier, with `unknown_faq_node`, because its producer lives in another
-   *   model, so the resolver never reached the join factor.
+   * The three entries it used to hold are all closed (`tests/CORPUS_DEFECTS.md`):
    *
-   * `skolem_distinct_rank` was a third until phase 6b, and its recorded
-   * diagnosis was wrong: its producer node was present and complete, and only
-   * its one-line `id` was missing. Adding the `id` made it resolve (defect #1,
-   * now closed).
-   *
-   * That is a defect in the shared fixtures, not in this pass; it is pinned
-   * here so the agreement is visible and so a fixture repair shows up as a test
-   * failure rather than silently.
+   * - `skolem_distinct_rank` (defect #1): its recorded diagnosis was wrong —
+   *   the producer node was present and complete, and only its one-line `id`
+   *   was missing.
+   * - `wildfire_atmosphere_ocean` (defect #2): `from_faq` now resolves at
+   *   DOCUMENT scope (esm-spec §9.7.5), so a producer in another model is
+   *   found.
+   * - `conservative_regrid_assembly` and `wildfire_atmosphere_ocean`
+   *   (defect #3): an aggregate `join.on` names `src_bin` / `rg_src_bin`, which
+   *   are declared MODEL VARIABLES — value-invention bin buffers — not
+   *   node-local binders. `joinBinderClass` now diagnoses an `on` column
+   *   against all four binder classes esm-spec §4.9.5 and CONFORMANCE_SPEC
+   *   §5.5.6 require, in their order.
    */
-  const KNOWN_UNRESOLVED: Record<string, string> = {
-    'geometry/conservative_regrid_assembly.esm': E_REF_UNRESOLVED_JOIN_FACTOR,
-    'wildfire_atmosphere_ocean.esm': E_REF_UNRESOLVED_JOIN_FACTOR,
-  }
+  const KNOWN_UNRESOLVED: Record<string, string> = {}
 
-  it('every shared valid fixture resolves, bar the three known reference-broken ones', () => {
+  it('every shared valid fixture resolves', () => {
     expect(files.length).toBeGreaterThan(50)
     const failures: string[] = []
     const rejected: Record<string, string> = {}

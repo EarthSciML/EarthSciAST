@@ -408,6 +408,12 @@ function buildReferenceGraphImpl(
     graph.ensureVertex({ key: indexSetKey(name), kind: VertexKind.INDEX_SET, name })
   }
 
+  // The model's declared variable registry. A `join` `on` key column may name a
+  // declared component-local variable — a value-invention bin buffer written by
+  // an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
+  // an `on` column polymorphic over. See `joinBinderClass` below.
+  const variables: RawObject = isObject(raw.variables) ? raw.variables : {}
+
   // Pass 2 — walk every expression node; assign a stable address, register
   // aggregate / id-bearing nodes, and add the within-node reference edges
   // (ranges[*].from, join.on). Also build id -> address for from_faq.
@@ -446,23 +452,58 @@ function buildReferenceGraphImpl(
   }
 
   /**
-   * Names a `join.on` reference may resolve to: the node's string factor-args,
-   * its declared range keys, and its symbolic `output_idx`.
+   * Which binder class a `join` name resolves to, or `null`.
+   *
+   * An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop
+   * symbol bound by the enclosing `ranges`, a document-scoped index set
+   * (§9.7.5), or a declared component-local variable — a value-invention bin
+   * buffer. A binding that diagnoses such a name "must do so against the
+   * variable AND index-set registries", not against node-local names alone.
+   *
+   * The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because
+   * a node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+   * permits one string to be a variable reference outside an aggregate and an
+   * index symbol inside one):
+   *
+   * 1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry
+   *    — tested FIRST;
+   * 2. a node-local string factor `arg`;
+   * 3. a declared component-local variable (the model's variable registry);
+   * 4. a document-scoped index set.
+   *
+   * Anything else is unresolvable and raises `E_REF_UNRESOLVED_JOIN_FACTOR`.
+   * Nothing here widens the check to "accept any string": a name in none of the
+   * four registries is still a typo and is still reported.
    */
-  const factorScope = (node: RawObject): Set<string> => {
-    const names = new Set<string>()
-    const args = node.args
-    if (Array.isArray(args)) {
-      for (const a of args) if (typeof a === 'string') names.add(a)
-    }
-    if (isObject(node.ranges)) {
-      for (const k of Object.keys(node.ranges)) names.add(k)
-    }
+  const joinBinderClass = (node: RawObject, name: unknown): string | null => {
+    if (typeof name !== 'string' || name === '') return null
+    // 1. node-local binders (these shadow a same-named variable)
+    if (isObject(node.ranges) && name in node.ranges) return 'range'
     const outIdx = node.output_idx
     if (Array.isArray(outIdx)) {
-      for (const o of outIdx) if (typeof o === 'string') names.add(o)
+      for (const o of outIdx) if (o === name) return 'output_idx'
     }
-    return names
+    // 2. node-local string factor args
+    const args = node.args
+    if (Array.isArray(args)) {
+      for (const a of args) if (a === name) return 'arg'
+    }
+    // 3. the model's variable registry — where a bin buffer lives
+    if (name in variables) return 'variable'
+    // 4. the document-scoped index-set registry
+    if (name in sets) return 'index_set'
+    return null
+  }
+
+  const checkJoinName = (node: RawObject, name: unknown, key: string, path: string): void => {
+    if (joinBinderClass(node, name) === null) {
+      throw new ReferenceResolutionError(
+        E_REF_UNRESOLVED_JOIN_FACTOR,
+        `join factor '${typeof name === 'string' ? name : ''}' of node ${key} names no ` +
+          `range, output index, factor arg, declared variable, or index set in scope ` +
+          `(model '${modelName}', at ${path})`,
+      )
+    }
   }
 
   const processNodeRefs = (node: RawObject, key: string, path: string): void => {
@@ -486,20 +527,28 @@ function buildReferenceGraphImpl(
     // join[*].on[*] -> factor
     const join = node.join
     if (Array.isArray(join)) {
-      const scope = factorScope(node)
       for (const clause of join) {
         if (!isObject(clause)) continue
         const on = clause.on
         if (!Array.isArray(on)) continue
         for (const pair of on) {
           if (!Array.isArray(pair) || pair.length === 0) continue
-          const ref = pair[0]
-          if (typeof ref !== 'string' || !scope.has(ref)) {
-            throw new ReferenceResolutionError(
-              E_REF_UNRESOLVED_JOIN_FACTOR,
-              `join factor '${String(ref)}' of node ${key} names no factor, range, ` +
-                `or output index in scope (model '${modelName}', at ${path})`,
-            )
+          const ref = pair[0] as string
+          checkJoinName(node, ref, key, path)
+          // BOTH key columns are references (esm-spec §4.9.5). Only the LEFT one
+          // carries the graph edge: the JOIN_FACTOR edge kind records the node's
+          // own key-column dependency, and the right column is frequently a
+          // document-scoped index set, which already has its own vertex kind.
+          // The right column is DIAGNOSED here and left un-edged, which is what
+          // makes `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+          // through the index-set class without inventing a `factor:sourceType`
+          // twin of `index_set:sourceType`.
+          //
+          // A non-string right column is a SCHEMA defect
+          // (tests/invalid/aggregate/join_on_key_not_string.esm pins it there)
+          // and is not re-diagnosed as a reference error.
+          if (pair.length > 1 && typeof pair[1] === 'string') {
+            checkJoinName(node, pair[1], key, path)
           }
           graph.ensureVertex({ key: factorKey(ref), kind: VertexKind.FACTOR, name: ref })
           graph.addEdge(key, factorKey(ref), EdgeKind.JOIN_FACTOR)
