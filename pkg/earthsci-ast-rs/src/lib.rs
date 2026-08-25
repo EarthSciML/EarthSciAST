@@ -42,6 +42,13 @@
 // sole callers of are then unreachable BY CONSTRUCTION, which is the point of
 // the feature, not a defect to chase per-item.
 #![cfg_attr(not(feature = "solve"), allow(dead_code, unused_imports))]
+// H-3 demoted ~45 modules to `pub(crate)`, so a doc link from a PUBLIC item to
+// an item that is now crate-private is expected and pervasive (74 sites). The
+// links are still correct — they resolve under `cargo doc
+// --document-private-items` and when reading the source, which is who reads
+// them now. Rewriting them all as inert code spans would delete working
+// navigation to buy silence, so the lint is turned off instead.
+#![allow(rustdoc::private_intra_doc_links)]
 
 // Conformance-harness argument parsing; callable by the conformance binaries but
 // hidden from the published rustdoc API surface.
