@@ -1124,17 +1124,56 @@ end
 # ============================================================
 
 """
+    EnumLoweringError <: EarthSciASTError
+
+Raised when enum lowering (esm-spec §9.3) fails, carrying the stable diagnostic
+`code` as a structured field rather than interpolated into the message — the
+same shape as [`ClosedFunctionError`](@ref), and the same error TYPE the four
+other bindings raise here (`EnumLoweringError` in TypeScript, Python and Rust;
+`DiagnosticError` in Go). Julia raised `ParseError` from this pass until
+API_SPEC.md §8 item 15, which made a caller's `catch e; e isa ParseError` the
+only portable way to handle a failure that is not a parse failure at all.
+
+Codes: `enum_op_malformed`, `unknown_enum`, `unknown_enum_symbol`.
+"""
+struct EnumLoweringError <: EarthSciASTError
+    code::String
+    message::String
+end
+
+Base.showerror(io::IO, e::EnumLoweringError) =
+    print(io, "EnumLoweringError(", e.code, "): ", e.message)
+
+"""
+    lower_enums(file::EsmFile) -> EsmFile
+
+The PURE form: return a DEEP COPY of `file` with every `enum` op replaced by
+the `const` integer the file's `enums` block assigns it, leaving `file`
+untouched. This is the canonical spelling across the bindings (API_SPEC.md §8
+item 15); [`lower_enums!`](@ref) is the in-place twin under Julia's `!`
+convention (§2.2), and is what the load path calls.
+
+Validation (esm-spec §9.3) — every rejection is an
+[`EnumLoweringError`](@ref):
+- an `enum` op whose args are not exactly two strings → `enum_op_malformed`;
+- an `enum` op naming an undeclared enum → `unknown_enum`;
+- an `enum` op naming a symbol not declared under that enum →
+  `unknown_enum_symbol`.
+
+A file with no `enums` block therefore raises `unknown_enum` on the first
+`enum` op it contains.
+"""
+lower_enums(file::EsmFile)::EsmFile = lower_enums!(deepcopy(file))
+
+"""
     lower_enums!(file::EsmFile)
 
 Walk every expression tree in `file` and replace each `enum` op with a
 `const` integer per the file's `enums` block. After this pass runs, no
 `enum`-op nodes remain in the in-memory representation.
 
-Validation (esm-spec §9.3):
-- An `enum` op naming an undeclared enum raises `ParseError("unknown_enum: ...")`.
-- An `enum` op naming a symbol not declared under that enum raises
-  `ParseError("unknown_enum_symbol: ...")`.
-- A file with no `enums` block raises if any `enum` op is encountered.
+The in-place twin of [`lower_enums`](@ref), which documents the validation
+rules and the [`EnumLoweringError`](@ref) codes both raise.
 
 Mutates `file` in place; returns the file for convenience.
 """
@@ -1278,21 +1317,26 @@ function _lower_expr_enums_uncached(e::OpExpr,
         # symbolic key. Strings come through `expression_from_json` as `VarExpr`,
         # so we read `.name` to recover them.
         if length(e.args) != 2
-            throw(ParseError("`enum` op expects 2 args (enum_name, symbol_name), got $(length(e.args))"))
+            throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
+                "`enum` op expects 2 args (enum_name, symbol_name), got $(length(e.args))"))
         end
         a1, a2 = e.args[1], e.args[2]
         enum_name = a1 isa VarExpr ? a1.name :
                     a1 isa OpExpr && a1.op == "const" && a1.value isa AbstractString ? String(a1.value) :
-                    throw(ParseError("`enum` op: first arg must be a string"))
+                    throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
+                        "`enum` op: first arg must be a string"))
         symbol_name = a2 isa VarExpr ? a2.name :
                       a2 isa OpExpr && a2.op == "const" && a2.value isa AbstractString ? String(a2.value) :
-                      throw(ParseError("`enum` op: second arg must be a string"))
+                      throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
+                          "`enum` op: second arg must be a string"))
         if !haskey(enums, enum_name)
-            throw(ParseError("unknown_enum: enum `$(enum_name)` is not declared in the file's `enums` block"))
+            throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM,
+                "enum `$(enum_name)` is not declared in the file's `enums` block"))
         end
         mapping = enums[enum_name]
         if !haskey(mapping, symbol_name)
-            throw(ParseError("unknown_enum_symbol: symbol `$(symbol_name)` is not declared under enum `$(enum_name)`"))
+            throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+                "symbol `$(symbol_name)` is not declared under enum `$(enum_name)`"))
         end
         return OpExpr("const", ASTExpr[]; value=mapping[symbol_name])
     end

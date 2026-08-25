@@ -382,7 +382,11 @@ export
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, evaluate_closed_function_ad,
     closed_function_names, ClosedFunctionError,
-    lower_enums!,
+    # `lower_enums` is the PURE form at the canonical name (API_SPEC.md §8
+    # item 15); `lower_enums!` is the in-place twin under Julia's `!`
+    # convention (§2.2). Both raise `EnumLoweringError`, as every other
+    # binding does — this used to raise `ParseError`.
+    lower_enums, lower_enums!, EnumLoweringError,
     # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,
     ExpressionTemplateError,
