@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
-import { loadString, toJson, validate, validateText, validateSchema } from './index.js'
+import { loadString, toJson, validateText, validateSchema } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
 const testsDir = fixturesDir()

@@ -17,7 +17,6 @@ import { join, basename, dirname } from 'path'
 import {
   loadString,
   toJson,
-  validate,
   validateText,
   toUnicode,
   toLatex,

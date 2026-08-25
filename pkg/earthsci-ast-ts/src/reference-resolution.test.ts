@@ -47,7 +47,10 @@ describe('buildReferenceGraph', () => {
     const g = buildReferenceGraph(
       model({
         equations: [
-          { lhs: { op: 'aggregate', id: 'agg1', args: [], ranges: { i: { from: 'cells' } } }, rhs: 0 },
+          {
+            lhs: { op: 'aggregate', id: 'agg1', args: [], ranges: { i: { from: 'cells' } } },
+            rhs: 0,
+          },
         ],
       }),
       'M',
@@ -75,9 +78,7 @@ describe('buildReferenceGraph', () => {
         'M',
         { cells: {} },
       ),
-    ).toThrow(
-      expect.objectContaining({ code: E_REF_UNDECLARED_INDEX_SET }) as unknown as Error,
-    )
+    ).toThrow(expect.objectContaining({ code: E_REF_UNDECLARED_INDEX_SET }) as unknown as Error)
   })
 
   it('rejects two expression nodes sharing an explicit id', () => {
@@ -138,14 +139,15 @@ describe('buildReferenceGraph', () => {
       buildReferenceGraph(
         model({
           equations: [
-            { lhs: { op: 'aggregate', id: 'j', args: ['A'], join: [{ on: [['Z', 'A']] }] }, rhs: 0 },
+            {
+              lhs: { op: 'aggregate', id: 'j', args: ['A'], join: [{ on: [['Z', 'A']] }] },
+              rhs: 0,
+            },
           ],
         }),
         'M',
       ),
-    ).toThrow(
-      expect.objectContaining({ code: E_REF_UNRESOLVED_JOIN_FACTOR }) as unknown as Error,
-    )
+    ).toThrow(expect.objectContaining({ code: E_REF_UNRESOLVED_JOIN_FACTOR }) as unknown as Error)
   })
 
   it('addresses an id-less aggregate by its structural path', () => {
@@ -179,7 +181,10 @@ describe('buildReferenceGraph', () => {
       models: {
         M: {
           equations: [
-            { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'cells' } } }, rhs: 0 },
+            {
+              lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'cells' } } },
+              rhs: 0,
+            },
           ],
         },
       },
@@ -208,7 +213,9 @@ describe('buildReferenceGraph', () => {
           { lhs: { op: 'aggregate', id: 'a', args: [], ranges: { i: { from: 'local' } } }, rhs: 0 },
         ],
       }
-      expect(buildReferenceGraph(model(nested), 'M').edgesOfKind(EdgeKind.RANGE_FROM)).toHaveLength(1)
+      expect(buildReferenceGraph(model(nested), 'M').edgesOfKind(EdgeKind.RANGE_FROM)).toHaveLength(
+        1,
+      )
       // Supplying the document registry means the nested one is NOT consulted.
       expect(() => buildReferenceGraph(model(nested), 'M', { other: {} })).toThrow(
         expect.objectContaining({ code: E_REF_UNDECLARED_INDEX_SET }) as unknown as Error,

@@ -470,9 +470,7 @@ export function buildReferenceGraph(
  * The document-scoped `index_sets` registry is read once from the top level and
  * threaded into every model, so a caller never assembles it by hand.
  */
-export function resolveReferences(
-  document: EsmFile | RawObject,
-): Map<string, ReferenceGraph> {
+export function resolveReferences(document: EsmFile | RawObject): Map<string, ReferenceGraph> {
   const out = new Map<string, ReferenceGraph>()
   const raw = document as RawObject
   const models = raw.models
