@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { validate } from './validate.js'
+import { validate, validateText } from './validate.js'
 import { checkArity, checkBroadcastFn, getOpInfo } from './op-registry.js'
 import { readFixture } from './test-helpers.js'
 import type { EsmFile, Expression } from './types.js'
@@ -88,7 +88,7 @@ function findings(file: EsmFile): string[] {
 
 describe('invalid_broadcast_fn (esm-spec §4.3.4)', () => {
   it('rejects the shared fixture at the pinned path, code and message', () => {
-    const result = validate(readFixture('invalid', 'broadcast_fn_unregistered.esm'))
+    const result = validateText(readFixture('invalid', 'broadcast_fn_unregistered.esm'))
 
     expect(result.is_valid).toBe(false)
     const found = result.structural_errors.filter((e) => e.code === 'invalid_broadcast_fn')
@@ -228,7 +228,7 @@ describe('registry arity floors are the cross-binding ones (esm-spec §4.2)', ()
 
 describe('array_shape_mismatch (esm-spec §4.3.4 "Broadcast compatibility")', () => {
   it('rejects the shared fixture at the pinned path, code, message and details', () => {
-    const result = validate(
+    const result = validateText(
       readFixture('invalid', 'array_broadcast', 'operand_index_set_not_in_result.esm'),
     )
 
@@ -255,7 +255,7 @@ describe('array_shape_mismatch (esm-spec §4.3.4 "Broadcast compatibility")', ()
     'bare_axis_permuted_operand.esm',
     'broadcast_node_mixed_rank.esm',
   ])('accepts the alignable fixture %s', (name) => {
-    const result = validate(readFixture('valid', 'array_broadcast', name))
+    const result = validateText(readFixture('valid', 'array_broadcast', name))
     expect(result.structural_errors).toEqual([])
     expect(result.is_valid).toBe(true)
   })

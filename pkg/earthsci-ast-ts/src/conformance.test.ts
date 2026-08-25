@@ -18,6 +18,7 @@ import {
   loadString,
   toJson,
   validate,
+  validateText,
   toUnicode,
   toLatex,
   toAscii,
@@ -136,7 +137,7 @@ describe('Conformance Test Suite', () => {
       //
       // `basePath` lets `validate()` OPEN relative `{ref}` and template-import
       // targets, exactly as a consumer holding the file on disk would.
-      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
+      const result = validateText(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
 
       if (!result.is_valid) {
         // Surface WHAT failed — a bare `false !== true` on a 200-line fixture is
@@ -295,7 +296,7 @@ describe('Conformance Test Suite', () => {
       // `subsystem_ref_ambiguous.esm`'s target holds three top-level components,
       // which is `ambiguous_subsystem_ref` — a verdict the I/O-free path cannot
       // reach, since without opening the file it can only say "unresolved".
-      const result = validate(content, { basePath: dirname(filePath) })
+      const result = validateText(content, { basePath: dirname(filePath) })
 
       if (expectedErrors[basename(filePath)]?.resolver_only) {
         // Resolver-only: the JSON-Schema layer must ACCEPT it (no schema_errors).
@@ -385,7 +386,7 @@ describe('Conformance Test Suite', () => {
       ({ file, expectedCode }) => {
         try {
           const content = readFileSync(file, 'utf-8')
-          const result = validate(content)
+          const result = validateText(content)
 
           expect(result.is_valid).toBe(false)
           expect(result.structural_errors.length).toBeGreaterThan(0)
@@ -557,7 +558,7 @@ describe('Conformance Test Suite', () => {
       const model = loadString(content)
 
       // 2. Validate
-      const validationResult = validate(content)
+      const validationResult = validateText(content)
       expect(validationResult.is_valid).toBe(true)
       expect(validationResult.schema_errors).toHaveLength(0)
       expect(validationResult.structural_errors).toHaveLength(0)
@@ -606,7 +607,7 @@ describe('Conformance Test Suite', () => {
 
       // 5. Re-validate after substitution
       const serializedSubstituted = toJson(substitutedModel)
-      const revalidationResult = validate(serializedSubstituted)
+      const revalidationResult = validateText(serializedSubstituted)
       expect(revalidationResult.is_valid).toBe(true)
 
       // 6. Verify model structure is preserved
@@ -650,7 +651,7 @@ describe('Conformance Test Suite', () => {
     // that `loadString()` does not throw — so an end-to-end system could fail every
     // structural check in the book and the test stayed green. Assert the result.
     it.each(endToEndFiles)('should validate complex system %s', (filePath) => {
-      const result = validate(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
+      const result = validateText(readFileSync(filePath, 'utf-8'), { basePath: dirname(filePath) })
 
       if (!result.is_valid) {
         const detail = [...result.schema_errors, ...result.structural_errors]

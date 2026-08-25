@@ -3,14 +3,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { validate } from './validate.js'
+import { validate, validateText } from './validate.js'
 import { readFixture } from './test-helpers.js'
 
 describe('Structural validation integration', () => {
   it('should detect equation count mismatch in actual test file', () => {
     const data = readFixture('invalid', 'equation_count_mismatch.esm')
 
-    const result = validate(data)
+    const result = validateText(data)
 
     expect(result.is_valid).toBe(false)
     expect(result.structural_errors).toHaveLength(1)

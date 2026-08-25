@@ -367,14 +367,53 @@ export interface ValidateOptions {
 }
 
 /**
- * Validate ESM data and return structured validation result.
+ * Validate a TYPED ESM DOCUMENT and return a structured validation result.
  *
- * @param data - ESM data as JSON string or object
+ * API_SPEC.md §8 item 13: `validate` takes a typed document in EVERY binding.
+ * It used to accept `string | object` here, so `validate(someString)` meant
+ * "parse this JSON text" in TypeScript and Python but was a type error in Rust
+ * and Go. The text convenience now has its own name, {@link validateText}, so
+ * the argument type says which one you are calling.
+ *
+ * Passing a string is rejected at compile time by the signature and at runtime
+ * by an explicit guard, rather than silently doing something else.
+ *
+ * @param document - a loaded ESM document (or a plain object of the same shape)
  * @param options - Optional {@link ValidateOptions}; pass `basePath` to let
  *   relative `{ref}` / template-import targets be opened and resolved.
  * @returns ValidationResult with validation status and errors
  */
-export function validate(data: string | object, options: ValidateOptions = {}): ValidationResult {
+export function validate(
+  document: EsmFile | object,
+  options: ValidateOptions = {},
+): ValidationResult {
+  if (typeof document === 'string') {
+    throw new TypeError(
+      'validate() takes a typed ESM document, not JSON text. ' +
+        'Use validateText(text) to validate a JSON string.',
+    )
+  }
+  return validateAny(document, options)
+}
+
+/**
+ * Validate ESM JSON **text**: parse it, then run {@link validate} on the result.
+ *
+ * A malformed document does not throw — it comes back as a `ValidationResult`
+ * carrying a single `json_parse_error` schema error, the same envelope the old
+ * string-accepting `validate()` produced.
+ *
+ * The canonical name is `validate_text` (API_SPEC.md §8 item 13). There is no
+ * `validatePath` counterpart in this binding: `@earthsciml/ast` is built for
+ * the browser as well as Node, and the package has no filesystem story on the
+ * public surface for a synchronous read. Read the file yourself and call
+ * `validateText`, passing `basePath` so relative `{ref}` targets still resolve.
+ */
+export function validateText(text: string, options: ValidateOptions = {}): ValidationResult {
+  return validateAny(text, options)
+}
+
+function validateAny(data: string | object, options: ValidateOptions = {}): ValidationResult {
   const schema_errors: ValidationError[] = []
   const structural_errors: ValidationError[] = []
   const unit_warnings: UnitWarning[] = []
