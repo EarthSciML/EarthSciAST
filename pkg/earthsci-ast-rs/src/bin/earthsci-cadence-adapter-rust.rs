@@ -2,7 +2,7 @@
 //! cadence-partition conformance harness (`scripts/run-cadence-conformance.py`,
 //! bead ess-my4.3.8).
 //!
-//! Thin by design (the contract lives in [`earthsci_ast::cadence`], not
+//! Thin by design (the contract lives in `earthsci_ast`'s cadence pass, not
 //! here): load the manifest, run the real partition pass over each fixture's
 //! ESM model, and write — per fixture — the class summary, the
 //! materialization-point threshold set, and the CONST-folded buffers. The
@@ -11,7 +11,8 @@
 //! Invoked as `earthsci-cadence-adapter-rust --manifest <m.json> --output <r.json>`.
 
 use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
-use earthsci_ast::cadence::{self, MaterializationPoint};
+use earthsci_ast::extension::cadence::model_with_loaders;
+use earthsci_ast::{MaterializationPoint, compute_fold, partition_model};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 use std::process::ExitCode;
@@ -66,9 +67,9 @@ fn run(manifest_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::erro
             .ok_or_else(|| format!("{rel}: model {model_name:?} not found"))?;
         // Attach the document's `data_sources` so the loader-seeded cadence
         // refinement (§5.7.2) can resolve a discrete variable's data_ingest source.
-        let model = cadence::model_with_loaders(model, &doc);
+        let model = model_with_loaders(model, &doc);
 
-        let partition = cadence::partition_model(&model)?;
+        let partition = partition_model(&model)?;
 
         // CONST-folded buffers — the fixtures are value-free, so the document
         // literals live in the manifest's `const_fold.inputs`; the partition
@@ -78,7 +79,7 @@ fn run(manifest_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::erro
             let inputs = cf.get("inputs").cloned().unwrap_or_else(|| json!({}));
             if let Some(expected) = cf.get("expected").and_then(|v| v.as_object()) {
                 for (label, spec) in expected {
-                    let serialized = cadence::compute_fold(label, spec, &inputs)?;
+                    let serialized = compute_fold(label, spec, &inputs)?;
                     buffers.insert(label.clone(), Value::String(serialized));
                 }
             }

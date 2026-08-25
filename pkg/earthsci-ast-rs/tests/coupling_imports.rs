@@ -4,9 +4,9 @@
 //! (an import and the equivalent inline edges flatten identically),
 //! multiple-instantiation, and each of the §10.11 diagnostic codes.
 
-use earthsci_ast::coupling_imports::{CouplingImportOptions, expand_coupling_imports};
-use earthsci_ast::diagnostic::DiagnosticError;
-use earthsci_ast::types::{CouplingEntry, EsmFile};
+use earthsci_ast::extension::diagnostic::DiagnosticError;
+use earthsci_ast::{CouplingEntry, EsmFile};
+use earthsci_ast::{CouplingImportOptions, expand_coupling_imports};
 use earthsci_ast::{
     LoadOptions, flatten, flatten_with_options, is_coupling_library_doc, load_string_with_options,
 };

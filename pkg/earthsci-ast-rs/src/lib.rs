@@ -67,7 +67,12 @@ pub mod diagnostic;
 pub mod display;
 pub mod edit;
 pub mod error;
+// The tier-2 EXTENSION SEAM (API_SPEC.md §3): the one deliberately-named place
+// where a Rust-only internal is handed to a caller. Everything reachable from
+// outside this crate is either a root `pub use` above/below (the stable tier,
+// pinned symbol-by-symbol by api-surface.json) or a member of this module.
 pub mod expression;
+pub mod extension;
 pub mod flatten;
 pub mod geometry;
 pub mod graph;

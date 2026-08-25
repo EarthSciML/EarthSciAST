@@ -2,7 +2,7 @@
 //! determinism conformance harness (`scripts/run-determinism-conformance.py`,
 //! CONFORMANCE_SPEC.md §5.5.4).
 //!
-//! Thin by design (the contract lives in [`earthsci_ast::relational`], not
+//! Thin by design (the contract lives in `earthsci_ast`'s relational engine, not
 //! here): load the manifest, run the REAL value-invention primitives
 //! (`skolem` / `distinct` / `rank`) and group-by aggregate over each fixture's
 //! `inputs.canonical` payload AND every adversarial `inputs.variants` payload,
@@ -14,7 +14,7 @@
 //! Invoked as `earthsci-determinism-adapter-rust --manifest <m.json> --output <r.json>`.
 
 use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
-use earthsci_ast::relational::{
+use earthsci_ast::{
     Key, Num, Ranking, SemiringOp, canonical_index_set_json, distinct, group_aggregate, rank,
     serialize_pairs, skolem, skolem_edge,
 };

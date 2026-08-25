@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use earthsci_ast::load_string;
-use earthsci_ast::registered_functions::{
+use earthsci_ast::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
 };
 use serde_json::Value;

@@ -18,8 +18,8 @@
 //! (this crate builds `serde_json` with `preserve_order`, so a string compare
 //! would spuriously depend on struct field order).
 
-use earthsci_ast::display::to_ascii;
-use earthsci_ast::parse_expression::{parse_equation, parse_expression};
+use earthsci_ast::to_ascii;
+use earthsci_ast::{parse_equation, parse_expression};
 use serde_json::Value;
 
 const CORPUS: &str = "../../tests/conformance/expression_parse/cases.json";

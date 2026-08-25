@@ -23,8 +23,8 @@ use std::rc::Rc;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
 
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareProvider};
-use earthsci_ast::pushdown_rewrite::desugar_pushdown;
+use earthsci_ast::desugar_pushdown;
+use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 fn ix(f: &str, idx: &[Value]) -> Value {

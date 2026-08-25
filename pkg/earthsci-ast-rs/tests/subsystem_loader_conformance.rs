@@ -23,7 +23,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::load_path;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Solution, SolveOptions};

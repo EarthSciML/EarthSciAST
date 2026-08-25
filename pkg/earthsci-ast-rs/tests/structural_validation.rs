@@ -1125,12 +1125,9 @@ fn discrete_parameter_loads_and_is_derived() {
         model.variables["held"].var_type,
         earthsci_ast::VariableType::Parameter
     );
-    assert_eq!(
-        earthsci_ast::classification::discrete_parameters(model),
-        ["held"]
-    );
+    assert_eq!(earthsci_ast::discrete_parameters(model), ["held"]);
     // ...and the unknown `x` is an ODE state, not a "state" declaration.
-    assert!(earthsci_ast::classification::is_ode_state(model, "x"));
+    assert!(earthsci_ast::is_ode_state(model, "x"));
 }
 
 /// A `default_units` naming a unit OTHER than the declared `units` means the

@@ -44,7 +44,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::provider::{
     CadenceProvider, ForcingBuffer, NativeField, ProviderError, RefreshExecutor,
 };

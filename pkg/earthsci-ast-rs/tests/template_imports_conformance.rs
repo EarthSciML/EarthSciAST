@@ -12,12 +12,12 @@
 //! expression-position substitution staying an AST, `only` visibility,
 //! diamond bindings, the 0.8.0 version gate).
 
-use earthsci_ast::lower_expression_templates::{
+use earthsci_ast::Expr;
+use earthsci_ast::extension::lower_expression_templates::{
     MAX_TEMPLATE_EXPANSION_DEPTH, expand, lower_expression_templates,
 };
-use earthsci_ast::template_imports::{reject_template_imports_pre_v08, resolve_template_machinery};
-use earthsci_ast::types::Expr;
 use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
+use earthsci_ast::{reject_template_imports_pre_v08, resolve_template_machinery};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 /// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
 /// on the variable.
 fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    earthsci_ast::classification::observed_definition_json(model, name)
+    earthsci_ast::observed_definition_json(model, name)
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
@@ -116,9 +116,8 @@ fn aggregate_int_ratio_golden_matches_golden() {
     );
     // The in-aggregate ratio and the standalone dx=1/8 both stay integers.
     let expanded = expand_raw(&conf(&["aggregate_int_ratio_golden", "fixture.esm"]));
-    let dx =
-        &earthsci_ast::classification::observed_definition_json(&expanded["models"]["M"], "dx")
-            .expect("dx defining equation")["args"];
+    let dx = &earthsci_ast::observed_definition_json(&expanded["models"]["M"], "dx")
+        .expect("dx defining equation")["args"];
     assert!(dx[0].is_i64() || dx[0].is_u64());
     assert!(dx[1].is_i64() || dx[1].is_u64());
 }
@@ -170,12 +169,12 @@ fn import_order_pins_tie_break_and_priority_flips_it() {
     // Winner sanity, independent of the goldens: earlier import wins the
     // equal-priority tie (2*x); explicit priority 10 out-ranks it (5*x).
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&d1["models"]["M"], "y")
+        earthsci_ast::observed_definition_json(&d1["models"]["M"], "y")
             .expect("y defining equation")["args"][0],
         json!(2)
     );
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&d2["models"]["M"], "y")
+        earthsci_ast::observed_definition_json(&d2["models"]["M"], "y")
             .expect("y defining equation")["args"][0],
         json!(5)
     );
@@ -424,19 +423,19 @@ fn metaparameter_resolutions_via_subsystem_ref_bindings() {
         let problem = &sweep.subsystems.as_ref().expect("subsystems")["Problem"];
         // Expression position: bare "N" substituted as an integer literal.
         assert_eq!(
-            *earthsci_ast::classification::observed_definition_json(problem, "npts")
+            *earthsci_ast::observed_definition_json(problem, "npts")
                 .expect("npts defining equation"),
             json!(n)
         );
         // Expression-position division stays an AST division (no folding).
         assert_eq!(
-            *earthsci_ast::classification::observed_definition_json(problem, "half")
+            *earthsci_ast::observed_definition_json(problem, "half")
                 .expect("half defining equation"),
             json!({"op": "/", "args": [n, 2]})
         );
         // Structural site: the aggregate dense range folded exactly.
         assert_eq!(
-            earthsci_ast::classification::observed_definition_json(problem, "ramp")
+            earthsci_ast::observed_definition_json(problem, "ramp")
                 .expect("ramp defining equation")["ranges"]["i"],
             json!([1, n / 2])
         );
@@ -450,7 +449,7 @@ fn loader_api_bindings_and_defaults() {
     let problem = conf(&["metaparameter_resolutions", "problem.esm"]);
     let fdef = load_path(&problem).expect("default load");
     let models = fdef.models.as_ref().expect("models");
-    let npts = earthsci_ast::classification::observed_definitions(&models["Problem"])
+    let npts = earthsci_ast::observed_definitions(&models["Problem"])
         .remove("npts")
         .expect("npts defining equation");
     assert_eq!(npts, Expr::Integer(2)); // default
@@ -459,7 +458,7 @@ fn loader_api_bindings_and_defaults() {
     api.insert("N".to_string(), 6i64);
     let fapi = load_path_with_options(&problem, &api).expect("API-bound load");
     let models = fapi.models.as_ref().expect("models");
-    let npts = earthsci_ast::classification::observed_definitions(&models["Problem"])
+    let npts = earthsci_ast::observed_definitions(&models["Problem"])
         .remove("npts")
         .expect("npts defining equation");
     assert_eq!(npts, Expr::Integer(6)); // API > default
@@ -503,11 +502,9 @@ fn valid_suite_library_and_minimal_consumer() {
     );
     // scale_by_n(x) lowered by the imported match rule to x * 8 (the
     // zero-parameter n_cells body composed and N folded at registration).
-    let y = earthsci_ast::classification::observed_definitions(
-        &m.models.as_ref().expect("models")["M"],
-    )
-    .remove("y")
-    .expect("y defining equation");
+    let y = earthsci_ast::observed_definitions(&m.models.as_ref().expect("models")["M"])
+        .remove("y")
+        .expect("y defining equation");
     assert_eq!(
         serde_json::to_value(&y).expect("serialize y"),
         json!({"op": "*", "args": ["x", 8]})
@@ -998,7 +995,7 @@ fn metaparameter_fold_ranges_regions_size_exact() {
         Some(12)
     );
     let m = &f.models.as_ref().expect("models")["M"];
-    let defs = earthsci_ast::classification::observed_definitions(m);
+    let defs = earthsci_ast::observed_definitions(m);
     let agg = serde_json::to_value(defs.get("agg").expect("agg equation")).unwrap();
     assert_eq!(agg["ranges"]["i"], json!([1, 5]));
     let ma = serde_json::to_value(defs.get("ma").expect("ma equation")).unwrap();
@@ -1093,11 +1090,9 @@ fn expression_position_substitution_never_folds() {
             "#,
     )
     .expect("subst load");
-    let dlon = earthsci_ast::classification::observed_definitions(
-        &f.models.as_ref().expect("models")["M"],
-    )
-    .remove("dlon")
-    .expect("dlon defining equation");
+    let dlon = earthsci_ast::observed_definitions(&f.models.as_ref().expect("models")["M"])
+        .remove("dlon")
+        .expect("dlon defining equation");
     assert_eq!(
         serde_json::to_value(&dlon).unwrap(),
         json!({"op": "/", "args": [360, 144]})
@@ -1156,7 +1151,7 @@ fn body_composition_inlines_and_depth_bound_is_exact() {
     lower_expression_templates(&mut doc).expect("lower");
     expand(&mut doc).expect("expand");
     assert_eq!(
-        *earthsci_ast::classification::observed_definition_json(&doc["models"]["M"], "y")
+        *earthsci_ast::observed_definition_json(&doc["models"]["M"], "y")
             .expect("y defining equation"),
         json!({"op": "+", "args": [1, {"op": "+", "args": [2, 3]}]})
     );

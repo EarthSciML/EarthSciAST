@@ -10,7 +10,7 @@
 //! template expansion against the RECEIVING component's registry, and the
 //! end-to-end simulate path.
 
-use earthsci_ast::types::{
+use earthsci_ast::{
     CouplingEntry, Equation, EsmFile, Expr, ExpressionNode, Metadata, Model, ModelVariable,
     VariableMapTransform, VariableType,
 };
@@ -474,12 +474,12 @@ fn lower_templates_expands_coupling_transform_against_receiving_component() {
         }]
     });
 
-    earthsci_ast::lower_expression_templates::lower_expression_templates(&mut doc)
+    earthsci_ast::extension::lower_expression_templates::lower_expression_templates(&mut doc)
         .expect("template expansion");
     // Option B: `double_plus`'s body is pure evaluable-core, so the transform
     // reference SURVIVES load; `expand` produces the Option-A image the build
     // path sees (RFC out-of-line-expression-templates §7.7).
-    earthsci_ast::lower_expression_templates::expand(&mut doc).expect("expand");
+    earthsci_ast::extension::lower_expression_templates::expand(&mut doc).expect("expand");
 
     // The transform is rewritten against the RECEIVING component (`Sink`, the
     // first dot-segment of `to`) to the expanded AST.
@@ -531,7 +531,7 @@ fn lower_templates_leaves_apply_free_coupling_transform_untouched() {
         }]
     });
 
-    earthsci_ast::lower_expression_templates::lower_expression_templates(&mut doc)
+    earthsci_ast::extension::lower_expression_templates::lower_expression_templates(&mut doc)
         .expect("apply-free transform must not error");
     assert_eq!(doc["coupling"][0]["transform"], transform);
 }

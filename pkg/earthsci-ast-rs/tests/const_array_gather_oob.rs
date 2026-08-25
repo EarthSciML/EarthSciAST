@@ -18,11 +18,11 @@
 use std::collections::HashMap;
 
 use earthsci_ast::BoundaryKind;
+use earthsci_ast::Expr;
 use earthsci_ast::simulate_array::{
     ConstArrayScope, Value as EvalValue, eval_expression_with_extents,
     eval_expression_with_extents_and_consts,
 };
-use earthsci_ast::types::Expr;
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};

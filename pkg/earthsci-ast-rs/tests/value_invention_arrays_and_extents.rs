@@ -30,11 +30,12 @@
 use std::collections::HashMap;
 
 use earthsci_ast::Key;
-use earthsci_ast::aggregate::resolve_expr_ranges_with_extents;
+use earthsci_ast::extension::aggregate::resolve_expr_ranges_with_extents;
+use earthsci_ast::extension::types::IndexSet;
 use earthsci_ast::simulate_array::{
     Value, eval_expression, eval_expression_with_extents, run_value_invention,
 };
-use earthsci_ast::types::{Expr, IndexSet, Model};
+use earthsci_ast::{Expr, Model};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value as Json, json};
 

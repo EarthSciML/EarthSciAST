@@ -22,7 +22,7 @@ use std::process::ExitCode;
 
 use earthsci_ast::adapter_support::{parse_manifest_output_args, write_report};
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, Compile, ProblemOptions, SolveOptions, esm_problem, load_string, solve};
 use ndarray::{ArrayD, IxDyn};

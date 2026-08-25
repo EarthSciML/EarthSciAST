@@ -5,8 +5,8 @@
 //! `EarthSciAST.jl/test/out_of_line_templates_test.jl` and drives the SAME
 //! shared fixtures under `tests/conformance/expression_templates/`.
 
-use earthsci_ast::lower_expression_templates as oob;
-use earthsci_ast::template_imports::resolve_template_machinery;
+use earthsci_ast::extension::lower_expression_templates as oob;
+use earthsci_ast::resolve_template_machinery;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// the equation whose LHS is the bare variable (esm-spec §6.3.1), not a field
 /// on the variable.
 fn obs_def<'a>(model: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    earthsci_ast::classification::observed_definition_json(model, name)
+    earthsci_ast::observed_definition_json(model, name)
         .unwrap_or_else(|| panic!("{name} has no defining equation"))
 }
 
@@ -27,7 +27,10 @@ fn conf(dir: &str) -> PathBuf {
 
 /// Option-B load: resolve_template_machinery + lower_expression_templates
 /// (surviving references preserved). Mirrors the Julia `_load`.
-fn load_b(dir: &str, fixture: &str) -> Result<Value, earthsci_ast::diagnostic::DiagnosticError> {
+fn load_b(
+    dir: &str,
+    fixture: &str,
+) -> Result<Value, earthsci_ast::extension::diagnostic::DiagnosticError> {
     let p = conf(dir);
     let src = std::fs::read_to_string(p.join(fixture)).expect("read fixture");
     let raw: Value = serde_json::from_str(&src).expect("parse fixture");
@@ -250,7 +253,7 @@ fn eager_target_bearing_positive_and_negative() {
 fn opacity_negative_compound_does_not_see_through_reference() {
     let loaded = load_b("opacity_negative", "fixture.esm").unwrap();
     let flux = normj(
-        earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux")
+        earthsci_ast::observed_definition_json(&loaded["models"]["m"], "flux")
             .expect("flux defining equation"),
     );
     assert_eq!(flux["op"], "D"); // compound did NOT fire (no marker 999)
@@ -271,7 +274,7 @@ fn opacity_negative_compound_does_not_see_through_reference() {
 fn opacity_priority_shadowing_generic_fires_compound_silently_does_not() {
     let loaded = load_b("opacity_priority_shadowing", "fixture.esm").unwrap();
     let flux = normj(
-        earthsci_ast::classification::observed_definition_json(&loaded["models"]["m"], "flux")
+        earthsci_ast::observed_definition_json(&loaded["models"]["m"], "flux")
             .expect("flux defining equation"),
     );
     assert_eq!(flux["op"], "*");
@@ -315,22 +318,22 @@ fn flatten_registry_merge_dedup_and_collision_rename() {
     );
     // references rewritten in lockstep
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "za")
+        earthsci_ast::observed_definition_json(&root["models"]["A"], "za")
             .expect("za defining equation")["name"],
         "A.s"
     );
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "zb")
+        earthsci_ast::observed_definition_json(&root["models"]["B"], "zb")
             .expect("zb defining equation")["name"],
         "B.s"
     );
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&root["models"]["A"], "ya")
+        earthsci_ast::observed_definition_json(&root["models"]["A"], "ya")
             .expect("ya defining equation")["name"],
         "sten"
     );
     assert_eq!(
-        earthsci_ast::classification::observed_definition_json(&root["models"]["B"], "yb")
+        earthsci_ast::observed_definition_json(&root["models"]["B"], "yb")
             .expect("yb defining equation")["name"],
         "sten"
     );

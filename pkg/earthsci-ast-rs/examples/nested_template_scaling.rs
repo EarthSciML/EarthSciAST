@@ -88,7 +88,7 @@ fn main() {
     };
 
     let t0 = Instant::now();
-    earthsci_ast::lower_expression_templates::lower_expression_templates(&mut v)
+    earthsci_ast::extension::lower_expression_templates::lower_expression_templates(&mut v)
         .expect("lower_expression_templates");
     let lower_time = t0.elapsed();
     let nodes = count_nodes(&v["reaction_systems"]["chem"]["reactions"][0]["rate"]);
@@ -96,7 +96,7 @@ fn main() {
 
     if let Some(src) = src {
         let t1 = Instant::now();
-        let file = earthsci_ast::parse::load_string(&src).expect("public load API");
+        let file = earthsci_ast::load_string(&src).expect("public load API");
         println!(
             "depth={depth} parse::load={:?} reactions={}",
             t1.elapsed(),

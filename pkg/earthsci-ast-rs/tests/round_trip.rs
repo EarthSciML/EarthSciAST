@@ -359,12 +359,9 @@ fn test_ornstein_uhlenbeck_sde_round_trip() {
         "a wiener update needs a distribution"
     );
     assert!(bw.update.as_ref().expect("update").is_wiener());
+    assert_eq!(earthsci_ast::brownian_parameters(model), ["Bw"]);
     assert_eq!(
-        earthsci_ast::classification::brownian_parameters(model),
-        ["Bw"]
-    );
-    assert_eq!(
-        earthsci_ast::classification::system_kind(model),
+        earthsci_ast::system_kind(model),
         earthsci_ast::SystemKind::Sde
     );
 
@@ -419,10 +416,7 @@ fn test_correlated_noise_sde_round_trip() {
         Some(&vec![vec![1.0, 0.5], vec![0.5, 1.0]]),
         "the correlation is the explicit off-diagonal of `cov`"
     );
-    assert_eq!(
-        earthsci_ast::classification::brownian_parameters(model),
-        ["B"]
-    );
+    assert_eq!(earthsci_ast::brownian_parameters(model), ["B"]);
 
     let serialized = to_json(&parsed).expect("failed to serialize");
     let reparsed: EsmFile = load_string(&serialized).expect("failed to reparse");
@@ -434,7 +428,7 @@ fn test_correlated_noise_sde_round_trip() {
     // Flattening must surface Brownian parameters in their own collection. It
     // is ONE vector-valued parameter now, not two tagged scalars: the
     // correlation lives in its `cov`.
-    use earthsci_ast::flatten::flatten;
+    use earthsci_ast::flatten;
     let flat = flatten(&parsed).expect("flatten");
     assert_eq!(flat.brownian_parameters.len(), 1);
     assert!(flat.brownian_parameters.contains_key("TwoBody.B"));

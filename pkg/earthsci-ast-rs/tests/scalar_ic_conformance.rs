@@ -19,7 +19,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::pde_inline_tests::run_pde_tests_with_base_dir;
+use earthsci_ast::run_pde_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;

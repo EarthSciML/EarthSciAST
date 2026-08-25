@@ -22,7 +22,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::flatten::flatten;
+use earthsci_ast::flatten;
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use ndarray::{ArrayD, IxDyn};

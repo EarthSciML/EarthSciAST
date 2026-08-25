@@ -28,9 +28,7 @@ use std::sync::{Arc, Mutex};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::prepare::{
-    AxisSel, Flow, PrepareError, PreparePhase, PrepareProgress, PrepareProvider,
-};
+use earthsci_ast::{AxisSel, Flow, PrepareError, PreparePhase, PrepareProgress, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem};
 
 // ---- Lambert conformal conic (unit sphere), to place points inside cells ----
@@ -122,7 +120,7 @@ struct Event {
 type Log = Arc<Mutex<Vec<Event>>>;
 
 /// An observer that records everything and never cancels.
-fn recorder(log: &Log) -> earthsci_ast::prepare::PrepareProgressFn {
+fn recorder(log: &Log) -> earthsci_ast::PrepareProgressFn {
     let log = log.clone();
     Arc::new(move |p: &PrepareProgress<'_>| {
         log.lock().unwrap().push(Event {

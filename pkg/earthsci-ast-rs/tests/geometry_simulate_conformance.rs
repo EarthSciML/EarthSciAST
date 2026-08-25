@@ -27,7 +27,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::simulate::Solution;
+use earthsci_ast::Solution;
 use earthsci_ast::{
     Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, load_string,
 };

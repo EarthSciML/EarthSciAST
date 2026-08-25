@@ -22,8 +22,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::types::{EsmFile, Metadata};
 use earthsci_ast::{Alg, Compiled, SolveOptions, Tolerance, load_path};
+use earthsci_ast::{EsmFile, Metadata};
 use std::collections::HashMap;
 use std::path::PathBuf;
 

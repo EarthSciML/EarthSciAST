@@ -29,8 +29,8 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::broad_phase;
-use earthsci_ast::value_invention::materialize_value_invention;
+use earthsci_ast::extension::broad_phase;
+use earthsci_ast::materialize_value_invention;
 use earthsci_ast::{BoundaryKind, Key, canonical_index_set_json};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;

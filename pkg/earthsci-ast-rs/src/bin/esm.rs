@@ -3,7 +3,7 @@
 //! Command-line interface for working with ESM files
 
 use clap::{Parser, Subcommand};
-use earthsci_ast::analysis::{
+use earthsci_ast::extension::analysis::{
     collect_unit_types, collect_variables, contains_common_subexpressions,
     contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
     count_numerical_values, count_operations, expression_depth, expressions_numerically_equal,
@@ -981,7 +981,7 @@ fn perform_deep_coupling_analysis(esm_file: &earthsci_ast::EsmFile) {
     }
 }
 
-fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
+fn analyze_coupling_patterns(graph: &earthsci_ast::ComponentGraph) {
     println!("\n=== COUPLING PATTERNS ===");
 
     // Pattern 1: Fan-out (one component affects many others)
@@ -1031,7 +1031,7 @@ fn analyze_coupling_patterns(graph: &earthsci_ast::graph::ComponentGraph) {
 }
 
 fn analyze_coupling_strength(
-    _graph: &earthsci_ast::graph::ComponentGraph,
+    _graph: &earthsci_ast::ComponentGraph,
     esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING STRENGTH ANALYSIS ===");
@@ -1099,7 +1099,7 @@ fn analyze_coupling_strength(
 }
 
 fn detect_coupling_antipatterns(
-    graph: &earthsci_ast::graph::ComponentGraph,
+    graph: &earthsci_ast::ComponentGraph,
     _esm_file: &earthsci_ast::EsmFile,
 ) {
     println!("\n=== COUPLING ANTI-PATTERNS ===");
@@ -1886,8 +1886,8 @@ fn run_graph(
                     for node in &graph.nodes {
                         let label = node.name.as_deref().unwrap_or(&node.id);
                         let shape = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "ellipse",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "box",
+                            earthsci_ast::ComponentType::Model => "ellipse",
+                            earthsci_ast::ComponentType::ReactionSystem => "box",
                         };
                         println!("  \"{}\" [label=\"{}\", shape={}];", node.id, label, shape);
                     }
@@ -1910,12 +1910,12 @@ fn run_graph(
                     for node in &graph.nodes {
                         let label = node.name.as_deref().unwrap_or(&node.id);
                         let shape_open = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => "(",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "[",
+                            earthsci_ast::ComponentType::Model => "(",
+                            earthsci_ast::ComponentType::ReactionSystem => "[",
                         };
                         let shape_close = match node.component_type {
-                            earthsci_ast::graph::ComponentType::Model => ")",
-                            earthsci_ast::graph::ComponentType::ReactionSystem => "]",
+                            earthsci_ast::ComponentType::Model => ")",
+                            earthsci_ast::ComponentType::ReactionSystem => "]",
                         };
                         println!("  {}{}{}{}", node.id, shape_open, label, shape_close);
                     }
@@ -1929,8 +1929,8 @@ fn run_graph(
                         "nodes": graph.nodes.iter().map(|n| serde_json::json!({
                             "id": n.id,
                             "type": match n.component_type {
-                                earthsci_ast::graph::ComponentType::Model => "model",
-                                earthsci_ast::graph::ComponentType::ReactionSystem => "reaction_system",
+                                earthsci_ast::ComponentType::Model => "model",
+                                earthsci_ast::ComponentType::ReactionSystem => "reaction_system",
                             },
                             "name": n.name
                         })).collect::<Vec<_>>(),

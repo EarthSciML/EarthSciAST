@@ -23,7 +23,7 @@ use std::rc::Rc;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::Value;
 
-use earthsci_ast::prepare::{AxisSel, PrepareError, PrepareProvider};
+use earthsci_ast::{AxisSel, PrepareError, PrepareProvider};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 
 // ---- Lambert conformal conic (unit sphere), plain-Rust ORACLE --------------

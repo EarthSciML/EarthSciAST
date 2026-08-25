@@ -19,9 +19,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use earthsci_ast::data_output::{GridPlan, OutputPlan};
 use earthsci_ast::simulate_array::ArrayCompiled;
 use earthsci_ast::{EsmFile, derive_output_plan, load_string};
+use earthsci_ast::{GridPlan, OutputPlan};
 use earthsciio::format::{
     ArrayData, NativeField, OutputSchema, WriteCoord, WriteVar, write_zarr_v3,
 };
