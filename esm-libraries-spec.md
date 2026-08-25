@@ -1557,7 +1557,7 @@ The expression editor is fundamentally a tree of reactive nodes. When a user cli
 **Dependencies:** `ajv` (schema validation). No framework, no DOM.
 
 ```
-esm-format/
+pkg/earthsci-ast-rs/
 ├── src/
 │   ├── types.ts          # TypeScript type definitions matching JSON Schema
 │   ├── parse.ts          # JSON → typed EsmFile
@@ -2206,7 +2206,13 @@ esm.explore(file)  # widget showing models, reactions, coupling graph
 
 ### 5.4 Rust — `earthsci-ast`
 
-**Tier: Core + Analysis**
+**Tier: Core + Analysis + Simulation**
+
+> The tier label read "Core + Analysis" until phase 6. That contradicted the
+> binding itself — Rust ships the simulation surface (`esm_problem` / `solve`)
+> and the `arrayop` runtime that executes discretized PDEs, described two
+> paragraphs below. `API_SPEC.md` §11 recorded the contradiction; this is the
+> correction.
 
 Rust provides a high-performance, memory-safe implementation suitable for CLI tools, WASM compilation (for web), and embedding in other systems.
 
@@ -2217,7 +2223,7 @@ Rust provides a high-performance, memory-safe implementation suitable for CLI to
 - `serde` + `serde_json` — serialization
 - `jsonschema` — schema validation
 - `wasm-bindgen` — optional, for WASM target
-- `diffsol` (0.11) — native-only ODE solver, used by `simulate()` (gated to non-wasm targets via `cfg(not(target_arch = "wasm32"))`); pulls in `faer` for the linear-algebra backend used at the call site
+- `diffsol` (0.11) — native-only ODE solver, behind the `simulate` feature and used by `solve()` (also gated to non-wasm targets via `cfg(not(target_arch = "wasm32"))`). `simulate()` no longer exists: phase 4 replaced it with `esm_problem(...)` + `solve(...)`, per §2.5; pulls in `faer` for the linear-algebra backend used at the call site
 
 #### 5.4.2 Crate Structure
 
