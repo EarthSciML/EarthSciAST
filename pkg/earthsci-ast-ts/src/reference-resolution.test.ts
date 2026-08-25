@@ -245,18 +245,20 @@ describe('reference resolution over the shared corpus', () => {
     .sort()
 
   /**
-   * THREE fixtures under `tests/valid/` are rejected by the resolver — and the
-   * Python binding rejects the same three with the same codes, byte for byte.
-   * They are schema-valid but reference-broken: `skolem_distinct_rank` and
-   * `wildfire_atmosphere_ocean` declare a `kind: "derived"` index set whose
-   * `from_faq` names an id no expression node carries (in the first, the name
-   * appears only inside an `_comment`), and `conservative_regrid_assembly` has
-   * a `join.on` factor outside its node's scope. That is a defect in the shared
-   * fixtures, not in this pass; it is pinned here so the agreement is visible
-   * and so a fixture repair shows up as a test failure rather than silently.
+   * The fixtures under `tests/valid/` that the resolver rejects — and the Python
+   * binding rejects each with the SAME code, byte for byte. They are
+   * schema-valid but reference-broken: `wildfire_atmosphere_ocean` declares a
+   * `kind: "derived"` index set whose `from_faq` names an id no expression node
+   * in the same model carries, and `conservative_regrid_assembly` has a
+   * `join.on` factor outside its node's scope. They are pinned here so the
+   * agreement is visible and so a fixture repair shows up as a test failure
+   * rather than silently.
+   *
+   * `skolem_distinct_rank` was the third until phase 6b: its producer node was
+   * present and complete and only its one-line `id` was missing, so adding the
+   * `id` made it resolve. See tests/CORPUS_DEFECTS.md defect 1.
    */
   const KNOWN_UNRESOLVED: Record<string, string> = {
-    'aggregate/skolem_distinct_rank.esm': E_REF_UNKNOWN_FAQ_NODE,
     'geometry/conservative_regrid_assembly.esm': E_REF_UNRESOLVED_JOIN_FACTOR,
     'wildfire_atmosphere_ocean.esm': E_REF_UNKNOWN_FAQ_NODE,
   }

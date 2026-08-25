@@ -2,12 +2,16 @@
 
 Fixtures under `tests/valid/` are the cross-binding definition of "a valid
 document": every binding drives its conformance suite from them. Three of the 92
-do **not** survive reference resolution. Found during phase 6, while adding
-`build_reference_graph` to TypeScript and checking it against Python — the two
-bindings agree exactly on all three, which is why this had gone unnoticed: no
-binding was running the resolver over the whole valid corpus.
+did **not** survive reference resolution when this file was opened in phase 6,
+found while adding `build_reference_graph` to TypeScript and checking it against
+Python — the two bindings agreed exactly on all three, which is why it had gone
+unnoticed: no binding was running the resolver over the whole valid corpus.
 
-Reproduce (92 fixtures, 89 resolve, 3 raise):
+Defect 1 is now **fixed** (phase 6b). Defect 2 is **ruled** and awaiting its
+five-binding implementation. Defect 3 is **diagnosed** (phase 6b) and, unlike
+the other two, is a bug in the five bindings rather than in the corpus.
+
+Reproduce (92 fixtures; 90 resolve and 2 raise as of the defect-1 fix):
 
 ```bash
 PYTHONPATH=pkg/earthsci-ast-py/src python3 - <<'PY'
@@ -18,19 +22,56 @@ for f in sorted(glob.glob("tests/valid/**/*.esm", recursive=True)):
 PY
 ```
 
-These are recorded, not fixed. Two need a ruling that is not phase 6's to make.
+Each section below carries its own status; read it before assuming the fixture
+is at fault, because for two of the three it was not.
 
-## 1. `aggregate/skolem_distinct_rank.esm` — a FIXTURE defect
+## 1. `aggregate/skolem_distinct_rank.esm` — FIXED (phase 6b)
 
-`E_REF_UNKNOWN_FAQ_NODE`: `index_sets.edges.from_faq` names `"edge_set"`, and
-the document contains **no `id` field at all** — a walk over every node finds
-zero. The name `edge_set` occurs exactly twice in the file: in the `from_faq`
-itself, and inside an `_comment` describing the node it *would* refer to.
+**The recorded diagnosis was wrong, and the repair was one line.**
 
-The producer node was described and never written. The resolvers are right to
-reject it. Fixing this means authoring the missing index-set-producing
-`aggregate` per RFC semiring-faq-unified-ir §5.5/§5.7, which is fixture work
-needing the RFC author's intent, not a mechanical repair.
+This entry used to read: "The producer node was described and never written …
+Fixing this means authoring the missing index-set-producing `aggregate` per RFC
+semiring-faq-unified-ir §5.5/§5.7, which is fixture work needing the RFC
+author's intent, not a mechanical repair."
+
+Both observations it rested on were true. `index_sets.edges.from_faq` named
+`"edge_set"`; a recursive walk over every object in the document found **zero**
+`"id"` keys; and `edge_set` appeared exactly twice, in the `from_faq` and in an
+`_comment`. The **inference** drawn from them was not: the node was never
+absent.
+
+The `_comment` is not a description of a node someone meant to write. It is the
+doc-comment **on that node**, sitting in the same equation object as a sibling
+of the `lhs` / `rhs` it annotates, and it opens by saying so — *"edge_set: the
+index-set-producing node referenced by `index_sets.edges.from_faq`"*. The node
+itself was at `/models/EdgeEnumeration/equations/0/rhs` all along, complete:
+`op: aggregate`, `semiring: bool_and_or`, `distinct: true`, the skolem `key`
+over the sorted endpoints, `filter`, `expr`, `ranges`, `output_idx`. Every field
+the RFC and the `_comment` call for was already written.
+
+The only thing missing was `"id": "edge_set"` — the one field that makes the
+node addressable, and the one field the schema does **not** require, which is
+exactly why the fixture was schema-valid and reference-broken at the same time.
+Nothing was underdetermined: the id's VALUE is pinned by the `from_faq` string
+it has to match, and `esm-schema.json` says so inline (`from_faq` is "the id of
+the index-set-producing node … named by its `id`").
+
+**Fix:** `"id": "edge_set"` added to that node, placed after `"op"` to match
+the near-twin fixture `tests/valid/cadence/pure_topology.esm`, which carries the
+same `index_sets` names, the same `ranges` keys, the same `output_idx` and the
+same `key` shape — and does carry the id. The fixture now resolves, and still
+validates.
+
+The resolver needs nothing else of a `from_faq` target: `build_reference_graph`
+registers any node carrying a non-empty string `id`, and checks only that the
+`from_faq` value is among them. It never inspects `op`, `semiring`, `distinct`,
+`key`, `ranges` or `output_idx` to resolve the reference.
+
+Unpinned in the two bindings that recorded the rejection —
+`pkg/earthsci-ast-go/pkg/esm/reference_graph_test.go`
+(`referenceCorpusRejections`) and
+`pkg/earthsci-ast-ts/src/reference-resolution.test.ts` (`KNOWN_UNRESOLVED`) —
+which is the failure those pins exist to produce.
 
 ## 2. `wildfire_atmosphere_ocean.esm` — a RESOLVER/SPEC defect
 
@@ -56,18 +97,122 @@ uniqueness requirement invalidates nothing that exists. All five bindings resolv
 `from_faq` per-model today and all five need the change; once they have it, this
 fixture is valid and stops being a defect.
 
-## 3. `geometry/conservative_regrid_assembly.esm` — undiagnosed
+## 3. `geometry/conservative_regrid_assembly.esm` — a RESOLVER defect (diagnosed, NOT fixed)
 
 `E_REF_UNRESOLVED_JOIN_FACTOR`: join factor `'src_bin'` of node
 `node:candidate_set` (`/models/ConservativeRegridAssembly/equations/2/rhs`)
 "names no factor, range, or output index in scope". Six equations in the model
 carry the same `join: [{"on": [["src_bin", "tgt_bin"]]}]`.
 
-Not established whether the fixture omits a binder or the resolver fails to see
-one that bin-skolem machinery introduces. Left open deliberately rather than
-guessed at.
+The open question was whether the fixture omits a binder or the resolver fails
+to see one. **It is the resolver, in all five bindings.** The fixture is not
+repaired here, because repairing it means changing
+`reference_resolution.*` / `reference_graph.*` in every binding — see "Why this
+is not fixed here" below.
+
+### The evidence
+
+**1. The normative text names three binder classes; the resolvers implement
+one.** `esm-spec.md` §4.9.5 says an `on` key column is **polymorphic** — a loop
+symbol bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or
+a declared component-local variable — and that a binding diagnosing such a name
+"must do so against the variable **and** index-set registries". CONFORMANCE_SPEC
+§5.5.6 says the same and adds the ordering: a name the node BINDS is tested
+first, then a declared local variable, then anything else is left alone. It
+names the third class explicitly, as a "value-invention bin buffer".
+
+Every binding's `factor_scope` helper consults exactly three **node-local**
+sources — the node's string `args`, its `ranges` keys, and its symbolic
+`output_idx` — and neither registry, even though `build_reference_graph` holds
+both (it already uses `index_sets` for `ranges[*].from`).
+
+`src_bin` and `tgt_bin` are class three: `models.ConservativeRegridAssembly.
+variables` declares both, each shaped over the join's range index set
+(`src_bin: shape ["src_cells"]`, `tgt_bin: shape ["tgt_cells"]`), and equations
+0 and 1 write them as the per-cell skolem bin buffers.
+
+**2. The engines execute this document.** Running Python's value-invention front
+door over the model returns `join_key_buffers` keyed `{'src_bin', 'tgt_bin'}` —
+the engine binds both names, under exactly the spellings the `join.on` uses.
+`numpy_interpreter`'s join-key resolver is written for precisely this case ("a
+materialized value-invention MAP buffer"); Julia's `_namespace_join` documents
+this fixture family by name; Julia's `geometry_assembly_conformance_test.jl`
+drives the whole fixture end-to-end. `validate_path` returns `is_valid: True`
+with no structural error and no unit warning. A document the semantic engines
+run is not reference-broken.
+
+**3. The scope set is self-inconsistent on fixtures everyone already accepts.**
+`tests/valid/aggregate/join_filter.esm` and
+`.../join_moves_running_exhaust.esm` join on `["src", "sourceType"]` — and
+`sourceType` is a document-scoped index set, in no `args`, no `ranges` key and
+no `output_idx`. They pass only because no binding validates `pair[1]` at all;
+the resolvers check the left column and ignore the right. Apply the existing
+scope test to the right column and an accepted, canonical fixture starts
+failing. So the implemented rule cannot be the intended rule even on the corpus
+it currently passes.
+
+**4. Nothing requires a join key column to appear in the node's `args`.** Not
+`esm-schema.json` (`on` items are just `[left, right]` strings), not RFC
+semiring-faq-unified-ir §5.3, not the spec. The three fixtures that resolve
+today do so because whoever authored them happened to list the columns in
+`args`. That is a coincidence of authorship, not a binder.
+`E_REF_UNRESOLVED_JOIN_FACTOR` itself appears in no spec, no schema and no RFC —
+only in the five bindings and their tests.
+
+### What the fix is
+
+In each binding's join handling, scope assembly must be layered, in this order
+(the order is normative per CONFORMANCE_SPEC §5.5.6, because a node-local binder
+SHADOWS a same-named variable):
+
+1. node-local binders — `ranges` keys and symbolic `output_idx` entries;
+2. node-local string `args`;
+3. **the model's variable registry** — where a bin buffer or envelope factor
+   lives. This is the omitted step that produces the failure;
+4. **the document-scoped index-set registry** — already threaded in for
+   `ranges[*].from`. Its absence is currently hidden by (5);
+5. only then `E_REF_UNRESOLVED_JOIN_FACTOR`.
+
+And the check must then be applied to `pair[1]` as well — today it cannot be,
+which is itself a symptom. Julia additionally validates `overlap`'s
+`src_env` / `tgt_env` against the same incomplete scope and will misfire the
+same way.
+
+### ⚠ This blocks defect 2, and the ordering matters
+
+`wildfire_atmosphere_ocean.esm` has the **identical latent failure**. Resolving
+its `OceanDynamics` model directly raises `E_REF_UNRESOLVED_JOIN_FACTOR` on
+`rg_src_bin` at `/models/OceanDynamics/equations/2/rhs`. It is masked today only
+because `AtmosphericDynamics` is reached first and raises
+`E_REF_UNKNOWN_FAQ_NODE` before `OceanDynamics` is ever walked.
+
+**So fixing defect 2 without fixing this one does not make
+`wildfire_atmosphere_ocean.esm` resolve — it changes which error it raises.**
+This defect must land with or before defect 2.
+
+### Why this is not fixed here
+
+The repair is a five-binding change to `reference_resolution.*` /
+`reference_graph.*`, the same modules being rewritten for defect 2's
+document-scope ruling. Landing two independent rewrites of one module in
+parallel is how the drift this file records got made. The diagnosis is the
+deliverable; the implementation belongs with defect 2's.
+
+### The fixture-side workaround, and why it is not the answer
+
+A mechanical repair exists: add `"args": ["src_bin", "tgt_bin"]` to each of the
+six aggregates here and the five in wildfire's `OceanDynamics`, matching how
+`bin_skolem_spatial_join.esm` and `conservative_regrid_overlap_join.esm` were
+authored. It is semantically harmless. But adopting it as *the* fix would ratify
+a rule the spec does not state, would leave `join_filter.esm`'s index-set column
+unresolvable the moment `pair[1]` is checked, and would leave §4.9.5's "must
+diagnose against the variable and index-set registries" unimplemented in all
+five bindings. If it is taken for scheduling reasons it should be recorded as a
+workaround, not as the diagnosis.
 
 ---
 
-TypeScript pins all three by name in its reference-graph tests, so a repair
-surfaces as a test failure rather than silently changing the corpus.
+TypeScript (`src/reference-resolution.test.ts`) and Go
+(`pkg/esm/reference_graph_test.go`) each pin the remaining rejections by name,
+so a repair surfaces as a test failure rather than silently changing the corpus.
+Defect 1's entry has been removed from both, which is what its fix had to do.
