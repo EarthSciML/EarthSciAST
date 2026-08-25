@@ -247,18 +247,25 @@ describe('reference resolution over the shared corpus', () => {
   /**
    * THREE fixtures under `tests/valid/` are rejected by the resolver — and the
    * Python binding rejects the same three with the same codes, byte for byte.
-   * They are schema-valid but reference-broken: `skolem_distinct_rank` and
-   * `wildfire_atmosphere_ocean` declare a `kind: "derived"` index set whose
-   * `from_faq` names an id no expression node carries (in the first, the name
-   * appears only inside an `_comment`), and `conservative_regrid_assembly` has
-   * a `join.on` factor outside its node's scope. That is a defect in the shared
-   * fixtures, not in this pass; it is pinned here so the agreement is visible
-   * and so a fixture repair shows up as a test failure rather than silently.
+   * They are schema-valid but reference-broken; see `tests/CORPUS_DEFECTS.md`:
+   *
+   * - `skolem_distinct_rank` declares a `kind: "derived"` index set whose
+   *   `from_faq` names an id no expression node in the DOCUMENT carries (the
+   *   name appears only inside an `_comment`) — corpus defect #1;
+   * - `conservative_regrid_assembly` and `wildfire_atmosphere_ocean` each have
+   *   a `join.on` factor outside its node's scope — corpus defect #3, whose
+   *   second instance was masked until `from_faq` moved to document scope
+   *   (esm-spec §9.7.5): `wildfire_atmosphere_ocean` used to fail earlier, with
+   *   `unknown_faq_node`, because its producer lives in another model.
+   *
+   * That is a defect in the shared fixtures, not in this pass; it is pinned
+   * here so the agreement is visible and so a fixture repair shows up as a test
+   * failure rather than silently.
    */
   const KNOWN_UNRESOLVED: Record<string, string> = {
     'aggregate/skolem_distinct_rank.esm': E_REF_UNKNOWN_FAQ_NODE,
     'geometry/conservative_regrid_assembly.esm': E_REF_UNRESOLVED_JOIN_FACTOR,
-    'wildfire_atmosphere_ocean.esm': E_REF_UNKNOWN_FAQ_NODE,
+    'wildfire_atmosphere_ocean.esm': E_REF_UNRESOLVED_JOIN_FACTOR,
   }
 
   it('every shared valid fixture resolves, bar the three known reference-broken ones', () => {
@@ -307,5 +314,89 @@ describe('reference resolution over the shared corpus', () => {
     expect(caught?.code).toBe(E_REF_UNDECLARED_INDEX_SET)
     // The message names the offending set, exactly as Python's does.
     expect(caught?.message).toContain('ghost_cells')
+  })
+})
+
+describe('from_faq resolves at DOCUMENT scope (esm-spec §9.7.5)', () => {
+  // `index_sets` is a document-scoped registry, so a `kind: "derived"` entry is
+  // visible to every model and its producing node may live in ANY of them.
+  // Until this ruling every binding resolved `from_faq` against one model's
+  // nodes, which made the cross-model shape unresolvable. The consequence: node
+  // ids are unique per DOCUMENT, not per model.
+  const agg = (extra: Record<string, unknown>) => ({ op: 'aggregate', args: [], ...extra })
+
+  it('resolves a producer that lives in another model', () => {
+    const doc = {
+      index_sets: {
+        faces: { kind: 'interval', size: 8 },
+        edges: { kind: 'derived', from_faq: 'edge_faq' },
+      },
+      models: {
+        Consumer: {
+          equations: [{ lhs: agg({ output_idx: [], ranges: { e: { from: 'edges' } } }), rhs: 0 }],
+        },
+        Producer: {
+          equations: [
+            {
+              lhs: agg({ id: 'edge_faq', output_idx: ['edge'], ranges: { f: { from: 'faces' } } }),
+              rhs: 0,
+            },
+          ],
+        },
+      },
+    }
+    const graphs = resolveReferences(doc)
+    // BOTH graphs carry the edge: the registry entry is document-scoped, so
+    // every model sees the same derived set and the same producer.
+    for (const name of ['Consumer', 'Producer']) {
+      const faq = graphs.get(name)!.edgesOfKind(EdgeKind.FROM_FAQ)
+      expect(faq).toHaveLength(1)
+      expect(faq[0].source).toBe(`${VertexKind.INDEX_SET}:edges`)
+      expect(faq[0].target).toBe(`${VertexKind.NODE}:edge_faq`)
+    }
+    // the consumer's graph gained a real vertex for the foreign producer, so
+    // the partition pass can walk index_set -> node across the model boundary.
+    const v = graphs.get('Consumer')!.vertices.get(`${VertexKind.NODE}:edge_faq`)
+    expect(v?.nodeId).toBe('edge_faq')
+    expect(v?.path).toBe('models/Producer/equations/0/lhs')
+  })
+
+  it('still rejects a from_faq naming no node anywhere in the document', () => {
+    const doc = {
+      index_sets: { edges: { kind: 'derived', from_faq: 'nowhere' } },
+      models: {
+        A: { equations: [{ lhs: agg({ id: 'here' }), rhs: 0 }] },
+        B: { equations: [{ lhs: agg({ id: 'there' }), rhs: 0 }] },
+      },
+    }
+    expect(() => resolveReferences(doc)).toThrow(
+      expect.objectContaining({ code: E_REF_UNKNOWN_FAQ_NODE }) as unknown as Error,
+    )
+  })
+
+  it('rejects the same node id used in two different models', () => {
+    // Legal before the §9.7.5 ruling, a load-time error now: one document-wide
+    // id namespace cannot hold two.
+    const doc = {
+      models: {
+        A: { equations: [{ lhs: agg({ id: 'dup' }), rhs: 0 }] },
+        B: { equations: [{ lhs: agg({ id: 'dup' }), rhs: 0 }] },
+      },
+    }
+    expect(() => resolveReferences(doc)).toThrow(
+      expect.objectContaining({ code: E_REF_DUPLICATE_NODE_ID }) as unknown as Error,
+    )
+  })
+
+  it('resolves the shared cross-model corpus fixture', () => {
+    const raw = JSON.parse(
+      readFileSync(fixturesDir('valid', 'aggregate', 'cross_model_from_faq.esm'), 'utf-8'),
+    ) as Record<string, unknown>
+    const graphs = resolveReferences(raw)
+    expect([...graphs.keys()].sort()).toEqual(['EdgeProducer', 'FluxConsumer'])
+    const faq = graphs.get('FluxConsumer')!.edgesOfKind(EdgeKind.FROM_FAQ)
+    expect(faq.map((e) => [e.source, e.target])).toEqual([
+      [`${VertexKind.INDEX_SET}:edges`, `${VertexKind.NODE}:edge_enum`],
+    ])
   })
 })

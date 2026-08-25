@@ -41,9 +41,9 @@ import type { EsmFile, Model } from './types.js'
 
 /** Undeclared name in a `ranges[*].from` reference. */
 export const E_REF_UNDECLARED_INDEX_SET = 'E_REF_UNDECLARED_INDEX_SET'
-/** A `kind: "derived"` index set's `from_faq` names no node id in the model. */
+/** A `kind: "derived"` index set's `from_faq` names no node id in the document. */
 export const E_REF_UNKNOWN_FAQ_NODE = 'E_REF_UNKNOWN_FAQ_NODE'
-/** Two expression nodes in the same model share an explicit `id`. */
+/** Two expression nodes in the same document share an explicit `id`. */
 export const E_REF_DUPLICATE_NODE_ID = 'E_REF_DUPLICATE_NODE_ID'
 /** A `join.on` factor reference names nothing in the node's scope. */
 export const E_REF_UNRESOLVED_JOIN_FACTOR = 'E_REF_UNRESOLVED_JOIN_FACTOR'
@@ -297,11 +297,94 @@ const AGGREGATE_OPS = new Set(['aggregate'])
  * `join.on` factor. Cycles are reported lazily by
  * {@link ReferenceGraph.topologicalOrder}, or eagerly by
  * {@link resolveReferences}.
+ *
+ * `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5). A caller holding
+ * one model gets that model as its own document, which is the right answer for
+ * a one-model document; {@link resolveReferences} is the document-scoped entry
+ * point and resolves against every model's nodes.
  */
 export function buildReferenceGraph(
   model: Model | RawObject,
   modelName = '',
   indexSets?: Record<string, unknown>,
+): ReferenceGraph {
+  return buildReferenceGraphImpl(model, modelName, indexSets, undefined)
+}
+
+/** One id-bearing expression node, as the `from_faq` scope sees it. */
+interface DocNode {
+  addr: string
+  path: string
+  op?: string
+  model: string
+}
+
+/** The model members whose expression trees carry addressable nodes. */
+const WALK_ROOTS = ['equations', 'initialization_equations'] as const
+
+/**
+ * Every explicit expression-node `id` in `document`, keyed by id.
+ *
+ * `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+ * `index_sets` entry is visible to every model, so the node it names may live in
+ * any of them. This pass therefore runs over all models BEFORE any single
+ * model's graph is built.
+ *
+ * Because ids from different models share one namespace, uniqueness is a
+ * DOCUMENT-wide requirement: a duplicate `id` anywhere is
+ * {@link E_REF_DUPLICATE_NODE_ID}.
+ */
+function collectDocumentNodeIds(document: RawObject): Map<string, DocNode> {
+  const nodes = new Map<string, DocNode>()
+  const models = document.models
+  if (!isObject(models)) return nodes
+  for (const [modelName, model] of Object.entries(models)) {
+    if (!isObject(model)) continue
+    for (const rootKey of WALK_ROOTS) {
+      const walk = (value: unknown, path: string): void => {
+        if (isObject(value)) {
+          if (isNode(value)) {
+            const rawId = value.id
+            if (typeof rawId === 'string' && rawId !== '') {
+              const qualified = `models/${modelName}/${path}`
+              const first = nodes.get(rawId)
+              if (first !== undefined) {
+                throw new ReferenceResolutionError(
+                  E_REF_DUPLICATE_NODE_ID,
+                  `duplicate expression-node id '${rawId}' in document ` +
+                    `(at ${qualified} and ${first.path})`,
+                )
+              }
+              nodes.set(rawId, {
+                addr: rawId,
+                path: qualified,
+                op: typeof value.op === 'string' ? value.op : undefined,
+                model: modelName,
+              })
+            }
+          }
+          for (const [k, v] of Object.entries(value)) walk(v, `${path}/${k}`)
+        } else if (Array.isArray(value)) {
+          value.forEach((v, i) => walk(v, `${path}/${i}`))
+        }
+      }
+      walk((model as RawObject)[rootKey], rootKey)
+    }
+  }
+  return nodes
+}
+
+/**
+ * {@link buildReferenceGraph}, plus the document-wide `from_faq` scope.
+ *
+ * `documentNodes` is the map {@link collectDocumentNodeIds} builds over every
+ * model. When it is `undefined` the model's own nodes are the scope.
+ */
+function buildReferenceGraphImpl(
+  model: Model | RawObject,
+  modelName: string,
+  indexSets: Record<string, unknown> | undefined,
+  documentNodes: Map<string, DocNode> | undefined,
 ): ReferenceGraph {
   const graph = new ReferenceGraph(modelName)
   const raw = model as RawObject
@@ -309,10 +392,9 @@ export function buildReferenceGraph(
   // MERGE the document-scoped registry (1.0.0 / v0.8.0+, where `index_sets` is
   // a sibling of `models`) with any model-nested one (the pre-0.8.0 shape);
   // a model-level entry takes precedence on a key collision. This is Go's rule
-  // in `reference_graph.go` verbatim, and Rust's; Python instead treats the two
-  // as either/or. No shared fixture carries both shapes at once, so the three
-  // agree on the corpus either way — but the merge is what two of the four
-  // existing implementations do, so it is what this one does.
+  // in `reference_graph.go` verbatim, and Rust's, and Julia's; Python was the
+  // odd one out (either/or) until the §9.7.5 work converged it, so all five
+  // bindings now agree.
   const sets: RawObject = {}
   if (isObject(indexSets)) {
     for (const [k, v] of Object.entries(indexSets)) sets[k] = v
@@ -329,7 +411,7 @@ export function buildReferenceGraph(
   // Pass 2 — walk every expression node; assign a stable address, register
   // aggregate / id-bearing nodes, and add the within-node reference edges
   // (ranges[*].from, join.on). Also build id -> address for from_faq.
-  const idToAddr = new Map<string, string>()
+  const localNodes = new Map<string, DocNode>()
 
   const registerNode = (node: RawObject, path: string): string | null => {
     const op = typeof node.op === 'string' ? node.op : undefined
@@ -342,15 +424,15 @@ export function buildReferenceGraph(
     const addr = nid ?? path
     const key = nodeKey(addr)
     if (nid !== undefined) {
-      const prior = idToAddr.get(nid)
+      const prior = localNodes.get(nid)
       if (prior !== undefined) {
         throw new ReferenceResolutionError(
           E_REF_DUPLICATE_NODE_ID,
           `duplicate expression-node id '${nid}' in model '${modelName}' ` +
-            `(at ${path} and ${nodeKey(prior)})`,
+            `(at ${path} and ${prior.path})`,
         )
       }
-      idToAddr.set(nid, addr)
+      localNodes.set(nid, { addr, path, op, model: modelName })
     }
     graph.ensureVertex({
       key,
@@ -442,26 +524,40 @@ export function buildReferenceGraph(
     }
   }
 
-  for (const rootKey of ['equations', 'initialization_equations']) {
+  for (const rootKey of WALK_ROOTS) {
     walk(raw[rootKey], rootKey)
   }
 
   for (const [node, key, path] of pending) processNodeRefs(node, key, path)
 
-  // Pass 3 — derived index sets resolve their from_faq to a node by id.
+  // Pass 3 — derived index sets resolve their from_faq to a node by id, at
+  // DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+  // model, since the registry entry naming it is visible to all of them.
+  const faqScope = documentNodes ?? localNodes
   for (const [name, entry] of Object.entries(sets)) {
     if (!isObject(entry)) continue
     if (entry.kind !== 'derived') continue
     const faq = entry.from_faq
-    const addr = typeof faq === 'string' ? idToAddr.get(faq) : undefined
-    if (addr === undefined) {
+    const target = typeof faq === 'string' ? faqScope.get(faq) : undefined
+    if (target === undefined) {
       throw new ReferenceResolutionError(
         E_REF_UNKNOWN_FAQ_NODE,
         `derived index set '${name}' references from_faq '${faq === undefined ? '' : String(faq)}', ` +
-          `which is not the id of any expression node in model '${modelName}'`,
+          `which is not the id of any expression node in the document`,
       )
     }
-    graph.addEdge(indexSetKey(name), nodeKey(addr), EdgeKind.FROM_FAQ)
+    // The producer may belong to another model; give this graph a vertex for it
+    // so the edge has a real endpoint. Idempotent: a local producer was already
+    // registered in pass 2.
+    graph.ensureVertex({
+      key: nodeKey(target.addr),
+      kind: VertexKind.NODE,
+      name: target.addr,
+      op: target.op,
+      nodeId: typeof faq === 'string' ? faq : undefined,
+      path: target.path,
+    })
+    graph.addEdge(indexSetKey(name), nodeKey(target.addr), EdgeKind.FROM_FAQ)
   }
 
   return graph
@@ -476,6 +572,10 @@ export function buildReferenceGraph(
  *
  * The document-scoped `index_sets` registry is read once from the top level and
  * threaded into every model, so a caller never assembles it by hand.
+ *
+ * Node ids are collected from EVERY model first, so a derived index set's
+ * `from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a
+ * duplicate id anywhere in the document is an error.
  */
 export function resolveReferences(document: EsmFile | RawObject): Map<string, ReferenceGraph> {
   const out = new Map<string, ReferenceGraph>()
@@ -483,9 +583,10 @@ export function resolveReferences(document: EsmFile | RawObject): Map<string, Re
   const models = raw.models
   if (!isObject(models)) return out
   const docIndexSets = isObject(raw.index_sets) ? raw.index_sets : {}
+  const documentNodes = collectDocumentNodeIds(raw)
   for (const [modelName, model] of Object.entries(models)) {
     if (!isObject(model)) continue
-    const graph = buildReferenceGraph(model, modelName, docIndexSets)
+    const graph = buildReferenceGraphImpl(model, modelName, docIndexSets, documentNodes)
     const cyc = graph.detectCycle()
     if (cyc !== null) {
       throw new ReferenceResolutionError(
