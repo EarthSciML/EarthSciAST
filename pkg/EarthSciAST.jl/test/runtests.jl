@@ -127,6 +127,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("cross_eq_class_emission_test.jl")       # cross-equation + affine-box classes emitted directly; repair pass zero-merge (ESS_CROSS_EQ_CLASS_EMIT_DISABLE oracle)
     include("tree_walk_oop_test.jl")
     include("oop_merge_test.jl")                     # :oop kernel-CLASS merge ≡ unmerged
+    include("tree_walk_oop_ssa_test.jl")             # ess-oop-ssa: producer-value references ≡ flat-buffer gathers (ESS_OOP_SSA)
     include("tree_walk_iip_generic_test.jl")
     include("parameter_gradient_test.jl")            # ∂(RHS)/∂p, both emitters (traced arm opt-in)
     include("parameter_vector_abi_test.jl")          # `p::AbstractVector`/ComponentVector ≡ NamedTuple, bit for bit
@@ -141,6 +142,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
         include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
         include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
+        include("reactant_oop_ssa_test.jl")          # ess-oop-ssa: skipped scatters/redirects visible in the raw module
     else
         @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
               "in the environment, to run the XLA tracing tests)"
