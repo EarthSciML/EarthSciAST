@@ -25,6 +25,30 @@ Per-binding sections; each binding lands its own share. The normative target is
 | `to_json(graph)` | `to_json_graph(graph)` | §8 item 8. `to_json` is the **document** serializer (§8 item 2). The `Graph` methods of `to_json` remain one minor as a deprecated alias and render byte-identical output. |
 | `to_unicode(model)` / `to_latex(file)` threw `ArgumentError` | returns the container summary | §8 item 18. All three renderers now accept the full domain — expressions **and** `Model` / `ReactionSystem` / `EsmFile`. A container summary has no format-specific form, so all three return the same plain text; `to_ascii`'s output is unchanged. |
 
+#### `update` diagnostic pointers lost a spurious `/0` (bug fix)
+
+Julia's typed model normalizes a scalar `update: {...}` into a one-element
+`Vector{ParameterUpdate}` at parse time. The three passes that walk update
+rules interpolated that **synthetic** index into the JSON Pointer they report,
+so a document writing the object form was told about
+
+    /models/M/variables/v/update/0/from/unit_conversion
+
+— a pointer that resolves to nothing in its own source. It is now
+
+    /models/M/variables/v/update/from/unit_conversion
+
+matching the corpus pin for `tests/invalid/undefined_variable_in_unit_conversion.esm`
+and the TypeScript, Python and Go bindings. The array form is unchanged and
+still carries its index (`/update/0/...`, `/update/1/...`), because there the
+index is real.
+
+Affected: `undefined_variable` (and any other reference finding) inside
+`update[*].when`, `update[*].expression` and `update[*].from.unit_conversion`,
+plus the `unit_inconsistency` `UnitFinding` subpaths for the same positions —
+whose message also no longer says "update rule 0" for a document with one rule.
+A consumer matching on diagnostic paths should expect the corrected pointer.
+
 #### `build_reference_graph` reads the 1.0.0 `index_sets` registry (bug fix)
 
 `build_reference_graph(model, model_name)` read `model["index_sets"]` — the

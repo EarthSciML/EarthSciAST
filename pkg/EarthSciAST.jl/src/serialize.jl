@@ -641,12 +641,14 @@ _emit_distribution(v::ModelVariable) =
 # ModelVariable.update: the object-or-array union of esm-spec §5.4. One rule
 # emits as the OBJECT form and two or more as the array form — a one-element
 # array is invalid, so the length alone recovers the wire spelling and the
-# round trip is stable.
+# round trip is stable. `_update_is_scalar_form` (types.jl) is that decision,
+# shared with `_update_rule_path` so an emitted document and a diagnostic
+# pointer into it can never disagree about which form this update has.
 function _emit_parameter_update_spec(v::ModelVariable)
     v.update === nothing && return nothing
     rules = v.update
     isempty(rules) && return nothing
-    length(rules) == 1 && return serialize_parameter_update(rules[1])
+    _update_is_scalar_form(rules) && return serialize_parameter_update(rules[1])
     return [serialize_parameter_update(r) for r in rules]
 end
 
