@@ -150,15 +150,15 @@
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 290,
-      "typescript": 220,
+      "typescript": 231,
       "python": 244,
       "rust": 311,
       "go": 385,
       "editor": 71
     },
     "by_tier": {
-      "extension": 708,
-      "stable": 264
+      "extension": 707,
+      "stable": 265
     }
   },
   "planned": [
@@ -169,22 +169,6 @@
       "affects": [
         "python",
         "rust"
-      ]
-    },
-    {
-      "canonical": "closed_function_names",
-      "issue": "Julia, Rust and Go export a FUNCTION; TypeScript exports a CONSTANT array `CLOSED_FUNCTION_NAMES`.",
-      "resolution": "TypeScript adds `closedFunctionNames()`; the constant stays one minor as a deprecated alias.",
-      "affects": [
-        "typescript"
-      ]
-    },
-    {
-      "canonical": "derive_odes",
-      "issue": "TypeScript spells it `deriveODEs`, violating the §2 rule that TypeScript is lowerCamelCase of the canonical name (`deriveOdes`). TypeScript already spells the sibling `odeStates` / `isOdeState` correctly.",
-      "resolution": "Rename to `deriveOdes`; `deriveODEs` stays one minor as an alias.",
-      "affects": [
-        "typescript"
       ]
     },
     {
@@ -231,7 +215,7 @@
     {
       "canonical": "system_kind",
       "issue": "Julia / Python / Rust / Go export a FUNCTION `system_kind`; TypeScript exports both the function `systemKind` and the type `SystemKind`, and Go additionally has `EffectiveSystemKind` with no counterpart elsewhere.",
-      "resolution": "Keep the function/type pair (they are distinct symbols under the (name, kind) identity rule). Decide whether `EffectiveSystemKind` is `declared_system_kind`'s peer or a Go-only convenience, and harmonise the trio `system_kind` / `declared_system_kind` / `declared_system_kind_mismatch`, which currently exists in three different two-binding subsets.",
+      "resolution": "RULED (phase 6, API_SPEC.md §8 item 11): the family is three distinct questions plus one composition. `system_kind(model)` derives, `declared_system_kind(model)` reads the field, and `effective_system_kind(model)` is `declared ?? derived` — the question a caller choosing a solver actually asks. `declared_system_kind_mismatch` is deleted. TypeScript has all three as of phase 6; Julia, Python and Go still owe `effective_system_kind`. The function/type pair stays (they are distinct symbols under the (name, kind) identity rule).",
       "affects": [
         "julia",
         "typescript",
@@ -712,7 +696,8 @@
         "go": "BuildReferenceGraph",
         "julia": "build_reference_graph",
         "python": "build_reference_graph",
-        "rust": "build_reference_graph"
+        "rust": "build_reference_graph",
+        "typescript": "buildReferenceGraph"
       }
     },
     {
@@ -1106,7 +1091,8 @@
       "bindings": {
         "go": "ClosedFunctionNames",
         "julia": "closed_function_names",
-        "rust": "closed_function_names"
+        "rust": "closed_function_names",
+        "typescript": "closedFunctionNames"
       }
     },
     {
@@ -1743,12 +1729,8 @@
         "julia": "component_graph",
         "python": "component_graph",
         "rust": "component_graph",
-        "typescript": [
-          "componentGraph",
-          "component_graph"
-        ]
-      },
-      "notes": "spelling differs from the §2 rule: typescript=component_graph (expected componentGraph); multiple spellings exported by: typescript"
+        "typescript": "componentGraph"
+      }
     },
     {
       "name": "component_graph",
@@ -2414,9 +2396,12 @@
         "julia": "derive_odes",
         "python": "derive_odes",
         "rust": "derive_odes",
-        "typescript": "deriveODEs"
+        "typescript": [
+          "deriveODEs",
+          "deriveOdes"
+        ]
       },
-      "notes": "spelling differs from the §2 rule: typescript=deriveODEs (expected deriveOdes)"
+      "notes": "spelling differs from the §2 rule: typescript=deriveODEs (expected deriveOdes); multiple spellings exported by: typescript"
     },
     {
       "name": "derive_output_gridding",
@@ -2726,7 +2711,8 @@
       "bindings": {
         "go": "EdgeKind",
         "python": "EdgeKind",
-        "rust": "EdgeKind"
+        "rust": "EdgeKind",
+        "typescript": "EdgeKind"
       }
     },
     {
@@ -2782,9 +2768,10 @@
     {
       "name": "effective_system_kind",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "go": "EffectiveSystemKind"
+        "go": "EffectiveSystemKind",
+        "typescript": "effectiveSystemKind"
       }
     },
     {
@@ -3467,14 +3454,6 @@
       "bindings": {
         "editor": "Expression",
         "go": "Expression"
-      }
-    },
-    {
-      "name": "expression_analyzer",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "typescript": "ExpressionAnalyzer"
       }
     },
     {
@@ -6172,7 +6151,8 @@
         "go": "ReferenceEdge",
         "julia": "ReferenceEdge",
         "python": "ReferenceEdge",
-        "rust": "ReferenceEdge"
+        "rust": "ReferenceEdge",
+        "typescript": "ReferenceEdge"
       }
     },
     {
@@ -6191,7 +6171,8 @@
         "go": "ReferenceGraph",
         "julia": "ReferenceGraph",
         "python": "ReferenceGraph",
-        "rust": "ReferenceGraph"
+        "rust": "ReferenceGraph",
+        "typescript": "ReferenceGraph"
       }
     },
     {
@@ -6209,7 +6190,8 @@
       "bindings": {
         "go": "ReferenceResolutionError",
         "julia": "ReferenceResolutionError",
-        "python": "ReferenceResolutionError"
+        "python": "ReferenceResolutionError",
+        "typescript": "ReferenceResolutionError"
       }
     },
     {
@@ -6220,7 +6202,8 @@
         "go": "ReferenceVertex",
         "julia": "ReferenceVertex",
         "python": "ReferenceVertex",
-        "rust": "ReferenceVertex"
+        "rust": "ReferenceVertex",
+        "typescript": "ReferenceVertex"
       }
     },
     {
@@ -6553,7 +6536,8 @@
         "go": "ResolveReferences",
         "julia": "resolve_references",
         "python": "resolve_references",
-        "rust": "resolve_references"
+        "rust": "resolve_references",
+        "typescript": "resolveReferences"
       }
     },
     {
@@ -7480,7 +7464,8 @@
       "bindings": {
         "go": "SupportedMigrationTargets",
         "julia": "supported_migration_targets",
-        "python": "supported_migration_targets"
+        "python": "supported_migration_targets",
+        "typescript": "supportedMigrationTargets"
       }
     },
     {
@@ -8276,6 +8261,14 @@
       }
     },
     {
+      "name": "validate_text",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "typescript": "validateText"
+      }
+    },
+    {
       "name": "validate_units",
       "kind": "function",
       "tier": "stable",
@@ -8498,7 +8491,8 @@
       "bindings": {
         "go": "VertexKind",
         "python": "VertexKind",
-        "rust": "VertexKind"
+        "rust": "VertexKind",
+        "typescript": "VertexKind"
       }
     },
     {

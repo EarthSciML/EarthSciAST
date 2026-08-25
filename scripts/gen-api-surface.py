@@ -266,23 +266,14 @@ PLANNED = [
                       "`output_times` -> `saveat`.",
         "affects": ["python", "rust"],
     },
-    {
-        "canonical": "closed_function_names",
-        "issue": "Julia, Rust and Go export a FUNCTION; TypeScript exports a "
-                 "CONSTANT array `CLOSED_FUNCTION_NAMES`.",
-        "resolution": "TypeScript adds `closedFunctionNames()`; the constant stays one "
-                      "minor as a deprecated alias.",
-        "affects": ["typescript"],
-    },
-    {
-        "canonical": "derive_odes",
-        "issue": "TypeScript spells it `deriveODEs`, violating the §2 rule that "
-                 "TypeScript is lowerCamelCase of the canonical name (`deriveOdes`). "
-                 "TypeScript already spells the sibling `odeStates` / `isOdeState` "
-                 "correctly.",
-        "resolution": "Rename to `deriveOdes`; `deriveODEs` stays one minor as an alias.",
-        "affects": ["typescript"],
-    },
+    # `closed_function_names` (§8 item 4), `derive_odes` (item 5),
+    # `component_graph` (item 20) and `supported_migration_targets` (gap G-2)
+    # used to live here. All four landed in phase 6 on the TypeScript side:
+    # `closedFunctionNames()` and `supportedMigrationTargets()` are now
+    # functions at the canonical name with the old spellings kept as deprecated
+    # aliases (§10), `deriveOdes` replaced the §2.1-violating `deriveODEs`
+    # (also aliased), and the snake_case `component_graph` alias was dropped.
+    # Each alias pair is a single manifest entry with two TypeScript spellings.
     {
         "canonical": "unknowns / parameters",
         "issue": "TypeScript and Python export `unknowns` / `parameters`; Julia "
@@ -335,13 +326,15 @@ PLANNED = [
                  "TypeScript exports both the function `systemKind` and the type "
                  "`SystemKind`, and Go additionally has `EffectiveSystemKind` with "
                  "no counterpart elsewhere.",
-        "resolution": "Keep the function/type pair (they are distinct symbols under "
-                      "the (name, kind) identity rule). Decide whether "
-                      "`EffectiveSystemKind` is `declared_system_kind`'s peer or a "
-                      "Go-only convenience, and harmonise the trio "
-                      "`system_kind` / `declared_system_kind` / "
-                      "`declared_system_kind_mismatch`, which currently exists in "
-                      "three different two-binding subsets.",
+        "resolution": "RULED (phase 6, API_SPEC.md §8 item 11): the family is three "
+                      "distinct questions plus one composition. `system_kind(model)` "
+                      "derives, `declared_system_kind(model)` reads the field, and "
+                      "`effective_system_kind(model)` is `declared ?? derived` — the "
+                      "question a caller choosing a solver actually asks. "
+                      "`declared_system_kind_mismatch` is deleted. TypeScript has all "
+                      "three as of phase 6; Julia, Python and Go still owe "
+                      "`effective_system_kind`. The function/type pair stays (they are "
+                      "distinct symbols under the (name, kind) identity rule).",
         "affects": ["julia", "typescript", "python", "go"],
     },
 ]
