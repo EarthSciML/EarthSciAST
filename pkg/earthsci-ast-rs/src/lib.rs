@@ -209,7 +209,10 @@ pub use parse_expression::{ExpressionParseError, parse_equation, parse_expressio
 pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
-pub use ref_loading::{resolve_subsystem_refs, resolve_subsystem_refs_with_metaparameters};
+pub use ref_loading::{
+    resolve_subsystem_refs, resolve_subsystem_refs_raw,
+    resolve_subsystem_refs_with_metaparameters,
+};
 pub use reference_resolution::{
     EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,
     build_reference_graph, resolve_references,
@@ -275,7 +278,7 @@ pub use edit::{
     remove_species, remove_variable, replace_coupling, replace_equation, update_model_metadata,
 };
 pub use error::EsmError;
-pub use lower_enums::{EnumLoweringError, lower_enums};
+pub use lower_enums::{EnumLoweringError, lower_enums, lower_enums_mut, lower_enums_raw};
 pub use migration::{MigrationError, can_migrate, migrate, supported_migration_targets};
 // Deprecated alias of `supported_migration_targets`, kept for one minor per
 // API_SPEC.md §10 (phase-6 G-2 dropped the `get_` prefix).

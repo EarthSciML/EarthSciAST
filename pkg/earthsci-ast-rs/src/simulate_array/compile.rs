@@ -147,7 +147,7 @@ pub(super) fn check_no_spatial_ops(expr: &Expr) -> Result<(), CompileError> {
 
 /// Coerce one resolved `subsystems` entry into a typed [`Model`] plus the
 /// document `index_sets` registry it ships (empty for a bare model fragment).
-/// The loader ([`crate::ref_loading::resolve_subsystem_refs`]) inlines each
+/// The loader ([`crate::ref_loading::resolve_subsystem_refs_raw`]) inlines each
 /// `{ "ref": … }` as the referenced file's full JSON, so the common shape is a
 /// whole ESM document carrying exactly one model (the MPAS mesh contract:
 /// `grids/mpas/mesh/level0.esm`); a bare `{ "variables": …, "equations": … }`
@@ -195,7 +195,7 @@ pub(super) fn parse_subsystem_model(
             details: format!(
                 "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
                  through the official loader (crate::parse::load_path) so \
-                 resolve_subsystem_refs inlines it first"
+                 resolve_subsystem_refs_raw inlines it first"
             ),
         })
     } else {

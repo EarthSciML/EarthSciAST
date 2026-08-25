@@ -73,11 +73,52 @@ fn root_metaparameter_env(
 ///
 /// * `value` - the parsed ESM JSON to resolve (modified in place)
 /// * `base_path` - directory to resolve relative file paths against
-pub fn resolve_subsystem_refs(value: &mut Value, base_path: &Path) -> Result<(), DiagnosticError> {
+///
+/// This is the raw-`serde_json::Value` extension seam (API_SPEC.md §8 item
+/// 14): it is what the LOADER runs, before the document is coerced to an
+/// [`crate::EsmFile`]. A caller holding a typed document wants
+/// [`resolve_subsystem_refs`].
+pub fn resolve_subsystem_refs_raw(
+    value: &mut Value,
+    base_path: &Path,
+) -> Result<(), DiagnosticError> {
     resolve_subsystem_refs_with_metaparameters(value, base_path, &BTreeMap::new())
 }
 
-/// Like [`resolve_subsystem_refs`], but with the loader-API metaparameter
+/// Resolve every subsystem `{ "ref": ... }` in a TYPED document, in place.
+///
+/// The canonical entry point (API_SPEC.md §8 item 14): Julia
+/// (`resolve_subsystem_refs!`), Python and TypeScript all take a typed
+/// document and mutate it; this binding alone took an untyped
+/// `serde_json::Value`. Implemented over [`resolve_subsystem_refs_raw`] —
+/// `file` is rendered to JSON, resolved, and read back — so the two agree by
+/// construction.
+///
+/// # Arguments
+///
+/// * `file` - the document to resolve (modified in place)
+/// * `base_path` - directory to resolve relative file paths against
+pub fn resolve_subsystem_refs(
+    file: &mut crate::EsmFile,
+    base_path: &Path,
+) -> Result<(), DiagnosticError> {
+    let mut value = serde_json::to_value(&*file).map_err(|e| {
+        err(
+            codes::UNRESOLVED_SUBSYSTEM_REF,
+            format!("could not render the document as JSON for ref resolution: {e}"),
+        )
+    })?;
+    resolve_subsystem_refs_raw(&mut value, base_path)?;
+    *file = serde_json::from_value(value).map_err(|e| {
+        err(
+            codes::UNRESOLVED_SUBSYSTEM_REF,
+            format!("resolved document did not deserialize back into an EsmFile: {e}"),
+        )
+    })?;
+    Ok(())
+}
+
+/// Like [`resolve_subsystem_refs_raw`], but with the loader-API metaparameter
 /// bindings (esm-spec §9.7.6 site 4) available, so a §4.7 subsystem-edge
 /// binding EXPRESSION (`NTGT = NX*NY`, §9.7.6 site 3) folds against the root
 /// document's closed metaparameter environment (defaults overlaid with the API
@@ -811,7 +852,7 @@ mod tests {
                 "Main": { "variables": {}, "equations": [] }
             }
         });
-        let result = resolve_subsystem_refs(&mut value, Path::new("/tmp"));
+        let result = resolve_subsystem_refs_raw(&mut value, Path::new("/tmp"));
         assert!(result.is_ok());
     }
 
@@ -848,7 +889,7 @@ mod tests {
             }
         });
 
-        resolve_subsystem_refs(&mut value, dir.path()).unwrap();
+        resolve_subsystem_refs_raw(&mut value, dir.path()).unwrap();
 
         let inner_resolved = &value["models"]["Outer"]["subsystems"]["Inner"];
         assert!(inner_resolved.get("variables").is_some());
@@ -899,7 +940,7 @@ mod tests {
             }
         });
 
-        let err = resolve_subsystem_refs(&mut value, dir.path())
+        let err = resolve_subsystem_refs_raw(&mut value, dir.path())
             .expect_err("a source-only file declares no mountable system");
         assert!(err.to_string().contains("multiple top-level systems"));
     }
@@ -958,7 +999,7 @@ mod tests {
             }
         });
 
-        resolve_subsystem_refs(&mut value, dir.path()).unwrap();
+        resolve_subsystem_refs_raw(&mut value, dir.path()).unwrap();
 
         // The ref is replaced by the single MODEL — the sources rode along in
         // the document but were never candidates for the mount.
@@ -983,7 +1024,7 @@ mod tests {
             }
         });
 
-        let result = resolve_subsystem_refs(&mut value, Path::new("/tmp"));
+        let result = resolve_subsystem_refs_raw(&mut value, Path::new("/tmp"));
         assert!(result.is_err());
         assert!(
             result
@@ -1041,7 +1082,7 @@ mod tests {
             }
         });
 
-        let result = resolve_subsystem_refs(&mut value, dir.path());
+        let result = resolve_subsystem_refs_raw(&mut value, dir.path());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("circular"));
     }
@@ -1063,7 +1104,7 @@ mod tests {
             }
         });
 
-        let result = resolve_subsystem_refs(&mut value, dir.path());
+        let result = resolve_subsystem_refs_raw(&mut value, dir.path());
         assert!(result.is_err());
         assert!(
             result
@@ -1108,9 +1149,53 @@ mod tests {
             }
         });
 
-        resolve_subsystem_refs(&mut value, dir.path()).unwrap();
+        resolve_subsystem_refs_raw(&mut value, dir.path()).unwrap();
         let resolved = &value["reaction_systems"]["Main"]["subsystems"]["SubKey"];
         assert!(resolved.get("species").is_some());
         assert!(resolved.get("ref").is_none());
+    }
+
+    /// API_SPEC.md §8 item 14: the canonical `resolve_subsystem_refs` takes a
+    /// TYPED document, as Julia, Python and TypeScript do. It must resolve
+    /// exactly what the raw seam resolves.
+    #[test]
+    fn typed_resolve_subsystem_refs_matches_the_raw_pass() {
+        let dir = TempDir::new().unwrap();
+        let inner = json!({
+            "esm": "1.0.0",
+            "metadata": { "name": "inner" },
+            "models": { "Inner": { "variables": {}, "equations": [] } }
+        });
+        std::fs::write(
+            dir.path().join("inner.json"),
+            serde_json::to_string(&inner).unwrap(),
+        )
+        .unwrap();
+
+        let doc = json!({
+            "esm": "1.0.0",
+            "metadata": { "name": "main" },
+            "models": {
+                "Outer": {
+                    "variables": {},
+                    "equations": [],
+                    "subsystems": { "Inner": { "ref": "inner.json" } }
+                }
+            }
+        });
+
+        let mut raw = doc.clone();
+        resolve_subsystem_refs_raw(&mut raw, dir.path()).unwrap();
+
+        let mut typed: crate::EsmFile = serde_json::from_value(doc).expect("typed document");
+        resolve_subsystem_refs(&mut typed, dir.path()).unwrap();
+
+        let inner_resolved = &typed.models.as_ref().unwrap()["Outer"]
+            .subsystems
+            .as_ref()
+            .unwrap()["Inner"];
+        assert!(inner_resolved.get("variables").is_some());
+        assert!(inner_resolved.get("ref").is_none());
+        assert_eq!(serde_json::to_value(&typed).unwrap(), raw);
     }
 }
