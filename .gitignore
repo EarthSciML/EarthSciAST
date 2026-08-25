@@ -131,3 +131,4 @@ docs/.hugo_build.lock
 
 # Hypothesis property-test database (local cache, not source)
 .hypothesis/
+.spikeenv/
