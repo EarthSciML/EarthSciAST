@@ -660,7 +660,7 @@ func RenameVariable(model Model, oldName, newName string) (Model, error) {
 // fully-qualified read the model-only entry point cannot see.
 //
 // The qualified spelling is bound EXPLICITLY rather than left to
-// SubstituteInModelWithScoped's dotted-name resolution. That resolution maps a
+// SubstituteInModelWithContext's dotted-name resolution. That resolution maps a
 // scoped path to the LEAF name it designates, so "M.Sub.v" and a model-level
 // variable also called "v" would resolve to the same binding key even though
 // they are different variables — and the rewrite would replace the qualified
