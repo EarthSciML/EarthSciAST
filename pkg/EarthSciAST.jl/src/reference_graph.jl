@@ -424,18 +424,57 @@ function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::Abst
     return g
 end
 
+# Union of the document-scoped registry and any model-nested one, with the
+# model's entries taking precedence. Returns `nothing` when neither exists, so
+# the "no registry at all" branches below stay unchanged.
+function _merge_index_sets(model_sets::Union{Nothing,AbstractDict},
+                           doc_sets::Union{Nothing,AbstractDict})
+    doc_sets === nothing && return model_sets
+    model_sets === nothing && return doc_sets
+    merged = OrderedDict{String,Any}()
+    for k in _str_keys(doc_sets)
+        merged[k] = _get(doc_sets, k)
+    end
+    for k in _str_keys(model_sets)
+        merged[k] = _get(model_sets, k)
+    end
+    return merged
+end
+
 """
-    build_reference_graph(model::AbstractDict, model_name="") -> ReferenceGraph
+    build_reference_graph(model::AbstractDict, model_name="", index_sets=nothing)
+        -> ReferenceGraph
 
 Resolve the reference edges of one `model` dict into a graph. Throws a
 [`ReferenceResolutionError`](@ref) on a duplicate node id, an undeclared
 `ranges[*].from` index set, a `from_faq` naming no node, or an unresolved
 `join.on` factor. (Cycles are reported lazily by [`topological_order`](@ref), or
 eagerly by [`resolve_references`](@ref).)
+
+`index_sets` is the **document-scoped** index-set registry (RFC §5.2). Since
+v0.8.0 that registry is a sibling of `models` at the top level of the document,
+not a key on each model, and in esm 1.0.0 it is the only place it may appear
+(`esm-schema.json` declares `index_sets` at `/properties/index_sets` and
+nowhere else). [`resolve_references`](@ref) threads the document's registry in
+for every model; a caller holding only a raw model dict may pass it explicitly,
+or omit it and get the pre-0.8.0 model-nested `index_sets` key as a fallback.
+
+Until API_SPEC.md §8 item 17 this method read ONLY `model["index_sets"]` and
+took no registry argument, so on any v0.8.0+ document every `ranges[*].from`
+target was undeclared and the pass raised `undeclared_index_set` where Python,
+Rust and Go all built the graph. The optional trailing argument is the shape
+Python (`index_sets=`) and Go (`docIndexSets`) already use; Rust spells it as
+the separate `build_reference_graph_with_index_sets`.
 """
-function build_reference_graph(model::AbstractDict, model_name::AbstractString = "")
+function build_reference_graph(model::AbstractDict, model_name::AbstractString = "",
+                               index_sets::Union{Nothing,AbstractDict} = nothing)
     g = ReferenceGraph(model_name)
-    index_sets = _as_dict(_get(model, "index_sets"))
+    # Merge the document-scoped registry (v0.8.0+) with any model-nested one
+    # (pre-0.8.0); model-level entries win a key collision, matching Rust and
+    # Go. For a schema-valid 1.0.0 document only one of the two is ever
+    # non-empty, so the merge is observationally the same as Python's
+    # "document registry, else the model key" fallback.
+    index_sets = _merge_index_sets(_as_dict(_get(model, "index_sets")), index_sets)
 
     # Pass 1 — register declared index sets as vertices.
     if index_sets !== nothing
@@ -481,15 +520,19 @@ end
 Resolve reference edges for every model in `document`. Throws a
 [`ReferenceResolutionError`](@ref) on any unresolved reference *or* reference
 cycle (each model's graph is checked acyclic eagerly here).
+
+The document's top-level `index_sets` registry is threaded into every model's
+[`build_reference_graph`](@ref) call — that is where esm 1.0.0 puts it.
 """
 function resolve_references(document::AbstractDict)
     out = OrderedDict{String,ReferenceGraph}()
     models = _as_dict(_get(document, "models"))
     models === nothing && return out
+    doc_index_sets = _as_dict(_get(document, "index_sets"))
     for name in _str_keys(models)
         model = _as_dict(_get(models, name))
         model === nothing && continue
-        g = build_reference_graph(model, name)
+        g = build_reference_graph(model, name, doc_index_sets)
         cyc = detect_cycle(g)
         cyc !== nothing && throw(ReferenceResolutionError(
             E_REF_CYCLE, "reference cycle in model '$(name)': " * join(cyc, " -> "), cyc))

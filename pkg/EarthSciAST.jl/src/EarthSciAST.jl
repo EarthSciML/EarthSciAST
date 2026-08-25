@@ -166,13 +166,24 @@ export
     # Derived classification (esm-spec §6.3.1) — the ONLY sanctioned way to ask
     # which unknowns are ODE states / observed / algebraic and which parameters
     # are Brownian / discrete / sampled / constant.
-    unknown_names, parameter_names,
+    # `unknowns` / `parameters` are the canonical cross-binding names
+    # (API_SPEC.md §8 item 6); `unknown_names` / `parameter_names` stay
+    # exported alongside them — not for one minor but indefinitely — because
+    # the bare names collide in Julia's flat namespace (`ModelingToolkit`
+    # exports both), so a consumer needs an unambiguous spelling.
+    unknowns, parameters, unknown_names, parameter_names,
     ode_states, is_ode_state, observed_unknowns, algebraic_unknowns,
     solver_unknowns,
     observed_definitions, observed_definition,
     brownian_parameters, discrete_parameters, sampled_parameters,
     constant_parameters,
-    system_kind, declared_system_kind_mismatch,
+    # The `system_kind` family (API_SPEC.md §8 item 11) is three distinct
+    # questions: `system_kind` DERIVES the kind from the equations and
+    # parameters, `declared_system_kind` reads the explicit field (`nothing`
+    # when absent), and `effective_system_kind` is `declared ?? derived` — the
+    # question a caller choosing a solver asks. The Julia-only
+    # `declared_system_kind_mismatch` was deleted in favour of the pair.
+    system_kind, declared_system_kind, effective_system_kind,
     has_spatial_derivative, has_time_derivative,
     assert_classification_partitions,
     # Event types
@@ -224,7 +235,11 @@ export
     # Coupling serialization functions
     serialize_coupling_entry, coerce_coupling_entry,
     # Structural validation
+    # `validate` takes a TYPED document in every binding (API_SPEC.md §8
+    # item 13); the path convenience is `validate_path`, which additionally
+    # renders a load-time rejection as the structural finding the corpus pins.
     StructuralError, ValidationResult, UnitWarning, validate_structural, validate,
+    validate_path,
     validate_reaction_rate_units,
     # Expression operations. Expression containment extends `Base.contains`
     # (always in scope for consumers), so `contains` is not re-exported.
@@ -237,9 +252,11 @@ export
     # Graph analysis (Section 4.8)
     Graph, ComponentNode, CouplingEdge, VariableNode, DependencyEdge,
     component_graph, expression_graph, adjacency, predecessors, successors,
-    to_dot, to_mermaid,
-    # `to_json` carries BOTH the graph method (graph.jl) and the document
-    # serializer (serialize.jl); they dispatch on their argument type.
+    # The canonical graph-rendering trio (API_SPEC.md §8 item 8).
+    to_dot, to_mermaid, to_json_graph,
+    # `to_json` is the DOCUMENT serializer (§8 item 2). Its `Graph` methods are
+    # a deprecated alias of `to_json_graph`, kept one minor per §10; they
+    # dispatch on the argument type and render byte-identical output.
     to_json,
     # Chemical subscript rendering
     render_chemical_formula, format_node_label,
@@ -367,7 +384,11 @@ export
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, evaluate_closed_function_ad,
     closed_function_names, ClosedFunctionError,
-    lower_enums!,
+    # `lower_enums` is the PURE form at the canonical name (API_SPEC.md §8
+    # item 15); `lower_enums!` is the in-place twin under Julia's `!`
+    # convention (§2.2). Both raise `EnumLoweringError`, as every other
+    # binding does — this used to raise `ParseError`.
+    lower_enums, lower_enums!, EnumLoweringError,
     # Expression-template expansion (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md)
     lower_expression_templates, reject_expression_templates_pre_v04,
     ExpressionTemplateError,

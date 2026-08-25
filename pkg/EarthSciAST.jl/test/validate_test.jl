@@ -5,6 +5,8 @@ Tests for ESM Format schema validation functionality.
 using Test
 using EarthSciAST
 
+include("testutils.jl")
+
 @testset "Schema Validation" begin
 
     @testset "validate_schema function" begin
@@ -132,6 +134,40 @@ using EarthSciAST
         }
         """
         @test EarthSciAST.load_string(IOBuffer(ok_json)) isa EarthSciAST.EsmFile
+    end
+
+    # API_SPEC.md §8 item 13: `validate` takes a TYPED document in every
+    # binding. The path convenience — which also renders a load-time rejection
+    # as the structural finding the corpus pins — is `validate_path`.
+    @testset "validate is typed-only; validate_path does the I/O" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "minimal_chemistry.esm")
+        @test isfile(path)
+
+        # The typed entry point.
+        file = EarthSciAST.load_path(path)
+        typed = validate(file)
+        @test typed isa ValidationResult
+
+        # The path entry point agrees with load_path + validate.
+        by_path = validate_path(path)
+        @test by_path isa ValidationResult
+        @test by_path.is_valid == typed.is_valid
+        @test [e.error_type for e in by_path.structural_errors] ==
+              [e.error_type for e in typed.structural_errors]
+
+        # `validate` no longer has a String method: a caller who passes a path
+        # gets a MethodError, not a silent file read.
+        @test isempty(methods(validate, (AbstractString,)))
+        @test_throws MethodError validate(path)
+
+        # `validate_path` still renders a LOAD-time rejection as a structural
+        # finding rather than throwing — the reason this entry point exists.
+        bad = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", "subsystem_ref_not_found.esm")
+        if isfile(bad)
+            res = validate_path(bad)
+            @test !res.is_valid
+            @test !isempty(res.structural_errors)
+        end
     end
 
 end

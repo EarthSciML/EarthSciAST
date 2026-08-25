@@ -161,6 +161,17 @@ const ERROR_CODES = (
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library",
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict",
 
+    # ── Enum lowering (esm-spec §9.3; registered_functions.jl, raised as
+    #    `EnumLoweringError`). The two `unknown_*` values are the ones the
+    #    Python binding already carries on its `EnumLoweringError.code`
+    #    (`UNKNOWN_ENUM` / `UNKNOWN_ENUM_SYMBOL`) and the ones Julia already
+    #    interpolated as a message prefix before this pass raised a structured
+    #    error; `ENUM_OP_MALFORMED` is TypeScript's spelling for the
+    #    wrong-arity / wrong-arg-type rejection. ─────────────────────────────
+    ENUM_OP_MALFORMED = "enum_op_malformed",
+    UNKNOWN_ENUM = "unknown_enum",
+    UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol",
+
     # ── Closed function registry (esm-spec §9.1–§9.2;
     #    registered_functions.jl, raised as `ClosedFunctionError`). ─────────
     UNKNOWN_CLOSED_FUNCTION = "unknown_closed_function",

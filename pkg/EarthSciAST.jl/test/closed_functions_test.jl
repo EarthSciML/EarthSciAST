@@ -157,3 +157,82 @@ end
         @test (err::ClosedFunctionError).code == "unknown_closed_function"
     end
 end
+
+# ---------------------------------------------------------------------------
+# Enum lowering — esm-spec §9.3, API_SPEC.md §8 item 15.
+#
+# Two things this pins: the canonical name is the PURE form (`lower_enums`),
+# with the mutating twin under Julia's `!` (§2.2); and every rejection is an
+# `EnumLoweringError`, which is what TypeScript, Python and Rust raise. Julia
+# raised `ParseError` here, so a caller's `catch e; e isa ParseError` was the
+# only portable handler for a failure that is not a parse failure at all.
+# ---------------------------------------------------------------------------
+@testset "enum lowering (esm-spec §9.3)" begin
+    enum_expr() = OpExpr("enum", EarthSciAST.ASTExpr[VarExpr("Phase"), VarExpr("LIQUID")])
+
+    function _file(; enums)
+        model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+                      [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
+                                enum_expr())])
+        return EsmFile("1.0.0", Metadata("Enums"); models=Dict("M" => model), enums=enums)
+    end
+
+    @testset "the pure form leaves its argument alone" begin
+        file = _file(enums=Dict("Phase" => Dict("SOLID" => 0, "LIQUID" => 1)))
+        lowered = lower_enums(file)
+
+        rhs_of(f) = f.models["M"].equations[1].rhs
+        # The copy is lowered ...
+        @test rhs_of(lowered) isa OpExpr
+        @test rhs_of(lowered).op == "const"
+        @test rhs_of(lowered).value == 1
+        # ... and the input is untouched, which is the whole point of the
+        # pure form.
+        @test rhs_of(file).op == "enum"
+        @test lowered !== file
+
+        # The mutating twin agrees on the result and rewrites in place.
+        mutated = lower_enums!(file)
+        @test mutated === file
+        @test rhs_of(file).op == "const"
+        @test rhs_of(file).value == 1
+    end
+
+    @testset "every rejection is an EnumLoweringError, not a ParseError" begin
+        undeclared = try
+            lower_enums(_file(enums=Dict("Other" => Dict("A" => 0))))
+            nothing
+        catch e
+            e
+        end
+        @test undeclared isa EnumLoweringError
+        @test !(undeclared isa ParseError)
+        @test undeclared.code == "unknown_enum"
+
+        no_symbol = try
+            lower_enums(_file(enums=Dict("Phase" => Dict("SOLID" => 0))))
+            nothing
+        catch e
+            e
+        end
+        @test no_symbol isa EnumLoweringError
+        @test no_symbol.code == "unknown_enum_symbol"
+
+        malformed_model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+            [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
+                      OpExpr("enum", EarthSciAST.ASTExpr[VarExpr("Phase")]))])
+        malformed = try
+            lower_enums(EsmFile("1.0.0", Metadata("Enums");
+                                models=Dict("M" => malformed_model),
+                                enums=Dict("Phase" => Dict("LIQUID" => 1))))
+            nothing
+        catch e
+            e
+        end
+        @test malformed isa EnumLoweringError
+        @test malformed.code == "enum_op_malformed"
+
+        # It is still catchable through the package's error root (H-1).
+        @test undeclared isa EarthSciAST.EarthSciASTError
+    end
+end

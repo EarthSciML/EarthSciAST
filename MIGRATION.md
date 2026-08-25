@@ -5,6 +5,51 @@ gives the exact before/after spelling in each binding.
 
 ---
 
+## Phase 6 — tidying the surfaces and locking them
+
+Per-binding sections; each binding lands its own share. The normative target is
+`API_SPEC.md` §8.
+
+### Julia
+
+| Before | After | Why |
+|---|---|---|
+| `unknown_names(model)` | `unknowns(model)` | §8 item 6. `unknown_names` / `parameter_names` **stay exported** — they are not going away — because the canonical bare names collide with `ModelingToolkit.unknowns` / `.parameters`. After `using EarthSciAST, ModelingToolkit`, a bare `unknowns(m)` is an ambiguity error in Julia; write `EarthSciAST.unknowns(m)` or keep using `unknown_names(m)`. |
+| `parameter_names(model)` | `parameters(model)` | as above |
+| `declared_system_kind_mismatch(model)` | **deleted** | §8 item 11. It was Julia-only and one line over the two functions that replace it. `nothing` ⇒ `declared_system_kind(m) === nothing \|\| declared_system_kind(m) == system_kind(m)`; the `(declared, derived)` tuple ⇒ `(declared_system_kind(m), system_kind(m))`. The `system_kind_mismatch` **finding** is unchanged — `validate` still reports it with the same code, path and `details`. |
+| — | `declared_system_kind(model)` | new: reads the explicit field, `nothing` when absent |
+| — | `effective_system_kind(model)` | new: `declared` if present, else derived — the question a caller choosing a solver asks |
+| `validate(path::AbstractString)` | `validate_path(path)` | §8 item 13. `validate` takes a **typed document** in every binding; one name meant "check this document" in four bindings and "read this file and check it" in Julia. `validate(::String)` is now a `MethodError`, deliberately: a silent file read is worse than a loud failure. `validate_path` keeps the whole old behaviour, including rendering a load-time rejection as the structural finding the corpus pins. |
+| `lower_enums!(file)` | `lower_enums(file)` (pure) or `lower_enums!(file)` (in place) | §8 item 15. The canonical name is the pure form, which deep-copies; the mutating twin keeps Julia's `!` (`API_SPEC.md` §2.2). Both are exported. |
+| `catch e; e isa ParseError` around enum lowering | `catch e; e isa EnumLoweringError` | §8 item 15, and a real defect: Julia raised `ParseError` where TypeScript, Python and Rust all raise `EnumLoweringError`. `EnumLoweringError <: EarthSciASTError` carries a structured `code` (`enum_op_malformed` / `unknown_enum` / `unknown_enum_symbol`) instead of interpolating it into the message. |
+| `to_json(graph)` | `to_json_graph(graph)` | §8 item 8. `to_json` is the **document** serializer (§8 item 2). The `Graph` methods of `to_json` remain one minor as a deprecated alias and render byte-identical output. |
+| `to_unicode(model)` / `to_latex(file)` threw `ArgumentError` | returns the container summary | §8 item 18. All three renderers now accept the full domain — expressions **and** `Model` / `ReactionSystem` / `EsmFile`. A container summary has no format-specific form, so all three return the same plain text; `to_ascii`'s output is unchanged. |
+
+#### `build_reference_graph` reads the 1.0.0 `index_sets` registry (bug fix)
+
+`build_reference_graph(model, model_name)` read `model["index_sets"]` — the
+**pre-0.8.0 nested** shape. Since v0.8.0 the registry is a sibling of `models`
+at the top of the document, and `esm-schema.json` declares `index_sets` at
+`/properties/index_sets` and nowhere else. So on any real 1.0.0 document Julia
+saw an EMPTY registry: every `ranges[*].from` target looked undeclared and the
+pass **threw** `E_REF_UNDECLARED_INDEX_SET`, where Python, Rust and Go all built
+the graph — index-set vertices, `range_from` edges and `from_faq` edges
+included.
+
+`resolve_references(document)` now threads `document["index_sets"]` into every
+model, and the registry is an optional **trailing** argument for direct callers:
+
+```julia
+build_reference_graph(model, "M", document["index_sets"])
+```
+
+Omitting it still falls back to a model-nested `index_sets` key, so pre-0.8.0
+raw-model callers are unaffected. Regression coverage:
+`pkg/EarthSciAST.jl/test/reference_graph_test.jl`, testset
+`"index_sets at DOCUMENT scope (esm 1.0.0 flat shape)"`.
+
+---
+
 ## Phase 4 — the simulation surface: `Problem` + `solve`
 
 `simulate` is **deleted** in Julia, Python and Rust — not deprecated, not

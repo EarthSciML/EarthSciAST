@@ -1566,11 +1566,19 @@ to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"
     to_latex(target) -> String
 
 Format `target` as Unicode / LaTeX mathematical notation. Parallel to
-[`to_ascii`](@ref) for `Nothing`, `Real`, `String`, `ASTExpr`, and `Equation`
-targets, sharing its naming convention across the language bindings (see
-tests/display/RENDERING_CONTRACT.md). Unlike `to_ascii`, there are no
-summary methods for `Model`/`ReactionSystem`/`EsmFile` — those types throw
-`ArgumentError` here.
+[`to_ascii`](@ref) across its whole domain — `Nothing`, `Real`, `String`,
+`ASTExpr`, `Equation`, and the three containers `Model` / `ReactionSystem` /
+`EsmFile` — sharing its naming convention across the language bindings (see
+tests/display/RENDERING_CONTRACT.md).
+
+The three renderers accept the same domain in every binding (API_SPEC.md §8
+item 18); `to_unicode` and `to_latex` used to throw `ArgumentError` on the
+containers here, so a caller could render an `EsmFile` summary in one format
+and not the other two. A container SUMMARY has no Unicode- or LaTeX-specific
+form — it is `Model(2 variables, 1 equation)`, not mathematics — so all three
+renderers return the same plain-text summary, exactly as Python's shared
+`_format` dispatch does ("container summaries are rendered as plain text for
+both LaTeX and ASCII"). The `to_ascii` summaries are unchanged.
 """
 to_unicode(target) =
     throw(ArgumentError("Unsupported type for Unicode formatting: $(typeof(target))"))
@@ -1584,6 +1592,9 @@ end
 to_unicode(target::ASTExpr) = format_expression_unicode(target)
 to_unicode(target::Equation) =
     "$(format_expression_unicode(target.lhs)) = $(format_expression_unicode(target.rhs))"
+to_unicode(target::Model) = to_ascii(target)
+to_unicode(target::ReactionSystem) = to_ascii(target)
+to_unicode(target::EsmFile) = to_ascii(target)
 
 to_latex(target) =
     throw(ArgumentError("Unsupported type for LaTeX formatting: $(typeof(target))"))
@@ -1597,3 +1608,6 @@ end
 to_latex(target::ASTExpr) = format_expression_latex(target)
 to_latex(target::Equation) =
     "$(format_expression_latex(target.lhs)) = $(format_expression_latex(target.rhs))"
+to_latex(target::Model) = to_ascii(target)
+to_latex(target::ReactionSystem) = to_ascii(target)
+to_latex(target::EsmFile) = to_ascii(target)

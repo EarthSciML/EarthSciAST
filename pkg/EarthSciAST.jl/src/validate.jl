@@ -615,10 +615,16 @@ function validate(file::EsmFile)::ValidationResult
 end
 
 """
-    validate(path::AbstractString) -> ValidationResult
+    validate_path(path::AbstractString) -> ValidationResult
 
 Validate the document at `path`, INCLUDING the failures that happen while
 loading it.
+
+`validate` itself takes a TYPED document in every binding (API_SPEC.md §8
+item 13) — it used to be a second `validate` method here, which made one name
+mean "check this document" in four bindings and "read this file and check it"
+in Julia. The file convenience keeps its behaviour under a name that says it
+does I/O.
 
 An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
 pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
@@ -631,7 +637,7 @@ built, and callers that want the exception keep it. This entry point is the one
 the conformance harness wants — it renders the throw as the structural error it
 always was.
 """
-function validate(path::AbstractString)::ValidationResult
+function validate_path(path::AbstractString)::ValidationResult
     file = try
         load_path(path)
     catch e
@@ -658,7 +664,7 @@ otherwise leave `structural_errors` empty even though the document is invalid
 - a structured `ParseError` (`code` non-empty) — currently the §11.4.1
   `ic_in_reaction_system` rejection — carries its own code, pointer and details.
 
-Both the file entry point [`validate(::AbstractString)`](@ref) and the
+Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
 in the same shape every other binding reports it.
 """
@@ -790,8 +796,8 @@ function validate_model_balance(model::Model, path::String;
                                 check_excess::Bool=true)::Vector{StructuralError}
     errors = StructuralError[]
 
-    unknowns = unknown_names(model)
-    n_unknowns = length(unknowns)
+    unknown_list = unknowns(model)
+    n_unknowns = length(unknown_list)
 
     # An `ic` equation prescribes an initial value, not a determining equation,
     # so it does not count toward the balance.
@@ -802,14 +808,14 @@ function validate_model_balance(model::Model, path::String;
     for eq in model.equations
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
-    missing_for = String[u for u in unknowns if !(u in equation_vars)]
+    missing_for = String[u for u in unknown_list if !(u in equation_vars)]
 
     has_subsystems = !isempty(model.subsystems)
     shortfall = n_unknowns - n_eqs
 
     report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
     if report
-        details = Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs)
+        details = Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs)
         isempty(missing_for) || (details["missing_equations_for"] = missing_for)
         push!(errors, StructuralError(
             path,
@@ -825,7 +831,7 @@ function validate_model_balance(model::Model, path::String;
             "Model declares unknown '$(first(missing_for))' but has no defining " *
             "equation for it",
             ERROR_CODES.EQUATION_COUNT_MISMATCH,
-            Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs,
+            Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs,
                              "missing_equations_for" => missing_for)))
     end
 
@@ -912,9 +918,9 @@ absent, and reports `system_kind_mismatch` when a present field contradicts it.
 Recurses into subsystems.
 """
 function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String)
-    mism = declared_system_kind_mismatch(model)
-    if mism !== nothing
-        declared, derived = mism
+    declared = declared_system_kind(model)
+    derived = system_kind(model)
+    if declared !== nothing && declared != derived
         push!(errors, StructuralError(
             "$path/system_kind",
             "Model declares system_kind '$declared' but its equations and " *

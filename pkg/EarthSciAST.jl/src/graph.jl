@@ -848,6 +848,8 @@ function to_mermaid(graph::Graph{VariableNode, DependencyEdge})::String
 end
 
 """
+    to_json_graph(graph) -> String
+
 Export graph to the JSON adjacency list of esm-libraries-spec §4.8.3.
 
 Three top-level keys:
@@ -863,8 +865,15 @@ Three top-level keys:
 Pinned by `tests/conformance/graph/cases.json` at the level of the top-level
 keys, the node ids, the edge endpoints and the adjacency map; the per-node and
 per-edge payloads are this binding's own and are not.
+
+The canonical name across the bindings is `to_json_graph` (API_SPEC.md §8
+item 8) — the spelling TypeScript (`toJsonGraph`), Python and Rust already
+use — because §8 item 2 gave `to_json` to the DOCUMENT serializer, and one
+binding cannot make one name mean both without dispatch a caller can only
+discover by reading the source. Julia's `to_json(::Graph)` methods stay one
+minor as a deprecated alias (§10) and render byte-identical output.
 """
-function to_json(graph::Graph{ComponentNode, CouplingEdge})::String
+function to_json_graph(graph::Graph{ComponentNode, CouplingEdge})::String
     adj_list = Dict{String, Vector{String}}()
     for node in graph.nodes
         adj_list[node.id] = sort!(String[n.id for n in _adjacent_nodes(graph, node)])
@@ -885,7 +894,7 @@ function to_json(graph::Graph{ComponentNode, CouplingEdge})::String
     return JSON3.write(result, pretty=true)
 end
 
-function to_json(graph::Graph{VariableNode, DependencyEdge})::String
+function to_json_graph(graph::Graph{VariableNode, DependencyEdge})::String
     adj_list = Dict{String, Vector{String}}()
     for node in graph.nodes
         adj_list[node.name] = sort!(String[n.name for n in _adjacent_nodes(graph, node)])
@@ -905,3 +914,14 @@ function to_json(graph::Graph{VariableNode, DependencyEdge})::String
     )
     return JSON3.write(result, pretty=true)
 end
+
+"""
+    to_json(graph::Graph) -> String
+
+Deprecated alias of [`to_json_graph`](@ref), kept one minor per API_SPEC.md
+§10. `to_json` is the document serializer (`to_json(::EsmFile)` in
+serialize.jl); these two `Graph` methods are the pre-§8 spelling of the graph
+renderer and delegate to it unchanged.
+"""
+to_json(graph::Graph{ComponentNode, CouplingEdge})::String = to_json_graph(graph)
+to_json(graph::Graph{VariableNode, DependencyEdge})::String = to_json_graph(graph)
