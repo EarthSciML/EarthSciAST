@@ -157,6 +157,46 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test err.code == ESS.E_REF_UNRESOLVED_JOIN_FACTOR
     end
 
+    # The four binder classes an `on` key column is polymorphic over
+    # (esm-spec §4.9.5 / CONFORMANCE_SPEC §5.5.6), and the NEGATIVE guard on the
+    # widening: consulting the variable and index-set registries must not
+    # degrade into "accept any string".
+    #
+    # The document declares a variable (`bin`), an index set (`cells`), a bound
+    # range (`i`) and a string factor arg (`w`), so every registry the check
+    # consults is non-empty and the check is genuinely reached.
+    @testset "join binder classes (esm-spec §4.9.5)" begin
+        four_class = on -> Dict{String,Any}(
+            "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
+            "variables" => Dict("bin" => Dict("type" => "parameter"),
+                                "w" => Dict("type" => "parameter")),
+            "equations" => [eqn(agg(id = "j", args = ["w"], output_idx = String[],
+                                    ranges = Dict("i" => Dict("from" => "cells")),
+                                    join = [Dict("on" => [on])]), 0)])
+
+        # Each class resolves, on BOTH key columns.
+        for on in (["i", "i"],          # 1. node-local binder (ranges key)
+                   ["w", "w"],          # 2. node-local string factor arg
+                   ["bin", "bin"],      # 3. declared model variable — defect #3
+                   ["cells", "cells"])  # 4. document-scoped index set
+            @test build_reference_graph(four_class(on), "M") isa ESS.ReferenceGraph
+        end
+
+        # A name in none of the four is STILL an error, on either column. The
+        # right column was never validated before this fix.
+        for on in (["no_such_name", "bin"], ["bin", "no_such_name"])
+            err = try
+                build_reference_graph(four_class(on), "M")
+                nothing
+            catch e
+                e
+            end
+            @test err isa ReferenceResolutionError
+            @test err.code == ESS.E_REF_UNRESOLVED_JOIN_FACTOR
+            @test occursin("no_such_name", err.message)
+        end
+    end
+
     @testset "(3) edges are queryable by the partition pass" begin
         producer = agg(id = "edge_faq", output_idx = ["edge"],
                        ranges = Dict("f" => Dict("from" => "faces")))
@@ -391,25 +431,56 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test ff[1].target == "node:edge_enum"
     end
 
-    # CORPUS_DEFECTS #2 is fixed; what remains on this fixture is #3.
-    # `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives in
-    # OceanDynamics while the registry entry is document-scoped — that resolves
-    # now. The producing node's `join.on == [["rg_src_bin","rg_tgt_bin"]]` names
-    # model variables rather than node-local binders, which is defect #3's
-    # shape, previously masked by #2 erroring first.
-    @testset "wildfire fixture no longer raises unknown_faq_node" begin
+    # CORPUS_DEFECTS #2 AND #3 are both fixed on this fixture, which was the
+    # SECOND instance of #3 — masked until #2 landed.
+    #   * #2: `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives
+    #     in OceanDynamics while the registry entry is document-scoped.
+    #   * #3: that producing node's `join.on == [["rg_src_bin","rg_tgt_bin"]]`
+    #     names declared model VARIABLES — per-cell value-invention bin buffers
+    #     written by equations 0 and 1 — rather than node-local binders. Both
+    #     columns now resolve through the variable class of `_join_binder_class`.
+    @testset "wildfire fixture resolves fully" begin
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
                         "wildfire_atmosphere_ocean.esm")
         doc = JSON3.read(read(path, String), Dict{String,Any})
-        err = try
-            resolve_references(doc); nothing
-        catch e
-            e
+        graphs = resolve_references(doc)
+        ocean = graphs["OceanDynamics"]
+        targets = Set(e.target for e in ESS.edges_of_kind(ocean, ESS.REF_EDGE_JOIN_FACTOR))
+        @test "factor:rg_src_bin" in targets
+    end
+
+    # The other instance of CORPUS_DEFECTS #3: six aggregates in
+    # ConservativeRegridAssembly join on [["src_bin","tgt_bin"]], both declared
+    # model variables shaped over the join's range index sets.
+    @testset "conservative_regrid_assembly resolves" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "geometry",
+                        "conservative_regrid_assembly.esm")
+        doc = JSON3.read(read(path, String), Dict{String,Any})
+        @test resolve_references(doc) isa AbstractDict
+    end
+
+    # The corpus-wide sweep: EVERY fixture under tests/valid resolves. This is
+    # the acceptance test for corpus defect #3 and the Julia counterpart of the
+    # Python / TypeScript / Go corpus sweeps.
+    @testset "every shared valid fixture resolves" begin
+        validdir = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid")
+        files = String[]
+        for (root, _, fs) in walkdir(validdir), f in fs
+            endswith(f, ".esm") && push!(files, joinpath(root, f))
         end
-        @test err isa ESS.ReferenceResolutionError
-        @test err.code != ESS.E_REF_UNKNOWN_FAQ_NODE
-        @test err.code == ESS.E_REF_UNRESOLVED_JOIN_FACTOR
-        @test occursin("rg_src_bin", err.message)
+        sort!(files)
+        @test length(files) > 50
+        failures = String[]
+        for f in files
+            doc = JSON3.read(read(f, String), Dict{String,Any})
+            try
+                resolve_references(doc)
+            catch e
+                push!(failures, string(relpath(f, validdir), ": ",
+                                       e isa ESS.ReferenceResolutionError ? e.code : string(typeof(e))))
+            end
+        end
+        @test failures == String[]
     end
 
 end

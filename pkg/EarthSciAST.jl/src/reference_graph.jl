@@ -286,27 +286,71 @@ end
 
 _is_node(x) = x isa AbstractDict && _haskey(x, "op")
 
-# Names a `join.on` reference may resolve to: the node's string factor-args, its
-# declared range keys, and its symbolic output_idx.
-function _factor_scope(node::AbstractDict)
-    names = Set{String}()
-    args = _as_vec(_get(node, "args"))
-    if args !== nothing
-        for a in args
-            s = _as_str(a)
-            s !== nothing && push!(names, s)
-        end
-    end
+# Which binder class a `join` name resolves to, or `nothing`.
+#
+# An `on` key column is POLYMORPHIC (esm-spec §4.9.5): it may name a loop symbol
+# bound by the enclosing `ranges`, a document-scoped index set (§9.7.5), or a
+# declared component-local variable — a value-invention bin buffer. A binding
+# that diagnoses such a name "must do so against the variable AND index-set
+# registries", not against node-local names alone.
+#
+# The classes are tested in the order CONFORMANCE_SPEC §5.5.6 fixes, because a
+# node-local binder SHADOWS a same-named declared variable (esm-spec §4.3.1
+# permits one string to be a variable reference outside an aggregate and an
+# index symbol inside one):
+#
+#   1. a name the node BINDS — a `ranges` key or a symbolic `output_idx` entry —
+#      tested FIRST;
+#   2. a node-local string factor `arg`;
+#   3. a declared component-local variable (the model's variable registry);
+#   4. a document-scoped index set.
+#
+# Anything else is unresolvable and raises E_REF_UNRESOLVED_JOIN_FACTOR. Nothing
+# here widens the check to "accept any string": a name in none of the four
+# registries is still a typo and is still reported.
+function _join_binder_class(node::AbstractDict, name::Union{Nothing,AbstractString},
+                            variables::Union{Nothing,AbstractDict},
+                            index_sets::Union{Nothing,AbstractDict})
+    (name === nothing || isempty(name)) && return nothing
+    nm = String(name)
+    # 1. node-local binders (these shadow a same-named variable)
     ranges = _as_dict(_get(node, "ranges"))
-    ranges !== nothing && union!(names, _str_keys(ranges))
+    ranges !== nothing && _haskey(ranges, nm) && return "range"
     oi = _as_vec(_get(node, "output_idx"))
     if oi !== nothing
         for o in oi
-            s = _as_str(o)
-            s !== nothing && push!(names, s)
+            _as_str(o) == nm && return "output_idx"
         end
     end
-    return names
+    # 2. node-local string factor args
+    args = _as_vec(_get(node, "args"))
+    if args !== nothing
+        for a in args
+            _as_str(a) == nm && return "arg"
+        end
+    end
+    # 3. the model's variable registry — where a bin buffer lives
+    variables !== nothing && _haskey(variables, nm) && return "variable"
+    # 4. the document-scoped index-set registry
+    index_sets !== nothing && _haskey(index_sets, nm) && return "index_set"
+    return nothing
+end
+
+# Diagnose one `join` name, throwing the unresolved-join-factor error when it
+# resolves in none of the four binder classes.
+function _check_join_name(node::AbstractDict, name::Union{Nothing,AbstractString},
+                          variables::Union{Nothing,AbstractDict},
+                          index_sets::Union{Nothing,AbstractDict},
+                          key::AbstractString, model_name::AbstractString,
+                          path::AbstractString; label::AbstractString="join factor")
+    if _join_binder_class(node, name, variables, index_sets) === nothing
+        throw(ReferenceResolutionError(
+            E_REF_UNRESOLVED_JOIN_FACTOR,
+            "$(label) '$(name === nothing ? "" : name)' of node $(key) names no range, " *
+            "output index, factor arg, declared variable, or index set in scope " *
+            "(model '$(model_name)', at $(path))"))
+    end
+    return nothing
 end
 
 # One id-bearing expression node, as the `from_faq` scope sees it.
@@ -322,6 +366,7 @@ const _WALK_ROOTS = ("equations", "initialization_equations")
 function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::AbstractString,
                                 model_name::AbstractString,
                                 index_sets::Union{Nothing,AbstractDict},
+                                variables::Union{Nothing,AbstractDict},
                                 id_to_addr::OrderedDict{String,_RefNode})
     op = _as_str(_get(node, "op"))
     nid = _nonempty_str(_get(node, "id"))
@@ -366,13 +411,14 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
     # join[*].on[*] -> factor
     join_clauses = _as_vec(_get(node, "join"))
     if join_clauses !== nothing
-        scope = _factor_scope(node)
         for clause in join_clauses
             cld = _as_dict(clause)
             cld === nothing && continue
             # A Phase-2a `overlap` clause references const-array ENVELOPE factors
-            # via `src_env` / `tgt_env`; each must resolve in factor scope just
-            # like a bin-equality key column.
+            # via `src_env` / `tgt_env`; each must resolve in join-name scope
+            # just like a bin-equality key column. CONFORMANCE_SPEC §5.5.6 makes
+            # these ALWAYS factor variables, so the variable registry (class 3)
+            # is what resolves them.
             ov = _as_dict(_get(cld, "overlap"))
             if ov !== nothing
                 for envkey in ("src_env", "tgt_env")
@@ -380,13 +426,8 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                     names === nothing && continue
                     for nm in names
                         ref = _as_str(nm)
-                        if ref === nothing || !(ref in scope)
-                            throw(ReferenceResolutionError(
-                                E_REF_UNRESOLVED_JOIN_FACTOR,
-                                "overlap-join env factor '$(ref === nothing ? "" : ref)' of " *
-                                "node $(key) names no factor, range, or output index in " *
-                                "scope (model '$(model_name)', at $(path))"))
-                        end
+                        _check_join_name(node, ref, variables, index_sets, key, model_name, path;
+                                         label="overlap-join env factor")
                         _ensure_vertex!(g, ReferenceVertex(
                             _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
                         _add_edge!(g, key, _factor_key(ref), REF_EDGE_JOIN_FACTOR)
@@ -400,12 +441,24 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                 pv = _as_vec(pair)
                 (pv === nothing || isempty(pv)) && continue
                 ref = _as_str(pv[1])
-                if ref === nothing || !(ref in scope)
-                    throw(ReferenceResolutionError(
-                        E_REF_UNRESOLVED_JOIN_FACTOR,
-                        "join factor '$(ref === nothing ? "" : ref)' of node $(key) names no " *
-                        "factor, range, or output index in scope " *
-                        "(model '$(model_name)', at $(path))"))
+                _check_join_name(node, ref, variables, index_sets, key, model_name, path)
+                # BOTH key columns are references (esm-spec §4.9.5). Only the
+                # LEFT one carries the graph edge: the join_factor edge kind
+                # records the node's own key-column dependency, and the right
+                # column is frequently a document-scoped index set, which already
+                # has its own vertex kind. The right column is DIAGNOSED here and
+                # left un-edged, which is what makes
+                # `aggregate/join_filter.esm`'s ["src", "sourceType"] resolve
+                # through the index-set class without inventing a
+                # `factor:sourceType` twin of `index_set:sourceType`.
+                #
+                # A non-string right column is a SCHEMA defect
+                # (tests/invalid/aggregate/join_on_key_not_string.esm pins it
+                # there) and is not re-diagnosed as a reference error.
+                if length(pv) > 1
+                    right = _as_str(pv[2])
+                    right === nothing ||
+                        _check_join_name(node, right, variables, index_sets, key, model_name, path)
                 end
                 _ensure_vertex!(g, ReferenceVertex(
                     _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
@@ -419,16 +472,18 @@ end
 
 function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::AbstractString,
                 index_sets::Union{Nothing,AbstractDict},
+                variables::Union{Nothing,AbstractDict},
                 id_to_addr::OrderedDict{String,_RefNode})
     if value isa AbstractDict
         _is_node(value) &&
-            _register_and_process!(g, value, path, model_name, index_sets, id_to_addr)
+            _register_and_process!(g, value, path, model_name, index_sets, variables, id_to_addr)
         for k in _str_keys(value)
-            _walk!(g, _get(value, k), string(path, "/", k), model_name, index_sets, id_to_addr)
+            _walk!(g, _get(value, k), string(path, "/", k), model_name, index_sets, variables,
+                   id_to_addr)
         end
     elseif value isa AbstractVector
         for (i, v) in enumerate(value)
-            _walk!(g, v, string(path, "/", i - 1), model_name, index_sets, id_to_addr)
+            _walk!(g, v, string(path, "/", i - 1), model_name, index_sets, variables, id_to_addr)
         end
     end
     return g
@@ -569,10 +624,16 @@ function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
     # Pass 2 — walk every expression node: assign a stable address, register
     # aggregate / id-bearing nodes, add within-node reference edges
     # (ranges[*].from, join.on), and build id -> address for from_faq.
+    # The model's declared variable registry. A `join` `on` key column may name a
+    # declared component-local variable — a value-invention bin buffer written by
+    # an earlier equation — one of the three binder classes esm-spec §4.9.5 makes
+    # an `on` column polymorphic over. See `_join_binder_class`.
+    variables = _as_dict(_get(model, "variables"))
+
     id_to_addr = OrderedDict{String,_RefNode}()
     for root in _WALK_ROOTS
         v = _get(model, root)
-        v === nothing || _walk!(g, v, root, model_name, index_sets, id_to_addr)
+        v === nothing || _walk!(g, v, root, model_name, index_sets, variables, id_to_addr)
     end
 
     # Pass 3 — derived index sets resolve their from_faq to a node by id, at
