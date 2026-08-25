@@ -39,18 +39,28 @@ var chemicalElements = map[string]bool{
 	"Rg": true, "Cn": true, "Nh": true, "Fl": true, "Mc": true, "Lv": true, "Ts": true, "Og": true,
 }
 
-// ToUnicode converts an expression to Unicode string with chemical subscripts and operator precedence
+// The three renderers accept the FULL display domain (API_SPEC.md §8 item 18):
+// an expression, an Equation, or one of the three CONTAINERS — Model,
+// ReactionSystem, ESMFile — in every binding. A container has no mathematical
+// notation, so it renders as the esm-spec §6.3 text SUMMARY; unicode keeps
+// unicode symbols and both latex and ascii fall back to plain text, which is
+// what TypeScript and Python already do.
+
+// ToUnicode converts an expression, equation or container to a Unicode string
+// with chemical subscripts and operator precedence.
 func ToUnicode(target Expression) string {
 	return formatExpression(target, FmtUnicode)
 }
 
-// ToLatex converts an expression to LaTeX string with chemical subscripts and operator precedence
+// ToLatex converts an expression, equation or container to a LaTeX string with
+// chemical subscripts and operator precedence.
 func ToLatex(target Expression) string {
 	return formatExpression(target, FmtLatex)
 }
 
-// ToASCII converts an expression to a plain-text string using the ascii render
-// format (function-call notation, no Unicode symbols in the operator layer).
+// ToASCII converts an expression, equation or container to a plain-text string
+// using the ascii render format (function-call notation, no Unicode symbols in
+// the operator layer).
 func ToASCII(target Expression) string {
 	return formatExpression(target, FmtASCII)
 }
@@ -110,9 +120,93 @@ func formatExpression(target any, format string) string {
 			parts[i] = formatExpression(v, format)
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
+
+	// --- the rest of the display domain (§8 item 18) ---
+	case Equation:
+		return formatExpression(expr.LHS, format) + " = " + formatExpression(expr.RHS, format)
+	case *Equation:
+		if expr == nil {
+			return ""
+		}
+		return formatExpression(*expr, format)
+	case Model:
+		return formatModelSummary(expr, summaryFormat(format))
+	case *Model:
+		if expr == nil {
+			return ""
+		}
+		return formatModelSummary(*expr, summaryFormat(format))
+	case ReactionSystem:
+		return formatReactionSystemSummary(expr)
+	case *ReactionSystem:
+		if expr == nil {
+			return ""
+		}
+		return formatReactionSystemSummary(*expr)
+	case ESMFile:
+		return formatESMFileSummary(expr)
+	case *ESMFile:
+		if expr == nil {
+			return ""
+		}
+		return formatESMFileSummary(*expr)
+
 	default:
 		return fmt.Sprintf("%v", target)
 	}
+}
+
+// summaryFormat maps a render format onto the two a container summary has: a
+// summary is TEXT, so unicode stays unicode and latex — which has no notation
+// for "3 models, 2 reaction systems" — falls back to ascii alongside it.
+func summaryFormat(format string) string {
+	if format == FmtUnicode || format == FmtUnicodeSpaced {
+		return FmtUnicode
+	}
+	return FmtASCII
+}
+
+// formatModelSummary renders a Model as its esm-spec §6.3 summary: the variable
+// and equation counts, then one line per equation. The model's NAME is not part
+// of it — a model is named by the key it hangs from in `models`, which a bare
+// Model value does not carry (the same reason TypeScript's formatModelSummary
+// omits it). ModelSummary, which walks the document, prints the key itself.
+func formatModelSummary(model Model, format string) string {
+	paramCount := 0
+	for _, variable := range model.Variables {
+		if variable.Type == VarTypeParameter {
+			paramCount++
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "(%d parameters, %d equation", paramCount, len(model.Equations))
+	if len(model.Equations) != 1 {
+		b.WriteString("s")
+	}
+	b.WriteString(")")
+	for _, eq := range model.Equations {
+		fmt.Fprintf(&b, "\n    %s = %s",
+			formatExpression(eq.LHS, format), formatExpression(eq.RHS, format))
+	}
+	return b.String()
+}
+
+// formatReactionSystemSummary renders a ReactionSystem as its §6.3 summary.
+// `species` is a keyed map in the schema, so the count comes from its keys.
+func formatReactionSystemSummary(rs ReactionSystem) string {
+	return fmt.Sprintf("ReactionSystem (%d species, %d reactions)",
+		len(rs.Species), len(rs.Reactions))
+}
+
+// formatESMFileSummary renders a whole document as its one-line §6.3 summary.
+// The multi-line structured listing is ModelSummary.
+func formatESMFileSummary(file ESMFile) string {
+	name := file.Metadata.Name
+	if name == "" {
+		name = "Untitled"
+	}
+	return fmt.Sprintf("ESM v%s: %s (%d models, %d reaction systems, %d data sources)",
+		file.ESM, name, len(file.Models), len(file.ReactionSystems), len(file.DataSources))
 }
 
 // formatNumber formats numeric values per the cross-language rendering contract
