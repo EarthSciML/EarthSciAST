@@ -69,7 +69,11 @@ vectorizable kernels (ghost-masked ones excluded and counted as fallback).
 Whole host corpus green with the flag FORCED on: tree_walk_oop (164),
 oop_merge (75), array_obs_materialize (78), scan_prefix (333),
 oop_scalar_batch (42), observed_materialization (20), observed_slots (36),
-iip_generic — all bit-identical to `f!`.
+iip_generic — all bit-identical to `f!` — and green with the flag OFF
+(default path untouched: tree_walk_oop 164, tree_walk_oop_ssa 45). A sweep
+over the shared `tests/valid` conformance corpus is inert (the 16 fixtures
+that build a bare evaluator are 0-D — no array kernels, 0 edges) and 16/16
+bit-pattern-identical on/off.
 
 ## Census delta (raw `@code_hlo optimize=false`, ON vs OFF)
 
@@ -104,6 +108,23 @@ CONUS; the buffers exceed L3), so the emission-level census is the measure.
    worthwhileness threshold; they also keep their producers' scatters.
 6. **Per-cell fallback kernels** disable scatter-skipping globally (reads
    un-enumerable). Rare on affine builds.
+
+## Interactions
+
+* `reactant_oop_test.jl` passes 35/35 with the flag forced on (traced
+  end-to-end, ODE solve, frozen-`t` contract, live-forcing refusal — all
+  unchanged).
+* `reactant_oop_intern_test.jl` under a FORCED corpus-wide `ESS_OOP_SSA=1`
+  fails its 5 interning-ENGAGEMENT assertions (hits == 0, slices already
+  minimal) while every value assertion passes: with the fan model's reads
+  redirected there are no duplicate `ue` reads left for the memo to dedupe.
+  That is the two features composing, not a regression — interning remains
+  load-bearing for exactly the reads SSA does not redirect (ghost gathers,
+  E-lane plans, fallback descriptors). The default suite (flag off) is
+  untouched.
+* Live forcing (`param_arrays`/`rhs_with_buffers`) rides through unchanged —
+  forcing reads go through the buffers argument, never `ue` — and the
+  discrete-cadence refresh stays visible with fill scatters skipped (probed).
 
 ## Generalization assessment (honest)
 
