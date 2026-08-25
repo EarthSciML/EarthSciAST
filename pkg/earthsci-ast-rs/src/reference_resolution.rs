@@ -77,8 +77,11 @@ pub enum ReferenceResolutionError {
     },
 
     /// A `kind:"derived"` index set's `from_faq` names no expression-node id.
+    ///
+    /// Resolved at DOCUMENT scope (esm-spec.md §9.7.5); `model` names the model
+    /// whose graph was being built when the lookup failed.
     #[error(
-        "derived index set '{index_set}' references from_faq '{from_faq}', which is not the id of any expression node in model '{model}'"
+        "derived index set '{index_set}' references from_faq '{from_faq}', which is not the id of any expression node in the document (model '{model}')"
     )]
     UnknownFaqNode {
         index_set: String,
@@ -86,7 +89,11 @@ pub enum ReferenceResolutionError {
         model: String,
     },
 
-    /// Two expression nodes in the same model share an explicit `id`.
+    /// Two expression nodes in the same DOCUMENT share an explicit `id`.
+    ///
+    /// Node ids are unique per document, not per model (esm-spec.md §9.7.5);
+    /// when the two occurrences are in different models the paths are
+    /// model-qualified and `model` names the second occurrence's model.
     #[error("duplicate expression-node id '{id}' in model '{model}' (at {path} and {first})")]
     DuplicateNodeId {
         id: String,
@@ -348,6 +355,14 @@ fn factor_scope(map: &Map<String, Value>) -> HashSet<String> {
     names
 }
 
+/// One id-bearing expression node, as the `from_faq` scope sees it.
+#[derive(Clone, Debug)]
+struct DocNode {
+    addr: String,
+    path: String,
+    op: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn register_and_process(
     map: &Map<String, Value>,
@@ -355,7 +370,7 @@ fn register_and_process(
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
-    id_to_addr: &mut IndexMap<String, (String, String)>,
+    id_to_addr: &mut IndexMap<String, DocNode>,
 ) -> Result<(), ReferenceResolutionError> {
     let op = map.get("op").and_then(|v| v.as_str());
     let nid = nonempty_str(map.get("id"));
@@ -371,15 +386,22 @@ fn register_and_process(
     let key = node_key(&addr);
 
     if let Some(id) = nid {
-        if let Some((_, first_path)) = id_to_addr.get(id) {
+        if let Some(first) = id_to_addr.get(id) {
             return Err(ReferenceResolutionError::DuplicateNodeId {
                 id: id.to_string(),
                 model: model_name.to_string(),
                 path: path.to_string(),
-                first: first_path.clone(),
+                first: first.path.clone(),
             });
         }
-        id_to_addr.insert(id.to_string(), (addr.clone(), path.to_string()));
+        id_to_addr.insert(
+            id.to_string(),
+            DocNode {
+                addr: addr.clone(),
+                path: path.to_string(),
+                op: op.map(|s| s.to_string()),
+            },
+        );
     }
 
     graph.ensure_vertex(ReferenceVertex {
@@ -460,7 +482,7 @@ fn walk(
     model_name: &str,
     index_sets: Option<&Map<String, Value>>,
     graph: &mut ReferenceGraph,
-    id_to_addr: &mut IndexMap<String, (String, String)>,
+    id_to_addr: &mut IndexMap<String, DocNode>,
 ) -> Result<(), ReferenceResolutionError> {
     match value {
         Value::Object(map) => {
@@ -493,6 +515,82 @@ fn walk(
         _ => {}
     }
     Ok(())
+}
+
+/// The model members whose expression trees carry addressable nodes.
+const WALK_ROOTS: [&str; 2] = ["equations", "initialization_equations"];
+
+/// Collect every explicit expression-node `id` under one model's `value`.
+fn collect_ids(
+    value: &Value,
+    path: &str,
+    model_name: &str,
+    nodes: &mut IndexMap<String, DocNode>,
+) -> Result<(), ReferenceResolutionError> {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("op")
+                && let Some(id) = nonempty_str(map.get("id"))
+            {
+                let qualified = format!("models/{model_name}/{path}");
+                if let Some(first) = nodes.get(id) {
+                    return Err(ReferenceResolutionError::DuplicateNodeId {
+                        id: id.to_string(),
+                        model: model_name.to_string(),
+                        path: qualified,
+                        first: first.path.clone(),
+                    });
+                }
+                nodes.insert(
+                    id.to_string(),
+                    DocNode {
+                        addr: id.to_string(),
+                        path: qualified,
+                        op: map
+                            .get("op")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                    },
+                );
+            }
+            for (k, v) in map {
+                collect_ids(v, &format!("{path}/{k}"), model_name, nodes)?;
+            }
+        }
+        Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                collect_ids(v, &format!("{path}/{i}"), model_name, nodes)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every explicit expression-node `id` in `document`, keyed by id.
+///
+/// `from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+/// `index_sets` entry is visible to every model, so the node it names may live
+/// in any of them. This pass therefore runs over all models BEFORE any single
+/// model's graph is built.
+///
+/// Because ids from different models share one namespace, uniqueness is a
+/// DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
+/// [`ReferenceResolutionError::DuplicateNodeId`].
+fn collect_document_node_ids(
+    document: &Value,
+) -> Result<IndexMap<String, DocNode>, ReferenceResolutionError> {
+    let mut nodes = IndexMap::new();
+    if let Some(models) = document.get("models").and_then(|v| v.as_object()) {
+        for (model_name, model) in models {
+            for root in WALK_ROOTS {
+                if let Some(v) = model.get(root) {
+                    collect_ids(v, root, model_name, &mut nodes)?;
+                }
+            }
+        }
+    }
+    Ok(nodes)
 }
 
 /// Deprecated alias of [`build_reference_graph`].
@@ -537,6 +635,19 @@ pub fn build_reference_graph(
     model_name: &str,
     doc_index_sets: Option<&Map<String, Value>>,
 ) -> Result<ReferenceGraph, ReferenceResolutionError> {
+    build_reference_graph_impl(model, model_name, doc_index_sets, None)
+}
+
+/// [`build_reference_graph`], plus the document-wide `from_faq` scope.
+///
+/// `document_nodes` is the map [`collect_document_node_ids`] builds over every
+/// model. When it is `None` the model's own nodes are the scope.
+fn build_reference_graph_impl(
+    model: &Value,
+    model_name: &str,
+    doc_index_sets: Option<&Map<String, Value>>,
+    document_nodes: Option<&IndexMap<String, DocNode>>,
+) -> Result<ReferenceGraph, ReferenceResolutionError> {
     let mut graph = ReferenceGraph {
         model: model_name.to_string(),
         ..Default::default()
@@ -576,21 +687,39 @@ pub fn build_reference_graph(
     // Pass 2 — walk every expression node: assign a stable address, register
     // aggregate / id-bearing nodes, and add the within-node reference edges
     // (ranges[*].from, join.on). Builds id -> address for from_faq.
-    let mut id_to_addr: IndexMap<String, (String, String)> = IndexMap::new();
-    for root in ["equations", "initialization_equations"] {
+    let mut id_to_addr: IndexMap<String, DocNode> = IndexMap::new();
+    for root in WALK_ROOTS {
         if let Some(v) = model.get(root) {
             walk(v, root, model_name, index_sets, &mut graph, &mut id_to_addr)?;
         }
     }
 
-    // Pass 3 — derived index sets resolve their from_faq to a node by id.
+    // Pass 3 — derived index sets resolve their from_faq to a node by id, at
+    // DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+    // model, since the registry entry naming it is visible to all of them.
+    let faq_scope = document_nodes.unwrap_or(&id_to_addr);
     if let Some(is) = index_sets {
         for (name, entry) in is {
             if entry.get("kind").and_then(|v| v.as_str()) == Some("derived") {
                 let faq = entry.get("from_faq").and_then(|v| v.as_str());
-                match faq.and_then(|f| id_to_addr.get(f)) {
-                    Some((addr, _)) => {
-                        graph.add_edge(&index_set_key(name), &node_key(addr), EdgeKind::FromFaq);
+                match faq.and_then(|f| faq_scope.get(f)) {
+                    Some(target) => {
+                        // The producer may belong to another model; give this
+                        // graph a vertex for it so the edge has a real endpoint.
+                        // Idempotent: a local producer was registered in pass 2.
+                        graph.ensure_vertex(ReferenceVertex {
+                            key: node_key(&target.addr),
+                            kind: VertexKind::Node,
+                            name: target.addr.clone(),
+                            op: target.op.clone(),
+                            node_id: faq.map(|s| s.to_string()),
+                            path: Some(target.path.clone()),
+                        });
+                        graph.add_edge(
+                            &index_set_key(name),
+                            &node_key(&target.addr),
+                            EdgeKind::FromFaq,
+                        );
                     }
                     None => {
                         return Err(ReferenceResolutionError::UnknownFaqNode {
@@ -611,6 +740,10 @@ pub fn build_reference_graph(
 ///
 /// Returns a `{model_name: ReferenceGraph}` map. Errors on any unresolved
 /// reference *or* reference cycle (each model's graph is checked acyclic).
+///
+/// Node ids are collected from EVERY model first, so a derived index set's
+/// `from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a
+/// duplicate id anywhere in the document is an error.
 pub fn resolve_references(
     document: &Value,
 ) -> Result<IndexMap<String, ReferenceGraph>, ReferenceResolutionError> {
@@ -622,8 +755,10 @@ pub fn resolve_references(
     // Since v0.8.0 the index_sets registry is document-scoped (a sibling of
     // `models`); thread it down so each model's ranges[*].from resolves.
     let doc_index_sets = document.get("index_sets").and_then(|v| v.as_object());
+    let document_nodes = collect_document_node_ids(document)?;
     for (model_name, model) in models {
-        let graph = build_reference_graph(model, model_name, doc_index_sets)?;
+        let graph =
+            build_reference_graph_impl(model, model_name, doc_index_sets, Some(&document_nodes))?;
         if let Some(cyc) = graph.detect_cycle() {
             return Err(ReferenceResolutionError::ReferenceCycle { path: cyc });
         }
