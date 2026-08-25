@@ -47,22 +47,22 @@
 // hidden from the published rustdoc API surface.
 #[doc(hidden)]
 pub mod adapter_support;
-pub mod aggregate;
+pub(crate) mod aggregate;
 /// Pure, I/O-free structural and expression analysis helpers for the `esm` CLI.
 pub(crate) mod analysis;
 /// Planar spatial-index broad phase (rstar R*-tree + brute-force oracle) for the
 /// projection-pushdown overlap join-gate.
-pub mod broad_phase;
-pub mod cadence;
+pub(crate) mod broad_phase;
+pub(crate) mod cadence;
 pub(crate) mod canonicalize;
-pub mod classification;
-pub mod coupling;
-pub mod coupling_imports;
-pub mod dae;
+pub(crate) mod classification;
+pub(crate) mod coupling;
+pub(crate) mod coupling_imports;
+pub(crate) mod dae;
 /// Flat→gridded simulation-output derivation (streaming-output-sinks RFC
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.
-pub mod data_output;
+pub(crate) mod data_output;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;
@@ -73,29 +73,29 @@ pub(crate) mod error;
 // pinned symbol-by-symbol by api-surface.json) or a member of this module.
 pub(crate) mod expression;
 pub mod extension;
-pub mod flatten;
-pub mod geometry;
+pub(crate) mod flatten;
+pub(crate) mod geometry;
 pub(crate) mod graph;
 pub mod intern;
-pub mod join;
-pub mod lower_enums;
-pub mod lower_expression_templates;
+pub(crate) mod join;
+pub(crate) mod lower_enums;
+pub(crate) mod lower_expression_templates;
 pub(crate) mod migration;
-pub mod op_registry;
+pub(crate) mod op_registry;
 pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
 /// (the inverse of that printer). Pure and wasm32-clean.
-pub mod parse_expression;
+pub(crate) mod parse_expression;
 pub mod provider;
-pub mod reactions;
-pub mod ref_loading;
-pub mod reference_resolution;
-pub mod registered_functions;
-pub mod relational;
+pub(crate) mod reactions;
+pub(crate) mod ref_loading;
+pub(crate) mod reference_resolution;
+pub(crate) mod registered_functions;
+pub(crate) mod relational;
 pub(crate) mod serialize;
 pub(crate) mod structural;
 pub(crate) mod substitute;
-pub mod template_imports;
+pub(crate) mod template_imports;
 pub(crate) mod types;
 pub(crate) mod unit_conversion;
 pub(crate) mod units;
@@ -131,17 +131,17 @@ pub mod pde_inline_tests;
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
 // the imperative `geometry::polygon_area`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod area_faq;
+pub(crate) mod area_faq;
 
 // Build-time value-invention front-door — derived index-sets (skolem/distinct/
 // rank) resolved via the relational engine, ONCE at setup (RFC §6.1 / §5.5).
-pub mod value_invention;
+pub(crate) mod value_invention;
 
 // Automatic projection-pushdown desugar (the Julia/Python `desugar_pushdown`
 // port): a raw-document → raw-document transform + the record-derived provider
 // gate helpers the `prepare` entry point consumes. Raw-JSON side by design —
 // see the module docs.
-pub mod pushdown_rewrite;
+pub(crate) mod pushdown_rewrite;
 
 // The deterministic-per-document BUILD PIPELINE — rewrite → value-invention →
 // member-factor feedback → gated fetch → observed-graph evaluation, all

@@ -16,6 +16,21 @@
 //! genuinely unreachable — the module list in `lib.rs` is no longer a de-facto
 //! API.
 //!
+//! ## Membership rule
+//!
+//! An item belongs here when it is not in the root re-export list AND either:
+//!
+//! 1. a real consumer names it — a test, a bench, an example, or one of the
+//!    `src/bin` binaries, all of which link this crate from outside; or
+//! 2. it has no in-crate caller at all. A `pub fn` nobody in the crate calls
+//!    existed only to be called from OUTSIDE the crate, so demoting it would
+//!    not encapsulate it — it would delete it, and `rustc` would say so with a
+//!    `dead_code` warning. Those are re-exported here rather than silenced
+//!    with `allow(dead_code)`, which would leave them alive but unreachable.
+//!
+//! An item with in-crate callers and no outside consumer is neither: it is
+//! private, and it stays private.
+//!
 //! ## What is NOT here
 //!
 //! Four seams keep their own top-level module path because `API_SPEC.md` §3/§7
@@ -43,7 +58,17 @@
 
 /// Aggregate (`sum_product` / semiring FAQ) range resolution.
 pub mod aggregate {
-    pub use crate::aggregate::{resolve_aggregate_ranges, resolve_expr_ranges_with_extents};
+    pub use crate::aggregate::{
+        ReduceKind, Semiring, resolve_aggregate_ranges, resolve_expr_ranges_with_extents,
+    };
+}
+
+/// `polygon_area` expressed as a `sum_product` FAQ over the clip ring,
+/// evaluated through the array simulator. Native-only, like the runtime it
+/// drives; the wasm regridder keeps the imperative `polygon_area`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod area_faq {
+    pub use crate::area_faq::polygon_area_faq;
 }
 
 /// Pure, I/O-free structural and expression analysis helpers. Written for the
@@ -61,19 +86,29 @@ pub mod analysis {
 /// brute-force oracle and the visit counter the scaling tests assert on.
 pub mod broad_phase {
     pub use crate::broad_phase::{
-        broad_phase_candidates, broad_phase_candidates_bruteforce, envelope_vectors,
+        OverlapIndex, broad_phase_candidates, broad_phase_candidates_bruteforce, envelope_vectors,
         overlap_enum_visits, reset_overlap_enum_visits,
     };
 }
 
-/// Refresh-cadence partitioning internals.
+/// Refresh-cadence partitioning internals, including the five predicates the
+/// cross-language cadence corpus is written against.
 pub mod cadence {
-    pub use crate::cadence::model_with_loaders;
+    pub use crate::cadence::{
+        assert_no_continuous_relational, check_expect_cadence, has_continuous,
+        materialization_frontier, model_with_loaders, tally_classes,
+    };
+}
+
+/// Classification queries with no cross-binding counterpart. The esm-spec
+/// section 6.3.1 family itself is the stable tier, at the crate root.
+pub mod classification {
+    pub use crate::classification::inlined_unknowns;
 }
 
 /// Simulation-output derivation internals.
 pub mod data_output {
-    pub use crate::data_output::DTYPE_FLOAT64;
+    pub use crate::data_output::{DTYPE_FLOAT64, gather, scatter};
 }
 
 /// The structured diagnostic carrier every raise site funnels through.
@@ -101,7 +136,7 @@ pub mod flatten {
 
 /// Geometry kernels with no cross-binding counterpart.
 pub mod geometry {
-    pub use crate::geometry::spherical_area;
+    pub use crate::geometry::{DEFAULT_LAT_ATOL, densify_parallel_edges, spherical_area};
 }
 
 /// The load-time `expression_templates` rewrite (esm-spec §9.6). Raw-JSON by
