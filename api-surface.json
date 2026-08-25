@@ -146,19 +146,19 @@
     }
   },
   "counts": {
-    "symbols": 972,
+    "symbols": 976,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 290,
       "typescript": 220,
       "python": 244,
-      "rust": 311,
+      "rust": 322,
       "go": 385,
       "editor": 71
     },
     "by_tier": {
-      "extension": 708,
-      "stable": 264
+      "extension": 711,
+      "stable": 265
     }
   },
   "planned": [
@@ -721,6 +721,14 @@
       "tier": "extension",
       "bindings": {
         "go": "BuildReferenceGraphFromModel"
+      }
+    },
+    {
+      "name": "build_reference_graph_with_index_sets",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "build_reference_graph_with_index_sets"
       }
     },
     {
@@ -2951,9 +2959,10 @@
     {
       "name": "error_code_names",
       "kind": "function",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "error_code_names"
+        "julia": "error_code_names",
+        "rust": "error_code_names"
       }
     },
     {
@@ -2962,6 +2971,7 @@
       "tier": "stable",
       "bindings": {
         "julia": "ERROR_CODES",
+        "rust": "ERROR_CODES",
         "typescript": "ERROR_CODES"
       }
     },
@@ -4782,6 +4792,22 @@
       }
     },
     {
+      "name": "lower_enums_mut",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "lower_enums_mut"
+      }
+    },
+    {
+      "name": "lower_enums_raw",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "lower_enums_raw"
+      }
+    },
+    {
       "name": "lower_expression_templates",
       "kind": "function",
       "tier": "stable",
@@ -6209,7 +6235,8 @@
       "bindings": {
         "go": "ReferenceResolutionError",
         "julia": "ReferenceResolutionError",
-        "python": "ReferenceResolutionError"
+        "python": "ReferenceResolutionError",
+        "rust": "ReferenceResolutionError"
       }
     },
     {
@@ -6574,6 +6601,14 @@
         "python": "resolve_subsystem_refs",
         "rust": "resolve_subsystem_refs",
         "typescript": "resolveSubsystemRefs"
+      }
+    },
+    {
+      "name": "resolve_subsystem_refs_raw",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "resolve_subsystem_refs_raw"
       }
     },
     {
@@ -7322,14 +7357,6 @@
       }
     },
     {
-      "name": "substitute_in_expression",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "substitute_in_expression"
-      }
-    },
-    {
       "name": "substitute_in_file",
       "kind": "function",
       "tier": "extension",
@@ -7480,7 +7507,8 @@
       "bindings": {
         "go": "SupportedMigrationTargets",
         "julia": "supported_migration_targets",
-        "python": "supported_migration_targets"
+        "python": "supported_migration_targets",
+        "rust": "supported_migration_targets"
       }
     },
     {
@@ -7646,6 +7674,7 @@
       "bindings": {
         "julia": "to_dot",
         "python": "to_dot",
+        "rust": "to_dot",
         "typescript": "toDot"
       }
     },
@@ -7679,6 +7708,7 @@
       "tier": "stable",
       "bindings": {
         "python": "to_json_graph",
+        "rust": "to_json_graph",
         "typescript": "toJsonGraph"
       }
     },
@@ -7726,6 +7756,7 @@
       "bindings": {
         "julia": "to_mermaid",
         "python": "to_mermaid",
+        "rust": "to_mermaid",
         "typescript": "toMermaid"
       }
     },
@@ -8273,6 +8304,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ValidateStructuralWithCodes"
+      }
+    },
+    {
+      "name": "validate_text",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "validate_text"
       }
     },
     {

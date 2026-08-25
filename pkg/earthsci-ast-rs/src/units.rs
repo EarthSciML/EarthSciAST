@@ -225,8 +225,7 @@ pub enum UnitSeverity {
 ///   limit of the ANALYSIS, not a defect, so it stays a non-blocking warning.
 ///
 /// These strings are a cross-binding contract; they must not change.
-pub const UNIT_FINDING_DIMENSIONAL_MISMATCH: &str =
-    crate::diagnostic::codes::DIMENSIONAL_MISMATCH;
+pub const UNIT_FINDING_DIMENSIONAL_MISMATCH: &str = crate::diagnostic::codes::DIMENSIONAL_MISMATCH;
 /// See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].
 pub const UNIT_FINDING_UNPARSEABLE: &str = crate::diagnostic::codes::UNPARSEABLE_UNIT;
 /// See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].

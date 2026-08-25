@@ -210,8 +210,7 @@ pub use reactions::{
     DeriveError, derive_odes, lower_reactions_to_equations, stoichiometric_matrix,
 };
 pub use ref_loading::{
-    resolve_subsystem_refs, resolve_subsystem_refs_raw,
-    resolve_subsystem_refs_with_metaparameters,
+    resolve_subsystem_refs, resolve_subsystem_refs_raw, resolve_subsystem_refs_with_metaparameters,
 };
 pub use reference_resolution::{
     EdgeKind, ReferenceEdge, ReferenceGraph, ReferenceResolutionError, ReferenceVertex, VertexKind,

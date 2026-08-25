@@ -13,7 +13,7 @@
 //! expectations hold in TypeScript, Python and Go.
 
 use earthsci_ast::{
-    EsmFile, SCHEMA_VERSION, can_migrate, supported_migration_targets, load_string, migrate,
+    EsmFile, SCHEMA_VERSION, can_migrate, load_string, migrate, supported_migration_targets,
 };
 use serde_json::Value;
 

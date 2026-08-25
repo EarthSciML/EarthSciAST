@@ -735,6 +735,7 @@ reading that as a gap.
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
 | `reference_edge` | type | `ReferenceEdge` | – | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
 | `reference_graph` | type | `ReferenceGraph` | – | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
+| `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` |
 | `reference_vertex` | type | `ReferenceVertex` | – | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
 | `remove_coupling` | function | `remove_coupling` | `removeCoupling` | – | `remove_coupling` | `RemoveCoupling` |
@@ -747,6 +748,9 @@ reading that as a gap.
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | – |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
+| `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | `supported_migration_targets` | `SupportedMigrationTargets` |
+| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | – |
+| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | `to_mermaid` | – |
 | `unit_warning` | type | `UnitWarning` | `UnitWarning` | – | `UnitWarning` | `UnitWarning` |
 
 #### Exported by three of the five
@@ -768,6 +772,7 @@ reading that as a gap.
 | `domain_unit_mismatch_error` | error | `DomainUnitMismatchError` | `DomainUnitMismatchError` | `DomainUnitMismatchError` | – | – |
 | `edge_kind` | type | – | – | `EdgeKind` | `EdgeKind` | `EdgeKind` |
 | `edit_error` | error | `EditError` | – | – | `EditError` | `EditError` |
+| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | `ERROR_CODES` | – |
 | `esm_problem` | function | `esm_problem` | – | `esm_problem` | `esm_problem` | – |
 | `esm_problem` | type | `EsmProblem` | – | `EsmProblem` | `EsmProblem` | – |
 | `evaluate` | function | – | – | `evaluate` | `evaluate` | `Evaluate` |
@@ -788,15 +793,12 @@ reading that as a gap.
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
-| `reference_resolution_error` | error | `ReferenceResolutionError` | – | `ReferenceResolutionError` | – | `ReferenceResolutionError` |
 | `remove_equation` | function | `remove_equation` | `removeEquation` | – | `remove_equation` | – |
 | `remove_event` | function | `remove_event` | `removeEvent` | – | – | `RemoveEvent` |
 | `rename_variable` | function | `rename_variable` | `renameVariable` | – | – | `RenameVariable` |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
-| `supported_migration_targets` | function | `supported_migration_targets` | – | `supported_migration_targets` | – | `SupportedMigrationTargets` |
-| `to_dot` | function | `to_dot` | `toDot` | `to_dot` | – | – |
-| `to_mermaid` | function | `to_mermaid` | `toMermaid` | `to_mermaid` | – | – |
+| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | `to_json_graph` | – |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
 | `vertex_kind` | type | – | – | `VertexKind` | `VertexKind` | `VertexKind` |
@@ -834,7 +836,7 @@ reading that as a gap.
 | `entity_not_found_error` | error | – | `EntityNotFoundError` | – | – | `EntityNotFoundError` |
 | `enum_lowering_error` | error | – | `EnumLoweringError` | – | `EnumLoweringError` | – |
 | `ephemeral_injected_file` | function | – | `ephemeralInjectedFile` | – | `ephemeral_injected_file` | – |
-| `error_codes` | constant | `ERROR_CODES` | `ERROR_CODES` | – | – | – |
+| `error_code_names` | function | `error_code_names` | – | – | `error_code_names` | – |
 | `evaluate_cellwise` | function | `evaluate_cellwise` | – | – | `evaluate_cellwise` | – |
 | `expand` | function | – | – | `Expand` | – | `Expand` |
 | `expand_document` | function | – | `expandDocument` | `expand_document` | – | – |
@@ -893,7 +895,6 @@ reading that as a gap.
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
-| `to_json_graph` | function | – | `toJsonGraph` | `to_json_graph` | – | – |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |
 | `unit` | type | – | – | – | `Unit` | `Unit` |

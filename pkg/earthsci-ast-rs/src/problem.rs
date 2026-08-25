@@ -1176,7 +1176,10 @@ pub enum StepStatus {
 /// The step grid is `opts.saveat` when the caller supplied one, else 100 evenly
 /// spaced points across `tspan`.
 #[cfg(feature = "solve")]
-pub fn init<'a>(prob: &'a EsmProblem, opts: &SolveOptions) -> Result<Integrator<'a>, SimulateError> {
+pub fn init<'a>(
+    prob: &'a EsmProblem,
+    opts: &SolveOptions,
+) -> Result<Integrator<'a>, SimulateError> {
     if let Backend::Static(reason) = &*prob.backend {
         return Err(SimulateError::NotDynamic {
             details: reason.clone(),

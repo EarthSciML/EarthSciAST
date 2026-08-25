@@ -454,10 +454,7 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
     since = "0.2.0",
     note = "renamed to `validate_text` (API_SPEC.md §8 item 13)"
 )]
-pub fn validate_complete(
-    json_str: &str,
-    base_path: Option<&std::path::Path>,
-) -> ValidationResult {
+pub fn validate_complete(json_str: &str, base_path: Option<&std::path::Path>) -> ValidationResult {
     validate_text(json_str, base_path)
 }
 

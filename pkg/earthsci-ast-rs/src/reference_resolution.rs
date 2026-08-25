@@ -682,7 +682,10 @@ mod tests {
             "equations": [{"lhs": agg(json!({"id": "present"})), "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M", None).unwrap_err();
-        assert!(matches!(err, ReferenceResolutionError::UnknownFaqNode { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UnknownFaqNode { .. }
+        ));
     }
 
     #[test]
@@ -694,7 +697,10 @@ mod tests {
             ]
         });
         let err = build_reference_graph(&model, "M", None).unwrap_err();
-        assert!(matches!(err, ReferenceResolutionError::DuplicateNodeId { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::DuplicateNodeId { .. }
+        ));
     }
 
     // ranges[*].from resolves to an index set -------------------------------
@@ -724,7 +730,10 @@ mod tests {
             "equations": [{"lhs": node, "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M", None).unwrap_err();
-        assert!(matches!(err, ReferenceResolutionError::UndeclaredIndexSet { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UndeclaredIndexSet { .. }
+        ));
     }
 
     #[test]
@@ -797,7 +806,10 @@ mod tests {
             "equations": [{"lhs": node, "rhs": 0}]
         });
         let err = build_reference_graph(&model, "M", None).unwrap_err();
-        assert!(matches!(err, ReferenceResolutionError::UnresolvedJoinFactor { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::UnresolvedJoinFactor { .. }
+        ));
     }
 
     // (3) edges are queryable by the partition pass -------------------------
@@ -840,7 +852,10 @@ mod tests {
 
         let doc = json!({"models": {"M": model}});
         let err = resolve_references(&doc).unwrap_err();
-        assert!(matches!(err, ReferenceResolutionError::ReferenceCycle { .. }));
+        assert!(matches!(
+            err,
+            ReferenceResolutionError::ReferenceCycle { .. }
+        ));
     }
 
     // additive: no references -> empty graph --------------------------------
@@ -911,7 +926,6 @@ mod tests {
         assert!(g.vertices.contains_key("index_set:faces"));
         assert!(g.vertices.contains_key("index_set:cells"));
     }
-
 
     /// API_SPEC.md §8 item 17: ONE name, with the document-scoped registry as
     /// an optional TRAILING argument rather than a second function.

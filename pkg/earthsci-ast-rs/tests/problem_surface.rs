@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use earthsci_ast::{
-    Alg, CallbackFn, CallbackSet, Compile, EnsembleProblem, Flow, EsmProblem, ProblemOptions,
+    Alg, CallbackFn, CallbackSet, Compile, EnsembleProblem, EsmProblem, Flow, ProblemOptions,
     Progress, Remake, ReturnCode, SimulateError, SolveOptions, callbacks, compose, esm_problem,
     init, load_string, observed_field, remake, solve, solve_ensemble, step,
 };
@@ -285,7 +285,10 @@ fn a_problem_level_callback_runs_and_is_readable_back() {
     assert_eq!(callbacks(&prob).names(), vec!["count"]);
 
     solve(&prob, &SolveOptions::default()).expect("solve");
-    assert!(*n.lock().unwrap() > 1, "the EsmProblem's callback never ran");
+    assert!(
+        *n.lock().unwrap() > 1,
+        "the EsmProblem's callback never ran"
+    );
 }
 
 /// The one genuinely ambiguous point in the design, settled deliberately:

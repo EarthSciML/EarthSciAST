@@ -1538,7 +1538,11 @@ impl TextRenderable for Expr {
 
 impl TextRenderable for Equation {
     fn render_unicode(&self) -> String {
-        format!("{} = {}", self.lhs.render_unicode(), self.rhs.render_unicode())
+        format!(
+            "{} = {}",
+            self.lhs.render_unicode(),
+            self.rhs.render_unicode()
+        )
     }
     fn render_latex(&self) -> String {
         format!("{} = {}", self.lhs.render_latex(), self.rhs.render_latex())
@@ -2368,7 +2372,6 @@ mod tests {
                 args: vec![Expr::Variable("beta".to_string()), Expr::Number(2.0)],
                 ..Default::default()
             }),
-            ..Default::default()
         };
         assert_eq!(to_unicode(&eq), "α = β·2");
         assert_eq!(to_ascii(&eq), "alpha = beta * 2");

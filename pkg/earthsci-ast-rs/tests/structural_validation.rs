@@ -1173,9 +1173,7 @@ fn default_units_must_match_declared_units() {
 
     // A `default_units` that AGREES is redundant but clean.
     assert!(
-        validate_text(&doc("K"), None)
-            .structural_errors
-            .is_empty(),
+        validate_text(&doc("K"), None).structural_errors.is_empty(),
         "matching default_units must not be reported"
     );
 }

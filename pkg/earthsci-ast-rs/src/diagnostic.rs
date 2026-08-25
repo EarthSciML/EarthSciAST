@@ -327,24 +327,63 @@ pub mod codes {
 pub const ERROR_CODES: &[(&str, &str)] = &[
     ("AMBIGUOUS_SUBSYSTEM_REF", codes::AMBIGUOUS_SUBSYSTEM_REF),
     ("ANALYSIS", codes::ANALYSIS),
-    ("APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH", codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH),
-    ("APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION", codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION),
-    ("APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY", codes::APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY),
-    ("APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE", codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE),
-    ("APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD", codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD),
+    (
+        "APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH",
+        codes::APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+    ),
+    (
+        "APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION",
+        codes::APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+    ),
+    (
+        "APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY",
+        codes::APPLY_EXPRESSION_TEMPLATE_RECURSIVE_BODY,
+    ),
+    (
+        "APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE",
+        codes::APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+    ),
+    (
+        "APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD",
+        codes::APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+    ),
     ("ARRAY_SHAPE_MISMATCH", codes::ARRAY_SHAPE_MISMATCH),
     ("CIRCULAR_DEPENDENCY", codes::CIRCULAR_DEPENDENCY),
     ("CLOSED_FUNCTION_ARG_TYPE", codes::CLOSED_FUNCTION_ARG_TYPE),
     ("CLOSED_FUNCTION_ARITY", codes::CLOSED_FUNCTION_ARITY),
     ("CLOSED_FUNCTION_OVERFLOW", codes::CLOSED_FUNCTION_OVERFLOW),
-    ("COUPLING_EDGE_UNKNOWN_ROLE", codes::COUPLING_EDGE_UNKNOWN_ROLE),
-    ("COUPLING_IMPORT_BIND_NOT_A_COMPONENT", codes::COUPLING_IMPORT_BIND_NOT_A_COMPONENT),
-    ("COUPLING_IMPORT_NOT_LIBRARY", codes::COUPLING_IMPORT_NOT_LIBRARY),
-    ("COUPLING_IMPORT_ROLE_UNBOUND", codes::COUPLING_IMPORT_ROLE_UNBOUND),
-    ("COUPLING_IMPORT_UNKNOWN_ROLE", codes::COUPLING_IMPORT_UNKNOWN_ROLE),
-    ("COUPLING_IMPORT_UNRESOLVED", codes::COUPLING_IMPORT_UNRESOLVED),
-    ("COUPLING_LIBRARY_ILLEGAL_PAYLOAD", codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD),
-    ("COUPLING_LIBRARY_NESTED_IMPORT", codes::COUPLING_LIBRARY_NESTED_IMPORT),
+    (
+        "COUPLING_EDGE_UNKNOWN_ROLE",
+        codes::COUPLING_EDGE_UNKNOWN_ROLE,
+    ),
+    (
+        "COUPLING_IMPORT_BIND_NOT_A_COMPONENT",
+        codes::COUPLING_IMPORT_BIND_NOT_A_COMPONENT,
+    ),
+    (
+        "COUPLING_IMPORT_NOT_LIBRARY",
+        codes::COUPLING_IMPORT_NOT_LIBRARY,
+    ),
+    (
+        "COUPLING_IMPORT_ROLE_UNBOUND",
+        codes::COUPLING_IMPORT_ROLE_UNBOUND,
+    ),
+    (
+        "COUPLING_IMPORT_UNKNOWN_ROLE",
+        codes::COUPLING_IMPORT_UNKNOWN_ROLE,
+    ),
+    (
+        "COUPLING_IMPORT_UNRESOLVED",
+        codes::COUPLING_IMPORT_UNRESOLVED,
+    ),
+    (
+        "COUPLING_LIBRARY_ILLEGAL_PAYLOAD",
+        codes::COUPLING_LIBRARY_ILLEGAL_PAYLOAD,
+    ),
+    (
+        "COUPLING_LIBRARY_NESTED_IMPORT",
+        codes::COUPLING_LIBRARY_NESTED_IMPORT,
+    ),
     ("COUPLING_ROLE_UNUSED", codes::COUPLING_ROLE_UNUSED),
     ("DATA_SOURCE_UNDEFINED", codes::DATA_SOURCE_UNDEFINED),
     ("DIMENSIONAL_MISMATCH", codes::DIMENSIONAL_MISMATCH),
@@ -354,47 +393,140 @@ pub const ERROR_CODES: &[(&str, &str)] = &[
     ("EQUATION_COUNT_MISMATCH", codes::EQUATION_COUNT_MISMATCH),
     ("EVENT_AFFECTS_PARAMETER", codes::EVENT_AFFECTS_PARAMETER),
     ("EVENT_VAR_UNDECLARED", codes::EVENT_VAR_UNDECLARED),
-    ("FACTOR_WITH_EXPRESSION_TRANSFORM", codes::FACTOR_WITH_EXPRESSION_TRANSFORM),
-    ("GEOMETRY_MANIFOLD_INVALID", codes::GEOMETRY_MANIFOLD_INVALID),
+    (
+        "FACTOR_WITH_EXPRESSION_TRANSFORM",
+        codes::FACTOR_WITH_EXPRESSION_TRANSFORM,
+    ),
+    (
+        "GEOMETRY_MANIFOLD_INVALID",
+        codes::GEOMETRY_MANIFOLD_INVALID,
+    ),
     ("IC_IN_REACTION_SYSTEM", codes::IC_IN_REACTION_SYSTEM),
-    ("INTERP_AXIS_LENGTH_MISMATCH", codes::INTERP_AXIS_LENGTH_MISMATCH),
+    (
+        "INTERP_AXIS_LENGTH_MISMATCH",
+        codes::INTERP_AXIS_LENGTH_MISMATCH,
+    ),
     ("INTERP_AXIS_TOO_SHORT", codes::INTERP_AXIS_TOO_SHORT),
     ("INTERP_NAN_IN_AXIS", codes::INTERP_NAN_IN_AXIS),
-    ("INTERP_NON_MONOTONIC_AXIS", codes::INTERP_NON_MONOTONIC_AXIS),
+    (
+        "INTERP_NON_MONOTONIC_AXIS",
+        codes::INTERP_NON_MONOTONIC_AXIS,
+    ),
     ("INVALID_BROADCAST_FN", codes::INVALID_BROADCAST_FN),
     ("INVALID_ENUMS_BLOCK", codes::INVALID_ENUMS_BLOCK),
     ("JOIN_KEY_INVALID_TYPE", codes::JOIN_KEY_INVALID_TYPE),
-    ("MAKEARRAY_REGION_INVERTED", codes::MAKEARRAY_REGION_INVERTED),
-    ("METAPARAMETER_NAME_CONFLICT", codes::METAPARAMETER_NAME_CONFLICT),
+    (
+        "MAKEARRAY_REGION_INVERTED",
+        codes::MAKEARRAY_REGION_INVERTED,
+    ),
+    (
+        "METAPARAMETER_NAME_CONFLICT",
+        codes::METAPARAMETER_NAME_CONFLICT,
+    ),
     ("METAPARAMETER_TYPE_ERROR", codes::METAPARAMETER_TYPE_ERROR),
     ("METAPARAMETER_UNBOUND", codes::METAPARAMETER_UNBOUND),
     ("NULL_REACTION", codes::NULL_REACTION),
-    ("OPERATOR_VARIABLE_MISSING", codes::OPERATOR_VARIABLE_MISSING),
-    ("RELATIONAL_NODE_IN_CONTINUOUS", codes::RELATIONAL_NODE_IN_CONTINUOUS),
-    ("REWRITE_RULE_NONTERMINATING", codes::REWRITE_RULE_NONTERMINATING),
-    ("SEARCHSORTED_NAN_IN_TABLE", codes::SEARCHSORTED_NAN_IN_TABLE),
-    ("SEARCHSORTED_NON_MONOTONIC", codes::SEARCHSORTED_NON_MONOTONIC),
-    ("SUBSYSTEM_INDEX_SET_CONFLICT", codes::SUBSYSTEM_INDEX_SET_CONFLICT),
-    ("SUBSYSTEM_REF_IS_COUPLING_LIBRARY", codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY),
-    ("SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY", codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY),
-    ("TEMPLATE_BODY_EXPANSION_TOO_DEEP", codes::TEMPLATE_BODY_EXPANSION_TOO_DEEP),
-    ("TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET", codes::TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET),
+    (
+        "OPERATOR_VARIABLE_MISSING",
+        codes::OPERATOR_VARIABLE_MISSING,
+    ),
+    (
+        "RELATIONAL_NODE_IN_CONTINUOUS",
+        codes::RELATIONAL_NODE_IN_CONTINUOUS,
+    ),
+    (
+        "REWRITE_RULE_NONTERMINATING",
+        codes::REWRITE_RULE_NONTERMINATING,
+    ),
+    (
+        "SEARCHSORTED_NAN_IN_TABLE",
+        codes::SEARCHSORTED_NAN_IN_TABLE,
+    ),
+    (
+        "SEARCHSORTED_NON_MONOTONIC",
+        codes::SEARCHSORTED_NON_MONOTONIC,
+    ),
+    (
+        "SUBSYSTEM_INDEX_SET_CONFLICT",
+        codes::SUBSYSTEM_INDEX_SET_CONFLICT,
+    ),
+    (
+        "SUBSYSTEM_REF_IS_COUPLING_LIBRARY",
+        codes::SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
+    ),
+    (
+        "SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY",
+        codes::SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
+    ),
+    (
+        "TEMPLATE_BODY_EXPANSION_TOO_DEEP",
+        codes::TEMPLATE_BODY_EXPANSION_TOO_DEEP,
+    ),
+    (
+        "TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET",
+        codes::TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+    ),
     ("TEMPLATE_IMPORT_CYCLE", codes::TEMPLATE_IMPORT_CYCLE),
-    ("TEMPLATE_IMPORT_INDEX_SET_CONFLICT", codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT),
-    ("TEMPLATE_IMPORT_IS_COUPLING_LIBRARY", codes::TEMPLATE_IMPORT_IS_COUPLING_LIBRARY),
-    ("TEMPLATE_IMPORT_NAME_CONFLICT", codes::TEMPLATE_IMPORT_NAME_CONFLICT),
-    ("TEMPLATE_IMPORT_NOT_LIBRARY", codes::TEMPLATE_IMPORT_NOT_LIBRARY),
-    ("TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME", codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME),
-    ("TEMPLATE_IMPORT_RENAME_COLLISION", codes::TEMPLATE_IMPORT_RENAME_COLLISION),
-    ("TEMPLATE_IMPORT_RENAME_INVALID", codes::TEMPLATE_IMPORT_RENAME_INVALID),
-    ("TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME", codes::TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME),
-    ("TEMPLATE_IMPORT_UNKNOWN_NAME", codes::TEMPLATE_IMPORT_UNKNOWN_NAME),
-    ("TEMPLATE_IMPORT_UNRESOLVED", codes::TEMPLATE_IMPORT_UNRESOLVED),
-    ("TEMPLATE_IMPORT_VERSION_TOO_OLD", codes::TEMPLATE_IMPORT_VERSION_TOO_OLD),
-    ("TEMPLATE_INJECT_TARGET_IS_LOADER", codes::TEMPLATE_INJECT_TARGET_IS_LOADER),
-    ("TEMPLATE_INJECT_TARGET_NOT_COMPONENT", codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT),
-    ("TEMPLATE_INJECT_TARGET_UNKNOWN", codes::TEMPLATE_INJECT_TARGET_UNKNOWN),
-    ("TOPLEVEL_MODEL_REF_UNRESOLVED", codes::TOPLEVEL_MODEL_REF_UNRESOLVED),
+    (
+        "TEMPLATE_IMPORT_INDEX_SET_CONFLICT",
+        codes::TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
+    ),
+    (
+        "TEMPLATE_IMPORT_IS_COUPLING_LIBRARY",
+        codes::TEMPLATE_IMPORT_IS_COUPLING_LIBRARY,
+    ),
+    (
+        "TEMPLATE_IMPORT_NAME_CONFLICT",
+        codes::TEMPLATE_IMPORT_NAME_CONFLICT,
+    ),
+    (
+        "TEMPLATE_IMPORT_NOT_LIBRARY",
+        codes::TEMPLATE_IMPORT_NOT_LIBRARY,
+    ),
+    (
+        "TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME",
+        codes::TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME,
+    ),
+    (
+        "TEMPLATE_IMPORT_RENAME_COLLISION",
+        codes::TEMPLATE_IMPORT_RENAME_COLLISION,
+    ),
+    (
+        "TEMPLATE_IMPORT_RENAME_INVALID",
+        codes::TEMPLATE_IMPORT_RENAME_INVALID,
+    ),
+    (
+        "TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME",
+        codes::TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME,
+    ),
+    (
+        "TEMPLATE_IMPORT_UNKNOWN_NAME",
+        codes::TEMPLATE_IMPORT_UNKNOWN_NAME,
+    ),
+    (
+        "TEMPLATE_IMPORT_UNRESOLVED",
+        codes::TEMPLATE_IMPORT_UNRESOLVED,
+    ),
+    (
+        "TEMPLATE_IMPORT_VERSION_TOO_OLD",
+        codes::TEMPLATE_IMPORT_VERSION_TOO_OLD,
+    ),
+    (
+        "TEMPLATE_INJECT_TARGET_IS_LOADER",
+        codes::TEMPLATE_INJECT_TARGET_IS_LOADER,
+    ),
+    (
+        "TEMPLATE_INJECT_TARGET_NOT_COMPONENT",
+        codes::TEMPLATE_INJECT_TARGET_NOT_COMPONENT,
+    ),
+    (
+        "TEMPLATE_INJECT_TARGET_UNKNOWN",
+        codes::TEMPLATE_INJECT_TARGET_UNKNOWN,
+    ),
+    (
+        "TOPLEVEL_MODEL_REF_UNRESOLVED",
+        codes::TOPLEVEL_MODEL_REF_UNRESOLVED,
+    ),
     ("UNDEFINED_INDEX_SET", codes::UNDEFINED_INDEX_SET),
     ("UNDEFINED_OPERATOR", codes::UNDEFINED_OPERATOR),
     ("UNDEFINED_PARAMETER", codes::UNDEFINED_PARAMETER),
@@ -418,6 +550,22 @@ pub fn error_code_names() -> Vec<&'static str> {
     let mut values: Vec<&'static str> = ERROR_CODES.iter().map(|(_, value)| *value).collect();
     values.sort_unstable();
     values
+}
+
+/// Parse a `major.minor.patch` version string into its numeric components.
+/// Returns `None` for anything that is not exactly three dot-separated
+/// non-negative integers. Shared by the load-time spec-version gates, the
+/// migration module, and version-compatibility checking, so all agree on
+/// what counts as a well-formed version token.
+pub fn parse_semver(version: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
 }
 
 #[cfg(test)]
@@ -458,7 +606,11 @@ mod error_code_tests {
             .split("pub const ")
             .skip(1)
             .filter_map(|rest| rest.split(':').next())
-            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
+            .filter(|n| {
+                !n.is_empty()
+                    && n.chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+            })
             .filter(|n| *n != "ERROR_CODES")
             .collect();
         for name in declared {
@@ -483,20 +635,4 @@ mod error_code_tests {
             super::codes::ARRAY_SHAPE_MISMATCH
         );
     }
-}
-
-/// Parse a `major.minor.patch` version string into its numeric components.
-/// Returns `None` for anything that is not exactly three dot-separated
-/// non-negative integers. Shared by the load-time spec-version gates, the
-/// migration module, and version-compatibility checking, so all agree on
-/// what counts as a well-formed version token.
-pub fn parse_semver(version: &str) -> Option<(u32, u32, u32)> {
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((major, minor, patch))
 }

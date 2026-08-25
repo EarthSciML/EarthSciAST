@@ -229,10 +229,7 @@ mod tests {
     fn sources_off_the_additive_line_have_no_targets() {
         // Past the ceiling, and other majors in both directions.
         for source in ["1.99.0", "2.0.0", "12.34.56"] {
-            assert_eq!(
-                supported_migration_targets(source),
-                Vec::<String>::new()
-            );
+            assert_eq!(supported_migration_targets(source), Vec::<String>::new());
         }
     }
 
@@ -260,14 +257,8 @@ mod tests {
         // `1.10.0` is NEWER than the current 1.0.0 and so off the line, and a
         // large patch of the current minor is off it too. A string comparison
         // would get "1.10.0" < "1.9.0" and could place either on the line.
-        assert_eq!(
-            supported_migration_targets("1.10.0"),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            supported_migration_targets("1.0.100"),
-            Vec::<String>::new()
-        );
+        assert_eq!(supported_migration_targets("1.10.0"), Vec::<String>::new());
+        assert_eq!(supported_migration_targets("1.0.100"), Vec::<String>::new());
     }
 
     #[test]

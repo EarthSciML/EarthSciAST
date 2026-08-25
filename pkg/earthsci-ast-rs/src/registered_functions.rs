@@ -81,7 +81,7 @@ impl ClosedArg {
         match self {
             ClosedArg::Scalar(v) => Ok(*v),
             ClosedArg::Array(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
-            codes::CLOSED_FUNCTION_ARG_TYPE,
+                codes::CLOSED_FUNCTION_ARG_TYPE,
                 format!("{name}: arg #{} must be scalar, got array", position + 1),
             )),
         }
@@ -91,7 +91,7 @@ impl ClosedArg {
         match self {
             ClosedArg::Array(v) => Ok(v.as_slice()),
             ClosedArg::Scalar(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
-            codes::CLOSED_FUNCTION_ARG_TYPE,
+                codes::CLOSED_FUNCTION_ARG_TYPE,
                 format!(
                     "{name}: arg #{} must be 1-D array, got other shape",
                     position + 1
@@ -108,7 +108,7 @@ impl ClosedArg {
         match self {
             ClosedArg::Array2D(v) => Ok(v.as_slice()),
             ClosedArg::Scalar(_) | ClosedArg::Array(_) => Err(ClosedFunctionError::new(
-            codes::CLOSED_FUNCTION_ARG_TYPE,
+                codes::CLOSED_FUNCTION_ARG_TYPE,
                 format!(
                     "{name}: arg #{} must be 2-D array, got other shape",
                     position + 1
@@ -414,7 +414,7 @@ fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionErr
     for (i, v) in xs.iter().copied().enumerate() {
         if v.is_nan() {
             return Err(ClosedFunctionError::new(
-            codes::SEARCHSORTED_NAN_IN_TABLE,
+                codes::SEARCHSORTED_NAN_IN_TABLE,
                 format!(
                     "{name}: xs[{idx}] is NaN; NaN entries in xs are forbidden",
                     idx = i + 1
@@ -423,7 +423,7 @@ fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionErr
         }
         if i > 0 && v < prev {
             return Err(ClosedFunctionError::new(
-            codes::SEARCHSORTED_NON_MONOTONIC,
+                codes::SEARCHSORTED_NON_MONOTONIC,
                 format!(
                     "{name}: xs is not non-decreasing (xs[{idx}]={v} < xs[{prev_idx}]={prev})",
                     idx = i + 1,
@@ -522,7 +522,7 @@ fn interp_bilinear(
     for (i, row) in table.iter().enumerate() {
         if row.len() != ny {
             return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_LENGTH_MISMATCH,
+                codes::INTERP_AXIS_LENGTH_MISMATCH,
                 format!(
                     "interp.bilinear: table row {row_idx} has len={got} but len(axis_y)={ny}",
                     row_idx = i + 1,
@@ -599,7 +599,7 @@ fn validate_axis(fn_name: &str, label: &str, axis: &[f64]) -> Result<(), ClosedF
     for (i, v) in axis.iter().copied().enumerate() {
         if v.is_nan() {
             return Err(ClosedFunctionError::new(
-            codes::INTERP_NAN_IN_AXIS,
+                codes::INTERP_NAN_IN_AXIS,
                 format!(
                     "{fn_name}: {label}[{idx}] is NaN; NaN entries in axes are forbidden",
                     idx = i + 1
@@ -614,7 +614,7 @@ fn validate_axis(fn_name: &str, label: &str, axis: &[f64]) -> Result<(), ClosedF
     for w in axis.windows(2) {
         if w[0] >= w[1] {
             return Err(ClosedFunctionError::new(
-            codes::INTERP_NON_MONOTONIC_AXIS,
+                codes::INTERP_NON_MONOTONIC_AXIS,
                 format!(
                     "{fn_name}: {label} is not strictly increasing (encountered {a} then {b})",
                     a = w[0],
