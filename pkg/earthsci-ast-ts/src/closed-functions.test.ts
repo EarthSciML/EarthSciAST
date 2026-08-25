@@ -20,6 +20,8 @@ import { loadString } from './parse.js'
 import { evaluateExpression } from './codegen.js'
 import {
   ClosedFunctionError,
+  closedFunctionNames,
+  CLOSED_FUNCTION_NAMES,
   validateSearchsortedTable,
   searchsortedFirst,
   interpLinear,
@@ -245,4 +247,15 @@ describe('Closed function registry — cross-binding conformance', () => {
       }
     })
   }
+})
+
+describe('closedFunctionNames (API_SPEC.md §8 item 4)', () => {
+  it('is a FUNCTION, matching Julia / Rust / Go', () => {
+    expect(typeof closedFunctionNames).toBe('function')
+    expect(closedFunctionNames()).toContain('datetime.year')
+  })
+
+  it('returns exactly the deprecated CLOSED_FUNCTION_NAMES constant', () => {
+    expect(closedFunctionNames()).toBe(CLOSED_FUNCTION_NAMES)
+  })
 })

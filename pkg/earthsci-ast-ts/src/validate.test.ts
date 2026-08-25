@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { validate } from './validate.js'
+import { validate, validateText } from './validate.js'
 import { readFixture, REPO_ROOT } from './test-helpers.js'
 
 describe('Structural validation', () => {
@@ -338,7 +338,7 @@ describe('Structural validation', () => {
   // parse._check_physical_constant_units, gt-3tgv).
   it('should reject units_dimensional_constant_error.esm with unit_inconsistency at usage site', () => {
     const content = readFixture('invalid', 'units_dimensional_constant_error.esm')
-    const result = validate(content)
+    const result = validateText(content)
     expect(result.is_valid).toBe(false)
     const err = result.structural_errors.find(
       (e) =>
@@ -553,7 +553,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   // empty-string document-root path, `details.error` shape, and `Invalid JSON: `
   // message prefix.
   it('reports malformed JSON in the json_parse_error envelope', () => {
-    const result = validate('{ "esm": "1.0.0", ')
+    const result = validateText('{ "esm": "1.0.0", ')
 
     expect(result.is_valid).toBe(false)
     expect(result.structural_errors).toEqual([])
@@ -568,7 +568,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
   })
 
   it('rejects trailing content after the JSON document', () => {
-    const result = validate('{"esm":"1.0.0","metadata":{"name":"x"}} trailing')
+    const result = validateText('{"esm":"1.0.0","metadata":{"name":"x"}} trailing')
 
     expect(result.is_valid).toBe(false)
     expect(result.schema_errors).toHaveLength(1)
@@ -590,7 +590,7 @@ describe('validate(str) JSON parsing (shared losslessJsonParse routing)', () => 
       },
     }
 
-    const fromString = validate(JSON.stringify(obj))
+    const fromString = validateText(JSON.stringify(obj))
     const fromObject = validate(obj)
 
     // Routing the string through the lossless parser (then stripping tagged
@@ -1598,11 +1598,11 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
 
     // WITH: the `{ref}` mount is opened, the component is inlined, and the
     // observed expression's `Calendar.seconds_since_midnight` now resolves.
-    expect(validate(content, { basePath: dirname(path) }).is_valid).toBe(true)
+    expect(validateText(content, { basePath: dirname(path) }).is_valid).toBe(true)
 
     // WITHOUT: unchanged legacy behaviour — the mount is honestly reported as
     // unresolved rather than silently passed over.
-    const without = validate(content)
+    const without = validateText(content)
     expect(without.is_valid).toBe(false)
     expect(codes(without)).toContain('unresolved_subsystem_ref@/models/Diurnal/subsystems/Calendar')
   })
@@ -1613,7 +1613,7 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
       'tests/valid/template_import_minimal.esm',
     ]) {
       const path = fixture(rel)
-      const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+      const result = validateText(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
       expect(result.is_valid, `${rel}: ${codes(result).join(', ')}`).toBe(true)
     }
   })
@@ -1623,7 +1623,7 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
     // distinguishable. This one is genuinely missing, and must stay rejected —
     // with the pinned code, at the pinned path (the mount, not the document root).
     const path = fixture('tests/invalid/subsystem_ref_not_found.esm')
-    const result = validate(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
+    const result = validateText(readFileSync(path, 'utf-8'), { basePath: dirname(path) })
     expect(result.is_valid).toBe(false)
     expect(codes(result)).toContain(
       'unresolved_subsystem_ref@/models/Atmosphere/subsystems/Missing',
@@ -1637,11 +1637,40 @@ describe('validate({ basePath }) resolves relative refs and template imports', (
     const path = fixture('tests/invalid/subsystem_ref_ambiguous.esm')
     const content = readFileSync(path, 'utf-8')
 
-    expect(codes(validate(content, { basePath: dirname(path) }))).toContain(
+    expect(codes(validateText(content, { basePath: dirname(path) }))).toContain(
       'ambiguous_subsystem_ref@/models/ClimateModel/subsystems/Atm',
     )
-    expect(codes(validate(content))).toContain(
+    expect(codes(validateText(content))).toContain(
       'unresolved_subsystem_ref@/models/ClimateModel/subsystems/Atm',
     )
+  })
+})
+
+describe('validate input type (API_SPEC.md §8 item 13)', () => {
+  const doc = {
+    esm: '1.0.0',
+    metadata: { name: 'x', authors: [] },
+    models: { M: { variables: {}, equations: [] } },
+  }
+
+  it('validate() takes a TYPED DOCUMENT', () => {
+    expect(validate(doc).is_valid).toBe(true)
+  })
+
+  it('validate() refuses JSON TEXT by name, pointing at validateText', () => {
+    // Callers on the TS type system never reach this; JS callers do.
+    expect(() => validate(JSON.stringify(doc) as unknown as object)).toThrow(/validateText/)
+  })
+
+  it('validateText() takes JSON text and agrees with validate() on the parsed form', () => {
+    const fromText = validateText(JSON.stringify(doc))
+    expect(fromText.is_valid).toBe(true)
+    expect(fromText).toEqual(validate(doc))
+  })
+
+  it('validateText() reports malformed JSON as json_parse_error, not a throw', () => {
+    const result = validateText('{ "esm": "1.0.0", ')
+    expect(result.is_valid).toBe(false)
+    expect(result.schema_errors[0].code).toBe('json_parse_error')
   })
 })

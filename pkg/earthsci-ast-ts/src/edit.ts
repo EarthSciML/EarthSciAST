@@ -566,7 +566,7 @@ export function extract(file: EsmFile, componentName: string): EsmFile {
  * @param system ReactionSystem to derive ODEs from
  * @returns Model with derived ODEs
  */
-export { deriveODEs } from './reactions.js'
+export { deriveOdes, deriveODEs } from './reactions.js'
 
 // =============================================================================
 // Utility Functions

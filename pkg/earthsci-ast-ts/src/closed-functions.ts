@@ -494,10 +494,27 @@ const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
   },
 }
 
-/** Names that bindings MUST recognize (derived from the dispatch table keys). */
-export const CLOSED_FUNCTION_NAMES: readonly string[] = Object.freeze(
+const CLOSED_FUNCTION_NAME_LIST: readonly string[] = Object.freeze(
   Object.keys(CLOSED_FUNCTION_DISPATCH),
 )
+
+/**
+ * Names that bindings MUST recognize (derived from the dispatch table keys).
+ *
+ * A FUNCTION, matching Julia's `closed_function_names()`, Rust's
+ * `closed_function_names()` and Go's `ClosedFunctionNames()` — API_SPEC.md §8
+ * item 4. TypeScript alone exposed this as a constant array, so a caller
+ * writing binding-agnostic code had to special-case it.
+ */
+export function closedFunctionNames(): readonly string[] {
+  return CLOSED_FUNCTION_NAME_LIST
+}
+
+/**
+ * @deprecated Use {@link closedFunctionNames}. Kept for one minor per
+ * API_SPEC.md §10; removed at the next major.
+ */
+export const CLOSED_FUNCTION_NAMES: readonly string[] = CLOSED_FUNCTION_NAME_LIST
 
 /**
  * Resolve a closed-function name + already-evaluated positional args into a

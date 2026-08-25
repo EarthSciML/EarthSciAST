@@ -12,11 +12,30 @@
  *
  * Canonical alias names (duplicates are kept for back-compat but marked
  * `@deprecated`):
- *   - root file structure → `EsmFile`   (aliases: `EsmFormat`, generated `ESMFormat`)
+ *   - root file structure → `EsmFile`   (alias: the generated `ESMFormat`)
  *   - operator node       → `ExpressionNode` (alias: `ExprNode`)
  *   - `Expression` (wire / schema-shaped value) and `Expr` (widened in-memory
  *     value that MAY carry a tagged `NumericLiteral`) are DISTINCT types, not
  *     aliases — pick by whether you hold a wire value or an in-memory one.
+ *
+ * DO NOT collapse `Expression` and `Expr` into one type. The phase-6 surface
+ * tidy (API_SPEC.md §8) proposed it and it was refused, because the two are not
+ * an alias pair in either direction:
+ *
+ *   - `Expression` is GENERATED from `esm-schema.json` by json2ts (plus
+ *     `scripts/fix-generated-expression.mjs`). Deleting it means the next
+ *     `npm run generate-types` puts it back.
+ *   - The relationship is a strict, ONE-WAY subtype: `Expression` is assignable
+ *     to `Expr`, and `Expr` is NOT assignable to `Expression` — the compiler
+ *     rejects it, because `Expr` admits the tagged `NumericLiteral` leaf that
+ *     only exists in memory. Collapsing onto `Expr` would let a tagged literal
+ *     reach a serialization boundary typed for the wire; collapsing onto
+ *     `Expression` would delete the tagged leaf the discretization RFC §5.4.1
+ *     requires.
+ *
+ * Both names are load-bearing and heavily used (roughly 400 references each in
+ * this package), and the editor is written almost entirely against `Expression`
+ * because it edits wire values.
  */
 
 // Re-export all generated types
@@ -82,11 +101,10 @@ export {
 
 /**
  * Main ESM file structure — the CANONICAL name for the root document type.
- * Alias for the generated `ESMFormat`. Prefer `EsmFile` over the deprecated
- * `EsmFormat` and the generated `ESMFormat` (all three are the same type).
+ * Prefer it over the generated `ESMFormat`. The deprecated `EsmFormat` spelling
+ * was removed in phase 6 (API_SPEC.md §8).
  */
 import type {
-  ESMFormat,
   ESMFormat1,
   ESMFormat2,
   ExpressionNode,
@@ -140,9 +158,6 @@ export type EsmFile = ESMFormat1 &
      */
     componentTemplates?: Record<string, unknown>
   }
-
-/** @deprecated Prefer {@link EsmFile}. Identical to the generated `ESMFormat`. */
-export type EsmFormat = ESMFormat
 
 /** @deprecated Prefer {@link ExpressionNode} (the generated name). */
 export type ExprNode = ExpressionNode

@@ -17,7 +17,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { migrate, canMigrate, getSupportedMigrationTargets, MigrationError } from './migration.js'
+import {
+  migrate,
+  canMigrate,
+  supportedMigrationTargets,
+  getSupportedMigrationTargets,
+  MigrationError,
+} from './migration.js'
 import { SCHEMA_VERSION } from './parse.js'
 import type { EsmFile } from './types.js'
 
@@ -123,5 +129,16 @@ describe('migration', () => {
       const noVersion = { metadata: { name: 'x' } } as unknown as EsmFile
       expect(() => migrate(noVersion, SCHEMA_VERSION)).toThrow(MigrationError)
     })
+  })
+})
+
+describe('supportedMigrationTargets (canonical spelling)', () => {
+  it('is the same function as the deprecated getSupportedMigrationTargets', () => {
+    expect(supportedMigrationTargets).toBe(getSupportedMigrationTargets)
+  })
+
+  it('agrees with the other bindings: additive line -> [SCHEMA_VERSION], else []', () => {
+    expect(supportedMigrationTargets(SCHEMA_VERSION)).toEqual([SCHEMA_VERSION])
+    expect(supportedMigrationTargets('0.9.0')).toEqual([])
   })
 })

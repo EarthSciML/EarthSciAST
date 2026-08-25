@@ -8,9 +8,9 @@
  * split into cohesive modules (expression-tree utilities, Go-mirroring unit
  * formatters, model / reaction-system / coupling checks, and the public
  * orchestrator). The public import path `./validate.js` and its export surface
- * are preserved verbatim — `validate`, `ValidationError`, `ValidationResult`,
- * and `StructuralError`.
+ * are preserved verbatim — `validate`, `validateText`, `ValidationError`,
+ * `ValidationResult`, and `StructuralError`.
  */
 
-export { validate } from './validate/orchestrator.js'
+export { validate, validateText } from './validate/orchestrator.js'
 export type { ValidationError, ValidationResult, StructuralError } from './validate/types.js'

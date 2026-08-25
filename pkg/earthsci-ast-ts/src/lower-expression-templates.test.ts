@@ -18,7 +18,7 @@ import { EsmDiagnosticError } from './errors.js'
 import { evaluateExpression, UnloweredOperatorError } from './codegen.js'
 import { fixturesDir, REPO_ROOT } from './test-helpers.js'
 import { toJson } from './serialize.js'
-import { validate } from './validate.js'
+import { validateText } from './validate.js'
 import type { ReactionSystem } from './types.js'
 
 // Canonical Arrhenius template fixture: 5 reactions sharing one
@@ -1265,7 +1265,7 @@ describe('§9.6.4 rule 5: a template library round-trips to itself', () => {
     // ...and the emitted form is itself a legal, loadable document — the property
     // that was actually broken. "Legal on disk, illegal once loaded and re-emitted"
     // means the document kind does not exist.
-    expect(validate(JSON.stringify(emitted), { basePath: dir }).is_valid).toBe(true)
+    expect(validateText(JSON.stringify(emitted), { basePath: dir }).is_valid).toBe(true)
   })
 
   it.each(libraries)('%s is a fixed point of loadString -> toJson -> loadString', (rel) => {
