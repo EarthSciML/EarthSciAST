@@ -309,10 +309,20 @@ function _factor_scope(node::AbstractDict)
     return names
 end
 
+# One id-bearing expression node, as the `from_faq` scope sees it.
+struct _RefNode
+    addr::String
+    path::String
+    op::Union{Nothing,String}
+end
+
+# The model members whose expression trees carry addressable nodes.
+const _WALK_ROOTS = ("equations", "initialization_equations")
+
 function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::AbstractString,
                                 model_name::AbstractString,
                                 index_sets::Union{Nothing,AbstractDict},
-                                id_to_addr::OrderedDict{String,Tuple{String,String}})
+                                id_to_addr::OrderedDict{String,_RefNode})
     op = _as_str(_get(node, "op"))
     nid = _nonempty_str(_get(node, "id"))
     is_agg = op !== nothing && op in _AGGREGATE_OPS
@@ -328,9 +338,9 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
             throw(ReferenceResolutionError(
                 E_REF_DUPLICATE_NODE_ID,
                 "duplicate expression-node id '$(nid)' in model '$(model_name)' " *
-                "(at $(path) and $(id_to_addr[nid][2]))"))
+                "(at $(path) and $(id_to_addr[nid].path))"))
         end
-        id_to_addr[nid] = (addr, String(path))
+        id_to_addr[nid] = _RefNode(addr, String(path), op)
     end
 
     _ensure_vertex!(g, ReferenceVertex(key, REF_VERTEX_NODE, addr, op, nid, String(path)))
@@ -409,7 +419,7 @@ end
 
 function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::AbstractString,
                 index_sets::Union{Nothing,AbstractDict},
-                id_to_addr::OrderedDict{String,Tuple{String,String}})
+                id_to_addr::OrderedDict{String,_RefNode})
     if value isa AbstractDict
         _is_node(value) &&
             _register_and_process!(g, value, path, model_name, index_sets, id_to_addr)
@@ -422,6 +432,64 @@ function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::Abst
         end
     end
     return g
+end
+
+# Collect every explicit expression-node id under one model's `value`, keyed by
+# id, under a model-qualified path.
+function _collect_ids!(nodes::OrderedDict{String,_RefNode}, value, path::AbstractString,
+                       model_name::AbstractString)
+    if value isa AbstractDict
+        if _is_node(value)
+            nid = _nonempty_str(_get(value, "id"))
+            if nid !== nothing
+                qualified = string("models/", model_name, "/", path)
+                if haskey(nodes, nid)
+                    throw(ReferenceResolutionError(
+                        E_REF_DUPLICATE_NODE_ID,
+                        "duplicate expression-node id '$(nid)' in document " *
+                        "(at $(qualified) and $(nodes[nid].path))"))
+                end
+                nodes[nid] = _RefNode(nid, qualified, _as_str(_get(value, "op")))
+            end
+        end
+        for k in _str_keys(value)
+            _collect_ids!(nodes, _get(value, k), string(path, "/", k), model_name)
+        end
+    elseif value isa AbstractVector
+        for (i, v) in enumerate(value)
+            _collect_ids!(nodes, v, string(path, "/", i - 1), model_name)
+        end
+    end
+    return nodes
+end
+
+"""
+    _collect_document_node_ids(document) -> OrderedDict{String,_RefNode}
+
+Every explicit expression-node `id` in `document`, keyed by id.
+
+`from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5): a document-scoped
+`index_sets` entry is visible to every model, so the node it names may live in
+ANY of them. This pass therefore runs over all models BEFORE any single model's
+graph is built.
+
+Because ids from different models share one namespace, uniqueness is a
+DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
+`E_REF_DUPLICATE_NODE_ID`.
+"""
+function _collect_document_node_ids(document::AbstractDict)
+    nodes = OrderedDict{String,_RefNode}()
+    models = _as_dict(_get(document, "models"))
+    models === nothing && return nodes
+    for name in _str_keys(models)
+        model = _as_dict(_get(models, name))
+        model === nothing && continue
+        for root in _WALK_ROOTS
+            v = _get(model, root)
+            v === nothing || _collect_ids!(nodes, v, root, name)
+        end
+    end
+    return nodes
 end
 
 # Union of the document-scoped registry and any model-nested one, with the
@@ -465,9 +533,23 @@ target was undeclared and the pass raised `undeclared_index_set` where Python,
 Rust and Go all built the graph. The optional trailing argument is the shape
 Python (`index_sets=`) and Go (`docIndexSets`) already use; Rust spells it as
 the separate `build_reference_graph_with_index_sets`.
+
+`from_faq` resolves at DOCUMENT scope (esm-spec.md §9.7.5). A caller holding one
+model gets that model as its own document, which is the right answer for a
+one-model document; [`resolve_references`](@ref) is the document-scoped entry
+point and resolves against every model's nodes.
 """
 function build_reference_graph(model::AbstractDict, model_name::AbstractString = "",
                                index_sets::Union{Nothing,AbstractDict} = nothing)
+    return _build_reference_graph(model, model_name, index_sets, nothing)
+end
+
+# `build_reference_graph`, plus the document-wide `from_faq` scope.
+# `document_nodes` is the map `_collect_document_node_ids` builds over every
+# model; when it is `nothing` the model's own nodes are the scope.
+function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
+                                index_sets::Union{Nothing,AbstractDict},
+                                document_nodes::Union{Nothing,OrderedDict{String,_RefNode}})
     g = ReferenceGraph(model_name)
     # Merge the document-scoped registry (v0.8.0+) with any model-nested one
     # (pre-0.8.0); model-level entries win a key collision, matching Rust and
@@ -487,27 +569,37 @@ function build_reference_graph(model::AbstractDict, model_name::AbstractString =
     # Pass 2 — walk every expression node: assign a stable address, register
     # aggregate / id-bearing nodes, add within-node reference edges
     # (ranges[*].from, join.on), and build id -> address for from_faq.
-    id_to_addr = OrderedDict{String,Tuple{String,String}}()
-    for root in ("equations", "initialization_equations")
+    id_to_addr = OrderedDict{String,_RefNode}()
+    for root in _WALK_ROOTS
         v = _get(model, root)
         v === nothing || _walk!(g, v, root, model_name, index_sets, id_to_addr)
     end
 
-    # Pass 3 — derived index sets resolve their from_faq to a node by id.
+    # Pass 3 — derived index sets resolve their from_faq to a node by id, at
+    # DOCUMENT scope (esm-spec.md §9.7.5): the producing node may live in any
+    # model, since the registry entry naming it is visible to all of them.
+    faq_scope = document_nodes === nothing ? id_to_addr : document_nodes
     if index_sets !== nothing
         for name in _str_keys(index_sets)
             entry = _as_dict(_get(index_sets, name))
             entry === nothing && continue
             _as_str(_get(entry, "kind")) == "derived" || continue
             faq = _as_str(_get(entry, "from_faq"))
-            if faq === nothing || !haskey(id_to_addr, faq)
+            if faq === nothing || !haskey(faq_scope, faq)
                 throw(ReferenceResolutionError(
                     E_REF_UNKNOWN_FAQ_NODE,
                     "derived index set '$(name)' references from_faq " *
                     "'$(faq === nothing ? "" : faq)', which is not the id of any " *
-                    "expression node in model '$(model_name)'"))
+                    "expression node in the document"))
             end
-            _add_edge!(g, _index_set_key(name), _node_key(id_to_addr[faq][1]), REF_EDGE_FROM_FAQ)
+            target = faq_scope[faq]
+            # The producer may belong to another model; give this graph a vertex
+            # for it so the edge has a real endpoint. `_ensure_vertex!` is
+            # idempotent: a local producer was already registered in pass 2.
+            _ensure_vertex!(g, ReferenceVertex(
+                _node_key(target.addr), REF_VERTEX_NODE, target.addr,
+                target.op, faq, target.path))
+            _add_edge!(g, _index_set_key(name), _node_key(target.addr), REF_EDGE_FROM_FAQ)
         end
     end
 
@@ -523,16 +615,21 @@ cycle (each model's graph is checked acyclic eagerly here).
 
 The document's top-level `index_sets` registry is threaded into every model's
 [`build_reference_graph`](@ref) call — that is where esm 1.0.0 puts it.
+
+Node ids are collected from EVERY model first, so a derived index set's
+`from_faq` may name a producer in any model (esm-spec.md §9.7.5) and a duplicate
+id anywhere in the document is an error.
 """
 function resolve_references(document::AbstractDict)
     out = OrderedDict{String,ReferenceGraph}()
     models = _as_dict(_get(document, "models"))
     models === nothing && return out
     doc_index_sets = _as_dict(_get(document, "index_sets"))
+    document_nodes = _collect_document_node_ids(document)
     for name in _str_keys(models)
         model = _as_dict(_get(models, name))
         model === nothing && continue
-        g = build_reference_graph(model, name, doc_index_sets)
+        g = _build_reference_graph(model, name, doc_index_sets, document_nodes)
         cyc = detect_cycle(g)
         cyc !== nothing && throw(ReferenceResolutionError(
             E_REF_CYCLE, "reference cycle in model '$(name)': " * join(cyc, " -> "), cyc))

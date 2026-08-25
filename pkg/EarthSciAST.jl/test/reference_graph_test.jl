@@ -9,7 +9,9 @@
 
 using Test
 using EarthSciAST
+using JSON3
 const ESS = EarthSciAST
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 # minimal aggregate node dict (build explicitly; `merge` is ambiguous here
 # because EarthSciAST also exports a `merge`).
@@ -307,6 +309,107 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test haskey(g2.vertices, "index_set:cells")
         @test haskey(g2.vertices, "index_set:other")
         @test length(ESS.edges_of_kind(g2, ESS.REF_EDGE_RANGE_FROM)) == 1
+    end
+
+
+    # --- from_faq resolves at DOCUMENT scope (esm-spec.md §9.7.5) -----------
+    #
+    # `index_sets` is a document-scoped registry, so a `kind:"derived"` entry is
+    # visible to every model and its producing node may live in ANY of them.
+    # Every binding used to resolve `from_faq` against one model's nodes, which
+    # made the cross-model shape unresolvable. The consequence: node ids are
+    # unique per DOCUMENT, not per model.
+    @testset "from_faq resolves at document scope" begin
+        producer = Dict{String,Any}("equations" => [eqn(
+            agg(id = "edge_faq", output_idx = ["edge"],
+                ranges = Dict("f" => Dict("from" => "faces"))), 0)])
+        consumer = Dict{String,Any}("equations" => [eqn(
+            agg(output_idx = String[], ranges = Dict("e" => Dict("from" => "edges"))), 0)])
+        doc = Dict{String,Any}(
+            "index_sets" => Dict(
+                "faces" => Dict("kind" => "interval", "size" => 8),
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
+            "models" => Dict("Consumer" => consumer, "Producer" => producer))
+        graphs = resolve_references(doc)
+
+        # BOTH graphs carry the edge: the registry entry is document-scoped, so
+        # every model sees the same derived set and the same producer.
+        for name in ("Consumer", "Producer")
+            ff = ESS.edges_of_kind(graphs[name], ESS.REF_EDGE_FROM_FAQ)
+            @test length(ff) == 1
+            @test ff[1].source == "index_set:edges"
+            @test ff[1].target == "node:edge_faq"
+        end
+        # The consumer's graph gained a real vertex for the foreign producer, so
+        # the partition pass can walk index_set -> node across the boundary.
+        v = graphs["Consumer"].vertices["node:edge_faq"]
+        @test v.node_id == "edge_faq"
+        @test v.path == "models/Producer/equations/0/lhs"
+
+        # Widening the scope does not weaken the error.
+        bad = Dict{String,Any}(
+            "index_sets" => Dict("edges" => Dict("kind" => "derived", "from_faq" => "nowhere")),
+            "models" => Dict(
+                "A" => Dict{String,Any}("equations" => [eqn(agg(id = "here"), 0)]),
+                "B" => Dict{String,Any}("equations" => [eqn(agg(id = "there"), 0)])))
+        err = try
+            resolve_references(bad); nothing
+        catch e
+            e
+        end
+        @test err isa ESS.ReferenceResolutionError
+        @test err.code == ESS.E_REF_UNKNOWN_FAQ_NODE
+    end
+
+    @testset "a node id duplicated across two models is an error" begin
+        # Legal before the §9.7.5 ruling, a load-time error now: one
+        # document-wide id namespace cannot hold two.
+        doc = Dict{String,Any}("models" => Dict(
+            "A" => Dict{String,Any}("equations" => [eqn(agg(id = "dup"), 0)]),
+            "B" => Dict{String,Any}("equations" => [eqn(agg(id = "dup"), 0)])))
+        err = try
+            resolve_references(doc); nothing
+        catch e
+            e
+        end
+        @test err isa ESS.ReferenceResolutionError
+        @test err.code == ESS.E_REF_DUPLICATE_NODE_ID
+        # Model-qualified on both sides, so the cross-model clash is visible.
+        @test occursin("models/A/", err.message)
+        @test occursin("models/B/", err.message)
+    end
+
+    @testset "the shared cross-model corpus fixture resolves" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "aggregate",
+                        "cross_model_from_faq.esm")
+        doc = JSON3.read(read(path, String), Dict{String,Any})
+        graphs = resolve_references(doc)
+        @test Set(keys(graphs)) == Set(["EdgeProducer", "FluxConsumer"])
+        ff = ESS.edges_of_kind(graphs["FluxConsumer"], ESS.REF_EDGE_FROM_FAQ)
+        @test length(ff) == 1
+        @test ff[1].source == "index_set:edges"
+        @test ff[1].target == "node:edge_enum"
+    end
+
+    # CORPUS_DEFECTS #2 is fixed; what remains on this fixture is #3.
+    # `rg_candidate_pairs.from_faq` names `rg_candidate_set`, which lives in
+    # OceanDynamics while the registry entry is document-scoped — that resolves
+    # now. The producing node's `join.on == [["rg_src_bin","rg_tgt_bin"]]` names
+    # model variables rather than node-local binders, which is defect #3's
+    # shape, previously masked by #2 erroring first.
+    @testset "wildfire fixture no longer raises unknown_faq_node" begin
+        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                        "wildfire_atmosphere_ocean.esm")
+        doc = JSON3.read(read(path, String), Dict{String,Any})
+        err = try
+            resolve_references(doc); nothing
+        catch e
+            e
+        end
+        @test err isa ESS.ReferenceResolutionError
+        @test err.code != ESS.E_REF_UNKNOWN_FAQ_NODE
+        @test err.code == ESS.E_REF_UNRESOLVED_JOIN_FACTOR
+        @test occursin("rg_src_bin", err.message)
     end
 
 end
