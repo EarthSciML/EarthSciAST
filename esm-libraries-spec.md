@@ -34,6 +34,14 @@ Each library implementation is classified into tiers:
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
 | **Analysis** | Unit checking, equation counting, stoichiometric matrix computation, conservation law detection | All languages |
+
+> **Two of those four are aspirational.** As of phase 6, `stoichiometric_matrix`
+> and the unit-checking surface exist in all five bindings, but **no binding
+> implements conservation-law detection or equation counting under any exported
+> name** — `api-surface.json` has no `conservation_laws` / `detect_conservation_laws`
+> or `equation_count` / `count_equations` symbol in any column. Either the tier
+> definition drops them or someone owes five implementations; recorded here
+> rather than left for the next reader to rediscover.
 | **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `earthsci-ast-editor` (SolidJS) |
 | **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
@@ -2360,21 +2368,46 @@ The v1 acceptance harness includes the Robertson stiff problem (verified against
 
 ---
 
-### 5.5 Go — `earthsci-ast-go` (Optional)
+### 5.5 Go — `earthsci-ast-go`
 
-**Tier: Core**
+**Tier: Core + Analysis**
 
 Go is useful for server-side tooling, CI/CD validation, and API backends.
 
-#### 5.5.1 Minimal Scope
+> This section described a "minimal scope" binding until phase 6, and was badly
+> stale: it predated the phase-5 work that roughly doubled Go's public surface.
+> Go is now the LARGEST surface of the six (383 exported spellings against
+> Rust's 322 and Julia's 297). The tier label moved from Core to Core +
+> Analysis in phase 6, when `DeriveODEs` and `StoichiometricMatrix` closed the
+> last two Analysis capabilities Go lacked.
+
+#### 5.5.1 Scope
+
+Core, in full:
 
 - Parse/serialize ESM files using standard `encoding/json`.
-- Schema validation via `gojsonschema`.
-- Pretty-print to Unicode and LaTeX.
-- Structural validation (equation counting, reference checks).
-- Substitution.
+- Schema validation via `gojsonschema`; structural validation; reference checks.
+- Pretty-print to Unicode, LaTeX and ASCII, over the full domain (expressions,
+  equations, models, reaction systems, whole files).
+- Substitution, including the scoped `*WithContext` family.
+- `Flatten`, the text expression parser (`ParseExpression` / `ParseEquation`),
+  the §4 editing operation set, `Migrate` / `CanMigrate`, and the reference
+  graph.
+- Graph representations and all three §4.8.3 renderings (`ToDOT`, `ToMermaid`,
+  `ToJSONGraph`).
 
-No simulation capability. The Go library serves as a validation and transformation layer in backend services.
+Analysis: unit validation with structured `UnitWarning` findings,
+`StoichiometricMatrix`, and `DeriveODEs`.
+
+**No simulation capability**, by design — the Go library is a validation and
+transformation layer for backend services. Go also no longer ships a
+command-line tool: phase 6 retired its `main.go` under H-5, which makes the
+Rust `esm` binary the only CLI. Go still ships as a library.
+
+**One documented divergence.** Go's `ReactionSystem.Species` is a
+`map[string]Species`, a genuinely unordered Go map, so `DeriveODEs` emits
+species in sorted-name order where Julia, Python, TypeScript and Rust emit
+declaration order. See `API_SPEC.md` §5.10; nothing in `tests/` pins it.
 
 ---
 
@@ -2643,13 +2676,13 @@ The following items are acknowledged gaps in this specification. They do not blo
 | LaTeX pretty-print | ✓ | ✓ (string) | — | ✓ | ✓ | ✓ |
 | Substitution | ✓ | ✓ | ✓ (interactive) | ✓ | ✓ | ✓ |
 | Structural validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Unit validation | ✓ | ✓ | — | ✓ | ✓ | — |
-| Derive ODEs from reactions | ✓ | ✓ | — | ✓ | ✓ | — |
-| Stoichiometric matrix | ✓ | ✓ | — | ✓ | ✓ | — |
+| Unit validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| Derive ODEs from reactions | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+| Stoichiometric matrix | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | System graph (component) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
 | Expression graph (variable) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
 | Graph export (DOT/Mermaid) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Model editing (programmatic) | ✓ | ✓ | — | ✓ | ✓ | — |
+| Model editing (programmatic) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 | Click-to-edit expressions | — | — | ✓ | — | — | — |
 | Drag-and-drop reordering | — | — | ✓ | — | — | — |
 | Expression palette | — | — | ✓ | — | — | — |
