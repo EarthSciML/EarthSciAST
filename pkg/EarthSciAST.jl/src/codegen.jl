@@ -133,7 +133,7 @@ function generate_model_code(name::String, model::Model)
     # `@brownians`, which promotes the system from an ODESystem to an
     # SDESystem. None of this is declared — `brownian_parameters` derives it
     # from the parameters' `update`.
-    unknown_set = Set(unknown_names(model))
+    unknown_set = Set(unknowns(model))
     brownian_set = Set(brownian_parameters(model))
     state_vars = Tuple{String, ModelVariable}[]
     parameters = Tuple{String, ModelVariable}[]

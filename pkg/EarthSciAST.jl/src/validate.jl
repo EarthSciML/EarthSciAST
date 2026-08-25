@@ -790,8 +790,8 @@ function validate_model_balance(model::Model, path::String;
                                 check_excess::Bool=true)::Vector{StructuralError}
     errors = StructuralError[]
 
-    unknowns = unknown_names(model)
-    n_unknowns = length(unknowns)
+    unknown_list = unknowns(model)
+    n_unknowns = length(unknown_list)
 
     # An `ic` equation prescribes an initial value, not a determining equation,
     # so it does not count toward the balance.
@@ -802,14 +802,14 @@ function validate_model_balance(model::Model, path::String;
     for eq in model.equations
         union!(equation_vars, _equation_lhs_names(eq.lhs))
     end
-    missing_for = String[u for u in unknowns if !(u in equation_vars)]
+    missing_for = String[u for u in unknown_list if !(u in equation_vars)]
 
     has_subsystems = !isempty(model.subsystems)
     shortfall = n_unknowns - n_eqs
 
     report = (shortfall > 0 && !has_subsystems) || (shortfall < 0 && check_excess)
     if report
-        details = Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs)
+        details = Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs)
         isempty(missing_for) || (details["missing_equations_for"] = missing_for)
         push!(errors, StructuralError(
             path,
@@ -825,7 +825,7 @@ function validate_model_balance(model::Model, path::String;
             "Model declares unknown '$(first(missing_for))' but has no defining " *
             "equation for it",
             ERROR_CODES.EQUATION_COUNT_MISMATCH,
-            Dict{String,Any}("unknowns" => unknowns, "equations" => n_eqs,
+            Dict{String,Any}("unknowns" => unknown_list, "equations" => n_eqs,
                              "missing_equations_for" => missing_for)))
     end
 
@@ -912,9 +912,9 @@ absent, and reports `system_kind_mismatch` when a present field contradicts it.
 Recurses into subsystems.
 """
 function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path::String)
-    mism = declared_system_kind_mismatch(model)
-    if mism !== nothing
-        declared, derived = mism
+    declared = declared_system_kind(model)
+    derived = system_kind(model)
+    if declared !== nothing && declared != derived
         push!(errors, StructuralError(
             "$path/system_kind",
             "Model declares system_kind '$declared' but its equations and " *

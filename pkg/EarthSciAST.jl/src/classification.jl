@@ -12,25 +12,52 @@
 # `tests/conformance/classification/` pins one answer for all of them.
 
 """
-    unknown_names(model::Model) -> Vector{String}
+    unknowns(model::Model) -> Vector{String}
 
 Every `unknown` declared by `model`, sorted lexicographically. The union of
 [`ode_states`](@ref), [`observed_unknowns`](@ref) and
 [`algebraic_unknowns`](@ref), which partition it.
+
+This is the canonical cross-binding name (API_SPEC.md §8 item 6): TypeScript
+spells it `unknowns` and Python `unknowns`. [`unknown_names`](@ref) is the
+Julia-only alias this binding shipped first and keeps exported, because the
+bare name collides badly in Julia's flat namespace — `ModelingToolkit.unknowns`
+is the obvious clash, and a consumer doing `using EarthSciAST, ModelingToolkit`
+needs a spelling that cannot be ambiguous.
 """
-unknown_names(model::Model)::Vector{String} =
+unknowns(model::Model)::Vector{String} =
     sort!(String[n for (n, v) in model.variables if v.type == UnknownVariable])
 
 """
-    parameter_names(model::Model) -> Vector{String}
+    parameters(model::Model) -> Vector{String}
 
 Every `parameter` declared by `model`, sorted lexicographically. The union of
 [`brownian_parameters`](@ref), [`discrete_parameters`](@ref),
 [`sampled_parameters`](@ref) and [`constant_parameters`](@ref), which partition
 it.
+
+The canonical cross-binding name; see [`unknowns`](@ref) for why the
+[`parameter_names`](@ref) alias stays exported alongside it.
 """
-parameter_names(model::Model)::Vector{String} =
+parameters(model::Model)::Vector{String} =
     sort!(String[n for (n, v) in model.variables if v.type == ParameterVariable])
+
+"""
+    unknown_names(model::Model) -> Vector{String}
+
+Deprecated alias of [`unknowns`](@ref) (API_SPEC.md §8 item 6). Kept exported —
+not merely for one minor — because the bare canonical name collides in Julia's
+flat namespace; both spellings are in the surface manifest.
+"""
+unknown_names(model::Model)::Vector{String} = unknowns(model)
+
+"""
+    parameter_names(model::Model) -> Vector{String}
+
+Deprecated alias of [`parameters`](@ref) (API_SPEC.md §8 item 6). Kept exported
+for the same namespace reason as [`unknown_names`](@ref).
+"""
+parameter_names(model::Model)::Vector{String} = parameters(model)
 
 # ── Equation-LHS shapes ─────────────────────────────────────────────────────
 #
@@ -202,7 +229,7 @@ vanishing (the equation balance, not the classification, is what reports it).
 function algebraic_unknowns(model::Model)::Vector{String}
     accounted = Set(ode_states(model))
     union!(accounted, keys(observed_definitions(model)))
-    return String[n for n in unknown_names(model) if !(n in accounted)]
+    return String[n for n in unknowns(model) if !(n in accounted)]
 end
 
 """
@@ -222,7 +249,7 @@ It is also the CONTINUOUS half of the cadence leaf-seed table
 """
 function solver_unknowns(model::Model)::Vector{String}
     observed = Set(observed_unknowns(model))
-    return String[n for n in unknown_names(model) if !(n in observed)]
+    return String[n for n in unknowns(model) if !(n in observed)]
 end
 
 # ── The four parameter sets (they partition) ────────────────────────────────
@@ -349,9 +376,10 @@ The rule is stated over the EQUATIONS and not over a `domain` block: v0.8.0
 removed `Domain.spatial`, so `domain` says nothing about space and a
 domain-based test is not implementable.
 
-A binding uses this derivation when the `system_kind` field is absent, and
-reports `system_kind_mismatch` when a present field contradicts it — see
-[`declared_system_kind_mismatch`](@ref).
+A binding uses this derivation when the `system_kind` field is absent — see
+[`effective_system_kind`](@ref), which composes it with
+[`declared_system_kind`](@ref) — and reports `system_kind_mismatch` when a
+present field contradicts it.
 """
 function system_kind(model::Model)::String
     isempty(brownian_parameters(model)) || return "sde"
@@ -361,17 +389,31 @@ function system_kind(model::Model)::String
 end
 
 """
-    declared_system_kind_mismatch(model::Model) -> Union{Tuple{String,String},Nothing}
+    declared_system_kind(model::Model) -> Union{String,Nothing}
 
-`(declared, derived)` when the model declares a `system_kind` that contradicts
-[`system_kind`](@ref), and `nothing` otherwise (including when the field is
-absent). The `system_kind_mismatch` diagnostic reports the pair.
+The `system_kind` the model DECLARES, verbatim, or `nothing` when the field is
+absent. No derivation happens here: this is the raw field read, the question
+`validate` asks when it needs to know whether the author committed to a kind at
+all.
+
+Contrast [`system_kind`](@ref), which ignores the field and derives the kind
+from the equations and parameters, and [`effective_system_kind`](@ref), which
+composes the two.
 """
-function declared_system_kind_mismatch(model::Model)
-    declared = model.system_kind
-    declared === nothing && return nothing
-    derived = system_kind(model)
-    return declared == derived ? nothing : (declared, derived)
+declared_system_kind(model::Model)::Union{String,Nothing} = model.system_kind
+
+"""
+    effective_system_kind(model::Model) -> String
+
+[`declared_system_kind`](@ref) when the model declares one, otherwise the
+derived [`system_kind`](@ref). This is the question a caller choosing a solver
+actually asks — the declaration wins, because an author who wrote it down meant
+it, and `validate` separately reports a `system_kind_mismatch` when the two
+disagree (API_SPEC.md §8 item 11).
+"""
+function effective_system_kind(model::Model)::String
+    declared = declared_system_kind(model)
+    return declared === nothing ? system_kind(model) : declared
 end
 
 # ── Partition assertions (§6.3.1: "these sets PARTITION") ───────────────────
@@ -389,7 +431,7 @@ function assert_classification_partitions(model::Model)
     us = ode_states(model)
     uo = observed_unknowns(model)
     ua = algebraic_unknowns(model)
-    all_u = unknown_names(model)
+    all_u = unknowns(model)
     covered = vcat(us, uo, ua)
     length(covered) == length(unique(covered)) ||
         throw(ArgumentError("unknown sets overlap: $(sort!(covered))"))
@@ -401,7 +443,7 @@ function assert_classification_partitions(model::Model)
     pd = discrete_parameters(model)
     ps = sampled_parameters(model)
     pc = constant_parameters(model)
-    all_p = parameter_names(model)
+    all_p = parameters(model)
     pcov = vcat(pb, pd, ps, pc)
     length(pcov) == length(unique(pcov)) ||
         throw(ArgumentError("parameter sets overlap: $(sort!(pcov))"))

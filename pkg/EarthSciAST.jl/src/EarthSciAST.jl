@@ -166,13 +166,24 @@ export
     # Derived classification (esm-spec §6.3.1) — the ONLY sanctioned way to ask
     # which unknowns are ODE states / observed / algebraic and which parameters
     # are Brownian / discrete / sampled / constant.
-    unknown_names, parameter_names,
+    # `unknowns` / `parameters` are the canonical cross-binding names
+    # (API_SPEC.md §8 item 6); `unknown_names` / `parameter_names` stay
+    # exported alongside them — not for one minor but indefinitely — because
+    # the bare names collide in Julia's flat namespace (`ModelingToolkit`
+    # exports both), so a consumer needs an unambiguous spelling.
+    unknowns, parameters, unknown_names, parameter_names,
     ode_states, is_ode_state, observed_unknowns, algebraic_unknowns,
     solver_unknowns,
     observed_definitions, observed_definition,
     brownian_parameters, discrete_parameters, sampled_parameters,
     constant_parameters,
-    system_kind, declared_system_kind_mismatch,
+    # The `system_kind` family (API_SPEC.md §8 item 11) is three distinct
+    # questions: `system_kind` DERIVES the kind from the equations and
+    # parameters, `declared_system_kind` reads the explicit field (`nothing`
+    # when absent), and `effective_system_kind` is `declared ?? derived` — the
+    # question a caller choosing a solver asks. The Julia-only
+    # `declared_system_kind_mismatch` was deleted in favour of the pair.
+    system_kind, declared_system_kind, effective_system_kind,
     has_spatial_derivative, has_time_derivative,
     assert_classification_partitions,
     # Event types
