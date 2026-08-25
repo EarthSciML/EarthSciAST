@@ -66,8 +66,13 @@ def test_pde_trajectory_matches_analytic(fixture):
     esm = et.load_path(str(_MANIFEST.parent / fixture["path"]))
     tr = fixture["trajectory"]
     tspan = (float(tr["time_span"]["start"]), float(tr["time_span"]["end"]))
-    result = solve(esm_problem(esm, tspan, u0=dict(tr["initial_conditions"])), alg=_INTEG["method"], reltol=float(_INTEG["rtol"]), abstol=float(_INTEG["atol"]))
-    assert (result.retcode is ReturnCode.Success)
+    result = solve(
+        esm_problem(esm, tspan, u0=dict(tr["initial_conditions"])),
+        alg=_INTEG["method"],
+        reltol=float(_INTEG["rtol"]),
+        abstol=float(_INTEG["atol"]),
+    )
+    assert result.retcode is ReturnCode.Success
     rtol, atol = _TOL["traj_analytic_rtol"], _TOL["traj_analytic_atol"]
     rows = {_bare(name): row for row, name in enumerate(result.vars)}
     for tstr, expected_state in tr["analytic"].items():

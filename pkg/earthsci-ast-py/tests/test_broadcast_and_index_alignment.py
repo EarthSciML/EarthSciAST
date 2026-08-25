@@ -119,8 +119,10 @@ def _run(doc: str, shape: tuple[int, ...]) -> np.ndarray:
     final state IS the RHS — which makes the assertions read as direct
     comparisons of the two spellings' values.
     """
-    result = solve(esm_problem(load_string(doc), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(load_string(doc), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     return np.asarray(result.y[: int(np.prod(shape)), -1]).reshape(shape)
 
 
@@ -205,8 +207,10 @@ def test_broadcast_end_to_end_matches_the_bare_operator() -> None:
 
     def final(rhs):
         doc = _doc(variables, [{"lhs": {"op": "D", "args": ["dp"], "wrt": "t"}, "rhs": rhs}])
-        result = solve(esm_problem(load_string(doc), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
-        assert (result.retcode is ReturnCode.Success), result.message
+        result = solve(
+            esm_problem(load_string(doc), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12
+        )
+        assert result.retcode is ReturnCode.Success, result.message
         return float(result.y[0, -1])
 
     bare = final({"op": "-", "args": ["div_h"]})

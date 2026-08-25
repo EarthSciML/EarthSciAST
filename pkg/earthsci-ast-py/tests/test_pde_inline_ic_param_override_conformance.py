@@ -94,8 +94,10 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     cells = [f"M.u[{i}]" for i in range(1, 6)]
 
     for key in ("A", "M.A"):
-        result = solve(esm_problem(esm, (0.0, 1.0), p={key: 0.0}), alg="RK45", reltol=1e-12, abstol=1e-14)
-        assert (result.retcode is ReturnCode.Success), result.message
+        result = solve(
+            esm_problem(esm, (0.0, 1.0), p={key: 0.0}), alg="RK45", reltol=1e-12, abstol=1e-14
+        )
+        assert result.retcode is ReturnCode.Success, result.message
         idx = {name: k for k, name in enumerate(result.vars)}
         for cell in cells:
             assert result.y[idx[cell]][0] == 0.0, f"{key}: {cell} not zeroed"
@@ -108,4 +110,9 @@ def test_local_and_qualified_override_keys_both_bind_the_build_scope() -> None:
     from earthsci_ast.errors import UnknownParameterError
 
     with pytest.raises(UnknownParameterError, match="not_a_param"):
-        solve(esm_problem(esm, (0.0, 1.0), p={"not_a_param": 7.0}), alg="RK45", reltol=1e-12, abstol=1e-14)
+        solve(
+            esm_problem(esm, (0.0, 1.0), p={"not_a_param": 7.0}),
+            alg="RK45",
+            reltol=1e-12,
+            abstol=1e-14,
+        )

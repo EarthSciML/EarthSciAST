@@ -128,7 +128,7 @@ def test_provider_object_path_refreshes_at_cadence() -> None:
     esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
     result = solve(esm_problem(esm, (0.0, 2.0), provider_factory=_make_factory(calls)), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), result.message
+    assert result.retcode is ReturnCode.Success, result.message
     assert result.vars == ["Plume.c"]
 
     # Same analytic piecewise solution as C1 (dc/dt = (wind[2] + rough[2]) - c, c0=0),
@@ -145,7 +145,7 @@ def test_const_materialized_once_discrete_refreshed_per_boundary() -> None:
     esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
     result = solve(esm_problem(esm, (0.0, 2.0), provider_factory=_make_factory(calls)), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), result.message
+    assert result.retcode is ReturnCode.Success, result.message
 
     # CONST loader: materialize() exactly once, never refreshed.
     assert calls["Z0"] == ["materialize"]
@@ -165,8 +165,13 @@ def test_boundaries_come_from_refresh_times_not_frequency() -> None:
     # at exactly those instants (seed + 0.5 + 1.5), not at t=1.
     esm = load_path(_FIXTURE)
     calls: Dict[str, List] = {}
-    result = solve(esm_problem(esm, (0.0, 2.0), provider_factory=_make_factory(calls, anchors_seconds=[0.0, 0.5, 1.5])), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(
+            esm, (0.0, 2.0), provider_factory=_make_factory(calls, anchors_seconds=[0.0, 0.5, 1.5])
+        ),
+        alg="LSODA",
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     assert calls["U"] == [0.0, 0.5, 1.5]
 
 
@@ -183,8 +188,13 @@ def test_provider_factory_ignored_when_callable_given() -> None:
             return np.array([99.0, _seg_value(t), -99.0])
         return np.array([0.25, 1.0, 0.25])
 
-    result = solve(esm_problem(esm, (0.0, 2.0), loader_provider=_legacy, provider_factory=_make_factory(factory_calls)), alg="LSODA")
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(
+            esm, (0.0, 2.0), loader_provider=_legacy, provider_factory=_make_factory(factory_calls)
+        ),
+        alg="LSODA",
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     assert callable_calls, "legacy callable must be the one consulted"
     assert factory_calls == {}, "provider_factory must be ignored when a callable is given"
 

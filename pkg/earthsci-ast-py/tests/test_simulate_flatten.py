@@ -62,7 +62,7 @@ def _decay_file() -> EsmFile:
 def test_simulate_esm_file_runs_through_flatten():
     file = _decay_file()
     result = solve(esm_problem(file, (0.0, 5.0), p={}, u0={"A": 1.0, "B": 0.0}), alg="RK45")
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
     # State variables are dot-namespaced.
     assert "Decay.A" in result.vars
     assert "Decay.B" in result.vars
@@ -136,7 +136,7 @@ def test_simulate_works_for_pure_ode_model():
     file = EsmFile(version="1.0.0", metadata=_metadata(), models={"Decay": model})
 
     result = solve(esm_problem(file, (0.0, 5.0), u0={"x": 2.0}), alg="RK45")
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
     idx = result.vars.index("Decay.x")
     # Analytical solution: x(t) = 2*exp(-0.3*t); at t=5 → 2*exp(-1.5) ≈ 0.4463.
     assert abs(result.y[idx, -1] - 2.0 * np.exp(-1.5)) < 1e-3
@@ -155,13 +155,13 @@ def test_simulate_caches_compiled_rhs_across_calls():
     # First call populates the cache.
     assert getattr(flat, "_simulate_compile_cache", None) is None
     r1 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
-    assert (r1.retcode is ReturnCode.Success)
+    assert r1.retcode is ReturnCode.Success
     cache_after_first = flat._simulate_compile_cache
     assert cache_after_first is not None
 
     # Second call must reuse the same compiled functions (identity check).
     r2 = solve(esm_problem(flat, (0.0, 1.0), u0={"A": 1.0, "B": 0.0}))
-    assert (r2.retcode is ReturnCode.Success)
+    assert r2.retcode is ReturnCode.Success
     assert flat._simulate_compile_cache is cache_after_first
     assert flat._simulate_compile_cache.rhs_vector_func is cache_after_first.rhs_vector_func
 
@@ -187,7 +187,7 @@ def test_simulate_cache_survives_parameter_overrides():
     # A different parameter override must not invalidate the compiled RHS:
     # parameter values are passed as runtime arguments, not inlined.
     r2 = solve(esm_problem(flat, (0.0, 1.0), p={"k": 2.0}, u0={"x": 1.0}))
-    assert (r2.retcode is ReturnCode.Success)
+    assert r2.retcode is ReturnCode.Success
     assert flat._simulate_compile_cache is compile1
 
     # And the parameter change must actually affect the trajectory.

@@ -127,9 +127,7 @@ def test_saveat_names_the_output_times() -> None:
     want = [0.0, 1.0, 2.0, 4.0]
     sol = solve(prob, saveat=want, reltol=TEST_RELTOL, abstol=TEST_ABSTOL)
     np.testing.assert_allclose(sol.t, want)
-    np.testing.assert_allclose(
-        sol["Decay.A"], [2.0 * math.exp(-0.5 * t) for t in want], rtol=1e-6
-    )
+    np.testing.assert_allclose(sol["Decay.A"], [2.0 * math.exp(-0.5 * t) for t in want], rtol=1e-6)
 
 
 # --------------------------------------------------------------------------- #

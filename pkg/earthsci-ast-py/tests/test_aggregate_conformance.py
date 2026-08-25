@@ -36,7 +36,7 @@ from earthsci_ast.reference_resolution import (
     build_reference_graph,
 )
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.validation import validate, validate_text
+from earthsci_ast.validation import validate_text
 
 
 _FIXTURES_DIR = VALID_DIR / "aggregate"
@@ -131,7 +131,7 @@ def test_aggregate_fixture_conformance(fixture_path: Path) -> None:
             params = {k: float(v) for k, v in (test.get("parameter_overrides") or {}).items()}
 
             result = solve(esm_problem(esm_file, tspan, u0=ics, p=params))
-            assert (result.retcode is ReturnCode.Success), (
+            assert result.retcode is ReturnCode.Success, (
                 f"{fixture_path.name}::{model_name}::{test_id} simulation failed: {result.message}"
             )
 

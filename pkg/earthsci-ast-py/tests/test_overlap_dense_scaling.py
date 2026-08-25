@@ -276,7 +276,9 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
     broad_phase.ENUM_VISITS[0] = 0
     # `prepare` runs the SAME rewrite itself (and aliases the bare authored
     # const-array names onto the flattened spellings while doing it).
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Fwd", inspect=insp, pushdown_rewrite=True)
+    prep = esm_problem(
+        doc, (0.0, 1.0), const_arrays=ca, model_name="Fwd", inspect=insp, pushdown_rewrite=True
+    )
     field = observed_field(prep, "Emis")
     visits = broad_phase.ENUM_VISITS[0]
 

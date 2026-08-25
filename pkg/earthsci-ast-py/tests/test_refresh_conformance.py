@@ -91,7 +91,7 @@ def test_refresh_regrid_band_matches_golden() -> None:
             loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
             inspect=insp,
         )
-        assert (res.retcode is ReturnCode.Success), res.message
+        assert res.retcode is ReturnCode.Success, res.message
         ftgt_want = ftgt_by[_anchor_key(ftgt_by, anchor)]
         got_ftgt = np.asarray(insp.setup_arrays["M.F_tgt"]).ravel()
         assert np.allclose(got_ftgt, ftgt_want, rtol=_FIELD_RTOL, atol=_FIELD_ATOL), (
@@ -126,7 +126,7 @@ def test_refresh_trajectory_band_matches_golden() -> None:
             atol=1e-12,
             loader_arrays={_SKEY: scale_native, _FKEY: fsrc},
         )
-        assert (res.retcode is ReturnCode.Success), res.message
+        assert res.retcode is ReturnCode.Success, res.message
         idx = {n: k for k, n in enumerate(res.vars)}
         ics = {s: float(res.y[idx[s if s in idx else s.split(".")[-1]]][-1]) for s in _STATES}
         states[b] = dict(ics)

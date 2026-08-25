@@ -11,7 +11,7 @@ from conftest import CORPUS_UNIT_DEFECTS, FIXTURES_ROOT
 
 from earthsci_ast import load_path, load_string
 from earthsci_ast.serialize import to_json
-from earthsci_ast.validation import validate, validate_text, SchemaValidationError
+from earthsci_ast.validation import validate_text, SchemaValidationError
 
 
 class TestStructuralValidation:
@@ -269,7 +269,7 @@ class TestStructuralValidation:
                 content = f.read()
 
             with pytest.raises((SchemaValidationError, Exception)) as exc_info:
-                load(content)
+                load_string(content)
 
             error = str(exc_info.value).lower()
             assert any(keyword in error for keyword in ["data", "loader", "config", "schema"])

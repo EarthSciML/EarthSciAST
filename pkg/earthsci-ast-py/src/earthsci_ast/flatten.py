@@ -716,6 +716,7 @@ def _describe_coupling(entry: CouplingEntry) -> str:
         systems = " + ".join(entry.systems)
         rule = f"operator_compose({systems})"
         if entry.translate:
+
             def _tr(v: object) -> str:
                 # Same leak as the transform above, latent: an object-valued
                 # translate entry would otherwise render as a Python dict repr.

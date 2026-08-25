@@ -74,7 +74,7 @@ def test_override_key_outcome(case: dict) -> None:
 
     if case["outcome"] == "resolved":
         result = solve(esm_problem(esm, (0.0, 1.0), p=params), **kw)
-        assert (result.retcode is ReturnCode.Success), result.message
+        assert result.retcode is ReturnCode.Success, result.message
         expected = case["trajectory_at_t1"]
         idx = {n: k for k, n in enumerate(result.vars)}
         for name, want in expected.items():
@@ -102,7 +102,7 @@ def test_defaults_run_without_overrides() -> None:
     the key and not about the document."""
     manifest = _manifest()
     result = solve(esm_problem(_load_fixture(), (0.0, 1.0)), alg="RK45", reltol=1e-12, abstol=1e-14)
-    assert (result.retcode is ReturnCode.Success), result.message
+    assert result.retcode is ReturnCode.Success, result.message
     idx = {n: k for k, n in enumerate(result.vars)}
     for name, want in _fixture()["defaults_at_t1"].items():
         assert float(result.y[idx[name]][-1]) == pytest.approx(

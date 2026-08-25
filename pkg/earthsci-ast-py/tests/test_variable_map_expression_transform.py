@@ -302,6 +302,6 @@ def test_simulate_expression_transform_end_to_end():
 
     esm_file = load_string(json.dumps(_doc()))
     result = solve(esm_problem(esm_file, (0.0, 1.0), p={}, u0={"u": 0.0}))
-    assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+    assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
     u_idx = result.vars.index("Sink.u")
     assert np.isclose(result.y[u_idx, -1], 9.5, rtol=1e-6)

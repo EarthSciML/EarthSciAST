@@ -91,7 +91,7 @@ def test_scalar_ic_seeding_precedence() -> None:
 
     # (1) Defaults: each state takes its own ic; `z` declares none and takes 7.
     res = solve(esm_problem(esm, (0.0, 1.0)), **kw)
-    assert (res.retcode is ReturnCode.Success), res.message
+    assert res.retcode is ReturnCode.Success, res.message
     assert at0(res, "M.u") == 3.0
     assert at0(res, "M.q") == 2.0
     assert at0(res, "M.w") == 4.0
@@ -101,14 +101,14 @@ def test_scalar_ic_seeding_precedence() -> None:
     # spelling of the key (§6.6.2).
     for key in ("A", "M.A"):
         res = solve(esm_problem(esm, (0.0, 1.0), p={key: 10.0}), **kw)
-        assert (res.retcode is ReturnCode.Success), res.message
+        assert res.retcode is ReturnCode.Success, res.message
         assert at0(res, "M.w") == 20.0
         assert at0(res, "M.u") == 3.0  # parameter-free ic unmoved
 
     # (3) A run-time `initial_conditions` entry beats the ic equation.
     for key in ("u", "M.u"):
         res = solve(esm_problem(esm, (0.0, 1.0), u0={key: 9.0}), **kw)
-        assert (res.retcode is ReturnCode.Success), res.message
+        assert res.retcode is ReturnCode.Success, res.message
         assert at0(res, "M.u") == 9.0
         assert at0(res, "M.w") == 4.0  # a state the override does not name keeps its ic
 
@@ -122,7 +122,7 @@ def test_scalar_ic_inside_an_array_model_routes_through_the_numpy_path() -> None
 
     esm = load_path(str(_ROOT / "fixtures" / "scalar_ic_in_array_model.esm"))
     res = solve(esm_problem(esm, (0.0, 1.0)), alg="RK45", reltol=1e-12, abstol=1e-14)
-    assert (res.retcode is ReturnCode.Success), res.message
+    assert res.retcode is ReturnCode.Success, res.message
     # Per-cell names are the array runtime's signature; the scalar-SymPy path
     # would report a single `N.f` row.
     assert "N.f[1]" in res.vars

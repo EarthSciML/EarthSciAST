@@ -96,7 +96,7 @@ def test_discrete_materialize_trajectory_matches_golden() -> None:
             atol=1e-12,
             loader_arrays={_SRC_KEY: snap},
         )
-        assert (res.retcode is ReturnCode.Success), res.message
+        assert res.retcode is ReturnCode.Success, res.message
         idx = {name: k for k, name in enumerate(res.vars)}
         # Single-model states surface as bare slot names (`c[1]`); accept either.
         ics = {

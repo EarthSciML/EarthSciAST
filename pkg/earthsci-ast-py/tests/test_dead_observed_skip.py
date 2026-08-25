@@ -115,8 +115,13 @@ _DEAD_BODY = {"op": "/", "args": [1.0, "NY"]}
 def test_dead_unresolvable_observed_does_not_break_array_rhs() -> None:
     """The per-step RHS driver skips the dead ``dead = 1/NY`` and integrates the
     live dynamics (``D(u) = k = 3`` from u(0)=0 gives u(1)=3 in every cell)."""
-    result = solve(esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0)),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     final = result.y[:, -1]
     np.testing.assert_allclose(final[:3], [3.0, 3.0, 3.0], rtol=1e-6)
 
@@ -126,16 +131,33 @@ def test_dead_unresolvable_observed_tolerated_by_build_inspection() -> None:
     must not abort on the dead observed either; it records only array observeds,
     so the unevaluable scalar simply never lands in ``setup_arrays``."""
     insp = BuildInspection()
-    result = solve(esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), inspect=insp), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), inspect=insp),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
+    assert result.retcode is ReturnCode.Success, result.message
     assert not any(name.endswith("dead") for name in insp.setup_arrays), sorted(insp.setup_arrays)
 
 
 def test_inspect_never_changes_the_trajectory_with_a_dead_observed() -> None:
     """The returned trajectory is identical with and without ``inspect`` even
     when a dead unresolvable observed is present (the skip is lossless)."""
-    plain = solve(esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    inspected = solve(esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), inspect=BuildInspection()), alg="LSODA", reltol=1e-10, abstol=1e-12)
+    plain = solve(
+        esm_problem(_load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0)),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
+    inspected = solve(
+        esm_problem(
+            _load_unvalidated(json.dumps(_doc(_DEAD_BODY))), (0.0, 1.0), inspect=BuildInspection()
+        ),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
     assert (plain.retcode is ReturnCode.Success) and (inspected.retcode is ReturnCode.Success)
     assert plain.vars == inspected.vars
     np.testing.assert_array_equal(plain.y, inspected.y)
@@ -151,7 +173,12 @@ def test_needed_broken_observed_still_errors() -> None:
     # equation, which is where an observed's body lives in 1.0.0.
     live_eq = next(e for e in doc["models"]["M"]["equations"] if e["lhs"] == "live")
     live_eq["rhs"] = {"op": "/", "args": [1.0, "Z"]}
-    result = solve(esm_problem(_load_unvalidated(json.dumps(doc)), (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
+    result = solve(
+        esm_problem(_load_unvalidated(json.dumps(doc)), (0.0, 1.0)),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
     assert result.retcode is not ReturnCode.Success
     assert "Unresolved symbol" in (result.message or "")
     assert "live" in (result.message or "")

@@ -119,7 +119,11 @@ def test_untaken_eager_ifelse_branch_stays_evaluable():
     evaluated but NOT selected costs nothing — the taken branch is real, and a
     complex dtype whose imaginary part is identically zero is projected back
     onto the reals rather than rejected."""
-    prep = esm_problem(_doc({"op": "ifelse", "args": [{"op": "false", "args": []}, _pow_x(), 1.0]}), (0.0, 1.0), model_name="M")
+    prep = esm_problem(
+        _doc({"op": "ifelse", "args": [{"op": "false", "args": []}, _pow_x(), 1.0]}),
+        (0.0, 1.0),
+        model_name="M",
+    )
     assert observed_field(prep, "y") == 1.0
 
 
@@ -142,7 +146,9 @@ def test_array_operand_keeps_numpy_nan_semantics():
         shape=["n"],
         extra_vars={"v": {"type": "parameter", "default": 0.0, "shape": ["n"]}},
     )
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays={"M.v": np.array([-2.5, 8.0, -1.0])}, model_name="M")
+    prep = esm_problem(
+        doc, (0.0, 1.0), const_arrays={"M.v": np.array([-2.5, 8.0, -1.0])}, model_name="M"
+    )
     got = observed_field(prep, "y")
     assert np.isnan(got[0]) and np.isnan(got[2])
     assert got[1] == pytest.approx(2.0, rel=1e-8)
@@ -172,12 +178,16 @@ def test_untaken_eager_ifelse_branch_may_divide_by_zero():
     `ifelse(A_j > 0, x/A_j, 0)`. `ifelse` is EAGER, so before this the untaken
     branch aborted the whole build with `ZeroDivisionError` while Julia and Rust
     returned the taken branch."""
-    prep = esm_problem(_doc(
+    prep = esm_problem(
+        _doc(
             {
                 "op": "ifelse",
                 "args": [{"op": "false", "args": []}, {"op": "/", "args": [1.0, 0.0]}, 1.0],
             }
-        ), (0.0, 1.0), model_name="M")
+        ),
+        (0.0, 1.0),
+        model_name="M",
+    )
     assert observed_field(prep, "y") == 1.0
 
 

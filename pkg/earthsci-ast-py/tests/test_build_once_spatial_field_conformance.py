@@ -53,8 +53,10 @@ def test_build_once_spatial_field_trajectory_matches_golden() -> None:
     golden = _golden()
     esm = load_path(str(_FIXTURE))
     t0, t1 = golden["cadence"]["tspan"]
-    result = solve(esm_problem(esm, (float(t0), float(t1))), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success), result.message
+    result = solve(
+        esm_problem(esm, (float(t0), float(t1))), alg="LSODA", reltol=1e-10, abstol=1e-12
+    )
+    assert result.retcode is ReturnCode.Success, result.message
 
     idx = {name: k for k, name in enumerate(result.vars)}
     traj = golden["trajectory"]

@@ -2186,7 +2186,9 @@ def load_string(
         json_text: The document as a JSON string.
     """
     data = json.loads(json_text)
-    return _load_data(data, base_path if base_path is not None else os.getcwd(), metaparameters, None)
+    return _load_data(
+        data, base_path if base_path is not None else os.getcwd(), metaparameters, None
+    )
 
 
 def load_document(
@@ -2428,4 +2430,3 @@ def _load_data(
             esm_file.events.append(_parse_discrete_event(ev))
 
     return esm_file
-

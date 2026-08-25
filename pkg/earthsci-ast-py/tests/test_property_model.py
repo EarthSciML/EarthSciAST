@@ -56,7 +56,7 @@ from earthsci_ast.esm_types import (
 )
 from earthsci_ast.classification import ode_states
 from earthsci_ast.flatten import FlattenedSystem, flatten
-from earthsci_ast.parse import load_path
+from earthsci_ast.parse import load_string
 from earthsci_ast.serialize import _serialize_expression, to_json
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
@@ -394,7 +394,7 @@ def test_flatten_stable_under_json_round_trip(esm_file: EsmFile) -> None:
     """Serializing + reloading a model must not change its flattened form."""
     json_str = to_json(esm_file)
     try:
-        reloaded = load(json_str)
+        reloaded = load_string(json_str)
     except Exception:  # pragma: no cover — surface as a Hypothesis shrink case
         pytest.fail(
             "Hypothesis-generated model failed to JSON round-trip "

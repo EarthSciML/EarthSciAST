@@ -255,8 +255,10 @@ def test_run_pde_tests_observed_array_assertions() -> None:
 def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
     file = load_string(json.dumps(_RAGGED_DOC))
     insp = BuildInspection()
-    result = solve(esm_problem(file, (0.0, 1.0), inspect=insp), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success)
+    result = solve(
+        esm_problem(file, (0.0, 1.0), inspect=insp), alg="LSODA", reltol=1e-10, abstol=1e-12
+    )
+    assert result.retcode is ReturnCode.Success
     # Every state-free array observed is exposed under its flattened name.
     for name in ("Rag.nedges", "Rag.edges_on_cell", "Rag.w", "Rag.gathered"):
         assert name in insp.setup_arrays, sorted(insp.setup_arrays)
@@ -270,7 +272,12 @@ def test_build_inspection_never_changes_the_simulation() -> None:
     """The returned trajectory is bit-identical with and without `inspect`."""
     file = load_string(json.dumps(_RAGGED_DOC))
     plain = solve(esm_problem(file, (0.0, 1.0)), alg="LSODA", reltol=1e-10, abstol=1e-12)
-    inspected = solve(esm_problem(load_string(json.dumps(_RAGGED_DOC)), (0.0, 1.0), inspect=BuildInspection()), alg="LSODA", reltol=1e-10, abstol=1e-12)
+    inspected = solve(
+        esm_problem(load_string(json.dumps(_RAGGED_DOC)), (0.0, 1.0), inspect=BuildInspection()),
+        alg="LSODA",
+        reltol=1e-10,
+        abstol=1e-12,
+    )
     assert (plain.retcode is ReturnCode.Success) and (inspected.retcode is ReturnCode.Success)
     assert plain.vars == inspected.vars
     np.testing.assert_array_equal(plain.t, inspected.t)

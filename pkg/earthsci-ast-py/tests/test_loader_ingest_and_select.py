@@ -253,7 +253,13 @@ def test_prepare_discovers_n_rec_and_the_graph_is_sized_by_it(doc_and_tmp):
     _requires_zarr_store()
     # NOTE the absent metaparameters: the caller passes NO N_REC. The document
     # declares that the loader knows it.
-    prep = esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), metaparameters=None, pushdown_rewrite=True)
+    prep = esm_problem(
+        doc,
+        (0.0, 1.0),
+        providers=_providers(doc, tmp_path),
+        metaparameters=None,
+        pushdown_rewrite=True,
+    )
     assert list(_field(prep, "is_NOx")) == [1.0, 1.0, 0.0], (
         "the observed graph is evaluated over the 3 SURVIVING records"
     )
@@ -265,7 +271,13 @@ def test_prepare_discovers_n_rec_and_the_graph_is_sized_by_it(doc_and_tmp):
 def test_a_caller_binding_that_contradicts_the_discovered_extent_is_an_error(doc_and_tmp):
     doc, tmp_path = doc_and_tmp
     with pytest.raises(SimulationError) as e:
-        esm_problem(doc, (0.0, 1.0), providers=_providers(doc, tmp_path), metaparameters={"N_REC": 5}, pushdown_rewrite=True)
+        esm_problem(
+            doc,
+            (0.0, 1.0),
+            providers=_providers(doc, tmp_path),
+            metaparameters={"N_REC": 5},
+            pushdown_rewrite=True,
+        )
     assert "N_REC" in str(e.value)
     assert "discovers 3" in str(e.value)
 

@@ -115,9 +115,18 @@ def _doc():
                                 "r": {"from": "emis_records"},
                             },
                             "args": [
-                                "src_W", "src_S", "src_E", "src_N",
-                                "rec_xmin", "rec_ymin", "rec_xmax", "rec_ymax",
-                                "cell_ring", "cell_area", "rec_ring", "emis_annual",
+                                "src_W",
+                                "src_S",
+                                "src_E",
+                                "src_N",
+                                "rec_xmin",
+                                "rec_ymin",
+                                "rec_xmax",
+                                "rec_ymax",
+                                "cell_ring",
+                                "cell_area",
+                                "rec_ring",
+                                "emis_annual",
                             ],
                             "expr": {
                                 "op": "*",
@@ -128,10 +137,34 @@ def _doc():
                                             {
                                                 "op": "and",
                                                 "args": [
-                                                    {"op": "<=", "args": [_ix("src_W", "c"), _ix("rec_xmax", "r")]},
-                                                    {"op": "<=", "args": [_ix("rec_xmin", "r"), _ix("src_E", "c")]},
-                                                    {"op": "<=", "args": [_ix("src_S", "c"), _ix("rec_ymax", "r")]},
-                                                    {"op": "<=", "args": [_ix("rec_ymin", "r"), _ix("src_N", "c")]},
+                                                    {
+                                                        "op": "<=",
+                                                        "args": [
+                                                            _ix("src_W", "c"),
+                                                            _ix("rec_xmax", "r"),
+                                                        ],
+                                                    },
+                                                    {
+                                                        "op": "<=",
+                                                        "args": [
+                                                            _ix("rec_xmin", "r"),
+                                                            _ix("src_E", "c"),
+                                                        ],
+                                                    },
+                                                    {
+                                                        "op": "<=",
+                                                        "args": [
+                                                            _ix("src_S", "c"),
+                                                            _ix("rec_ymax", "r"),
+                                                        ],
+                                                    },
+                                                    {
+                                                        "op": "<=",
+                                                        "args": [
+                                                            _ix("rec_ymin", "r"),
+                                                            _ix("src_N", "c"),
+                                                        ],
+                                                    },
                                                 ],
                                             },
                                             1.0,
@@ -148,7 +181,10 @@ def _doc():
                                                     {
                                                         "op": "polygon_intersection_area",
                                                         "manifold": "planar",
-                                                        "args": [_ix("cell_ring", "c"), _ix("rec_ring", "r")],
+                                                        "args": [
+                                                            _ix("cell_ring", "c"),
+                                                            _ix("rec_ring", "r"),
+                                                        ],
                                                     },
                                                     _ix("cell_area", "c"),
                                                 ],
@@ -203,12 +239,17 @@ class MockGated:
 
 def _const_arrays():
     base = {
-        "src_W": W, "src_S": S, "src_E": E, "src_N": N,
+        "src_W": W,
+        "src_S": S,
+        "src_E": E,
+        "src_N": N,
         "cell_area": [1.0] * 4,
         "cell_ring": [_ring(W[c], S[c], E[c], N[c]) for c in range(4)],
         "rec_ring": [_ring(*r) for r in RECS],
-        "rec_xmin": [r[0] for r in RECS], "rec_ymin": [r[1] for r in RECS],
-        "rec_xmax": [r[2] for r in RECS], "rec_ymax": [r[3] for r in RECS],
+        "rec_xmin": [r[0] for r in RECS],
+        "rec_ymin": [r[1] for r in RECS],
+        "rec_xmax": [r[2] for r in RECS],
+        "rec_ymax": [r[3] for r in RECS],
         "emis_annual": EMIS,
     }
     # The flattened consumer is `<Model>.<parameter>`; the pushdown path aliases
@@ -246,7 +287,11 @@ def test_every_cell_axis_array_is_gathered_rank_preserving():
     ]
     assert gathers["pd_cell__src_cells__cell_area"] == ["pd_support__src_cells"]
 
-    defs = {e["lhs"]: e["rhs"] for e in out["models"]["Binned"]["equations"] if isinstance(e.get("lhs"), str)}
+    defs = {
+        e["lhs"]: e["rhs"]
+        for e in out["models"]["Binned"]["equations"]
+        if isinstance(e.get("lhs"), str)
+    }
     ring = defs["pd_cell__src_cells__cell_ring"]
     # A MAP, not a reduction: every range is an output index.
     assert ring["output_idx"] == ["c", "pd_t0", "pd_t1"]
@@ -264,9 +309,7 @@ def test_body_reads_are_repointed_onto_the_gathers():
     compact axis — the substitution is by NAME, so the sliced spelling
     `index(cell_ring, c)` is untouched apart from the base."""
     out = desugar_pushdown(_doc(), "Binned")
-    body = next(
-        e["rhs"] for e in out["models"]["Binned"]["equations"] if e.get("lhs") == "E_PM25"
-    )
+    body = next(e["rhs"] for e in out["models"]["Binned"]["equations"] if e.get("lhs") == "E_PM25")
     assert body["ranges"]["c"]["from"] == "pd_support__src_cells"
 
     bases = set()
@@ -364,7 +407,9 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
     which is on the full receptor axis, exactly."""
     ca = _const_arrays()
 
-    dense_prep = esm_problem(copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=dict(ca, **{"Binned.SR_PM25": SR}))
+    dense_prep = esm_problem(
+        copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=dict(ca, **{"Binned.SR_PM25": SR})
+    )
     dense = {v: np.asarray(observed_field(dense_prep, v)) for v in ("E_PM25", "conc_PM25")}
     # The dense arm is itself checked against a hand oracle, so a shared bug in
     # both arms cannot pass this test by agreeing with itself.
@@ -372,7 +417,13 @@ def test_rewritten_polygon_allocation_matches_the_dense_evaluation():
     assert np.allclose(dense["conc_PM25"], np.asarray(EXPECT_E) @ SR)
 
     gated = MockGated(SR)
-    push_prep = esm_problem(copy.deepcopy(_doc()), (0.0, 1.0), const_arrays=ca, providers={"Binned.SR_PM25": gated}, pushdown_rewrite=True)
+    push_prep = esm_problem(
+        copy.deepcopy(_doc()),
+        (0.0, 1.0),
+        const_arrays=ca,
+        providers={"Binned.SR_PM25": gated},
+        pushdown_rewrite=True,
+    )
     push = {v: np.asarray(observed_field(push_prep, v)) for v in ("E_PM25", "conc_PM25")}
 
     mf = np.asarray(push_prep.const_arrays["pd_member_factor__src_cells"], dtype=int)

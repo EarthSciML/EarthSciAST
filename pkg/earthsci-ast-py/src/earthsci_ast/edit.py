@@ -749,6 +749,7 @@ class ESMEditor:
 # bottom of this module.
 # ===========================================================================
 
+
 def add_variable(
     model: Model, var_name: str, var_info: ModelVariable, validate_after_edit: bool = True
 ) -> EditResult:
@@ -765,25 +766,19 @@ def rename_variable(
     return editor.rename_variable(model, old_name, new_name)
 
 
-def remove_variable(
-    model: Model, var_name: str, validate_after_edit: bool = True
-) -> EditResult:
+def remove_variable(model: Model, var_name: str, validate_after_edit: bool = True) -> EditResult:
     """Remove a variable from a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_variable(model, var_name)
 
 
-def add_equation(
-    model: Model, equation: Equation, validate_after_edit: bool = True
-) -> EditResult:
+def add_equation(model: Model, equation: Equation, validate_after_edit: bool = True) -> EditResult:
     """Add an equation to a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.add_equation(model, equation)
 
 
-def remove_equation(
-    model: Model, index: int, validate_after_edit: bool = True
-) -> EditResult:
+def remove_equation(model: Model, index: int, validate_after_edit: bool = True) -> EditResult:
     """Remove an equation from a model by index."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_equation(model, index)
@@ -837,9 +832,7 @@ def add_discrete_event(
     return editor.add_discrete_event(model, event)
 
 
-def remove_event(
-    model: Model, event_name: str, validate_after_edit: bool = True
-) -> EditResult:
+def remove_event(model: Model, event_name: str, validate_after_edit: bool = True) -> EditResult:
     """Remove an event from a model."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_event(model, event_name)
@@ -853,25 +846,19 @@ def add_coupling(
     return editor.add_coupling(esm_file, coupling)
 
 
-def remove_coupling(
-    esm_file: EsmFile, index: int, validate_after_edit: bool = True
-) -> EditResult:
+def remove_coupling(esm_file: EsmFile, index: int, validate_after_edit: bool = True) -> EditResult:
     """Remove a coupling entry from an ESM file."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.remove_coupling(esm_file, index)
 
 
-def merge(
-    file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True
-) -> EditResult:
+def merge(file_a: EsmFile, file_b: EsmFile, validate_after_edit: bool = True) -> EditResult:
     """Merge two ESM files."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.merge(file_a, file_b)
 
 
-def extract(
-    esm_file: EsmFile, component_name: str, validate_after_edit: bool = True
-) -> EditResult:
+def extract(esm_file: EsmFile, component_name: str, validate_after_edit: bool = True) -> EditResult:
     """Extract a single component into a standalone ESM file."""
     editor = ESMEditor(validate_after_edit=validate_after_edit)
     return editor.extract(esm_file, component_name)
@@ -885,6 +872,7 @@ def extract(
 # alongside the canonical name -- for at least one minor release, then go at the
 # next major (API_SPEC.md 10).
 # ===========================================================================
+
 
 def add_variable_to_model(
     model: Model, var_name: str, var_info: ModelVariable, validate_after_edit: bool = True

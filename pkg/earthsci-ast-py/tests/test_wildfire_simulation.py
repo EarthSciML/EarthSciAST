@@ -80,7 +80,7 @@ def test_wildfire_atmosphere_ocean_simulation() -> None:
         test_tol = test.get("tolerance")
 
         result = solve(esm_problem(file, tspan), reltol=1e-10, abstol=1e-12)
-        assert (result.retcode is ReturnCode.Success), f"solve() did not succeed: {result.message}"
+        assert result.retcode is ReturnCode.Success, f"solve() did not succeed: {result.message}"
 
         for a in test["assertions"]:
             total += 1
@@ -120,7 +120,7 @@ def test_wildfire_constant_and_regrid_states() -> None:
     weights giving surface_heat_flux=[100, 283.333, 350]."""
     file = load_path(FIXTURE)
     result = solve(esm_problem(file, (0.0, 3600.0)), reltol=1e-10, abstol=1e-12)
-    assert (result.retcode is ReturnCode.Success), result.message
+    assert result.retcode is ReturnCode.Success, result.message
 
     def final(name: str) -> float:
         assert name in result.vars, f"{name} not in {result.vars}"

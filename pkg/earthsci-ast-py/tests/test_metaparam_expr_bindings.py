@@ -231,4 +231,6 @@ def test_mount_edge_unknown_parent_name_is_loud(tmp_path):
         "parent_bad.esm",
         _parent_mount({"NX": "NX", "NY": "NX", "NTGT": {"op": "*", "args": ["NX", "NZZ"]}}),
     )
-    assert _err(lambda: load_path(path, metaparameters={"NX": 18})) == "template_import_unknown_name"
+    assert (
+        _err(lambda: load_path(path, metaparameters={"NX": 18})) == "template_import_unknown_name"
+    )

@@ -260,8 +260,7 @@ class _ErrorCodeRegistry:
             return self._codes[name]
         except KeyError:
             raise AttributeError(
-                f"no diagnostic code named {name!r}; "
-                f"this binding knows {len(self._codes)} codes"
+                f"no diagnostic code named {name!r}; this binding knows {len(self._codes)} codes"
             ) from None
 
     def __setattr__(self, name: str, value: object) -> None:

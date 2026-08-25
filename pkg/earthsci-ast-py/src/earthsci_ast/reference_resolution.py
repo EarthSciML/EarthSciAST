@@ -330,9 +330,7 @@ def _collect_document_node_ids(document: dict) -> dict[str, _DocNode]:
                         f"duplicate expression-node id '{nid}' in document "
                         f"(at {qualified} and {first.path})",
                     )
-                nodes[nid] = _DocNode(
-                    addr=nid, path=qualified, op=node.get("op"), model=model_name
-                )
+                nodes[nid] = _DocNode(addr=nid, path=qualified, op=node.get("op"), model=model_name)
     return nodes
 
 
