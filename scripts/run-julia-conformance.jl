@@ -164,7 +164,7 @@ function run_display(manifest)
         parse_failure = nothing
         try
             target = is_formula ? String(case["input"]) :
-                     EarthSciAST.parse_expression(case["input"])
+                     EarthSciAST.expression_from_json(case["input"])
         catch e
             parse_failure = string(e)
         end
@@ -207,9 +207,9 @@ function run_substitution(manifest)
     for case in manifest["substitution_cases"]
         id = String(case["id"])
         try
-            expr = EarthSciAST.parse_expression(case["input"])
+            expr = EarthSciAST.expression_from_json(case["input"])
             bindings = Dict{String, EarthSciAST.ASTExpr}(
-                String(k) => EarthSciAST.parse_expression(v)
+                String(k) => EarthSciAST.expression_from_json(v)
                 for (k, v) in case["bindings"]
             )
             result = EarthSciAST.substitute(expr, bindings)
