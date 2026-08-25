@@ -9,7 +9,7 @@
 > modelled loaders as nodes need updating accordingly. See
 > `docs/content/rfcs/unified-variable-model.md`.
 
-**Companion Libraries for the EarthSciML Serialization Format — Version 0.1.0 Draft**
+**Companion Libraries for the EarthSciML Serialization Format — esm 1.0.0**
 
 ## 1. Overview
 

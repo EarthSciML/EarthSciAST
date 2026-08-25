@@ -1,10 +1,12 @@
 # Getting Started with ESM Format in Python
 
-The Python implementation provides scientific computing integration with NumPy, SciPy, SymPy, and matplotlib, making it ideal for data analysis, visualization, and numerical modeling workflows.
+The Python implementation provides scientific computing integration with NumPy,
+SciPy, SymPy, and matplotlib, making it suitable for data analysis,
+visualization, and numerical modeling workflows.
 
 ## Installation
 
-### From PyPI (when available)
+### From PyPI
 ```bash
 pip install earthsci-ast
 ```
@@ -17,25 +19,32 @@ pip install -e .
 ```
 
 ### With Optional Dependencies
+
+The base install is the **format** library — parse, validate, serialize,
+display, canonicalize, graph, edit, flatten — and pulls in no netCDF or solver
+stack. The heavier tiers are opt-in:
+
 ```bash
-# For visualization
-pip install earthsci-ast[viz]
+# Gridded / static data readers (xarray + netcdf4)
+pip install "earthsci-ast[data]"
 
-# For symbolic computation
-pip install earthsci-ast[symbolic]
+# ODE solver behind `solve` (scipy)
+pip install "earthsci-ast[simulate]"
 
-# For all optional features
-pip install earthsci-ast[all]
+# Solution.plot (matplotlib)
+pip install "earthsci-ast[plot]"
+
+# Spherical / geodesic clipping (spherely)
+pip install "earthsci-ast[geometry]"
 ```
 
 ## Core Capabilities
 
-The Python implementation provides **Analysis** tier capabilities:
 - ✅ Parse, serialize, validate ESM files
 - ✅ Mathematical expression manipulation
 - ✅ Unit checking and dimensional analysis
 - ✅ SymPy integration for symbolic computation
-- ✅ NumPy/SciPy integration for numerical analysis
+- ✅ Simulation of ODE and post-discretize PDE systems (NumPy + SciPy)
 - ✅ Matplotlib visualization
 - ✅ Jupyter notebook integration
 
@@ -44,120 +53,155 @@ The Python implementation provides **Analysis** tier capabilities:
 ### Loading and Validating ESM Files
 
 ```python
-from earthsci_ast import load_esm, save_esm, validate
-import json
+from earthsci_ast import load_path, load_string, write_path, validate
 
-# Load from file
-esm_file = load_esm('model.esm')
-print(f"Loaded: {esm_file.metadata.name}")
+# From a file
+esm_file = load_path("model.esm")
 
-# Load from string
-json_string = '''{"esm": "1.0.0", "metadata": {"name": "Test"}}'''
-esm_file = load_esm(json_string)
+# From a JSON string
+esm_file = load_string(json_string)
 
-# Load from dictionary
-esm_dict = json.loads(json_string)
-esm_file = load_esm(esm_dict)
+# Inspect the document
+print(f"Models: {list(esm_file.models)}")
+model = esm_file.models["ExponentialDecay"]
+print(f"Variables: {list(model.variables)}")
+print(f"Equations: {len(model.equations)}")
 
-# Validate structure and semantics
+# Validate
 result = validate(esm_file)
 if result.is_valid:
-    print("✓ Valid ESM file")
+    print("Valid")
 else:
-    for error in result.errors:
-        print(f"✗ {error.path}: {error.message}")
+    for err in result.schema_errors + result.structural_errors:
+        print(f"error: {err}")
 
-# Save back to file
-save_esm(esm_file, 'output.esm')
+# Unit findings are warnings, not errors — they never make a file invalid
+for w in result.unit_warnings:
+    print(f"units: {w.message}")
+
+# Write back out
+write_path(esm_file, "output.esm")
 ```
+
+`load_path` also accepts `metaparameters=` (to close a metaparameterized
+document) and `base_path=` (to resolve `$ref` targets from another directory).
 
 ### Working with Expressions
 
+Expressions are built from `ExprNode`, whose `args` are nested `ExprNode`s,
+variable-name strings, or numbers:
+
 ```python
 from earthsci_ast import (
-    parse_expression, to_unicode, to_latex, to_ascii,
-    substitute, free_variables, simplify
+    ExprNode, to_unicode, to_latex, to_ascii,
+    free_variables, contains, simplify, substitute,
 )
 
-# Parse mathematical expression
-expr = parse_expression({"op": "+", "args": ["x", {"op": "^", "args": ["y", "2"]}]})
+expr = ExprNode(op="*", args=["k", "A", "B"])
 
-# Pretty-print in different formats
-print(f"Unicode: {to_unicode(expr)}")    # x + y²
-print(f"LaTeX: {to_latex(expr)}")        # x + y^{2}
-print(f"ASCII: {to_ascii(expr)}")        # x + y^2
+print(to_unicode(expr))              # k·A·B
+print(to_latex(expr))                # k \cdot A \cdot B
+print(sorted(free_variables(expr)))  # ['A', 'B', 'k']
+print(contains(expr, "A"))           # True
 
-# Analyze expression
-variables = free_variables(expr)          # ['x', 'y']
-print(f"Free variables: {variables}")
+# Substitution takes name -> expression
+bound = substitute(expr, {"k": 2})
+print(to_unicode(bound))             # 2·A·B
 
-# Substitute values
-substituted = substitute(expr, {'x': '2', 'y': 't'})
-print(f"After substitution: {to_unicode(substituted)}")  # 2 + t²
-
-# Simplify expression
-simplified = simplify(expr)
-print(f"Simplified: {to_unicode(simplified)}")
+print(to_unicode(simplify(ExprNode(op="+", args=["x", 0]))))
 ```
 
-## NumPy and SciPy Integration
+To parse infix source text, use `parse_expression`. It returns the raw
+dictionary form of the node, which the renderers accept directly; wrap it in
+`ExprNode(**…)` before passing it to the analysis helpers:
 
-### Numerical Analysis
+```python
+from earthsci_ast import parse_expression, ExprNode, free_variables, to_unicode
+
+raw = parse_expression("k * A * B")     # {'op': '*', 'args': ['k', 'A', 'B']}
+print(to_unicode(raw))                  # k·A·B
+
+expr = ExprNode(**raw)
+print(sorted(free_variables(expr)))     # ['A', 'B', 'k']
+```
+
+## Simulation
+
+The simulation surface is one noun and one verb: `esm_problem(...)` builds,
+`solve(...)` runs. Requires the `[simulate]` extra.
+
+```python
+from earthsci_ast import esm_problem, solve
+
+prob = esm_problem("simple_ode.esm", (0.0, 10.0))
+sol = solve(prob, saveat=[0.0, 5.0, 10.0])
+
+print(sol.retcode)          # ReturnCode.Success
+print(sol.t)                # [ 0.  5. 10.]
+print(sol.vars)             # ['ExponentialDecay.N']
+print(sol.get("ExponentialDecay.N"))
+print(sol.y.shape)          # (n_variables, n_timepoints)
+```
+
+`esm_problem` accepts overrides for parameters and initial conditions, plus the
+metaparameters and data providers a document needs:
+
+```python
+prob = esm_problem(
+    "model.esm",
+    (0.0, 86400.0),
+    p={"k_decay": 0.05},
+    u0={"N": 100.0},
+    model_name="ExponentialDecay",
+)
+sol = solve(prob, alg="LSODA", abstol=1e-8, reltol=1e-6)
+```
+
+### What `esm_problem` accepts
+
+`esm_problem` enforces one rule: the flattened system's independent variables
+must be exactly `['t']`. A document still carrying a spatial axis (`x`, `y`,
+`z`, …) raises `UnsupportedDimensionalityError`.
+
+This is an interface contract, not a tier limit — **discretize the spatial axes
+first**. Discretization is expressed as `expression_templates` carrying `match`
+rewrite rules, and the binding applies them at load time. Once discretized, the
+same `esm_problem` / `solve` pair handles 0-D ODEs, mixed ODE/algebraic
+systems, and PDEs of any dimensionality, because the post-discretize AST has
+the same shape regardless of the original topology.
+
+### Working with the results as arrays
+
+`sol.t` and `sol.y` are plain NumPy arrays, so the whole SciPy/NumPy toolkit
+applies directly:
 
 ```python
 import numpy as np
-from scipy.integrate import odeint
-from earthsci_ast import load_esm, to_numpy_system
+from earthsci_ast import esm_problem, solve
 
-# Load atmospheric chemistry model
-esm_file = load_esm('atmospheric_model.esm')
+sol = solve(esm_problem("model.esm", (0.0, 3600.0)))
 
-# Convert to NumPy-compatible system
-system = to_numpy_system(esm_file)
-
-# Set up initial conditions and parameters
-y0 = np.array([1e12, 1e11, 1e10])  # Initial concentrations
-t = np.linspace(0, 86400, 1000)    # 24 hours
-params = {'k1': 1e-4, 'k2': 2e-5}
-
-# Define ODE system
-def dydt(y, t, system, params):
-    return system.evaluate(y, t, params)
-
-# Solve ODE system
-solution = odeint(dydt, y0, t, args=(system, params))
-
-print(f"Final concentrations: {solution[-1]}")
+series = sol.get("ExponentialDecay.N")
+print("mean:", np.mean(series))
+print("final:", series[-1])
+print("half-life crossing:", sol.t[np.argmax(series < series[0] / 2)])
 ```
 
-### Statistical Analysis
+### Parameter sweeps
+
+There is no dedicated sweep helper — build one problem per sample:
 
 ```python
 import numpy as np
-import pandas as pd
-from scipy import stats
-from earthsci_ast import load_esm, validate
+from earthsci_ast import esm_problem, solve
 
-# Load multiple model runs
-model_results = []
-for i in range(100):
-    # Load model with perturbed parameters
-    esm_file = load_esm(f'model_run_{i}.esm')
+results = {}
+for k in np.linspace(0.01, 0.10, 10):
+    sol = solve(esm_problem("model.esm", (0.0, 3600.0), p={"k_decay": float(k)}))
+    results[k] = sol.get("ExponentialDecay.N")[-1]
 
-    # Extract results
-    result = simulate_model(esm_file)
-    model_results.append(result)
-
-# Convert to DataFrame for analysis
-df = pd.DataFrame(model_results)
-
-# Statistical analysis
-mean_values = df.mean()
-std_values = df.std()
-confidence_intervals = df.apply(lambda x: stats.t.interval(0.95, len(x)-1, loc=x.mean(), scale=stats.sem(x)))
-
-print("Mean concentrations:", mean_values)
-print("95% Confidence intervals:", confidence_intervals)
+for k, final in results.items():
+    print(f"k={k:.3f} -> {final:.4f}")
 ```
 
 ## SymPy Integration
@@ -166,233 +210,147 @@ print("95% Confidence intervals:", confidence_intervals)
 
 ```python
 import sympy as sp
-from earthsci_ast import load_esm, to_sympy_expressions
+from earthsci_ast import ExprNode, to_sympy, from_sympy, to_unicode
 
-# Load model
-esm_file = load_esm('symbolic_model.esm')
+expr = ExprNode(op="*", args=["k", "A", "B"])
+sym = to_sympy(expr)
+print(sym)                       # A*B*k
+print(sp.expand(sym * 2))
 
-# Convert expressions to SymPy
-sympy_exprs = to_sympy_expressions(esm_file)
-
-# Symbolic differentiation
-x, t = sp.symbols('x t')
-expr = sympy_exprs['reaction_rate']
-
-# Calculate partial derivatives
-dexpr_dx = sp.diff(expr, x)
-dexpr_dt = sp.diff(expr, t)
-
-print(f"∂/∂x: {dexpr_dx}")
-print(f"∂/∂t: {dexpr_dt}")
-
-# Solve algebraic equations symbolically
-equilibrium_eq = sp.Eq(dexpr_dt, 0)
-equilibrium_solution = sp.solve(equilibrium_eq, x)
-print(f"Equilibrium: {equilibrium_solution}")
-
-# Generate optimized NumPy functions
-expr_func = sp.lambdify((x, t), expr, 'numpy')
-gradient_func = sp.lambdify((x, t), [dexpr_dx, dexpr_dt], 'numpy')
+# And back into ESM form
+print(to_unicode(from_sympy(sp.simplify(sym))))
 ```
+
+`to_sympy` accepts an optional `symbol_map` if you need to control how names
+become SymPy symbols.
 
 ### Jacobian Matrix Generation
 
+`jacobian(model)` differentiates the model's ODE right-hand sides with respect
+to its ODE states and returns a SymPy matrix:
+
 ```python
-import sympy as sp
-from earthsci_ast import load_esm, get_state_variables, get_equations
+from earthsci_ast import Model, ModelVariable, Equation, ExprNode, jacobian, ode_states
 
-# Load chemical kinetics model
-esm_file = load_esm('kinetics_model.esm')
+model = Model(
+    name="Lotka",
+    variables={
+        "x": ModelVariable(type="unknown", units="1", description="prey"),
+        "y": ModelVariable(type="unknown", units="1", description="predator"),
+        "a": ModelVariable(type="parameter", units="1/s", default=1.1),
+        "b": ModelVariable(type="parameter", units="1/s", default=0.4),
+    },
+    equations=[
+        Equation(
+            lhs=ExprNode(op="D", args=["x"], wrt="t"),
+            rhs=ExprNode(op="-", args=[ExprNode(op="*", args=["a", "x"]),
+                                       ExprNode(op="*", args=["b", "x", "y"])]),
+        ),
+        Equation(
+            lhs=ExprNode(op="D", args=["y"], wrt="t"),
+            rhs=ExprNode(op="-", args=[ExprNode(op="*", args=["b", "x", "y"]),
+                                       ExprNode(op="*", args=["a", "y"])]),
+        ),
+    ],
+)
 
-# Get system variables and equations
-state_vars = get_state_variables(esm_file)
-equations = get_equations(esm_file)
-
-# Convert to SymPy
-symbols = [sp.Symbol(var.name) for var in state_vars]
-sympy_eqs = [to_sympy(eq.rhs) for eq in equations]
-
-# Compute Jacobian matrix
-jacobian = sp.Matrix([[sp.diff(eq, var) for var in symbols] for eq in sympy_eqs])
-
-print("Jacobian matrix:")
-sp.pprint(jacobian)
-
-# Generate optimized function
-jacobian_func = sp.lambdify(symbols, jacobian, 'numpy')
+print(ode_states(model))   # ['x', 'y']
+print(jacobian(model))     # Matrix([[a - b*y, -b*x], [b*y, -a + b*x]])
 ```
+
+`jacobian` requires every equation in the model to be differentiable, so a
+model that also carries `ic` (initial-condition) equations must have them
+filtered out first.
 
 ## Visualization with Matplotlib
 
 ### Time Series Plotting
 
+A `Solution` plots itself (requires the `[plot]` extra):
+
 ```python
-import matplotlib.pyplot as plt
-from earthsci_ast import load_esm, simulate_model
+from earthsci_ast import esm_problem, solve
 
-# Load and simulate model
-esm_file = load_esm('atmospheric_model.esm')
-time, solution = simulate_model(esm_file, t_span=(0, 86400))
-
-# Create comprehensive plot
-fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-
-# Concentration time series
-axes[0, 0].plot(time/3600, solution)  # Convert to hours
-axes[0, 0].set_xlabel('Time (hours)')
-axes[0, 0].set_ylabel('Concentration (molec/cm³)')
-axes[0, 0].set_title('Species Concentrations')
-axes[0, 0].legend(['O₃', 'NO₂', 'OH'])
-axes[0, 0].set_yscale('log')
-
-# Phase space plot
-axes[0, 1].plot(solution[:, 0], solution[:, 1])
-axes[0, 1].set_xlabel('[O₃] (molec/cm³)')
-axes[0, 1].set_ylabel('[NO₂] (molec/cm³)')
-axes[0, 1].set_title('Phase Space')
-
-# Rate analysis
-rates = calculate_reaction_rates(esm_file, solution)
-axes[1, 0].plot(time/3600, rates)
-axes[1, 0].set_xlabel('Time (hours)')
-axes[1, 0].set_ylabel('Reaction Rate')
-axes[1, 0].set_title('Reaction Rates')
-
-# Sensitivity analysis
-sensitivity = calculate_sensitivity(esm_file, solution)
-axes[1, 1].imshow(sensitivity, aspect='auto', cmap='RdBu_r')
-axes[1, 1].set_title('Parameter Sensitivity')
-axes[1, 1].set_xlabel('Parameters')
-axes[1, 1].set_ylabel('Time')
-
-plt.tight_layout()
-plt.savefig('model_analysis.png', dpi=300)
-plt.show()
+sol = solve(esm_problem("model.esm", (0.0, 3600.0)))
+sol.plot()                                    # every variable
+sol.plot(variables=["ExponentialDecay.N"])    # a subset
 ```
 
-### 3D Visualization
+For full control, drive matplotlib directly off the arrays:
 
 ```python
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import numpy as np
-from earthsci_ast import load_esm, parameter_sweep
+from earthsci_ast import esm_problem, solve
 
-# Parameter sweep
-esm_file = load_esm('parameter_study.esm')
-param1_range = np.linspace(1e-5, 1e-3, 20)
-param2_range = np.linspace(1e-6, 1e-4, 20)
+sol = solve(esm_problem("model.esm", (0.0, 3600.0)))
 
-# Run parameter sweep
-results = parameter_sweep(esm_file, {
-    'k1': param1_range,
-    'k2': param2_range
-})
+fig, ax = plt.subplots(figsize=(8, 4))
+for name in sol.vars:
+    ax.plot(sol.t, sol.get(name), label=name)
+ax.set_xlabel("time (s)")
+ax.set_ylabel("value")
+ax.legend()
+fig.tight_layout()
+fig.savefig("timeseries.png", dpi=150)
+```
 
-# Create 3D surface plot
-fig = plt.figure(figsize=(10, 8))
-ax = fig.add_subplot(111, projection='3d')
+### Visualizing model structure
 
-X, Y = np.meshgrid(param1_range, param2_range)
-Z = results['final_concentration']
+`component_graph` returns the coupling graph, which renders to Mermaid, DOT, or
+JSON — useful for embedding a diagram in a notebook or a report:
 
-surface = ax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.8)
-ax.set_xlabel('Parameter k1')
-ax.set_ylabel('Parameter k2')
-ax.set_zlabel('Final [O₃] (molec/cm³)')
-ax.set_title('Parameter Sensitivity Surface')
+```python
+from earthsci_ast import load_path, component_graph, to_mermaid, to_dot
 
-plt.colorbar(surface)
-plt.show()
+graph = component_graph(load_path("coupled.esm"))
+print(to_mermaid(graph))
+print(to_dot(graph))
 ```
 
 ## Jupyter Notebook Integration
 
 ### Interactive Model Exploration
 
+`to_latex` output renders directly in a notebook, and `ipywidgets` gives you a
+parameter slider over the same `esm_problem` / `solve` pair:
+
 ```python
-# Jupyter notebook cell
-from earthsci_ast import load_esm, interactive_plot
-from ipywidgets import interact, FloatSlider, IntSlider
-import matplotlib.pyplot as plt
+from IPython.display import Math, display
+from earthsci_ast import load_path, to_latex
 
-# Load model
-esm_file = load_esm('interactive_model.esm')
-
-# Create interactive parameter explorer
-@interact(
-    k1=FloatSlider(value=1e-4, min=1e-6, max=1e-2, step=1e-6, description='k1'),
-    k2=FloatSlider(value=2e-5, min=1e-7, max=1e-3, step=1e-7, description='k2'),
-    duration=IntSlider(value=24, min=1, max=168, description='Hours')
-)
-def explore_parameters(k1, k2, duration):
-    # Update model parameters
-    modified_esm = update_parameters(esm_file, {'k1': k1, 'k2': k2})
-
-    # Simulate
-    time, solution = simulate_model(modified_esm, t_span=(0, duration*3600))
-
-    # Plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(time/3600, solution)
-    plt.xlabel('Time (hours)')
-    plt.ylabel('Concentration')
-    plt.title(f'Model with k1={k1:.2e}, k2={k2:.2e}')
-    plt.legend(['O₃', 'NO₂', 'OH'])
-    plt.yscale('log')
-    plt.grid(True)
-    plt.show()
+esm_file = load_path("model.esm")
+model = esm_file.models["ExponentialDecay"]
+for eq in model.equations:
+    display(Math(f"{to_latex(eq.lhs)} = {to_latex(eq.rhs)}"))
 ```
 
-### Model Comparison Dashboard
+```python
+import ipywidgets as widgets
+import matplotlib.pyplot as plt
+from earthsci_ast import esm_problem, solve
+
+def run(k_decay=0.05, hours=1.0):
+    sol = solve(esm_problem("model.esm", (0.0, hours * 3600.0), p={"k_decay": k_decay}))
+    plt.figure(figsize=(8, 4))
+    for name in sol.vars:
+        plt.plot(sol.t, sol.get(name), label=name)
+    plt.xlabel("time (s)"); plt.legend(); plt.show()
+
+widgets.interact(run, k_decay=(0.01, 0.20, 0.01), hours=(0.5, 24.0, 0.5))
+```
+
+### Comparing model versions
 
 ```python
-import pandas as pd
-import seaborn as sns
-from earthsci_ast import load_esm, compare_models
+import matplotlib.pyplot as plt
+from earthsci_ast import esm_problem, solve
 
-# Load multiple model versions
-models = {
-    'v1.0': load_esm('model_v1.esm'),
-    'v1.1': load_esm('model_v1.1.esm'),
-    'v2.0': load_esm('model_v2.esm')
-}
-
-# Compare model performance
-comparison_results = compare_models(models)
-
-# Create comparison dashboard
-fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-
-# Model complexity comparison
-complexity_df = pd.DataFrame({
-    'Version': list(models.keys()),
-    'Variables': [len(model.get_variables()) for model in models.values()],
-    'Equations': [len(model.get_equations()) for model in models.values()],
-    'Parameters': [len(model.get_parameters()) for model in models.values()]
-})
-
-complexity_df.set_index('Version').plot(kind='bar', ax=axes[0,0])
-axes[0,0].set_title('Model Complexity')
-axes[0,0].set_ylabel('Count')
-
-# Performance comparison
-performance_df = pd.DataFrame(comparison_results['performance'])
-sns.boxplot(data=performance_df, ax=axes[0,1])
-axes[0,1].set_title('Simulation Performance')
-axes[0,1].set_ylabel('Runtime (seconds)')
-
-# Accuracy comparison
-accuracy_df = pd.DataFrame(comparison_results['accuracy'])
-sns.heatmap(accuracy_df, annot=True, ax=axes[1,0], cmap='RdYlBu_r')
-axes[1,0].set_title('Model Accuracy (R²)')
-
-# Feature comparison
-features_df = pd.DataFrame(comparison_results['features'])
-features_df.plot(kind='barh', ax=axes[1,1])
-axes[1,1].set_title('Feature Availability')
-
-plt.tight_layout()
+versions = {"v1.0": "model_v1.esm", "v1.1": "model_v1.1.esm"}
+fig, ax = plt.subplots(figsize=(8, 4))
+for label, path in versions.items():
+    sol = solve(esm_problem(path, (0.0, 3600.0)))
+    ax.plot(sol.t, sol.get(sol.vars[0]), label=label)
+ax.legend(); ax.set_xlabel("time (s)")
 plt.show()
 ```
 
@@ -402,194 +360,104 @@ plt.show()
 
 ```python
 import pytest
-from earthsci_ast import load_esm, validate, simulate_model
-import numpy as np
+from earthsci_ast import load_path, validate, validate_units, esm_problem, solve
 
-class TestESMModel:
-    @pytest.fixture
-    def sample_model(self):
-        return load_esm('test_data/sample_model.esm')
 
-    def test_model_loads_correctly(self, sample_model):
-        assert sample_model.metadata.name == 'Sample Model'
-        assert len(sample_model.models) > 0
+@pytest.fixture
+def esm_file():
+    return load_path("tests/fixtures/model.esm")
 
-    def test_model_validates(self, sample_model):
-        result = validate(sample_model)
-        assert result.is_valid, f"Validation errors: {result.errors}"
 
-    def test_simulation_runs(self, sample_model):
-        time, solution = simulate_model(sample_model, t_span=(0, 3600))
+def test_document_is_valid(esm_file):
+    result = validate(esm_file)
+    assert result.is_valid, result.schema_errors + result.structural_errors
 
-        assert len(time) > 0
-        assert solution.shape[0] == len(time)
-        assert not np.any(np.isnan(solution))
-        assert np.all(solution >= 0)  # Physical constraint
 
-    @pytest.mark.parametrize("param_value", [1e-6, 1e-4, 1e-2])
-    def test_parameter_sensitivity(self, sample_model, param_value):
-        modified_model = update_parameters(sample_model, {'k1': param_value})
-        time, solution = simulate_model(modified_model)
+def test_units_are_consistent(esm_file):
+    report = validate_units(esm_file)
+    assert report.is_valid, [f.message for f in report.findings]
 
-        # Check that results are reasonable
-        final_concentrations = solution[-1]
-        assert np.all(final_concentrations > 0)
-        assert np.all(final_concentrations < 1e15)  # Upper bound check
+
+def test_solution_conserves_mass():
+    sol = solve(esm_problem("tests/fixtures/model.esm", (0.0, 100.0)))
+    assert sol.retcode.name == "Success"
+    total = sum(sol.get(name) for name in sol.vars)
+    assert abs(total[-1] - total[0]) < 1e-6
 ```
 
-### Property-Based Testing
+### Round-trip property testing
+
+Serialization must be lossless, which is a natural property test:
 
 ```python
-from hypothesis import given, strategies as st
-from earthsci_ast import parse_expression, to_unicode, substitute
+from earthsci_ast import load_path, to_json, load_string
 
-@given(
-    variable_name=st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=['Lu', 'Ll'])),
-    coefficient=st.floats(min_value=1e-10, max_value=1e10, allow_nan=False, allow_infinity=False)
-)
-def test_linear_expression_properties(variable_name, coefficient):
-    # Create linear expression: coefficient * variable
-    expr = {"op": "*", "args": [str(coefficient), variable_name]}
 
-    # Should parse without error
-    parsed = parse_expression(expr)
-    assert parsed is not None
-
-    # Should render to valid unicode
-    unicode_str = to_unicode(parsed)
-    assert variable_name in unicode_str
-
-    # Substitution should work
-    substituted = substitute(parsed, {variable_name: "1.0"})
-    result_unicode = to_unicode(substituted)
-    assert "1.0" in result_unicode or str(coefficient) in result_unicode
+def test_round_trip_is_lossless():
+    original = load_path("tests/fixtures/model.esm")
+    again = load_string(to_json(original))
+    assert to_json(again) == to_json(original)
 ```
 
-## Performance Optimization
+## Performance Notes
 
-### Vectorized Operations
-
-```python
-import numpy as np
-from earthsci_ast import load_esm, vectorize_system
-
-# Load model
-esm_file = load_esm('large_model.esm')
-
-# Create vectorized system for batch processing
-vectorized_system = vectorize_system(esm_file)
-
-# Process multiple initial conditions simultaneously
-initial_conditions = np.random.random((1000, len(esm_file.get_state_variables())))
-time_points = np.linspace(0, 86400, 100)
-
-# Vectorized simulation (much faster than loops)
-batch_results = vectorized_system.solve_batch(initial_conditions, time_points)
-
-print(f"Processed {len(initial_conditions)} simulations in batch")
-print(f"Results shape: {batch_results.shape}")  # (1000, 100, n_variables)
-```
-
-### Caching and Memoization
-
-```python
-from functools import lru_cache
-from earthsci_ast import load_esm, parse_expression
-
-# Cache parsed expressions
-@lru_cache(maxsize=1000)
-def cached_parse_expression(expr_json):
-    return parse_expression(expr_json)
-
-# Cache model compilation
-@lru_cache(maxsize=10)
-def cached_compile_model(model_file_hash):
-    esm_file = load_esm(model_file_hash)
-    return compile_to_numpy(esm_file)
-
-# Use caching in performance-critical code
-def process_many_expressions(expression_list):
-    results = []
-    for expr_json in expression_list:
-        # This will be fast for repeated expressions
-        parsed = cached_parse_expression(expr_json)
-        results.append(evaluate_expression(parsed))
-    return results
-```
+- **Load once, reuse.** `load_path` parses and resolves references; hold the
+  resulting `EsmFile` rather than re-reading the file per operation.
+- **Build once, solve many.** `esm_problem` does the flattening, discretization
+  rewrite, and code preparation. For a sweep, rebuild only when the *structure*
+  changes — parameter and initial-condition overrides are arguments to
+  `esm_problem`, so they are cheap relative to re-parsing.
+- **`cse=True`** (the default on `esm_problem`) eliminates common
+  subexpressions in the right-hand side; leave it on unless you are debugging.
+- **Stay in NumPy.** `sol.y` is a single array; prefer vectorized operations
+  over per-timestep Python loops.
 
 ## Next Steps
 
-- **Reference** — Browse the [Python API Reference](../api/python/)
-- **Examples** — Work through the [examples directory](../examples/)
-- **Units** — Read the [units standard](../units-standard/)
+- Read the [format specification](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-spec.md)
+  for the authoritative definition
+- Browse the [examples](../../examples/)
+- See the [troubleshooting guide](../../troubleshooting/) when something fails
+- Check the [Python package README](https://github.com/EarthSciML/EarthSciAST/blob/main/pkg/earthsci-ast-py/README.md)
+  for the simulation-interface contract in full
 
 ## Common Patterns
 
-### Model Factory Pattern
+### Model Factory
+
 ```python
-class ModelFactory:
-    @staticmethod
-    def atmospheric_chemistry(species_list, reaction_rates):
-        """Create atmospheric chemistry model from species and rates."""
-        variables = [
-            ModelVariable(name=species, type='state', units='molec/cm^3')
-            for species in species_list
-        ]
+from earthsci_ast import Model, ModelVariable, Equation, ExprNode
 
-        equations = []
-        for reaction, rate in reaction_rates.items():
-            # Parse reaction string and create equations
-            eq = create_equation_from_reaction(reaction, rate)
-            equations.append(eq)
 
-        return Model(
-            name='atmospheric_chemistry',
-            variables=variables,
-            equations=equations
-        )
-
-    @staticmethod
-    def biogeochemical_cycle(pools, fluxes):
-        """Create biogeochemical cycle model."""
-        # Implementation here...
-        pass
+def decay_model(name: str, rate: float) -> Model:
+    return Model(
+        name=name,
+        variables={
+            "N": ModelVariable(type="unknown", units="mol", description="amount"),
+            "k": ModelVariable(type="parameter", units="1/s", default=rate),
+        },
+        equations=[
+            Equation(
+                lhs=ExprNode(op="D", args=["N"], wrt="t"),
+                rhs=ExprNode(op="-", args=[ExprNode(op="*", args=["k", "N"])]),
+            )
+        ],
+    )
 ```
 
 ### Data Pipeline Integration
+
 ```python
-from earthsci_ast import load_esm, validate
+from pathlib import Path
 import pandas as pd
+from earthsci_ast import esm_problem, solve
 
-class ESMDataPipeline:
-    def __init__(self, model_path):
-        self.esm_file = load_esm(model_path)
-        self._validate_model()
 
-    def _validate_model(self):
-        result = validate(self.esm_file)
-        if not result.is_valid:
-            raise ValueError(f"Invalid model: {result.errors}")
+def run_to_dataframe(path: Path, tspan, **overrides) -> pd.DataFrame:
+    sol = solve(esm_problem(str(path), tspan, **overrides))
+    return pd.DataFrame({name: sol.get(name) for name in sol.vars}, index=sol.t)
 
-    def process_observations(self, data_df):
-        """Process observational data through the model."""
-        results = []
-        for idx, row in data_df.iterrows():
-            # Set model parameters from observations
-            model_result = self.run_model_with_params(row.to_dict())
-            results.append(model_result)
 
-        return pd.DataFrame(results)
-
-    def parameter_estimation(self, observations):
-        """Estimate parameters from observations."""
-        from scipy.optimize import minimize
-
-        def objective(params):
-            predictions = self.predict(params)
-            return np.sum((predictions - observations) ** 2)
-
-        result = minimize(objective, initial_guess)
-        return result.x
+df = run_to_dataframe(Path("model.esm"), (0.0, 3600.0), p={"k_decay": 0.05})
+df.to_csv("results.csv")
 ```
-
-Ready to dive into scientific computing? Browse the [examples](../examples/) and the [Python API Reference](../api/python/).

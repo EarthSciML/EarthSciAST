@@ -76,6 +76,8 @@ json_string = EarthSciAST.serialize(esm_file)
 
 ## Next Steps
 
-- Check out the [API Reference](api/types.md) for detailed documentation
-- See [Examples](examples/basic.md) for more complex usage scenarios
-- Read the [Developer Guide](developer.md) to contribute to the project
+- See [Simulation Runners](simulation-runners.md) for building and solving models
+- Read [`esm-spec.md`](https://github.com/EarthSciML/EarthSciAST/blob/main/esm-spec.md)
+  for the authoritative format definition
+- See [CONTRIBUTING.md](https://github.com/EarthSciML/EarthSciAST/blob/main/CONTRIBUTING.md)
+  to contribute to the project
