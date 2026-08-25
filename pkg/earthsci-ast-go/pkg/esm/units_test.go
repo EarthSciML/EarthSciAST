@@ -457,7 +457,7 @@ func TestValidateEquationDimensionsInconsistent(t *testing.T) {
 	if w == nil {
 		t.Fatal("expected a unit warning")
 	}
-	if w.LhsUnits == "" || w.RhsUnits == "" {
+	if w.LHSUnits == "" || w.RHSUnits == "" {
 		t.Errorf("warning missing dims: %+v", w)
 	}
 }
@@ -528,7 +528,7 @@ func TestValidateFileUnitsEndToEnd(t *testing.T) {
 	for _, w := range result.UnitWarnings {
 		if w.Path == "/models/M/equations/0" {
 			found = true
-			if w.LhsUnits == w.RhsUnits {
+			if w.LHSUnits == w.RHSUnits {
 				t.Errorf("mismatch warning has matching dims: %+v", w)
 			}
 		}
