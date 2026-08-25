@@ -354,8 +354,7 @@ func TestGraphExport(t *testing.T) {
 	}
 
 	// Test DOT export
-	dotExporter := NewDOTExporter()
-	dotOutput, err := dotExporter.ExportComponentGraph(graph)
+	dotOutput, err := ToDOT(graph)
 	if err != nil {
 		t.Errorf("DOT export failed: %v", err)
 	}
@@ -374,8 +373,7 @@ func TestGraphExport(t *testing.T) {
 	}
 
 	// Test Mermaid export
-	mermaidExporter := NewMermaidExporter()
-	mermaidOutput, err := mermaidExporter.ExportComponentGraph(graph)
+	mermaidOutput, err := ToMermaid(graph)
 	if err != nil {
 		t.Errorf("Mermaid export failed: %v", err)
 	}
@@ -385,8 +383,7 @@ func TestGraphExport(t *testing.T) {
 	}
 
 	// Test JSON export
-	jsonExporter := NewJSONExporter()
-	jsonOutput, err := jsonExporter.ExportComponentGraph(graph)
+	jsonOutput, err := ToJSONGraph(graph)
 	if err != nil {
 		t.Errorf("JSON export failed: %v", err)
 	}
