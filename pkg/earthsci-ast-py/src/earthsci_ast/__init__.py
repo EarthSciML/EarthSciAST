@@ -122,6 +122,10 @@ from .flatten import (
 # Validation (Core tier requirement)
 from .validation import validate, validate_path, validate_text, ValidationResult, ValidationError
 
+# Enum lowering (esm-spec §9.3). `lower_enums` is PURE and `lower_enums_mut` is
+# the in-place twin, per API_SPEC.md §8 item 15.
+from .registered_functions import EnumLoweringError, lower_enums, lower_enums_mut
+
 # Expression engine (Core tier requirement)
 from .expression import (
     free_variables,
@@ -517,6 +521,9 @@ __all__ = [
     "validate",
     "validate_path",
     "validate_text",
+    "lower_enums",
+    "lower_enums_mut",
+    "EnumLoweringError",
     "ValidationResult",
     "ValidationError",
     "SchemaValidationError",
