@@ -137,8 +137,12 @@ end
 
 _s_seed(n) = Float64[0.6 * sin(0.7k) + 1.2 for k in 1:n]
 
+# Both arms pin the flag explicitly, so this file also runs correctly under a
+# corpus-wide `ESS_OOP_SSA=1` sweep (the "off" build must really be off).
 function _s_build_both(doc)
-    off = ESMs.build_evaluator(doc; form = :oop)
+    off = withenv("ESS_OOP_SSA" => nothing) do
+        ESMs.build_evaluator(doc; form = :oop)
+    end
     on = withenv("ESS_OOP_SSA" => "1") do
         ESMs.build_evaluator(doc; form = :oop)
     end

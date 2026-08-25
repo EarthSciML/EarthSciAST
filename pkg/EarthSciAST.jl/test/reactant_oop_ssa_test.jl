@@ -119,7 +119,9 @@ function _a_build_pair(doc)
     fon, u0, p, _, _ = withenv("ESS_OOP_SSA" => "1") do
         ESMa.build_evaluator(doc; form = :oop)
     end
-    foff, _, _, _, _ = ESMa.build_evaluator(doc; form = :oop)
+    foff, _, _, _, _ = withenv("ESS_OOP_SSA" => nothing) do
+        ESMa.build_evaluator(doc; form = :oop)
+    end
     return fon, foff, u0, p
 end
 
