@@ -11,6 +11,11 @@
 #   * its du is BIT-identical to the un-split build (ESS_CODEGEN_BODY_SPLIT_DISABLE)
 #     at Float64 and under ForwardDiff (the split is value-exact, order-preserving);
 #   * the pre-split build is byte-restored by ESS_CODEGEN_BODY_SPLIT_DISABLE=1.
+# On Julia < 1.12 the split is unavailable (`_cg_split_supported`: RGF turns a
+# sub-function into an UNTYPED opaque closure there, which boxes per cell and
+# segfaults when nested), so an oversized body DECLINES to the interpreter
+# instead. This pins that fallback on those versions -- and, on every version,
+# that the du is the same either way.
 using Test
 using EarthSciAST
 using ForwardDiff
@@ -61,11 +66,18 @@ _decl(t) = sum(v for (k, v) in t if startswith(String(k), "codegen_decline"); in
     @test get(rt, :codegen_kernel, 0) >= 1        # kernel codegens (not interpreter)
     @test _decl(rt) == 0                          # nothing declined
 
-    # Forced split: a small fn-node cap makes the body exceed one function, so it
-    # is partitioned into helpers — and STILL codegens (no interpreter decline).
+    # Forced split: a small fn-node cap makes the body exceed one function.
     fs, v0, ps, st = _bs_build(model, ics; fncap=40)
-    @test get(st, :codegen_kernel, 0) >= 1        # STILL codegen'd (split, not declined)
-    @test _decl(st) == 0                          # the split never falls back to the interpreter
+    if ESM._cg_split_supported()
+        # It is partitioned into helpers — and STILL codegens (no decline).
+        @test get(st, :codegen_kernel, 0) >= 1    # STILL codegen'd (split, not declined)
+        @test _decl(st) == 0                      # the split never falls back to the interpreter
+    else
+        # The documented fallback: no split is emitted, and the oversized body
+        # declines to the interpreter rather than to a boxing closure nest.
+        @test _decl(st) >= 1
+        @test get(st, :codegen_kernel, 0) == 0
+    end
 
     @test u0 == v0
 

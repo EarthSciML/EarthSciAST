@@ -881,6 +881,22 @@ end
 _codegen_fn_node_cap() =
     something(tryparse(Int, get(ENV, "ESS_CODEGEN_FN_NODE_CAP", "")), 20_000)
 
+# Whether this Julia can carry the body split at all. Julia < 1.12 CANNOT, and
+# takes the pre-split path instead: one function per kernel, and an oversized
+# body declines to the interpreter the way it did before ess-iip-split.
+#
+# The split's only mechanism is an inner `function` inside the emitted body, and
+# that body becomes a `RuntimeGeneratedFunction`. RGF rewrites every inner
+# definition into a `Base.Experimental.@opaque` closure — it has to, since the
+# body is compiled inside a `@generated` function, which may not define methods
+# — and an untyped opaque closure is `Core.OpaqueClosure{NTuple{N, Any}}`. On
+# 1.10 and 1.11 that boxes every scalar crossing the boundary, which is a
+# per-cell leak linear in the grid, and a NEST of them (a helper calling a
+# helper) segfaults: the MethodError such a call raises crashes the runtime
+# while it is being constructed. 1.12's optimizer types and elides the closure,
+# which is why the split is allocation-free and stable only there.
+_cg_split_supported() = VERSION >= v"1.12"
+
 # Every Symbol referenced anywhere in `ex` (recursively). Used to compute the
 # exact set of outer-scope locals a chunk function must receive as arguments.
 function _cg_collect_syms!(acc::Set{Symbol}, ex)
@@ -1057,6 +1073,10 @@ function _cg_bound_body!(ctx::_CGCtx, ex)
     cap = _codegen_fn_node_cap()
     cap <= 0 && return ex
     _cg_expr_size(ex) <= cap && return ex
+    # Oversized, and this Julia cannot split safely: decline the kernel to its
+    # existing (interpreter) runner rather than emit a closure nest that boxes
+    # per cell and segfaults. See `_cg_split_supported`.
+    _cg_split_supported() || throw(_CodegenDecline(:body_split_unsupported))
     return _cg_partition!(ctx, ex, cap)[1]
 end
 
@@ -1141,8 +1161,10 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     push!(outer_passed, :_cgci)
     push!(outer_passed, :_cgnc)
 
-    # Partition the loop nests into chunks capped by emitted-node count.
-    cap = _codegen_fn_node_cap()
+    # Partition the loop nests into chunks capped by emitted-node count. A
+    # non-positive cap means "one chunk" — which is also what an unsupported
+    # Julia gets, so it emits no sub-functions at all (`_cg_split_supported`).
+    cap = _cg_split_supported() ? _codegen_fn_node_cap() : 0
     chunks = Vector{Vector{Any}}()
     cur = Any[]; curcost = 0
     for (lx, cost) in kloops
@@ -1154,23 +1176,39 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
     isempty(cur) || push!(chunks, cur)
 
     # One `@noinline` sub-function per chunk, taking du/u/p/t + exactly the outer
-    # locals its loops reference (sorted for a deterministic signature). It
-    # captures nothing, so calling it allocates nothing.
+    # locals its loops reference (sorted for a deterministic signature).
+    #
+    # A SINGLE chunk is not a split -- the body is already under the cap -- so
+    # its loops go straight into the kernel function instead. That is not just
+    # tidiness: a sub-function here becomes an untyped opaque closure, and on
+    # Julia < 1.12 every call to one boxes each scalar crossing the boundary,
+    # a per-cell leak linear in the grid (48 B/cell on the 1-D array-observed
+    # kernel). See `_cg_split_supported`, which is also why an unsupported Julia
+    # never reaches the several-chunk branch below.
+    #
+    # A genuine split (several chunks) does emit sub-functions: an oversized
+    # single function is the thing this transform exists to prevent, and it OOMs
+    # the compiler outright, which is worse than boxing.
     fndefs = Any[]; callstmts = Any[]
-    for (ci, chunk) in enumerate(chunks)
-        used = Set{Symbol}()
-        for lx in chunk
-            _cg_collect_syms!(used, lx)
+    if length(chunks) == 1
+        push!(callstmts,
+              Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunks[1]...)))
+    else
+        for (ci, chunk) in enumerate(chunks)
+            used = Set{Symbol}()
+            for lx in chunk
+                _cg_collect_syms!(used, lx)
+            end
+            passed = sort!(collect(intersect(used, outer_passed)); by = string)
+            fname = Symbol("_cgchunk_", ci)
+            fbody = Expr(:block,
+                         :(local _cgT = _rhs_value_type(u, p, t)),
+                         Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunk...)),
+                         :(return nothing))
+            fdef = Expr(:function, Expr(:call, fname, :du, :u, :p, :t, passed...), fbody)
+            push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+            push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
         end
-        passed = sort!(collect(intersect(used, outer_passed)); by = string)
-        fname = Symbol("_cgchunk_", ci)
-        fbody = Expr(:block,
-                     :(local _cgT = _rhs_value_type(u, p, t)),
-                     Expr(:macrocall, Symbol("@inbounds"), ln, Expr(:block, chunk...)),
-                     :(return nothing))
-        fdef = Expr(:function, Expr(:call, fname, :du, :u, :p, :t, passed...), fbody)
-        push!(fndefs, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
-        push!(callstmts, Expr(:call, fname, :du, :u, :p, :t, passed...))
     end
 
     # `tabs` is now a tuple of the by-type containers; hoist each to its `_cggrpG`
