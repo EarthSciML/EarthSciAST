@@ -179,3 +179,44 @@ def test_untaken_eager_ifelse_branch_may_divide_by_zero():
             }
         ), (0.0, 1.0), model_name="M")
     assert observed_field(prep, "y") == 1.0
+
+
+def test_untaken_eager_ifelse_branch_may_leave_the_reals_through_solve():
+    """`ifelse(false, x^(1/3), 6.0)` with `x < 0`, read back through `solve`.
+
+    The real-world shape (EarthSciModels `holtslag_boville/nonlocal_abl.esm`):
+    a Monin-Obukhov stability function written as
+    `ifelse(L > 0, 1 + 5*ζ, (1 - 16*ζ)^(-1/4))`. Under STABLE conditions the
+    taken branch is the linear one, but BOTH `ifelse` lowerings in this binding
+    are eager -- the codegen path becomes `sympy.Piecewise` and thence
+    `numpy.select`, which evaluates every arm -- so the untaken arm's negative
+    base with a fractional exponent promoted the whole result to a complex
+    dtype whose imaginary part is ZERO.
+
+    That is a real answer wearing a complex dtype. `_observed_rows` cast it
+    with a bare `float()` and raised an unnamed `TypeError` ("can't convert
+    complex to float"), so a model whose taken branch is perfectly real could
+    not be simulated at all -- and its sibling cast, `np.asarray(...,
+    dtype=float)`, would have silently discarded the imaginary part instead.
+    The array observed path already routed through `_require_real`; this scalar
+    one did not.
+
+    Asserts the VALUE, not merely the absence of an exception: projecting a
+    zero-imaginary complex back onto the reals has to give the taken branch.
+    """
+    from earthsci_ast import solve
+
+    # `x` defaults to -2.5, so the condition is TRUE and 6.0 is the taken
+    # branch -- exactly the stable-branch selection in the real model.
+    doc = _doc(
+        {
+            "op": "ifelse",
+            "args": [{"op": "<", "args": ["x", 0.0]}, 6.0, _pow_x()],
+        }
+    )
+    sol = solve(esm_problem(doc, (0.0, 1.0), model_name="M"))
+    assert sol.retcode.name != "Failure", sol.message
+    # `vars` are model-qualified ("M.y"), so match on the final component.
+    idx = next(i for i, n in enumerate(sol.vars) if n.split(".")[-1] == "y")
+    y = np.asarray(sol.y[idx])
+    assert y.size and np.all(y == 6.0), y[:5]

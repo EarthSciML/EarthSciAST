@@ -11,7 +11,7 @@ import guard, and the dense-output point budget — so the pathway submodules
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from .errors import AmbiguousParameterError, UnknownParameterError
+from .numpy_interpreter import _require_real
 
 # Optional scipy import - only needed for actual simulation.
 #
@@ -340,16 +341,37 @@ def _retcode_for_error(exc: BaseException) -> ReturnCode:
     return ReturnCode.Failure
 
 
-def _observed_rows(vals, n: int) -> np.ndarray:
+def _observed_rows(vals, n: int, names: Sequence[str] | None = None) -> np.ndarray:
     """Materialize observed-body outputs into a ``(len(vals), n)`` float matrix.
 
     Each observed value is broadcast onto the ``n``-point time grid: a scalar
     (``ndim == 0``) or a size-1 array fills the whole row with its single value;
     a full-length array (``size == n``) is copied verbatim; any other size falls
     back to its first element broadcast across the row.
+
+    Every value passes :func:`numpy_interpreter._require_real` FIRST, mirroring
+    what the array observed path already does at
+    ``simulation_array._collect_observed``. Both `ifelse` lowerings in this
+    binding are EAGER — the interpreter evaluates both arms, and the codegen
+    path lowers to ``sympy.Piecewise`` and thence to ``numpy.select``, which
+    also evaluates every arm — so an UNTAKEN arm containing ``^`` with a
+    negative base and a fractional exponent promotes the whole result to a
+    complex dtype with an all-zero imaginary part. That is a real answer
+    wearing a complex dtype, and ``_require_real`` projects it back onto the
+    reals; only a genuinely nonzero imaginary part raises.
+
+    Without this, the two casts below did the two WORST things available: bare
+    ``float()`` on a scalar raised an unnamed ``TypeError`` ("can't convert
+    complex to float"), and ``np.asarray(..., dtype=float)`` on an array
+    silently DISCARDED the imaginary part behind a ``ComplexWarning`` nothing
+    escalates — a plausible wrong number. A model whose taken branch is
+    perfectly real could not be simulated at all on the first path, and could
+    be quietly wrong on the second.
     """
     block = np.empty((len(vals), n), dtype=float)
     for i, val in enumerate(vals):
+        where = f"observed '{names[i]}'" if names is not None and i < len(names) else f"observed output {i}"
+        val = _require_real(val, where)
         if np.ndim(val) == 0:
             block[i, :] = float(val)
         else:

@@ -342,7 +342,7 @@ def _simulate_scalar(
             t_out = np.linspace(t0_, t1_, 1001)
             if observed_names and observed_vector_func is not None:
                 obs_vals = observed_vector_func(t_out, *param_values)
-                y_out = _observed_rows(obs_vals, t_out.size)
+                y_out = _observed_rows(obs_vals, t_out.size, observed_names)
             else:
                 y_out = np.empty((0, t_out.size), dtype=float)
             if callback is not None:
@@ -401,7 +401,7 @@ def _simulate_scalar(
         if observed_names and y_out.size and observed_vector_func is not None:
             state_arrays = [y_out[i, :] for i in range(len(state_names))]
             obs_results = observed_vector_func(t_out, *state_arrays, *param_values)
-            obs_block = _observed_rows(obs_results, t_out.size)
+            obs_block = _observed_rows(obs_results, t_out.size, observed_names)
             y_out = np.vstack([y_out, obs_block])
             out_vars.extend(observed_names)
 
