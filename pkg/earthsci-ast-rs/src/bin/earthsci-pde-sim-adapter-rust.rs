@@ -95,9 +95,16 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         .iter()
         .map(|(k, v)| (k.clone(), v.as_f64().unwrap_or(0.0)))
         .collect();
-    let out_times: Vec<f64> = tr["saveat"]
+    // The MANIFEST key is `output_times` -- a shared cross-binding fixture
+    // field written by `scripts/gen_pde_sim_fixtures.py` and read as
+    // `tr.output_times` by the Julia adapter. It is NOT the SciML
+    // `SolveOptions.saveat` field below; phase 4's `output_times` -> `saveat`
+    // rename applied to the OPTIONS struct and was wrongly applied to this
+    // manifest read too, which made every fixture report an error instead of
+    // a trajectory.
+    let out_times: Vec<f64> = tr["output_times"]
         .as_array()
-        .ok_or("saveat missing")?
+        .ok_or("output_times missing")?
         .iter()
         .map(|v| v.as_f64().unwrap_or(0.0))
         .collect();
