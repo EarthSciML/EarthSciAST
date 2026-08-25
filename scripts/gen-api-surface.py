@@ -65,6 +65,48 @@ def canonical(name: str) -> str:
     return "_".join(merged)
 
 
+# A deprecation alias created by a RENAME cannot be folded by `canonical()`,
+# which only knows about SPELLING differences (Julia's `!`, camel vs snake). Yet
+# API_SPEC.md §10 requires an alias to be "a manifest entry with multiple
+# spellings for that binding ... in the same tier" — so without this table the
+# old name lands as its own `extension` symbol and the surface stops recording
+# that the two are one thing.
+#
+# Keyed (binding, exact spelling) -> canonical name. Every entry here is a name
+# kept for one minor per §10; delete the entry when the alias is removed.
+ALIAS_OVERRIDES: dict[tuple[str, str], str] = {
+    # §8 item 7 — Python's edit operations dropped their container suffix.
+    ("python", "add_variable_to_model"): "add_variable",
+    ("python", "rename_variable_in_model"): "rename_variable",
+    ("python", "remove_variable_from_model"): "remove_variable",
+    ("python", "add_equation_to_model"): "add_equation",
+    ("python", "remove_equation_from_model"): "remove_equation",
+    ("python", "add_reaction_to_system"): "add_reaction",
+    ("python", "remove_reaction_from_system"): "remove_reaction",
+    ("python", "add_species_to_system"): "add_species",
+    ("python", "remove_species_from_system"): "remove_species",
+    ("python", "add_continuous_event_to_model"): "add_continuous_event",
+    ("python", "add_discrete_event_to_model"): "add_discrete_event",
+    ("python", "remove_event_from_model"): "remove_event",
+    ("python", "add_coupling_to_file"): "add_coupling",
+    ("python", "remove_coupling_from_file"): "remove_coupling",
+    ("python", "merge_esm_files"): "merge",
+    ("python", "extract_component_from_file"): "extract",
+    # §8 item 6 — Julia's bare `unknowns` / `parameters` collide with MTK and
+    # Catalyst, so the `*_names` spellings stay exported alongside them.
+    ("julia", "unknown_names"): "unknowns",
+    ("julia", "parameter_names"): "parameters",
+    # G-2 — the `get` prefix came off in phase 6.
+    ("typescript", "getSupportedMigrationTargets"): "supported_migration_targets",
+    ("rust", "get_supported_migration_targets"): "supported_migration_targets",
+    # §8 item 10 — Rust's error joined the cross-binding name.
+    ("rust", "ReferenceError"): "reference_resolution_error",
+    # §8 item 13 / item 17 — Rust renames.
+    ("rust", "validate_complete"): "validate_text",
+    ("rust", "build_reference_graph_with_index_sets"): "build_reference_graph",
+}
+
+
 def kind_of(name: str) -> str:
     """Infer a symbol kind from its spelling.
 
@@ -357,7 +399,8 @@ def build() -> dict:
     )
     for binding, names in live.items():
         for name in sorted(names):
-            table[(canonical(name), kind_for(binding, name))][binding].append(name)
+            key = ALIAS_OVERRIDES.get((binding, name)) or canonical(name)
+            table[(key, kind_for(binding, name))][binding].append(name)
 
     symbols = []
     for (name, kind), bindings in sorted(table.items()):

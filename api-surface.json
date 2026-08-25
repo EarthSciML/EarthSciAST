@@ -146,7 +146,7 @@
     }
   },
   "counts": {
-    "symbols": 960,
+    "symbols": 938,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 297,
@@ -157,8 +157,8 @@
       "editor": 71
     },
     "by_tier": {
-      "extension": 687,
-      "stable": 273
+      "extension": 666,
+      "stable": 272
     }
   },
   "planned": [
@@ -240,17 +240,13 @@
       "bindings": {
         "go": "AddContinuousEvent",
         "julia": "add_continuous_event",
-        "python": "add_continuous_event",
+        "python": [
+          "add_continuous_event",
+          "add_continuous_event_to_model"
+        ],
         "typescript": "addContinuousEvent"
-      }
-    },
-    {
-      "name": "add_continuous_event_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_continuous_event_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_continuous_event_to_model (expected add_continuous_event); multiple spellings exported by: python"
     },
     {
       "name": "add_coupling",
@@ -259,18 +255,14 @@
       "bindings": {
         "go": "AddCoupling",
         "julia": "add_coupling",
-        "python": "add_coupling",
+        "python": [
+          "add_coupling",
+          "add_coupling_to_file"
+        ],
         "rust": "add_coupling",
         "typescript": "addCoupling"
-      }
-    },
-    {
-      "name": "add_coupling_to_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_coupling_to_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_coupling_to_file (expected add_coupling); multiple spellings exported by: python"
     },
     {
       "name": "add_discrete_event",
@@ -279,17 +271,13 @@
       "bindings": {
         "go": "AddDiscreteEvent",
         "julia": "add_discrete_event",
-        "python": "add_discrete_event",
+        "python": [
+          "add_discrete_event",
+          "add_discrete_event_to_model"
+        ],
         "typescript": "addDiscreteEvent"
-      }
-    },
-    {
-      "name": "add_discrete_event_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_discrete_event_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_discrete_event_to_model (expected add_discrete_event); multiple spellings exported by: python"
     },
     {
       "name": "add_equation",
@@ -298,18 +286,14 @@
       "bindings": {
         "go": "AddEquation",
         "julia": "add_equation",
-        "python": "add_equation",
+        "python": [
+          "add_equation",
+          "add_equation_to_model"
+        ],
         "rust": "add_equation",
         "typescript": "addEquation"
-      }
-    },
-    {
-      "name": "add_equation_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_equation_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_equation_to_model (expected add_equation); multiple spellings exported by: python"
     },
     {
       "name": "add_model",
@@ -326,10 +310,14 @@
       "bindings": {
         "go": "AddReaction",
         "julia": "add_reaction",
-        "python": "add_reaction",
+        "python": [
+          "add_reaction",
+          "add_reaction_to_system"
+        ],
         "rust": "add_reaction",
         "typescript": "addReaction"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_reaction_to_system (expected add_reaction); multiple spellings exported by: python"
     },
     {
       "name": "add_reaction_system",
@@ -340,32 +328,20 @@
       }
     },
     {
-      "name": "add_reaction_to_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_reaction_to_system"
-      }
-    },
-    {
       "name": "add_species",
       "kind": "function",
       "tier": "stable",
       "bindings": {
         "go": "AddSpecies",
         "julia": "add_species",
-        "python": "add_species",
+        "python": [
+          "add_species",
+          "add_species_to_system"
+        ],
         "rust": "add_species",
         "typescript": "addSpecies"
-      }
-    },
-    {
-      "name": "add_species_to_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_species_to_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_species_to_system (expected add_species); multiple spellings exported by: python"
     },
     {
       "name": "add_variable",
@@ -374,18 +350,14 @@
       "bindings": {
         "go": "AddVariable",
         "julia": "add_variable",
-        "python": "add_variable",
+        "python": [
+          "add_variable",
+          "add_variable_to_model"
+        ],
         "rust": "add_variable",
         "typescript": "addVariable"
-      }
-    },
-    {
-      "name": "add_variable_to_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "add_variable_to_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=add_variable_to_model (expected add_variable); multiple spellings exported by: python"
     },
     {
       "name": "adjacency",
@@ -703,9 +675,13 @@
         "go": "BuildReferenceGraph",
         "julia": "build_reference_graph",
         "python": "build_reference_graph",
-        "rust": "build_reference_graph",
+        "rust": [
+          "build_reference_graph",
+          "build_reference_graph_with_index_sets"
+        ],
         "typescript": "buildReferenceGraph"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: rust=build_reference_graph_with_index_sets (expected build_reference_graph); multiple spellings exported by: rust"
     },
     {
       "name": "build_reference_graph_from_model",
@@ -713,14 +689,6 @@
       "tier": "extension",
       "bindings": {
         "go": "BuildReferenceGraphFromModel"
-      }
-    },
-    {
-      "name": "build_reference_graph_with_index_sets",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "build_reference_graph_with_index_sets"
       }
     },
     {
@@ -3597,17 +3565,13 @@
       "bindings": {
         "go": "Extract",
         "julia": "extract",
-        "python": "extract",
+        "python": [
+          "extract",
+          "extract_component_from_file"
+        ],
         "typescript": "extract"
-      }
-    },
-    {
-      "name": "extract_component_from_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "extract_component_from_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=extract_component_from_file (expected extract); multiple spellings exported by: python"
     },
     {
       "name": "fail",
@@ -4166,15 +4130,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "get_expression_dimensions"
-      }
-    },
-    {
-      "name": "get_supported_migration_targets",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "rust": "get_supported_migration_targets",
-        "typescript": "getSupportedMigrationTargets"
       }
     },
     {
@@ -4840,17 +4795,13 @@
       "tier": "stable",
       "bindings": {
         "go": "Merge",
-        "python": "merge",
+        "python": [
+          "merge",
+          "merge_esm_files"
+        ],
         "typescript": "merge"
-      }
-    },
-    {
-      "name": "merge_esm_files",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "merge_esm_files"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=merge_esm_files (expected merge); multiple spellings exported by: python"
     },
     {
       "name": "metadata",
@@ -5379,14 +5330,6 @@
       }
     },
     {
-      "name": "parameter_names",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "parameter_names"
-      }
-    },
-    {
       "name": "parameter_sweep",
       "kind": "type",
       "tier": "extension",
@@ -5434,9 +5377,13 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "julia": "parameters",
+        "julia": [
+          "parameter_names",
+          "parameters"
+        ],
         "typescript": "parameters"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: julia=parameter_names (expected parameters); multiple spellings exported by: julia"
     },
     {
       "name": "parse_cadence",
@@ -6111,14 +6058,6 @@
       }
     },
     {
-      "name": "reference_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "rust": "ReferenceError"
-      }
-    },
-    {
       "name": "reference_graph",
       "kind": "type",
       "tier": "stable",
@@ -6146,9 +6085,13 @@
         "go": "ReferenceResolutionError",
         "julia": "ReferenceResolutionError",
         "python": "ReferenceResolutionError",
-        "rust": "ReferenceResolutionError",
+        "rust": [
+          "ReferenceError",
+          "ReferenceResolutionError"
+        ],
         "typescript": "ReferenceResolutionError"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: rust=ReferenceError (expected ReferenceResolutionError); multiple spellings exported by: rust"
     },
     {
       "name": "reference_vertex",
@@ -6249,18 +6192,14 @@
       "bindings": {
         "go": "RemoveCoupling",
         "julia": "remove_coupling",
-        "python": "remove_coupling",
+        "python": [
+          "remove_coupling",
+          "remove_coupling_from_file"
+        ],
         "rust": "remove_coupling",
         "typescript": "removeCoupling"
-      }
-    },
-    {
-      "name": "remove_coupling_from_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_coupling_from_file"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_coupling_from_file (expected remove_coupling); multiple spellings exported by: python"
     },
     {
       "name": "remove_equation",
@@ -6268,10 +6207,14 @@
       "tier": "stable",
       "bindings": {
         "julia": "remove_equation",
-        "python": "remove_equation",
+        "python": [
+          "remove_equation",
+          "remove_equation_from_model"
+        ],
         "rust": "remove_equation",
         "typescript": "removeEquation"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_equation_from_model (expected remove_equation); multiple spellings exported by: python"
     },
     {
       "name": "remove_equation_at",
@@ -6290,31 +6233,19 @@
       }
     },
     {
-      "name": "remove_equation_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_equation_from_model"
-      }
-    },
-    {
       "name": "remove_event",
       "kind": "function",
       "tier": "stable",
       "bindings": {
         "go": "RemoveEvent",
         "julia": "remove_event",
-        "python": "remove_event",
+        "python": [
+          "remove_event",
+          "remove_event_from_model"
+        ],
         "typescript": "removeEvent"
-      }
-    },
-    {
-      "name": "remove_event_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_event_from_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_event_from_model (expected remove_event); multiple spellings exported by: python"
     },
     {
       "name": "remove_model",
@@ -6331,18 +6262,14 @@
       "bindings": {
         "go": "RemoveReaction",
         "julia": "remove_reaction",
-        "python": "remove_reaction",
+        "python": [
+          "remove_reaction",
+          "remove_reaction_from_system"
+        ],
         "rust": "remove_reaction",
         "typescript": "removeReaction"
-      }
-    },
-    {
-      "name": "remove_reaction_from_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_reaction_from_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_reaction_from_system (expected remove_reaction); multiple spellings exported by: python"
     },
     {
       "name": "remove_species",
@@ -6351,18 +6278,14 @@
       "bindings": {
         "go": "RemoveSpecies",
         "julia": "remove_species",
-        "python": "remove_species",
+        "python": [
+          "remove_species",
+          "remove_species_from_system"
+        ],
         "rust": "remove_species",
         "typescript": "removeSpecies"
-      }
-    },
-    {
-      "name": "remove_species_from_system",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_species_from_system"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_species_from_system (expected remove_species); multiple spellings exported by: python"
     },
     {
       "name": "remove_variable",
@@ -6371,18 +6294,14 @@
       "bindings": {
         "go": "RemoveVariable",
         "julia": "remove_variable",
-        "python": "remove_variable",
+        "python": [
+          "remove_variable",
+          "remove_variable_from_model"
+        ],
         "rust": "remove_variable",
         "typescript": "removeVariable"
-      }
-    },
-    {
-      "name": "remove_variable_from_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "remove_variable_from_model"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=remove_variable_from_model (expected remove_variable); multiple spellings exported by: python"
     },
     {
       "name": "rename_variable",
@@ -6391,9 +6310,13 @@
       "bindings": {
         "go": "RenameVariable",
         "julia": "rename_variable",
-        "python": "rename_variable",
+        "python": [
+          "rename_variable",
+          "rename_variable_in_model"
+        ],
         "typescript": "renameVariable"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: python=rename_variable_in_model (expected rename_variable); multiple spellings exported by: python"
     },
     {
       "name": "rename_variable_in_file",
@@ -6401,14 +6324,6 @@
       "tier": "extension",
       "bindings": {
         "go": "RenameVariableInFile"
-      }
-    },
-    {
-      "name": "rename_variable_in_model",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "rename_variable_in_model"
       }
     },
     {
@@ -7408,9 +7323,16 @@
         "go": "SupportedMigrationTargets",
         "julia": "supported_migration_targets",
         "python": "supported_migration_targets",
-        "rust": "supported_migration_targets",
-        "typescript": "supportedMigrationTargets"
-      }
+        "rust": [
+          "get_supported_migration_targets",
+          "supported_migration_targets"
+        ],
+        "typescript": [
+          "getSupportedMigrationTargets",
+          "supportedMigrationTargets"
+        ]
+      },
+      "notes": "spelling differs from the §2 rule: rust=get_supported_migration_targets (expected supported_migration_targets); typescript=getSupportedMigrationTargets (expected supportedMigrationTargets); multiple spellings exported by: rust, typescript"
     },
     {
       "name": "sweep_dimension",
@@ -7917,14 +7839,6 @@
       }
     },
     {
-      "name": "unknown_names",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "julia": "unknown_names"
-      }
-    },
-    {
       "name": "unknown_variable",
       "kind": "type",
       "tier": "extension",
@@ -7937,10 +7851,14 @@
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "julia": "unknowns",
+        "julia": [
+          "unknown_names",
+          "unknowns"
+        ],
         "python": "unknowns",
         "typescript": "unknowns"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: julia=unknown_names (expected unknowns); multiple spellings exported by: julia"
     },
     {
       "name": "unlowered_operator_error",
@@ -8109,14 +8027,6 @@
       }
     },
     {
-      "name": "validate_complete",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "validate_complete"
-      }
-    },
-    {
       "name": "validate_equation_dimensions",
       "kind": "function",
       "tier": "stable",
@@ -8224,9 +8134,13 @@
       "bindings": {
         "go": "ValidateText",
         "python": "validate_text",
-        "rust": "validate_text",
+        "rust": [
+          "validate_complete",
+          "validate_text"
+        ],
         "typescript": "validateText"
-      }
+      },
+      "notes": "spelling differs from the §2 rule: rust=validate_complete (expected validate_text); multiple spellings exported by: rust"
     },
     {
       "name": "validate_units",

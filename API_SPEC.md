@@ -692,14 +692,14 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_coupling` | function | `add_coupling` | `addCoupling` | `add_coupling` | `add_coupling` | `AddCoupling` |
-| `add_equation` | function | `add_equation` | `addEquation` | `add_equation` | `add_equation` | `AddEquation` |
-| `add_reaction` | function | `add_reaction` | `addReaction` | `add_reaction` | `add_reaction` | `AddReaction` |
-| `add_species` | function | `add_species` | `addSpecies` | `add_species` | `add_species` | `AddSpecies` |
-| `add_variable` | function | `add_variable` | `addVariable` | `add_variable` | `add_variable` | `AddVariable` |
+| `add_coupling` | function | `add_coupling` | `addCoupling` | `add_coupling` / `add_coupling_to_file` | `add_coupling` | `AddCoupling` |
+| `add_equation` | function | `add_equation` | `addEquation` | `add_equation` / `add_equation_to_model` | `add_equation` | `AddEquation` |
+| `add_reaction` | function | `add_reaction` | `addReaction` | `add_reaction` / `add_reaction_to_system` | `add_reaction` | `AddReaction` |
+| `add_species` | function | `add_species` | `addSpecies` | `add_species` / `add_species_to_system` | `add_species` | `AddSpecies` |
+| `add_variable` | function | `add_variable` | `addVariable` | `add_variable` / `add_variable_to_model` | `add_variable` | `AddVariable` |
 | `algebraic_unknowns` | function | `algebraic_unknowns` | `algebraicUnknowns` | `algebraic_unknowns` | `algebraic_unknowns` | `AlgebraicUnknowns` |
 | `brownian_parameters` | function | `brownian_parameters` | `brownianParameters` | `brownian_parameters` | `brownian_parameters` | `BrownianParameters` |
-| `build_reference_graph` | function | `build_reference_graph` | `buildReferenceGraph` | `build_reference_graph` | `build_reference_graph` | `BuildReferenceGraph` |
+| `build_reference_graph` | function | `build_reference_graph` | `buildReferenceGraph` | `build_reference_graph` | `build_reference_graph` / `build_reference_graph_with_index_sets` | `BuildReferenceGraph` |
 | `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
@@ -727,13 +727,13 @@ reading that as a gap.
 | `parse_expression` | function | `parse_expression` | `parseExpression` | `parse_expression` | `parse_expression` | `ParseExpression` |
 | `reference_edge` | type | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` | `ReferenceEdge` |
 | `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
-| `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` |
+| `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceError` / `ReferenceResolutionError` | `ReferenceResolutionError` |
 | `reference_vertex` | type | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
-| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` | `remove_coupling` | `RemoveCoupling` |
-| `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` | `remove_reaction` | `RemoveReaction` |
-| `remove_species` | function | `remove_species` | `removeSpecies` | `remove_species` | `remove_species` | `RemoveSpecies` |
-| `remove_variable` | function | `remove_variable` | `removeVariable` | `remove_variable` | `remove_variable` | `RemoveVariable` |
+| `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` / `remove_coupling_from_file` | `remove_coupling` | `RemoveCoupling` |
+| `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` / `remove_reaction_from_system` | `remove_reaction` | `RemoveReaction` |
+| `remove_species` | function | `remove_species` | `removeSpecies` | `remove_species` / `remove_species_from_system` | `remove_species` | `RemoveSpecies` |
+| `remove_variable` | function | `remove_variable` | `removeVariable` | `remove_variable` / `remove_variable_from_model` | `remove_variable` | `RemoveVariable` |
 | `resolve_references` | function | `resolve_references` | `resolveReferences` | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_subsystem_refs` | function | `resolve_subsystem_refs!` | `resolveSubsystemRefs` | `resolve_subsystem_refs` | `resolve_subsystem_refs` | `ResolveSubsystemRefs` |
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
@@ -741,7 +741,7 @@ reading that as a gap.
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
-| `supported_migration_targets` | function | `supported_migration_targets` | `supportedMigrationTargets` | `supported_migration_targets` | `supported_migration_targets` | `SupportedMigrationTargets` |
+| `supported_migration_targets` | function | `supported_migration_targets` | `getSupportedMigrationTargets` / `supportedMigrationTargets` | `supported_migration_targets` | `get_supported_migration_targets` / `supported_migration_targets` | `SupportedMigrationTargets` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
 | `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | `ToDOT` |
@@ -761,8 +761,8 @@ reading that as a gap.
 
 | Canonical | Kind | Julia | TS | Python | Rust | Go |
 |---|---|---|---|---|---|---|
-| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | `add_continuous_event` | – | `AddContinuousEvent` |
-| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | `add_discrete_event` | – | `AddDiscreteEvent` |
+| `add_continuous_event` | function | `add_continuous_event` | `addContinuousEvent` | `add_continuous_event` / `add_continuous_event_to_model` | – | `AddContinuousEvent` |
+| `add_discrete_event` | function | `add_discrete_event` | `addDiscreteEvent` | `add_discrete_event` / `add_discrete_event_to_model` | – | `AddDiscreteEvent` |
 | `affect_equation` | type | `AffectEquation` | – | `AffectEquation` | `AffectEquation` | `AffectEquation` |
 | `canonical_json` | function | `canonical_json` | `canonicalJson` | – | `canonical_json` | `CanonicalJSON` |
 | `canonicalize` | function | `canonicalize` | `canonicalize` | – | `canonicalize` | `Canonicalize` |
@@ -793,7 +793,7 @@ reading that as a gap.
 | `expand_coupling_imports` | function | `expand_coupling_imports` | `expandCouplingImports` | `expand_coupling_imports` | `expand_coupling_imports` | – |
 | `expression_graph` | function | `expression_graph` | `expressionGraph` | `expression_graph` | `expression_graph` | – |
 | `expression_template_error` | error | `ExpressionTemplateError` | `ExpressionTemplateError` | `ExpressionTemplateError` | – | `ExpressionTemplateError` |
-| `extract` | function | `extract` | `extract` | `extract` | – | `Extract` |
+| `extract` | function | `extract` | `extract` | `extract` / `extract_component_from_file` | – | `Extract` |
 | `functional_update` | type | `FunctionalUpdate` | – | `FunctionalUpdate` | `FunctionalUpdate` | `FunctionalUpdate` |
 | `graph` | type | `Graph` | `Graph` | `Graph` | – | `Graph` |
 | `loader_field` | type | – | `LoaderField` | `LoaderField` | `LoaderField` | `LoaderField` |
@@ -806,14 +806,14 @@ reading that as a gap.
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
 | `reaction_system` | type | `ReactionSystem` | – | `ReactionSystem` | `ReactionSystem` | `ReactionSystem` |
 | `reject_expression_templates_pre_v04` | function | `reject_expression_templates_pre_v04` | `rejectExpressionTemplatesPreV04` | `reject_expression_templates_pre_v04` | – | `RejectExpressionTemplatesPreV04` |
-| `remove_equation` | function | `remove_equation` | `removeEquation` | `remove_equation` | `remove_equation` | – |
-| `remove_event` | function | `remove_event` | `removeEvent` | `remove_event` | – | `RemoveEvent` |
-| `rename_variable` | function | `rename_variable` | `renameVariable` | `rename_variable` | – | `RenameVariable` |
+| `remove_equation` | function | `remove_equation` | `removeEquation` | `remove_equation` / `remove_equation_from_model` | `remove_equation` | – |
+| `remove_event` | function | `remove_event` | `removeEvent` | `remove_event` / `remove_event_from_model` | – | `RemoveEvent` |
+| `rename_variable` | function | `rename_variable` | `renameVariable` | `rename_variable` / `rename_variable_in_model` | – | `RenameVariable` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
-| `validate_text` | function | – | `validateText` | `validate_text` | `validate_text` | `ValidateText` |
+| `validate_text` | function | – | `validateText` | `validate_text` | `validate_complete` / `validate_text` | `ValidateText` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by three of the five
@@ -846,7 +846,7 @@ reading that as a gap.
 | `lower_enums_mut` | function | – | – | `lower_enums_mut` | `lower_enums_mut` | `LowerEnumsMut` |
 | `map_variable` | function | `map_variable` | `mapVariable` | – | – | `MapVariable` |
 | `max_template_expansion_depth` | constant | – | `MAX_TEMPLATE_EXPANSION_DEPTH` | `MAX_TEMPLATE_EXPANSION_DEPTH` | – | `MaxTemplateExpansionDepth` |
-| `merge` | function | – | `merge` | `merge` | – | `Merge` |
+| `merge` | function | – | `merge` | `merge` / `merge_esm_files` | – | `Merge` |
 | `observed_field` | function | `observed_field` | – | `observed_field` | `observed_field` | – |
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
@@ -858,7 +858,7 @@ reading that as a gap.
 | `unit_finding_analysis` | constant | – | – | `UNIT_FINDING_ANALYSIS` | `UNIT_FINDING_ANALYSIS` | `UnitFindingAnalysis` |
 | `unit_finding_dimensional_mismatch` | constant | – | – | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UNIT_FINDING_DIMENSIONAL_MISMATCH` | `UnitFindingDimensionalMismatch` |
 | `unit_finding_unparseable` | constant | – | – | `UNIT_FINDING_UNPARSEABLE` | `UNIT_FINDING_UNPARSEABLE` | `UnitFindingUnparseable` |
-| `unknowns` | function | `unknowns` | `unknowns` | `unknowns` | – | – |
+| `unknowns` | function | `unknown_names` / `unknowns` | `unknowns` | `unknowns` | – | – |
 | `validate_equation_dimensions` | function | `validate_equation_dimensions` | – | – | `validate_equation_dimensions` | `ValidateEquationDimensions` |
 
 #### Exported by two of the five
@@ -906,7 +906,6 @@ reading that as a gap.
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
-| `get_supported_migration_targets` | function | – | `getSupportedMigrationTargets` | – | `get_supported_migration_targets` | – |
 | `graph_edge` | type | – | – | `GraphEdge` | – | `GraphEdge` |
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
@@ -923,7 +922,7 @@ reading that as a gap.
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
 | `output_plan` | type | `OutputPlan` | – | – | `OutputPlan` | – |
-| `parameters` | function | `parameters` | `parameters` | – | – | – |
+| `parameters` | function | `parameter_names` / `parameters` | `parameters` | – | – | – |
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
