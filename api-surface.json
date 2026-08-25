@@ -146,18 +146,18 @@
     }
   },
   "counts": {
-    "symbols": 938,
+    "symbols": 909,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 297,
       "typescript": 231,
-      "python": 272,
+      "python": 243,
       "rust": 322,
       "go": 383,
       "editor": 71
     },
     "by_tier": {
-      "extension": 666,
+      "extension": 637,
       "stable": 272
     }
   },
@@ -486,14 +486,6 @@
       }
     },
     {
-      "name": "apply_variable_mapping",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "apply_variable_mapping"
-      }
-    },
-    {
       "name": "area_tolerance_ok",
       "kind": "function",
       "tier": "stable",
@@ -730,38 +722,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "build_zarr_sink"
-      }
-    },
-    {
-      "name": "cache_miss",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "CacheMiss"
-      }
-    },
-    {
-      "name": "cache_path_for_url",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cache_path_for_url"
-      }
-    },
-    {
-      "name": "cached_fetcher",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cached_fetcher"
-      }
-    },
-    {
-      "name": "cached_opener",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "cached_opener"
       }
     },
     {
@@ -2168,14 +2128,6 @@
       }
     },
     {
-      "name": "data_source_dispatch_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "DataSourceDispatchError"
-      }
-    },
-    {
       "name": "data_source_extent",
       "kind": "type",
       "tier": "extension",
@@ -3334,22 +3286,6 @@
       }
     },
     {
-      "name": "expand_url_template",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "expand_url_template"
-      }
-    },
-    {
-      "name": "expand_with_mirrors",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "expand_with_mirrors"
-      }
-    },
-    {
       "name": "expanded_model",
       "kind": "function",
       "tier": "extension",
@@ -3604,22 +3540,6 @@
       "bindings": {
         "julia": "field_reduce",
         "rust": "field_reduce"
-      }
-    },
-    {
-      "name": "file_anchor_for_time",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "file_anchor_for_time"
-      }
-    },
-    {
-      "name": "file_anchors_in_range",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "file_anchors_in_range"
       }
     },
     {
@@ -4170,22 +4090,6 @@
       }
     },
     {
-      "name": "grid_loader",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "python": "GridLoader"
-      }
-    },
-    {
-      "name": "grid_loader_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "GridLoaderError"
-      }
-    },
-    {
       "name": "grid_plan",
       "kind": "type",
       "tier": "stable",
@@ -4547,14 +4451,6 @@
       }
     },
     {
-      "name": "load_data",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_data"
-      }
-    },
-    {
       "name": "load_document",
       "kind": "function",
       "tier": "stable",
@@ -4572,14 +4468,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "load_document_with_options"
-      }
-    },
-    {
-      "name": "load_grid",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_grid"
       }
     },
     {
@@ -4617,22 +4505,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "load_path_with_options"
-      }
-    },
-    {
-      "name": "load_points",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_points"
-      }
-    },
-    {
-      "name": "load_static",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "load_static"
       }
     },
     {
@@ -4836,14 +4708,6 @@
         "python": "MigrationError",
         "rust": "MigrationError",
         "typescript": "MigrationError"
-      }
-    },
-    {
-      "name": "mirror_fallback_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "MirrorFallbackError"
       }
     },
     {
@@ -5212,14 +5076,6 @@
       }
     },
     {
-      "name": "open_with_fallback",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "open_with_fallback"
-      }
-    },
-    {
       "name": "operator",
       "kind": "type",
       "tier": "stable",
@@ -5435,14 +5291,6 @@
       }
     },
     {
-      "name": "parse_iso_duration",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "parse_iso_duration"
-      }
-    },
-    {
       "name": "parse_reaction",
       "kind": "function",
       "tier": "extension",
@@ -5654,22 +5502,6 @@
       "tier": "extension",
       "bindings": {
         "go": "PlotValue"
-      }
-    },
-    {
-      "name": "points_loader",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "python": "PointsLoader"
-      }
-    },
-    {
-      "name": "points_loader_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "PointsLoaderError"
       }
     },
     {
@@ -6009,14 +5841,6 @@
         "julia": "ReactionSystem",
         "python": "ReactionSystem",
         "rust": "ReactionSystem"
-      }
-    },
-    {
-      "name": "records_for_file",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "records_for_file"
       }
     },
     {
@@ -6372,22 +6196,6 @@
       "tier": "extension",
       "bindings": {
         "go": "ResolveAndLowerReferencePreserving"
-      }
-    },
-    {
-      "name": "resolve_data_dir",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "resolve_data_dir"
-      }
-    },
-    {
-      "name": "resolve_files",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "resolve_files"
       }
     },
     {
@@ -7037,22 +6845,6 @@
       }
     },
     {
-      "name": "static_loader",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "python": "StaticLoader"
-      }
-    },
-    {
-      "name": "static_loader_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "StaticLoaderError"
-      }
-    },
-    {
       "name": "step",
       "kind": "function",
       "tier": "stable",
@@ -7420,14 +7212,6 @@
       }
     },
     {
-      "name": "template_placeholders",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "python": "template_placeholders"
-      }
-    },
-    {
       "name": "template_resolve_options",
       "kind": "type",
       "tier": "extension",
@@ -7458,14 +7242,6 @@
       "tier": "extension",
       "bindings": {
         "go": "Test"
-      }
-    },
-    {
-      "name": "time_resolution_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "TimeResolutionError"
       }
     },
     {
@@ -7996,14 +7772,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "UpdateValue"
-      }
-    },
-    {
-      "name": "url_template_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "python": "UrlTemplateError"
       }
     },
     {
