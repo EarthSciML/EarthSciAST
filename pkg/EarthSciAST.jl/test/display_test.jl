@@ -244,4 +244,37 @@ using EarthSciAST
         @test_throws ArgumentError to_ascii(:a_symbol)
     end
 
+    # API_SPEC.md §8 item 18: all three renderers accept the FULL domain —
+    # expressions AND containers. `to_unicode` / `to_latex` used to throw
+    # `ArgumentError` on `Model` / `ReactionSystem` / `EsmFile`, so an
+    # `EsmFile` summary was renderable in one format and not the other two.
+    @testset "to_unicode / to_latex / to_ascii accept containers" begin
+        model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+                      [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
+                                NumExpr(1.0))])
+        rsys = ReactionSystem([Species("A"), Species("B")],
+                              [Reaction(Dict("A" => 1.0), Dict("B" => 1.0),
+                                        NumExpr(1.0))])
+        file = EsmFile("1.0.0", Metadata("Containers"); models=Dict("M" => model))
+
+        for target in (model, rsys, file)
+            for render in (to_ascii, to_unicode, to_latex)
+                out = render(target)
+                @test out isa String
+                @test !isempty(out)
+            end
+            # A container SUMMARY has no format-specific form, so all three
+            # agree — and `to_ascii`'s output is unchanged by the extension.
+            @test to_unicode(target) == to_ascii(target)
+            @test to_latex(target) == to_ascii(target)
+        end
+
+        @test to_ascii(model) == "Model(1 variables, 1 equations)"
+        @test startswith(to_ascii(file), "ESM v1.0.0: Containers")
+
+        # Genuinely unsupported types still throw, in all three.
+        @test_throws ArgumentError to_unicode(:a_symbol)
+        @test_throws ArgumentError to_latex(:a_symbol)
+    end
+
 end
