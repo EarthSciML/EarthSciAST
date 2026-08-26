@@ -382,13 +382,6 @@ jobs:
           cd ../..
         fi
 
-        if [ -d "pkg/earthsci-ast-editor" ]; then
-          cd pkg/earthsci-ast-editor
-          npm ci
-          cyclonedx-npm -o ../../sbom-reports/earthsci-ast-editor-sbom.json
-          cd ../..
-        fi
-
     - name: Run advanced static analysis
       run: |
         echo "Running Semgrep static analysis..."

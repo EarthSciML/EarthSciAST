@@ -35,12 +35,6 @@
       "type": "go",
       "module_path": "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go",
       "registry": "https://proxy.golang.org"
-    },
-    "earthsci-ast-editor": {
-      "path": "./pkg/earthsci-ast-editor",
-      "type": "typescript",
-      "npm_name": "@earthsciml/ast-editor",
-      "registry": "https://registry.npmjs.org"
     }
   }
 }

@@ -484,7 +484,6 @@ class PackageSignatureVerifier:
             "EarthSciAST.jl": "julia",
             "earthsci-ast-py": "python",
             "earthsci-ast-ts": "npm",
-            "earthsci-ast-editor": "npm",
             "earthsci-ast-rs": "rust",
         }
 
@@ -558,7 +557,6 @@ def main():
                     "EarthSciAST.jl": "julia",
                     "earthsci-ast-py": "python",
                     "earthsci-ast-ts": "npm",
-                    "earthsci-ast-editor": "npm",
                     "earthsci-ast-rs": "rust",
                 }
 

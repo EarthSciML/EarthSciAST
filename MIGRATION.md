@@ -304,8 +304,7 @@ All three old spellings are still exported for one minor and are bound to the
   an internally inconsistent one — the siblings were already `odeStates` and
   `isOdeState`.
 
-After this release no TypeScript or editor export carries a snake_case
-spelling.
+After this release no TypeScript export carries a snake_case spelling.
 
 ### `toDot` / `toMermaid` / `toJsonGraph` did not change
 
@@ -799,13 +798,6 @@ conformance runner and no documentation invoked it — `grep -rn esm-go` over
 `cmd/esm-conformance`, which is untouched. `esm` (Rust) is the project's only
 shipped CLI.
 
-## Editor — `@earthsciml/ast-editor`
-
-**Nothing changed.** All 71 declared spellings are identical before and after.
-The editor's web components had already migrated off TypeScript's
-`component_graph` before it was deleted, which is why deleting it broke no
-caller.
-
 ---
 
 # Part IV — Cross-cutting changes, explained once
@@ -1171,7 +1163,6 @@ Listed because knowing the boundary is what stops you over-migrating.
   untouched.
 - **Go's `ParameterSweep` / `SweepRange` / `SweepDimension`** are `.esm`
   document types and are untouched.
-- **The `@earthsciml/ast-editor` surface** is unchanged in full.
 - **TypeScript's `lowerEnums`, `toDot` / `toMermaid` / `toJsonGraph`, and the
   display renderers** were already conformant and were verified, not changed.
 - **`Expression` and `Expr` (TypeScript) are deliberately not collapsed.** They

@@ -10,7 +10,7 @@ The EarthSciAST project implements comprehensive security scanning and package v
 
 - **Julia**: EarthSciAST.jl
 - **Python**: earthsci_ast
-- **TypeScript/JavaScript**: @earthsciml/ast, earthsci-ast-editor
+- **TypeScript/JavaScript**: @earthsciml/ast
 - **Rust**: earthsci-ast
 
 ## Security Tools

@@ -559,7 +559,6 @@ class PackageVerifier:
             "earthsci-ast-py": "python",
             "earthsci-ast-ts": "npm",
             "earthsci-ast-rs": "rust",
-            "earthsci-ast-editor": "npm",
             # 'earthsci-ast-go': 'go',  # TODO: scanner lacks _scan_go_package; add when Go support lands
         }
 

@@ -10,7 +10,6 @@ Five language bindings ship from this repo under one version number:
 | Rust | `earthsci-ast` | crates.io |
 | Go | `.../pkg/earthsci-ast-go` | Go module proxy |
 
-The editor (`@earthsciml/ast-editor`) is **not** released from this process.
 
 ## Package version vs. format version
 

@@ -13,7 +13,7 @@ The format is language-agnostic (Julia, TypeScript, Python, Rust, Go), human-rea
 
 ## Packages and Capabilities
 
-Five language implementations plus an editor. All five read and write the same
+Five language implementations. All five read and write the same
 `esm-schema.json` and are held to a shared cross-language conformance suite, so
 they agree on parsing, serialization, validation, canonical form, and display.
 They differ in how far up the stack they go.
@@ -35,7 +35,6 @@ check, transform, and display documents, not to run them.
 | **earthsci-ast** | Python | [`pkg/earthsci-ast-py/`](pkg/earthsci-ast-py/) | NumPy/SciPy/SymPy integration |
 | **earthsci-ast** | Rust | [`pkg/earthsci-ast-rs/`](pkg/earthsci-ast-rs/) | High-performance implementation, plus the `esm` CLI and WASM bindings |
 | **earthsci-ast-go** | Go | [`pkg/earthsci-ast-go/`](pkg/earthsci-ast-go/) | Lightweight reader/checker |
-| **@earthsciml/ast-editor** | SolidJS | [`pkg/earthsci-ast-editor/`](pkg/earthsci-ast-editor/) | Interactive web-based editing components |
 
 The exported surface of every binding is pinned in
 [`api-surface.json`](api-surface.json) and tiered in [API_SPEC.md](API_SPEC.md);

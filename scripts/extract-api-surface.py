@@ -19,7 +19,6 @@ Extraction points, one per binding, each the binding's single declaration of
   Python      `__all__` of `pkg/earthsci-ast-py/src/earthsci_ast/__init__.py`
   Rust        the root `pub use` / `pub const` / `pub mod` of `pkg/earthsci-ast-rs/src/lib.rs`
   Go          package-level exported identifiers of `pkg/earthsci-ast-go/pkg/esm`
-  editor      the named re-exports of `pkg/earthsci-ast-editor/src/index.ts`
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-BINDINGS = ("julia", "typescript", "python", "rust", "go", "editor")
+BINDINGS = ("julia", "typescript", "python", "rust", "go")
 
 
 def _strip_line_comments(text: str, marker: str) -> str:
@@ -100,9 +99,6 @@ def _extract_ts_index(path: str) -> dict:
 def extract_typescript() -> dict:
     return _extract_ts_index(os.path.join(ROOT, "pkg/earthsci-ast-ts/src/index.ts"))
 
-
-def extract_editor() -> dict:
-    return _extract_ts_index(os.path.join(ROOT, "pkg/earthsci-ast-editor/src/index.ts"))
 
 
 # --------------------------------------------------------------------------
@@ -279,7 +275,6 @@ def extract_all() -> dict:
         "python": extract_python(),
         "rust": extract_rust(),
         "go": extract_go(),
-        "editor": extract_editor(),
     }
 
 
@@ -300,7 +295,6 @@ def manifest_names(manifest: dict) -> dict[str, set[str]]:
 
 def live_names(surfaces: dict) -> dict[str, set[str]]:
     ts = surfaces["typescript"]
-    ed = surfaces["editor"]
     rs = surfaces["rust"]
     return {
         "julia": set(surfaces["julia"]),
@@ -308,7 +302,6 @@ def live_names(surfaces: dict) -> dict[str, set[str]]:
         "python": set(surfaces["python"]["names"]),
         "rust": set(rs["reexports"]) | set(rs["consts"]),
         "go": {s["name"] for s in surfaces["go"]},
-        "editor": set(ed["values"]) | set(ed["types"]),
     }
 
 

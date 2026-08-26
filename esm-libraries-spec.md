@@ -5,8 +5,8 @@
 > DERIVED (esm-spec §6.3.1). (2) A data source is no longer a COMPONENT — it has
 > no variables, is not a coupling endpoint or subsystem, and is therefore not a
 > node in `component_graph()`. External data reaches a model as a parameter whose
-> `update` draws from a `data_sources` entry. Editor and graph surfaces that
-> modelled loaders as nodes need updating accordingly. See
+> `update` draws from a `data_sources` entry. Graph surfaces that modelled
+> loaders as nodes need updating accordingly. See
 > `docs/content/rfcs/unified-variable-model.md`.
 
 **Companion Libraries for the EarthSciML Serialization Format — esm 1.0.0**
@@ -34,7 +34,6 @@ Each library implementation is classified into tiers:
 |---|---|---|
 | **Core** | Parse, serialize, pretty-print, substitute, validate schema, flatten coupled systems to single equation system with dot-namespaced variables | All languages |
 | **Analysis** | Unit checking, stoichiometric matrix computation | All languages |
-| **Interactive** | Click-to-edit expressions, structural editing, undo/redo, coupling graph, web component export | `earthsci-ast-editor` (SolidJS) |
 | **Simulation** | Convert to native ODE system and solve numerically; Julia converts flattened system to MTK `ODESystem` or `PDESystem` depending on dimensionality | Julia (MTK), Python (SymPy + SciPy), optionally others |
 | **Full** | Bidirectional MTK/Catalyst conversion, coupled system assembly, operator dispatch | Julia only (initially) |
 
@@ -1140,7 +1139,7 @@ Adding an explicit `Advection` model on the same grid with `_var` placeholder eq
 
 ### 4.8 Graph Representations
 
-Every library must be able to produce two distinct graph representations of an `.esm` file. These graphs are **data-only**: libraries return language-idiomatic adjacency structures (nodes, edges, connectivity) but do **not** render, lay out, or visualize the graph. Rendering is the sole concern of downstream consumers (`earthsci-ast-editor`'s `<CouplingGraph>` component, CLI export to DOT/Mermaid, or user code).
+Every library must be able to produce two distinct graph representations of an `.esm` file. These graphs are **data-only**: libraries return language-idiomatic adjacency structures (nodes, edges, connectivity) but do **not** render, lay out, or visualize the graph. Rendering is the sole concern of downstream consumers (CLI export to DOT/Mermaid, or user code).
 
 #### 4.8.1 System Graph (Component-Level)
 
@@ -1198,8 +1197,6 @@ Edges:
   GEOSFP —[u]→ Advection            (variable_map)
   GEOSFP —[v]→ Advection            (variable_map)
 ```
-
-This is the graph that `earthsci-ast-editor`'s `<CouplingGraph>` component renders visually.
 
 #### 4.8.2 Expression Graph (Variable-Level)
 
@@ -1545,26 +1542,13 @@ initial-condition map that was already declared in the ESM model.
 
 ---
 
-### 5.2 TypeScript / SolidJS — `@earthsciml/ast` + `earthsci-ast-editor`
+### 5.2 TypeScript — `@earthsciml/ast`
 
-**Tier: Core + Analysis (@earthsciml/ast), Interactive Editing (earthsci-ast-editor)**
+**Tier: Core + Analysis**
 
-The web story is split into two packages with a clean dependency boundary:
+`@earthsciml/ast` is pure TypeScript with zero framework dependencies: types, parsing, validation, substitution, LaTeX/Unicode string generation. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
 
-- **`@earthsciml/ast`** — Pure TypeScript, zero framework dependencies. Types, parsing, validation, substitution, LaTeX/Unicode string generation. Usable in any JS/TS environment (Node, Deno, Bun, browser, web workers).
-- **`earthsci-ast-editor`** — SolidJS-based interactive expression and model editor. Renders the AST directly as clickable, editable DOM elements. Exported as both Solid components and framework-agnostic web components.
-
-#### 5.2.1 Why SolidJS for the Editor
-
-The expression editor is fundamentally a tree of reactive nodes. When a user clicks a variable in a 200-term equation and replaces it, only that node and its ancestors need to update. This maps directly to Solid's reactivity model:
-
-- **Granular reactivity:** Each AST node is a signal. Editing one node updates only its DOM element — no virtual DOM diffing of the entire expression tree.
-- **`createStore` with path-based updates:** `setStore("args", 1, "args", 0, "op", "+")` maps naturally to AST path manipulation.
-- **No re-render cascade:** React would re-render the whole expression tree on any edit (or require extensive `memo` boundaries at every node). Solid updates in place.
-- **Small bundle:** The editor component adds ~7KB gzipped (Solid runtime) vs ~40KB+ (React).
-- **Web component export:** Solid components compile to native custom elements via `solid-element`, making them embeddable in React, Vue, Svelte, plain HTML, or the seshat.pub platform without framework coupling.
-
-#### 5.2.2 `@earthsciml/ast` — Pure TypeScript Library
+#### 5.2.1 `@earthsciml/ast` — Pure TypeScript Library
 
 **Dependencies:** `ajv` (schema validation). No framework, no DOM.
 
@@ -1665,328 +1649,9 @@ type DiscreteEventTrigger =
 
 Types should be auto-generated from the JSON Schema where possible (using `json-schema-to-typescript`), then augmented with utility functions.
 
-#### 5.2.3 `earthsci-ast-editor` — SolidJS Interactive Editor
+#### 5.2.2 Code Generation
 
-**Dependencies:** `solid-js`, `solid-element` (web component export), `@earthsciml/ast` (peer dependency).
-
-```
-earthsci-ast-editor/
-├── src/
-│   ├── components/
-│   │   ├── ExpressionNode.tsx    # Core: renders a single AST node
-│   │   ├── ExpressionEditor.tsx  # Composes nodes into a full expression
-│   │   ├── EquationEditor.tsx    # LHS = RHS with editable sides
-│   │   ├── ModelEditor.tsx       # Full model: variables + equations + events
-│   │   ├── ReactionEditor.tsx    # Reaction system editor
-│   │   ├── CouplingGraph.tsx     # Visual coupling diagram
-│   │   ├── ValidationPanel.tsx   # Live validation feedback
-│   │   └── FileSummary.tsx       # Overview of entire ESM file
-│   ├── primitives/
-│   │   ├── ast-store.ts          # Solid store wrapping EsmFile
-│   │   ├── selection.ts          # Selected AST node tracking
-│   │   ├── highlighted-var.ts    # Cross-equation variable highlight on hover
-│   │   ├── history.ts            # Undo/redo stack
-│   │   └── validation.ts         # Reactive validation signals
-│   ├── layout/
-│   │   ├── fraction.tsx          # CSS fraction layout
-│   │   ├── superscript.tsx       # Exponent positioning
-│   │   ├── subscript.tsx         # Chemical subscript
-│   │   ├── radical.tsx           # Square root rendering
-│   │   └── delimiters.tsx        # Parentheses with auto-sizing
-│   ├── web-components.ts         # Custom element registration
-│   └── index.ts                  # Public API
-├── tests/
-└── package.json
-```
-
-#### 5.2.4 `ExpressionNode` — The Core Component
-
-Every AST node renders as a Solid component that knows its own path, handles click/hover events, and uses CSS for math-like layout. This is the key design — no KaTeX, no MathJax, no static rendering. The math _is_ the editor.
-
-```tsx
-// Conceptual structure — each AST node is an interactive component
-import { Component, Show, For, createSignal } from 'solid-js';
-import type { Expr, ExprNode } from '@earthsciml/ast';
-
-interface ExpressionNodeProps {
-  expr: Expr;                      // reactive (from Solid store)
-  path: (string | number)[];       // AST path for this node
-  highlightedVars: Accessor<Set<string>>;   // currently highlighted equivalence class
-  onHoverVar: (name: string | null) => void; // set/clear hovered variable
-  onSelect: (path: (string | number)[]) => void;
-  onReplace: (path: (string | number)[], newExpr: Expr) => void;
-}
-
-const ExpressionNodeComponent: Component<ExpressionNodeProps> = (props) => {
-  const [hovered, setHovered] = createSignal(false);
-
-  // Number literal
-  if (typeof props.expr === 'number') {
-    return (
-      <span
-        class="esm-num"
-        classList={{ 'esm-hovered': hovered() }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onClick={() => props.onSelect(props.path)}
-      >
-        {formatNumber(props.expr)}
-      </span>
-    );
-  }
-
-  // Variable reference
-  if (typeof props.expr === 'string') {
-    const isHighlighted = () => props.highlightedVars().has(props.expr);
-    return (
-      <span
-        class="esm-var"
-        classList={{
-          'esm-hovered': hovered(),
-          'esm-var-highlighted': isHighlighted(),
-        }}
-        onMouseEnter={() => { setHovered(true); props.onHoverVar(props.expr); }}
-        onMouseLeave={() => { setHovered(false); props.onHoverVar(null); }}
-        onClick={() => props.onSelect(props.path)}
-      >
-        {renderChemicalName(props.expr)}  {/* O3 → O₃ */}
-      </span>
-    );
-  }
-
-  // Operator node — dispatch to layout components
-  return <OperatorLayout node={props.expr} path={props.path} {...props} />;
-};
-```
-
-**Layout components** handle the visual math rendering:
-
-```tsx
-// Fraction layout for division
-const FractionLayout: Component<{num: Expr; den: Expr; path: ...}> = (props) => (
-  <span class="esm-frac">
-    <span class="esm-frac-num">
-      <ExpressionNodeComponent expr={props.num} path={[...props.path, 'args', 0]} />
-    </span>
-    <span class="esm-frac-bar" />
-    <span class="esm-frac-den">
-      <ExpressionNodeComponent expr={props.den} path={[...props.path, 'args', 1]} />
-    </span>
-  </span>
-);
-
-// Derivative layout: ∂O₃/∂t rendered as fraction
-const DerivativeLayout: Component<{node: ExprNode; path: ...}> = (props) => (
-  <span class="esm-deriv">
-    <span class="esm-frac">
-      <span class="esm-frac-num">∂<ExpressionNodeComponent expr={props.node.args[0]} ... /></span>
-      <span class="esm-frac-bar" />
-      <span class="esm-frac-den">∂{props.node.wrt}</span>
-    </span>
-  </span>
-);
-```
-
-**CSS handles math typography** — no canvas, no SVG, just styled spans:
-
-```css
-.esm-frac {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  vertical-align: middle;
-}
-.esm-frac-bar {
-  width: 100%;
-  height: 1px;
-  background: currentColor;
-  margin: 1px 0;
-}
-.esm-frac-num, .esm-frac-den {
-  padding: 0 2px;
-  font-size: 0.85em;
-}
-.esm-var {
-  font-style: italic;
-  cursor: pointer;
-  transition: background 0.1s ease;
-}
-.esm-var:hover, .esm-hovered {
-  background: rgba(59, 130, 246, 0.1);
-  border-radius: 2px;
-}
-.esm-var-highlighted {
-  background: rgba(250, 204, 21, 0.25);
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.5);
-}
-.esm-var-highlighted.esm-hovered {
-  background: rgba(250, 204, 21, 0.4);
-}
-.esm-selected {
-  background: rgba(59, 130, 246, 0.2);
-  outline: 1px solid rgb(59, 130, 246);
-  border-radius: 2px;
-}
-.esm-num {
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-```
-
-#### 5.2.5 Interaction Model
-
-**Variable hover highlighting:** Hovering over any variable name highlights _every_ occurrence of that variable across all visible equations. This works across equation boundaries — hover `O₃` in one equation and every `O₃` in the model lights up in yellow. The highlight is driven by a `highlightedVars` signal shared across all `ExpressionNode` instances:
-
-```typescript
-import { createSignal, createMemo } from 'solid-js';
-import type { EsmFile } from '@earthsciml/ast';
-
-// Build equivalence classes from coupling rules at file load / on coupling change
-function buildVarEquivalences(file: EsmFile): Map<string, Set<string>> {
-  const groups = new UnionFind<string>();
-
-  for (const entry of file.coupling ?? []) {
-    if (entry.type === 'variable_map') {
-      // GEOSFP.T → SimpleOzone.T means these are the same quantity
-      groups.union(entry.from, entry.to);
-    }
-    if (entry.type === 'operator_compose' && entry.translate) {
-      for (const [from, to] of Object.entries(entry.translate)) {
-        const toVar = typeof to === 'string' ? to : to.var;
-        groups.union(from, toVar);
-      }
-    }
-  }
-
-  // Return a map: any variable name → all equivalent names
-  return groups.toEquivalenceMap();
-}
-
-// One signal per editor scope
-const equivalences = createMemo(() => buildVarEquivalences(file));
-const [hoveredVar, setHoveredVar] = createSignal<string | null>(null);
-
-// The set of names to highlight — includes all equivalent variables
-const highlightedVars = createMemo(() => {
-  const v = hoveredVar();
-  if (!v) return new Set<string>();
-  return equivalences().get(v) ?? new Set([v]);
-});
-
-// Each ExpressionNode checks membership in the set
-// isHighlighted = () => highlightedVars().has(props.expr)
-```
-
-**Highlighting passes through equalities.** The coupling section defines which variables across different models refer to the same physical quantity. When `variable_map` maps `GEOSFP.T` to `SimpleOzone.T`, or `operator_compose` translates `SuperFast.O3` to `Advection._var`, these form equivalence classes. Hovering any member of an equivalence class highlights all members that are currently visible.
-
-Concretely: if the file contains `{ "type": "variable_map", "from": "GEOSFP.T", "to": "SimpleOzone.T" }`, then hovering `T` in the SimpleOzone model also highlights `T` in the GEOSFP data loader panel and `GEOSFP.T` / `SimpleOzone.T` in the coupling graph. The user sees the full data flow path for that quantity.
-
-Equivalence classes are computed once (and reactively recomputed when coupling rules change) using a union-find structure. The `highlightedVars` memo produces a `Set<string>` so that each `ExpressionNode`'s `isHighlighted()` check is an O(1) set lookup, not a traversal.
-
-The highlight scoping is configurable:
-- **Model scope** (default): Highlight within the current model or reaction system. Equivalences are not resolved — only literal name matches.
-- **File scope:** Highlight across all models with equivalence resolution. This is the mode where hovering `T` in one model lights up every coupled `T` everywhere. This is the most useful mode for understanding data flow.
-- **Equation scope:** Highlight only within the current equation.
-
-Scoped references are normalized: both `O3` (bare) and `SimpleOzone.O3` (qualified) are recognized as the same variable when the context model is `SimpleOzone`. For subsystems, the full path is used: `SimpleOzone.GasPhase.O3` refers to variable `O3` in subsystem `GasPhase` of `SimpleOzone`.
-
-**Selection:** Click any AST node to select it. The selected node is highlighted and its AST path is exposed. A detail panel shows the node's type, value, parent context, and available actions.
-
-**Inline editing:** Double-click a number to type a new value. Double-click a variable to get an autocomplete dropdown of available variables. Changes propagate through the Solid store and trigger revalidation.
-
-**Structural editing:** Select a node, then:
-- **Replace:** Type a new expression or pick from a palette.
-- **Wrap:** Wrap the selected node in an operator (e.g., select `O3`, click "negate" → `−O3`).
-- **Unwrap:** If the selected node is a unary op, replace it with its argument.
-- **Delete:** Remove a term from a sum/product (adjusting the parent node).
-- **Drag-and-drop:** Reorder terms in commutative operations (addition, multiplication).
-
-**Expression palette:** A sidebar with common operations — derivatives, common functions, arithmetic operators, chemical species from the current model. Drag from palette to expression to insert.
-
-**Store architecture:**
-
-```typescript
-import { createStore, produce } from 'solid-js/store';
-import type { EsmFile } from '@earthsciml/ast';
-import { validate } from '@earthsciml/ast';
-
-const [file, setFile] = createStore<EsmFile>(loadedFile);
-
-// Path-based update — only the affected node re-renders
-function replaceNode(path: (string | number)[], newExpr: Expr) {
-  setFile(...pathToStoreArgs(path), newExpr);
-  // Solid automatically updates only the affected ExpressionNode
-}
-
-// Example: replace the rate of reaction R1
-setFile('reaction_systems', 'SimpleOzone', 'reactions', 0, 'rate', {
-  op: '*',
-  args: [2.0e-12, { op: 'exp', args: [{ op: '/', args: [-1400, 'T'] }] }]
-});
-
-// Validation runs reactively
-const validationResult = createMemo(() => validate(file));
-```
-
-**Undo/redo:**
-
-```typescript
-import { createUndoHistory } from './primitives/history';
-
-const { undo, redo, canUndo, canRedo } = createUndoHistory(file, setFile);
-// Each setFile call is automatically captured as a history entry
-```
-
-#### 5.2.6 Web Component Export
-
-`earthsci-ast-editor` components are exported as standard web components via `solid-element`, making them embeddable in any framework:
-
-```typescript
-// web-components.ts
-import { customElement } from 'solid-element';
-import { ExpressionEditor } from './components/ExpressionEditor';
-import { ModelEditor } from './components/ModelEditor';
-
-customElement('esm-expression-editor', { expr: {}, onChange: () => {} }, ExpressionEditor);
-customElement('esm-model-editor', { model: {}, onChange: () => {} }, ModelEditor);
-customElement('esm-file-editor', { file: {}, onChange: () => {} }, FileEditor);
-```
-
-Usage in plain HTML:
-```html
-<esm-expression-editor
-  expr='{"op": "+", "args": ["a", "b"]}'
-  onchange="handleChange(event.detail)"
-/>
-```
-
-Usage in React (via wrapper or directly as custom element):
-```jsx
-<esm-model-editor
-  ref={el => { el.model = myModel; el.addEventListener('change', handleChange); }}
-/>
-```
-
-Usage in the seshat.pub platform or any other framework — no adapter needed.
-
-#### 5.2.7 Higher-Level Editor Components
-
-Beyond individual expressions, `earthsci-ast-editor` provides composed editors for entire sections:
-
-**`<ModelEditor>`** — Displays all equations in a model with editable variables panel, equation list, and event editor. Variables show type badges (state/parameter/observed) and units.
-
-**`<ReactionEditor>`** — Reaction system editor showing reactions in chemical notation (`NO + O₃ →[k₁] NO₂`) with clickable rate expressions. Add/remove reactions via UI.
-
-**`<CouplingGraph>`** — Visual directed graph of model components and their coupling relationships. Nodes are models/reaction systems/data loaders; edges are coupling entries. Click an edge to edit the coupling rule. Consumes the data-only graph structure from `@earthsciml/ast`'s `component_graph()` and handles layout and rendering internally (e.g., using `d3-force` for layout, Solid for DOM rendering).
-
-**`<FileSummary>`** — Read-only overview panel showing the structured summary (as specified in Section 6.3 of this document), with links that scroll to / select the relevant editor section.
-
-**`<ValidationPanel>`** — Reactive panel showing schema errors, structural errors, and unit warnings. Updates live as the user edits. Clicking an error highlights the offending node in the expression editor.
-
-#### 5.2.8 Code Generation
-
-The pure `@earthsciml/ast` library (not the editor) provides code generation for backend simulation. Code generation covers **models and reaction systems** — their variables, parameters, equations, reactions, and events. Coupling and domain configuration are emitted as structured comments or stubs that the user can complete manually.
+`@earthsciml/ast` provides code generation for backend simulation. Code generation covers **models and reaction systems** — their variables, parameters, equations, reactions, and events. Coupling and domain configuration are emitted as structured comments or stubs that the user can complete manually.
 
 **Scope:** Code generation must handle:
 
@@ -2640,16 +2305,7 @@ migrate(file: EsmFile, target_version: string) → EsmFile
 19. Rust: WASM compilation for web use.
 20. Rust: CLI tool.
 21. `@earthsciml/ast`: Julia and Python code generation.
-22. `earthsci-ast-editor`: `ExpressionNode` component with click-to-select, hover highlight, CSS math layout.
-23. `earthsci-ast-editor`: Inline editing (double-click numbers/variables), autocomplete.
-24. `earthsci-ast-editor`: Structural editing (wrap/unwrap/delete/drag-reorder).
-25. `earthsci-ast-editor`: Expression palette sidebar.
-26. `earthsci-ast-editor`: `ModelEditor`, `ReactionEditor` composed components.
-27. `earthsci-ast-editor`: `CouplingGraph` visualization.
-28. `earthsci-ast-editor`: `ValidationPanel` with error-to-node linking.
-29. `earthsci-ast-editor`: Undo/redo history.
-30. `earthsci-ast-editor`: Web component export via `solid-element`.
-31. Julia: full EarthSciML integration (data loaders, operators, spatial simulation).
+22. Julia: full EarthSciML integration (data loaders, operators, spatial simulation).
 
 ---
 
@@ -2664,46 +2320,38 @@ The following items are acknowledged gaps in this specification. They do not blo
 | Expression graph edge rules for reactions are ambiguous | Section 4.8.2 | The rule for which nodes get edges (self-loops, rate parameter edges) needs a precise algorithm, not just an example. |
 | Unit string parsing grammar undefined | Section 3.3 | Unit strings are free-form. A formal grammar or recognized-token list (including `molec`, `ppb`, `ppm`) would improve cross-language consistency. |
 | Python simulation with spatial operators | Section 5.3.5 | Coupling resolution with `operator_compose` involving spatial derivatives (grad, laplacian) is not meaningful for 0D simulation. The spec should clarify that Python simulation skips spatial terms or raises an error. |
-| Code generation templates underspecified | Section 5.2.8 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
-| `earthsci-ast-editor` CSS theming / dark mode | Section 5.2.4 | No specification for CSS custom properties or theme customization. |
+| Code generation templates underspecified | Section 5.2.2 | Exact rules for emitting parameter defaults, unit strings (Julia `u"..."`, Python `pint`), and boilerplate structure need more detail. |
 | Concurrency / thread safety | All libraries | Not addressed. Relevant for Julia (multi-threaded solvers) and Rust (Send/Sync bounds). |
 
 ---
 
 ## 11. Summary Table
 
-| Capability | Julia | TS `@earthsciml/ast` | Solid `earthsci-ast-editor` | Python | Rust | Go |
-|---|---|---|---|---|---|---|
-| Parse / serialize | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Schema validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Unicode pretty-print | ✓ | ✓ (string) | ✓ (DOM) | ✓ | ✓ | ✓ |
-| LaTeX pretty-print | ✓ | ✓ (string) | — | ✓ | ✓ | ✓ |
-| Substitution | ✓ | ✓ | ✓ (interactive) | ✓ | ✓ | ✓ |
-| Structural validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Unit validation | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Derive ODEs from reactions | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Stoichiometric matrix | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| System graph (component) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
-| Expression graph (variable) | ✓ | ✓ | ✓ (visual) | ✓ | ✓ | ✓ |
-| Graph export (DOT/Mermaid) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Model editing (programmatic) | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Click-to-edit expressions | — | — | ✓ | — | — | — |
-| Drag-and-drop reordering | — | — | ✓ | — | — | — |
-| Expression palette | — | — | ✓ | — | — | — |
-| Undo/redo | — | — | ✓ | — | — | — |
-| Coupling graph visualization | — | — | ✓ | — | — | — |
-| Live validation panel | — | — | ✓ | — | — | — |
-| Web component export | — | — | ✓ | — | — | — |
-| MTK ↔ ESM conversion | ✓ | — | — | — | — | — |
-| Catalyst ↔ ESM conversion | ✓ | — | — | — | — | — |
-| Coupled system assembly | ✓ | — | — | — | — | — |
-| 0D simulation (box model) | ✓ | — | — | ✓ | 0D stiff ODEs (diffsol backend; events and coupling deferred) | — |
-| Spatial (discretized-PDE) simulation | ✓ | — | — | ✓ | ✓ (arrayop runtime; §5.9) | — |
-| Event simulation | ✓ | — | — | partial | — | — |
-| WASM target | — | — | — | — | ✓ | — |
-| CLI tool | — | — | — | — | ✓ | — |
-| Julia code generation | — | ✓ | — | — | — | — |
-| Python code generation | — | ✓ | — | — | — | — |
-| Jupyter integration | — | — | — | ✓ | — | — |
+| Capability | Julia | TS `@earthsciml/ast` | Python | Rust | Go |
+|---|---|---|---|---|---|
+| Parse / serialize | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Schema validation | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Unicode pretty-print | ✓ | ✓ (string) | ✓ | ✓ | ✓ |
+| LaTeX pretty-print | ✓ | ✓ (string) | ✓ | ✓ | ✓ |
+| Substitution | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Structural validation | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Unit validation | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Derive ODEs from reactions | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Stoichiometric matrix | ✓ | ✓ | ✓ | ✓ | ✓ |
+| System graph (component) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Expression graph (variable) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Graph export (DOT/Mermaid) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Model editing (programmatic) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| MTK ↔ ESM conversion | ✓ | — | — | — | — |
+| Catalyst ↔ ESM conversion | ✓ | — | — | — | — |
+| Coupled system assembly | ✓ | — | — | — | — |
+| 0D simulation (box model) | ✓ | — | ✓ | 0D stiff ODEs (diffsol backend; events and coupling deferred) | — |
+| Spatial (discretized-PDE) simulation | ✓ | — | ✓ | ✓ (arrayop runtime; §5.9) | — |
+| Event simulation | ✓ | — | partial | — | — |
+| WASM target | — | — | — | ✓ | — |
+| CLI tool | — | — | — | ✓ | — |
+| Julia code generation | — | ✓ | — | — | — |
+| Python code generation | — | ✓ | — | — | — |
+| Jupyter integration | — | — | ✓ | — | — |
 
 **Note.** Libraries marked with a ✓ for any simulation capability row (0D simulation, Spatial simulation, Event simulation) are considered **simulation-capable** and must include end-to-end simulation tests per Section 2.4.2 — the test suite must invoke a real solver on the library's produced system object and assert numerical correctness, not merely that the object was constructed. Solvers used for these tests are test-only dependencies; libraries MUST NOT embed a solver as a runtime dependency (Section 2.4).

@@ -273,8 +273,6 @@ export {
   MigrationError,
 } from './migration.js'
 
-// Interactive editor components and web components live in the earthsci-ast-editor
-// package.
 
 // Coupled system flattening (esm-libraries-spec §4.7.5)
 export {
