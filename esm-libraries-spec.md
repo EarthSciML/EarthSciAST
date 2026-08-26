@@ -1553,7 +1553,7 @@ initial-condition map that was already declared in the ESM model.
 **Dependencies:** `ajv` (schema validation). No framework, no DOM.
 
 ```
-pkg/earthsci-ast-rs/
+pkg/earthsci-ast-ts/
 ├── src/
 │   ├── types.ts          # TypeScript type definitions matching JSON Schema
 │   ├── parse.ts          # JSON → typed EsmFile
