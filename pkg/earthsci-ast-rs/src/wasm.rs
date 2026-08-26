@@ -468,6 +468,89 @@ pub fn solve(
     to_js(&out)
 }
 
+/// Read back every build-time observed field of a document, evaluated once.
+///
+/// The counterpart to [`solve`] for a document with **no state variables**: a
+/// `system_kind: "nonlinear"` file whose whole content is its observed graph has
+/// nothing to integrate, `solve` refuses it with
+/// [`SimulateError::NotDynamic`](crate::SimulateError::NotDynamic), and
+/// `observed_field` is how such a document's results are read (API_SPEC §5.8).
+/// Without this export a wasm host had no way to reach that path at all — the
+/// only entry point that runs a model was `solve`, so a browser presented with a
+/// state-free document could only hand it to the ODE solver and report whatever
+/// the integrator said about a zero-length state vector.
+///
+/// Arguments mirror [`solve`]'s leading five. `t0`/`t_end` are the problem's
+/// span: nothing here integrates over it, but construction takes a span and a
+/// time-dependent loader is sampled against it. `params_str` and `ic_str` are
+/// the same JSON `{name: number}` maps, bound as `p` and `u0`.
+///
+/// Returns `{ names: string[], fields: { [name]: { shape: number[], values:
+/// number[] } } }`. `names` is [`EsmProblem::observed_field_names`] —
+/// component-qualified, sorted, and the spelling that resolves however many
+/// components the document has. `values` is the field in row-major (C) order,
+/// and `shape` is empty for a rank-0 observed, whose `values` is then a single
+/// number. Both are present for every name, so a host need not call twice.
+///
+/// A document that DOES have state variables is not an error here: it simply
+/// reports whatever fields its build materialized, which for an ordinary ODE
+/// model is usually none. Deciding which of the two entry points a document
+/// wants is the host's job, and `names.length` is not the way to do it —
+/// [`crate::classification`] answers it from the document.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn observed_fields(
+    json_str: &str,
+    t0: f64,
+    t_end: f64,
+    params_str: &str,
+    ic_str: &str,
+) -> Result<JsValue, JsValue> {
+    use crate::problem::{ProblemOptions, esm_problem, observed_field};
+    use std::collections::HashMap;
+
+    let esm_file =
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+
+    let parse_map = |s: &str, what: &str| -> Result<HashMap<String, f64>, JsValue> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Ok(HashMap::new());
+        }
+        serde_json::from_str(s).map_err(|e| JsValue::from_str(&format!("{what} parse error: {e}")))
+    };
+
+    let prob = esm_problem(
+        &esm_file,
+        (t0, t_end),
+        ProblemOptions {
+            p: parse_map(params_str, "Params")?,
+            u0: parse_map(ic_str, "Initial-conditions")?,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+
+    let names = prob.observed_field_names();
+    let mut fields = serde_json::Map::with_capacity(names.len());
+    for name in &names {
+        // Every name came from `observed_field_names`, so a miss is a defect in
+        // the resolver rather than a caller error — report it as one instead of
+        // silently returning a short map.
+        let a = observed_field(&prob, name)
+            .map_err(|e| JsValue::from_str(&format!("observed_field({name}): {e}")))?;
+        fields.insert(
+            name.clone(),
+            serde_json::json!({
+                "shape": a.shape(),
+                "values": a.iter().copied().collect::<Vec<f64>>(),
+            }),
+        );
+    }
+
+    to_js(&serde_json::json!({ "names": names, "fields": fields }))
+}
+
 /// Compile a document's RHS onto the vectorized tape and report which rules
 /// did NOT make it — WITHOUT integrating anything.
 ///

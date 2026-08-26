@@ -617,6 +617,15 @@ plain `esm_problem(input, tspan)` with no further options — no build flag, no
 particular input spelling, no `inspect` sink. A binding whose stable function
 needs an undocumented precondition to say anything has not implemented it.
 
+**On the wasm surface** the same path is the `observed_fields` export
+(`src/wasm.rs`), which returns every field at once — `{ names, fields: { [name]:
+{ shape, values } } }` — rather than one per call. A `wasm_bindgen` boundary
+cannot hand JS a live `EsmProblem` handle (this is the same constraint that
+makes `solve` build-and-run in one call), so a per-name `observed_field` would
+rebuild the problem on every lookup. The names it reports are
+`observed_field_names`, and each is resolved through `observed_field`, so the
+resolution rule below is the one a JS host gets.
+
 **Name resolution.** Build-time field names are **flattened and
 component-qualified** (`Sites.North.u`). A binding MUST resolve `name` by this
 precedence, stopping at the first rule that applies:
