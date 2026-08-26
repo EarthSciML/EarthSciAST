@@ -1,0 +1,65 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "TwoComponentStatic",
+    "description": "Two mounted components and no differential equations: purely algebraic, so there is nothing to integrate and the document's whole content is its observed graph. Pins observed_field's name resolution (API_SPEC 5.8) — 'Sites.North.u' and 'Sites.South.u' both resolve, while the bare 'u' they share must be refused rather than bound to one of them. 'North.ur' has no twin and must still be refused, because the gate is the component count, not ambiguity.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "created": "2026-08-26T00:00:00Z",
+    "license": "CC0",
+    "tags": ["nonlinear", "static", "observed_field", "regression"]
+  },
+  "models": {
+    "Sites": {
+      "system_kind": "nonlinear",
+      "variables": {},
+      "equations": [],
+      "subsystems": {
+        "North": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "units": "m",
+              "default": 0.0,
+              "description": "Displacement at the northern site"
+            },
+            "ur": {
+              "type": "unknown",
+              "units": "m",
+              "default": 0.0,
+              "description": "Radial displacement at the northern site; no twin in South"
+            },
+            "k": {
+              "type": "parameter",
+              "units": "m",
+              "default": 2.0,
+              "description": "Northern site scale"
+            }
+          },
+          "equations": [
+            {"lhs": "u", "rhs": {"op": "*", "args": ["k", 3]}},
+            {"lhs": "ur", "rhs": {"op": "+", "args": ["k", 1]}}
+          ]
+        },
+        "South": {
+          "variables": {
+            "u": {
+              "type": "unknown",
+              "units": "m",
+              "default": 0.0,
+              "description": "Displacement at the southern site"
+            },
+            "k": {
+              "type": "parameter",
+              "units": "m",
+              "default": 5.0,
+              "description": "Southern site scale"
+            }
+          },
+          "equations": [
+            {"lhs": "u", "rhs": {"op": "*", "args": ["k", 7]}}
+          ]
+        }
+      }
+    }
+  }
+}

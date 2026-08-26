@@ -899,6 +899,37 @@ impl Compiled {
         Ok(ic_vec)
     }
 
+    /// Every observed variable's value at `t`, evaluated against an EMPTY
+    /// state vector — the state-free build-time evaluation behind
+    /// [`crate::problem::observed_field`].
+    ///
+    /// Only meaningful when the system has no state variables. The observed
+    /// bodies are then pure functions of the parameters and `t`, and the
+    /// topological order [`Self::observed_variable_names`] already carries
+    /// makes one forward pass enough — no solver, and no build pipeline.
+    /// A `ResolvedExpr::State` would index the empty slice, so callers MUST
+    /// check `state_variable_names().is_empty()` first.
+    ///
+    /// Names are FLATTENED names (`Sites.North.u`), which is the spelling
+    /// `observed_field` resolves against in every binding.
+    pub(crate) fn evaluate_static_observeds(
+        &self,
+        params: &HashMap<String, f64>,
+        t: f64,
+    ) -> Result<Vec<(String, f64)>, SimulateError> {
+        debug_assert!(
+            self.state_names.is_empty(),
+            "evaluate_static_observeds is only defined for a state-free system"
+        );
+        let param_vec = self.build_param_vec(params)?;
+        let no_state: [f64; 0] = [];
+        let mut obs = vec![0.0f64; self.observed_exprs.len()];
+        for (i, e) in self.observed_exprs.iter().enumerate() {
+            obs[i] = interpret(e, &no_state, &param_vec, &obs, t);
+        }
+        Ok(self.observed_names.iter().cloned().zip(obs).collect())
+    }
+
     /// Apply algebraic constraints to the initial-condition vector so that
     /// y0[i] for an algebraic state is consistent with its defining body
     /// — otherwise users must hand-tune defaults to satisfy the algebraic

@@ -604,6 +604,49 @@ same `BuildInspection` through `prepare`; Python `(prep, name)`; Rust a method o
 `Prepared` taking only `name`. It is `(prob, name)` in all three, with build
 observability moved to a construction-time seam.
 
+#### `observed_field` on a document with no state variables
+
+A document that declares no differential equations — `system_kind: nonlinear`,
+every result an observed — has nothing to integrate. `solve` on it is a
+run with no content, and each binding says so its own way (Rust
+`SimulateError::NotDynamic`; Python's array pathway `ReturnCode.Failure`; the
+scalar pathway samples the observed bodies over `tspan`; Julia hands back a
+`Success` whose state rows are empty). **`observed_field` is the way such a
+document's results are read**, and it is stable API, so it MUST answer on a
+plain `esm_problem(input, tspan)` with no further options — no build flag, no
+particular input spelling, no `inspect` sink. A binding whose stable function
+needs an undocumented precondition to say anything has not implemented it.
+
+**Name resolution.** Build-time field names are **flattened and
+component-qualified** (`Sites.North.u`). A binding MUST resolve `name` by this
+precedence, stopping at the first rule that applies:
+
+1. **Exact hit** — `name` is a field name.
+2. **Bare name** — `name` carries no `.`, and the problem has exactly **one
+   component**; it then resolves to the unique field with that tail.
+
+A *component* is everything before a flattened name's final segment, and `""`
+for an unqualified one; the problem's component count is the number of distinct
+ones across its fields. A bare name against a **multi-component** problem MUST
+be refused, naming every qualified candidate so the author can spell it, rather
+than bound to one of them.
+
+**The gate is the component count, not ambiguity**, and the difference is the
+point. Under an ambiguity gate a bare `ur` that happens to be unique today
+resolves, and mounting a second component tomorrow — one that need not even
+declare a `ur` — changes what an existing script means, silently and at a
+distance. The stricter rule makes the qualified spelling the only one that
+survives composition, which is the spelling composition produces anyway.
+
+> This deliberately diverges from esm-spec §6.6.2's override-key rule, which is
+> ambiguity-gated (its rule 3 binds a bare key that is the trailing segment of
+> exactly one flattened name). That rule governs keys an author writes **inside
+> a document**, where the local spelling is the mandated one and the document's
+> own composition is fixed; this one governs names a caller passes **from
+> outside**, across recompositions the caller does not control. Both refuse to
+> bind an ambiguous bare name to an arbitrary candidate, which is the property
+> §6.6.2 calls out as non-conforming.
+
 ### 5.9 Reference resolution
 
 `build_reference_graph(model, model_name="") -> ReferenceGraph` and
