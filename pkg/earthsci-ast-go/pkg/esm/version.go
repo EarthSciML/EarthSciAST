@@ -13,4 +13,4 @@ package esm
 // It is maintained by hand alongside the repo-wide release version, which the
 // release process bumps in lockstep with the Julia Project.toml, the Rust
 // Cargo.toml, the npm package.json and the Python pyproject.toml.
-const LibraryVersion = "0.1.1"
+const LibraryVersion = "0.2.0"

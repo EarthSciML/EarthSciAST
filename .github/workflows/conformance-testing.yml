@@ -181,6 +181,13 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: pkg/earthsci-ast-go
 
+      # --- Cross-binding ------------------------------------------------
+      # Six files carry the one release version; two of them are hand-kept
+      # mirrors with no manifest to derive from. v0.2.0 published with both
+      # mirrors stale. Cheap to check, so check it on every run.
+      - name: Version sync (all bindings)
+        run: ./scripts/check-version-sync.sh
+
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml

@@ -96,12 +96,24 @@ sits in a **3-day AutoMerge waiting period**.
 
 ## Cutting a release
 
-1. Bump the version in all five manifests **in one reviewed commit**:
+1. Bump the version in all **six** places **in one reviewed commit**:
    - `pkg/EarthSciAST.jl/Project.toml`
    - `pkg/earthsci-ast-ts/package.json` (and run `npm install --package-lock-only`)
    - `pkg/earthsci-ast-py/pyproject.toml`
-   - `pkg/earthsci-ast-rs/Cargo.toml` (and run `cargo generate-lockfile`)
-   - Go carries no version in its manifest; it comes from the tag.
+   - `pkg/earthsci-ast-rs/Cargo.toml` (`Cargo.lock` is not tracked)
+   - `pkg/earthsci-ast-ts/src/version.ts` — `LIBRARY_VERSION`
+   - `pkg/earthsci-ast-go/pkg/esm/version.go` — `LibraryVersion`
+
+   The last two are **hand-kept mirrors**, and they are the ones that get
+   forgotten. Julia (`pkgversion`), Python (`importlib.metadata`) and Rust
+   (`env!("CARGO_PKG_VERSION")`) all derive `LIBRARY_VERSION` from their
+   manifest and need nothing. TypeScript cannot import `package.json`
+   (tsconfig's `rootDir` is `./src`) and a Go module has no in-tree version
+   manifest at all, so both mirror the number by hand.
+
+   `./scripts/check-version-sync.sh` checks all six and runs in the lint job.
+   Go carries no version in its own manifest; the module version comes from
+   the tag.
 
    The pipeline reads the version out of the manifests and **fails the run if
    the bindings disagree** — it no longer guesses a version from git tags or
@@ -137,6 +149,19 @@ sits in a **3-day AutoMerge waiting period**.
 
 ## Things that were broken, and why they are worth not re-breaking
 
+- **Both hand-kept version mirrors shipped stale in v0.2.0.** The four
+  manifests were bumped; `LIBRARY_VERSION` in TypeScript and `LibraryVersion`
+  in Go were not, so 0.2.0 reports `0.1.1` from both. TypeScript's
+  `version.test.ts` caught it — after publishing, because conformance does not
+  gate the publish jobs. Go had no guard at all. Hence
+  `scripts/check-version-sync.sh` in lint, which runs before any release.
+- **`binary-release.yml` resolved its version from `GITHUB_REF`.** Reached
+  through `workflow_call`, `github.event_name` is the *caller's* event
+  (`push`), so it fell through to `${GITHUB_REF#refs/tags/}` on
+  `refs/heads/main` and tried to create a release tagged `refs/heads/main`:
+  "branch or tag names starting with 'refs/' are not allowed". It reads
+  `inputs.version` first now, and fails loudly rather than passing a `refs/…`
+  string to the API. Same class of bug as the release-asset upload below.
 - **`release-publish.yml` was event-driven.** The release is created with
   `GITHUB_TOKEN`, and GitHub does not start workflow runs from
   `GITHUB_TOKEN`-triggered events — so nothing was ever published. It is now

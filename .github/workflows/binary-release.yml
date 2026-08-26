@@ -53,11 +53,25 @@ jobs:
     - name: Get version
       id: get_version
       run: |
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          VERSION="${{ github.event.inputs.version }}"
-        else
-          VERSION=${GITHUB_REF#refs/tags/}
+        # `inputs.version` covers BOTH of the ways this workflow is asked for a
+        # version: workflow_call (the release pipeline) and workflow_dispatch.
+        # It has to be read first. Reached through workflow_call from a push to
+        # main, `github.event_name` is the CALLER's event -- `push` -- so the
+        # old branch fell through to `${GITHUB_REF#refs/tags/}`, GITHUB_REF was
+        # `refs/heads/main`, the strip did nothing, and the release API rejected
+        # the literal string: "branch or tag names starting with 'refs/' are not
+        # allowed". Same class of bug as the release-asset upload recorded in
+        # RELEASING.md; this was the site that still had it.
+        VERSION="${{ inputs.version }}"
+        if [ -z "$VERSION" ]; then
+          VERSION="${GITHUB_REF#refs/tags/}"
         fi
+        case "$VERSION" in
+          refs/*|"")
+            echo "::error::No tag resolved for this run (got '$VERSION'). Refusing to create a release."
+            exit 1
+            ;;
+        esac
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
 
