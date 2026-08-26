@@ -283,6 +283,15 @@ SILENTLY — which is the one outcome a coupling mis-specification must not have
     order normative and says a coupling-merged entry keeps the position of its
     first occurrence; appending the merge to the end of the list instead
     reorders the flattened equation vector against every other binding.
+
+  * **The merged equation is REATTRIBUTED to its dependent variable's system.**
+    A document may CHAIN compose entries over one state with the operator as A
+    (`["DepositionSink", "Chem"]`, then `["EmissionSource", "Chem"]`, then the
+    transport lift — `reseact.esm`'s shape; issue #172). The merge consumes
+    what was Chem's defining equation, and the NEXT entry's ownership gates
+    (`a_index`, `owner in b_names`) can only find the composed tendency again
+    if it is now owned by the variable's own system, not by the operator that
+    happened to author the surviving clone.
 """
 function _apply_operator_compose!(equations::Vector{Equation},
                                   entry::CouplingOperatorCompose,
@@ -414,6 +423,18 @@ function _apply_operator_compose!(equations::Vector{Equation},
             expanded[j] = Equation(eq.lhs,
                                    OpExpr("+", ASTExpr[eq.rhs; terms...]);
                                    _comment=eq._comment)
+            # A merged equation is no longer A's authored contribution — it is
+            # the composed tendency of its dependent variable, and a LATER
+            # coupling entry must be able to find it under that variable's own
+            # system, in either role. When A is the operator (`"systems":
+            # ["DepositionSink", "Chemistry"]`, with the sink authoring
+            # `D(Chemistry.X)` directly), keeping A's ownership makes the next
+            # entry's `owner in b_names` gate skip the equation entirely, so the
+            # chain leaves TWO equations claiming `D(Chemistry.X)` — a duplicate
+            # derivative three stages later in the tree walk instead of a merge
+            # here.
+            dep = lhs_dependent_variable(eq.lhs)
+            dep === nothing || (new_owners[j] = _component_root(dep))
         end
     end
 
