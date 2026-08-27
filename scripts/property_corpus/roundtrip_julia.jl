@@ -3,7 +3,7 @@
 # Julia expression round-trip driver for property-corpus conformance.
 #
 # Reads expression JSON fixtures, passes each through
-# EarthSciAST.parse_expression / serialize_expression, and emits
+# EarthSciAST.expression_from_json / serialize_expression, and emits
 # a JSON object {fixture_name: {"ok": bool, "value"|"error": ...}} to stdout.
 #
 # Usage: julia roundtrip_julia.jl <fixture.json> [<fixture.json> ...]
@@ -21,7 +21,12 @@ function roundtrip_one(path::String)::Dict{String,Any}
     try
         raw = read(path, String)
         data = JSON3.read(raw)
-        expr = EarthSciAST.parse_expression(data)
+        # `expression_from_json` is the wire-JSON decoder. It is NOT
+        # `parse_expression`, which since 3f2c468b7 means "parse ASCII
+        # expression TEXT" and only accepts an AbstractString — calling it here
+        # made every fixture a MethodError, so Julia reported `null` for all 50
+        # and the whole stage read as cross-binding divergence.
+        expr = EarthSciAST.expression_from_json(data)
         # `serialize_expression` returns a plain string-keyed
         # `Dict{String,Any}`/`Vector`/scalar tree directly (since the
         # `f02f99d2` "one post-wire carrier" refactor there are no JSON3
