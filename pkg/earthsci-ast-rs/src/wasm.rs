@@ -998,19 +998,26 @@ impl Solution {
 
     /// Several observeds in ONE pass over the output grid.
     ///
-    /// `names_str` is a JSON array. The graph is walked once per output time
-    /// however many names are asked for, so this is materially cheaper than a
-    /// loop over [`Solution::observed`] — and it is what a host reading a
-    /// model's authored assertions wants.
+    /// `names_str` is a JSON array; the result is an object keyed by the names
+    /// that were ASKED FOR. The graph is walked once per output time however
+    /// many names are given, so this is materially cheaper than a loop over
+    /// [`Solution::observed`].
+    ///
+    /// **Tolerant, where [`Solution::observed`] is strict.** A name that is not
+    /// an observed variable is simply ABSENT from the result rather than an
+    /// error — most often because it is a STATE, which the caller already has.
+    /// That is what a host reading a model's authored assertions needs: it
+    /// knows the variable names and not which kind each is, and one state in
+    /// the list must not cost it the other answers. A caller that wants "this
+    /// specific name or an explanation" asks [`Solution::observed`].
     #[wasm_bindgen(js_name = observedMany)]
     pub fn observed_many(&self, names_str: &str) -> Result<JsValue, JsValue> {
         let names: Vec<String> = serde_json::from_str(names_str)
             .map_err(|e| JsValue::from_str(&format!("Names parse error: {e}")))?;
         let rows = crate::problem::observed_trajectories(&self.problem, &self.inner, &names)
             .map_err(|e| JsValue::from_str(&format!("observedMany: {e}")))?;
-        let out: serde_json::Map<String, serde_json::Value> = names
+        let out: serde_json::Map<String, serde_json::Value> = rows
             .into_iter()
-            .zip(rows)
             .map(|(n, row)| (n, serde_json::json!(row)))
             .collect();
         to_js(&out)

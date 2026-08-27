@@ -167,11 +167,42 @@ fn asking_for_many_agrees_with_asking_one_at_a_time() {
     ];
     let many = observed_trajectories(&prob, &sol, &names).expect("both resolve");
     assert_eq!(many.len(), 2);
-    assert_eq!(many[0], many[1]);
+    // Keyed by the spelling that was ASKED FOR, so a caller can key its own
+    // lookup by the same string it passed in.
+    assert_eq!(many[0].0, "total_rate");
+    assert_eq!(many[1].0, "CompleteModel.total_rate");
+    assert_eq!(many[0].1, many[1].1);
     assert_eq!(
-        many[0],
+        many[0].1,
         observed_trajectory(&prob, &sol, "total_rate").unwrap()
     );
+}
+
+/// The bulk form OMITS a name that is not an observed; the singular form
+/// refuses it. The split is what lets a host hand over a list of variable names
+/// without first knowing which kind each one is — a test harness reading a
+/// model's authored assertions knows the names and not their kinds, and one
+/// state in the list must not cost it the other answers.
+#[test]
+fn the_bulk_form_skips_what_it_cannot_resolve() {
+    let prob = problem(DYNAMIC, HashMap::new());
+    let sol = solve(&prob, &opts(5)).expect("the model solves");
+
+    let names = vec![
+        "x".to_string(),          // a STATE
+        "total_rate".to_string(), // an observed
+        "nope".to_string(),       // nothing at all
+    ];
+    let many = observed_trajectories(&prob, &sol, &names).expect("the call succeeds");
+    assert_eq!(
+        many.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+        vec!["total_rate"],
+        "only the observed comes back, and it is named so the caller can tell",
+    );
+    for absent in ["x", "nope"] {
+        let e = observed_trajectory(&prob, &sol, absent).expect_err("refused");
+        assert!(format!("{e}").contains(absent), "{e}");
+    }
 }
 
 /// A name that is not an observed is an ERROR, not a row of zeros. A silent

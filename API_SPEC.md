@@ -640,9 +640,16 @@ graph and the parameter bindings — and the solution holds the arguments, which
 is exactly why neither alone can answer.
 
 ```
-observed_trajectory(prob, sol, name)   -> Array          # Rust
-observed_trajectories(prob, sol, names) -> Array[]       # one pass, many names
+observed_trajectory(prob, sol, name)    -> Array               # Rust, STRICT
+observed_trajectories(prob, sol, names) -> (name, Array)[]     # one pass, TOLERANT
 ```
+
+The plural is tolerant where the singular is strict: a name that is not an
+observed variable — most often a STATE, which the caller already has in the
+solution — is OMITTED from the result rather than failing the call, and the
+result is keyed by the spelling that was asked for so the caller can tell which
+came back. That split is what lets a host hand over a list of variable names
+without first knowing which kind each one is.
 
 **Not a second arity of `observed_field`, and the reason is the return RANK.** A
 field is the shape the document declares; a trajectory is that shape with a time

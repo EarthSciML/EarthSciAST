@@ -719,21 +719,46 @@ pub fn observed_trajectory(
     name: &str,
 ) -> Result<Vec<f64>, SimulateError> {
     let one = [name.to_string()];
-    Ok(observed_trajectories(prob, sol, &one)?
-        .pop()
-        .expect("one name in, one trajectory out"))
+    // The bulk form omits what it cannot resolve; the singular one must not,
+    // so an empty result becomes the diagnostic the resolver would have given.
+    match observed_trajectories(prob, sol, &one)?.pop() {
+        Some((_, values)) => Ok(values),
+        None => {
+            let compiled = match &*prob.backend {
+                Backend::Scalar(c) => c,
+                _ => unreachable!("the bulk form already refused a non-scalar backend"),
+            };
+            let declared = compiled.observed_variable_names();
+            let model = prob.model_name.as_deref().unwrap_or("");
+            Err(
+                resolve_observed_name(declared, model, components_of(declared, model) == 1, name)
+                    .expect_err("resolution failed, or the bulk form would have answered"),
+            )
+        }
+    }
 }
 
 /// [`observed_trajectory`] for several names, in ONE pass over the output grid.
 ///
 /// The graph is walked once per output time however many names are asked for,
 /// so a caller wanting five observeds should ask once rather than five times.
+///
+/// **Tolerant where the singular form is strict**, and returns `(name, values)`
+/// pairs so a caller can tell which is which. A name that is not an observed
+/// variable — most often a STATE, which the caller already has in `sol` — is
+/// omitted rather than failing the whole call. That is what a host asking "give
+/// me whichever of these are observed" needs: a test harness reading a model's
+/// authored assertions knows the variable names but not which kind each is, and
+/// one state in the list must not cost it the other four answers.
+///
+/// The returned names are the spellings that were ASKED FOR, not the resolved
+/// ones, so a caller can key its own lookup by them.
 #[cfg(feature = "solve")]
 pub fn observed_trajectories(
     prob: &EsmProblem,
     sol: &Solution,
     names: &[String],
-) -> Result<Vec<Vec<f64>>, SimulateError> {
+) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
     let compiled = match &*prob.backend {
         Backend::Scalar(c) => c,
         Backend::Array(_) => {
@@ -757,12 +782,17 @@ pub fn observed_trajectories(
     let model = prob.model_name.as_deref().unwrap_or("");
     let single = components_of(declared, model) == 1;
 
-    let resolved: Vec<String> = names
+    let (asked, resolved): (Vec<String>, Vec<String>) = names
         .iter()
-        .map(|name| resolve_observed_name(declared, model, single, name))
-        .collect::<Result<_, _>>()?;
+        .filter_map(|name| {
+            resolve_observed_name(declared, model, single, name)
+                .ok()
+                .map(|r| (name.clone(), r))
+        })
+        .unzip();
 
-    compiled.observed_trajectories(&resolved, &sol.time, &sol.state, &prob.p)
+    let rows = compiled.observed_trajectories(&resolved, &sol.time, &sol.state, &prob.p)?;
+    Ok(asked.into_iter().zip(rows).collect())
 }
 
 /// §5.8's precedence, against a flat list of declared observed names.
