@@ -11,6 +11,36 @@
 #
 # Reuses the `zero_alloc_harness.jl` helpers — `built_rhs_alloc_bytes(model;…)`
 # and `rhs_alloc_bytes(f!,du,u0,p,t)` — which any future evaluator work can call.
+#
+# THREADED TIER, and why this file pins the SERIAL path explicitly.
+# The codegen tier can run a section's cell axis as static chunks through
+# Polyester (`_run_cg_section_threaded!`, codegen_kernel.jl). That dispatch is
+# NOT free: handing a closure over `du`/`u`/`p`/`tabs` to Polyester's batch
+# runner costs a fixed ~96 B per call (48 B closure + 48 B
+# `ManualMemory.Reference`; both non-isbits, so Polyester boxes them). The cost
+# is per DISPATCH, not per cell — it does not grow with N — but it is not 0.
+#
+# The tier arms itself when Polyester is loaded, and Polyester arrives as a
+# TRANSITIVE dependency of the SciML stack (ModelingToolkit / OrdinaryDiffEq /
+# Catalyst). So whether these measurements see the serial or the threaded path
+# depends on which OTHER test files ran first in the same process — this file
+# alone loads no SciML package and measures the serial path, while the full
+# `runtests.jl` has MTK loaded by the time it gets here and measures the
+# threaded one. That is a property of the process, not of the kernels.
+#
+# The zero-allocation DISCIPLINE this file exists to guard (`@views`/gather
+# slices, preallocated scratch, fused in-place broadcasts, in-place semiring
+# folds, explicit `du` scatter) is a property of the kernels themselves, so the
+# testsets below pin the serial path and keep asserting EXACTLY 0 — via
+# `ESS_THREADS_MIN_CELLS`, which `_sec_prep_threads!` reads ONCE per section
+# and caches (unlike `ESS_THREADS_DISABLE`/`ESS_CG_THREADS_DISABLE`, which
+# `_cg_threads_available()` re-reads on EVERY call and whose `get(ENV, …)`
+# itself allocates a 32 B String per call once the variable is set — a kill
+# switch cannot be used to measure zero allocation).
+#
+# The threaded dispatch is then covered on its own terms by the final testset:
+# its cost must stay CONSTANT in N, which is the real invariant (a per-cell
+# leak on the chunked path would grow with the grid).
 
 using Test
 using EarthSciAST
@@ -181,6 +211,14 @@ function _contract_fold_alloc(n; warmup::Int=3, samples::Int=5)
     return (best, ESM._eval_node(cnode, u, p, 0.0), sum(u))
 end
 
+# Force the SERIAL path for every exact-zero measurement below, so the numbers
+# are a property of the kernels rather than of whichever packages a previously
+# included test file happened to load. `_sec_prep_threads!` reads this once per
+# section and caches the verdict, so it costs no per-call allocation of its own
+# (see the header note).
+const _SERIAL_PIN = ("ESS_THREADS_MIN_CELLS" => string(typemax(Int)),)
+
+withenv(_SERIAL_PIN...) do
 @testset "tree_walk PDE RHS is allocation-free (ess-9cc)" begin
 
     @testset "scalar interp.* observed RHS: 0 bytes (perf-interp-alloc)" begin
@@ -266,6 +304,48 @@ end
             bytes, got, want = _contract_fold_alloc(n)
             @test got == want
             @test bytes == 0
+        end
+    end
+end
+end  # withenv(_SERIAL_PIN...)
+
+# The chunked cell axis on its own terms. Only reachable when the threaded tier
+# is actually armed (Polyester loaded — usually transitively via the SciML
+# stack — and `nthreads() > 1`), so it is skipped in a bare `julia --project`
+# run of this file and exercised in the full suite.
+#
+# The dispatch costs a FIXED ~96 B per call (see the header). What must hold is
+# that the cost is per dispatch and not per CELL: a real leak in a chunked
+# kernel would scale with the grid. So this pins N-INDEPENDENCE plus a small
+# absolute ceiling, which is the same property the serial testsets pin with
+# `== 0` — just at the constant the batch runner actually costs.
+@testset "threaded cell axis: per-dispatch cost is constant in N (ess-9cc)" begin
+    if !EarthSciAST._threads_available()
+        @info "skipping threaded-tier allocation test: threaded tier not armed " *
+              "(needs Polyester loaded and nthreads() > 1; " *
+              "nthreads=$(Threads.nthreads()), " *
+              "polyester=$(EarthSciAST._polyester_loaded()))"
+    else
+        # Small min-cells so every N below genuinely chunks; read once per
+        # section and cached, so it adds no per-call allocation.
+        withenv("ESS_THREADS_MIN_CELLS" => "256") do
+            bytes = map((1024, 4096, 16384)) do N
+                ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
+                built_rhs_alloc_bytes(_stencil_model(N); initial_conditions=ics)
+            end
+            # Grid grows 16x; the per-call cost must not move at all.
+            @test allequal(bytes)
+            # And it must stay a small constant, not creep toward per-cell.
+            @test all(<=(256), bytes)
+
+            fbytes = map((1024, 16384)) do N
+                ics = Dict("u[$k]" => 0.1k for k in 1:N)
+                built_rhs_alloc_bytes(_forcing_gather_model(N);
+                    initial_conditions=ics,
+                    param_arrays=Dict("forcing" => collect(1.0:Float64(N))))
+            end
+            @test allequal(fbytes)
+            @test all(<=(256), fbytes)
         end
     end
 end
