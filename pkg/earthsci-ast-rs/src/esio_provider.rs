@@ -128,11 +128,15 @@ struct ColumnSpec {
 /// should surface at the boundary, not as an absent forcing later.
 fn to_ess_field(
     name: &str,
-    f: &EsioField,
+    f: EsioField,
     coords: &HashMap<String, earthsciio::format::Coord>,
 ) -> Result<NativeField, ProviderError> {
-    let values: Vec<f64> = match &f.data {
-        ArrayData::F64(v) => v.clone(),
+    // Takes the field by value so an already-f64 slab MOVES into the model
+    // array — a gated SR slab is ~0.6 GB, and a clone here doubles the
+    // transient footprint of every fetch.
+    let n_values = f.data.len();
+    let values: Vec<f64> = match f.data {
+        ArrayData::F64(v) => v,
         ArrayData::I64(v) => v.iter().map(|&x| x as f64).collect(),
         ArrayData::I32(v) => v.iter().map(|&x| x as f64).collect(),
         ArrayData::Bool(v) => v.iter().map(|&x| if x { 1.0 } else { 0.0 }).collect(),
@@ -145,9 +149,8 @@ fn to_ess_field(
     };
     let array = ArrayD::from_shape_vec(IxDyn(&f.shape), values).map_err(|e| {
         err(format!(
-            "loader variable '{name}': shape {:?} does not match {} values ({e})",
+            "loader variable '{name}': shape {:?} does not match {n_values} values ({e})",
             f.shape,
-            f.data.len()
         ))
     })?;
 
@@ -719,13 +722,13 @@ impl EsioProvider {
     ) -> Result<HashMap<String, NativeField>, ProviderError> {
         let coords = self.inner.coords();
         let mut out = HashMap::with_capacity(fields.len());
-        for (disk_name, f) in &fields {
+        for (disk_name, f) in fields {
             let model_name = self
                 .var_map
-                .get(disk_name)
+                .get(&disk_name)
                 .cloned()
                 .unwrap_or_else(|| disk_name.clone());
-            out.insert(model_name, to_ess_field(disk_name, f, coords)?);
+            out.insert(model_name, to_ess_field(&disk_name, f, coords)?);
         }
         Ok(out)
     }

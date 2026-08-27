@@ -1497,12 +1497,12 @@ pub(crate) fn run_prepare(
     // silently makes unreachable is a bar that never fills.
     let pending: Vec<&String> = order.iter().filter(|n| !fields.contains_key(*n)).collect();
     let n_pending = pending.len();
-    for (i, name) in pending.into_iter().enumerate() {
+    for (i, name) in pending.iter().enumerate() {
         report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
         let t = std::time::Instant::now();
         let a = eval_observed(
             name,
-            &defs[name],
+            &defs[*name],
             &arrays,
             &param_vals,
             &param_names,
@@ -1515,8 +1515,15 @@ pub(crate) fn run_prepare(
             a.shape(),
             t.elapsed().as_secs_f64()
         ));
-        arrays.insert(name.clone(), a.clone());
-        fields.insert(name.clone(), a);
+        // Into the evaluation namespace ONLY while later observeds may still
+        // read it; each is MOVED into `fields` after the loop rather than held
+        // in both maps at once.
+        arrays.insert((*name).clone(), a);
+    }
+    for name in pending {
+        if let Some(a) = arrays.remove(name) {
+            fields.insert(name.clone(), a);
+        }
     }
     report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
 
