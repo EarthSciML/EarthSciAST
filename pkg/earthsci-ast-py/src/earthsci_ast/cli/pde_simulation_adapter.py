@@ -70,7 +70,7 @@ def _sample_trajectory(result, out_times) -> dict[str, dict[str, float]]:
 
 
 def run_fixture(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
-    esm = et.load(str(base / fixture["path"]))
+    esm = et.load_path(str(base / fixture["path"]))
 
     rhs: dict[str, dict[str, float]] = {}
     for probe in fixture["rhs_probes"]:
@@ -98,7 +98,7 @@ def run_fixture_full(fixture: dict, base: Path, integ: dict) -> dict[str, Any]:
     loaded fields injected ONLY through the provider seam, and emit the RHS at
     each probe state and the trajectory at each checkpoint. Reuses the exact
     Phase-1 machinery of ``tests/test_loaded_ic_bc_simulation.py``."""
-    esm = et.load(str(base / fixture["path"]))
+    esm = et.load_path(str(base / fixture["path"]))
     flat = et.flatten(esm)
 
     # Every loaded field enters through the provider seam, keyed by its declared
