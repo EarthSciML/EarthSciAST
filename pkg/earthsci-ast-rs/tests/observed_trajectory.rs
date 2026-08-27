@@ -217,3 +217,35 @@ fn a_state_free_document_is_sent_to_observed_field() {
         other => panic!("expected NotDynamic, got {other:?}"),
     }
 }
+
+/// A pure `reaction_systems` document is DIFFERENTIAL, and `Compile::Auto` has
+/// to know it before flattening has lowered anything.
+///
+/// The regression: `has_differential_equations` read `file.models` alone, and a
+/// chemistry document has no models at all until its reactions are lowered. So
+/// `Auto` chose the static backend and `solve` refused twenty-five differential
+/// equations with "the document declares no differential equations". Every pure
+/// chemistry document in the wild is this shape.
+#[test]
+fn a_reaction_system_is_not_mistaken_for_a_static_document() {
+    const POLLU: &str = "../../tests/valid/reaction_system_only.esm";
+    if !Path::new(POLLU).exists() {
+        eprintln!("· skipping: no {POLLU}");
+        return;
+    }
+    let prob = esm_problem(
+        ProblemInput::Path(Path::new(POLLU)),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .expect("esm_problem");
+    assert!(
+        prob.is_dynamic(),
+        "a document of 25 reactions was classified static",
+    );
+    let mut o = SolveOptions::default();
+    o.sample_evenly(0.0, 1.0, 3);
+    let sol = solve(&prob, &o).expect("a reaction system integrates");
+    assert_eq!(sol.time.len(), 3);
+    assert!(!sol.state_variable_names.is_empty());
+}

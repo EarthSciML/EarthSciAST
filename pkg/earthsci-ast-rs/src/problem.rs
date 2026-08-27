@@ -1286,6 +1286,25 @@ fn compile_backend(
 /// [`solve`] on it raises [`SimulateError::NotDynamic`] rather than handing
 /// back an empty trajectory.
 pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str>) -> bool {
+    // A REACTION SYSTEM is differential, and reading only `models` said it was
+    // not. Reactions lower to `D(species, t) = …` during flattening, so a
+    // document whose whole content is a `reaction_systems` block has no models
+    // AT ALL until that happens — and this function runs before it. Every pure
+    // chemistry document in the wild is that shape (`pollu`, `superfast`,
+    // `geoschem_fullchem`), and `Compile::Auto` was calling each of them static
+    // and then refusing to solve twenty-five differential equations with
+    // `NotDynamic { "the document declares no differential equations" }`.
+    //
+    // A system with no reactions is genuinely not differential — it lowers to
+    // nothing — so the check is for reactions rather than for the block.
+    if let Some(systems) = file.reaction_systems.as_ref()
+        && systems
+            .iter()
+            .filter(|(name, _)| model_name.is_none_or(|want| want == name.as_str()))
+            .any(|(_, rs)| !rs.reactions.is_empty())
+    {
+        return true;
+    }
     let Some(models) = file.models.as_ref() else {
         return false;
     };
