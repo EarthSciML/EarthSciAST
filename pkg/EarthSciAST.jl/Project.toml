@@ -67,6 +67,17 @@ Reactant = "0.2"
 RuntimeGeneratedFunctions = "0.5"
 SciMLBase = "2"
 Symbolics = "7"
+# HELD BACK DELIBERATELY. SymbolicUtils 4.46.0 deleted
+#   Base.ImmutableDict(d::ImmutableDict{K,V}, x, y) = ImmutableDict{K,V}(d, x, y)
+# from src/types.jl. Base has never defined that 3-argument form -- only the
+# Pair-taking one -- and Symbolics 7.x calls it in `renamed_metadata`
+# (src/variable.jl), which ModelingToolkitBase's PrecompileTools workload reaches
+# through complete -> Initial -> default_toterm -> diff2term -> rename. So 4.46.0
+# makes ModelingToolkit fail to PRECOMPILE, taking Catalyst and both EarthSciAST
+# MTK extensions down with it. Every SymbolicUtils through 4.45.0 carries the
+# method, and no Symbolics release has adapted yet (7.36.0 is current). Lift this
+# once Symbolics stops calling the 3-arg form, or SymbolicUtils restores it.
+SymbolicUtils = "4 - 4.45"
 Tullio = "0.3.9"
 Unitful = "1.28.0"
 julia = "1.10"
@@ -109,7 +120,8 @@ Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
 Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "EarthSciIO", "Blosc", "JSON", "SHA", "ZipFile"]
+test = ["Test", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "SymbolicUtils", "EarthSciIO", "Blosc", "JSON", "SHA", "ZipFile"]
