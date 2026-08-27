@@ -23,11 +23,35 @@
 # so on a fresh checkout we re-establish the local dev path then instantiate; on
 # warm runs (Manifest already present) this is just a fast resolve check.
 import Pkg
-let env = joinpath(@__DIR__, "pde_sim_adapter")
-    Pkg.activate(env; io=devnull)
-    isfile(joinpath(env, "Manifest.toml")) ||
-        Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
-    Pkg.instantiate(; io=devnull)
+let env = joinpath(@__DIR__, "pde_sim_adapter"), manifest = joinpath(env, "Manifest.toml")
+    bootstrap() = begin
+        Pkg.activate(env; io=devnull)
+        isfile(manifest) ||
+            Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
+        Pkg.instantiate(; io=devnull)
+    end
+    try
+        bootstrap()
+    catch err
+        # Manifest.toml is a machine-local CACHE (gitignored), so it can lag a
+        # Project.toml that has moved on and then contradict it. Concretely: a
+        # Manifest generated before 02ddbef0e pins EarthSciIO to a local dev
+        # `path`, while the Project now sources it from git — and
+        # `Pkg.instantiate` dies on the contradiction with a bare
+        # `MethodError: joinpath(::Nothing)` (Pkg calls `isdir(source_path(...))`
+        # and `source_path` returns nothing for a repo-sourced package whose
+        # manifest entry carries no tree hash). The adapter then wrote no output
+        # and the Julia REFERENCE stage failed, which also fails the Rust and
+        # Python stages that compare against it.
+        #
+        # A cache that cannot instantiate has no value, so rebuild it rather
+        # than fail the gate. `Pkg.develop` only writes the Manifest here —
+        # EarthSciAST is already in the Project's [deps], so the tracked
+        # Project.toml is not touched.
+        @warn "pde_sim_adapter env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
+        rm(manifest; force=true)
+        bootstrap()
+    end
 end
 
 using EarthSciAST
