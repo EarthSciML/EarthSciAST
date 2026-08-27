@@ -626,6 +626,46 @@ rebuild the problem on every lookup. The names it reports are
 `observed_field_names`, and each is resolved through `observed_field`, so the
 resolution rule below is the one a JS host gets.
 
+#### Reading an observed of a document that DOES integrate
+
+`observed_field` reports what the BUILD materialized, which is a constant. An
+observed of a dynamic model is not one — it varies along the trajectory — and a
+`Solution` carries **state rows only**, in every binding. So there was no way to
+read one back at all: a model author asserting on `NOx` where the states are
+`NO` and `NO2` got "not found" on a model that was fine.
+
+The missing argument is the solution. An observed is a pure function of
+`(state, params, t)`: the problem holds the function — the topo-sorted observed
+graph and the parameter bindings — and the solution holds the arguments, which
+is exactly why neither alone can answer.
+
+```
+observed_trajectory(prob, sol, name)   -> Array          # Rust
+observed_trajectories(prob, sol, names) -> Array[]       # one pass, many names
+```
+
+**Not a second arity of `observed_field`, and the reason is the return RANK.** A
+field is the shape the document declares; a trajectory is that shape with a time
+axis added. Two ranks under one name is a contract a caller cannot read off the
+call site. A binding that can overload MAY still spell it as an extra arity of
+`observed_field` — Julia and Python are free to — and this is the
+transliteration §2.1 fixes for the one that cannot.
+
+Name resolution is the rule below, unchanged. Scalar backend only: the
+array/spatial runtime materializes observeds per cell inside itself rather than
+through this graph, and a static document has no trajectory and wants
+`observed_field`. **Rust only today**, hence `extension` tier rather than
+`stable`; it becomes stable when Julia and Python implement it.
+
+> Julia's `SymbolicIndexingInterface` already returns observeds from `sol[…]`,
+> so §2.5.7's claim that "a solution is indexed by variable name" has been true
+> in one binding and not the others. This is the gap, named.
+
+**On the wasm surface** this is `Solution.observed(name)` / `observedMany(names)`
+on the handle returned by `Problem.solve` — see the `Problem` / `Solution`
+classes in `src/wasm.rs`. The handle holds the problem it came from, so a host
+cannot read a solution against the wrong bindings.
+
 **Name resolution.** Build-time field names are **flattened and
 component-qualified** (`Sites.North.u`). A binding MUST resolve `name` by this
 precedence, stopping at the first rule that applies:

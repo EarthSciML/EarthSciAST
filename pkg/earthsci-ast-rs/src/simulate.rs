@@ -1186,6 +1186,74 @@ impl Compiled {
     /// states + parameters at each output time. No-op for a system without
     /// algebraic states.
     #[cfg(feature = "solve")]
+    /// The trajectories of the named observed variables over an output grid.
+    ///
+    /// The companion to [`Self::evaluate_static_observeds`] for a system that
+    /// DOES integrate. An observed is a pure function of `(state, params, t)`;
+    /// the compiled system holds the function and the caller's solution holds
+    /// the arguments, which is exactly why neither alone can answer and why
+    /// this takes both.
+    ///
+    /// One forward pass per output time over the already-topo-sorted graph —
+    /// the same pass [`Self::reconstruct_algebraic_trajectory`] makes, which
+    /// computes every one of these values and then keeps only the algebraic
+    /// states. Every requested name is filled from that one pass rather than
+    /// re-walking the graph per name.
+    ///
+    /// `state` is read as given. A solution's algebraic rows have already been
+    /// reconstructed by the time a caller has one, so no second fixup is
+    /// wanted here — doing it again would be harmless but would say that this
+    /// function knows something about solution provenance that it does not.
+    ///
+    /// Returns `InvalidParameter` for a name that is not an observed variable;
+    /// the caller resolves spellings (API_SPEC §5.8) before getting here.
+    pub(crate) fn observed_trajectories(
+        &self,
+        names: &[String],
+        time: &[f64],
+        state: &[Vec<f64>],
+        params: &HashMap<String, f64>,
+    ) -> Result<Vec<Vec<f64>>, SimulateError> {
+        let slots: Vec<usize> = names
+            .iter()
+            .map(|n| {
+                self.observed_names
+                    .iter()
+                    .position(|o| o == n)
+                    .ok_or_else(|| SimulateError::InvalidParameter { name: n.clone() })
+            })
+            .collect::<Result<_, _>>()?;
+
+        let param_vec = self.build_param_vec(params)?;
+        let n_states = self.state_names.len();
+        let mut out = vec![vec![0.0f64; time.len()]; names.len()];
+        let mut y_eff = vec![0.0f64; n_states];
+        let mut obs_buf = vec![0.0f64; self.observed_exprs.len()];
+
+        for (k, &t) in time.iter().enumerate() {
+            for (i, y) in y_eff.iter_mut().enumerate() {
+                // A short row is a caller error rather than something to paper
+                // over with a zero: it would produce a plausible number from a
+                // state that was never there.
+                *y = *state.get(i).and_then(|r| r.get(k)).ok_or_else(|| {
+                    SimulateError::InvalidParameter {
+                        name: format!(
+                            "{} (the solution has no value at output index {k})",
+                            self.state_names[i]
+                        ),
+                    }
+                })?;
+            }
+            for (i, e) in self.observed_exprs.iter().enumerate() {
+                obs_buf[i] = interpret(e, &y_eff, &param_vec, &obs_buf, t);
+            }
+            for (row, &slot) in out.iter_mut().zip(&slots) {
+                row[k] = obs_buf[slot];
+            }
+        }
+        Ok(out)
+    }
+
     fn reconstruct_algebraic_trajectory(
         &self,
         time: &[f64],

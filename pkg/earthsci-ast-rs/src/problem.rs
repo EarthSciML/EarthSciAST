@@ -499,6 +499,20 @@ impl EsmProblem {
         &self.build.fields
     }
 
+    /// The names of the OBSERVED VARIABLES [`observed_trajectory`] can report a
+    /// trajectory for.
+    ///
+    /// Disjoint from [`Self::observed_field_names`] and answering a different
+    /// question: those are constants the BUILD materialized, these vary along a
+    /// solution. Empty on the array and static backends, which have no scalar
+    /// observed graph to walk.
+    pub fn observed_variable_names(&self) -> Vec<String> {
+        match &*self.backend {
+            Backend::Scalar(c) => c.observed_variable_names().to_vec(),
+            Backend::Array(_) | Backend::Static(_) => Vec::new(),
+        }
+    }
+
     /// The names of every build-time field [`observed_field`] can return,
     /// component-qualified — the spelling that resolves whatever the problem's
     /// component count, and the one to report to an author whose bare name was
@@ -670,6 +684,147 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             ),
         },
     ))
+}
+
+/// The trajectory of the observed variable `name` over `sol`'s output grid.
+///
+/// The solution-aware half of [`observed_field`], and the answer to a question
+/// neither argument can answer alone. An observed is a pure function of
+/// `(state, params, t)`: `prob` holds the function — the topo-sorted observed
+/// graph and the parameter bindings — and `sol` holds the arguments. That is
+/// why this takes both, and why [`observed_field`] can only ever report fields
+/// the BUILD materialized. A [`Solution`] carries state rows only, so an
+/// observed of a model that does integrate has no other way out.
+///
+/// Named `observed_trajectory` rather than being a second arity of
+/// `observed_field` because the return RANK differs: a field is the shape the
+/// document declares, a trajectory is that shape with a time axis added. Two
+/// ranks under one name is a contract a caller cannot read off the call. (A
+/// binding that can overload — Julia, Python — may still spell it as an extra
+/// arity of `observed_field`; API_SPEC §5.8 records the transliteration.)
+///
+/// Name resolution is §5.8's rule, the same one [`observed_field`] applies:
+/// exact hit, then the component-qualified spelling, then a bare name only when
+/// the problem has exactly one component.
+///
+/// Scalar backend only. A document on the array/spatial runtime materializes
+/// its observeds per cell inside that runtime rather than through this graph,
+/// and reporting a scalar trajectory for one would be a wrong answer rather
+/// than a missing one; a static one has no trajectory at all and wants
+/// [`observed_field`].
+#[cfg(feature = "solve")]
+pub fn observed_trajectory(
+    prob: &EsmProblem,
+    sol: &Solution,
+    name: &str,
+) -> Result<Vec<f64>, SimulateError> {
+    let one = [name.to_string()];
+    Ok(observed_trajectories(prob, sol, &one)?
+        .pop()
+        .expect("one name in, one trajectory out"))
+}
+
+/// [`observed_trajectory`] for several names, in ONE pass over the output grid.
+///
+/// The graph is walked once per output time however many names are asked for,
+/// so a caller wanting five observeds should ask once rather than five times.
+#[cfg(feature = "solve")]
+pub fn observed_trajectories(
+    prob: &EsmProblem,
+    sol: &Solution,
+    names: &[String],
+) -> Result<Vec<Vec<f64>>, SimulateError> {
+    let compiled = match &*prob.backend {
+        Backend::Scalar(c) => c,
+        Backend::Array(_) => {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: "observed_trajectory: this EsmProblem is on the array runtime,                               which materializes observeds per cell rather than through the                               scalar graph"
+                        .to_string(),
+                },
+            ));
+        }
+        Backend::Static(reason) => {
+            return Err(SimulateError::NotDynamic {
+                details: format!(
+                    "{reason}; a static document's results are read with observed_field"
+                ),
+            });
+        }
+    };
+
+    let declared = compiled.observed_variable_names();
+    let model = prob.model_name.as_deref().unwrap_or("");
+    let single = components_of(declared, model) == 1;
+
+    let resolved: Vec<String> = names
+        .iter()
+        .map(|name| resolve_observed_name(declared, model, single, name))
+        .collect::<Result<_, _>>()?;
+
+    compiled.observed_trajectories(&resolved, &sol.time, &sol.state, &prob.p)
+}
+
+/// §5.8's precedence, against a flat list of declared observed names.
+#[cfg(feature = "solve")]
+fn resolve_observed_name(
+    declared: &[String],
+    model: &str,
+    single_component: bool,
+    name: &str,
+) -> Result<String, SimulateError> {
+    if declared.iter().any(|d| d == name) {
+        return Ok(name.to_string()); // rule 1
+    }
+    if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
+        && declared.iter().any(|d| d == rest)
+    {
+        return Ok(rest.to_string()); // rule 2
+    }
+    if !name.contains('.') {
+        let mut matches: Vec<&String> = declared
+            .iter()
+            .filter(|d| d.rsplit('.').next() == Some(name))
+            .collect();
+        matches.sort();
+        // Rule 3's gate. A bare name that WOULD have resolved but for the
+        // component count gets the remedy in the diagnostic — the author cannot
+        // qualify it without being told which spellings exist.
+        if single_component && matches.len() == 1 {
+            return Ok(matches[0].clone());
+        }
+        if !matches.is_empty() {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: format!(
+                        "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
+                        components_of(declared, model),
+                        matches
+                            .iter()
+                            .map(|k| qualify(model, k))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                },
+            ));
+        }
+    }
+    Err(SimulateError::Compile(
+        crate::compile_error::CompileError::InterpreterBuildError {
+            details: format!(
+                "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
+            ),
+        },
+    ))
+}
+
+#[cfg(feature = "solve")]
+fn components_of(declared: &[String], model: &str) -> usize {
+    declared
+        .iter()
+        .map(|k| component_of(&qualify(model, k)).to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 // =============================================================================
