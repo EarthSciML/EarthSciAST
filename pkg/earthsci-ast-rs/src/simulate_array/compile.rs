@@ -2168,9 +2168,9 @@ fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
 /// `const` — typically a small placeholder or a default — must not silently
 /// override real data. It also makes the channel usable for OVERRIDES, matching
 /// the Julia reference's `const_arrays=` kwarg.
-fn vi_factor_arrays(
+fn vi_factor_arrays<S: std::hash::BuildHasher>(
     model: &Model,
-    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
 ) -> HashMap<String, ArrayD<f64>> {
     let mut arrays = collect_const_factor_arrays(model);
     if let Some(extra) = caller_arrays {
@@ -2268,10 +2268,10 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
 /// [`CompileError::InterpreterBuildError`] if the model or registry cannot be
 /// serialized to the engine's JSON view, or if the engine rejects the document
 /// (e.g. a producer that classifies CONTINUOUS, §5.7 guard 2).
-pub fn run_value_invention(
+pub fn run_value_invention<S: std::hash::BuildHasher>(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
-    caller_arrays: Option<&HashMap<String, ArrayD<f64>>>,
+    caller_arrays: Option<&HashMap<String, ArrayD<f64>, S>>,
 ) -> Result<ValueInventionResult, CompileError> {
     let const_arrays = vi_factor_arrays(model, caller_arrays);
     let params = collect_scalar_param_defaults(model);

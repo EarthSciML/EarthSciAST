@@ -1562,22 +1562,51 @@ pub fn eval_expression_with_extents_and_consts(
     derived_extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
 ) -> Result<Value, CompileError> {
-    check_evaluable(expr)?;
-    let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
     // `HashMap` (FAQ rings, coordinate fields). Rehash into the fast [`ArrMap`]
     // the interpreter uses so the per-node tree walk gets the fast lookups. The
-    // input maps are small (a clipped ring, a couple of coordinate arrays) and
-    // this runs once per call (per-cell IC recompute was removed — see
-    // `resolve_field_ics`), so the shallow re-map is negligible.
+    // input maps are small here (a clipped ring, a couple of coordinate arrays)
+    // and this runs once per call (per-cell IC recompute was removed — see
+    // `resolve_field_ics`), so the shallow re-map is negligible. Hot in-crate
+    // callers whose maps carry provider slabs must NOT take this boundary —
+    // prepare's observed-graph loop holds an [`ArrMap`] and calls the shared
+    // variant below, because deep-cloning a map that holds fifteen
+    // hundreds-of-MB SR slabs once per observed dominated the whole build
+    // (measured: ~87% of a warm ISRM prepare was memmove).
     let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    eval_expression_with_extents_and_consts_shared(
+        expr,
+        &inputs,
+        params,
+        param_names,
+        t,
+        derived_extents,
+        const_arrays,
+    )
+}
+
+/// [`eval_expression_with_extents_and_consts`] minus the input-map rehash: the
+/// caller already holds the interpreter's own [`ArrMap`] and the arrays are
+/// borrowed for the duration of the call, byte-identically — no copy of any
+/// input array is made.
+pub(crate) fn eval_expression_with_extents_and_consts_shared(
+    expr: &Expr,
+    inputs: &ArrMap,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
+) -> Result<Value, CompileError> {
+    check_evaluable(expr)?;
+    let empty: ArrMap = ArrMap::default();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     // Standalone expression evaluation (FAQ rings, area integrands) carries no
     // loader forcing — an empty buffer keeps the channel byte-identical here.
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut ctx = EvalCtx {
         state_arrays: &empty,
-        observed_arrays: &inputs,
+        observed_arrays: inputs,
         params,
         param_names,
         loop_binds: IdxMap::default(),

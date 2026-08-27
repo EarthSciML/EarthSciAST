@@ -84,8 +84,8 @@ use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
 use crate::simulate_array::{
-    ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts,
-    run_value_invention,
+    ArrMap, ConstArrayScope, Value as EvalValue,
+    eval_expression_with_extents_and_consts_shared, run_value_invention,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
@@ -595,7 +595,7 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
 // namespaced model names, and every dotted key additionally surfaces under its
 // unique shallowest bare tail — the spelling the authored expressions use).
 // --------------------------------------------------------------------------- //
-fn inject_aliases(arrays: &mut HashMap<String, ArrayD<f64>>, coupling: &[(String, String)]) {
+fn inject_aliases(arrays: &mut ArrMap, coupling: &[(String, String)]) {
     // The coupling routing is AUTHORITATIVE: a `variable_map` explicitly binds
     // the loader field to the model variable, so surface the array under both
     // the namespaced target and its model-local tail (the authored spelling
@@ -682,7 +682,7 @@ fn producer_seed_closure(
 fn eval_observed(
     name: &str,
     def: &Expr,
-    arrays: &HashMap<String, ArrayD<f64>>,
+    arrays: &ArrMap,
     param_vals: &[f64],
     param_names: &[String],
     index_sets: &HashMap<String, IndexSet>,
@@ -692,7 +692,7 @@ fn eval_observed(
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
         .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
-    let val = eval_expression_with_extents_and_consts(
+    let val = eval_expression_with_extents_and_consts_shared(
         &expr,
         arrays,
         param_vals,
@@ -1202,7 +1202,11 @@ pub(crate) fn run_prepare(
     let (param_vals, param_names) = scalar_params(&model, &opts.parameters);
 
     // ---- provider injection: eager CONST materialization; gated deferral ----
-    let mut arrays: HashMap<String, ArrayD<f64>> = const_arrays;
+    // Held as the interpreter's own `ArrMap` (one rehash of the caller's map,
+    // MOVING the values) so the observed-graph loop below can lend it to the
+    // evaluator without the per-observed deep clone of every provider slab that
+    // this map's SR arrays would otherwise cost.
+    let mut arrays: ArrMap = const_arrays.into_iter().collect();
     let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
     let n_providers = providers.len();
     for (i, (k, mut prov)) in providers.into_iter().enumerate() {
