@@ -100,7 +100,6 @@ def extract_typescript() -> dict:
     return _extract_ts_index(os.path.join(ROOT, "pkg/earthsci-ast-ts/src/index.ts"))
 
 
-
 # --------------------------------------------------------------------------
 # Python — __all__
 # --------------------------------------------------------------------------

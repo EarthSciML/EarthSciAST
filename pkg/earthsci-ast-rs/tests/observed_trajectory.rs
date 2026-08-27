@@ -40,9 +40,11 @@ fn problem(path: &str, p: HashMap<String, f64>) -> earthsci_ast::EsmProblem {
 }
 
 fn opts(points: usize) -> SolveOptions {
-    let mut o = SolveOptions::default();
-    o.reltol = 1e-10;
-    o.abstol = 1e-14;
+    let mut o = SolveOptions {
+        reltol: 1e-10,
+        abstol: 1e-14,
+        ..Default::default()
+    };
     o.sample_evenly(0.0, 10.0, points);
     o
 }

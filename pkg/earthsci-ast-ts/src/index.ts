@@ -273,7 +273,6 @@ export {
   MigrationError,
 } from './migration.js'
 
-
 // Coupled system flattening (esm-libraries-spec §4.7.5)
 export {
   flatten,
