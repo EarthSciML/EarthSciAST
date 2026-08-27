@@ -1389,7 +1389,7 @@ impl CseRt {
         let origin = slab.origin.clone();
         let ptr: *const ArrayD<f64> = &slab.data;
         VecValue::View {
-            data: unsafe { &*ptr },
+            data: unsafe { (*ptr).view() },
             origin,
         }
     }
@@ -1410,7 +1410,7 @@ impl CseRt {
         let origin = slab.origin.clone();
         let ptr: *const ArrayD<f64> = &slab.data;
         VecValue::View {
-            data: unsafe { &*ptr },
+            data: unsafe { (*ptr).view() },
             origin,
         }
     }
