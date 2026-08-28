@@ -57,6 +57,14 @@
 # Debug: ESS_CODEGEN_DEBUG=1 prints per-build emission/decline/latency lines.
 # Budget: ESS_CODEGEN_NODE_BUDGET overrides the emitted-node cap (default
 # 400_000 across all kernels of one build) that bounds Julia compile latency.
+#
+# TEMPLATE SUB-KERNELS COMPILE ONCE (ess-cg-subcall-fn, OPT-IN via
+# ESS_CG_SUBCALL_FN=1): a `_NK_SUBCALL` body is emitted into ONE top-level
+# `@noinline` function (structurally deduped across sub-kernels that differ
+# only in descriptor constants) and every site becomes a call — see
+# `_cg_emit_subcall` / `_cg_cell_fn!` and the default-off rationale at
+# `_cg_subcall_fn_disabled`. ESS_CG_SUBCALL_FN_MIN_NODES sets the stay-inline
+# size floor; ESS_CG_STRUCT_DUMP=<dir> dumps cell-body canonical keys.
 # ========================================================================
 
 _codegen_disabled() = get(ENV, "ESS_CODEGEN_DISABLE", "") == "1"
@@ -214,13 +222,58 @@ mutable struct _CGCtx
     # helpers are never referenced (dedup scope is one kernel — where the
     # redundancy is; distinct kernels are distinct equations).
     helper_dedup::Dict{String,Symbol}
+    # Sub-kernel function memo (ess-cg-subcall-fn): sub-`_AccKernel` → the
+    # `@noinline` function serving its body, as `(fname, extra_params,
+    # int_consts::Vector{Int}, flt_consts::Vector{Float64})`, or `:inline` for
+    # a body under the size floor (kept inlined per site, the pre-tier
+    # emission). CROSS-kernel, like `invdone` — a sub-kernel shared by several
+    # parents compiles once and every site calls it — with `sublog` mirroring
+    # `invlog` so a declined kernel's entries roll back (their function defs
+    # are discarded from `helpers` by the same rollback).
+    subfn::IdDict{Any,Any}
+    sublog::Vector{Any}
+    # STRUCTURAL dedup across distinct sub-kernels (ess-cg-subcall-struct): the
+    # canonical body text (locals positionally renamed, every Int/Float64
+    # literal lifted into the per-instance constant vectors, invariant slots
+    # read through the `_cgivt` tuple argument) → the one compiled function.
+    # Two `_AccKernel`s that differ only in descriptor CONTENT — the same
+    # physics template applied at two offsets, or in two region classes —
+    # canonicalize to the same text and share one LLVM compile; each call site
+    # passes its own constants. `substruct_log` mirrors `sublog` for rollback.
+    substruct::Dict{String,Tuple{Symbol,Vector{Symbol}}}
+    substruct_log::Vector{String}
+    # True while emitting a sub-kernel body: `_NK_CACHED` invariant reads emit
+    # `_cgivt[idx]` (the tuple argument) instead of a prologue local name.
+    subivt::Bool
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
            IdDict{Any,Vector{Symbol}}(),
-           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Symbol}())
+           Any[], Any[], 0, budget, 0, shared_cache, 0, Any[], Dict{String,Symbol}(),
+           IdDict{Any,Any}(), Any[],
+           Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false)
 
 _cg_helper_dedup_disabled() = get(ENV, "ESS_CG_HELPER_DEDUP_DISABLE", "") == "1"
+
+# Sub-kernel / cell-body function tier (ess-cg-subcall-fn): OPT-IN via
+# ESS_CG_SUBCALL_FN=1 (ESS_CG_SUBCALL_FN_DISABLE=1 still force-disables, as
+# the differential oracle). Measured on the duo LMARS RHS (2026-08-28) the
+# tier is value-exact and shares real structure (94/120 sub-bodies dedup), but
+# the emitted-node total is unchanged — the mass is ~28 near-identical cell
+# bodies fragmented per region class by value-dependent boundary folds, which
+# no post-fold canonicalization can soundly unify — and first-call compile
+# memory goes UP (38+ GB vs 32.6 GB) from the added function boundaries. Until
+# the duo rules gather affinely over shared cell sets (where this tier's
+# sharing actually lands), the fused emission is the better default.
+_cg_subcall_fn_disabled() =
+    get(ENV, "ESS_CG_SUBCALL_FN_DISABLE", "") == "1" ||
+    get(ENV, "ESS_CG_SUBCALL_FN", "") != "1"
+
+# Bodies at or under this emitted-node floor stay inlined per site: a leaf
+# template of a handful of nodes is cheaper re-emitted than behind a `@noinline`
+# call per cell per site. Override with ESS_CG_SUBCALL_FN_MIN_NODES.
+_cg_subcall_fn_min_nodes() =
+    something(tryparse(Int, get(ENV, "ESS_CG_SUBCALL_FN_MIN_NODES", "")), 64)
 
 _cg_name(ctx::_CGCtx, base::String) = Symbol("_cg", base, ctx.nname += 1)
 
@@ -374,6 +427,11 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
         cse = kc.K.cse
         if pl === cse.scratch && nd.idx <= length(kc.cellsyms)
             return kc.cellsyms[nd.idx]
+        elseif pl === cse.inv_scratch && ctx.subivt
+            # Sub-kernel body (ess-cg-subcall-struct): invariant slots arrive as
+            # ONE homogeneous tuple argument, so bodies stay structurally equal
+            # across sub-kernels whose prologue locals have different names.
+            return :(_cgivt[$(nd.idx)])
         elseif pl === cse.inv_scratch && nd.idx <= length(kc.invsyms)
             return kc.invsyms[nd.idx]
         elseif pl === ctx.shared_cache && pl isa _CSECache &&
@@ -448,15 +506,185 @@ function _cg_emit_recipes!(stmts::Vector{Any}, ctx::_CGCtx, kc::_CGKernCtx)
     return stmts
 end
 
-# Template sub-kernel call (`_NK_SUBCALL`): inline the body at the call site —
-# per-cell CSE recipes become occurrence-local `convert(T, …)` locals (the
-# interpreter refills the body's scratch at every evaluation; occurrence-local
-# names compute the identical values), then the body spine evaluates against
-# its OWN descriptor table. The body's invariant tier was emitted once in the
-# prologue (`_cg_inv!` — `K.subs` holds every transitive sub, nested-first).
+# Template sub-kernel call (`_NK_SUBCALL`), the COMPILE-ONCE emission
+# (ess-cg-subcall-fn). The affine tier already shares one `_AccKernel` per
+# (use site, region class) body, and the interpreter recurses into it; inlining
+# it here at every call site un-did that sharing at codegen — the fused duo
+# momentum RHS emitted 3.2e6 nodes (~127k per kernel, the SAME template chains
+# re-emitted per site and per region-class kernel), and Julia's first-call
+# compile of that much unshared code cost ~93 min / 33 GB. So a body is now
+# emitted ONCE into a top-level `@noinline` function `(u, p, t, <cell context>,
+# extra…)` and every site becomes a CALL carrying its own cell-context
+# expressions — value- and order-exact, since the body computes the identical
+# scalar sequence with the context bound as arguments instead of spliced in.
+#
+# Bit-exactness and the zero-alloc discipline follow the split helpers'
+# (`_cg_spill!`) conventions exactly: per-cell CSE recipes stay function-local
+# `convert(_cgT, …)` locals (the interpreter refills the body's scratch at
+# every evaluation — a fresh call frame computes the identical values), `_cgT`
+# is recomputed inside from `(u, p, t)` (never passed — constant-propagation),
+# the function captures nothing, and the name shares the split helpers'
+# `_cgh…` namespace so `_cg_is_spill_call` (partition irreducibility) and
+# `_cg_is_passable` (never passed as a value) treat call sites correctly. The
+# body's invariant tier was emitted once in the prologue (`_cg_inv!` —
+# `K.subs` holds every transitive sub, nested-first); its slot locals arrive
+# through the sorted `extra` parameters like any other passable name.
+#
+# A tiny body (≤ `_cg_subcall_fn_min_nodes()`) stays inlined per site, and
+# Julia < 1.12 keeps the pre-tier inlining wholesale — the emitted function is
+# the same inner-`function`-under-RGF mechanism as the split, which boxes and
+# segfaults there (`_cg_split_supported`).
+# Canonicalizer/parametrizer for one emitted sub-kernel body
+# (ess-cg-subcall-struct). Rewrites the expression so that everything that
+# varies between two structurally-equal sub-kernels becomes an ARGUMENT:
+#   * every `Int` literal      → `_cgai[k]` (collected into `ints`);
+#   * every `Float64` literal  → `_cgaf[k]` (collected into `flts`);
+#   * every emitter-minted body-local (`_cgq…`/`_cgr…`/`_cgm…`/`_cgs…`) →
+#     `_cgxN` in first-appearance order, so two emissions of the same structure
+#     print identically even though `_cg_name`'s global counter differed.
+# Names that are REAL outer/context references are never renamed: tab group
+# containers (`_cggrp…`), helper/sub-function names (`_cgh…`), invariant
+# prologue locals (`_cgv…`, referenced by nested call sites), the context
+# params (`_cgs…`, matched via `_cgsm`/`_cgsc`/`_cgsn`/`_cgso`), and the
+# abstraction's own vectors/tuple (`_cgai`/`_cgaf`/`_cgivt`, digit-free tails).
+# `string(result)` is then the structural key: equal text ⇔ the same code with
+# different constants, which is exactly what may share one compiled function.
+# The values a body computes are unchanged — the same operations are applied
+# to the same operand VALUES; they arrive from an indexed read instead of an
+# immediate.
+mutable struct _CGAbs
+    ints::Vector{Int}
+    flts::Vector{Float64}
+    ren::Dict{Symbol,Symbol}
+end
+_CGAbs() = _CGAbs(Int[], Float64[], Dict{Symbol,Symbol}())
+function _cg_abs_renameable(s::Symbol)
+    nm = String(s)
+    (startswith(nm, "_cg") && isdigit(nm[end])) || return false
+    for p in ("_cggrp", "_cgh", "_cgv", "_cgsm", "_cgiv", "_cgai", "_cgaf", "_cgx")
+        startswith(nm, p) && return false
+    end
+    return true
+end
+function _cg_abstract!(ab::_CGAbs, ex)
+    if ex isa Int
+        push!(ab.ints, ex)
+        return :(_cgai[$(length(ab.ints))])
+    elseif ex isa Float64
+        push!(ab.flts, ex)
+        return :(_cgaf[$(length(ab.flts))])
+    elseif ex isa Symbol
+        _cg_abs_renameable(ex) || return ex
+        return get!(() -> Symbol("_cgx", length(ab.ren) + 1), ab.ren, ex)
+    elseif ex isa Expr
+        return Expr(ex.head, Any[_cg_abstract!(ab, a) for a in ex.args]...)
+    end
+    return ex          # QuoteNode, LineNumberNode, Bool, String, …
+end
+
+function _cg_subcall_fn!(ctx::_CGCtx, S::_AccKernel, invsyms::Vector{Symbol})
+    got = get(ctx.subfn, S, nothing)
+    got !== nothing && return got
+    # Formal cell-context parameter names. Function-scoped, so one fixed set
+    # serves every sub-kernel; `_cg`-prefixed, so a spill INSIDE this body
+    # passes them along like any other in-scope emitter local.
+    c = :_cgsc; n = :_cgsn; oln = :_cgso
+    m1 = :_cgsm1; m2 = :_cgsm2; m3 = :_cgsm3
+    nodes0 = ctx.nodes
+    inner = _CGKernCtx(S, c, n, oln, m1, m2, m3, Symbol[], Symbol[])
+    subivt0 = ctx.subivt
+    ctx.subivt = true
+    local body0
+    try
+        # Recipes are emitted UN-partitioned here (the pre-tier
+        # `_cg_emit_recipes!` bounds each one immediately, which would mint
+        # spill helpers before canonicalization): the whole body is partitioned
+        # AFTER the structural-dedup decision, so a dedup hit discards nothing.
+        stmts = Any[]
+        for r in S.cse.recipes
+            e = _cg_emit(ctx, inner, r)
+            s = _cg_name(ctx, "q")
+            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(inner.cellsyms, s)
+        end
+        spine = _cg_emit(ctx, inner, S.spine)
+        body0 = isempty(stmts) ? spine : Expr(:block, stmts..., spine)
+    finally
+        ctx.subivt = subivt0
+    end
+    if ctx.nodes - nodes0 <= _cg_subcall_fn_min_nodes()
+        # Under the floor: discard this probe emission (its nodes un-count; tab
+        # registrations dedup by identity, so re-emission re-reads the same
+        # `_cggrpG[pos]` slots) and inline at every site instead.
+        ctx.nodes = nodes0
+        ctx.subfn[S] = :inline
+        push!(ctx.sublog, S)
+        return :inline
+    end
+    ab = _CGAbs()
+    kb = _cg_abstract!(ab, body0)
+    key = string(kb)
+    hit = get(ctx.substruct, key, nothing)
+    if hit !== nothing
+        # Same structure as an already-compiled body: this instance's emission
+        # is discarded (only its constants survive, in the per-S entry) and
+        # every site calls the one existing function.
+        ctx.nodes = nodes0
+        _tally_cascade!(:cg_subcall_struct_hit)
+        fname, extra = hit
+        entry = (fname, extra, ab.ints, ab.flts)
+        ctx.subfn[S] = entry
+        push!(ctx.sublog, S)
+        return entry
+    end
+    body = _cg_bound_body!(ctx, kb)
+    syms = Set{Symbol}()
+    _cg_collect_syms!(syms, body)
+    bound = _cg_collect_bound!(Set{Symbol}(), body)
+    ctxparams = (c, n, oln, m1, m2, m3, :_cgai, :_cgaf, :_cgivt)
+    extra = sort!([s for s in syms
+                   if _cg_is_passable(s) && !(s in bound) && !(s in ctxparams)];
+                  by = string)
+    fname = _cg_name(ctx, "h")     # the split helpers' `_cgh…` namespace
+    ln = LineNumberNode(0, Symbol("ess-cg-subcall-fn"))
+    fstmts = Any[]
+    (:_cgT in syms) && push!(fstmts, :(local _cgT = _rhs_value_type(u, p, t)))
+    push!(fstmts, Expr(:macrocall, Symbol("@inbounds"), ln, :(return $body)))
+    params = Symbol[:u, :p, :t, c, n, oln, m1, m2, m3, :_cgai, :_cgaf, :_cgivt]
+    append!(params, extra)
+    fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, fstmts...))
+    push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+    _tally_cascade!(:cg_subcall_fn)
+    ctx.substruct[key] = (fname, extra)
+    push!(ctx.substruct_log, key)
+    entry = (fname, extra, ab.ints, ab.flts)
+    ctx.subfn[S] = entry
+    push!(ctx.sublog, S)
+    return entry
+end
+
 function _cg_emit_subcall(ctx::_CGCtx, kc::_CGKernCtx, S::_AccKernel)
     invsyms = get(ctx.invdone, S, nothing)
     invsyms === nothing && throw(_CodegenDecline(:subcall_order))
+    if _cg_split_supported() && !_cg_subcall_fn_disabled()
+        got = _cg_subcall_fn!(ctx, S, invsyms)
+        if got !== :inline
+            fname, extra, ints, flts =
+                got::Tuple{Symbol,Vector{Symbol},Vector{Int},Vector{Float64}}
+            _cg_budget!(ctx)
+            # The instance constants ride as tab containers (identity-stable
+            # vectors, registered once per S) — an L1-resident indexed read in
+            # place of an immediate, never a per-call tuple copy — and the
+            # invariant slots as one homogeneous tuple of prologue locals.
+            return Expr(:call, fname, :u, :p, :t, kc.c, kc.n, kc.oln,
+                        kc.mi1, kc.mi2, kc.mi3,
+                        _cg_tab!(ctx, ints), _cg_tab!(ctx, flts),
+                        Expr(:tuple, invsyms...), extra...)
+        end
+    end
+    # Pre-tier emission: inline the body at the call site — per-cell CSE
+    # recipes become occurrence-local locals, then the body spine evaluates
+    # against its OWN descriptor table.
     inner = _CGKernCtx(S, kc.c, kc.n, kc.oln, kc.mi1, kc.mi2, kc.mi3,
                        Symbol[], invsyms)
     stmts = _cg_emit_recipes!(Any[], ctx, inner)
@@ -653,6 +881,90 @@ end
 # chunk it lands in, so any chunking reproduces the serial values BIT FOR BIT
 # as long as no two cells share a `du` slot (checked at build — see
 # `_cg_covered_outs_disjoint`).
+# Structural CELL-BODY function (ess-cg-cell-fn): the same canonicalize/
+# parametrize/dedup treatment `_cg_subcall_fn!` gives a template sub-kernel,
+# applied to a PARENT kernel's whole per-cell body (recipes + `du[oln] = spine`).
+# The payoff is across REGION CLASSES: a rule compiled over many wrap/donor/
+# corner boxes mints one `_AccKernel` per class whose bodies differ only in
+# descriptor deltas and tab positions — exactly what the abstraction lifts into
+# arguments — so sixty class kernels compile a handful of distinct functions
+# instead of sixty ~50k-node loop bodies. Under the floor (or with the tier
+# off) the body is spliced into the loop nest exactly as before.
+function _cg_cell_fn!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
+    got = get(ctx.subfn, K, nothing)
+    got === :inline && return nothing
+    got !== nothing && return got
+    c = :_cgsc; n = :_cgsn; oln = :_cgso
+    m1 = :_cgsm1; m2 = :_cgsm2; m3 = :_cgsm3
+    nodes0 = ctx.nodes
+    inner = _CGKernCtx(K, c, n, oln, m1, m2, m3, Symbol[], Symbol[])
+    subivt0 = ctx.subivt
+    ctx.subivt = true
+    local body0
+    try
+        stmts = Any[]
+        for r in K.cse.recipes
+            e = _cg_emit(ctx, inner, r)
+            s = _cg_name(ctx, "q")
+            push!(stmts, :(local $s = convert(_cgT, $e)))
+            push!(inner.cellsyms, s)
+        end
+        spine = _cg_emit(ctx, inner, K.spine)
+        body0 = Expr(:block, stmts..., :(du[$oln] = $spine))
+    finally
+        ctx.subivt = subivt0
+    end
+    if ctx.nodes - nodes0 <= _cg_subcall_fn_min_nodes()
+        ctx.nodes = nodes0
+        ctx.subfn[K] = :inline
+        push!(ctx.sublog, K)
+        return nothing
+    end
+    ab = _CGAbs()
+    kb = _cg_abstract!(ab, body0)
+    key = string(kb)
+    if (d = get(ENV, "ESS_CG_STRUCT_DUMP", "")) != ""
+        open(joinpath(d, "cellkey_$(length(ctx.substruct_log))_$(objectid(K)).txt"), "w") do io
+            write(io, key)
+        end
+    end
+    hit = get(ctx.substruct, key, nothing)
+    if hit !== nothing
+        ctx.nodes = nodes0
+        _tally_cascade!(:cg_cell_struct_hit)
+        fname, extra = hit
+        entry = (fname, extra, ab.ints, ab.flts)
+        ctx.subfn[K] = entry
+        push!(ctx.sublog, K)
+        return entry
+    end
+    body = _cg_bound_body!(ctx, kb)
+    syms = Set{Symbol}()
+    _cg_collect_syms!(syms, body)
+    bound = _cg_collect_bound!(Set{Symbol}(), body)
+    ctxparams = (c, n, oln, m1, m2, m3, :_cgai, :_cgaf, :_cgivt)
+    extra = sort!([s for s in syms
+                   if _cg_is_passable(s) && !(s in bound) && !(s in ctxparams)];
+                  by = string)
+    fname = _cg_name(ctx, "h")
+    ln = LineNumberNode(0, Symbol("ess-cg-cell-fn"))
+    fstmts = Any[]
+    (:_cgT in syms) && push!(fstmts, :(local _cgT = _rhs_value_type(u, p, t)))
+    push!(fstmts, Expr(:macrocall, Symbol("@inbounds"), ln,
+                       Expr(:block, body, :(return nothing))))
+    params = Symbol[:du, :u, :p, :t, c, n, oln, m1, m2, m3, :_cgai, :_cgaf, :_cgivt]
+    append!(params, extra)
+    fdef = Expr(:function, Expr(:call, fname, params...), Expr(:block, fstmts...))
+    push!(ctx.helpers, Expr(:macrocall, Symbol("@noinline"), ln, fdef))
+    _tally_cascade!(:cg_cell_fn)
+    ctx.substruct[key] = (fname, extra)
+    push!(ctx.substruct_log, key)
+    entry = (fname, extra, ab.ints, ab.flts)
+    ctx.subfn[K] = entry
+    push!(ctx.sublog, K)
+    return entry
+end
+
 function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     # Invariant tiers, nested-first (K.subs holds every transitive sub).
     for S in K.subs
@@ -660,9 +972,23 @@ function _cg_emit_kernel!(ctx::_CGCtx, K::_AccKernel)
     end
     invsyms = _cg_inv!(ctx, K)
 
-    # Per-cell body: CSE recipes as locals (converted to T exactly where the
-    # interpreter's scratch store converts), then the spine into du[oln].
+    cellfn = (_cg_split_supported() && !_cg_subcall_fn_disabled()) ?
+             _cg_cell_fn!(ctx, K, invsyms) : nothing
+
+    # Per-cell body: a CALL to the shared cell function when the structural
+    # tier is serving this kernel; otherwise CSE recipes as locals (converted
+    # to T exactly where the interpreter's scratch store converts), then the
+    # spine into du[oln] — spliced into the loop nest as before.
     function cellbody(kc::_CGKernCtx)
+        if cellfn !== nothing
+            fname, extra, ints, flts =
+                cellfn::Tuple{Symbol,Vector{Symbol},Vector{Int},Vector{Float64}}
+            _cg_budget!(ctx)
+            return Any[Expr(:call, fname, :du, :u, :p, :t, kc.c, kc.n, kc.oln,
+                            kc.mi1, kc.mi2, kc.mi3,
+                            _cg_tab!(ctx, ints), _cg_tab!(ctx, flts),
+                            Expr(:tuple, invsyms...), extra...)]
+        end
         stmts = _cg_emit_recipes!(Any[], ctx, kc)
         push!(stmts, :(du[$(kc.oln)] = $(_cg_bound_body!(ctx, _cg_emit(ctx, kc, K.spine)))))
         return stmts
@@ -1108,6 +1434,8 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         nprologue = length(ctx.prologue)
         ninvlog = length(ctx.invlog)
         nhelpers = length(ctx.helpers)
+        nsublog = length(ctx.sublog)
+        nstructlog = length(ctx.substruct_log)
         nodes0 = ctx.nodes
         fscratch0 = ctx.fscratch
         empty!(ctx.helper_dedup)   # dedup scope = this kernel (see the field doc)
@@ -1127,6 +1455,17 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             end
             resize!(ctx.invlog, ninvlog)
             resize!(ctx.helpers, nhelpers)     # discard this kernel's split helpers
+            # Sub-kernel function memo entries whose defs were just discarded
+            # from `helpers` (a later kernel sharing S would otherwise call a
+            # rolled-back name) — the `invdone` rollback's exact mirror.
+            for i in length(ctx.sublog):-1:(nsublog + 1)
+                delete!(ctx.subfn, ctx.sublog[i])
+            end
+            resize!(ctx.sublog, nsublog)
+            for i in length(ctx.substruct_log):-1:(nstructlog + 1)
+                delete!(ctx.substruct, ctx.substruct_log[i])
+            end
+            resize!(ctx.substruct_log, nstructlog)
             ctx.nodes = nodes0
             ctx.fscratch = fscratch0
             _tally_cascade!(Symbol(tally, "_decline_", err.reason))
