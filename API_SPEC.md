@@ -30,7 +30,6 @@ Six packages are in scope:
 | Python | `earthsci-ast` | `__all__` of `src/earthsci_ast/__init__.py` |
 | Rust | `earthsci-ast` | root `pub use` / `pub const` of `src/lib.rs` |
 | Go | `.../pkg/esm` | package-level exported identifiers |
-| Editor | `@earthsciml/ast-editor` | named re-exports of `src/index.ts` |
 
 The canonical name is always `snake_case`, for every kind of symbol. A symbol's
 identity is the pair **(canonical name, kind)**, where kind is one of
@@ -117,11 +116,8 @@ Today's rule for membership, applied mechanically by
 `scripts/gen-api-surface.py`: a `(name, kind)` exported by **two or more**
 bindings is `stable`. Two independent implementations agreeing on a name is the
 best available evidence that the name is load-bearing rather than incidental.
-The editor's component surface is `stable` by explicit allowlist, since it is
-that package's entire public product.
 
-**237 symbols.** 31 of them are exported by five or more bindings; 8 are
-allowlisted single-binding entries.
+**262 symbols.** 66 of them are exported by all five bindings.
 
 ### extension seam
 
@@ -172,7 +168,6 @@ distinguishable from "drifted away".
 | classification | Julia, TS, Python, Rust, Go | esm-spec §6.3.1 derived variable classification |
 | simulation | Julia, Python, Rust | build an RHS and integrate it |
 | runtime I/O | Julia, Python, Rust | data-source providers, refresh cadence, output sinks, checkpoints |
-| UI | Editor | interactive SolidJS editing components |
 
 **TypeScript and Go are deliberately non-simulating.** They read, write,
 analyse, and transform documents; they do not integrate them. A `simulate`
@@ -609,6 +604,105 @@ same `BuildInspection` through `prepare`; Python `(prep, name)`; Rust a method o
 `Prepared` taking only `name`. It is `(prob, name)` in all three, with build
 observability moved to a construction-time seam.
 
+#### `observed_field` on a document with no state variables
+
+A document that declares no differential equations — `system_kind: nonlinear`,
+every result an observed — has nothing to integrate. `solve` on it is a
+run with no content, and each binding says so its own way (Rust
+`SimulateError::NotDynamic`; Python's array pathway `ReturnCode.Failure`; the
+scalar pathway samples the observed bodies over `tspan`; Julia hands back a
+`Success` whose state rows are empty). **`observed_field` is the way such a
+document's results are read**, and it is stable API, so it MUST answer on a
+plain `esm_problem(input, tspan)` with no further options — no build flag, no
+particular input spelling, no `inspect` sink. A binding whose stable function
+needs an undocumented precondition to say anything has not implemented it.
+
+**On the wasm surface** the same path is the `observed_fields` export
+(`src/wasm.rs`), which returns every field at once — `{ names, fields: { [name]:
+{ shape, values } } }` — rather than one per call. A `wasm_bindgen` boundary
+cannot hand JS a live `EsmProblem` handle (this is the same constraint that
+makes `solve` build-and-run in one call), so a per-name `observed_field` would
+rebuild the problem on every lookup. The names it reports are
+`observed_field_names`, and each is resolved through `observed_field`, so the
+resolution rule below is the one a JS host gets.
+
+#### Reading an observed of a document that DOES integrate
+
+`observed_field` reports what the BUILD materialized, which is a constant. An
+observed of a dynamic model is not one — it varies along the trajectory — and a
+`Solution` carries **state rows only**, in every binding. So there was no way to
+read one back at all: a model author asserting on `NOx` where the states are
+`NO` and `NO2` got "not found" on a model that was fine.
+
+The missing argument is the solution. An observed is a pure function of
+`(state, params, t)`: the problem holds the function — the topo-sorted observed
+graph and the parameter bindings — and the solution holds the arguments, which
+is exactly why neither alone can answer.
+
+```
+observed_trajectory(prob, sol, name)    -> Array               # Rust, STRICT
+observed_trajectories(prob, sol, names) -> (name, Array)[]     # one pass, TOLERANT
+```
+
+The plural is tolerant where the singular is strict: a name that is not an
+observed variable — most often a STATE, which the caller already has in the
+solution — is OMITTED from the result rather than failing the call, and the
+result is keyed by the spelling that was asked for so the caller can tell which
+came back. That split is what lets a host hand over a list of variable names
+without first knowing which kind each one is.
+
+**Not a second arity of `observed_field`, and the reason is the return RANK.** A
+field is the shape the document declares; a trajectory is that shape with a time
+axis added. Two ranks under one name is a contract a caller cannot read off the
+call site. A binding that can overload MAY still spell it as an extra arity of
+`observed_field` — Julia and Python are free to — and this is the
+transliteration §2.1 fixes for the one that cannot.
+
+Name resolution is the rule below, unchanged. Scalar backend only: the
+array/spatial runtime materializes observeds per cell inside itself rather than
+through this graph, and a static document has no trajectory and wants
+`observed_field`. **Rust only today**, hence `extension` tier rather than
+`stable`; it becomes stable when Julia and Python implement it.
+
+> Julia's `SymbolicIndexingInterface` already returns observeds from `sol[…]`,
+> so §2.5.7's claim that "a solution is indexed by variable name" has been true
+> in one binding and not the others. This is the gap, named.
+
+**On the wasm surface** this is `Solution.observed(name)` / `observedMany(names)`
+on the handle returned by `Problem.solve` — see the `Problem` / `Solution`
+classes in `src/wasm.rs`. The handle holds the problem it came from, so a host
+cannot read a solution against the wrong bindings.
+
+**Name resolution.** Build-time field names are **flattened and
+component-qualified** (`Sites.North.u`). A binding MUST resolve `name` by this
+precedence, stopping at the first rule that applies:
+
+1. **Exact hit** — `name` is a field name.
+2. **Bare name** — `name` carries no `.`, and the problem has exactly **one
+   component**; it then resolves to the unique field with that tail.
+
+A *component* is everything before a flattened name's final segment, and `""`
+for an unqualified one; the problem's component count is the number of distinct
+ones across its fields. A bare name against a **multi-component** problem MUST
+be refused, naming every qualified candidate so the author can spell it, rather
+than bound to one of them.
+
+**The gate is the component count, not ambiguity**, and the difference is the
+point. Under an ambiguity gate a bare `ur` that happens to be unique today
+resolves, and mounting a second component tomorrow — one that need not even
+declare a `ur` — changes what an existing script means, silently and at a
+distance. The stricter rule makes the qualified spelling the only one that
+survives composition, which is the spelling composition produces anyway.
+
+> This deliberately diverges from esm-spec §6.6.2's override-key rule, which is
+> ambiguity-gated (its rule 3 binds a bare key that is the trailing segment of
+> exactly one flattened name). That rule governs keys an author writes **inside
+> a document**, where the local spelling is the mandated one and the document's
+> own composition is fixed; this one governs names a caller passes **from
+> outside**, across recompositions the caller does not control. Both refuse to
+> bind an ambiguous bare name to an arbitrary candidate, which is the property
+> §6.6.2 calls out as non-conforming.
+
 ### 5.9 Reference resolution
 
 `build_reference_graph(model, model_name="") -> ReferenceGraph` and
@@ -1009,21 +1103,6 @@ reading that as a gap.
 | `variable_in_use_error` | error | – | `VariableInUseError` | – | – | `VariableInUseError` |
 | `variable_kind` | type | – | `VariableKind` | – | `VariableKind` | – |
 
-#### Editor package
-
-| Canonical | Kind | TS | Editor |
-|---|---|---|---|
-| `coupling_graph` | type | – | `CouplingGraph` |
-| `create_ast_store` | function | – | `createAstStore` |
-| `equation_editor` | type | – | `EquationEditor` |
-| `expression` | type | – | `Expression` |
-| `expression_node` | type | – | `ExpressionNode` |
-| `file_summary` | type | – | `FileSummary` |
-| `model_editor` | type | – | `ModelEditor` |
-| `reaction_editor` | type | – | `ReactionEditor` |
-| `register_web_components` | function | – | `registerWebComponents` |
-| `validation_panel` | type | – | `ValidationPanel` |
-
 <!-- END GENERATED: stable-surface -->
 
 ---
@@ -1045,9 +1124,8 @@ allowed to differ.
 | Go graph exporters | Go | `DOTExporter` / `JSONExporter` / `MermaidExporter` and their `New*` constructors are a Go-idiomatic object surface with no counterpart elsewhere (§8 replaces the free functions, not the exporters). |
 | Go diagnostic codes | Go | The ~84 `Code*` / `Error*` / `Role*` / `SystemKind*` constants. Their *values* are conformance-pinned by the shared fixture corpus; their Go *identifiers* are not. |
 | TypeScript analysis | TypeScript | The complexity/CSE/differentiation toolkit under `src/analysis/`. A TypeScript-only authoring aid. |
-| Editor internals | Editor | Everything beyond the allowlisted components: primitives, path utilities, highlight/validation contexts. |
 
-Go carries the largest extension surface (177 of its 275 symbols) — a direct
+Go carries the largest extension surface (222 of its 383 symbols) — a direct
 consequence of §8's Go-side renames not having happened yet, plus the
 diagnostic-code constants.
 
@@ -1082,7 +1160,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | **Ruled (phase 6), after a correction.** The first ruling said the canonical signature was `build_reference_graph(document)`. That is not implementable: the function builds the graph of ONE MODEL and takes the model name in all four bindings that have it, and the document-level entry point already exists as `resolve_references(document)`. The Julia agent refused it and was right. Canonical is **`build_reference_graph(model, model_name, index_sets = <none>)`** — the document-scoped registry is an OPTIONAL TRAILING argument, not a separate function name and not required. Omitted, it falls back to a model-nested `index_sets` (the pre-0.8.0 shape); on a collision the model-nested one wins, which is Go's existing merge rule. Rust folds `build_reference_graph_with_index_sets` in; Python already conforms; Go's third argument becomes optional; TypeScript gains the function. **The Julia bug is real and confirmed**: Julia read `model["index_sets"]` where `esm-schema.json` declares `index_sets` only at `/properties/index_sets`, so `resolve_references` THREW `ReferenceResolutionError(E_REF_UNDECLARED_INDEX_SET)` on any 1.0.0 document with a top-level registry, where Python, Rust and Go all returned a graph. **TypeScript ADDED (phase 6):** ported from Python (the most complete of the four: it registers every node before resolving any reference, so a forward `from_faq` resolves), except for the registry rule, which follows Go and Rust: the model-nested pre-0.8.0 `index_sets` is MERGED on top of the document-scoped one, so a model-level entry wins a collision, where Python treats the two as either/or. Verified against the Python binding over all shared `tests/valid/**` fixtures — vertices, edges and topological order identical, zero mismatches, under both registry rules, because no shared fixture carries the two shapes at once. | Julia, Rust, Go, TypeScript |
 | 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. | Julia, Rust, Go |
 | 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`, left open for a ruling. **CLOSED (phase 6b): renamed to `LHSUnits` / `RHSUnits`.** The ruling is that Go's own house style already decided it — `FlattenedEquation.LHSString` / `.RHSString` (`pkg/esm/flatten.go`) spell the same two initialisms uppercase, so these two fields were the outliers, not the precedent. The wire contract is untouched and was VERIFIED so: the `json:"lhs_units"` / `json:"rhs_units"` tags are unchanged, and a `UnitWarning` marshal→unmarshal→marshal round trip is byte-identical before and after the rename. The `"lhs_units"` / `"rhs_units"` keys `promoteUnitFindings` writes into `StructuralError.Details` are likewise unchanged. Struct fields remain non-manifest symbols, so `api-surface.json` does not move. | Go |
-| 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the editor's web-components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
+| 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the (since-deleted) editor package's web components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
 | G-2 | `supported_migration_targets` | TypeScript and Rust spelled it `get_supported_migration_targets`; Julia, Python and Go spell it `supported_migration_targets`. One capability under two canonical names, so the manifest carried two `stable` entries for it. | **TypeScript DONE (phase 6).** `supportedMigrationTargets()` added at the canonical name over the same table `migrate` / `canMigrate` use; `getSupportedMigrationTargets` stays a deprecated alias for one minor (§10), the same function object. **Rust DONE (phase 6)** as well (`a154aa171`): `supported_migration_targets` is the definition, `get_supported_migration_targets` a `#[deprecated]` delegate. Both spellings fold under the canonical name via `ALIAS_OVERRIDES`, so the manifest carries one entry, not two. | TypeScript, Rust |
 | G-3 | `build_reference_graph` | Exported by Julia, Python, Rust and Go; **absent in TypeScript** — a four-of-five gap in a `stable` symbol that no row above covered. | **DONE (phase 6).** TypeScript gains `buildReferenceGraph`, plus the rest of the module's public surface (`resolveReferences`, `ReferenceGraph`, `ReferenceVertex`, `ReferenceEdge`, `VertexKind`, `EdgeKind`, `ReferenceResolutionError`), so the family is 5/5. See item 17 for the signature and the cross-binding verification. | TypeScript |
 | H-4 | Python layering | Python re-exported the whole `data_sources` loader stack through the top-level `__all__` — 32 spellings, of which 29 were `extension`-tier and Python-only — so `import earthsci_ast` handed you a data-loading toolkit as well as a format library. `xarray` and `netcdf4` sat in the BASE dependency set, which a comment justified as "the IO tier hard-depends on them". | **DONE (phase 6).** The premise was measured FALSE: no module under `earthsci_ast/` imports `xarray` or `netCDF4` at module scope — `xarray` is imported inside `data_sources._xarray._default_xarray_opener`, and `netCDF4` is never imported by this package at all (it is the engine xarray selects). With all three of `xarray` / `netCDF4` / `scipy` blocked by an import hook, `import earthsci_ast` already succeeded and `__all__` was still the full 272, so nothing had to be restructured to make the split possible. The 29 `extension` spellings left `__all__` and now live only on `earthsci_ast.data_sources`; Python's declared surface is **272 -> 243**. The three `stable` spellings in that block — `apply_unit_conversion`, `parse_unit_conversion`, `UnitConversionError` — were **deliberately KEPT** at the top level: Julia defines them in core `src/unit_conversion.jl` (not `EarthSciASTEarthSciIOExt`), TypeScript exports `UnitConversionError` from its index, and §6 carries all three as `stable`, so dropping them would have made Python the sole non-conformant binding and downgraded a stable symbol. The manifest's `stable` count is unchanged at 272 — every symbol removed was `extension`. `xarray` / `netcdf4` moved to a new `data` extra; `scipy` had already moved to `simulate` in an earlier round, per esm-libraries-spec §2.4 / §2.5.9. A missing optional dependency is reported at the point of use, naming the extra. | Python |
@@ -1101,13 +1179,12 @@ binding's declared surface equals `api-surface.json`:
 | Python | `pkg/earthsci-ast-py/tests/test_api_surface.py` | `earthsci_ast.__all__` |
 | Rust | `pkg/earthsci-ast-rs/tests/api_surface.rs` | the crate root's `pub use` / `pub const` |
 | Go | `pkg/earthsci-ast-go/pkg/esm/api_surface_test.go` | a `go/ast` walk of package `esm` |
-| Editor | `pkg/earthsci-ast-editor/src/api-surface.test.ts` | the `index.ts` re-export list |
 
 Each also checks kinds — a manifest `error` must be a throwable, a manifest
 `type` must not be a function — and each guards against passing vacuously if its
 parser matches nothing.
 
-A cross-cutting check runs all six extractions at once:
+A cross-cutting check runs all five extractions at once:
 
 ```bash
 python3 scripts/extract-api-surface.py --check

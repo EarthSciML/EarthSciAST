@@ -340,21 +340,63 @@ pub fn solve(
     progress: Option<js_sys::Function>,
 ) -> Result<JsValue, JsValue> {
     use crate::problem::{ProblemOptions, esm_problem, solve as rust_solve};
-    use crate::simulate::{Alg, Flow, Progress, ProgressFn, SolveOptions};
-    use std::collections::HashMap;
 
     let esm_file =
         rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
 
-    let parse_map = |s: &str, what: &str| -> Result<HashMap<String, f64>, JsValue> {
-        let s = s.trim();
-        if s.is_empty() {
-            return Ok(HashMap::new());
-        }
-        serde_json::from_str(s).map_err(|e| JsValue::from_str(&format!("{what} parse error: {e}")))
-    };
-    let params = parse_map(params_str, "Params")?;
-    let initial_conditions = parse_map(ic_str, "Initial-conditions")?;
+    let opts = parse_solve_options(opts_str, t0, t_end, progress)?;
+
+    // Build once, then solve — the same two steps every native caller takes,
+    // collapsed here for a host that runs a document ONCE. A host that runs the
+    // same document repeatedly should hold a [`Problem`] instead and pay for the
+    // build once.
+    let prob = esm_problem(
+        &esm_file,
+        (t0, t_end),
+        ProblemOptions {
+            p: parse_binding_map(params_str, "Params")?,
+            u0: parse_binding_map(ic_str, "Initial-conditions")?,
+            compile: crate::problem::Compile::Always,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+    let sol =
+        rust_solve(&prob, &opts).map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
+
+    to_js(&solution_json(&sol))
+}
+
+/// A JSON `{name: number}` map, empty when the string is.
+///
+/// Shared by [`solve`], [`observed_fields`] and [`Problem`] so the three cannot
+/// disagree about what an empty binding map means.
+#[cfg(feature = "wasm")]
+fn parse_binding_map(
+    s: &str,
+    what: &str,
+) -> Result<std::collections::HashMap<String, f64>, JsValue> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    serde_json::from_str(s).map_err(|e| JsValue::from_str(&format!("{what} parse error: {e}")))
+}
+
+/// [`solve`]'s options object, including the progress observer.
+///
+/// Factored out so the free function and [`Problem::solve`] read the SAME
+/// spelling of `alg` / `solver`, the same `outputPoints`, and the same cancel
+/// convention. Two parsers for one options object is two behaviours waiting to
+/// diverge.
+#[cfg(all(feature = "wasm", feature = "solve"))]
+fn parse_solve_options(
+    opts_str: &str,
+    t0: f64,
+    t_end: f64,
+    progress: Option<js_sys::Function>,
+) -> Result<crate::simulate::SolveOptions, JsValue> {
+    use crate::simulate::{Alg, Flow, Progress, ProgressFn, SolveOptions};
 
     let opts_json: serde_json::Value = {
         let s = opts_str.trim();
@@ -423,24 +465,13 @@ pub fn solve(
         });
         opts.progress = Some(observer);
     }
+    Ok(opts)
+}
 
-    // Build once, then solve — the same two steps every native caller takes,
-    // collapsed here because the JS boundary cannot hold a `EsmProblem`.
-    let prob = esm_problem(
-        &esm_file,
-        (t0, t_end),
-        ProblemOptions {
-            p: params,
-            u0: initial_conditions,
-            compile: crate::problem::Compile::Always,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
-    let sol =
-        rust_solve(&prob, &opts).map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
-
-    let out = serde_json::json!({
+/// A solution in the object shape [`solve`] has always returned.
+#[cfg(all(feature = "wasm", feature = "solve"))]
+fn solution_json(sol: &crate::simulate::Solution) -> serde_json::Value {
+    serde_json::json!({
         "time": sol.time,
         "state": sol.state,
         "stateVariableNames": sol.state_variable_names,
@@ -448,24 +479,102 @@ pub fn solve(
         // to t_end" from "stopped early, here is why" by reading THIS, not by
         // comparing step counters or parsing an error string.
         "retcode": sol.retcode.name(),
-        "metadata": {
-            "alg": sol.metadata.alg,
-            "nRhsCalls": sol.metadata.n_rhs_calls,
-            "nJacobianCalls": sol.metadata.n_jacobian_calls,
-            "nAcceptedSteps": sol.metadata.n_accepted_steps,
-            "nRejectedSteps": sol.metadata.n_rejected_steps,
-            // Rules the vectorized tape could not compile, so the per-cell
-            // oracle evaluated them: `[{rule, reason}, …]`, empty when the tape
-            // covered everything. Same numbers either way — but a fallback's
-            // cost grows with the cell count, so this is the only way a browser
-            // host can tell "slow model" from "slow spelling of a fast model".
-            "tapeFallbacks": sol.metadata.tape_fallbacks.iter()
-                .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
-                .collect::<Vec<_>>(),
-        }
-    });
+        "metadata": metadata_json(sol),
+    })
+}
 
-    to_js(&out)
+/// [`solve`]'s `metadata` object.
+#[cfg(all(feature = "wasm", feature = "solve"))]
+fn metadata_json(sol: &crate::simulate::Solution) -> serde_json::Value {
+    serde_json::json!({
+        "alg": sol.metadata.alg,
+        "nRhsCalls": sol.metadata.n_rhs_calls,
+        "nJacobianCalls": sol.metadata.n_jacobian_calls,
+        "nAcceptedSteps": sol.metadata.n_accepted_steps,
+        "nRejectedSteps": sol.metadata.n_rejected_steps,
+        // Rules the vectorized tape could not compile, so the per-cell oracle
+        // evaluated them: `[{rule, reason}, …]`, empty when the tape covered
+        // everything. Same numbers either way — but a fallback's cost grows with
+        // the cell count, so this is the only way a browser host can tell "slow
+        // model" from "slow spelling of a fast model".
+        "tapeFallbacks": sol.metadata.tape_fallbacks.iter()
+            .map(|(rule, reason)| serde_json::json!({"rule": rule, "reason": reason}))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Read back every build-time observed field of a document, evaluated once.
+///
+/// The counterpart to [`solve`] for a document with **no state variables**: a
+/// `system_kind: "nonlinear"` file whose whole content is its observed graph has
+/// nothing to integrate, `solve` refuses it with
+/// [`SimulateError::NotDynamic`](crate::SimulateError::NotDynamic), and
+/// `observed_field` is how such a document's results are read (API_SPEC §5.8).
+/// Without this export a wasm host had no way to reach that path at all — the
+/// only entry point that runs a model was `solve`, so a browser presented with a
+/// state-free document could only hand it to the ODE solver and report whatever
+/// the integrator said about a zero-length state vector.
+///
+/// Arguments mirror [`solve`]'s leading five. `t0`/`t_end` are the problem's
+/// span: nothing here integrates over it, but construction takes a span and a
+/// time-dependent loader is sampled against it. `params_str` and `ic_str` are
+/// the same JSON `{name: number}` maps, bound as `p` and `u0`.
+///
+/// Returns `{ names: string[], fields: { [name]: { shape: number[], values:
+/// number[] } } }`. `names` is [`EsmProblem::observed_field_names`] —
+/// component-qualified, sorted, and the spelling that resolves however many
+/// components the document has. `values` is the field in row-major (C) order,
+/// and `shape` is empty for a rank-0 observed, whose `values` is then a single
+/// number. Both are present for every name, so a host need not call twice.
+///
+/// A document that DOES have state variables is not an error here: it simply
+/// reports whatever fields its build materialized, which for an ordinary ODE
+/// model is usually none. Deciding which of the two entry points a document
+/// wants is the host's job, and `names.length` is not the way to do it —
+/// [`crate::classification`] answers it from the document.
+#[cfg(feature = "wasm")]
+#[wasm_bindgen]
+pub fn observed_fields(
+    json_str: &str,
+    t0: f64,
+    t_end: f64,
+    params_str: &str,
+    ic_str: &str,
+) -> Result<JsValue, JsValue> {
+    use crate::problem::{ProblemOptions, esm_problem, observed_field};
+
+    let esm_file =
+        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+
+    let prob = esm_problem(
+        &esm_file,
+        (t0, t_end),
+        ProblemOptions {
+            p: parse_binding_map(params_str, "Params")?,
+            u0: parse_binding_map(ic_str, "Initial-conditions")?,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+
+    let names = prob.observed_field_names();
+    let mut fields = serde_json::Map::with_capacity(names.len());
+    for name in &names {
+        // Every name came from `observed_field_names`, so a miss is a defect in
+        // the resolver rather than a caller error — report it as one instead of
+        // silently returning a short map.
+        let a = observed_field(&prob, name)
+            .map_err(|e| JsValue::from_str(&format!("observed_field({name}): {e}")))?;
+        fields.insert(
+            name.clone(),
+            serde_json::json!({
+                "shape": a.shape(),
+                "values": a.iter().copied().collect::<Vec<f64>>(),
+            }),
+        );
+    }
+
+    to_js(&serde_json::json!({ "names": names, "fields": fields }))
 }
 
 /// Compile a document's RHS onto the vectorized tape and report which rules
@@ -643,5 +752,290 @@ mod tests {
         assert_eq!(graph.nodes[0].id, "SimpleModel");
 
         println!("✓ New WASM export functions compile and core functionality works");
+    }
+}
+
+// =============================================================================
+// The Problem / Solution handles
+// =============================================================================
+//
+// [`solve`] and [`observed_fields`] each build a problem, use it once, and throw
+// it away, because a `wasm_bindgen` export cannot take one as an argument. That
+// is right for a host that runs a document once — the app's Run button — and
+// wrong for one that runs the same document repeatedly: a parameter sweep pays
+// for flatten, value invention and compile on every member, and reading an
+// observed back means solving a second time.
+//
+// `EsmProblem` is fully owned (`Rc<JsonValue>`, `Rc<Backend>`,
+// `Rc<BuildProducts>`) and carries no lifetime, so it satisfies wasm-bindgen's
+// `'static` bound and can be handed over as an opaque handle. What JS owes in
+// exchange is DISPOSAL: a pointer-backed wasm-bindgen class is not reachable by
+// the JavaScript garbage collector, so a handle that is never `free()`d leaks
+// its compiled backend and every build product with it. Both classes below are
+// `try`/`finally` material.
+//
+//   const prob = Problem.build(json, 0, 10, '{}', '{}', '{}')
+//   try {
+//     const sol = prob.solve('{"alg":"bdf"}')
+//     try { console.log(sol.observed('NOx')) } finally { sol.free() }
+//   } finally { prob.free() }
+
+/// A built [`crate::problem::EsmProblem`], reusable across solves.
+///
+/// `Rc` rather than a bare value so a [`Solution`] can hold the problem it came
+/// from: an observed's trajectory is a function of both, and making the host
+/// pass the problem back in would let it pass a DIFFERENT one — silently
+/// producing numbers from the wrong parameter bindings.
+#[cfg(all(feature = "wasm", feature = "solve"))]
+#[wasm_bindgen]
+pub struct Problem {
+    inner: std::rc::Rc<crate::problem::EsmProblem>,
+}
+
+#[cfg(all(feature = "wasm", feature = "solve"))]
+#[wasm_bindgen]
+impl Problem {
+    /// Build a problem from a document. The arguments are [`solve`]'s leading
+    /// five, and mean the same things.
+    ///
+    /// Not a `constructor`: wasm-bindgen constructors cannot be fallible in a
+    /// way that reads well from JS, and building a document is the step most
+    /// likely to fail.
+    pub fn build(
+        json_str: &str,
+        t0: f64,
+        t_end: f64,
+        params_str: &str,
+        ic_str: &str,
+    ) -> Result<Problem, JsValue> {
+        use crate::problem::{Compile, ProblemOptions, esm_problem};
+
+        let esm_file = rust_load_string(json_str)
+            .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        let prob = esm_problem(
+            &esm_file,
+            (t0, t_end),
+            ProblemOptions {
+                p: parse_binding_map(params_str, "Params")?,
+                u0: parse_binding_map(ic_str, "Initial-conditions")?,
+                // `Auto`, not `Always`: a handle is also how a host inspects a
+                // STATIC document, and `Always` would fail to build the very
+                // documents `observed_field` exists to answer for. A host that
+                // means to integrate calls `solve`, which says so with its own
+                // error if there is nothing to integrate.
+                compile: Compile::Auto,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+        Ok(Problem {
+            inner: std::rc::Rc::new(prob),
+        })
+    }
+
+    /// Integrate, returning a [`Solution`] handle.
+    ///
+    /// `opts_str` and `progress` are [`solve`]'s, unchanged — including the
+    /// `alg` / `solver` alias and the `=== false` cancel convention.
+    pub fn solve(
+        &self,
+        opts_str: &str,
+        progress: Option<js_sys::Function>,
+    ) -> Result<Solution, JsValue> {
+        let (t0, t_end) = self.inner.tspan();
+        let opts = parse_solve_options(opts_str, t0, t_end, progress)?;
+        let sol = crate::problem::solve(&self.inner, &opts)
+            .map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
+        Ok(Solution {
+            inner: sol,
+            problem: self.inner.clone(),
+        })
+    }
+
+    /// A NEW problem with different bindings, sharing this one's compiled
+    /// right-hand side and build products (§2.5.5) — the point of holding a
+    /// handle at all.
+    ///
+    /// Empty JSON leaves that half unchanged; `tspan_str` is `[t0, t_end]` or
+    /// empty. The original is untouched, so a sweep keeps one problem and
+    /// derives a member per point.
+    pub fn remake(
+        &self,
+        params_str: &str,
+        ic_str: &str,
+        tspan_str: &str,
+    ) -> Result<Problem, JsValue> {
+        let tspan = {
+            let s = tspan_str.trim();
+            if s.is_empty() {
+                None
+            } else {
+                let v: Vec<f64> = serde_json::from_str(s)
+                    .map_err(|e| JsValue::from_str(&format!("Tspan parse error: {e}")))?;
+                if v.len() != 2 {
+                    return Err(JsValue::from_str("Tspan must be [t0, t_end]"));
+                }
+                Some((v[0], v[1]))
+            }
+        };
+        let next = crate::problem::remake(
+            &self.inner,
+            &crate::problem::Remake {
+                p: parse_binding_map(params_str, "Params")?,
+                u0: parse_binding_map(ic_str, "Initial-conditions")?,
+                tspan,
+                callbacks: None,
+            },
+        )
+        .map_err(|e| JsValue::from_str(&format!("Remake error: {e}")))?;
+        Ok(Problem {
+            inner: std::rc::Rc::new(next),
+        })
+    }
+
+    /// One BUILD-time observed field, as `{ shape, values }` (API_SPEC §5.8).
+    ///
+    /// The handle form of [`observed_fields`]. For an observed of a document
+    /// that integrates, ask the [`Solution`]: a build-time field is a constant
+    /// and a trajectory is not.
+    pub fn observed_field(&self, name: &str) -> Result<JsValue, JsValue> {
+        let a = crate::problem::observed_field(&self.inner, name)
+            .map_err(|e| JsValue::from_str(&format!("observed_field({name}): {e}")))?;
+        to_js(&serde_json::json!({
+            "shape": a.shape(),
+            "values": a.iter().copied().collect::<Vec<f64>>(),
+        }))
+    }
+
+    /// Every name [`Problem::observed_field`] can answer for, sorted.
+    #[wasm_bindgen(js_name = observedFieldNames)]
+    pub fn observed_field_names(&self) -> Vec<String> {
+        self.inner.observed_field_names()
+    }
+
+    /// Flattened state-variable names, in solver order.
+    #[wasm_bindgen(js_name = stateVariableNames)]
+    pub fn state_variable_names(&self) -> Vec<String> {
+        self.inner.state_variable_names()
+    }
+
+    /// Flattened parameter names.
+    #[wasm_bindgen(js_name = parameterNames)]
+    pub fn parameter_names(&self) -> Vec<String> {
+        self.inner.parameter_names()
+    }
+
+    /// Whether there is anything to integrate. `false` means [`Problem::solve`]
+    /// will refuse, and the results are read with
+    /// [`Problem::observed_field`].
+    #[wasm_bindgen(js_name = isDynamic)]
+    pub fn is_dynamic(&self) -> bool {
+        self.inner.is_dynamic()
+    }
+
+    /// The integration interval, as `[t0, t_end]`.
+    pub fn tspan(&self) -> Vec<f64> {
+        let (a, b) = self.inner.tspan();
+        vec![a, b]
+    }
+}
+
+/// A trajectory, plus the problem that produced it.
+///
+/// Holding the problem is what lets [`Solution::observed`] answer at all: an
+/// observed is a pure function of `(state, params, t)`, the problem holds the
+/// function and this holds the arguments.
+#[cfg(all(feature = "wasm", feature = "solve"))]
+#[wasm_bindgen]
+pub struct Solution {
+    inner: crate::simulate::Solution,
+    problem: std::rc::Rc<crate::problem::EsmProblem>,
+}
+
+#[cfg(all(feature = "wasm", feature = "solve"))]
+#[wasm_bindgen]
+impl Solution {
+    /// The whole trajectory in [`solve`]'s object shape, so a host can move
+    /// between the two APIs without a second decoder.
+    #[wasm_bindgen(js_name = toJSON)]
+    pub fn to_json(&self) -> Result<JsValue, JsValue> {
+        to_js(&solution_json(&self.inner))
+    }
+
+    /// Output times.
+    pub fn time(&self) -> Vec<f64> {
+        self.inner.time.clone()
+    }
+
+    /// Flattened state-variable names, parallel to the rows of the state.
+    #[wasm_bindgen(js_name = stateVariableNames)]
+    pub fn state_variable_names(&self) -> Vec<String> {
+        self.inner.state_variable_names.clone()
+    }
+
+    /// One state variable's trajectory, by name (esm-libraries-spec §2.5.7).
+    ///
+    /// Resolves the exact flattened name, then a unique bare tail. Returns an
+    /// error rather than an empty array for a name it does not have, so a typo
+    /// is not a row of zeros.
+    pub fn get(&self, name: &str) -> Result<Vec<f64>, JsValue> {
+        self.inner
+            .get(name)
+            .map(|v| v.to_vec())
+            .ok_or_else(|| JsValue::from_str(&format!("no state variable named '{name}'")))
+    }
+
+    /// One OBSERVED variable's trajectory over the output grid.
+    ///
+    /// The reason this class holds its problem. A `Solution` carries state rows
+    /// only — in every binding — so before this there was no way to read back
+    /// an observed of a model that integrates. Name resolution is API_SPEC
+    /// §5.8's rule.
+    pub fn observed(&self, name: &str) -> Result<Vec<f64>, JsValue> {
+        crate::problem::observed_trajectory(&self.problem, &self.inner, name)
+            .map_err(|e| JsValue::from_str(&format!("observed({name}): {e}")))
+    }
+
+    /// Several observeds in ONE pass over the output grid.
+    ///
+    /// `names_str` is a JSON array; the result is an object keyed by the names
+    /// that were ASKED FOR. The graph is walked once per output time however
+    /// many names are given, so this is materially cheaper than a loop over
+    /// [`Solution::observed`].
+    ///
+    /// **Tolerant, where [`Solution::observed`] is strict.** A name that is not
+    /// an observed variable is simply ABSENT from the result rather than an
+    /// error — most often because it is a STATE, which the caller already has.
+    /// That is what a host reading a model's authored assertions needs: it
+    /// knows the variable names and not which kind each is, and one state in
+    /// the list must not cost it the other answers. A caller that wants "this
+    /// specific name or an explanation" asks [`Solution::observed`].
+    #[wasm_bindgen(js_name = observedMany)]
+    pub fn observed_many(&self, names_str: &str) -> Result<JsValue, JsValue> {
+        let names: Vec<String> = serde_json::from_str(names_str)
+            .map_err(|e| JsValue::from_str(&format!("Names parse error: {e}")))?;
+        let rows = crate::problem::observed_trajectories(&self.problem, &self.inner, &names)
+            .map_err(|e| JsValue::from_str(&format!("observedMany: {e}")))?;
+        let out: serde_json::Map<String, serde_json::Value> = rows
+            .into_iter()
+            .map(|(n, row)| (n, serde_json::json!(row)))
+            .collect();
+        to_js(&out)
+    }
+
+    /// Every observed variable this solution can report a trajectory for.
+    #[wasm_bindgen(js_name = observedNames)]
+    pub fn observed_names(&self) -> Vec<String> {
+        self.problem.observed_variable_names()
+    }
+
+    /// The SciML return code. `"Success"` means the run reached `t_end`.
+    pub fn retcode(&self) -> String {
+        self.inner.retcode.name().to_string()
+    }
+
+    /// Solver provenance and step counters.
+    pub fn metadata(&self) -> Result<JsValue, JsValue> {
+        to_js(&metadata_json(&self.inner))
     }
 }

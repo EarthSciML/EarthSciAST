@@ -42,9 +42,6 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | **Analysis** | Stoich matrix | Required | Required | Required | Required | Optional | ✅ Created (included in ODE examples) |
 | **Analysis** | System graphs | Required | Required | Required | Required | Required | ✅ Partial (1 case) |
 | **Analysis** | Expression graphs | Required | Required | Required | Required | Required | ✅ `conformance/graph/cases.json` (generated; driven by all five bindings) |
-| **Interactive** | Click-to-edit | SolidJS | — | — | — | — | ❌ Missing interaction fixtures |
-| **Interactive** | Structural editing | SolidJS | — | — | — | — | ❌ Missing |
-| **Interactive** | Coupling graph | SolidJS | — | — | — | — | ❌ Missing |
 | **Simulation** | ODE solving | — | Required | — | Required | — | ❌ Missing simulation fixtures |
 | **Simulation** | Event handling | — | Required | — | Required | — | ❌ Missing |
 | **Full** | MTK conversion | — | — | — | Required | — | ❌ Missing |

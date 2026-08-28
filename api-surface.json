@@ -43,12 +43,6 @@
         "python",
         "rust"
       ]
-    },
-    "ui": {
-      "summary": "interactive SolidJS editing components",
-      "bindings": [
-        "editor"
-      ]
     }
   },
   "binding_profiles": {
@@ -92,28 +86,21 @@
       "surface_declaration": "package-level exported identifiers of pkg/esm",
       "surface_test": "pkg/earthsci-ast-go/pkg/esm/api_surface_test.go",
       "scope_note": "Package-level func / type / const / var only. Methods on an exported type are covered by that type's entry, not listed separately."
-    },
-    "editor": {
-      "package": "@earthsciml/ast-editor",
-      "surface_declaration": "pkg/earthsci-ast-editor/src/index.ts named re-exports",
-      "surface_test": "pkg/earthsci-ast-editor/src/api-surface.test.ts",
-      "star_reexports": []
     }
   },
   "counts": {
-    "symbols": 909,
+    "symbols": 849,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 298,
       "typescript": 231,
       "python": 243,
-      "rust": 323,
-      "go": 383,
-      "editor": 71
+      "rust": 325,
+      "go": 383
     },
     "by_tier": {
-      "extension": 637,
-      "stable": 272
+      "extension": 587,
+      "stable": 262
     }
   },
   "planned": [
@@ -498,22 +485,6 @@
       }
     },
     {
-      "name": "ast_store",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "AstStore"
-      }
-    },
-    {
-      "name": "ast_store_config",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "AstStoreConfig"
-      }
-    },
-    {
       "name": "authored_template_names",
       "kind": "function",
       "tier": "extension",
@@ -661,14 +632,6 @@
       "bindings": {
         "go": "BuildUnitEnv",
         "rust": "build_unit_env"
-      }
-    },
-    {
-      "name": "build_var_equivalences",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "buildVarEquivalences"
       }
     },
     {
@@ -1506,14 +1469,6 @@
       }
     },
     {
-      "name": "common_paths",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "CommonPaths"
-      }
-    },
-    {
       "name": "common_subexpression",
       "kind": "type",
       "tier": "extension",
@@ -1661,7 +1616,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "ComponentNode",
         "go": "ComponentNode",
         "julia": "ComponentNode",
         "python": "ComponentNode",
@@ -1831,7 +1785,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "CouplingEdge",
         "go": "CouplingEdge",
         "julia": "CouplingEdge",
         "python": "CouplingEdge",
@@ -1856,22 +1809,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "CouplingEvent"
-      }
-    },
-    {
-      "name": "coupling_graph",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "CouplingGraph"
-      }
-    },
-    {
-      "name": "coupling_graph_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "CouplingGraphProps"
       }
     },
     {
@@ -1965,62 +1902,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "CovarianceMatrix"
-      }
-    },
-    {
-      "name": "create_ast_store",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "editor": "createAstStore"
-      }
-    },
-    {
-      "name": "create_debounced_validation",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createDebouncedValidation"
-      }
-    },
-    {
-      "name": "create_highlight_context",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createHighlightContext"
-      }
-    },
-    {
-      "name": "create_undo_history",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createUndoHistory"
-      }
-    },
-    {
-      "name": "create_undo_keyboard_handler",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createUndoKeyboardHandler"
-      }
-    },
-    {
-      "name": "create_validation_context",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createValidationContext"
-      }
-    },
-    {
-      "name": "create_validation_signals",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "createValidationSignals"
       }
     },
     {
@@ -2186,22 +2067,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "DEFAULT_RELTOL"
-      }
-    },
-    {
-      "name": "delimiters",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Delimiters"
-      }
-    },
-    {
-      "name": "delimiters_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "DelimitersProps"
       }
     },
     {
@@ -2738,22 +2603,6 @@
       }
     },
     {
-      "name": "equation_editor",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "EquationEditor"
-      }
-    },
-    {
-      "name": "equation_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EquationEditorProps"
-      }
-    },
-    {
       "name": "equation_unit_findings",
       "kind": "function",
       "tier": "extension",
@@ -2958,14 +2807,6 @@
       }
     },
     {
-      "name": "esm_coupling_graph_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EsmCouplingGraphProps"
-      }
-    },
-    {
       "name": "esm_diagnostic_error",
       "kind": "error",
       "tier": "extension",
@@ -2990,31 +2831,14 @@
       }
     },
     {
-      "name": "esm_expression_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EsmExpressionEditorProps"
-      }
-    },
-    {
       "name": "esm_file",
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "EsmFile",
         "go": "ESMFile",
         "julia": "EsmFile",
         "python": "EsmFile",
         "rust": "EsmFile"
-      }
-    },
-    {
-      "name": "esm_file_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EsmFileEditorProps"
       }
     },
     {
@@ -3023,14 +2847,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "EsmMachineryError"
-      }
-    },
-    {
-      "name": "esm_model_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EsmModelEditorProps"
       }
     },
     {
@@ -3059,14 +2875,6 @@
         "julia": "EsmProblem",
         "python": "EsmProblem",
         "rust": "EsmProblem"
-      }
-    },
-    {
-      "name": "esm_reaction_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "EsmReactionEditorProps"
       }
     },
     {
@@ -3262,7 +3070,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "ExprNode",
         "go": "ExprNode",
         "python": "ExprNode"
       }
@@ -3270,9 +3077,8 @@
     {
       "name": "expression",
       "kind": "type",
-      "tier": "stable",
+      "tier": "extension",
       "bindings": {
-        "editor": "Expression",
         "go": "Expression"
       }
     },
@@ -3404,18 +3210,9 @@
     {
       "name": "expression_node",
       "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "ExpressionNode",
-        "rust": "ExpressionNode"
-      }
-    },
-    {
-      "name": "expression_node_props",
-      "kind": "type",
       "tier": "extension",
       "bindings": {
-        "editor": "ExpressionNodeProps"
+        "rust": "ExpressionNode"
       }
     },
     {
@@ -3495,22 +3292,6 @@
       "bindings": {
         "julia": "field_reduce",
         "rust": "field_reduce"
-      }
-    },
-    {
-      "name": "file_summary",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "FileSummary"
-      }
-    },
-    {
-      "name": "file_summary_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "FileSummaryProps"
       }
     },
     {
@@ -3841,22 +3622,6 @@
       }
     },
     {
-      "name": "fraction",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Fraction"
-      }
-    },
-    {
-      "name": "fraction_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "FractionProps"
-      }
-    },
-    {
       "name": "free_parameters",
       "kind": "function",
       "tier": "stable",
@@ -3992,27 +3757,11 @@
       }
     },
     {
-      "name": "get_expression_at_path",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "getExpressionAtPath"
-      }
-    },
-    {
       "name": "get_expression_dimensions",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "julia": "get_expression_dimensions"
-      }
-    },
-    {
-      "name": "get_value_at_path",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "getValueAtPath"
       }
     },
     {
@@ -4028,7 +3777,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "Graph",
         "go": "Graph",
         "julia": "Graph",
         "python": "Graph",
@@ -4118,38 +3866,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "higherOrderDerivative"
-      }
-    },
-    {
-      "name": "highlight_context_value",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "HighlightContextValue"
-      }
-    },
-    {
-      "name": "highlight_provider",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "HighlightProvider"
-      }
-    },
-    {
-      "name": "highlight_provider_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "HighlightProviderProps"
-      }
-    },
-    {
-      "name": "history_entry",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "HistoryEntry"
       }
     },
     {
@@ -4267,14 +3983,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "isDifferentiable"
-      }
-    },
-    {
-      "name": "is_highlighted",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "isHighlighted"
       }
     },
     {
@@ -4671,7 +4379,6 @@
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "Model",
         "go": "Model",
         "julia": "Model",
         "python": "Model",
@@ -4692,22 +4399,6 @@
       "tier": "extension",
       "bindings": {
         "typescript": "ModelClassification"
-      }
-    },
-    {
-      "name": "model_editor",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "ModelEditor"
-      }
-    },
-    {
-      "name": "model_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ModelEditorProps"
       }
     },
     {
@@ -4866,14 +4557,6 @@
       }
     },
     {
-      "name": "normalize_scoped_reference",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "normalizeScopedReference"
-      }
-    },
-    {
       "name": "num",
       "kind": "type",
       "tier": "extension",
@@ -4925,6 +4608,22 @@
         "julia": "observed_field",
         "python": "observed_field",
         "rust": "observed_field"
+      }
+    },
+    {
+      "name": "observed_trajectories",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "observed_trajectories"
+      }
+    },
+    {
+      "name": "observed_trajectory",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "observed_trajectory"
       }
     },
     {
@@ -5355,46 +5054,6 @@
       }
     },
     {
-      "name": "path",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Path"
-      }
-    },
-    {
-      "name": "path_segment",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "PathSegment"
-      }
-    },
-    {
-      "name": "path_to_string",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "pathToString"
-      }
-    },
-    {
-      "name": "path_utils",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "PathUtils"
-      }
-    },
-    {
-      "name": "paths_equal",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "pathsEqual"
-      }
-    },
-    {
       "name": "pde_assertion_result",
       "kind": "type",
       "tier": "stable",
@@ -5703,22 +5362,6 @@
       }
     },
     {
-      "name": "radical",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Radical"
-      }
-    },
-    {
-      "name": "radical_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "RadicalProps"
-      }
-    },
-    {
       "name": "rank",
       "kind": "function",
       "tier": "stable",
@@ -5772,27 +5415,10 @@
       }
     },
     {
-      "name": "reaction_editor",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "ReactionEditor"
-      }
-    },
-    {
-      "name": "reaction_editor_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ReactionEditorProps"
-      }
-    },
-    {
       "name": "reaction_system",
       "kind": "type",
       "tier": "stable",
       "bindings": {
-        "editor": "ReactionSystem",
         "go": "ReactionSystem",
         "julia": "ReactionSystem",
         "python": "ReactionSystem",
@@ -5907,14 +5533,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "RegionBound"
-      }
-    },
-    {
-      "name": "register_web_components",
-      "kind": "function",
-      "tier": "stable",
-      "bindings": {
-        "editor": "registerWebComponents"
       }
     },
     {
@@ -6128,14 +5746,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "replace_equation"
-      }
-    },
-    {
-      "name": "replace_expression_at_path",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "replaceExpressionAtPath"
       }
     },
     {
@@ -6417,14 +6027,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "ScopedContext"
-      }
-    },
-    {
-      "name": "scoping_mode",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ScopingMode"
       }
     },
     {
@@ -6846,14 +6448,6 @@
       }
     },
     {
-      "name": "string_to_path",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "stringToPath"
-      }
-    },
-    {
       "name": "structural_error",
       "kind": "error",
       "tier": "stable",
@@ -6884,22 +6478,6 @@
       "tier": "extension",
       "bindings": {
         "go": "StructuralValidationResult"
-      }
-    },
-    {
-      "name": "subscript",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Subscript"
-      }
-    },
-    {
-      "name": "subscript_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "SubscriptProps"
       }
     },
     {
@@ -7045,22 +6623,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "successors"
-      }
-    },
-    {
-      "name": "superscript",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "Superscript"
-      }
-    },
-    {
-      "name": "superscript_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "SuperscriptProps"
       }
     },
     {
@@ -7385,22 +6947,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "UnboundVariableError"
-      }
-    },
-    {
-      "name": "undo_history",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "UndoHistory"
-      }
-    },
-    {
-      "name": "undo_history_config",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "UndoHistoryConfig"
       }
     },
     {
@@ -7731,14 +7277,6 @@
       }
     },
     {
-      "name": "use_highlight_context",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "editor": "useHighlightContext"
-      }
-    },
-    {
       "name": "validate",
       "kind": "function",
       "tier": "stable",
@@ -7877,14 +7415,6 @@
       }
     },
     {
-      "name": "validation_config",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ValidationConfig"
-      }
-    },
-    {
       "name": "validation_error",
       "kind": "type",
       "tier": "stable",
@@ -7894,35 +7424,11 @@
       }
     },
     {
-      "name": "validation_error_with_metadata",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ValidationErrorWithMetadata"
-      }
-    },
-    {
       "name": "validation_message",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "go": "ValidationMessage"
-      }
-    },
-    {
-      "name": "validation_panel",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "editor": "ValidationPanel"
-      }
-    },
-    {
-      "name": "validation_panel_props",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ValidationPanelProps"
       }
     },
     {
@@ -7935,14 +7441,6 @@
         "python": "ValidationResult",
         "rust": "ValidationResult",
         "typescript": "ValidationResult"
-      }
-    },
-    {
-      "name": "validation_signals",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "editor": "ValidationSignals"
       }
     },
     {

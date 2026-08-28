@@ -136,7 +136,13 @@ macro_rules! bail_vec {
 /// read and allocated a fresh array per kernel node.
 pub(super) enum VecValue<'a> {
     Scalar(f64),
-    View { data: &'a ArrayD<f64>, origin: DimI },
+    /// A borrowed window of a persistent array — an `ArrayViewD`, not a whole
+    /// `&ArrayD`, so an aligned `index(...)` slice (a contraction fold reading
+    /// one source row per tuple) can be handed back without the gather copy.
+    View {
+        data: ArrayViewD<'a, f64>,
+        origin: DimI,
+    },
     Owned { data: ArrayD<f64>, origin: DimI },
 }
 
@@ -176,7 +182,7 @@ impl<'a> VecValue<'a> {
                 // `assign` writes every element of the box, so the checkout
                 // does not need to be zero-filled.
                 let mut buf = pool.take_array_uninit(data.shape());
-                buf.assign(data);
+                buf.assign(&data);
                 (buf, origin)
             }
             VecValue::Scalar(_) => unreachable!("into_owned called on a scalar"),
@@ -494,6 +500,22 @@ pub(super) fn eval_vec_contracted<'a>(
         return Some(acc);
     }
 
+    // A SUM of an unfiltered two-factor product folds each tuple's term into
+    // the accumulator in ONE pass when one factor is an array over the box and
+    // the other a scalar (`sum_c SR[c,r]·E[c]` — the sr_matvec shape): the
+    // generic path materializes the product into a pooled buffer and then adds
+    // that buffer into `acc`, three full sweeps per tuple counting the gather;
+    // the fused loop computes `acc[k] = acc[k] + (a[k]·b)` directly. Per
+    // element it performs the identical multiply-then-add in the identical
+    // argument order as `vec_combine(Mul, …)` followed by `vec_combine(Add,
+    // …)` (no FMA is emitted from `x + y * z` source form), so the result is
+    // bit-identical; only the intermediate buffer traffic is gone.
+    let fuse_mul: Option<(&Expr, &Expr)> = if filter.is_none() && reduce == ReduceKind::Sum {
+        as_op(body, "*", 2).map(|n| (&n.args[0], &n.args[1]))
+    } else {
+        None
+    };
+
     // Iterate the contraction window with a mixed-radix counter (no allocation).
     let mut cvals = [0i64; MAXC];
     cvals[..nc].copy_from_slice(&clo[..nc]);
@@ -509,6 +531,86 @@ pub(super) fn eval_vec_contracted<'a>(
             cnames: contract_names,
             cvals: &cvals[..nc],
         };
+        if let Some((ea, eb)) = fuse_mul {
+            let va = match eval_vec(ea, &bx, ctx, pool, ops) {
+                Some(v) => v,
+                None => {
+                    acc.release(pool);
+                    return None;
+                }
+            };
+            let vb = match eval_vec(eb, &bx, ctx, pool, ops) {
+                Some(v) => v,
+                None => {
+                    va.release(pool);
+                    acc.release(pool);
+                    return None;
+                }
+            };
+            *ops += 1; // the `*` node the fusion folds without visiting
+            // An array factor must cover the output box exactly — the same
+            // condition `vec_combine(Add, acc, term)` would have enforced on
+            // the materialized product; a mismatch bails to the oracle as the
+            // generic path does.
+            let covers = |v: &VecValue| v.origin() == Some(lo) && v.shape() == Some(shape);
+            let acc_data = match &mut acc {
+                VecValue::Owned { data, .. } => data,
+                _ => unreachable!("the contraction accumulator is always Owned"),
+            };
+            match (va, vb) {
+                (VecValue::Scalar(x), VecValue::Scalar(y)) => {
+                    let s = x * y;
+                    acc_data.mapv_inplace(|a| a + s);
+                }
+                (arr, VecValue::Scalar(s)) if covers(&arr) => {
+                    let av = arr.view().expect("array factor has a view");
+                    ndarray::Zip::from(&mut *acc_data)
+                        .and(&av)
+                        .for_each(|o, &x| *o += x * s);
+                    drop(av);
+                    arr.release(pool);
+                }
+                (VecValue::Scalar(s), arr) if covers(&arr) => {
+                    let av = arr.view().expect("array factor has a view");
+                    ndarray::Zip::from(&mut *acc_data)
+                        .and(&av)
+                        .for_each(|o, &y| *o += s * y);
+                    drop(av);
+                    arr.release(pool);
+                }
+                (va, vb) => {
+                    // Two array factors (or a box mismatch): the generic
+                    // product-then-add, unchanged.
+                    let term = match vec_combine(BinCode::Mul, va, vb, pool) {
+                        Some(t) => t,
+                        None => {
+                            acc.release(pool);
+                            return None;
+                        }
+                    };
+                    acc = vec_combine(combine_op, acc, term, pool)?;
+                }
+            }
+            // Mixed-radix increment over the contraction window.
+            let mut d = 0;
+            let mut done = false;
+            loop {
+                if d == nc {
+                    done = true;
+                    break;
+                }
+                cvals[d] += 1;
+                if cvals[d] <= chi[d] {
+                    break;
+                }
+                cvals[d] = clo[d];
+                d += 1;
+            }
+            if done {
+                break;
+            }
+            continue;
+        }
         let term = match eval_vec(body, &bx, ctx, pool, ops) {
             Some(t) => t,
             None => {
@@ -671,7 +773,7 @@ pub(super) fn eval_vec_variable<'a>(
             VecValue::Scalar(a[IxDyn(&[])])
         } else {
             VecValue::View {
-                data: a,
+                data: a.view(),
                 origin: DimI::from_elem(1, a.ndim()),
             }
         });
@@ -681,7 +783,7 @@ pub(super) fn eval_vec_variable<'a>(
             VecValue::Scalar(a[IxDyn(&[])])
         } else {
             VecValue::View {
-                data: a,
+                data: a.view(),
                 origin: DimI::from_elem(1, a.ndim()),
             }
         });
@@ -1579,6 +1681,60 @@ pub(super) fn eval_vec_index<'a>(
                 axis_segs.push(segs);
             }
         }
+    }
+
+    // ---- Aligned-slice fast path: hand back a VIEW, no gather copy ----------
+    // Inside a contraction fold the body is re-evaluated once per tuple, and for
+    // an einsum like `sum_c SR[c,r]·E[c]` every tuple's `index(SR, c, r)` is one
+    // whole source ROW — copied here into a pooled buffer only for the very next
+    // node to read it once and fold it away. When (a) the source is itself a
+    // borrowed view of a persistent array, (b) every output axis is mapped (no
+    // broadcast stretch, which `ArrayViewD` cannot carry by value), and (c) each
+    // mapped axis is a single segment covering the full output extent (no
+    // ghost-0 positions, no wrap split), the gather is a pure slice — fixed-axis
+    // selects plus one window per axis — so return it as a `View` and skip the
+    // copy entirely. Confined to `!bx.cnames.is_empty()` (a fold tuple in
+    // flight): the pure-map top level must keep receiving `Owned` values, whose
+    // bare-View rejection (esm audit #3) it relies on.
+    if !bx.cnames.is_empty()
+        && n_mapped == out_ndim
+        && (0..out_ndim).all(|a| {
+            axis_segs[a].len() == 1 && axis_segs[a][0].0 == 0 && axis_segs[a][0].1 == bx.shape[a]
+        })
+        && let VecValue::View { data, .. } = &arg0
+    {
+        let mut sv = data.clone();
+        // Fixed-axis selects, descending so lower axis indices stay valid.
+        let mut fixed_desc: SmallVec<[(usize, usize); 4]> =
+            fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
+        fixed_desc.sort_by_key(|x| std::cmp::Reverse(x.0));
+        for (d, i0) in fixed_desc {
+            sv = sv.index_axis_move(ndarray::Axis(d), i0);
+        }
+        // Remaining axes are the mapped source axes in ascending source order;
+        // permute into output-axis order (same rule as the copy path below).
+        let mut mapped_src: SmallVec<[usize; 4]> =
+            mapped.iter().flatten().map(|(d, _)| *d).collect();
+        mapped_src.sort_unstable();
+        let perm: SmallVec<[usize; 4]> = (0..out_ndim)
+            .filter_map(|a| mapped[a].as_ref())
+            .map(|(d, _)| {
+                mapped_src
+                    .iter()
+                    .position(|s| s == d)
+                    .expect("mapped source axis is in mapped_src")
+            })
+            .collect();
+        let mut sv = sv.permuted_axes(IxDyn(&perm[..]));
+        // Each axis's single segment: out[0..l] ← src[s..s+l].
+        for a in 0..out_ndim {
+            let (_, l, s) = axis_segs[a][0];
+            sv.slice_axis_inplace(ndarray::Axis(a), Slice::from(s..s + l));
+        }
+        return Some(VecValue::View {
+            data: sv,
+            origin: bx.lo.iter().copied().collect(),
+        });
     }
 
     // Reduce the source to just the mapped axes: select each fixed axis at its

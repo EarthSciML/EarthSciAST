@@ -1246,12 +1246,31 @@ class EnsembleProblem:
 # --------------------------------------------------------------------------- #
 
 
+def _field_components(arrays: dict, scalars: dict) -> set[str]:
+    """The distinct components owning a problem's build-time fields.
+
+    A component is everything before a flattened name's final segment
+    (``Sites.North`` for ``Sites.North.u``), and ``""`` for an unqualified one.
+    :func:`observed_field` resolves a bare name only when this holds exactly
+    one — see API_SPEC §5.8.
+    """
+    return {k.rsplit(".", 1)[0] if "." in k else "" for k in set(arrays) | set(scalars)}
+
+
 def observed_field(prob: EsmProblem, name: str):
     """Evaluate/read the state-free observed ``name`` at BUILD time through the
     EsmProblem's own graph — the const-geometry hoist already materialized it; this
-    resolves the (flattened or local) name against those products. Raises
-    :class:`SimulationError` when ``name`` is not a build-time-evaluable observed
-    of the EsmProblem.
+    resolves the name against those products. Raises :class:`SimulationError`
+    when ``name`` is not a build-time-evaluable observed of the EsmProblem.
+
+    Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
+
+    1. **Exact hit** — ``name`` is a flattened field name (``Sites.North.u``).
+    2. **Bare name** — ``name`` carries no ``.``, and the problem has exactly
+       ONE component; it then resolves to the unique field with that tail.
+
+    A bare name against a MULTI-component problem is refused, with every
+    qualified candidate named, rather than bound to an arbitrary one.
 
     Two arguments in every binding (API_SPEC §5.8): build observability moved to
     a construction-time seam, so no caller has to thread a BuildInspection
@@ -1277,14 +1296,27 @@ def observed_field(prob: EsmProblem, name: str):
 
     got = _lookup(v)
     if got is None and "." not in v:
-        # local spelling: resolve against the flattened observed-name tails.
+        # Bare spelling. It resolves only when the problem has exactly ONE
+        # component (API_SPEC §5.8): with two mounted components a bare ``u``
+        # designates ``Sites.North.u`` and ``Sites.South.u`` equally, and this
+        # used to answer with whichever sorted first — a wrong value rather
+        # than a refusal, which is the failure mode esm-spec §6.6.2 names as
+        # specifically non-conforming for the same shape of lookup.
         matches = sorted(
             k for k in set(arrays) | set(scalars) if k.rsplit(".", 1)[-1] == v and "." in k
         )
-        for k in matches:
-            got = _lookup(k)
-            if got is not None:
-                break
+        components = _field_components(arrays, scalars)
+        if len(components) == 1:
+            for k in matches:
+                got = _lookup(k)
+                if got is not None:
+                    break
+        elif matches:
+            raise SimulationError(
+                f"observed_field: '{name}' is a bare name and this EsmProblem has "
+                f"{len(components)} components ({', '.join(sorted(components))}); "
+                f"qualify it as one of: {', '.join(matches)}"
+            )
     if got is None:
         # The hoist records WHY it dropped each unresolvable observed; a skip
         # cascades, so report the FIRST recorded failure (the root cause) along

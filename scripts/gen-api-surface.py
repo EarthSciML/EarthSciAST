@@ -154,7 +154,7 @@ def binding_kinds(surfaces: dict) -> dict[str, dict[str, str]]:
         if s["kind"] == "var" and s["name"].startswith("Err"):
             k = "error"
         kinds["go"][s["name"]] = k
-    for binding in ("typescript", "editor"):
+    for binding in ("typescript",):
         # A TypeScript error is a class, so it is a VALUE export. A `export type`
         # named `...Error` is a diagnostic record, not something you throw.
         for n in surfaces[binding]["types"]:
@@ -225,7 +225,7 @@ def transliterate(name: str, kind: str, binding: str, upper_initialisms: bool = 
             return _pascal(tokens, go=True)
         if kind not in ("constant",):
             head, *rest = tokens
-            if binding in ("typescript", "editor"):
+            if binding == "typescript":
                 return head + _pascal(rest, go=True)
     if binding == "go":
         return _pascal(tokens, go=True)
@@ -233,7 +233,7 @@ def transliterate(name: str, kind: str, binding: str, upper_initialisms: bool = 
         return _pascal(tokens, go=False)
     if kind == "constant":
         return name.upper()
-    if binding in ("typescript", "editor"):
+    if binding == "typescript":
         head, *rest = tokens
         return head + _pascal(rest, go=False)
     return name  # julia / python / rust: verbatim snake_case
@@ -286,19 +286,10 @@ EXTENSION_OVERRIDES = {
     ("prepare_provider", "type"),
 }
 
-STABLE_OVERRIDES = {
-    # The editor's component / primitive / store surface is that package's whole
-    # public product, so it is stable even though no other binding exports it.
-    ("expression_node", "type"),
-    ("equation_editor", "type"),
-    ("model_editor", "type"),
-    ("reaction_editor", "type"),
-    ("coupling_graph", "type"),
-    ("validation_panel", "type"),
-    ("file_summary", "type"),
-    ("create_ast_store", "function"),
-    ("register_web_components", "function"),
-}
+# The inverse escape hatch: promote a single-binding symbol to `stable` when its
+# one binding is the sole plausible home for the capability. Empty today — the
+# only entries were the deleted editor package's components.
+STABLE_OVERRIDES: set[tuple[str, str]] = set()
 
 # Bindings that deliberately do not implement a capability family. Recorded so
 # a reader can tell "absent by design" from "absent by drift".
@@ -318,10 +309,6 @@ CAPABILITY_PROFILES = {
     "runtime_io": {
         "summary": "data-source providers, refresh cadence, output sinks, checkpoints",
         "bindings": ["julia", "python", "rust"],
-    },
-    "ui": {
-        "summary": "interactive SolidJS editing components",
-        "bindings": ["editor"],
     },
 }
 
@@ -545,12 +532,6 @@ def build() -> dict:
                 "exported type are covered by that type's entry, not listed "
                 "separately.",
             },
-            "editor": {
-                "package": "@earthsciml/ast-editor",
-                "surface_declaration": "pkg/earthsci-ast-editor/src/index.ts named re-exports",
-                "surface_test": "pkg/earthsci-ast-editor/src/api-surface.test.ts",
-                "star_reexports": surfaces["editor"]["star_reexports"],
-            },
         },
         "counts": {
             "symbols": len(symbols),
@@ -577,7 +558,6 @@ _HEADERS = {
     "python": "Python",
     "rust": "Rust",
     "go": "Go",
-    "editor": "Editor",
 }
 
 
@@ -604,7 +584,7 @@ def _table(syms: list, cols: list) -> str:
 
 def stable_surface_tables(manifest: dict) -> str:
     stable = [s for s in manifest["symbols"] if s["tier"] == "stable"]
-    core = [b for b in BINDINGS if b != "editor"]
+    core = list(BINDINGS)
     counted = {s["name"] + s["kind"]: sum(b in s["bindings"] for b in core) for s in stable}
 
     def at(n: int) -> list:
@@ -618,10 +598,6 @@ def stable_surface_tables(manifest: dict) -> str:
         (2, "two of the five"),
     ):
         parts.append(f"#### Exported by {label}\n\n" + _table(at(n), core))
-    editor_only = [
-        s for s in stable if counted[s["name"] + s["kind"]] < 2 and "editor" in s["bindings"]
-    ]
-    parts.append("#### Editor package\n\n" + _table(editor_only, ["typescript", "editor"]))
     return "\n\n".join(parts)
 
 

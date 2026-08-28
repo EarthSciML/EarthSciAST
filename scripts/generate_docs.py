@@ -394,7 +394,7 @@ class DocumentationExtractor:
 
     def _extract_typescript_docs(self) -> Dict[str, Any]:
         """Extract documentation from TypeScript package."""
-        ts_dirs = [self.packages_dir / "earthsci-ast-ts", self.packages_dir / "earthsci-ast-editor"]
+        ts_dirs = [self.packages_dir / "earthsci-ast-ts"]
 
         functions = []
         types = []

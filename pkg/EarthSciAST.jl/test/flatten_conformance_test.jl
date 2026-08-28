@@ -794,6 +794,63 @@ end
                "D(SimpleChemistry.Photochemistry.NO2_photo)/Dt"]
     end
 
+    @testset "operator_compose: CHAINED entries over one state keep merging" begin
+        # Regression for issue #172 (E_TREEWALK_DUPLICATE_DERIVATIVE in every
+        # ReSEACT build). The document chains three entries over the same
+        # states, with the OPERATOR as A — `["Sink", "Chem"]`, the sink
+        # authoring `D(Chem.O3)` directly — which §4.7.1 permits and
+        # `reseact.esm` uses (deposition, then emission, then the pointwise
+        # transport lift). Entry 1's merge must leave an equation the NEXT
+        # entry can still find: reattributed to the system that owns its
+        # dependent variable, not left as A's authored contribution. Keeping
+        # A's ownership made entries 2 and 3 match nothing, and the flattened
+        # system carried THREE equations claiming `D(Chem.O3)`.
+        doc = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "ChainedCompose",
+                      "description": "chained operator_compose with the operator as A",
+                      "authors": ["EarthSciAST test suite"],
+                      "created": "2026-08-25T00:00:00Z"},
+         "models": {
+           "Chem": {"variables": {"O3": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                                  "NO": {"type": "unknown", "units": "mol/mol", "default": 1.0},
+                                  "k1": {"type": "parameter", "units": "1/s", "default": 0.1},
+                                  "k2": {"type": "parameter", "units": "1/s", "default": 0.2}},
+                    "equations": [{"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["k1"]}, "O3"]}},
+                                  {"lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["k2"]}, "NO"]}}]},
+           "Sink": {"variables": {"kd": {"type": "parameter", "units": "1/s", "default": 0.01}},
+                    "equations": [{"lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["kd"]}, "Chem.O3"]}},
+                                  {"lhs": {"op": "D", "args": ["Chem.NO"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["kd"]}, "Chem.NO"]}}]},
+           "Src":  {"variables": {"e": {"type": "parameter", "units": "mol/mol/s", "default": 2.0}},
+                    "equations": [{"lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
+                                   "rhs": "e"}]},
+           "Adv":  {"variables": {"wind": {"type": "parameter", "units": "m/s", "default": 3.0}},
+                    "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
+                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["wind"]},
+                                                               {"op": "grad", "args": ["_var"]}]}}]}},
+         "coupling": [{"type": "operator_compose", "systems": ["Sink", "Chem"]},
+                      {"type": "operator_compose", "systems": ["Src", "Chem"]},
+                      {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}]}
+        """
+        flat = flatten(load_string(doc))
+        # ONE equation per species, every chained contribution in its RHS. The
+        # POSITIONS are the merge trail: each merge keeps the surviving A
+        # equation's document slot, so NO's chain ends at the sink's slot and
+        # O3's at the source's (its last matching A).
+        @test String[to_ascii(eq) for eq in flat.equations] == [
+            "D(Chem.NO)/Dt = (-Sink.kd) * Chem.NO + (-Chem.k2) * Chem.NO + " *
+                "(-Adv.wind) * grad(Chem.NO)",
+            "D(Chem.O3)/Dt = Src.e + (-Sink.kd) * Chem.O3 + " *
+                "(-Chem.k1) * Chem.O3 + (-Adv.wind) * grad(Chem.O3)",
+        ]
+        @test sort(collect(keys(flat.state_variables))) == ["Chem.NO", "Chem.O3"]
+        @test isempty(flat.algebraic_variables)
+    end
+
     @testset "coupling entries apply BY KIND, not in declaration order" begin
         # §4.7 "Resolution order". The corpus cannot pin this: it records one
         # document in one declaration order, so a binding that applied entries as

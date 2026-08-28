@@ -11,8 +11,8 @@ species, and reactions live in the document itself, so a conforming parser in
 any language can reconstruct the complete mathematical system without executing
 author-supplied code.
 
-Reference implementations exist in Julia, TypeScript, Python, Rust, and Go, with
-a SolidJS editor. All share `esm-schema.json` and a common conformance suite.
+Reference implementations exist in Julia, TypeScript, Python, Rust, and Go.
+All share `esm-schema.json` and a common conformance suite.
 
 ## Documentation
 

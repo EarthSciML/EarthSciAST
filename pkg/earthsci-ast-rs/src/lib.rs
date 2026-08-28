@@ -331,7 +331,10 @@ pub use problem::{
     Remake, callbacks, compose, esm_problem, observed_field, remake,
 };
 #[cfg(feature = "solve")]
-pub use problem::{Integrator, StepStatus, init, solve, solve_ensemble, solve_to_completion, step};
+pub use problem::{
+    Integrator, StepStatus, init, observed_trajectories, observed_trajectory, solve,
+    solve_ensemble, solve_to_completion, step,
+};
 pub use units::{
     Dimension, Rational, UNIT_FINDING_ANALYSIS, UNIT_FINDING_DIMENSIONAL_MISMATCH,
     UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,

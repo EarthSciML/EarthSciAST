@@ -260,7 +260,11 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    corpus = Path(args.corpus)
+    # Resolve: the go and rust drivers run with `cwd` set to their own package
+    # directory, so a corpus spelled relatively would reach them as a path that
+    # does not exist there — reported as `ok: false` and then, indistinguishably,
+    # as cross-binding divergence.
+    corpus = Path(args.corpus).resolve()
     fixtures = sorted(corpus.glob("expr_*.json"))
     if not fixtures:
         print(f"error: no fixtures in {corpus}", file=sys.stderr)

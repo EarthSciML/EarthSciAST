@@ -86,7 +86,9 @@ pub use eval::{
 // the vectorized overlay); re-exported crate-wide so the scalar interpreter
 // `crate::simulate::eval_op` routes through the SAME definition instead of
 // re-implementing the arithmetic/comparison/logical algebra (knot #3a).
-pub(crate) use eval::{apply_binary, apply_unary, fold_scalar};
+pub(crate) use eval::{
+    apply_binary, apply_unary, eval_expression_with_extents_and_consts_shared, fold_scalar,
+};
 pub use rhs::RhsScratch;
 
 use compile::*;
@@ -135,7 +137,7 @@ type IdxMap = HashMap<String, i64, FxBuildHasher>;
 /// public boundary ([`eval_expression`]'s `inputs`, `forcing_handle`,
 /// `BuildInspection::setup_arrays`) stays on std `HashMap`; conversion happens
 /// there (a shallow clone of the small FAQ/coordinate input maps).
-type ArrMap = HashMap<String, ArrayD<f64>, FxBuildHasher>;
+pub(crate) type ArrMap = HashMap<String, ArrayD<f64>, FxBuildHasher>;
 
 /// Stack-inlined operand buffer for the per-node scalar evaluator. An operator's
 /// arity is ≤ 4 in practice (most are binary), so evaluating `node.args` into

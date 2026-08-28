@@ -181,6 +181,13 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: pkg/earthsci-ast-go
 
+      # --- Cross-binding ------------------------------------------------
+      # Six files carry the one release version; two of them are hand-kept
+      # mirrors with no manifest to derive from. v0.2.0 published with both
+      # mirrors stale. Cheap to check, so check it on every run.
+      - name: Version sync (all bindings)
+        run: ./scripts/check-version-sync.sh
+
   # Run each language's individual tests first.
   # Matrices absorbed from the per-language CI workflows (gt-9ju):
   #   python-package.yml, rust-ci.yml, julia-ci.yml, go-ci.yml, npm-publish.yml
@@ -265,39 +272,6 @@ jobs:
 
       - name: Run TypeScript tests
         run: npm run test:ci
-
-  earthsci-ast-editor-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: pkg/earthsci-ast-editor
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || '' }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'npm'
-          cache-dependency-path: pkg/earthsci-ast-editor/package-lock.json
-
-      # earthsci-ast-editor consumes @earthsciml/ast via a file: devDependency, so
-      # the toolkit's dist must exist before the editor installs/builds.
-      - name: Build @earthsciml/ast dependency
-        working-directory: pkg/earthsci-ast-ts
-        run: npm ci && npm run build
-
-      - name: Install earthsci-ast-editor dependencies
-        run: npm install
-
-      - name: Typecheck earthsci-ast-editor
-        run: npm run typecheck
-
-      - name: Run earthsci-ast-editor tests
-        run: npx vitest run
 
   python-tests:
     runs-on: ubuntu-latest

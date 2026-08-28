@@ -14,7 +14,6 @@ cd pkg/earthsci-ast-ts && npm test                            # TypeScript
 cd pkg/earthsci-ast-py && python3 -m pytest tests/ -v         # Python
 cd pkg/earthsci-ast-rs && cargo test                       # Rust
 cd pkg/earthsci-ast-go && go test ./...                          # Go
-cd pkg/earthsci-ast-editor && npm test                                  # SolidJS editor
 
 # Dependency management
 ./install.sh --all       # Install all language environments
@@ -30,7 +29,6 @@ EarthSciAST is a language-agnostic JSON format for earth science model component
 - **earthsci-ast-py** (`earthsci-ast`) — Python scientific integration
 - **earthsci-ast-rs** (`earthsci-ast`) — Rust high-performance implementation
 - **earthsci-ast-go** — Go lightweight implementation
-- **earthsci-ast-editor** (`@earthsciml/ast-editor`) — SolidJS interactive web editor
 
 Shared test fixtures in `tests/` (valid, invalid, conformance) ensure cross-language consistency.
 

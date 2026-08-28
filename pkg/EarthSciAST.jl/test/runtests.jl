@@ -243,6 +243,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("observed_materialization_test.jl")   # build-time producer materialization (line allocation)
     include("gated_sibling_loaders_test.jl")      # hook 2: sibling loaders sharing a variable name
     include("build_inspection_test.jl")
+    include("observed_field_static_test.jl")  # §5.8 name resolution on a state-free document
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
     include("conformance_pde_inline_observed_rank2_test.jl")

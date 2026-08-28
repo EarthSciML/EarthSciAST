@@ -25,7 +25,6 @@ EarthSciAST is a language-agnostic JSON-based format for earth science model com
 - **Python** (earthsci_ast) - Scientific Python integration
 - **Rust** (earthsci-ast) - High-performance implementation
 - **Go** (earthsci-ast-go) - Lightweight Go implementation
-- **SolidJS** (earthsci-ast-editor) - Interactive web-based editor
 
 All implementations must maintain conformance across languages through our comprehensive test suite.
 
@@ -108,8 +107,7 @@ EarthSciAST/
 │   ├── earthsci-ast-ts/    # TypeScript implementation
 │   ├── earthsci_ast/          # Python implementation
 │   ├── earthsci-ast-rs/  # Rust implementation
-│   ├── earthsci-ast-go/       # Go implementation
-│   └── earthsci-ast-editor/          # SolidJS web editor
+│   └── earthsci-ast-go/       # Go implementation
 ├── tests/                   # Cross-language conformance tests
 │   ├── valid/              # Valid ESM files for testing
 │   ├── invalid/            # Invalid ESM files for validation testing

@@ -2907,8 +2907,14 @@ end
 
 # A redirect must BEAT the gather it replaces: accept when the run count is
 # small against the lane count (each run is one slice; > 1 also costs a
-# concatenate). A fragmented mapping keeps the dense gather.
-@inline _ssa_worthwhile(L::Int, nseg::Int) = nseg <= max(8, L >> 2)
+# concatenate). A fragmented mapping keeps the dense gather. The cap must be
+# ABSOLUTE as well as relative: lattice run counts grow ~O(sqrt NC) with the
+# grid, and a purely relative bound (L>>2 = 1,638 at CONUS) admitted edges of
+# hundreds of slices each -- the emitted module overflowed XLA:CPU's
+# contiguous JIT section arena ("Unable to allocate section memory") at
+# 13x7x72 while RSS sat at 6.7 GB. 64 leaves the measured 6x6x8 behaviour
+# (L>>2 = 72) essentially unchanged.
+@inline _ssa_worthwhile(L::Int, nseg::Int) = nseg <= min(64, max(8, L >> 2))
 
 function _build_oop_ssa_plan(mat_levels::Tuple, acc_kernels, acc_plans,
                              rhs_list, cse_prelude, n_states::Int, n_total::Int)

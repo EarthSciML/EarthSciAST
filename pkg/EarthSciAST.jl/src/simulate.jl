@@ -818,6 +818,31 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
     return out
 end
 
+# The distinct components owning a prepared document's build-time observeds.
+# A component is everything before a flattened name's final segment
+# (`Sites.North` for `Sites.North.u`), and `""` for an unqualified one.
+# [`observed_field`](@ref) resolves a BARE name only when this set holds exactly
+# ONE (API_SPEC §5.8): with two mounted components a bare `u` designates
+# `Sites.North.u` and `Sites.South.u` equally, and answering with whichever the
+# variable iteration reached first is a wrong value rather than a missing one.
+function _field_components(model)
+    comps = Set{String}()
+    for k in observed_unknowns(model)
+        s = String(k)
+        push!(comps, occursin('.', s) ? String(rsplit(s, '.'; limit = 2)[1]) : "")
+    end
+    return comps
+end
+
+# Every flattened observed of `model` whose final segment is the bare name `v`,
+# sorted — the candidates a refused bare lookup must name so the author can
+# qualify it (esm-spec §6.6.2 requires the same of an ambiguous override key).
+function _bare_candidates(model, v::AbstractString)
+    return sort!(String[String(k) for k in observed_unknowns(model)
+                        if occursin('.', String(k)) &&
+                           String(rsplit(String(k), '.'; limit = 2)[2]) == v])
+end
+
 """
     observed_field(prob::EsmProblem, name) -> Array
 
@@ -829,8 +854,15 @@ seam, so the caller no longer threads the same [`BuildInspection`](@ref) through
 the build and back into this accessor — the problem owns one. Pass your own via
 `esm_problem(...; inspect = insp)` if you also want to read the sink directly.
 
-`name` may be spelled with the flattener's namespacing (`"ISRM.deathsK"`) or
-locally (`"deathsK"`, resolved against the single run model's variable tails).
+Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
+
+1. **Exact hit** — `name` is a flattened observed name (`"ISRM.deathsK"`).
+2. **Bare name** — `name` carries no `.`, and the document has exactly ONE
+   component; it then resolves to the unique observed with that tail
+   (`"deathsK"`).
+
+A bare name against a MULTI-component document is refused, with every qualified
+candidate named, rather than bound to an arbitrary one.
 
 Throws a `SimulateError` when `name` is not a build-time-evaluable observed
 (state-dependent, unsized axis, or not an observed at all).
@@ -845,14 +877,25 @@ function observed_field(prob::EsmProblem, name::AbstractString)
         "observed_field: prepared document has no model"))
     mname = String(first(keys(file.models)))
     v = String(name)
+    model = file.models[mname]
+    comps = _field_components(model)
+    single = length(comps) == 1
     fld = _observed_field(insp, file, mname, v)
     if fld === nothing && !occursin('.', v)
-        # local spelling: resolve against the run model's variable tails.
-        for k in keys(file.models[mname].variables)
-            ks = String(k)
-            (occursin('.', ks) && String(split(ks, '.')[end]) == v) || continue
-            fld = _observed_field(insp, file, mname, ks)
-            fld === nothing || break
+        # Bare spelling: resolve against the run model's observed tails, but
+        # only on a SINGLE-component document (API_SPEC §5.8). On a multi-
+        # component one the bare name is refused with every candidate named.
+        cands = _bare_candidates(model, v)
+        if single
+            for k in cands
+                fld = _observed_field(insp, file, mname, k)
+                fld === nothing || break
+            end
+        elseif !isempty(cands)
+            throw(SimulateError(
+                "observed_field: '$name' is a bare name and this problem has " *
+                "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
+                "qualify it as one of: $(join(cands, ", "))"))
         end
     end
     if fld === nothing
@@ -884,16 +927,20 @@ function observed_field(prob::EsmProblem, name::AbstractString)
         # GUARD: only an OBSERVED may be answered this way. `const_arrays` also
         # holds every array-valued PARAMETER, and quietly returning one of those
         # from `observed_field` would turn a wrong name into a plausible answer.
-        obs = Set{String}(observed_unknowns(file.models[mname]))
-        is_obs = any(k -> (String(k) == v || String(split(String(k), '.')[end]) == v)
-                          && String(k) in obs, keys(file.models[mname].variables))
+        obs = Set{String}(observed_unknowns(model))
+        is_obs = any(k -> (String(k) == v ||
+                           (single && String(split(String(k), '.')[end]) == v))
+                          && String(k) in obs, keys(model.variables))
         is_obs || throw(SimulateError(
             "observed_field: '$name' is not a build-time-evaluable observed of the " *
             "prepared document"))
         arr = nothing
         for reg in (insp.setup_arrays, insp.const_arrays)
             arr = get(reg, mname * "." * v, get(reg, v, nothing))
-            if arr === nothing
+            if arr === nothing && single
+                # Bare tail, single-component only — same §5.8 gate the observed
+                # graph applies above, so the two fallbacks cannot disagree
+                # about whether a bare name is answerable.
                 hits = [k for k in keys(reg)
                         if occursin('.', k) && String(split(k, '.')[end]) == v]
                 length(hits) == 1 && (arr = reg[first(hits)])

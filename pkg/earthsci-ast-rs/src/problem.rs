@@ -499,10 +499,33 @@ impl EsmProblem {
         &self.build.fields
     }
 
-    /// The names of every build-time field [`observed_field`] can return.
+    /// The names of the OBSERVED VARIABLES [`observed_trajectory`] can report a
+    /// trajectory for.
+    ///
+    /// Disjoint from [`Self::observed_field_names`] and answering a different
+    /// question: those are constants the BUILD materialized, these vary along a
+    /// solution. Empty on the array and static backends, which have no scalar
+    /// observed graph to walk.
+    pub fn observed_variable_names(&self) -> Vec<String> {
+        match &*self.backend {
+            Backend::Scalar(c) => c.observed_variable_names().to_vec(),
+            Backend::Array(_) | Backend::Static(_) => Vec::new(),
+        }
+    }
+
+    /// The names of every build-time field [`observed_field`] can return,
+    /// component-qualified — the spelling that resolves whatever the problem's
+    /// component count, and the one to report to an author whose bare name was
+    /// refused.
     pub fn observed_field_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.build.fields.keys().cloned().collect();
-        names.extend(self.inspection.borrow().setup_arrays.keys().cloned());
+        let model = self.model_name.as_deref().unwrap_or("");
+        let mut names: Vec<String> = self
+            .build
+            .fields
+            .keys()
+            .chain(self.inspection.borrow().setup_arrays.keys())
+            .map(|k| qualify(model, k))
+            .collect();
         names.sort();
         names.dedup();
         names
@@ -519,33 +542,140 @@ pub fn callbacks(prob: &EsmProblem) -> &CallbackSet {
     &prob.callbacks
 }
 
+/// `key` qualified by the component path `model`, idempotently.
+///
+/// The two field maps an [`EsmProblem`] carries are keyed differently. The
+/// build pipeline keys a field by the SELECTED MODEL's own variable name
+/// (`E_PM25`, or `North.u` for a mounted subsystem), because it evaluates one
+/// model's observed graph rather than the flattened document's; the state-free
+/// static evaluation keys it by the FLATTENED name (`ISRM.E_PM25`), because
+/// that is what `Compiled` produces. Qualifying the first spelling and leaving
+/// the second alone puts both into the one namespace Julia and Python key
+/// their build-time fields by, so `observed_field` answers the same spellings
+/// in all three bindings.
+fn qualify(model: &str, key: &str) -> String {
+    let already = key == model
+        || key
+            .strip_prefix(model)
+            .is_some_and(|rest| rest.starts_with('.'));
+    if model.is_empty() || already {
+        key.to_string()
+    } else {
+        format!("{model}.{key}")
+    }
+}
+
+/// The component that owns a qualified name — everything before the final
+/// segment, or `""` when the name is unqualified.
+fn component_of(qualified: &str) -> &str {
+    qualified.rsplit_once('.').map_or("", |(head, _)| head)
+}
+
+/// The distinct components owning `prob`'s build-time fields (API_SPEC §5.8).
+///
+/// A bare name is only resolvable when this holds exactly one: with two
+/// mounted components a bare `u` designates `North.u` and `South.u` equally,
+/// and answering with either is worse than refusing.
+fn field_components(prob: &EsmProblem) -> std::collections::BTreeSet<String> {
+    let model = prob.model_name.as_deref().unwrap_or("");
+    let mut out = std::collections::BTreeSet::new();
+    for k in prob.build.fields.keys() {
+        out.insert(component_of(&qualify(model, k)).to_string());
+    }
+    for k in prob.inspection.borrow().setup_arrays.keys() {
+        out.insert(component_of(&qualify(model, k)).to_string());
+    }
+    out
+}
+
 /// The build-time field named `name`, from `prob`'s construction.
 ///
-/// Matches the exact name first, then the unique dotted-name tail. Reads the
-/// build pipeline's fields and, when [`ProblemOptions::inspect`] was set, the
-/// array runtime's materialized setup arrays — one arity, `(prob, name)`, in
-/// every binding.
+/// Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
+///
+/// 1. **Exact hit** — `name` is a stored key.
+/// 2. **Component-qualified hit** — `name` is a stored key's [`qualify`]d
+///    spelling (`ISRM.E_PM25` for the pipeline's `E_PM25`).
+/// 3. **Bare name** — `name` carries no `.`, and the problem has exactly ONE
+///    component; it then resolves to the unique field with that tail.
+///
+/// A bare name against a MULTI-component problem is refused rather than bound
+/// to an arbitrary candidate. Reads the build pipeline's fields, the state-free
+/// static evaluation's fields, and — when [`ProblemOptions::inspect`] was set —
+/// the array runtime's materialized setup arrays. One arity, `(prob, name)`,
+/// in every binding.
 pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
-    fn pick<'a, T>(map: &'a HashMap<String, T>, name: &str) -> Option<&'a T> {
+    fn pick<'a, T>(
+        map: &'a HashMap<String, T>,
+        model: &str,
+        single_component: bool,
+        name: &str,
+    ) -> Option<&'a T> {
         if let Some(v) = map.get(name) {
+            return Some(v); // rule 1
+        }
+        // Rule 2, as a strip rather than a scan: `name` is the qualified
+        // spelling of key `k` exactly when it is `model` + `.` + `k`. With an
+        // empty `model` the inner strip fails and this is a no-op.
+        if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
+            && let Some(v) = map.get(rest)
+        {
             return Some(v);
         }
-        if name.contains('.') {
-            return None;
+        if name.contains('.') || !single_component {
+            return None; // rule 3's gate
         }
         let mut matches: Vec<&String> = map
             .keys()
-            .filter(|k| k.contains('.') && k.rsplit('.').next() == Some(name))
+            .filter(|k| k.rsplit('.').next() == Some(name))
             .collect();
         matches.sort();
-        matches.first().map(|k| &map[*k])
+        // Within ONE component two keys cannot share a tail, so a second match
+        // here means the component set was miscounted; refuse rather than pick.
+        (matches.len() == 1).then(|| &map[matches[0]])
     }
 
-    if let Some(a) = pick(&prob.build.fields, name) {
+    let model = prob.model_name.as_deref().unwrap_or("");
+    let components = field_components(prob);
+    let single = components.len() == 1;
+
+    if let Some(a) = pick(&prob.build.fields, model, single, name) {
         return Ok(a.clone());
     }
-    if let Some(a) = pick(&prob.inspection.borrow().setup_arrays, name) {
+    if let Some(a) = pick(&prob.inspection.borrow().setup_arrays, model, single, name) {
         return Ok(a.clone());
+    }
+    // A bare name that WOULD have resolved but for the component gate gets the
+    // remedy in the diagnostic: the author has to qualify it, and cannot know
+    // which spellings exist without being told.
+    if !name.contains('.') && !single {
+        let mut cands: Vec<String> = prob
+            .build
+            .fields
+            .keys()
+            .chain(prob.inspection.borrow().setup_arrays.keys())
+            .filter(|k| k.rsplit('.').next() == Some(name))
+            .map(|k| qualify(model, k))
+            .collect();
+        cands.sort();
+        cands.dedup();
+        if !cands.is_empty() {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: format!(
+                        "observed_field: '{name}' is a bare name and this EsmProblem has {} \
+                         components ({}); qualify it as one of: {}",
+                        components.len(),
+                        components
+                            .iter()
+                            .filter(|c| !c.is_empty())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        cands.join(", ")
+                    ),
+                },
+            ));
+        }
     }
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::InterpreterBuildError {
@@ -554,6 +684,177 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             ),
         },
     ))
+}
+
+/// The trajectory of the observed variable `name` over `sol`'s output grid.
+///
+/// The solution-aware half of [`observed_field`], and the answer to a question
+/// neither argument can answer alone. An observed is a pure function of
+/// `(state, params, t)`: `prob` holds the function — the topo-sorted observed
+/// graph and the parameter bindings — and `sol` holds the arguments. That is
+/// why this takes both, and why [`observed_field`] can only ever report fields
+/// the BUILD materialized. A [`Solution`] carries state rows only, so an
+/// observed of a model that does integrate has no other way out.
+///
+/// Named `observed_trajectory` rather than being a second arity of
+/// `observed_field` because the return RANK differs: a field is the shape the
+/// document declares, a trajectory is that shape with a time axis added. Two
+/// ranks under one name is a contract a caller cannot read off the call. (A
+/// binding that can overload — Julia, Python — may still spell it as an extra
+/// arity of `observed_field`; API_SPEC §5.8 records the transliteration.)
+///
+/// Name resolution is §5.8's rule, the same one [`observed_field`] applies:
+/// exact hit, then the component-qualified spelling, then a bare name only when
+/// the problem has exactly one component.
+///
+/// Scalar backend only. A document on the array/spatial runtime materializes
+/// its observeds per cell inside that runtime rather than through this graph,
+/// and reporting a scalar trajectory for one would be a wrong answer rather
+/// than a missing one; a static one has no trajectory at all and wants
+/// [`observed_field`].
+#[cfg(feature = "solve")]
+pub fn observed_trajectory(
+    prob: &EsmProblem,
+    sol: &Solution,
+    name: &str,
+) -> Result<Vec<f64>, SimulateError> {
+    let one = [name.to_string()];
+    // The bulk form omits what it cannot resolve; the singular one must not,
+    // so an empty result becomes the diagnostic the resolver would have given.
+    match observed_trajectories(prob, sol, &one)?.pop() {
+        Some((_, values)) => Ok(values),
+        None => {
+            let compiled = match &*prob.backend {
+                Backend::Scalar(c) => c,
+                _ => unreachable!("the bulk form already refused a non-scalar backend"),
+            };
+            let declared = compiled.observed_variable_names();
+            let model = prob.model_name.as_deref().unwrap_or("");
+            Err(
+                resolve_observed_name(declared, model, components_of(declared, model) == 1, name)
+                    .expect_err("resolution failed, or the bulk form would have answered"),
+            )
+        }
+    }
+}
+
+/// [`observed_trajectory`] for several names, in ONE pass over the output grid.
+///
+/// The graph is walked once per output time however many names are asked for,
+/// so a caller wanting five observeds should ask once rather than five times.
+///
+/// **Tolerant where the singular form is strict**, and returns `(name, values)`
+/// pairs so a caller can tell which is which. A name that is not an observed
+/// variable — most often a STATE, which the caller already has in `sol` — is
+/// omitted rather than failing the whole call. That is what a host asking "give
+/// me whichever of these are observed" needs: a test harness reading a model's
+/// authored assertions knows the variable names but not which kind each is, and
+/// one state in the list must not cost it the other four answers.
+///
+/// The returned names are the spellings that were ASKED FOR, not the resolved
+/// ones, so a caller can key its own lookup by them.
+#[cfg(feature = "solve")]
+pub fn observed_trajectories(
+    prob: &EsmProblem,
+    sol: &Solution,
+    names: &[String],
+) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
+    let compiled = match &*prob.backend {
+        Backend::Scalar(c) => c,
+        Backend::Array(_) => {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: "observed_trajectory: this EsmProblem is on the array runtime,                               which materializes observeds per cell rather than through the                               scalar graph"
+                        .to_string(),
+                },
+            ));
+        }
+        Backend::Static(reason) => {
+            return Err(SimulateError::NotDynamic {
+                details: format!(
+                    "{reason}; a static document's results are read with observed_field"
+                ),
+            });
+        }
+    };
+
+    let declared = compiled.observed_variable_names();
+    let model = prob.model_name.as_deref().unwrap_or("");
+    let single = components_of(declared, model) == 1;
+
+    let (asked, resolved): (Vec<String>, Vec<String>) = names
+        .iter()
+        .filter_map(|name| {
+            resolve_observed_name(declared, model, single, name)
+                .ok()
+                .map(|r| (name.clone(), r))
+        })
+        .unzip();
+
+    let rows = compiled.observed_trajectories(&resolved, &sol.time, &sol.state, &prob.p)?;
+    Ok(asked.into_iter().zip(rows).collect())
+}
+
+/// §5.8's precedence, against a flat list of declared observed names.
+#[cfg(feature = "solve")]
+fn resolve_observed_name(
+    declared: &[String],
+    model: &str,
+    single_component: bool,
+    name: &str,
+) -> Result<String, SimulateError> {
+    if declared.iter().any(|d| d == name) {
+        return Ok(name.to_string()); // rule 1
+    }
+    if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
+        && declared.iter().any(|d| d == rest)
+    {
+        return Ok(rest.to_string()); // rule 2
+    }
+    if !name.contains('.') {
+        let mut matches: Vec<&String> = declared
+            .iter()
+            .filter(|d| d.rsplit('.').next() == Some(name))
+            .collect();
+        matches.sort();
+        // Rule 3's gate. A bare name that WOULD have resolved but for the
+        // component count gets the remedy in the diagnostic — the author cannot
+        // qualify it without being told which spellings exist.
+        if single_component && matches.len() == 1 {
+            return Ok(matches[0].clone());
+        }
+        if !matches.is_empty() {
+            return Err(SimulateError::Compile(
+                crate::compile_error::CompileError::InterpreterBuildError {
+                    details: format!(
+                        "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
+                        components_of(declared, model),
+                        matches
+                            .iter()
+                            .map(|k| qualify(model, k))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                },
+            ));
+        }
+    }
+    Err(SimulateError::Compile(
+        crate::compile_error::CompileError::InterpreterBuildError {
+            details: format!(
+                "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
+            ),
+        },
+    ))
+}
+
+#[cfg(feature = "solve")]
+fn components_of(declared: &[String], model: &str) -> usize {
+    declared
+        .iter()
+        .map(|k| component_of(&qualify(model, k)).to_string())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 // =============================================================================
@@ -785,7 +1086,6 @@ pub fn esm_problem<'a>(
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut build = BuildProducts::default();
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut model_name = opts.model_name.clone();
@@ -842,6 +1142,25 @@ pub fn esm_problem<'a>(
         opts.compile,
     )?;
 
+    // ---- (4b) State-free static evaluation. -------------------------------
+    // A document that declares no differential equations has nothing to
+    // integrate — `solve` refuses it with `NotDynamic` — but its whole content
+    // is its observed graph, which is exactly what `observed_field` reads. This
+    // evaluates that graph so the read works with NO options set, which is what
+    // a stable-API function has to do (API_SPEC §5.8): before this, reaching a
+    // state-free document's own results through the Rust binding meant knowing
+    // to pass `build_pipeline: true` AND to hand in raw JSON rather than a
+    // typed document, neither of which the surface contract mentions.
+    //
+    // Skipped when the build pipeline already produced fields, so the ISRM /
+    // pushdown path keeps its own (model-local) keys untouched.
+    if build.fields.is_empty()
+        && let Backend::Static(_) = &backend
+    {
+        let t0 = opts.sample_time.unwrap_or(tspan.0);
+        build.fields = static_observed_fields(owned_file.as_ref(), flat_only, &opts.p, t0);
+    }
+
     // ---- (5) Bind and CONST-materialize the run-time providers. -----------
     #[cfg(not(target_arch = "wasm32"))]
     let (refresh, discrete_forcing, refresh_boundaries) =
@@ -876,6 +1195,66 @@ fn wants_build_pipeline(opts: &ProblemOptions) -> bool {
         || !opts.const_arrays.is_empty()
 }
 
+/// Evaluate a state-free system's observed graph at `t0`.
+///
+/// The build-time half of [`observed_field`] for a document with no
+/// differential equations. `Compiled` has already topologically ordered and
+/// index-resolved the flattened observeds, so this is one interpreter pass
+/// over them against an EMPTY state vector — no solver, no build pipeline, and
+/// no dependence on how the caller spelled its input.
+///
+/// Keys are FLATTENED names (`Sites.North.u`), matching Julia's
+/// `BuildInspection.observed_exprs` and Python's `static_observed_values`.
+///
+/// **Tolerant by construction.** A system the scalar interpreter cannot lower
+/// — an array op, a `v1`-unsupported feature, a parameter with no default —
+/// yields NO fields rather than failing the build. Construction was not asked
+/// to compile anything here (`Compile::Auto` chose `Backend::Static`), so a
+/// failure to evaluate must surface as `observed_field` reporting the name it
+/// cannot answer, not as a document that will not build. Python makes the same
+/// call for the same reason (`problem.py`, the scalar no-state branch).
+fn static_observed_fields(
+    file: Option<&EsmFile>,
+    flat_only: Option<&FlattenedSystem>,
+    p: &HashMap<String, f64>,
+    t0: f64,
+) -> HashMap<String, ArrayD<f64>> {
+    let owned_flat;
+    let flat = match (flat_only, file) {
+        (Some(f), _) => f,
+        (None, Some(file)) => match crate::flatten::flatten(file) {
+            Ok(f) => {
+                owned_flat = f;
+                &owned_flat
+            }
+            Err(_) => return HashMap::new(),
+        },
+        (None, None) => return HashMap::new(),
+    };
+    // A system WITH state is not state-free evaluable: an observed may read
+    // state, and there is none to read. Reachable when `model_name` selects an
+    // ODE-free model out of a document that has ODEs elsewhere, since
+    // `flatten` is document-wide.
+    if !flat.state_variables.is_empty() {
+        return HashMap::new();
+    }
+    let Ok(compiled) = Compiled::from_flattened(flat) else {
+        return HashMap::new();
+    };
+    let Ok(values) = compiled.evaluate_static_observeds(p, t0) else {
+        return HashMap::new();
+    };
+    values
+        .into_iter()
+        .map(|(name, v)| {
+            (
+                name,
+                ArrayD::from_shape_vec(ndarray::IxDyn(&[1]), vec![v]).unwrap(),
+            )
+        })
+        .collect()
+}
+
 fn compile_backend(
     file: Option<&EsmFile>,
     flat: Option<&FlattenedSystem>,
@@ -888,6 +1267,17 @@ fn compile_backend(
         ));
     }
     if let Some(flat) = flat {
+        // Same rule the typed-document branch applies below, on the input that
+        // states it most directly: a flattened system with no state variables
+        // has nothing to integrate. Without this, `ProblemInput::Flattened`
+        // was the one input shape that got a "dynamic" scalar backend for a
+        // state-free system — `solve` then failed inside the solver instead of
+        // reporting `NotDynamic`, and `observed_field` saw no static fields.
+        if mode == Compile::Auto && flat.state_variables.is_empty() {
+            return Ok(Backend::Static(
+                "the flattened system declares no state variables".to_string(),
+            ));
+        }
         return Ok(Backend::Scalar(Rc::new(Compiled::from_flattened(flat)?)));
     }
     let Some(file) = file else {
@@ -926,6 +1316,25 @@ fn compile_backend(
 /// [`solve`] on it raises [`SimulateError::NotDynamic`] rather than handing
 /// back an empty trajectory.
 pub(crate) fn has_differential_equations(file: &EsmFile, model_name: Option<&str>) -> bool {
+    // A REACTION SYSTEM is differential, and reading only `models` said it was
+    // not. Reactions lower to `D(species, t) = …` during flattening, so a
+    // document whose whole content is a `reaction_systems` block has no models
+    // AT ALL until that happens — and this function runs before it. Every pure
+    // chemistry document in the wild is that shape (`pollu`, `superfast`,
+    // `geoschem_fullchem`), and `Compile::Auto` was calling each of them static
+    // and then refusing to solve twenty-five differential equations with
+    // `NotDynamic { "the document declares no differential equations" }`.
+    //
+    // A system with no reactions is genuinely not differential — it lowers to
+    // nothing — so the check is for reactions rather than for the block.
+    if let Some(systems) = file.reaction_systems.as_ref()
+        && systems
+            .iter()
+            .filter(|(name, _)| model_name.is_none_or(|want| want == name.as_str()))
+            .any(|(_, rs)| !rs.reactions.is_empty())
+    {
+        return true;
+    }
     let Some(models) = file.models.as_ref() else {
         return false;
     };

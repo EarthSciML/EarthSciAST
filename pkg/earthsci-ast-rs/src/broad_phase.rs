@@ -414,7 +414,7 @@ impl OverlapIndex {
 /// How an overlap gate drives an enumeration — the shared decision the
 /// value-invention producer and the dense aggregate expansion both apply.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DrivePlan {
+pub enum DrivePlan<'a> {
     /// Do not drive; walk the full product (and let the membership test filter).
     Full,
     /// Both gated symbols are already bound and the pair is NOT a candidate:
@@ -427,12 +427,14 @@ pub enum DrivePlan {
     /// One gated symbol is free and the other is already bound: the free one
     /// enumerates only `vals` — its bound partner's candidates, restricted to
     /// its own range and ASCENDING, i.e. the exact order-preserving
-    /// subsequence of the range it would otherwise have walked.
+    /// subsequence of the range it would otherwise have walked. Borrowed from
+    /// the index: a plan is computed once per OUTPUT CELL, and an owned list
+    /// here was a measurable per-cell allocation.
     Restrict {
         /// `true` when the free symbol is the `src_env` side.
         free_is_src: bool,
         /// The admitted values, ascending.
-        vals: Vec<i64>,
+        vals: &'a [i64],
     },
 }
 
@@ -446,13 +448,12 @@ pub enum DrivePlan {
 /// the evaluator walks `lo..=hi`), so unlike the Julia reference — whose
 /// `contract_iters` may be arbitrary integer vectors and which therefore has to
 /// PROVE 1-stridedness before it may restrict — there is nothing here that can
-/// fail to be order-preserving.
-fn restrict_to_range(parts: &[i64], lo: i64, hi: i64) -> Vec<i64> {
-    parts
-        .iter()
-        .copied()
-        .filter(|p| *p >= lo && *p <= hi)
-        .collect()
+/// fail to be order-preserving. And because `parts` is itself ascending, the
+/// restriction is a CONTIGUOUS subslice — found by binary search, no copy.
+fn restrict_to_range(parts: &[i64], lo: i64, hi: i64) -> &[i64] {
+    let start = parts.partition_point(|&p| p < lo);
+    let end = parts.partition_point(|&p| p <= hi);
+    &parts[start..end]
 }
 
 /// Decide how an overlap gate drives an enumeration.
@@ -466,7 +467,7 @@ pub fn overlap_drive_plan(
     src_bound: Option<i64>,
     tgt_bound: Option<i64>,
     free_range: Option<(i64, i64)>,
-) -> DrivePlan {
+) -> DrivePlan<'_> {
     match (src_bound, tgt_bound) {
         // Both free ⇒ drive from the sorted candidate pairs.
         (None, None) => DrivePlan::Pairs,

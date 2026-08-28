@@ -564,11 +564,16 @@ pub(super) fn broadcast_value(v: &Value, target: &[usize]) -> ArrayD<f64> {
 pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
     match (a, b) {
         (Value::Scalar(x), Value::Scalar(y)) => Value::Scalar(apply_binary(op, x, y)),
+        // The array arms hoist the op-name lookup out of the element loop
+        // (`binary_kernel_of` is pinned bit-for-bit to `apply_binary` by
+        // `binary_kernels_match_apply_binary`).
         (Value::Scalar(x), Value::Array(ya)) => {
-            Value::Array(Box::new(ya.mapv(|y| apply_binary(op, x, y))))
+            let k = binary_kernel_of(BinCode::of(op));
+            Value::Array(Box::new(ya.mapv(|y| k(x, y))))
         }
         (Value::Array(xa), Value::Scalar(y)) => {
-            Value::Array(Box::new(xa.mapv(|x| apply_binary(op, x, y))))
+            let k = binary_kernel_of(BinCode::of(op));
+            Value::Array(Box::new(xa.mapv(|x| k(x, y))))
         }
         (Value::Array(xa), Value::Array(ya)) => {
             // Use ndarray broadcasting.
@@ -725,11 +730,14 @@ pub(super) fn broadcast_binary(op: &str, a: &ArrayD<f64>, b: &ArrayD<f64>) -> Ar
         return ArrayD::<f64>::from_elem(IxDyn(&nan_shape), f64::NAN);
     };
     let mut out = ArrayD::<f64>::zeros(IxDyn(&target_shape));
+    // Op-name lookup hoisted out of the element loop; the kernel table is
+    // pinned bit-for-bit to `apply_binary`.
+    let k = binary_kernel_of(BinCode::of(op));
     ndarray::Zip::from(&mut out)
         .and(&av)
         .and(&bv)
         .for_each(|o, &x, &y| {
-            *o = apply_binary(op, x, y);
+            *o = k(x, y);
         });
     out
 }
@@ -782,7 +790,12 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
     let v = eval(arg0, ctx);
     match v {
         Value::Scalar(s) => Value::Scalar(apply_unary(op, s)),
-        Value::Array(a) => Value::Array(Box::new(a.mapv(|x| apply_unary(op, x)))),
+        Value::Array(a) => {
+            // Op-name lookup hoisted out of the element loop; the kernel table
+            // is pinned bit-for-bit to `apply_unary`.
+            let k = unary_kernel_of(UnCode::of(op));
+            Value::Array(Box::new(a.mapv(k)))
+        }
     }
 }
 
@@ -1562,22 +1575,51 @@ pub fn eval_expression_with_extents_and_consts(
     derived_extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
 ) -> Result<Value, CompileError> {
-    check_evaluable(expr)?;
-    let empty: ArrMap = ArrMap::default();
     // Cold public boundary: the standalone evaluator's `inputs` arrive as a std
     // `HashMap` (FAQ rings, coordinate fields). Rehash into the fast [`ArrMap`]
     // the interpreter uses so the per-node tree walk gets the fast lookups. The
-    // input maps are small (a clipped ring, a couple of coordinate arrays) and
-    // this runs once per call (per-cell IC recompute was removed — see
-    // `resolve_field_ics`), so the shallow re-map is negligible.
+    // input maps are small here (a clipped ring, a couple of coordinate arrays)
+    // and this runs once per call (per-cell IC recompute was removed — see
+    // `resolve_field_ics`), so the shallow re-map is negligible. Hot in-crate
+    // callers whose maps carry provider slabs must NOT take this boundary —
+    // prepare's observed-graph loop holds an [`ArrMap`] and calls the shared
+    // variant below, because deep-cloning a map that holds fifteen
+    // hundreds-of-MB SR slabs once per observed dominated the whole build
+    // (measured: ~87% of a warm ISRM prepare was memmove).
     let inputs: ArrMap = inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    eval_expression_with_extents_and_consts_shared(
+        expr,
+        &inputs,
+        params,
+        param_names,
+        t,
+        derived_extents,
+        const_arrays,
+    )
+}
+
+/// [`eval_expression_with_extents_and_consts`] minus the input-map rehash: the
+/// caller already holds the interpreter's own [`ArrMap`] and the arrays are
+/// borrowed for the duration of the call, byte-identically — no copy of any
+/// input array is made.
+pub(crate) fn eval_expression_with_extents_and_consts_shared(
+    expr: &Expr,
+    inputs: &ArrMap,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
+) -> Result<Value, CompileError> {
+    check_evaluable(expr)?;
+    let empty: ArrMap = ArrMap::default();
     let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     // Standalone expression evaluation (FAQ rings, area integrands) carries no
     // loader forcing — an empty buffer keeps the channel byte-identical here.
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut ctx = EvalCtx {
         state_arrays: &empty,
-        observed_arrays: &inputs,
+        observed_arrays: inputs,
         params,
         param_names,
         loop_binds: IdxMap::default(),
@@ -2012,7 +2054,7 @@ pub(super) fn reduce_contraction_gated(
         DrivePlan::Restrict { vals, .. } => {
             let d = free_dim.expect("a Restrict plan names a free contracted dim");
             let mut srcs = full_sources(ranges);
-            srcs[d] = DimSrc::List(&vals);
+            srcs[d] = DimSrc::List(vals);
             reduce_over_sources(contract_names, &srcs, body, reduce, filter, cell, ctx)
         }
         DrivePlan::Pairs
