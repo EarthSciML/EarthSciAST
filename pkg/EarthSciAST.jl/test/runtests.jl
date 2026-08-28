@@ -140,9 +140,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     if get(ENV, "ESM_TEST_REACTANT", "0") == "1"
         include("reactant_oop_test.jl")
         include("reactant_lane_dedup_test.jl")       # merged lane tables ≢ grid size
+        include("reactant_locate_test.jl")           # count-locate ≢ a reduction, and bit-exact
         include("reactant_scan_test.jl")             # traced prefix scan ≢ grid size
         include("reactant_oop_intern_test.jl")       # one emitted read per (SSA value, window)
         include("reactant_oop_ssa_test.jl")          # ess-oop-ssa: skipped scatters/redirects visible in the raw module
+        include("reactant_oop_gvn_test.jl")          # one emitted OP per (opcode, operand values)
     else
         @info "skipping reactant_oop_test.jl (set ESM_TEST_REACTANT=1, with Reactant " *
               "in the environment, to run the XLA tracing tests)"
@@ -224,6 +226,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("geometry_assembly_conformance_test.jl")
     include("geometry_overlap_join_conformance_test.jl")
     include("geometry_ranged_clip_test.jl")
+    include("setup_map_compile_once_test.jl")  # promoted-physics MAP: compile-once == per-cell, bitwise
+    include("geom_sweep_specialize_test.jl")   # geometry sweep: rank-specialized == rank-abstract, bitwise
+    include("geom_overlap_drive_test.jl")     # setup overlap broad phase: candidate-DRIVEN, and what it changes
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening

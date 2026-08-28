@@ -4,17 +4,14 @@
 # `_Node` fields, so they need the IR type at include time). Section 2c:
 # the COMPILED setup-time geometry path.
 #
-# WHY. The setup-time geometry evaluator used to be a sixth, fully separate
-# interpreter (`_geo_eval`, formerly in geometry_setup.jl): a raw-AST walker
-# with string-compared ops, per-node Dict name lookups, and its own
-# hand-mirrored scalar ladder (`_geo_apply_scalar/1/2/3`) — re-run once per
-# output cell × contraction tuple, which made it the #1 build hotspot of a
-# conservative regrid. It is now a COMPILER: `_geo_compile` lowers a geometry
-# body ONCE per materialization sweep into the SAME `_Node` IR the runtime
-# walkers evaluate, and the per-cell work is a single `_eval_node` walk over a
-# small `Vector{Float64}` loop-index frame. The scalar vocabulary therefore
-# evaluates through `_eval_node_op`'s (registry-generated) arms — the
-# geometry op ladder is DELETED, not mirrored.
+# WHY A COMPILER. Geometry setup once had its own raw-AST interpreter — string
+# -compared ops, per-node Dict lookups, a hand-mirrored scalar ladder — re-run
+# once per output cell × contraction tuple, which made it the dominant build cost
+# of a conservative regrid. `_geo_compile` instead lowers a geometry body ONCE per
+# materialization sweep into the SAME `_Node` IR the runtime walkers evaluate, and
+# the per-cell work is a single `_eval_node` walk over a small `Vector{Float64}`
+# loop-index frame. The scalar vocabulary therefore evaluates through
+# `_eval_node_op`'s registry-generated arms; there is no mirrored geometry ladder.
 #
 # HOW THE PIECES MAP (interpreter arm → compiled form):
 #   * loop indices          → `_NK_STATE` slots in the per-sweep frame `u`
@@ -290,8 +287,7 @@ end
 
 # ---- The evaluator arms (`_eval_node_op`'s cold tail) -----------------------
 
-# Round an index expression to an integer subscript (the interpreter's
-# `Int(round(_geo_eval(...)))`, verbatim).
+# Round an index expression to an integer subscript.
 @inline _geo_ix_value(nd::_Node, u, p, t, ::Type{T}) where {T} =
     Int(round(_eval_node(nd, u, p, t, T)::Float64))
 
@@ -306,9 +302,35 @@ function _geo_ring_value(r::_GeoClipRef, u, p, t, ::Type{T}) where {T}
                                         r.manifold))
 end
 function _geo_ring_value(r::_GeoRingRef, u, p, t, ::Type{T}) where {T}
-    base = _geo_ring_value(r.src, u, p, t, T)
-    nd = ndims(base)
+    # `r.src` is typed `Any` (an array, another `_GeoRingRef`, or a
+    # `_GeoClipRef`), so resolving and slicing it IN THIS FRAME would leave `base`
+    # — and every `ndims`/`view`/`getindex` of the slice — inferred as `Any`: a
+    # dynamic dispatch per subscript, per cell, for the whole sweep. The slice
+    # moves to a barrier method (`_geo_ring_slice`) taking the base as an
+    # ARGUMENT, so it compiles against a known type. Same slices, same values.
+    #
+    # Two `isa` ladders keep even the barrier call static: the first for a source
+    # that already IS the dense ring stack (where `_geo_ring_value` is the
+    # identity, so the match skips a dispatch and a call), the second for one that
+    # had to be resolved. Anything else takes the same generic call as before.
+    src = r.src
     ix = r.idx
+    if src isa Array{Float64,3}
+        return _geo_ring_slice(src, ix, u, p, t, T)
+    elseif src isa Array{Float64,2}
+        return _geo_ring_slice(src, ix, u, p, t, T)
+    end
+    base = _geo_ring_value(src, u, p, t, T)
+    if base isa Array{Float64,3}
+        return _geo_ring_slice(base, ix, u, p, t, T)
+    elseif base isa Array{Float64,2}
+        return _geo_ring_slice(base, ix, u, p, t, T)
+    end
+    return _geo_ring_slice(base, ix, u, p, t, T)
+end
+
+function _geo_ring_slice(base, ix::Vector{_Node}, u, p, t, ::Type{T}) where {T}
+    nd = ndims(base)
     k = length(ix)
     if k == 1
         i1 = _geo_ix_value(ix[1], u, p, t, T)
@@ -328,8 +350,33 @@ end
 # subscript, read. Ranks 1–3 are unrolled (no splat) exactly as the
 # interpreter's fast paths were; bounds stay CHECKED, as before.
 function _geo_gather_value(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
-    arr = _geo_ring_value(n.payload, u, p, t, T)
-    c = n.children
+    # `_Node.payload` is `Any` (one struct serves every node kind), so reading the
+    # source array THROUGH IT costs two dynamic dispatches per gather — one to
+    # `_geo_ring_value`, one to the `getindex` on its `Any`-typed result — plus a
+    # boxed `Float64` conversion, paid once per subscripted read per cell. Passing
+    # the payload as an ARGUMENT to a barrier method lands the one remaining
+    # dispatch on a specialization where the source type, and hence `arr`'s, is
+    # known, so the reads in `_geo_gather_from` are ordinary typed array indexing.
+    # Same order, same reads, same values; bounds stay CHECKED as before.
+    #
+    # A concrete `isa` then narrows `pl` to the shapes a geometry sweep actually
+    # reads — a dense `Array{Float64,1..3}`, which is what every const/materialized
+    # `env` entry is — making the barrier call static. Anything else (a
+    # bounded-const wrapper, a `_GeoRingRef`, a `_GeoClipRef`, a non-Float64 or
+    # higher-rank array) falls to the same generic call as before.
+    pl = n.payload
+    if pl isa Array{Float64,1}
+        return _geo_gather_from(pl, n.children, u, p, t, T)
+    elseif pl isa Array{Float64,2}
+        return _geo_gather_from(pl, n.children, u, p, t, T)
+    elseif pl isa Array{Float64,3}
+        return _geo_gather_from(pl, n.children, u, p, t, T)
+    end
+    return _geo_gather_from(pl, n.children, u, p, t, T)
+end
+
+function _geo_gather_from(src, c::Vector{_Node}, u, p, t, ::Type{T})::Float64 where {T}
+    arr = _geo_ring_value(src, u, p, t, T)
     k = length(c)
     if k == 1
         return Float64(arr[_geo_ix_value(c[1], u, p, t, T)])
@@ -375,9 +422,9 @@ function _geo_eval_agg(spec::_GeoAggSpec, u, p, t, ::Type{T})::Float64 where {T}
     return acc
 end
 
-# The join-then-filter gate for the TOP-level materialization sweeps (the
-# compiled twin of the retired `_geo_agg_gate_resolved`): slot-addressed
-# array equalities, then the compiled filter predicate against the frame.
+# The join-then-filter gate for the TOP-level materialization sweeps:
+# slot-addressed array equalities, then the compiled filter predicate against
+# the frame.
 @inline function _geo_gate_ok(gates, filt, u)
     if gates !== nothing
         @inbounds for gt in gates
@@ -390,6 +437,13 @@ end
     return true
 end
 
+# `polygon_intersection_area` of two resolved ring sources. Split out of the
+# `:geo_pia` arm so the operand types can be narrowed at the call site.
+function _geo_pia_value(a, b, manifold::String, u, p, t, ::Type{T})::Float64 where {T}
+    return _polygon_intersection_area(_geo_ring_value(a, u, p, t, T),
+                                      _geo_ring_value(b, u, p, t, T), manifold)
+end
+
 # The `:geo_*` dispatch — the cold tail arm of `_eval_node_op` (compile.jl).
 # Only setup-time compiled trees carry these ops, so the RHS hot path never
 # reaches here; `::Float64` keeps the ladder's inferred union small.
@@ -398,10 +452,19 @@ function _eval_geo_op(n::_Node, u, p, t, ::Type{T})::Float64 where {T}
     if op === :geo_gather
         return _geo_gather_value(n, u, p, t, T)
     elseif op === :geo_pia
+        # Both operands are `Any` on the spec, so resolving them here costs two
+        # dynamic dispatches per PAIR — and a dense `A_ij[i,j] =
+        # polygon_intersection_area(src[i], tgt[j])` evaluates this once per
+        # (source, target) pair. Narrow the near-universal `_GeoRingRef` operands
+        # with a concrete `isa` and resolve them in a specialization. Operand
+        # evaluation order (a, then b) is unchanged.
         spec = n.payload::_GeoPiaSpec
-        return _polygon_intersection_area(_geo_ring_value(spec.a, u, p, t, T),
-                                          _geo_ring_value(spec.b, u, p, t, T),
-                                          spec.manifold)
+        a = spec.a
+        b = spec.b
+        if a isa _GeoRingRef && b isa _GeoRingRef
+            return _geo_pia_value(a, b, spec.manifold, u, p, t, T)
+        end
+        return _geo_pia_value(a, b, spec.manifold, u, p, t, T)
     elseif op === :geo_skolem
         c = n.children
         vals = Any[_eval_node(c[k], u, p, t, T) for k in eachindex(c)]

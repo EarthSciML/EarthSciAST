@@ -411,7 +411,21 @@ jobs:
           cargo test --target wasm32-unknown-unknown --features wasm --test wasm_suite
 
       - name: Run Rust tests
-        run: cargo test --verbose --all-features
+        # stable and beta test the whole surface. The MSRV leg names every
+        # feature EXCEPT `esio`: that opt-in bridge pulls earthsciio -> zarrs,
+        # whose own MSRV is 1.91, so `--all-features` cannot build the graph at
+        # 1.89 at all. An opt-in integration raising the floor for the code that
+        # opts in is normal, and testing it here would only assert that someone
+        # else's crate supports our MSRV, which is not ours to claim.
+        # `--all-features` has no "except" form, hence the list (`cli`/`solve`
+        # arrive with the default feature set).
+        run: |
+          if [ "${{ matrix.rust }}" = "1.89.0" ]; then
+            cargo test --verbose --features \
+              conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance
+          else
+            cargo test --verbose --all-features
+          fi
 
       - name: Generate Rust documentation
         if: matrix.rust == 'stable'

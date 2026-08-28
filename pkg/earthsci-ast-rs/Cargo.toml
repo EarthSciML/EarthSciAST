@@ -187,6 +187,9 @@ wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "web-sys"]
 # EarthSciIO on the default path (the rigs are deliberately decoupled; the Python
 # binding's `esio_provider` is opt-in for the same reason), and EarthSciIO pulls
 # netcdf/hdf5 C libraries that would otherwise burden every consumer's build.
+# NOTE: turning this on raises the effective MSRV above this crate's declared
+# 1.89 -- earthsciio pulls zarrs, whose own `rust-version` is 1.91 -- so the
+# MSRV leg of CI tests every feature EXCEPT this one.
 esio = ["dep:earthsciio", "dep:time"]
 # Performance features
 parallel = ["rayon"]

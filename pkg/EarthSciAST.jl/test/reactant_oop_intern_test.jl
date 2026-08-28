@@ -136,8 +136,14 @@ _i_bits(v::AbstractVector{Float64}) = reinterpret(UInt64, v)
     stats = Dict{String,Any}()
     cen = Dict{String,Any}()
     ops = Dict{String,Int}()
+    # `ESS_OOP_GVN` is pinned OFF for the census: with emission value numbering
+    # on, a shared read makes every op above it share too (that cascade is the
+    # POINT of ess-oop-gvn), and the "nothing but reads moved" assertions below
+    # — which isolate what interning alone is worth — would then be false for a
+    # good reason. The VALUE comparisons further down deliberately leave it at
+    # its default, since a pure emission CSE must not change them either way.
     for (mode, gg) in (("1", g_on), ("0", g_off))
-        withenv("ESS_OOP_INTERN" => mode) do
+        withenv("ESS_OOP_INTERN" => mode, "ESS_OOP_GVN" => "0") do
             ESMi.oop_intern_stats_reset!()
             mod = RXi.@code_hlo optimize = false gg(ur, pr, tr)
             stats[mode] = ESMi.oop_intern_stats()

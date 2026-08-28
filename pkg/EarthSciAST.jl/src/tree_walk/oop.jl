@@ -63,37 +63,34 @@
 # `IllegalTypeAnalysisException` naming `_oop_eval` and the `getproperty` that loads
 # it. ForwardDiff, which analyzes types the way Julia does, is unaffected.
 #
-# Three things about that are easy to get wrong, so they were MEASURED (Enzyme
-# 0.13.199; scripts, logs and the full argument in scripts/enzyme_aliasing/):
+# Three things about that are easy to get wrong (scripts, logs and the full argument
+# in scripts/enzyme_aliasing/):
 #
-#   * It is not an `:oop` problem. The default in-place `f!` fails identically, at
-#     `_eval_node`, from its scalar CSE-prelude/`rhs_list` tier. The wart belongs to
-#     the shared `_Node` IR.
+#   * It is not an `:oop` problem. The in-place `f!` fails identically, at
+#     `_eval_node`. The wart belongs to the shared `_Node` IR.
 #   * The tree need not CONTAIN the offending kind. A 0-D model with no loop-var,
 #     gather or `fn` node still fails on the `_NK_LOOPVAR` arm: Enzyme analyzes the
 #     whole statically reachable method, so an arm this model can never execute
-#     poisons the walk anyway. That is what makes runtime cleverness a non-strategy.
+#     poisons the walk anyway. Runtime cleverness is therefore not a strategy.
 #   * It is the LOAD, not the field. A struct that still declares `payload::Any` but
-#     whose walk never loads it differentiates fine. So routing around the payload
-#     DOES help, arm by arm — the failure just moves to the next load, and the walk
-#     has many. Barriers (`@noinline`, or properly `EnzymeRules.inactive`) clear them
-#     one at a time until they reach the one wall they cannot: `_oop_fn`'s boxed
-#     `Vector{Any}` args handed to a `String`-dispatched registry, whose contents are
-#     ACTIVE. That one needs a typed calling convention, not a barrier.
+#     whose walk never loads it differentiates fine, so routing around the payload
+#     helps arm by arm — the failure just moves to the next load. Barriers clear them
+#     one at a time until the wall they cannot: `_oop_fn`'s boxed `Vector{Any}` args
+#     handed to a `String`-dispatched registry, whose contents are ACTIVE. That needs
+#     a typed calling convention, not a barrier.
 #
-# The flag itself is a wart and not a hazard: per Enzyme's own C++, it only makes type
-# analysis DECLINE to propagate facts upward through phis/selects — the flag that can
-# fabricate a type and so produce wrong derivatives is `looseTypeAnalysis!`, which is
-# a different global read by different code. It is process-global with no scoped
-# alternative, so its real cost is blast radius, not correctness.
+# The flag is a wart, not a hazard: per Enzyme's own C++ it only makes type analysis
+# DECLINE to propagate facts upward through phis/selects. The flag that can fabricate
+# a type — and so produce wrong derivatives — is `looseTypeAnalysis!`, a different
+# global read by different code. Being process-global with no scoped alternative, its
+# real cost is blast radius, not correctness.
 #
-# The durable fix is still a payload-free IR: lower the compiled IR ONCE at build time
-# into a concretely-typed tree with the variant resolved statically. That same lowering
-# is what an XLA/Reactant backend wants regardless, so the two motivations converge —
-# and half of it exists already, as codegen_kernel.jl does exactly this for the array
-# kernels of `f!`. Note what that convergence does NOT buy: with the codegen tier on,
-# Enzyme currently fails on the emitted RuntimeGeneratedFunction with an internal
-# `UndefVarError`, so the lowering is not on its own a route to Enzyme support.
+# The durable fix is a payload-free IR: lower the compiled IR ONCE at build time into
+# a concretely-typed tree with the variant resolved statically. An XLA/Reactant
+# backend wants that lowering regardless, and codegen_kernel.jl already does it for
+# the array kernels of `f!`. It is not on its own a route to Enzyme support, though:
+# with the codegen tier on, Enzyme fails on the emitted RuntimeGeneratedFunction with
+# an internal `UndefVarError`.
 #
 # THE ONE LADDER. `_oop_op` evaluates an op over ALREADY-EVALUATED children using
 # broadcast (`.+`, `sin.`, …) throughout. Broadcasting two scalars yields a scalar,
@@ -102,14 +99,12 @@
 # set to drift out of sync with `_eval_node_op` and `_eval_acc_op`. The op-coverage
 # test asserts this ladder accepts every op those two accept.
 #
-# PERFORMANCE SHAPE (measured, 1-D reaction–diffusion, Float64). This form costs about
-# 2.7–4× the in-place `f!` and allocates ~12 MB per call at N = 100k. That cost is not
-# the tree walk — which is O(#nodes), not O(#cells), so its dynamic dispatch amortizes
-# away over the cell axis — it is the DEFINING cost of being out of place: one fresh
-# temporary per AST node instead of `f!`'s preallocated `buf`s, and the GC pressure that
-# comes with it. It is not a bug to be optimized away; it is what you trade the buffers
-# for. (An affine-slice fast path for the gathers was tried and measured worthless, so
-# it is not here.)
+# PERFORMANCE SHAPE. On the host this form is slower than the in-place `f!` and
+# allocates per call. That cost is not the tree walk — which is O(#nodes), not
+# O(#cells), so its dynamic dispatch amortizes over the cell axis — it is the
+# DEFINING cost of being out of place: one fresh temporary per AST node instead of
+# `f!`'s preallocated `buf`s, plus the GC pressure. It is what you trade the
+# buffers for, not a bug to optimize away.
 #
 # So do NOT reach for this form to go faster, and do not reach for it to differentiate
 # on the CPU either — `f!` does both better. Reach for it when the target is a tracer or
@@ -134,11 +129,10 @@ const _oop_value_type = _rhs_value_type
 @inline _oop_read_state(u, i::Int) = @inbounds u[i]
 
 # A plain indexed gather, deliberately. A stencil's slots are almost always a
-# contiguous run (`c[i-1]` over the interior is just the state window shifted by one),
-# so it is tempting to detect that and take `u[a:b]` instead — but measured, the
-# detector buys NOTHING here: this RHS is bound by allocating one temporary per node,
-# not by the gather's addressing mode. (XLA canonicalizes such gathers to slices on its
-# own, and an equivalent detector was equally worthless there. Same answer, both worlds.)
+# contiguous run (`c[i-1]` over the interior is the state window shifted by one), so
+# it is tempting to detect that and take `u[a:b]` instead. It buys nothing: this RHS
+# is bound by allocating one temporary per node, not by the gather's addressing mode,
+# and XLA canonicalizes such gathers to slices on its own.
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
 
 # ---- Read interning, TRACE ONLY (ess-oop-intern) -----------------------------
@@ -146,12 +140,10 @@ const _oop_value_type = _rhs_value_type
 # The SAME window of the SAME container is read many times inside one RHS
 # evaluation: a materialized array observed lives in the flat extended state
 # tensor `ue`, and every acc-kernel descriptor that reads it emits its own read.
-# Measured on ReSEACT at 7x7x16, one chemistry RHS emitted 478 `stablehlo.slice`
-# ops over just 123 DISTINCT windows (~3.9x), and the whole module 8,093 slices
-# of which 4,928 (60.9%) were exact `(operand, window)` duplicates. XLA then
-# rediscovers that they are duplicates with `CSE<stablehlo::SliceOp>`, a PAIRWISE
-# (quadratic) pattern that a `perf` profile of a stuck CONUS compile put at ~50%
-# of all CPU. Emitting the read once removes the duplicate before it exists.
+# On a real chemistry mechanism most emitted `stablehlo.slice` ops are exact
+# `(operand, window)` duplicates. XLA then rediscovers that with
+# `CSE<stablehlo::SliceOp>`, a PAIRWISE (quadratic) pattern that dominates compile
+# time on large grids. Emitting the read once removes the duplicate before it exists.
 #
 # WHY THIS IS A THIRD ARGUMENT AND NOT A GLOBAL. The memo has to die with the
 # trace that created it: an SSA value from a finished module is not usable in the
@@ -182,6 +174,71 @@ const _oop_value_type = _rhs_value_type
 # element type (`Dual`, `Float32`, …); the Reactant extension adds the one method
 # that returns a real memo, for a `TracedRArray` state.
 @inline _oop_new_memo(u) = nothing
+
+# ---- Emission-time value numbering, TRACE ONLY (ess-oop-gvn) -----------------
+#
+# The read memo above removes duplicate READS. This removes duplicate ops, by the
+# same argument and through the same per-call object.
+#
+# WHY THERE IS ANYTHING LEFT TO REMOVE. The compiled IR is a DAG — the build shares
+# subtrees aggressively (`src/intern.jl` hash-consing, `_sub_preserving`, the CSE
+# prelude, `_build_acc_cse`, xcse) — but `_oop_eval` / `_oop_eval_acck` walk it as a
+# TREE. There is no per-node memo and there cannot easily be one, because the same
+# node is legitimately evaluated against different states (`u` vs the extended `ue`),
+# different CSE caches and different loop-counter values. So a shared subtree is
+# re-EMITTED once per parent. On host that is free; under a trace each re-walk
+# manufactures a fresh cone of MLIR ops that XLA must rediscover as redundant,
+# pairwise.
+#
+# WHY THE KEY IS EMITTED VALUES, not AST nodes. An op is redundant exactly when its
+# opcode and its OPERAND VALUES match an earlier one — a property of the emitted SSA
+# values, not of the AST that produced them. That key is sound with no analysis (two
+# pure ops over the same SSA values compute the same tensor; `u` vs `ue`, cache and
+# loop iteration all show up as different operand values), and exactly
+# bit-preserving (the reused value IS what the duplicate would have emitted, so
+# every consumer sees an identical tensor). It is `cse` moved from the compiler to
+# the emitter.
+#
+# SCALAR CONSTANTS ARE THE LOAD-BEARING PART. Reactant memoizes ARRAY constants by
+# value, but a SCALAR constant goes `Ops.constant(::Number)` -> `Ops.fill` -> a
+# fresh `stablehlo.constant` every time. One coefficient used at N sites therefore
+# arrives as N distinct SSA values, which BREAKS THE CASCADE: `k .* x` at two sites
+# has different operand ids, so neither the products nor their consumers share.
+#
+# Lifetime and region-soundness are the read memo's, because it IS the read memo's
+# object: one RHS invocation, one MLIR block, ops only ever appended.
+#
+# Host builds `nothing` for the memo, so every seam below is its unmemoized
+# definition with a zero-sized third argument, and the host path is unchanged.
+# Both this and native emission are OPT-IN — see `_oop_new_memo` in
+# ext/EarthSciASTReactantExt.jl for the switches and their default.
+
+# The arithmetic ladder, value-numbered. `memo` is `nothing` on host and for any
+# backend that does not specialize it, so this is `_oop_op(op, c, T)` verbatim.
+#
+# A backend may also use this seam to emit the op DIRECTLY rather than through Julia
+# broadcast (ess-oop-native): Reactant's broadcast lowering manufactures identity
+# `broadcast_in_dim`s, identity `transpose`s and never-read `constant`s around every
+# elementwise op — not duplicates for CSE to find, just scaffolding for the
+# canonicalizer to delete. The extension bypasses that for the operations whose
+# StableHLO form IS the IEEE operation Julia's operator is (`+ - * /` and negation)
+# and falls back to this ladder for everything else, which stays the reference for
+# op semantics.
+@inline _oop_op(op::Symbol, c::AbstractVector, ::Type{T}, memo) where {T} =
+    _oop_op(op, c, T)
+
+# A build-time constant entering the value type. On host `convert(T, x)`, which
+# is what every call site said before this seam existed.
+@inline _oop_const(::Type{T}, x, memo) where {T} = convert(T, x)
+
+# The two scalar reads, value-numbered on `(operand SSA value, index)`. Each
+# traces to a slice + reshape, so a repeated read is two redundant ops, not one.
+@inline _oop_read_state(u, i::Int, memo) = _oop_read_state(u, i)
+@inline _oop_read_forcing(buf, i::Int, memo) = _oop_read_forcing(buf, i)
+
+# `x ^ <host literal>`: the exponent stays a host `Float64` (see `_oop_pow`), so
+# it is part of the KEY rather than an operand.
+@inline _oop_powlit(base, ex::Float64, memo) = base .^ ex
 
 # Engagement witness. Trace-time only — the host path never reaches it — and a
 # COUNTER, not a cache: nothing is ever read back out of it by the walker, so it
@@ -215,6 +272,47 @@ Zero the [`oop_intern_stats`](@ref) counters.
 function oop_intern_stats_reset!()
     @inbounds _OOP_INTERN_TALLY[1] = 0
     @inbounds _OOP_INTERN_TALLY[2] = 0
+    return nothing
+end
+
+# The same witness for emission value numbering (ess-oop-gvn), kept SEPARATE from
+# the read tally: the two answer different questions (how often is the same window
+# read twice, vs the same op emitted twice), so pooling them would make each hit
+# rate uninterpretable.
+const _OOP_GVN_TALLY = Int[0, 0]      # [hits, misses]
+
+@inline function _oop_gvn_tally!(hit::Bool)
+    @inbounds _OOP_GVN_TALLY[hit ? 1 : 2] += 1
+    return nothing
+end
+
+"""
+    oop_gvn_stats() -> (; hits, misses)
+
+Cumulative emission value-numbering counters for the out-of-place emitter's
+TRACED path (ess-oop-gvn): `hits` is the number of ops (arithmetic results,
+constants and scalar reads) served from an already-emitted SSA value instead of
+emitting a new op, `misses` the number that emitted one. `hits` is therefore the
+count of StableHLO ops NOT handed to XLA to CSE away.
+
+Both are zero on host — value numbering is trace-only — and zero unless
+`ESS_OOP_GVN=1`. Reset with [`oop_gvn_stats_reset!`](@ref).
+
+NOT exported, unlike its read-interning twin: the exported surface is a
+cross-binding commitment (mirrored in `api-surface.json`, tiered in API_SPEC.md),
+and this is an engine diagnostic with no counterpart in any other binding.
+"""
+oop_gvn_stats() = (hits = @inbounds(_OOP_GVN_TALLY[1]),
+                   misses = @inbounds(_OOP_GVN_TALLY[2]))
+
+"""
+    oop_gvn_stats_reset!()
+
+Zero the [`oop_gvn_stats`](@ref) counters.
+"""
+function oop_gvn_stats_reset!()
+    @inbounds _OOP_GVN_TALLY[1] = 0
+    @inbounds _OOP_GVN_TALLY[2] = 0
     return nothing
 end
 
@@ -470,23 +568,26 @@ end
 # catastrophically WRONG for a tracer on a big table, where every ladder step is
 # a separate traced op and the emitted program is O(table) PER CALL SITE.
 #
-# Measured, one `interp.bilinear` on a 61×23 table over 392 lanes: the ladder
-# traces to 76,593 stablehlo ops (5,524 `select` + 2,806 `compare` + 1,319 `and`
-# and their broadcast/constant scaffolding), in 74 s. The ReSEACT Fast-JX
-# component has 18 such calls; across the traced operator-split window's ~120
-# RHS call sites that reached 21.4M ops and the XLA compile was OOM-killed at
-# 30 GB. >90% of that program was ladder scaffolding; real arithmetic was <1%.
+# On a photolysis-style component with several bilinear calls over tables of a few
+# thousand entries, the ladder traces to a program dominated by `select`/`compare`
+# scaffolding rather than arithmetic, and XLA compile can exhaust host memory.
 #
 # A tracer has a constant-time primitive for precisely this — `stablehlo.gather`
-# on a constant table, and a `reduce` for the count — so a backend replaces the
-# three ladders HERE rather than forking the three lane evaluators. What a
-# backend method must honour, bit-for-bit:
+# on a constant table — so a backend replaces the three ladders HERE rather than
+# forking the three lane evaluators. What a backend method must honour,
+# bit-for-bit:
 #
 #   `_oop_knot_count(knots, q, cmp)`   Σ_k [cmp(knots[k], q)] as a Float64 lane
 #         value. The terms are 0.0/1.0 and n ≪ 2^53, so the sum is EXACT in any
-#         association order: a `reduce` is bit-identical to the ladder's
-#         left-to-right `.+` chain, for every query including NaN (which fails
-#         every compare and contributes 0.0 in both).
+#         association order, and so is any other route to the same integer: what
+#         a backend owes is the ladder's VALUE, not its shape, for every query
+#         including NaN (which fails every compare and contributes 0.0 here).
+#         A `reduce` along the knot axis is the obvious lowering; the Reactant
+#         backend instead locates elementwise (a capped ladder for a small axis,
+#         an arithmetic guess corrected by two gathers for a big uniform one, the
+#         reduce as a fallback) — see the `count-locate` header in
+#         ext/EarthSciASTReactantExt.jl and test/reactant_locate_test.jl for the
+#         exactness argument and its pins.
 #   `_oop_knot_pair(v, i)`             `(v[i], v[i+1])` elementwise, `i` an
 #         exactly-integral Float64 lane index in `[1, length(v)-1]`. SELECTION,
 #         never a blend — the table entry comes through bit-exact (no `0·Inf`,
@@ -643,10 +744,9 @@ end
 # CLAMP/EDGE BOUNDS are the exception to "every knot read is a seam": the outer
 # clamp (`ax[1]`/`ax[Nx]`, and the linear form's edge values `table[1]`/
 # `table[n]`) is a plain broadcast over the boundary COLUMN, so under a trace
-# each such column used to be embedded as a lane-wide constant even when every
-# lane held the same bound — the one remaining O(lanes) constant after the
-# knot/table gathers went grid-independent (4 per bilinear; ~3.8 MB at 13×7×72
-# against the table's former 1.32 GB — see test/reactant_lane_dedup_test.jl).
+# each such column would be embedded as a lane-wide constant even when every lane
+# holds the same bound — the one remaining O(lanes) constant after the knot/table
+# gathers went grid-independent (see test/reactant_lane_dedup_test.jl).
 # `_oop_lane_bound` collapses a boundary column whose lanes are all BITWISE
 # equal (`isequal` per element: NaN unifies, `-0.0` stays apart from `0.0` —
 # the same key the trace-time lane dedup groups by) to its one scalar, which a
@@ -728,13 +828,10 @@ end
 # an invariant scalar query alike, exactly as the ladders did; the per-LANE spec
 # forms broadcast over `h.specs`, so lane `l` reads its own table.
 #
-# WHY IT MATTERS. The ladder is O(table) per LANE, and the constant is brutal on
-# a big table: a 61x23 `interp.bilinear` over 392 lanes costs 6.0 ms through the
-# ladder and 0.018 ms through the cores — 328x, at Float64 and at `Dual` alike
-# (measured). A model with 18 such calls per RHS was spending ~0.1 s per
-# evaluation inside interp alone; a 60 s chemistry window took 1775 s against
-# 25 s for the same model without the bilinear component. That is not a tracing
-# problem and never was — it is the tracer's program running on host.
+# WHY IT MATTERS. The ladder is O(table) per LANE, so on a table of any size it
+# costs orders of magnitude more than the cores, at Float64 and at `Dual` alike —
+# on host, where the ladder buys nothing. That is not a tracing problem; it is the
+# tracer's program running on host.
 @inline _oop_interp_linear_lanes(h::_InterpLinearSpec, q, ::Type{T}) where {T<:Real} =
     _oop_interp_linear.(Ref(h), q, T)
 @inline _oop_interp_searchsorted_lanes(h::_InterpSearchsortedSpec, q,
@@ -778,8 +875,8 @@ end
 # `Memory{Any}` hash table throws inside Reactant's closure walk), which would
 # break tracing for every model, forcing or not. A backend passes device arrays
 # (`ConcreteRArray`s) in `buffers`, and an in-place `copyto!` into those SAME
-# arrays between calls is a real input update the compiled program sees
-# (measured; see ext/EarthSciASTReactantExt.jl).
+# arrays between calls is a real input update the compiled program sees (see
+# ext/EarthSciASTReactantExt.jl).
 #
 # The host wrapper (`_OopRHS`) forwards the build's own host buffers, so
 # `f(u, p, t)` still reads the exact aliased storage it always did — the
@@ -822,11 +919,11 @@ end
 function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     k = n.kind
     if k === _NK_LITERAL
-        return convert(T, n.literal)
+        return _oop_const(T, n.literal, fb.memo)
     elseif k === _NK_STATE
-        return convert(T, _oop_read_state(u, n.idx))
+        return convert(T, _oop_read_state(u, n.idx, fb.memo))
     elseif k === _NK_PARAM
-        return convert(T, _read_param(p, n.sym, n.idx))
+        return _oop_const(T, _read_param(p, n.sym, n.idx), fb.memo)
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_PARAM_GATHER
@@ -836,7 +933,7 @@ function _oop_eval(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)
         # host array for the aligned argument entry), so a tracing backend sees
         # a real input, not a baked-in trace-time constant.
         return convert(T, _oop_read_forcing(
-            _oop_forcing_slab(fb, n.payload::Vector{Float64}), n.idx))
+            _oop_forcing_slab(fb, n.payload::Vector{Float64}), n.idx, fb.memo))
     elseif k === _NK_CACHED
         return @inbounds cache[n.idx]
     elseif k === _NK_CONTRACTION
@@ -955,7 +1052,7 @@ function _oop_state_gather(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_Oop
         off += (sub - sg.lo[d]) * sg.strides[d]
     end
     slot = @inbounds sg.slot_flat[off + 1]
-    return convert(T, _oop_read_state(u, slot))
+    return convert(T, _oop_read_state(u, slot, fb.memo))
 end
 
 # OOP twin of `_eval_contraction_loop` (ess-runtime-contraction). Same static-range
@@ -966,7 +1063,7 @@ function _oop_contraction_loop(n::_Node, u, p, t, cache::AbstractVector{T}, fb::
     ref = spec.ref
     body = @inbounds n.children[1]
     op = n.op
-    s = convert(T, n.literal)
+    s = _oop_const(T, n.literal, fb.memo)
     rng = spec.lo:spec.step:spec.hi
     if op === :+
         @inbounds for k in rng
@@ -1027,7 +1124,7 @@ function _oop_eval_op(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForci
     @inbounds for i in eachindex(ch)
         c[i] = _oop_eval(ch[i], u, p, t, cache, fb)
     end
-    return _oop_op(n.op, c, T)
+    return _oop_op(n.op, c, T, fb.memo)
 end
 
 # A LITERAL EXPONENT STAYS A LITERAL. Everywhere else, widening a `Float64` constant
@@ -1047,7 +1144,7 @@ end
     _expect_arity_n(op, ch, 2)
     base = _oop_eval(ch[1], u, p, t, cache, fb)
     e = ch[2]
-    return e.kind === _NK_LITERAL ? base^e.literal :
+    return e.kind === _NK_LITERAL ? _oop_powlit(base, e.literal, fb.memo) :
            base^_oop_eval(e, u, p, t, cache, fb)
 end
 
@@ -1056,7 +1153,7 @@ end
 function _oop_contraction(n::_Node, u, p, t, cache::AbstractVector{T}, fb::_OopForcing)::T where {T}
     op = n.op
     ch = n.children
-    s = convert(T, n.literal)
+    s = _oop_const(T, n.literal, fb.memo)
     if op === :+
         @inbounds for k in eachindex(ch)
             s += _oop_eval(ch[k], u, p, t, cache, fb)
@@ -1121,9 +1218,9 @@ end
 # entry at a time through `_oop_eval`. Correct, and on host cheap; under a TRACE
 # it is the one remaining place the emitted program's size scales with the grid:
 # every entry re-traces its whole tree, so a contraction loop over L levels
-# inside a per-column fill emits O(columns × L) scalar-indexed reads (measured
-# on ReSEACT CONUS: ~80 `stablehlo.dynamic_slice` PER GRID CELL, a 410 MB HLO
-# module at 7×7×72 — the multi-day-XLA-hang term).
+# inside a per-column fill emits O(columns × L) scalar-indexed reads — tens of
+# `stablehlo.dynamic_slice` ops per grid cell, which is what makes XLA compile
+# time blow up on a real grid.
 #
 # WHAT. Those entries are per-cell INSTANTIATIONS of one expression: same tree,
 # same ops, same loop ranges — only the baked-in cell data differ (state slots,
@@ -1489,19 +1586,19 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
                          fb::_OopForcing) where {T}
     k = b.kind
     if k === _NK_LITERAL
-        return isempty(b.lanes_f) ? convert(T, b.literal) : b.lanes_f
+        return isempty(b.lanes_f) ? _oop_const(T, b.literal, fb.memo) : b.lanes_f
     elseif k === _NK_STATE
-        return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx)) :
+        return isempty(b.slots) ? convert(T, _oop_read_state(u, b.idx, fb.memo)) :
                _oop_gather(u, b.slots, fb.memo)
     elseif k === _NK_PARAM
-        return convert(T, _read_param(p, b.sym, b.idx))
+        return _oop_const(T, _read_param(p, b.sym, b.idx), fb.memo)
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_CACHED
         return @inbounds cache[b.idx]
     elseif k === _NK_PARAM_GATHER
         buf = _oop_forcing_slab(fb, b.payload::Vector{Float64})
-        return isempty(b.slots) ? convert(T, _oop_read_forcing(buf, b.idx)) :
+        return isempty(b.slots) ? convert(T, _oop_read_forcing(buf, b.idx, fb.memo)) :
                _oop_gather(buf, b.slots, fb.memo)
     elseif k === _NK_LOOPVAR
         # Per LANE: positionally-matched loop counters normally all hold the
@@ -1576,7 +1673,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         body = @inbounds b.children[1]
         op = b.op
         refs = b.refs
-        s::Any = convert(T, b.literal)
+        s::Any = _oop_const(T, b.literal, fb.memo)
         if op === :+
             for kk in b.lo:b.step:b.hi
                 @inbounds for r in refs; r[] = kk; end
@@ -1603,7 +1700,7 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
         # Fixed-width ⊕-fold, child order, seeded from 0̄ — `_oop_contraction`
         # per lane.
         ch = b.children
-        res::Any = convert(T, b.literal)
+        res::Any = _oop_const(T, b.literal, fb.memo)
         if b.op === :+
             for i in eachindex(ch)
                 res = res .+ _oop_eval_batch(ch[i], u, p, t, cache, fb)
@@ -1633,14 +1730,15 @@ function _oop_eval_batch(b::_OopBatchNode, u, p, t, cache::AbstractVector{T},
             # pinned it, so a literal exponent is always the SHARED-literal form.
             base = _oop_eval_batch(ch[1], u, p, t, cache, fb)
             e = @inbounds ch[2]
-            (e.kind === _NK_LITERAL && isempty(e.lanes_f)) && return base .^ e.literal
+            (e.kind === _NK_LITERAL && isempty(e.lanes_f)) &&
+                return _oop_powlit(base, e.literal, fb.memo)
             return base .^ _oop_eval_batch(e, u, p, t, cache, fb)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
             c[i] = _oop_eval_batch(ch[i], u, p, t, cache, fb)
         end
-        return _oop_op(op, c, T)
+        return _oop_op(op, c, T, fb.memo)
     end
 end
 
@@ -1732,9 +1830,8 @@ _is_traced(u, p, t) = _reactant_rooted(u) || _reactant_rooted(t)
 # `live_forcing` holds, and live forcing implies a non-empty buffers container.
 _forcing_traced(bufs) = all(_reactant_rooted, values(bufs))
 
-# Does this compiled IR read a live forcing buffer anywhere? A `_VK_INVARIANT`
-# carries a scalar `_Node` in its payload, so the scalar side is walked too — a
-# forcing read hoisted into the scalar prelude is still a forcing read.
+# Does this compiled IR read a live forcing buffer anywhere? The CSE prelude is
+# walked too, so a forcing read hoisted into it is still a forcing read.
 _scalar_has_pgather(n::_Node) =
     n.kind === _NK_PARAM_GATHER || any(_scalar_has_pgather, n.children)
 
@@ -1748,7 +1845,7 @@ end
 # aliased `_PGatherArray.flat`) and `_AK_ARR_FIXED` (the lowering of an invariant
 # `_NK_PARAM_GATHER` — also the aliased buffer). Both are host arrays a tracer
 # would bake in as constants, so a build whose acc kernels carry either must
-# refuse `@compile` exactly as the `_VK_PGATHER` path does. Sub-kernel tables
+# refuse `@compile` exactly as the `_NK_PARAM_GATHER` path does. Sub-kernel tables
 # (`K.subs`, transitive by construction) are scanned too.
 _acc_desc_live_forcing(a::_AccDesc) =
     a.kind === _AK_FORCING_BOX || a.kind === _AK_ARR_FIXED ||
@@ -1768,8 +1865,7 @@ _acc_has_live_forcing(K::_AccKernel) =
 #     locate→gather→blend lane forms, and the kernel's whole result lands
 #     through ONE `_oop_scatter`. NOTHING scalar-indexes `u` per cell, so an
 #     XLA/Reactant trace of a DEFAULT (affine) build emits a program whose size
-#     is independent of the grid — the refusal this replaced
-#     (`E_TREEWALK_ACC_XLA_UNSUPPORTED`) is gone.
+#     is independent of the grid.
 #
 #   * The PER-CELL fallback — `_oop_run_acc_kernel` — the functional twin of
 #     `_run_acc_kernel!`: same cell walk, same eltype-generic `_eval_acc` spine,
@@ -2413,14 +2509,15 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             # `s == 0 ? 0.0 : u[s]`, bit-identical; the gather used a safe index.
             return isempty(m) ? g : ifelse.(m, zero(T), g)
         elseif ak === _AK_STATE_FIXED
-            return convert(T, _oop_read_state(u, a.idx))
+            return convert(T, _oop_read_state(u, a.idx, fb.memo))
         elseif ak === _AK_SCALAR
-            return convert(T, a.v)
+            return _oop_const(T, a.v, fb.memo)
         elseif ak === _AK_ARR_FIXED
             # LIVE forcing (invariant slot): re-read per call — data, zero
             # derivative. Through the `buffers` argument (see `_OopForcing`), so
             # a trace reads a real input; the seam makes the scalar read legal.
-            return convert(T, _oop_read_forcing(_oop_forcing_slab(fb, a.arr), a.idx))
+            return convert(T, _oop_read_forcing(_oop_forcing_slab(fb, a.arr),
+                                               a.idx, fb.memo))
         elseif ak === _AK_FORCING_BOX || ak === _AK_ARR_TBL_BOX
             # LIVE forcing lanes: re-gathered per call from the `buffers`
             # argument — one whole-array gather at host-frozen indices, which
@@ -2431,9 +2528,9 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             return plan.consts[nd.idx]
         end
     elseif k === _NK_LITERAL
-        return convert(T, nd.literal)
+        return _oop_const(T, nd.literal, fb.memo)
     elseif k === _NK_PARAM
-        return convert(T, _read_param(p, nd.sym, nd.idx))
+        return _oop_const(T, _read_param(p, nd.sym, nd.idx), fb.memo)
     elseif k === _NK_TIME
         return convert(T, t)
     elseif k === _NK_CACHED
@@ -2502,14 +2599,14 @@ function _oop_eval_acck(nd::_Node, u, p, t, K::_AccKernel, plan::_OopAccPlan,
             # A literal exponent stays a literal — see `_oop_pow`.
             base = _oop_eval_acck(ch[1], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
             e = ch[2]
-            return e.kind === _NK_LITERAL ? base .^ e.literal :
+            return e.kind === _NK_LITERAL ? _oop_powlit(base, e.literal, fb.memo) :
                    base .^ _oop_eval_acck(e, u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
         end
         c = Vector{Any}(undef, length(ch))
         for i in eachindex(ch)
             c[i] = _oop_eval_acck(ch[i], u, p, t, K, plan, invvals, cellvals, sub, fb, T, ssa)
         end
-        return _oop_op(op, c, T)
+        return _oop_op(op, c, T, fb.memo)
     end
 end
 
