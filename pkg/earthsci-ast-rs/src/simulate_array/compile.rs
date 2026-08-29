@@ -1149,11 +1149,16 @@ fn classify_variables(
 }
 
 /// (2) Infer shapes for state variables from all equation usages, then (2b)
-/// seed declared array shapes for states the index-usage inference left
-/// scalar. A whole-array `D(state)` (bare LHS, no per-cell `index`) or an
-/// `ic`-only array state has no indexed reference to infer from, so its
-/// declared `shape` (index-set names resolved to sizes via the document
-/// registry) is authoritative.
+/// overwrite with each state's declared array `shape` where one is declared
+/// and resolves. The declared shape (index-set names resolved to sizes via
+/// the document registry) is AUTHORITATIVE over usage inference (esm-spec
+/// §11), matching the Python binding: a whole-array `D(state)` never
+/// index-uses the state, so inference alone collapses it to a scalar; and an
+/// observed's halo gather (`index(q, clamp(i±k))` inside an extended-grid
+/// aggregate, e.g. the duo grid's `duo_extend`) index-uses the state at
+/// offsets past its true extent, so inference alone WIDENS it past the grid.
+/// Usage inference remains the fallback for states with no (resolvable)
+/// declared shape.
 fn infer_state_shapes(
     model: &Model,
     state_vars: &[&String],
@@ -1161,16 +1166,8 @@ fn infer_state_shapes(
 ) -> Result<HashMap<String, Vec<usize>>, CompileError> {
     let mut shape_map = infer_shapes(state_vars, &model.equations)?;
 
-    // (2b) Seed declared array shapes for states the index-usage inference
-    //      left scalar. A whole-array `D(state)` (bare LHS, no per-cell
-    //      `index`) or an `ic`-only array state has no indexed reference to
-    //      infer from, so its declared `shape` (index-set names resolved to
-    //      sizes via the document registry) is authoritative.
+    // (2b) Declared shapes are authoritative wherever they resolve.
     for name in state_vars {
-        let empty = shape_map.get(*name).map(|s| s.is_empty()).unwrap_or(true);
-        if !empty {
-            continue;
-        }
         if let Some(decl) = model.variables.get(*name).and_then(|v| v.shape.as_ref()) {
             if !decl.is_empty() {
                 if let Some(resolved) = resolve_declared_shape(decl, index_sets) {
