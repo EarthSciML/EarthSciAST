@@ -30,6 +30,7 @@ Design notes
 from __future__ import annotations
 
 import functools
+import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -160,12 +161,14 @@ class EvalContext:
     # loader-dependent quantity. Empty ⇒ nothing is known-invariant, so the
     # operator path declines and #1's dense reduce handles the node.
     invariant_names: frozenset[str] = field(default_factory=frozenset)
-    # Declared 1-D shape INDEX SET of each document array, keyed by the
+    # FIRST declared shape INDEX SET of each document array, keyed by the
     # (flattened) variable name — the general form of ``join_key_index_sets``.
     # A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not loop
-    # symbols, and resolves each side to a range symbol through that factor's
-    # declared 1-D shape (CONFORMANCE_SPEC §5.5.6; the Julia reference passes the
-    # same table as ``var_shapes``). Rank != 1 variables are simply absent.
+    # symbols, and resolves each side to a range symbol through the first
+    # factor's declared shape's FIRST axis — rank-agnostic on purpose, so an
+    # arity-1 ``[pos, verts, coord]`` ring factor resolves like a 1-D column
+    # (CONFORMANCE_SPEC §5.5.6; the Julia geometry-setup resolver applies the
+    # same first-axis rule). Variables with no named first axis are absent.
     # Empty ⇒ no overlap gate can resolve, which is exactly the fail-closed
     # behaviour a document without one wants.
     var_index_sets: dict[str, str] = field(default_factory=dict)
@@ -1724,6 +1727,85 @@ def _materialize_map(
         return None
 
 
+# Combined out × reduce box cell cap for the broadcast contraction path; over
+# the cap the node declines to the scalar loop unchanged. 2^22 float64 cells is
+# a ~32 MB body slab — comfortably inside every conformance runner while still
+# admitting any stencil-scale contraction.
+_CONTRACTION_BOX_CAP = 1 << 22
+# Kill switch (oracle): ESS_NP_CONTRACT_DISABLE=1 routes every plain
+# contraction back to the scalar loop, so the two paths can be diffed bitwise.
+_CONTRACT_DISABLE = os.environ.get("ESS_NP_CONTRACT_DISABLE", "") == "1"
+
+
+def _eval_arrayop_contraction_broadcast(
+    body: Expr,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+) -> np.ndarray | None:
+    """Whole-box fast path for a PLAIN contraction (no join / filter / ragged
+    range) whose body the einsum decomposer rejects — affine or computed
+    subscripts, indicator ``*`` gates, ``index`` gathers into nested arrays.
+    That is the §9.6.8 reduced-rank / contracted gather shape (the ESD duo
+    grid's halo-strip remaps), which otherwise costs one Python tree walk per
+    (output cell × contraction point): the Python mirror of EarthSciAST.jl's
+    affine-stencilizer contraction unroll (fd81e922f).
+
+    The output indices AND the contracted indices are each bound to their own
+    broadcast axis of the combined ``out × reduce`` box, the body is evaluated
+    ONCE over that box, and the reduce axes are then ⊕-folded SEQUENTIALLY in
+    ``_cartesian`` order (last symbol fastest). Per output cell the fold
+    performs exactly the term order and operation chain of :func:`_reduce_over`
+    (:func:`_reduce_step_box` reproduces :func:`_reduce_step` element-wise), so
+    the result is bit-for-bit the scalar path's answer; only the per-cell
+    Python walk is gone.
+
+    Returns ``None`` (caller falls back to the scalar loop) for a body the
+    broadcast evaluation cannot express — an inner construct that rejects
+    array-bound index symbols, a shape mismatch — or a combined box over
+    :data:`_CONTRACTION_BOX_CAP`.
+    """
+    if _CONTRACT_DISABLE or not reduce_syms:
+        return None
+    red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
+    if any(len(r) == 0 for r in red_ranges_exp):
+        # Empty contracted range: every cell reduces over nothing — the
+        # semiring identity 0̄ fill, exactly the scalar path's answer.
+        return np.full(out_shape, empty_zero, dtype=float)
+    red_shape = tuple(len(r) for r in red_ranges_exp)
+    total = int(np.prod(out_shape, dtype=np.int64)) * int(np.prod(red_shape, dtype=np.int64))
+    if total > _CONTRACTION_BOX_CAP:
+        return None
+    ndim = len(out_syms) + len(reduce_syms)
+    prev = dict(ctx.locals)
+    try:
+        for axis, (s, r) in enumerate(zip(out_syms, out_ranges_exp)):
+            _bind_broadcast_range(ctx, s, np.asarray(r, dtype=float), axis, ndim)
+        for k, (s, r) in enumerate(zip(reduce_syms, red_ranges_exp)):
+            _bind_broadcast_range(ctx, s, np.asarray(r, dtype=float), len(out_syms) + k, ndim)
+        box = _compile_expr(body)(ctx)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
+        return None
+    finally:
+        ctx.locals = prev
+    try:
+        box = np.asarray(_require_real(box, "aggregate body"), dtype=float)
+        box = np.broadcast_to(box, tuple(out_shape) + red_shape)
+    except (NumpyInterpreterError, ValueError, TypeError):
+        return None
+    acc: np.ndarray | None = None
+    lead = (slice(None),) * len(out_shape)
+    for red_idx in np.ndindex(*red_shape):  # last symbol fastest — `_cartesian` order
+        acc = _reduce_step_box(reducer, acc, box[lead + red_idx])
+    # Copy: `acc` may alias the (broadcast) body box after a 1-term fold.
+    return np.array(acc, dtype=float)
+
+
 def _batched_ring_gather(
     arg: Expr, out_syms: list[str], ctx: EvalContext
 ) -> tuple[np.ndarray, str] | None:
@@ -2083,6 +2165,27 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         if fast is not None:
             return fast
 
+    # Whole-box broadcast contraction: the plain contractions the einsum
+    # decomposer rejects (affine / computed subscripts, indicator gates — the
+    # §9.6.8 duo halo-strip gathers). Valid for EVERY semiring because the body
+    # is evaluated as written (no factoring); only the ⊕ fold is lifted from
+    # per-cell to whole-box, in the identical term order, so the answer is
+    # bit-for-bit the scalar loop's. Declines (→ None) to the scalar loop.
+    if reduce_syms:
+        unrolled = _eval_arrayop_contraction_broadcast(
+            expr.expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
+        )
+        if unrolled is not None:
+            return unrolled
+
     # Pure-map (no contraction) vectorized fast path: stencils — affine
     # subscripts, sums, sqrt/max/min, makearray regions — that the einsum
     # decomposer above rejects. Binds the output indices to ranges and evaluates
@@ -2224,6 +2327,30 @@ def _reduce_step(op: str, acc: float | None, val: float) -> float:
         return max(acc, val)
     if op == "min":
         return min(acc, val)
+    raise NumpyInterpreterError(f"Unsupported reduce: {op}")
+
+
+def _reduce_step_box(op: str, acc: np.ndarray | None, val: np.ndarray) -> np.ndarray:
+    """Array analog of :func:`_reduce_step`: one ⊕-fold step over whole
+    output-box term slabs (the broadcast contraction path). Element-wise it
+    performs the IDENTICAL operation chain as the scalar fold — ``max``/``min``
+    keep Python's ``b if b > a else a`` selection (and hence its NaN behaviour)
+    via ``np.where`` rather than adopting ``np.maximum``'s NaN propagation — so
+    each output cell's reduction is bit-for-bit the scalar path's."""
+    if op == "or":
+        if acc is None:
+            return np.where(val != 0.0, 1.0, 0.0)
+        return np.where((acc != 0.0) | (val != 0.0), 1.0, 0.0)
+    if acc is None:
+        return val
+    if op == "+":
+        return acc + val
+    if op == "*":
+        return acc * val
+    if op == "max":
+        return np.where(val > acc, val, acc)
+    if op == "min":
+        return np.where(val < acc, val, acc)
     raise NumpyInterpreterError(f"Unsupported reduce: {op}")
 
 
@@ -2478,10 +2605,13 @@ def _overlap_env_sym(
 ) -> str:
     """The range symbol an overlap gate's envelope side binds (§5.5.6).
 
-    Resolved from the FIRST factor's declared 1-D shape index set — never from
-    the clause's position — so which side is skolemised / reduced / output stays
-    free and the aggregate's own ``output_idx`` decides the orientation
-    independently. Mirrors the Julia ``_overlap_env_sym``.
+    Resolved from the FIRST factor's declared shape's FIRST index-set axis —
+    never from the clause's position — so which side is skolemised / reduced /
+    output stays free and the aggregate's own ``output_idx`` decides the
+    orientation independently. Rank-agnostic like the Julia geometry-setup
+    resolver (``_geo_loopvar_for``): an arity-1 ``[pos, verts, coord]`` ring
+    factor's position axis names the range exactly as a 1-D column's sole axis
+    does.
     """
     if not env_names:
         raise NumpyInterpreterError("join 'overlap' gate has an empty env-factor list")
@@ -2489,8 +2619,8 @@ def _overlap_env_sym(
     key = _scoped_array_name(fname, ctx.var_index_sets)
     if key is None:
         raise NumpyInterpreterError(
-            f"join 'overlap' env factor {fname!r} must be a 1-D buffer whose shape "
-            f"index set names the join range; no 1-D declared shape is known for it "
+            f"join 'overlap' env factor {fname!r} must carry a declared shape whose "
+            f"FIRST index-set axis names the join range; none is known for it "
             f"(CONFORMANCE_SPEC §5.5.6)"
         )
     return _join_sym_for_key(ctx.var_index_sets[key], raw_ranges, sym_to_set)
