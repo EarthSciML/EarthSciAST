@@ -201,3 +201,18 @@ performance = ["parallel", "simd", "zero_copy", "custom_alloc"]
 
 # WASM target configuration
 [package.metadata.wasm-pack.profile.release]
+
+# The conformance runners and examples integrate real PDE systems; at the
+# default dev opt-level 0 the duo cubed-sphere cases take tens of minutes,
+# at opt-level 2 under a minute (30x measured on the ESD duo_swe_dp gate).
+# Optimizing this crate and its dependencies while leaving the dev PROFILE
+# selected keeps `cargo build`/`cargo test` semantics (debug assertions,
+# overflow checks, incremental) and CI caching unchanged — only codegen speed
+# moves. `package."*"` covers dependencies (ndarray in particular sits on the
+# evaluator hot path); the named entry covers this crate itself, which the
+# wildcard does not reach.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.earthsci-ast]
+opt-level = 2
