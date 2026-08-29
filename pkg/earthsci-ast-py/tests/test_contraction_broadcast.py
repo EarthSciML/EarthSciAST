@@ -14,13 +14,11 @@ a tent-basis ``max(0, min(...))`` body over affine gathers).
 from __future__ import annotations
 
 import numpy as np
-import pytest
+from test_numpy_interpreter import _ctx
 
 import earthsci_ast.numpy_interpreter as NI
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import eval_expr
-
-from test_numpy_interpreter import _ctx
 
 
 def _idx(name, *subs):
@@ -37,6 +35,7 @@ def _duo_strip_node(reduce_op: str | None = None) -> ExprNode:
     contracted over 0..5 (0-based); tent-weight body over affine gathers into
     the 1-D reference coordinates ``refx``/``refy`` and the donor field ``dt``.
     """
+
     # weight(c, ref, s) = max(0, 1 - |c - ref[s+2]|)  — a hat basis centred on
     # ref[s+2], nonzero for at most two consecutive s: a genuine gather-gate.
     def tent(coord, ref, sym):
@@ -131,12 +130,12 @@ def test_duo_strip_hand_computed_value() -> None:
     gi = np.arange(1, 4, dtype=float)[:, None, None, None]
     gj = np.arange(4, 8, dtype=float)[None, :, None, None]
     k = np.arange(0, 6, dtype=float)[None, None, :, None]
-    l = np.arange(0, 6, dtype=float)[None, None, None, :]
+    ell = np.arange(0, 6, dtype=float)[None, None, None, :]
     # esm `index` is 1-based: ref[s+2] reads 0-based slot s+1, dt[k+1, l+1]
     # reads 0-based (k, l).
     wx = np.maximum(0.0, 1.0 - np.abs((gj - 3.0) - refx[(k + 1).astype(int)]))
-    wy = np.maximum(0.0, 1.0 - np.abs(gi - refy[(l + 1).astype(int)]))
-    expected = np.sum(wx * wy * dt[k.astype(int), l.astype(int)], axis=(2, 3))
+    wy = np.maximum(0.0, 1.0 - np.abs(gi - refy[(ell + 1).astype(int)]))
+    expected = np.sum(wx * wy * dt[k.astype(int), ell.astype(int)], axis=(2, 3))
     np.testing.assert_allclose(eval_expr(node, ctx), expected, rtol=0, atol=1e-14)
 
 
