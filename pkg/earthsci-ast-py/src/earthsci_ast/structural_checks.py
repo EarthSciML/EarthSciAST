@@ -837,6 +837,100 @@ def _resolve_scoped_ref(ref: str, tables: dict[str, Any]) -> tuple:
     return (system, var, "no_var")
 
 
+def _model_template_registry(data: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
+    """The expression-template registry VISIBLE to a model's expressions on the
+    resolved document (§9.7 machinery already folded imports in): the top-level
+    ``expression_templates`` block with the model's own block layered over it."""
+    registry: dict[str, Any] = {}
+    for block in (data.get("expression_templates"), model.get("expression_templates")):
+        if isinstance(block, dict):
+            registry.update({k: v for k, v in block.items() if isinstance(v, dict)})
+    return registry
+
+
+def _scalar_field_param_map(registry: dict[str, Any]) -> dict[str, frozenset[str]]:
+    """For each template in ``registry``, the param names consumed in a
+    scalar-FIELD substitution site (esm-spec §9.6.1) of its body — today the
+    ``manifold`` field of the geometry ops — directly or forwarded through a
+    nested ``apply_expression_template``.
+
+    A call-site binding VALUE for such a param is field VOCABULARY (the closed
+    manifold set, CONFORMANCE_SPEC §5.8.4), never an expression reference: the
+    schema deliberately admits any string in the ``manifold`` position so a
+    template body can carry a parameter name there, and admissibility of the
+    bound literal is enforced on the EXPANDED form (§9.6.4,
+    ``geometry_manifold_invalid``) — not by the raw-stage reference checker.
+    Julia and Rust validate references after expansion, where the literal sits
+    in the node's ``manifold`` field; this map is how the raw-stage walk reaches
+    the same verdict."""
+    resolved: dict[str, frozenset[str]] = {}
+
+    def params_of(name: str, stack: tuple[str, ...]) -> frozenset[str]:
+        if name in resolved:
+            return resolved[name]
+        if name in stack:  # cyclic template application — let the resolver report it
+            return frozenset()
+        tpl = registry.get(name)
+        if not isinstance(tpl, dict):
+            return frozenset()
+        params = {p for p in tpl.get("params") or [] if isinstance(p, str)}
+        found: set[str] = set()
+        stack = stack + (name,)
+        nodes: list[Any] = [tpl.get("body")]
+        while nodes:
+            node = nodes.pop()
+            if isinstance(node, list):
+                nodes.extend(node)
+                continue
+            if not isinstance(node, dict):
+                continue
+            mf = node.get("manifold")
+            if isinstance(mf, str) and mf in params:
+                found.add(mf)
+            inner_name = node.get("name")
+            bindings = node.get("bindings")
+            if (
+                node.get("op") == "apply_expression_template"
+                and isinstance(inner_name, str)
+                and isinstance(bindings, dict)
+            ):
+                inner_sf = params_of(inner_name, stack)
+                for k, v in bindings.items():
+                    if k in inner_sf and isinstance(v, str) and v in params:
+                        found.add(v)
+            nodes.extend(node.values())
+        resolved[name] = frozenset(found)
+        return resolved[name]
+
+    return {name: params_of(name, ()) for name in registry}
+
+
+def _strip_scalar_field_bindings(expr: Any, sf_map: dict[str, frozenset[str]]) -> Any:
+    """Non-mutating copy of ``expr`` with every ``apply_expression_template``
+    node's STRING bindings for scalar-field params (see
+    :func:`_scalar_field_param_map`) removed, so the reference walker does not
+    read field vocabulary (``manifold: "planar"``) as a variable reference.
+    Expression-valued bindings are kept — their references are real."""
+    if isinstance(expr, list):
+        return [_strip_scalar_field_bindings(x, sf_map) for x in expr]
+    if not isinstance(expr, dict):
+        return expr
+    out = {k: _strip_scalar_field_bindings(v, sf_map) for k, v in expr.items()}
+    name = out.get("name")
+    bindings = out.get("bindings")
+    if (
+        out.get("op") == "apply_expression_template"
+        and isinstance(name, str)
+        and isinstance(bindings, dict)
+    ):
+        sf = sf_map.get(name, frozenset())
+        if sf:
+            out["bindings"] = {
+                k: v for k, v in bindings.items() if not (k in sf and isinstance(v, str))
+            }
+    return out
+
+
 def _check_variable_references(
     data: dict[str, Any], tables: dict[str, Any], errors: list[str]
 ) -> None:
@@ -868,8 +962,15 @@ def _check_variable_references(
     global_symbols = tables["global_symbols"]
     for mname, m in data.get("models", {}).items():
         subsystems = m.get("subsystems") or {}
+        # Scalar-field template params (§9.6.1): a call-site STRING binding for
+        # one is field vocabulary (`manifold: "planar"`), not a reference —
+        # strip those bindings before the reference walk (never mutating the
+        # document). See :func:`_scalar_field_param_map`.
+        sf_map = _scalar_field_param_map(_model_template_registry(data, m))
         for location, expr, check_bare, phrase, extra in _model_expression_sites(m, mname):
             bound_symbols = _expression_bound_symbols(expr)
+            if sf_map:
+                expr = _strip_scalar_field_bindings(expr, sf_map)
             for ref in _walk_expression_strings(expr):
                 # `_var` is the reserved operator placeholder (spec §6.4): in an
                 # operator-style model it is substituted with each matching state
