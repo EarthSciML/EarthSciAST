@@ -776,7 +776,7 @@ end
 function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_StencilCtx)
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, ctx.idx_env, ctx.const_arrays) for a in kargs]
-        r, _ = _select_region(producer, kvals)
+        r, region = _select_region(producer, kvals)
         r == 0 && return NumExpr(0.0)   # no region covers → makearray default
         values = producer.values === nothing ? ASTExpr[] : producer.values
         sel = values[r]
@@ -785,9 +785,22 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
             rank = re.op == "makearray" ?
                 ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
                 count(s -> s isa AbstractString, re.output_idx)
-            rank == length(kargs) ||
-                throw(_StencilFallback("makearray reduced-rank region value"))
-            return _stencilize_indexed(re, kargs, ctx)
+            rank == length(kargs) && return _stencilize_indexed(re, kargs, ctx)
+            # §9.6.8 REDUCED-RANK region value: the value array covers the
+            # region's NON-SINGLETON axes (a face/strip region pins the others
+            # to a single line), so the value is indexed at the non-singleton
+            # k-args only — mirroring `_resolve_index_of_makearray` exactly.
+            # The pinned axes need no verification: region coverage already
+            # fixed their k-values to the singleton bound.
+            ns = region === nothing ? Int[] :
+                 Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
+            rank == length(ns) ||
+                throw(_StencilFallback("makearray reduced-rank region value: region " *
+                    "$r value op '$(re.op)' rank $rank vs $(length(ns)) " *
+                    "non-singleton of $(length(kargs)) index args" *
+                    (re.op == "makearray" ? "" :
+                     ", output_idx $(re.output_idx)")))
+            return _stencilize_indexed(re, kargs[ns], ctx)
         end
         return _stencilize(sel, ctx)
     end
@@ -798,11 +811,43 @@ function _stencilize_indexed(producer::OpExpr, kargs::Vector{ASTExpr}, ctx::_Ste
     oi = String[String(s) for s in oi_raw if s isa AbstractString]
     length(oi) == length(kargs) ||
         throw(_StencilFallback("index(aggregate) output_idx/arg mismatch"))
-    ranges = producer.ranges === nothing ? Dict{String,Any}() : producer.ranges
-    all(n -> n in oi, keys(ranges)) ||
-        throw(_StencilFallback("index(aggregate) with contracted index"))
+    ranges = _ranges_dict(producer)
     body = producer.expr_body
     body === nothing && throw(_StencilFallback("index(aggregate) with no body"))
+    cnames = _contracted_index_names(ranges, oi)
+    if !isempty(cnames)
+        # CONSTANT-bound contraction: unroll into the same ⊕-combined term list
+        # the per-cell reference builds (`_resolve_index_of_arrayop` →
+        # `_foreach_aggregate_term` + `_combine_with_reducer`), so the fold
+        # SHAPE, term order, and reducer chaining are byte-identical — the box
+        # processor then lowers the unrolled body like any elementwise tree.
+        # Output-index binding happens after the unroll here (the reference
+        # binds first); leaf substitutions on disjoint name sets commute, so
+        # the trees are identical. A non-constant bound could vary the term
+        # set across the box (it may reference an output index), so only fully
+        # constant dense ranges are modelled — same gate as the branch-key
+        # walk (`_branch_key_indexed!`), which keeps key and spine in
+        # lockstep. NOTE: the per-term `_sub_preserving` detaches nested
+        # expansion roots from `tctx.sites` (they re-fuse, costing only
+        # compile sharing, never correctness) — same behavior as the
+        # top-level `_unrolled_contraction_body` path.
+        citers = Vector{Int}[]
+        for n in cnames
+            raw = ranges[n]
+            (raw isa AbstractVector && _is_const_int_range(raw)) ||
+                throw(_StencilFallback("index(aggregate) contracted index '$n' " *
+                                       "has no constant dense range"))
+            push!(citers, collect(_expand_int_range(raw)))
+        end
+        oplus, zerobar = _aggregate_oplus_identity(producer.semiring, producer.reduce)
+        terms = ASTExpr[]
+        _foreach_aggregate_term(body, cnames, citers, nothing, nothing,
+                                zerobar) do term
+            push!(terms, term)
+        end
+        body = _combine_with_reducer(oplus, zerobar, terms)
+        _tally_cascade!(:stencil_indexed_contraction_unroll)
+    end
     # Compile-once template tier: an expansion-root producer becomes a shared
     # sub-kernel over its index-bound body instead of being re-substituted and
     # re-fused into every branch spine.
@@ -934,13 +979,30 @@ function _branch_key_indexed!(io::IOBuffer, producer::OpExpr, kargs::Vector{ASTE
                               memo::IdDict{OpExpr,Bool}, seen::IdDict{OpExpr,Nothing})
     if producer.op == "makearray"
         kvals = Int[_eval_const_int(a, idx_env, const_arrays) for a in kargs]
-        r, _ = _select_region(producer, kvals)
+        r, region = _select_region(producer, kvals)
         print(io, 'M', r, ';')
         r == 0 && return
         values = producer.values === nothing ? ASTExpr[] : producer.values
         sel = values[r]
         if _is_array_producer(sel)
-            _branch_key_indexed!(io, sel::OpExpr, kargs, idxset, idx_env, const_arrays, memo, seen)
+            re = sel::OpExpr
+            # §9.6.8 reduced-rank region value: key it at the region's
+            # NON-SINGLETON k-args — the same slicing `_stencilize_indexed`
+            # applies, so key and spine traversals stay in lockstep. A shape
+            # neither models throws `_StencilFallback` in the spine build, so
+            # returning here (key incomplete) can never pair with an accepted
+            # spine.
+            ka = kargs
+            rank = re.op == "makearray" ?
+                ((re.regions === nothing || isempty(re.regions)) ? 0 : length(re.regions[1])) :
+                count(s -> s isa AbstractString, re.output_idx)
+            if rank != length(kargs)
+                region === nothing && return
+                ns = Int[d for d in 1:length(kargs) if region[d][1] != region[d][2]]
+                rank == length(ns) || return
+                ka = kargs[ns]
+            end
+            _branch_key_indexed!(io, re, ka, idxset, idx_env, const_arrays, memo, seen)
         else
             _branch_key!(io, sel, idxset, idx_env, const_arrays, memo, seen)
         end

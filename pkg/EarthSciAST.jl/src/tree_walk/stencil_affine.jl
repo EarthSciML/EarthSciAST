@@ -603,6 +603,48 @@ function _box_local_addr(box, D)
     return s, off, acc            # acc == number of cells in the box
 end
 
+# ── ESS_AK_TBL_DEBUG=1: table-materialization ATTRIBUTION log ──────────────
+# Every per-box table a build materializes (a lane the affine derivation could
+# not prove) records `(kind, var_name, rendered index args)` → (boxes, total
+# entries) in `_AK_TBL_LOG`. Debug-only observability — the log is written
+# only under the env flag and read by probes; it never feeds the build.
+const _AK_TBL_LOG = Dict{String,Tuple{Int,Int}}()
+_ak_tbl_debug() = get(ENV, "ESS_AK_TBL_DEBUG", "") == "1"
+_reset_ak_tbl_log!() = empty!(_AK_TBL_LOG)
+function _ak_render(io::IO, e::ASTExpr)
+    if e isa VarExpr
+        print(io, e.name)
+    elseif e isa IntExpr
+        print(io, e.value)
+    elseif e isa NumExpr
+        print(io, e.value)
+    elseif e isa OpExpr
+        print(io, e.op, '(')
+        for (i, a) in enumerate(e.args)
+            i > 1 && print(io, ',')
+            _ak_render(io, a)
+        end
+        print(io, ')')
+    else
+        print(io, '?')
+    end
+end
+function _ak_tbl_log!(kind::Symbol, rec::_LaneRecipe, len::Int)
+    _ak_tbl_debug() || return nothing
+    io = IOBuffer()
+    print(io, kind, ' ', rec.var_name, '[')
+    for (i, a) in enumerate(rec.idx_args)
+        i > 1 && print(io, ',')
+        _ak_render(io, a)
+    end
+    print(io, ']')
+    key = String(take!(io))
+    length(key) > 300 && (key = key[1:300] * "…")
+    n, tot = get(_AK_TBL_LOG, key, (0, 0))
+    _AK_TBL_LOG[key] = (n + 1, tot + len)
+    return nothing
+end
+
 # Materialize a NON-AFFINE state lane as a per-box slot table (Stage 2 of the
 # array-IR unification): one `_eval_recipe` per box cell — the SAME resolution
 # the per-cell fallback would run — stored densely in box-local layout, with 0
@@ -622,6 +664,7 @@ function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
         tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
                               var_map, const_arrays)::Int
     end
+    _ak_tbl_log!(:state, rec, len)
     return _AccRepl(_AccStateTblBox(tbl, s[1], s[2], s[3], off))
 end
 
@@ -660,6 +703,7 @@ function _materialize_pgather_tbl(rec::_LaneRecipe, idx_names, box, D,
         tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, collect(Int, loop)),
                               var_map, const_arrays)::Int
     end
+    _ak_tbl_log!(:pgather, rec, len)
     return _AccRepl(_AccArrTblBox(pg.flat, tbl, s[1], s[2], s[3], off))
 end
 
@@ -688,6 +732,7 @@ function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
     end
     v1 = vals[1]
     all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
+    _ak_tbl_log!(rec.kind == LANE_EXPRTBL ? :exprtbl : :const, rec, len)
     return _AccRepl(_AccConstBox(vals, s[1], s[2], s[3], off))
 end
 
