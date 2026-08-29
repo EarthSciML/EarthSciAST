@@ -84,8 +84,8 @@ use crate::pushdown_rewrite::{
     GateAxis, ProviderGate, desugar_pushdown, pushdown_coupling_pairs, pushdown_provider_gates,
 };
 use crate::simulate_array::{
-    ArrMap, ConstArrayScope, Value as EvalValue,
-    eval_expression_with_extents_and_consts_shared, run_value_invention,
+    ArrMap, ConstArrayScope, Value as EvalValue, eval_expression_with_extents_and_consts_shared,
+    run_value_invention,
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};

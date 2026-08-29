@@ -143,7 +143,10 @@ pub(super) enum VecValue<'a> {
         data: ArrayViewD<'a, f64>,
         origin: DimI,
     },
-    Owned { data: ArrayD<f64>, origin: DimI },
+    Owned {
+        data: ArrayD<f64>,
+        origin: DimI,
+    },
 }
 
 impl<'a> VecValue<'a> {

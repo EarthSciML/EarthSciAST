@@ -122,8 +122,12 @@ fn caller_supplied_arrays_reach_the_overlap_gate() {
 fn without_the_caller_channel_the_gate_has_no_envelopes() {
     let (model, index_sets) = isrm_model();
 
-    let err = run_value_invention(&model, &index_sets, None::<&std::collections::HashMap<String, ndarray::ArrayD<f64>>>)
-        .expect_err("with no factor arrays the gate has nothing to build an envelope from");
+    let err = run_value_invention(
+        &model,
+        &index_sets,
+        None::<&std::collections::HashMap<String, ndarray::ArrayD<f64>>>,
+    )
+    .expect_err("with no factor arrays the gate has nothing to build an envelope from");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("overlap-join env factor") && msg.contains("not supplied in const arrays"),
