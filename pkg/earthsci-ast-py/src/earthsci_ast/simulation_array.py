@@ -1912,20 +1912,25 @@ def _partition_and_materialize_observeds(
 
 
 def _var_index_sets(flat: FlattenedSystem) -> dict[str, str]:
-    """``flattened variable name -> its single declared index-set axis``.
+    """``flattened variable name -> its FIRST declared index-set axis``.
 
     The general form of ``join_key_index_sets``, covering states, observeds AND
-    parameters, and restricted to RANK-1 declared shapes. A §5.5.6
-    ``join.overlap`` gate names its envelope FACTORS, not loop symbols, and
-    resolves each side to a range symbol through that factor's declared 1-D
-    shape; this is the table it consults (the Julia reference passes the same
-    thing as ``var_shapes``). Threaded into every EvalContext the build spawns.
+    parameters. A §5.5.6 ``join.overlap`` gate names its envelope FACTORS, not
+    loop symbols, and resolves each side to a range symbol through the first
+    factor's declared shape; this is the table it consults. The rule is
+    deliberately RANK-AGNOSTIC — the FIRST axis is the position axis — matching
+    the Julia geometry-setup resolver (``_geo_loopvar_for``) and
+    :func:`broad_phase.ring_envelopes`, which reads a single-name env factor as
+    a ``[pos, verts, coord]`` 3-D ring stack (§5.5.6 arity 1 — the form every
+    shipped ``conservative_overlap_*_gated`` template uses). Restricting this
+    to rank-1 shapes left every ring-factor overlap gate unresolvable in the
+    Python build. Threaded into every EvalContext the build spawns.
     """
     out: dict[str, str] = {}
     for table in (flat.state_variables, flat.observed_variables, flat.parameters):
         for name, var in table.items():
             shape = getattr(var, "shape", None)
-            if shape and len(shape) == 1 and isinstance(shape[0], str):
+            if shape and isinstance(shape[0], str):
                 out[name] = shape[0]
     return out
 
