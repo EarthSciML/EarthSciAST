@@ -310,9 +310,9 @@ pub struct FlattenedSystem {
     /// This is what decides whether a downstream constructor builds an
     /// `ODESystem` or a `PDESystem`, so an undiscretized spatial operator must
     /// REACH this struct rather than be rejected before it. `t` comes first;
-    /// the spatial axes follow in LEXICOGRAPHIC order — the one place the
-    /// document-order rule does not apply, because the axes are discovered by
-    /// scanning the equations rather than declared in any order.
+    /// the spatial axes follow in DOCUMENT ORDER — the order the equation scan
+    /// first encounters them, which is the order the document names them and
+    /// the order a downstream array layout follows.
     pub independent_variables: Vec<String>,
     /// Dot-namespaced state variables with full metadata.
     pub state_variables: IndexMap<String, ModelVariable>,
@@ -870,14 +870,12 @@ fn scope_template_body(
 /// into array dimensions and carries no such node, so it yields nothing and
 /// stays a pure ODE with `["t"]`.
 ///
-/// **Ordering.** `t` first, then the spatial axes LEXICOGRAPHIC. This is the one
-/// The axes follow DOCUMENT ORDER, like every other ordered field in step 4 —
-/// the order the scan first encounters them, which is the order the document
-/// names them (`full_coupled` → `["t", "lon", "lat", "lev"]`). This used to
-/// collect into a `BTreeSet`, i.e. sorted, on the reasoning that a scanned list
-/// has no document order to preserve. That was wrong: the axis order is the
-/// order a downstream array layout follows, so sorting silently permutes the
-/// modeller's axes.
+/// **Ordering.** `t` first, then the spatial axes in DOCUMENT ORDER, like every
+/// other ordered field in step 4 — the order the scan first encounters them,
+/// which is the order the document names them (`full_coupled` →
+/// `["t", "lon", "lat", "lev"]`). The axes are never sorted: the axis order is
+/// the order a downstream array layout follows, so sorting would silently
+/// permute the modeller's axes.
 fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
     // First-encounter order, deduplicated. `out` doubles as the seen-set: it
     // starts with "t", which also drops a spatial `wrt` naming time.
@@ -1008,9 +1006,10 @@ fn collect_loader_fields(
 
 /// Phase 1 of [`flatten`]: build one [`SystemBlock`] per component — models
 /// first (spec §4.7.5 step 2), then reaction systems lowered to ODE
-/// equations — each with dot-namespaced variables and equations. Component
-/// names are sorted within each kind for deterministic output. Returns the
-/// contributing system names (provenance) alongside the blocks.
+/// equations — each with dot-namespaced variables and equations. Within each
+/// kind, components keep the order the document declares them
+/// (esm-libraries-spec §4.7.5 step 4, "Ordering"). Returns the contributing
+/// system names (provenance) alongside the blocks.
 fn collect_component_systems(
     file: &EsmFile,
 ) -> Result<(Vec<String>, Vec<SystemBlock>), FlattenError> {
@@ -1018,8 +1017,8 @@ fn collect_component_systems(
     let mut per_system: Vec<SystemBlock> = Vec::new();
 
     // Models first (spec §4.7.5 step 2), in the order the DOCUMENT declares
-    // them (esm-libraries-spec §4.7.5 step 4, "Ordering"). Sorting the keys —
-    // what this used to do — is observable in the flattened parameter vector.
+    // them (esm-libraries-spec §4.7.5 step 4, "Ordering"): key order is
+    // observable in the flattened parameter vector, so it is never sorted.
     if let Some(models) = &file.models {
         for (name, model) in models {
             let block = build_model_block(name, model)?;
