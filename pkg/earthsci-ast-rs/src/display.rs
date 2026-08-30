@@ -44,40 +44,65 @@ fn get_precedence(op: &str) -> i32 {
     0 // Default for unknown operators
 }
 
+/// The ONE canonical Greek-letter table; every derived lookup below
+/// ([`greek_name_to_char`], [`greek_char_to_name`], [`greek_to_latex`]) reads
+/// it, mirroring `GREEK_TABLE` in pretty-print.ts. Each row is
+/// `(spelled ascii name, lowercase Unicode char, capital-has-distinct-LaTeX)`:
+/// the flagged capitals render as a `\Gamma`-style command when SPELLED
+/// (`"Gamma"`); the rest look like Latin capitals and carry none. Uppercase
+/// Unicode chars appear in NO view — every backend passes them through
+/// unchanged — and the name↔char views are lowercase-only, both deliberate
+/// (they preserve each backend's prior behavior, and match pretty-print.ts).
+const GREEK_TABLE: &[(&str, char, bool)] = &[
+    ("alpha", 'α', false),
+    ("beta", 'β', false),
+    ("gamma", 'γ', true),
+    ("delta", 'δ', true),
+    ("epsilon", 'ε', false),
+    ("zeta", 'ζ', false),
+    ("eta", 'η', false),
+    ("theta", 'θ', true),
+    ("iota", 'ι', false),
+    ("kappa", 'κ', false),
+    ("lambda", 'λ', true),
+    ("mu", 'μ', false),
+    ("nu", 'ν', false),
+    ("xi", 'ξ', true),
+    ("omicron", 'ο', false),
+    ("pi", 'π', true),
+    ("rho", 'ρ', false),
+    ("sigma", 'σ', true),
+    ("tau", 'τ', false),
+    ("upsilon", 'υ', true),
+    ("phi", 'φ', true),
+    ("chi", 'χ', false),
+    ("psi", 'ψ', true),
+    ("omega", 'ω', true),
+];
+
+/// The Unicode symbol for a spelled lowercase Greek-letter name
+/// (`"pi"` → `'π'`), for the Unicode backend.
+fn greek_name_to_char(name: &str) -> Option<char> {
+    GREEK_TABLE
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|&(_, c, _)| c)
+}
+
+/// The spelled name of a lowercase Greek Unicode char (`'π'` → `"pi"`), for
+/// the ASCII backend.
+fn greek_char_to_name(c: char) -> Option<&'static str> {
+    GREEK_TABLE
+        .iter()
+        .find(|&&(_, ch, _)| ch == c)
+        .map(|&(n, _, _)| n)
+}
+
 /// Convert a string with chemical subscripts and Greek letters to Unicode
 fn format_chemical_subscripts(s: &str) -> String {
-    // Handle Greek letter conversions first
-    let greek_converted = match s {
-        "alpha" => "α",
-        "beta" => "β",
-        "gamma" => "γ",
-        "delta" => "δ",
-        "epsilon" => "ε",
-        "zeta" => "ζ",
-        "eta" => "η",
-        "theta" => "θ",
-        "iota" => "ι",
-        "kappa" => "κ",
-        "lambda" => "λ",
-        "mu" => "μ",
-        "nu" => "ν",
-        "xi" => "ξ",
-        "omicron" => "ο",
-        "pi" => "π",
-        "rho" => "ρ",
-        "sigma" => "σ",
-        "tau" => "τ",
-        "upsilon" => "υ",
-        "phi" => "φ",
-        "chi" => "χ",
-        "psi" => "ψ",
-        "omega" => "ω",
-        _ => s,
-    };
-
-    // If we converted to a Greek letter, return it
-    if greek_converted != s {
-        return greek_converted.to_string();
+    // A name that is exactly a spelled Greek letter becomes its symbol.
+    if let Some(c) = greek_name_to_char(s) {
+        return c.to_string();
     }
 
     // Peel a trailing ionic charge (`Ca2+`, `SO4-2`) so its magnitude renders
@@ -462,84 +487,32 @@ fn to_superscript_str(s: &str) -> String {
 fn greek_to_ascii(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
-        let name = match c {
-            'α' => "alpha",
-            'β' => "beta",
-            'γ' => "gamma",
-            'δ' => "delta",
-            'ε' => "epsilon",
-            'ζ' => "zeta",
-            'η' => "eta",
-            'θ' => "theta",
-            'ι' => "iota",
-            'κ' => "kappa",
-            'λ' => "lambda",
-            'μ' => "mu",
-            'ν' => "nu",
-            'ξ' => "xi",
-            'ο' => "omicron",
-            'π' => "pi",
-            'ρ' => "rho",
-            'σ' => "sigma",
-            'τ' => "tau",
-            'υ' => "upsilon",
-            'φ' => "phi",
-            'χ' => "chi",
-            'ψ' => "psi",
-            'ω' => "omega",
-            other => {
-                out.push(other);
-                continue;
-            }
-        };
-        out.push_str(name);
+        match greek_char_to_name(c) {
+            Some(name) => out.push_str(name),
+            None => out.push(c),
+        }
     }
     out
 }
 
 /// LaTeX command for a variable name that is exactly a Greek letter, given
 /// either as a spelled name (`"phi"`) or a single Unicode character (`"θ"`).
-/// Returns `None` for any non-Greek identifier.
-fn greek_to_latex(name: &str) -> Option<&'static str> {
-    let cmd = match name {
-        "alpha" | "α" => "\\alpha",
-        "beta" | "β" => "\\beta",
-        "gamma" | "γ" => "\\gamma",
-        "delta" | "δ" => "\\delta",
-        "epsilon" | "ε" => "\\epsilon",
-        "zeta" | "ζ" => "\\zeta",
-        "eta" | "η" => "\\eta",
-        "theta" | "θ" => "\\theta",
-        "iota" | "ι" => "\\iota",
-        "kappa" | "κ" => "\\kappa",
-        "lambda" | "λ" => "\\lambda",
-        "mu" | "μ" => "\\mu",
-        "nu" | "ν" => "\\nu",
-        "xi" | "ξ" => "\\xi",
-        "omicron" | "ο" => "\\omicron",
-        "pi" | "π" => "\\pi",
-        "rho" | "ρ" => "\\rho",
-        "sigma" | "σ" => "\\sigma",
-        "tau" | "τ" => "\\tau",
-        "upsilon" | "υ" => "\\upsilon",
-        "phi" | "φ" => "\\phi",
-        "chi" | "χ" => "\\chi",
-        "psi" | "ψ" => "\\psi",
-        "omega" | "ω" => "\\omega",
-        "Gamma" => "\\Gamma",
-        "Delta" => "\\Delta",
-        "Theta" => "\\Theta",
-        "Lambda" => "\\Lambda",
-        "Xi" => "\\Xi",
-        "Pi" => "\\Pi",
-        "Sigma" => "\\Sigma",
-        "Upsilon" => "\\Upsilon",
-        "Phi" => "\\Phi",
-        "Psi" => "\\Psi",
-        "Omega" => "\\Omega",
-        _ => return None,
-    };
-    Some(cmd)
+/// The capitals with a distinct LaTeX command are recognized SPELLED only
+/// (`"Phi"` → `\Phi`); the rest, and every uppercase Unicode char, return
+/// `None` — as does any non-Greek identifier.
+fn greek_to_latex(name: &str) -> Option<String> {
+    for &(n, c, capital_has_latex) in GREEK_TABLE {
+        // A lowercase letter, spelled either way (`"phi"` or `"φ"`).
+        if name == n || name.chars().eq(std::iter::once(c)) {
+            return Some(format!("\\{n}"));
+        }
+        // Its spelled capital (`"Phi"`), when the capital has its own command.
+        let initial = n.chars().next().expect("table names are non-empty");
+        if capital_has_latex && name.strip_prefix(initial.to_ascii_uppercase()) == Some(&n[1..]) {
+            return Some(format!("\\{name}"));
+        }
+    }
+    None
 }
 
 /// The raw identifier string carried by a leaf expression (used by `enum`,
@@ -1612,7 +1585,7 @@ fn format_variable_latex(name: &str) -> String {
     }
     // A variable that is exactly a Greek letter renders as its LaTeX command.
     if let Some(cmd) = greek_to_latex(name) {
-        return cmd.to_string();
+        return cmd;
     }
     format_chemical_latex(name)
 }
@@ -2170,6 +2143,46 @@ mod tests {
         assert_eq!(to_ascii(&zero_expr), "0");
         assert_eq!(to_ascii(&neg_zero_expr), "0");
         assert_eq!(to_ascii(&one_expr), "1");
+    }
+
+    /// The unified Greek table and its three derived views, pinned: the 24
+    /// letters in canonical order, name↔char round-trips, the 11 capitals
+    /// with a distinct LaTeX command, and the deliberate asymmetries — the
+    /// Latin-looking capitals carry no command, and uppercase Unicode chars
+    /// pass through every backend unchanged.
+    #[test]
+    fn the_greek_table_drives_all_three_views() {
+        let names: Vec<&str> = GREEK_TABLE.iter().map(|&(n, _, _)| n).collect();
+        assert_eq!(names, [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
+            "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau",
+            "upsilon", "phi", "chi", "psi", "omega",
+        ]);
+        for &(n, c, _) in GREEK_TABLE {
+            assert_eq!(greek_name_to_char(n), Some(c), "name → char for {n}");
+            assert_eq!(greek_char_to_name(c), Some(n), "char → name for {c}");
+            assert_eq!(greek_to_latex(n).unwrap(), format!("\\{n}"));
+            assert_eq!(greek_to_latex(&c.to_string()).unwrap(), format!("\\{n}"));
+        }
+        let capitals: Vec<&str> = GREEK_TABLE
+            .iter()
+            .filter(|&&(_, _, cap)| cap)
+            .map(|&(n, _, _)| n)
+            .collect();
+        assert_eq!(capitals, [
+            "gamma", "delta", "theta", "lambda", "xi", "pi", "sigma", "upsilon", "phi", "psi",
+            "omega",
+        ]);
+        assert_eq!(greek_to_latex("Theta").as_deref(), Some("\\Theta"));
+        assert_eq!(greek_to_latex("Omega").as_deref(), Some("\\Omega"));
+        // A capital that looks like a Latin letter has no LaTeX command, an
+        // uppercase Unicode char is recognized nowhere, and neither the
+        // all-caps nor a non-Greek spelling is a Greek name.
+        for miss in ["Alpha", "Δ", "GAMMA", "Deltas", "x"] {
+            assert_eq!(greek_to_latex(miss), None, "{miss} must not match");
+        }
+        assert_eq!(greek_to_ascii("θ_Δx"), "theta_Δx");
+        assert_eq!(format_chemical_subscripts("Delta"), "Delta");
     }
 
     #[test]
