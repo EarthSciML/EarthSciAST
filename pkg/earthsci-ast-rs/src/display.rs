@@ -2153,11 +2153,14 @@ mod tests {
     #[test]
     fn the_greek_table_drives_all_three_views() {
         let names: Vec<&str> = GREEK_TABLE.iter().map(|&(n, _, _)| n).collect();
-        assert_eq!(names, [
-            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
-            "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau",
-            "upsilon", "phi", "chi", "psi", "omega",
-        ]);
+        assert_eq!(
+            names,
+            [
+                "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
+                "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau",
+                "upsilon", "phi", "chi", "psi", "omega",
+            ]
+        );
         for &(n, c, _) in GREEK_TABLE {
             assert_eq!(greek_name_to_char(n), Some(c), "name → char for {n}");
             assert_eq!(greek_char_to_name(c), Some(n), "char → name for {c}");
@@ -2169,10 +2172,13 @@ mod tests {
             .filter(|&&(_, _, cap)| cap)
             .map(|&(n, _, _)| n)
             .collect();
-        assert_eq!(capitals, [
-            "gamma", "delta", "theta", "lambda", "xi", "pi", "sigma", "upsilon", "phi", "psi",
-            "omega",
-        ]);
+        assert_eq!(
+            capitals,
+            [
+                "gamma", "delta", "theta", "lambda", "xi", "pi", "sigma", "upsilon", "phi", "psi",
+                "omega",
+            ]
+        );
         assert_eq!(greek_to_latex("Theta").as_deref(), Some("\\Theta"));
         assert_eq!(greek_to_latex("Omega").as_deref(), Some("\\Omega"));
         // A capital that looks like a Latin letter has no LaTeX command, an

@@ -863,8 +863,20 @@ mod tests {
             assert!(is_core_op(name), "`{name}` is excused but not a core op");
         }
         for name in [
-            "neg", "ln", "and", "or", "not", "D", "ic", "const", "true", "fn", "aggregate",
-            "index", "expp", "t",
+            "neg",
+            "ln",
+            "and",
+            "or",
+            "not",
+            "D",
+            "ic",
+            "const",
+            "true",
+            "fn",
+            "aggregate",
+            "index",
+            "expp",
+            "t",
         ] {
             assert!(
                 !is_builtin_function_name(name),
