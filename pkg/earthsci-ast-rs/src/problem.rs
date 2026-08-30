@@ -588,9 +588,69 @@ fn field_components(prob: &EsmProblem) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// Outcome of applying §5.8's precedence to one namespace of stored keys.
+enum NameResolution {
+    /// The stored key `name` designates.
+    Key(String),
+    /// `name` is a bare name whose tail matches these keys (sorted), but the
+    /// gate refused to bind one: a multi-component problem, or a second tail
+    /// match within ONE component — where two keys cannot share a tail, so a
+    /// second match means the component set was miscounted; refuse rather
+    /// than pick.
+    Ambiguous(Vec<String>),
+    /// No rule matched.
+    Miss,
+}
+
+/// The §5.8 name-resolution rule, shared by [`observed_field`] and the
+/// observed-trajectory resolver, in precedence order:
+///
+/// 1. **Exact hit** — `name` is a stored key.
+/// 2. **Component-qualified hit** — `name` is a stored key's [`qualify`]d
+///    spelling (`ISRM.E_PM25` for the pipeline's `E_PM25`). Done as a strip
+///    rather than a scan: `name` is the qualified spelling of key `k` exactly
+///    when it is `model` + `.` + `k`. With an empty `model` the inner strip
+///    fails and this is a no-op.
+/// 3. **Bare name** — `name` carries no `.` and the problem has exactly ONE
+///    component; it then resolves to the unique key with that tail.
+///
+/// A bare name whose tail matches but which rule 3's gate refuses comes back
+/// as [`NameResolution::Ambiguous`] carrying every candidate, so a caller can
+/// put the remedy in its diagnostic — the author has to qualify the name, and
+/// cannot know which spellings exist without being told.
+fn resolve_observed_key<'a>(
+    keys: impl Iterator<Item = &'a String> + Clone,
+    model: &str,
+    single_component: bool,
+    name: &str,
+) -> NameResolution {
+    if keys.clone().any(|k| k == name) {
+        return NameResolution::Key(name.to_string()); // rule 1
+    }
+    if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
+        && keys.clone().any(|k| k == rest)
+    {
+        return NameResolution::Key(rest.to_string()); // rule 2
+    }
+    if name.contains('.') {
+        return NameResolution::Miss; // rule 3 is for bare names only
+    }
+    let mut matches: Vec<&String> = keys.filter(|k| k.rsplit('.').next() == Some(name)).collect();
+    matches.sort();
+    if single_component && matches.len() == 1 {
+        return NameResolution::Key(matches[0].clone());
+    }
+    if matches.is_empty() {
+        NameResolution::Miss
+    } else {
+        NameResolution::Ambiguous(matches.into_iter().cloned().collect())
+    }
+}
+
 /// The build-time field named `name`, from `prob`'s construction.
 ///
-/// Resolution is the cross-binding rule of API_SPEC §5.8, in precedence order:
+/// Resolution is the cross-binding rule of API_SPEC §5.8
+/// ([`resolve_observed_key`]), in precedence order:
 ///
 /// 1. **Exact hit** — `name` is a stored key.
 /// 2. **Component-qualified hit** — `name` is a stored key's [`qualify`]d
@@ -604,78 +664,53 @@ fn field_components(prob: &EsmProblem) -> std::collections::BTreeSet<String> {
 /// the array runtime's materialized setup arrays. One arity, `(prob, name)`,
 /// in every binding.
 pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
-    fn pick<'a, T>(
-        map: &'a HashMap<String, T>,
-        model: &str,
-        single_component: bool,
-        name: &str,
-    ) -> Option<&'a T> {
-        if let Some(v) = map.get(name) {
-            return Some(v); // rule 1
-        }
-        // Rule 2, as a strip rather than a scan: `name` is the qualified
-        // spelling of key `k` exactly when it is `model` + `.` + `k`. With an
-        // empty `model` the inner strip fails and this is a no-op.
-        if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
-            && let Some(v) = map.get(rest)
-        {
-            return Some(v);
-        }
-        if name.contains('.') || !single_component {
-            return None; // rule 3's gate
-        }
-        let mut matches: Vec<&String> = map
-            .keys()
-            .filter(|k| k.rsplit('.').next() == Some(name))
-            .collect();
-        matches.sort();
-        // Within ONE component two keys cannot share a tail, so a second match
-        // here means the component set was miscounted; refuse rather than pick.
-        (matches.len() == 1).then(|| &map[matches[0]])
-    }
-
     let model = prob.model_name.as_deref().unwrap_or("");
     let components = field_components(prob);
     let single = components.len() == 1;
 
-    if let Some(a) = pick(&prob.build.fields, model, single, name) {
-        return Ok(a.clone());
+    if let NameResolution::Key(k) =
+        resolve_observed_key(prob.build.fields.keys(), model, single, name)
+    {
+        return Ok(prob.build.fields[&k].clone());
     }
-    if let Some(a) = pick(&prob.inspection.borrow().setup_arrays, model, single, name) {
-        return Ok(a.clone());
+    let inspection = prob.inspection.borrow();
+    if let NameResolution::Key(k) =
+        resolve_observed_key(inspection.setup_arrays.keys(), model, single, name)
+    {
+        return Ok(inspection.setup_arrays[&k].clone());
     }
     // A bare name that WOULD have resolved but for the component gate gets the
     // remedy in the diagnostic: the author has to qualify it, and cannot know
-    // which spellings exist without being told.
-    if !name.contains('.') && !single {
-        let mut cands: Vec<String> = prob
-            .build
-            .fields
-            .keys()
-            .chain(prob.inspection.borrow().setup_arrays.keys())
-            .filter(|k| k.rsplit('.').next() == Some(name))
-            .map(|k| qualify(model, k))
-            .collect();
+    // which spellings exist without being told. (`Ambiguous` under a SINGLE
+    // component — the miscounted-set refusal — keeps the generic error below,
+    // as it always has.)
+    if !single
+        && let NameResolution::Ambiguous(matches) = resolve_observed_key(
+            prob.build.fields.keys().chain(inspection.setup_arrays.keys()),
+            model,
+            single,
+            name,
+        )
+    {
+        let mut cands: Vec<String> = matches.iter().map(|k| qualify(model, k)).collect();
         cands.sort();
         cands.dedup();
-        if !cands.is_empty() {
-            return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError {
-                    details: format!(
-                        "observed_field: '{name}' is a bare name and this EsmProblem has {} \
-                         components ({}); qualify it as one of: {}",
-                        components.len(),
-                        components
-                            .iter()
-                            .filter(|c| !c.is_empty())
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        cands.join(", ")
-                    ),
-                },
-            ));
-        }
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::InterpreterBuildError {
+                details: format!(
+                    "observed_field: '{name}' is a bare name and this EsmProblem has {} \
+                     components ({}); qualify it as one of: {}",
+                    components.len(),
+                    components
+                        .iter()
+                        .filter(|c| !c.is_empty())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    cands.join(", ")
+                ),
+            },
+        ));
     }
     Err(SimulateError::Compile(
         crate::compile_error::CompileError::InterpreterBuildError {
@@ -795,7 +830,8 @@ pub fn observed_trajectories(
     Ok(asked.into_iter().zip(rows).collect())
 }
 
-/// §5.8's precedence, against a flat list of declared observed names.
+/// §5.8's precedence ([`resolve_observed_key`]), against a flat list of
+/// declared observed names.
 #[cfg(feature = "solve")]
 fn resolve_observed_name(
     declared: &[String],
@@ -803,49 +839,32 @@ fn resolve_observed_name(
     single_component: bool,
     name: &str,
 ) -> Result<String, SimulateError> {
-    if declared.iter().any(|d| d == name) {
-        return Ok(name.to_string()); // rule 1
+    match resolve_observed_key(declared.iter(), model, single_component, name) {
+        NameResolution::Key(k) => Ok(k),
+        // A bare name that WOULD have resolved but for the component count gets
+        // the remedy in the diagnostic — the author cannot qualify it without
+        // being told which spellings exist.
+        NameResolution::Ambiguous(matches) => Err(SimulateError::Compile(
+            crate::compile_error::CompileError::InterpreterBuildError {
+                details: format!(
+                    "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
+                    components_of(declared, model),
+                    matches
+                        .iter()
+                        .map(|k| qualify(model, k))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        )),
+        NameResolution::Miss => Err(SimulateError::Compile(
+            crate::compile_error::CompileError::InterpreterBuildError {
+                details: format!(
+                    "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
+                ),
+            },
+        )),
     }
-    if let Some(rest) = name.strip_prefix(model).and_then(|r| r.strip_prefix('.'))
-        && declared.iter().any(|d| d == rest)
-    {
-        return Ok(rest.to_string()); // rule 2
-    }
-    if !name.contains('.') {
-        let mut matches: Vec<&String> = declared
-            .iter()
-            .filter(|d| d.rsplit('.').next() == Some(name))
-            .collect();
-        matches.sort();
-        // Rule 3's gate. A bare name that WOULD have resolved but for the
-        // component count gets the remedy in the diagnostic — the author cannot
-        // qualify it without being told which spellings exist.
-        if single_component && matches.len() == 1 {
-            return Ok(matches[0].clone());
-        }
-        if !matches.is_empty() {
-            return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError {
-                    details: format!(
-                        "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
-                        components_of(declared, model),
-                        matches
-                            .iter()
-                            .map(|k| qualify(model, k))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                },
-            ));
-        }
-    }
-    Err(SimulateError::Compile(
-        crate::compile_error::CompileError::InterpreterBuildError {
-            details: format!(
-                "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
-            ),
-        },
-    ))
 }
 
 #[cfg(feature = "solve")]
