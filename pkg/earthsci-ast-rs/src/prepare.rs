@@ -15,8 +15,8 @@
 //! loader extent discovery → typed load → provider materialization →
 //! build-time coordinate evaluation → value-invention → member-factor feedback
 //! → gated pre-sliced fetch → dependency-ordered observed-graph evaluation —
-//! and returns a [`PreparedBuild`] whose [`PreparedBuild::observed_field`] reads the
-//! build-time fields back. This is the entry point the isrm.esm runner drives;
+//! and returns a [`PreparedBuild`] whose [`PreparedBuild::fields`] map holds the
+//! build-time fields. This is the entry point the isrm.esm runner drives;
 //! it never integrates.
 //!
 //! **Extent discovery** runs before the typed load because it CLOSES

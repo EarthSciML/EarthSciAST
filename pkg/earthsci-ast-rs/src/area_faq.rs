@@ -9,7 +9,8 @@
 //! ordinary `sum_product` aggregate over the ring index set. This module builds
 //! that FAQ as an [`Expr`] and evaluates it through the **same** generic aggregate
 //! machinery the array simulator uses ([`eval_expression`]) — so the production
-//! conservative-regridding area ([`crate::regrid`]) is the FAQ, and the imperative
+//! conservative-regridding area (a regridding document's build-time aggregate,
+//! evaluated by [`crate::prepare`]'s observed-graph pass) is the FAQ, and the imperative
 //! [`crate::geometry::polygon_area`] / `shoelace_area` / `spherical_area`
 //! functions are only its cross-check oracle.
 //!

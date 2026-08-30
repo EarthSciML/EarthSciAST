@@ -1454,7 +1454,7 @@ struct SystemBlock {
     state_vars: IndexMap<String, ModelVariable>,
     /// EVERY parameter of the component, in declaration order and of every
     /// cadence. The wiener / discrete subsets are re-derived over the FLATTENED
-    /// system in [`classify_flattened`]; they are not carved out here, because
+    /// system in [`flattened_classification`]; they are not carved out here, because
     /// esm-spec §6.3.1's four sets partition `parameters` rather than sitting
     /// beside it.
     parameters: IndexMap<String, ModelVariable>,
@@ -1542,7 +1542,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
             // esm-spec §6.3.1: `brownian_parameters` / `discrete_parameters` /
             // `sampled_parameters` / `constant_parameters` PARTITION the
             // parameters, so a wiener-updated entry is a parameter that ALSO
-            // appears in the Brownian subset — see [`classify_flattened`].
+            // appears in the Brownian subset — see [`flattened_classification`].
             VariableType::Parameter => {
                 parameters.insert(namespaced, cloned);
             }

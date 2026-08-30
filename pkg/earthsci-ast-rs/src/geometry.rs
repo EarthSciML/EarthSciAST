@@ -320,9 +320,11 @@ pub fn spherical_area(ring: &[(f64, f64)]) -> Result<f64, GeometryError> {
 /// Planar ⇒ shoelace / Gauss–Green; spherical / geodesic ⇒ the great-circle-edge
 /// area in **steradians** (unit sphere) via `s2rst`. A degenerate (< 3
 /// vertex) ring — an empty clip — is `0.0`. The conservative-regridding assembly
-/// ([`crate::regrid`]) now computes the build-once factor `A_ij` through the FAQ
-/// ([`crate::area_faq::polygon_area_faq`]); this function is the same value that
-/// FAQ encodes, kept as the independent oracle (mirrors Python `geometry.polygon_area`).
+/// (a regridding document's build-time aggregates, evaluated by
+/// [`crate::prepare`]'s observed-graph pass) computes the build-once factor
+/// `A_ij` through the FAQ ([`crate::area_faq::polygon_area_faq`]); this function
+/// is the same value that FAQ encodes, kept as the independent oracle (mirrors
+/// Python `geometry.polygon_area`).
 ///
 /// Target-agnostic in the strong sense: the spherical arm defers to
 /// [`spherical_area`], which is the SAME pure-Rust `s2rst` kernel on every
