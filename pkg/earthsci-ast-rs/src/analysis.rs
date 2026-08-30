@@ -132,6 +132,7 @@ pub fn collect_subexpressions(expr: &Expr, subexprs: &mut Vec<Expr>) {
 pub fn expressions_equal(expr1: &Expr, expr2: &Expr) -> bool {
     match (expr1, expr2) {
         (Expr::Number(n1), Expr::Number(n2)) => (n1 - n2).abs() < 1e-10,
+        (Expr::Integer(i1), Expr::Integer(i2)) => i1 == i2,
         (Expr::Variable(v1), Expr::Variable(v2)) => v1 == v2,
         (Expr::Operator(op1), Expr::Operator(op2)) => {
             op1.op == op2.op
@@ -181,6 +182,9 @@ pub fn contains_expensive_operations(expr: &Expr) -> bool {
 pub fn expressions_numerically_equal(expr1: &Expr, expr2: &Expr, tolerance: f64) -> bool {
     match (expr1, expr2) {
         (Expr::Number(n1), Expr::Number(n2)) => (n1 - n2).abs() <= tolerance,
+        (Expr::Integer(i1), Expr::Integer(i2)) => {
+            i1 == i2 || (*i1 as f64 - *i2 as f64).abs() <= tolerance
+        }
         (Expr::Variable(v1), Expr::Variable(v2)) => v1 == v2,
         (Expr::Operator(op1), Expr::Operator(op2)) => {
             op1.op == op2.op
@@ -503,5 +507,36 @@ mod tests {
                 "threshold".to_string(),
             ])
         );
+    }
+
+    /// `Integer` leaves compare equal to themselves in both comparators, so an
+    /// integer-bearing subexpression shared by both sides of an equation is
+    /// recognized as a common-subexpression candidate.
+    #[test]
+    fn integer_subexpressions_compare_equal() {
+        // (x + 2) * y — the bare JSON `2` deserializes to `Expr::Integer`.
+        let shared: Expr = serde_json::from_value(serde_json::json!({
+            "op": "*",
+            "args": [{ "op": "+", "args": ["x", 2] }, "y"]
+        }))
+        .expect("valid expression JSON");
+
+        assert!(expressions_equal(&shared, &shared.clone()));
+        assert!(expressions_numerically_equal(&shared, &shared.clone(), 0.0));
+        assert!(expressions_equal(&Expr::Integer(1), &Expr::Integer(1)));
+        assert!(!expressions_equal(&Expr::Integer(1), &Expr::Integer(2)));
+
+        // The shared subtree (depth 3) appears on both sides.
+        let lhs: Expr = serde_json::from_value(serde_json::json!({
+            "op": "+",
+            "args": [{ "op": "*", "args": [{ "op": "+", "args": ["x", 2] }, "y"] }, "a"]
+        }))
+        .expect("valid expression JSON");
+        let rhs: Expr = serde_json::from_value(serde_json::json!({
+            "op": "/",
+            "args": ["b", { "op": "*", "args": [{ "op": "+", "args": ["x", 2] }, "y"] }]
+        }))
+        .expect("valid expression JSON");
+        assert!(contains_common_subexpressions(&lhs, &rhs));
     }
 }
