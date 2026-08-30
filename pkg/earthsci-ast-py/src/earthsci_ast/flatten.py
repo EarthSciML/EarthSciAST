@@ -11,6 +11,7 @@ This module is the Python equivalent of EarthSciAST.jl/src/flatten.jl.
 
 from __future__ import annotations
 
+import os
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -2533,6 +2534,153 @@ def _eval_index_expr(expr: Expr, index_vals: dict[str, int]) -> int | None:
     return None
 
 
+# Kill-switch for the interval-arithmetic shape-inference fast path below —
+# the A/B oracle: with ESS_SHAPE_INTERVAL_DISABLE=1 every aggregate box is
+# enumerated pointwise, which must produce identical shapes.
+_SHAPE_INTERVAL_DISABLE = os.environ.get("ESS_SHAPE_INTERVAL_DISABLE", "") == "1"
+
+
+def _interval_index_expr(expr: Expr, bounds: dict[str, tuple[int, int]]) -> tuple[int, int] | None:
+    """Interval twin of :func:`_eval_index_expr`: evaluate a subscript over
+    ``{symbol: (min, max)}`` bounds, returning the inclusive ``(lo, hi)`` hull.
+
+    Exact (not merely an enclosure) whenever each bound symbol occurs at most
+    once in ``expr``: the supported ops (+, -, *) make such an expression
+    multilinear in independent variables, so its extrema over the box sit at
+    per-symbol min/max corners — precisely what interval arithmetic computes.
+    Callers must reject repeated-symbol subscripts (see
+    :func:`_repeats_bound_symbol`) before trusting the hull. Returns ``None``
+    exactly where the pointwise evaluator does (unbound symbol, unsupported
+    op, bool/non-integer literal) so skip semantics match."""
+    if isinstance(expr, (int, float)):
+        if isinstance(expr, bool):
+            return None
+        try:
+            v = int(expr)
+        except Exception:
+            return None
+        return (v, v)
+    if isinstance(expr, str):
+        return bounds.get(expr)
+    if isinstance(expr, ExprNode):
+        if expr.op == "+" and expr.args:
+            lo, hi = 0, 0
+            for a in expr.args:
+                iv = _interval_index_expr(a, bounds)
+                if iv is None:
+                    return None
+                lo, hi = lo + iv[0], hi + iv[1]
+            return (lo, hi)
+        if expr.op == "-" and expr.args:
+            if len(expr.args) == 1:
+                iv = _interval_index_expr(expr.args[0], bounds)
+                return None if iv is None else (-iv[1], -iv[0])
+            acc = _interval_index_expr(expr.args[0], bounds)
+            if acc is None:
+                return None
+            lo, hi = acc
+            for a in expr.args[1:]:
+                iv = _interval_index_expr(a, bounds)
+                if iv is None:
+                    return None
+                lo, hi = lo - iv[1], hi - iv[0]
+            return (lo, hi)
+        if expr.op == "*" and expr.args:
+            lo, hi = 1, 1
+            for a in expr.args:
+                iv = _interval_index_expr(a, bounds)
+                if iv is None:
+                    return None
+                cands = (lo * iv[0], lo * iv[1], hi * iv[0], hi * iv[1])
+                lo, hi = min(cands), max(cands)
+            return (lo, hi)
+    return None
+
+
+def _repeats_bound_symbol(expr: Expr, bounds: dict[str, tuple[int, int]]) -> bool:
+    """True if any interval-bound symbol occurs more than once in ``expr`` —
+    the one case where the interval hull over-covers the true extremum
+    (``i - i`` is pointwise 0 but hulls to ``[lo-hi, hi-lo]``)."""
+    seen: set[str] = set()
+    for node in walk(expr):
+        if isinstance(node, str) and node in bounds:
+            if node in seen:
+                return True
+            seen.add(node)
+    return False
+
+
+def _collect_index_uses_interval(
+    expr: Expr,
+    state_vars: set[str],
+    out: dict[str, list[list[int]]],
+    bounds: dict[str, tuple[int, int]],
+) -> bool:
+    """Interval-mode twin of :func:`_collect_index_uses`.
+
+    Instead of enumerating an aggregate's Cartesian index box (the pointwise
+    walk is O(box × body) in pure Python — ~230 s per duo momentum case),
+    bind each index symbol to its ``(min, max)`` hull and record ONE tuple of
+    per-dimension interval maxima per state-variable index site. The shape
+    consumer (:func:`infer_variable_shapes`) only reads per-dimension maxima
+    and tuple arity, so this is exactly equivalent to the enumeration
+    wherever the hull is exact.
+
+    Returns ``True`` when every index site under ``expr`` was recorded (or
+    skipped) exactly as the enumerating walk would; ``False`` means some
+    subscript repeats a bound symbol, where the hull over-covers — the caller
+    must fall back to pointwise enumeration of its box. Tuples recorded
+    before a ``False`` are themselves exact, so no rollback is needed."""
+    if _is_number(expr) or isinstance(expr, str) or expr is None:
+        return True
+    if not isinstance(expr, ExprNode):
+        return True
+    if expr.op == "index" and expr.args:
+        head = expr.args[0]
+        if isinstance(head, str) and head in state_vars:
+            tup: list[int] = []
+            ok = True
+            for idx_expr in expr.args[1:]:
+                if _repeats_bound_symbol(idx_expr, bounds):
+                    return False
+                iv = _interval_index_expr(idx_expr, bounds)
+                if iv is None:
+                    ok = False
+                    break
+                tup.append(iv[1])
+            if ok and tup:
+                out.setdefault(head, []).append(tup)
+        for child in iter_children(expr):
+            if not _collect_index_uses_interval(child, state_vars, out, bounds):
+                return False
+        return True
+    if expr.op == "aggregate":
+        ranges = expr.ranges or {}
+        idx_syms = [s for s in (expr.output_idx or []) if isinstance(s, str)]
+        for k in ranges.keys():
+            if k not in idx_syms:
+                idx_syms.append(k)
+        dense_ranges = all(isinstance(ranges.get(s), (list, tuple)) for s in idx_syms)
+        inner = bounds
+        if idx_syms and all(s in ranges for s in idx_syms) and dense_ranges:
+            value_lists = [_expand_range(ranges[s]) for s in idx_syms]
+            if any(not vl for vl in value_lists):
+                # Empty box: the enumerating walk visits no points and
+                # records nothing from the body.
+                return True
+            inner = dict(bounds)
+            for s, vl in zip(idx_syms, value_lists):
+                inner[s] = (min(vl), max(vl))
+        for child in iter_children(expr):
+            if not _collect_index_uses_interval(child, state_vars, out, inner):
+                return False
+        return True
+    for child in iter_children(expr):
+        if not _collect_index_uses_interval(child, state_vars, out, bounds):
+            return False
+    return True
+
+
 def _collect_index_uses(
     expr: Expr,
     state_vars: set[str],
@@ -2598,6 +2746,26 @@ def _collect_index_uses(
             if idx_syms and all(s in ranges for s in idx_syms) and dense_ranges:
                 # Enumerate Cartesian product of index ranges.
                 value_lists = [_expand_range(ranges[s]) for s in idx_syms]
+
+                # Interval fast path: one body walk over (min, max) hulls
+                # instead of O(box) pointwise walks — exact for the affine
+                # single-occurrence subscripts every shipped rule uses (see
+                # _collect_index_uses_interval). Falls through to the
+                # enumeration below only when a subscript repeats a bound
+                # symbol (hull over-covers) or the kill-switch is set.
+                if not _SHAPE_INTERVAL_DISABLE:
+                    if any(not vl for vl in value_lists):
+                        return  # empty box — enumeration visits no points
+                    ibounds: dict[str, tuple[int, int]] = {
+                        k: (v, v) for k, v in bound_indices.items()
+                    }
+                    for s, vl in zip(idx_syms, value_lists):
+                        ibounds[s] = (min(vl), max(vl))
+                    if all(
+                        _collect_index_uses_interval(child, state_vars, out, ibounds)
+                        for child in iter_children(expr)
+                    ):
+                        return
 
                 def rec(pos: int, current: dict[str, int]) -> None:
                     if pos == len(idx_syms):
