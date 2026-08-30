@@ -296,6 +296,57 @@ pub fn is_core_op(op: &str) -> bool {
     arity_of(op).is_some()
 }
 
+/// Is `name` a **built-in function head** — always legal as a bare leaf in
+/// VARIABLE position even though no variable declares it (esm-spec §4.2's
+/// named elementary functions and reductions, `ifelse`, and the event op
+/// `Pre`)?
+///
+/// This is the excuse list the crate's two undefined-variable gates share:
+/// [`crate::structural`]'s reference checks and the array compiler's
+/// free-variable check ([`crate::simulate_array`]) skip these names instead of
+/// reporting an undefined variable. Each gate used to carry its own copy of
+/// the list, with a doc comment asking the other to stay in sync; the registry
+/// holds the one copy now.
+///
+/// Every name here is an evaluable-core op, but deliberately NOT every
+/// identifier-shaped core op is here: the operator spellings `neg`, `ln`,
+/// `and`, `or` and `not` (and the form ops `D`, `ic`, `const`, `true`, …) have
+/// never been excused as variable names, and widening the excuse set would
+/// silently pass a genuinely undeclared variable that happens to carry one of
+/// those names. `builtin_function_names_are_core_and_nothing_widened` pins
+/// both directions.
+#[must_use]
+pub fn is_builtin_function_name(name: &str) -> bool {
+    matches!(
+        name,
+        "exp"
+            | "log"
+            | "log10"
+            | "sqrt"
+            | "abs"
+            | "sign"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "min"
+            | "max"
+            | "floor"
+            | "ceil"
+            | "ifelse"
+            | "Pre"
+    )
+}
+
 /// Is `op` a **scalar operator** — one whose meaning is a POINTWISE map from
 /// scalar operands to a scalar result (esm-spec §4.2 "arithmetic, elementary
 /// functions, comparisons")?
@@ -787,6 +838,37 @@ mod tests {
             assert!(
                 arity_of(op).is_some(),
                 "scalar operator `{op}` has no arity entry"
+            );
+        }
+    }
+
+    /// The built-in-function-head excuse set, pinned exactly: the named
+    /// elementary functions and reductions, `ifelse`, and `Pre`. Every name is
+    /// a core op (the set only CLASSIFIES registry ops), and the
+    /// identifier-shaped core spellings the undefined-variable gates have
+    /// never excused stay excluded — widening the set would silently pass a
+    /// genuinely undeclared variable carrying one of those names.
+    #[test]
+    fn builtin_function_names_are_core_and_nothing_widened() {
+        const BUILTIN: &[&str] = &[
+            "exp", "log", "log10", "sqrt", "abs", "sign", "sin", "cos", "tan", "asin", "acos",
+            "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "min", "max",
+            "floor", "ceil", "ifelse", "Pre",
+        ];
+        for name in BUILTIN {
+            assert!(
+                is_builtin_function_name(name),
+                "`{name}` must be an excused built-in function head"
+            );
+            assert!(is_core_op(name), "`{name}` is excused but not a core op");
+        }
+        for name in [
+            "neg", "ln", "and", "or", "not", "D", "ic", "const", "true", "fn", "aggregate",
+            "index", "expp", "t",
+        ] {
+            assert!(
+                !is_builtin_function_name(name),
+                "`{name}` must not be excused as a built-in function head"
             );
         }
     }

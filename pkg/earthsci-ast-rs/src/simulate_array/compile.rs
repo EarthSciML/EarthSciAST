@@ -7,7 +7,7 @@
 use super::*;
 use crate::aggregate::{effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges};
 use crate::flatten::FlattenedSystem;
-use crate::op_registry::OpError;
+use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
 use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
 use crate::value_invention::{
@@ -900,41 +900,6 @@ fn is_ic_lhs(lhs: &Expr) -> bool {
     matches!(lhs, Expr::Operator(op) if op.op == "ic")
 }
 
-/// Elementary math / reduction names that are always valid as a bare leaf even
-/// though they are not declared variables. Mirrors `structural.rs`
-/// `is_builtin_function` so the same names are excused across the two Rust
-/// gates.
-fn is_builtin_fn_name(name: &str) -> bool {
-    matches!(
-        name,
-        "exp"
-            | "log"
-            | "log10"
-            | "sqrt"
-            | "abs"
-            | "sign"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "asin"
-            | "acos"
-            | "atan"
-            | "atan2"
-            | "sinh"
-            | "cosh"
-            | "tanh"
-            | "asinh"
-            | "acosh"
-            | "atanh"
-            | "min"
-            | "max"
-            | "floor"
-            | "ceil"
-            | "ifelse"
-            | "Pre"
-    )
-}
-
 /// The index / integration symbols a single node BINDS for its body (mirrors
 /// `structural.rs` `bound_index_symbols`): `output_idx` / `ranges` keys, an
 /// `integral` `int_var`, an argmin/argmax `arg`, the BARE subscript positions of
@@ -980,7 +945,7 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
 /// used to credit an `ic` RHS's coordinate symbols into the bound set.
 fn collect_free_bare_symbols(expr: &Expr, out: &mut HashSet<String>) {
     match expr {
-        Expr::Variable(name) if !name.contains('.') && !is_builtin_fn_name(name) => {
+        Expr::Variable(name) if !name.contains('.') && !is_builtin_function_name(name) => {
             out.insert(name.clone());
         }
         Expr::Operator(node) => {
@@ -1034,7 +999,7 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
         Expr::Variable(name) => {
             // A dotted name is a qualified / forcing reference resolved at
             // runtime; builtins and derivative markers are always valid.
-            if name.contains('.') || is_builtin_fn_name(name) || name.starts_with("d(") {
+            if name.contains('.') || is_builtin_function_name(name) || name.starts_with("d(") {
                 return Ok(());
             }
             if scope.contains(name) {

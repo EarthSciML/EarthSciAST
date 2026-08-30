@@ -12,6 +12,7 @@
 //! both layers — see the note in parse.rs before changing a shared rule.
 
 use crate::EsmFile;
+use crate::op_registry::is_builtin_function_name;
 use crate::units::{
     build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
 };
@@ -714,7 +715,7 @@ fn collect_free_symbols(expr: &crate::Expr, out: &mut HashSet<String>) {
         crate::Expr::Variable(name) => {
             // A scoped reference names another system's variable, not a local
             // coordinate.
-            if !name.contains('.') && !is_builtin_function(name) {
+            if !name.contains('.') && !is_builtin_function_name(name) {
                 out.insert(name.clone());
             }
         }
@@ -1922,7 +1923,7 @@ pub(crate) fn validate_expression_references_with_systems(
             // (`t`), the spatial coordinates and `_var` are NOT special-cased
             // here: they are seeded into `defined_vars` as implicitly-declared
             // symbols (esm-spec §4.9.1), so they resolve like any other name.
-            if var_name.starts_with("d(") || is_builtin_function(var_name) {
+            if var_name.starts_with("d(") || is_builtin_function_name(var_name) {
                 return; // These are always valid
             }
 
@@ -2093,38 +2094,6 @@ fn check_broadcast_fn_node(
         message,
         details,
     });
-}
-
-/// Check if a variable name is a built-in function
-fn is_builtin_function(name: &str) -> bool {
-    matches!(
-        name,
-        "exp"
-            | "log"
-            | "log10"
-            | "sqrt"
-            | "abs"
-            | "sign"
-            | "sin"
-            | "cos"
-            | "tan"
-            | "asin"
-            | "acos"
-            | "atan"
-            | "atan2"
-            | "sinh"
-            | "cosh"
-            | "tanh"
-            | "asinh"
-            | "acosh"
-            | "atanh"
-            | "min"
-            | "max"
-            | "floor"
-            | "ceil"
-            | "ifelse"
-            | "Pre"
-    )
 }
 
 fn validate_discrete_event(
@@ -2329,7 +2298,7 @@ fn validate_event_ref_expression(
 ) {
     match expr {
         crate::Expr::Variable(var_name) => {
-            if !is_builtin_function(var_name) && !defined_vars.contains(var_name) {
+            if !is_builtin_function_name(var_name) && !defined_vars.contains(var_name) {
                 errors.push(StructuralError {
                     path: path.to_string(),
                     code: StructuralErrorCode::UndefinedVariable,
