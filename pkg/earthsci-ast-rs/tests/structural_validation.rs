@@ -4,31 +4,87 @@
 
 use earthsci_ast::*;
 
+/// Table-driven guard for invalid fixtures whose rejection is STRUCTURAL:
+/// the contract in tests/invalid/expected_errors.json pins `schema_errors: []`
+/// for each of them, so `load_string` must succeed and `validate()` must
+/// report the pinned error code. A fixture that stops parsing is a hard
+/// failure here — never a silent pass.
+fn assert_fixture_structurally_rejected(name: &str, fixture: &str, code: StructuralErrorCode) {
+    let esm_file = load_string(fixture).unwrap_or_else(|e| {
+        panic!(
+            "{name} must load (expected_errors.json pins schema_errors: [] for it), \
+             but load_string failed: {e}"
+        )
+    });
+    let result = validate(&esm_file);
+    assert!(
+        result.has_errors(),
+        "expected {name} to fail structural validation"
+    );
+    assert!(
+        result
+            .structural_errors
+            .iter()
+            .any(|err| std::mem::discriminant(&err.code) == std::mem::discriminant(&code)),
+        "expected {code} for {name}; got {:?}",
+        result
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Guard for fixtures the contract rejects at the SCHEMA layer
+/// (`schema_errors` non-empty in tests/invalid/expected_errors.json):
+/// `validate_text` must report every pinned (keyword, path), and the
+/// document must be invalid.
+fn assert_fixture_schema_rejected(name: &str, fixture: &str, pinned: &[(&str, &str)]) {
+    let result = validate_text(fixture, None);
+    assert!(!result.is_valid, "expected {name} to be invalid");
+    for (keyword, path) in pinned {
+        assert!(
+            result
+                .schema_errors
+                .iter()
+                .any(|e| e.keyword == *keyword && e.path == *path),
+            "expected schema error ({keyword} @ {path}) for {name}; got {:?}",
+            result
+                .schema_errors
+                .iter()
+                .map(|e| (e.keyword.clone(), e.path.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Guard for fixtures this binding rejects at LOAD time. `load_string` runs a
+/// load-time structural layer (src/parse.rs, "Post-schema structural /
+/// semantic validation") that gates whether a file parses at all, so these
+/// fixtures never reach the typed `validate()` pass. The load error must name
+/// the offending reference — a fixture that starts loading, or that fails for
+/// an unrelated reason, is a hard failure.
+fn assert_fixture_load_rejected(name: &str, fixture: &str, expected_fragments: &[&str]) {
+    let err = match load_string(fixture) {
+        Ok(_) => panic!("{name} must be rejected by load_string's load-time structural layer"),
+        Err(e) => e.to_string(),
+    };
+    for fragment in expected_fragments {
+        assert!(
+            err.contains(fragment),
+            "{name}: load error must mention {fragment:?}, got: {err}"
+        );
+    }
+}
+
 /// Test unknown variable reference error
 #[test]
 fn test_unknown_variable_reference() {
-    let fixture = include_str!("../../../tests/invalid/unknown_variable_ref.esm");
-
-    let parsed_result = load_string(fixture);
-
-    match parsed_result {
-        Ok(esm_file) => {
-            // File parsed successfully, now test structural validation
-            let validation_result = validate(&esm_file);
-            assert!(validation_result.has_errors());
-
-            // Check for unknown variable reference error
-            let has_unknown_var_error = validation_result
-                .structural_errors
-                .clone()
-                .iter()
-                .any(|err| matches!(err.code, StructuralErrorCode::UndefinedVariable));
-            assert!(has_unknown_var_error, "Expected UndefinedVariable error");
-        }
-        Err(_) => {
-            // If it fails to parse, that's also acceptable for this test
-        }
-    }
+    assert_fixture_structurally_rejected(
+        "unknown_variable_ref",
+        include_str!("../../../tests/invalid/unknown_variable_ref.esm"),
+        StructuralErrorCode::UndefinedVariable,
+    );
 }
 
 /// Test undefined species in reactions
@@ -50,30 +106,7 @@ fn test_undefined_species() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_undefined_species_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::UndefinedSpecies));
-                assert!(
-                    has_undefined_species_error,
-                    "Expected UndefinedSpecies error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(name, fixture, StructuralErrorCode::UndefinedSpecies);
     }
 }
 
@@ -96,30 +129,11 @@ fn test_undefined_parameter() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_undefined_param_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::UndefinedParameter));
-                assert!(
-                    has_undefined_param_error,
-                    "Expected UndefinedParameter error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(
+            name,
+            fixture,
+            StructuralErrorCode::UndefinedParameter,
+        );
     }
 }
 
@@ -142,30 +156,11 @@ fn test_equation_count_mismatch() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_equation_count_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::EquationCountMismatch));
-                assert!(
-                    has_equation_count_error,
-                    "Expected EquationCountMismatch error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(
+            name,
+            fixture,
+            StructuralErrorCode::EquationCountMismatch,
+        );
     }
 }
 
@@ -184,30 +179,7 @@ fn test_null_reaction() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_null_reaction_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::NullReaction));
-                assert!(
-                    has_null_reaction_error,
-                    "Expected NullReaction error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(name, fixture, StructuralErrorCode::NullReaction);
     }
 }
 
@@ -326,99 +298,78 @@ fn test_unknown_without_equation() {
     }
 }
 
-/// Test unresolved scoped references
+/// Test unresolved scoped references.
+///
+/// This binding rejects unresolvable coupling references at LOAD time (the
+/// load-time layer's `check_coupling_references`), so `load_string` itself
+/// fails and must name the missing system or variable.
 #[test]
 fn test_unresolved_scoped_reference() {
-    let fixtures = [
-        (
-            "unresolved_scoped_ref",
-            include_str!("../../../tests/invalid/unresolved_scoped_ref.esm"),
-        ),
-        (
-            "unresolved_scoped_ref_missing_system",
-            include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_system.esm"),
-        ),
-        (
-            "unresolved_scoped_ref_missing_variable",
-            include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_variable.esm"),
-        ),
-    ];
-
-    for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_unresolved_ref_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::UnresolvedScopedRef));
-                assert!(
-                    has_unresolved_ref_error,
-                    "Expected UnresolvedScopedRef error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
-    }
+    assert_fixture_load_rejected(
+        "unresolved_scoped_ref",
+        include_str!("../../../tests/invalid/unresolved_scoped_ref.esm"),
+        &["coupling[0]/from", "undefined system 'NonExistentSystem'"],
+    );
+    assert_fixture_load_rejected(
+        "unresolved_scoped_ref_missing_system",
+        include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_system.esm"),
+        &["coupling[0]/from", "undefined system 'NonExistentModel'"],
+    );
+    assert_fixture_load_rejected(
+        "unresolved_scoped_ref_missing_variable",
+        include_str!("../../../tests/invalid/unresolved_scoped_ref_missing_variable.esm"),
+        &[
+            "coupling[0]/from",
+            "variable 'nonexistent_variable' not provided by 'ModelB'",
+        ],
+    );
 }
 
-/// Test event variable undeclared errors
+/// Test event variable undeclared errors.
+///
+/// This binding rejects undeclared event variables at LOAD time (the
+/// load-time layer's `check_event_variable_references`), so `load_string`
+/// itself fails and must name the undeclared variable.
+///
+/// `event_var_undeclared_condition.esm` is NOT here: expected_errors.json
+/// pins it as a SCHEMA-layer rejection (its `continuous_events/0` lacks the
+/// required `conditions` property) — see
+/// `test_event_var_undeclared_condition_schema_rejected`.
 #[test]
 fn test_event_variable_undeclared() {
-    let fixtures = [
-        (
-            "event_var_undeclared",
-            include_str!("../../../tests/invalid/event_var_undeclared.esm"),
-        ),
-        (
-            "event_var_undeclared_condition",
-            include_str!("../../../tests/invalid/event_var_undeclared_condition.esm"),
-        ),
-        (
-            "event_var_undeclared_affects",
-            include_str!("../../../tests/invalid/event_var_undeclared_affects.esm"),
-        ),
-    ];
-
-    for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_event_var_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::EventVarUndeclared));
-                assert!(
-                    has_event_var_error,
-                    "Expected EventVarUndeclared error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
-    }
+    assert_fixture_load_rejected(
+        "event_var_undeclared",
+        include_str!("../../../tests/invalid/event_var_undeclared.esm"),
+        &[
+            "continuous_events[0]/affects[0]/lhs",
+            "undeclared variable 'undefined_velocity'",
+        ],
+    );
+    assert_fixture_load_rejected(
+        "event_var_undeclared_affects",
+        include_str!("../../../tests/invalid/event_var_undeclared_affects.esm"),
+        &[
+            "discrete_events[0]/affects[0]/lhs",
+            "undeclared variable 'undefined_parameter'",
+        ],
+    );
 }
 
-/// Test invalid discrete parameter
+/// event_var_undeclared_condition.esm is rejected at the SCHEMA layer
+/// (expected_errors.json: `must have required property 'conditions'`).
+#[test]
+fn test_event_var_undeclared_condition_schema_rejected() {
+    assert_fixture_schema_rejected(
+        "event_var_undeclared_condition",
+        include_str!("../../../tests/invalid/event_var_undeclared_condition.esm"),
+        &[("required", "/models/BallModel/continuous_events/0")],
+    );
+}
+
+/// Test invalid discrete parameter.
+///
+/// esm 1.0.0: events affect UNKNOWNS only, so an event whose `affects` LHS
+/// names a parameter is `event_affects_parameter`.
 #[test]
 fn test_invalid_discrete_parameter() {
     let fixtures = [
@@ -433,32 +384,11 @@ fn test_invalid_discrete_parameter() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                // esm 1.0.0: events affect UNKNOWNS only, so an event whose
-                // `affects` LHS names a parameter is `event_affects_parameter`.
-                let has_event_affects_parameter = validation_result
-                    .structural_errors
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::EventAffectsParameter));
-                assert!(
-                    has_event_affects_parameter,
-                    "Expected EventAffectsParameter error for {name}: {:?}",
-                    validation_result.structural_errors
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(
+            name,
+            fixture,
+            StructuralErrorCode::EventAffectsParameter,
+        );
     }
 }
 
@@ -477,98 +407,57 @@ fn test_undefined_variable_contexts() {
     ];
 
     for (name, fixture) in fixtures {
-        let parsed_result = load_string(fixture);
-
-        match parsed_result {
-            Ok(esm_file) => {
-                let validation_result = validate(&esm_file);
-                assert!(
-                    validation_result.has_errors(),
-                    "Expected {name} to have validation errors"
-                );
-
-                let has_undefined_var_error = validation_result
-                    .structural_errors
-                    .clone()
-                    .iter()
-                    .any(|err| matches!(err.code, StructuralErrorCode::UndefinedVariable));
-                assert!(
-                    has_undefined_var_error,
-                    "Expected UndefinedVariable error for {name}"
-                );
-            }
-            Err(_) => {
-                // Parse failure is also acceptable
-            }
-        }
+        assert_fixture_structurally_rejected(
+            name,
+            fixture,
+            StructuralErrorCode::UndefinedVariable,
+        );
     }
 }
 
 /// Test undefined system reference
 #[test]
 fn test_undefined_system() {
-    let fixture = include_str!("../../../tests/invalid/undefined_system.esm");
-
-    let parsed_result = load_string(fixture);
-
-    match parsed_result {
-        Ok(esm_file) => {
-            let validation_result = validate(&esm_file);
-            assert!(validation_result.has_errors());
-
-            let has_undefined_system_error = validation_result
-                .structural_errors
-                .clone()
-                .iter()
-                .any(|err| matches!(err.code, StructuralErrorCode::UndefinedSystem));
-            assert!(has_undefined_system_error, "Expected UndefinedSystem error");
-        }
-        Err(_) => {
-            // Parse failure is also acceptable
-        }
-    }
+    assert_fixture_structurally_rejected(
+        "undefined_system",
+        include_str!("../../../tests/invalid/undefined_system.esm"),
+        StructuralErrorCode::UndefinedSystem,
+    );
 }
 
-/// Test multiple errors combined
+/// multiple_errors_combined.esm is rejected at the SCHEMA layer
+/// (expected_errors.json: its `continuous_events/0` lacks the required
+/// `conditions` property, so the structural findings it was written for are
+/// unreachable until the fixture is modernised).
 #[test]
 fn test_multiple_errors_combined() {
-    let fixture = include_str!("../../../tests/invalid/multiple_errors_combined.esm");
-
-    let parsed_result = load_string(fixture);
-
-    match parsed_result {
-        Ok(esm_file) => {
-            let validation_result = validate(&esm_file);
-            assert!(validation_result.has_errors());
-
-            // Should have multiple different error types
-            assert!(
-                validation_result.structural_errors.clone().len() > 1,
-                "Expected multiple validation errors"
-            );
-        }
-        Err(_) => {
-            // Parse failure is also acceptable for a severely malformed file
-        }
-    }
+    assert_fixture_schema_rejected(
+        "multiple_errors_combined",
+        include_str!("../../../tests/invalid/multiple_errors_combined.esm"),
+        &[("required", "/models/BadModel/continuous_events/0")],
+    );
 }
 
-/// Test event error conditions
+/// event_error_conditions.esm is rejected at the SCHEMA layer with four
+/// pinned violations (expected_errors.json).
 #[test]
 fn test_event_error_conditions() {
-    let fixture = include_str!("../../../tests/invalid/event_error_conditions.esm");
-
-    let parsed_result = load_string(fixture);
-
-    match parsed_result {
-        Ok(esm_file) => {
-            let validation_result = validate(&esm_file);
-            assert!(validation_result.has_errors());
-        }
-        Err(_) => {
-            // Parse failure is also acceptable
-        }
-    }
+    assert_fixture_schema_rejected(
+        "event_error_conditions",
+        include_str!("../../../tests/invalid/event_error_conditions.esm"),
+        &[
+            ("oneOf", "/models/ErrorTestModel/discrete_events/1/trigger"),
+            (
+                "required",
+                "/models/ErrorTestModel/discrete_events/2/trigger",
+            ),
+            (
+                "minItems",
+                "/models/ErrorTestModel/discrete_events/3/trigger/times",
+            ),
+            ("required", "/models/ErrorTestModel/discrete_events/4"),
+        ],
+    );
 }
 
 /// Test circular dependency detection.
