@@ -6,7 +6,7 @@
 //! cannot mask a lowering bug, and it clones freely.
 
 use super::super::*;
-use super::exec::run_rhs_oracle;
+use super::exec::{eval_micro_op, run_rhs_oracle};
 use super::ir::*;
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn, Slice};
 use std::cell::RefCell;
@@ -254,7 +254,10 @@ pub(super) fn run_reference(
             Instr::Fused { spec } => {
                 // Straightforward per-element interpretation of the fused
                 // micro-program (independent of the fast executor's chunked
-                // strip-mining), pinning the fusion pass itself.
+                // strip-mining), pinning the fusion pass itself. Micro-op
+                // scalar semantics come from the shared `eval_micro_op`;
+                // operand access here stays bounds-checked slices, so an
+                // out-of-range run offset panics instead of reading UB.
                 let fs = &prog.fused[*spec as usize];
                 let svals: Vec<f64> = fs
                     .scalars
@@ -313,71 +316,7 @@ pub(super) fn run_reference(
                             }
                         };
                         for op in &fs.micro {
-                            match op {
-                                MicroOp::Bin { op, a, b, out } => {
-                                    regs[*out as usize] =
-                                        binary_kernel_of(*op)(get(a, &regs), get(b, &regs));
-                                }
-                                MicroOp::Un { op, a, out } => {
-                                    regs[*out as usize] = unary_kernel_of(*op)(get(a, &regs));
-                                }
-                                MicroOp::Neg { a, out } => {
-                                    regs[*out as usize] = -get(a, &regs);
-                                }
-                                MicroOp::Select { cond, a, b, out } => {
-                                    regs[*out as usize] = if get(cond, &regs) != 0.0 {
-                                        get(a, &regs)
-                                    } else {
-                                        get(b, &regs)
-                                    };
-                                }
-                                MicroOp::Mov { a, out } => {
-                                    regs[*out as usize] = get(a, &regs);
-                                }
-                                MicroOp::Bin2 {
-                                    op1,
-                                    a,
-                                    b,
-                                    op2,
-                                    c,
-                                    swap,
-                                    out,
-                                } => {
-                                    let t = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
-                                    let cv = get(c, &regs);
-                                    regs[*out as usize] = if *swap {
-                                        binary_kernel_of(*op2)(cv, t)
-                                    } else {
-                                        binary_kernel_of(*op2)(t, cv)
-                                    };
-                                }
-                                MicroOp::Bin3 {
-                                    op1,
-                                    a,
-                                    b,
-                                    op2,
-                                    c,
-                                    swap2,
-                                    op3,
-                                    d,
-                                    swap3,
-                                    out,
-                                } => {
-                                    let t1 = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
-                                    let cv = get(c, &regs);
-                                    let t2 = if *swap2 {
-                                        binary_kernel_of(*op2)(cv, t1)
-                                    } else {
-                                        binary_kernel_of(*op2)(t1, cv)
-                                    };
-                                    let dv = get(d, &regs);
-                                    regs[*out as usize] = if *swap3 {
-                                        binary_kernel_of(*op3)(dv, t2)
-                                    } else {
-                                        binary_kernel_of(*op3)(t2, dv)
-                                    };
-                                }
-                            }
+                            eval_micro_op(op, &mut regs, &get);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
@@ -552,4 +491,6 @@ fn exec_gather(plan: &GatherPlan, src: ArrayViewD<'_, f64>) -> ArrayD<f64> {
 
 // The per-cell oracle for one fallback RHS rule lives in `super::exec`
 // (`run_rhs_oracle`), shared between this reference executor and the
-// production fast executor so both fallback arms are the same code.
+// production fast executor so both fallback arms are the same code. Likewise
+// `eval_micro_op` is the shared single definition of micro-op scalar
+// semantics.

@@ -304,7 +304,10 @@ pub(crate) enum MRef {
 /// One micro-op of a fused group. Element semantics are EXACTLY the scalar
 /// kernels of the corresponding [`Instr`] (`binary_kernel_of` /
 /// `unary_kernel_of` / `-x` / `vec_select`'s per-element pick / a plain move),
-/// applied in program order per element.
+/// applied in program order per element. The single executable definition is
+/// `exec::eval_micro_op` (which the per-element interpreters share; the
+/// chunked executor's monomorphized loops are pinned bit-identical to it by
+/// the A/B tests).
 #[derive(Clone, Debug)]
 pub(crate) enum MicroOp {
     Bin {

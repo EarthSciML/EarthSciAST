@@ -1396,6 +1396,73 @@ unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Monomorphized kernel dispatch tables — expanded ONCE, used by BOTH the
+// unfused executor (`run_range`, through the strided `ew1`/`ew2` loops) and
+// the fused chunk executor (`exec_fused_runs`, through `fch1`/`fch2`), so an
+// op given a monomorphized arm in one cannot be missed in the other.
+// ---------------------------------------------------------------------------
+
+/// Dispatch a [`BinCode`] to `$apply!(kernel)` with a monomorphized closure
+/// for each hot op. Each closure body is the IDENTICAL expression to
+/// `binary_kernel_of`'s arm for that op, so this is a pure dispatch hoist —
+/// one indirect kernel call per node (unfused) or per chunk (fused) becomes
+/// an inlined, vectorizable element loop. The arms mirror `vec_combine`'s,
+/// plus the comparison relops feeding `Select` masks; any remaining op falls
+/// through to the shared fn-pointer table itself, so semantics have a single
+/// source either way.
+macro_rules! dispatch_bin_kernel {
+    ($op:expr, $apply:ident) => {
+        match $op {
+            BinCode::Add => $apply!(|x, y| x + y),
+            BinCode::Sub => $apply!(|x, y| x - y),
+            BinCode::Mul => $apply!(|x, y| x * y),
+            BinCode::Div => $apply!(|x, y| x / y),
+            BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
+            BinCode::Min => $apply!(|x: f64, y: f64| x.min(y)),
+            BinCode::Max => $apply!(|x: f64, y: f64| x.max(y)),
+            BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
+            BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
+            BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
+            BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
+            BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
+            BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
+            other => $apply!(binary_kernel_of(*other)),
+        }
+    };
+}
+
+/// Dispatch a [`UnCode`] to `$apply!(kernel)` with a monomorphized closure
+/// for each hot op — the unary counterpart of [`dispatch_bin_kernel`]: each
+/// closure body is the IDENTICAL expression to `unary_kernel_of`'s arm, and
+/// the remaining ops fall through to the fn-pointer table.
+macro_rules! dispatch_un_kernel {
+    ($op:expr, $apply:ident) => {
+        match $op {
+            UnCode::Abs => $apply!(|x: f64| x.abs()),
+            UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
+            UnCode::Exp => $apply!(|x: f64| x.exp()),
+            UnCode::Ln => $apply!(|x: f64| x.ln()),
+            UnCode::Log10 => $apply!(|x: f64| x.log10()),
+            UnCode::Sin => $apply!(|x: f64| x.sin()),
+            UnCode::Cos => $apply!(|x: f64| x.cos()),
+            UnCode::Tanh => $apply!(|x: f64| x.tanh()),
+            UnCode::Floor => $apply!(|x: f64| x.floor()),
+            UnCode::Ceil => $apply!(|x: f64| x.ceil()),
+            UnCode::Sign => $apply!(|x: f64| {
+                if x > 0.0 {
+                    1.0
+                } else if x < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }),
+            other => $apply!(unary_kernel_of(*other)),
+        }
+    };
+}
+
 /// Execute one fused group. Iterates the precompiled run schedule; each run
 /// is strip-mined into `FCHUNK`-element chunks whose micro-ops execute over
 /// the register file, then live-out registers store to the slab. Per element
@@ -1580,54 +1647,24 @@ unsafe fn exec_fused_runs(
                     MicroOp::Bin { op, a, b, out } => {
                         let (a, b) = (msrc(a), msrc(b));
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
-                        // Monomorphized over the same kernel bodies as the
-                        // unfused `Instr::Bin` arm.
-                        unsafe {
-                            match op {
-                                BinCode::Add => fch2(dst, c, a, b, |x, y| x + y),
-                                BinCode::Sub => fch2(dst, c, a, b, |x, y| x - y),
-                                BinCode::Mul => fch2(dst, c, a, b, |x, y| x * y),
-                                BinCode::Div => fch2(dst, c, a, b, |x, y| x / y),
-                                BinCode::Pow => fch2(dst, c, a, b, |x: f64, y: f64| x.powf(y)),
-                                BinCode::Min => fch2(dst, c, a, b, |x: f64, y: f64| x.min(y)),
-                                BinCode::Max => fch2(dst, c, a, b, |x: f64, y: f64| x.max(y)),
-                                BinCode::Eq => fch2(dst, c, a, b, |x, y| (x == y) as i32 as f64),
-                                BinCode::Ne => fch2(dst, c, a, b, |x, y| (x != y) as i32 as f64),
-                                BinCode::Lt => fch2(dst, c, a, b, |x, y| (x < y) as i32 as f64),
-                                BinCode::Le => fch2(dst, c, a, b, |x, y| (x <= y) as i32 as f64),
-                                BinCode::Gt => fch2(dst, c, a, b, |x, y| (x > y) as i32 as f64),
-                                BinCode::Ge => fch2(dst, c, a, b, |x, y| (x >= y) as i32 as f64),
-                                other => fch2(dst, c, a, b, binary_kernel_of(*other)),
-                            }
+                        // Monomorphized over the shared table — the same
+                        // kernel bodies as the unfused `Instr::Bin` arm.
+                        macro_rules! chunk {
+                            ($f:expr) => {
+                                unsafe { fch2(dst, c, a, b, $f) }
+                            };
                         }
+                        dispatch_bin_kernel!(op, chunk);
                     }
                     MicroOp::Un { op, a, out } => {
                         let a = msrc(a);
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
-                        unsafe {
-                            match op {
-                                UnCode::Abs => fch1(dst, c, a, |x: f64| x.abs()),
-                                UnCode::Sqrt => fch1(dst, c, a, |x: f64| x.sqrt()),
-                                UnCode::Exp => fch1(dst, c, a, |x: f64| x.exp()),
-                                UnCode::Ln => fch1(dst, c, a, |x: f64| x.ln()),
-                                UnCode::Log10 => fch1(dst, c, a, |x: f64| x.log10()),
-                                UnCode::Sin => fch1(dst, c, a, |x: f64| x.sin()),
-                                UnCode::Cos => fch1(dst, c, a, |x: f64| x.cos()),
-                                UnCode::Tanh => fch1(dst, c, a, |x: f64| x.tanh()),
-                                UnCode::Floor => fch1(dst, c, a, |x: f64| x.floor()),
-                                UnCode::Ceil => fch1(dst, c, a, |x: f64| x.ceil()),
-                                UnCode::Sign => fch1(dst, c, a, |x: f64| {
-                                    if x > 0.0 {
-                                        1.0
-                                    } else if x < 0.0 {
-                                        -1.0
-                                    } else {
-                                        0.0
-                                    }
-                                }),
-                                other => fch1(dst, c, a, unary_kernel_of(*other)),
-                            }
+                        macro_rules! chunk {
+                            ($f:expr) => {
+                                unsafe { fch1(dst, c, a, $f) }
+                            };
                         }
+                        dispatch_un_kernel!(op, chunk);
                     }
                     MicroOp::Neg { a, out } => {
                         let a = msrc(a);
@@ -1854,9 +1891,102 @@ unsafe fn exec_fused_runs_avx512(
     unsafe { exec_fused_runs(fs, svals, bases, outs, fregs) }
 }
 
+/// The SINGLE definition of micro-op scalar semantics: one element of one
+/// [`MicroOp`], evaluated over a scalar register file. Both cold per-element
+/// interpreters — the test-only reference executor (`refexec`) and the
+/// `ESS_TAPE_FUSE_MODE=elem` measurement arm ([`exec_fused_elem`]) — dispatch
+/// through this function, so they cannot drift from each other. The hot
+/// chunked executor ([`exec_fused_runs`]) applies the SAME kernels in the
+/// same per-element order through its monomorphized chunk loops (a structure
+/// a scalar evaluator cannot back without disturbing it); the A/B tests and
+/// `simd_clone_bit_identity` pin it bit-identical to this definition.
+///
+/// Semantics (see [`MicroOp`] for the full contract):
+/// * `Bin`/`Un` apply [`binary_kernel_of`] / [`unary_kernel_of`] — the same
+///   fn-pointer tables the unfused instructions dispatch through.
+/// * `Neg` is `x → -x`, NOT `0 - x` (which differs on signed zero).
+/// * `Bin2`/`Bin3` operand orientation: the fused intermediate always feeds
+///   the NEXT kernel, and `swap*` records which SIDE it enters on —
+///   `t = op1(a, b); out = swap ? op2(c, t) : op2(t, c)` (likewise `swap2`
+///   then `swap3` for `Bin3`). The constituent kernels are applied strictly
+///   in order — never contracted into a hardware FMA, which would change
+///   bits.
+/// * `get` resolves an [`MRef`] operand (register / broadcast scalar / array
+///   input at the current element, including the [`GHOST_OFF`] `+0.0` read).
+///   Operand reads are pure, so `Select` reading only the taken operand is
+///   value-identical to the chunked executor's load-both blend.
+#[inline(always)]
+pub(super) fn eval_micro_op(op: &MicroOp, regs: &mut [f64], get: impl Fn(&MRef, &[f64]) -> f64) {
+    match op {
+        MicroOp::Bin { op, a, b, out } => {
+            regs[*out as usize] = binary_kernel_of(*op)(get(a, regs), get(b, regs));
+        }
+        MicroOp::Un { op, a, out } => {
+            regs[*out as usize] = unary_kernel_of(*op)(get(a, regs));
+        }
+        MicroOp::Neg { a, out } => {
+            regs[*out as usize] = -get(a, regs);
+        }
+        MicroOp::Select { cond, a, b, out } => {
+            regs[*out as usize] = if get(cond, regs) != 0.0 {
+                get(a, regs)
+            } else {
+                get(b, regs)
+            };
+        }
+        MicroOp::Mov { a, out } => {
+            regs[*out as usize] = get(a, regs);
+        }
+        MicroOp::Bin2 {
+            op1,
+            a,
+            b,
+            op2,
+            c,
+            swap,
+            out,
+        } => {
+            let t = binary_kernel_of(*op1)(get(a, regs), get(b, regs));
+            let cv = get(c, regs);
+            regs[*out as usize] = if *swap {
+                binary_kernel_of(*op2)(cv, t)
+            } else {
+                binary_kernel_of(*op2)(t, cv)
+            };
+        }
+        MicroOp::Bin3 {
+            op1,
+            a,
+            b,
+            op2,
+            c,
+            swap2,
+            op3,
+            d,
+            swap3,
+            out,
+        } => {
+            let t1 = binary_kernel_of(*op1)(get(a, regs), get(b, regs));
+            let cv = get(c, regs);
+            let t2 = if *swap2 {
+                binary_kernel_of(*op2)(cv, t1)
+            } else {
+                binary_kernel_of(*op2)(t1, cv)
+            };
+            let dv = get(d, regs);
+            regs[*out as usize] = if *swap3 {
+                binary_kernel_of(*op3)(dv, t2)
+            } else {
+                binary_kernel_of(*op3)(t2, dv)
+            };
+        }
+    }
+}
+
 /// The per-element measurement arm (`ESS_TAPE_FUSE_MODE=elem`): one scalar
-/// register file, micro-ops dispatched per element through the shared kernel
-/// tables. Bit-identical to the chunked executor (same kernels, same order).
+/// register file, micro-ops dispatched per element through [`eval_micro_op`]
+/// (the single definition of micro-op scalar semantics). Bit-identical to
+/// the chunked executor (same kernels, same order).
 #[inline(never)]
 unsafe fn exec_fused_elem(
     fs: &FusedSpec,
@@ -1893,77 +2023,7 @@ unsafe fn exec_fused_elem(
                 }
             };
             for op in &fs.micro {
-                match op {
-                    MicroOp::Bin { op, a, b, out } => {
-                        let v = binary_kernel_of(*op)(get(a, &regs), get(b, &regs));
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Un { op, a, out } => {
-                        let v = unary_kernel_of(*op)(get(a, &regs));
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Neg { a, out } => {
-                        let v = -get(a, &regs);
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Select { cond, a, b, out } => {
-                        let v = if get(cond, &regs) != 0.0 {
-                            get(a, &regs)
-                        } else {
-                            get(b, &regs)
-                        };
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Mov { a, out } => {
-                        let v = get(a, &regs);
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Bin2 {
-                        op1,
-                        a,
-                        b,
-                        op2,
-                        c,
-                        swap,
-                        out,
-                    } => {
-                        let t = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
-                        let cv = get(c, &regs);
-                        let v = if *swap {
-                            binary_kernel_of(*op2)(cv, t)
-                        } else {
-                            binary_kernel_of(*op2)(t, cv)
-                        };
-                        regs[*out as usize] = v;
-                    }
-                    MicroOp::Bin3 {
-                        op1,
-                        a,
-                        b,
-                        op2,
-                        c,
-                        swap2,
-                        op3,
-                        d,
-                        swap3,
-                        out,
-                    } => {
-                        let t1 = binary_kernel_of(*op1)(get(a, &regs), get(b, &regs));
-                        let cv = get(c, &regs);
-                        let t2 = if *swap2 {
-                            binary_kernel_of(*op2)(cv, t1)
-                        } else {
-                            binary_kernel_of(*op2)(t1, cv)
-                        };
-                        let dv = get(d, &regs);
-                        let v = if *swap3 {
-                            binary_kernel_of(*op3)(dv, t2)
-                        } else {
-                            binary_kernel_of(*op3)(t2, dv)
-                        };
-                        regs[*out as usize] = v;
-                    }
-                }
+                eval_micro_op(op, &mut regs, &get);
             }
             for &(reg, optr) in outs {
                 unsafe { *optr.add(at) = regs[reg as usize] };
@@ -2030,30 +2090,15 @@ fn run_range(
                     let bv = resolve_rv(b, &desc.shape, env, slab_ptr, slot_off, obs);
                     let dst = unsafe { slab_ptr.add(off) };
                     let sh = &desc.shape;
-                    // Monomorphized hot kernels, mirroring `vec_combine`'s
-                    // arms (plus the comparison relops feeding `Select`
-                    // masks): each closure computes the IDENTICAL expression
-                    // to `binary_kernel_of`'s arm, so this is a pure dispatch
-                    // hoist — one indirect call per NODE becomes an inlined,
-                    // vectorizable element loop.
-                    unsafe {
-                        match op {
-                            BinCode::Add => ew2(dst, sh, &av, &bv, |x, y| x + y),
-                            BinCode::Sub => ew2(dst, sh, &av, &bv, |x, y| x - y),
-                            BinCode::Mul => ew2(dst, sh, &av, &bv, |x, y| x * y),
-                            BinCode::Div => ew2(dst, sh, &av, &bv, |x, y| x / y),
-                            BinCode::Pow => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.powf(y)),
-                            BinCode::Min => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.min(y)),
-                            BinCode::Max => ew2(dst, sh, &av, &bv, |x: f64, y: f64| x.max(y)),
-                            BinCode::Eq => ew2(dst, sh, &av, &bv, |x, y| (x == y) as i32 as f64),
-                            BinCode::Ne => ew2(dst, sh, &av, &bv, |x, y| (x != y) as i32 as f64),
-                            BinCode::Lt => ew2(dst, sh, &av, &bv, |x, y| (x < y) as i32 as f64),
-                            BinCode::Le => ew2(dst, sh, &av, &bv, |x, y| (x <= y) as i32 as f64),
-                            BinCode::Gt => ew2(dst, sh, &av, &bv, |x, y| (x > y) as i32 as f64),
-                            BinCode::Ge => ew2(dst, sh, &av, &bv, |x, y| (x >= y) as i32 as f64),
-                            other => ew2(dst, sh, &av, &bv, binary_kernel_of(*other)),
-                        }
+                    // Monomorphized over the shared table
+                    // (`dispatch_bin_kernel`) — one indirect call per NODE
+                    // becomes an inlined, vectorizable element loop.
+                    macro_rules! strided {
+                        ($f:expr) => {
+                            unsafe { ew2(dst, sh, &av, &bv, $f) }
+                        };
                     }
+                    dispatch_bin_kernel!(op, strided);
                 }
             }
             Instr::Un { op, a, out } => {
@@ -2067,34 +2112,15 @@ fn run_range(
                     let av = resolve_rv(a, &desc.shape, env, slab_ptr, slot_off, obs);
                     let dst = unsafe { slab_ptr.add(off) };
                     let sh = &desc.shape;
-                    // Step 4: monomorphized arms for the common unaries (the
-                    // same closure bodies as `unary_kernel_of`, so a pure
-                    // dispatch hoist — one fn-pointer call per ELEMENT becomes
-                    // an inlined loop).
-                    unsafe {
-                        match op {
-                            UnCode::Abs => ew1(dst, sh, &av, |x: f64| x.abs()),
-                            UnCode::Sqrt => ew1(dst, sh, &av, |x: f64| x.sqrt()),
-                            UnCode::Exp => ew1(dst, sh, &av, |x: f64| x.exp()),
-                            UnCode::Ln => ew1(dst, sh, &av, |x: f64| x.ln()),
-                            UnCode::Log10 => ew1(dst, sh, &av, |x: f64| x.log10()),
-                            UnCode::Sin => ew1(dst, sh, &av, |x: f64| x.sin()),
-                            UnCode::Cos => ew1(dst, sh, &av, |x: f64| x.cos()),
-                            UnCode::Tanh => ew1(dst, sh, &av, |x: f64| x.tanh()),
-                            UnCode::Floor => ew1(dst, sh, &av, |x: f64| x.floor()),
-                            UnCode::Ceil => ew1(dst, sh, &av, |x: f64| x.ceil()),
-                            UnCode::Sign => ew1(dst, sh, &av, |x: f64| {
-                                if x > 0.0 {
-                                    1.0
-                                } else if x < 0.0 {
-                                    -1.0
-                                } else {
-                                    0.0
-                                }
-                            }),
-                            other => ew1(dst, sh, &av, unary_kernel_of(*other)),
-                        }
+                    // Step 4: monomorphized arms for the common unaries via
+                    // the shared table (`dispatch_un_kernel`) — one
+                    // fn-pointer call per ELEMENT becomes an inlined loop.
+                    macro_rules! strided {
+                        ($f:expr) => {
+                            unsafe { ew1(dst, sh, &av, $f) }
+                        };
                     }
+                    dispatch_un_kernel!(op, strided);
                 }
             }
             Instr::Neg { a, out } => {
