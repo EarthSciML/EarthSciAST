@@ -283,6 +283,57 @@ pub(super) fn subblock_dest(
     Some(dest)
 }
 
+/// §5.3 filter gate shared by the pure-map and contracted vectorized paths: a
+/// cell (pure map) or combination (contraction) for which the predicate is
+/// false contributes the reduction identity 0̄ (`out = filter ? term :
+/// identity`; acc ⊕ 0̄ = acc), matching the oracle's per-cell
+/// `filter_excludes`. Gate the term with the filter mask —
+/// `vec_select(mask, term, identity)` — reusing the identical predicate the
+/// oracle applies per cell. A SCALAR-false mask replaces the whole term with
+/// the identity; a SCALAR-true keeps it.
+///
+/// Takes ownership of `term`; on `None` (unsupported filter expression, box
+/// mismatch) `term` has been released and the caller bails to the oracle.
+#[allow(clippy::too_many_arguments)]
+fn apply_filter_gate<'a>(
+    term: VecValue<'a>,
+    filter: Option<&Expr>,
+    identity: f64,
+    bx: &VecBox,
+    lo: &[i64],
+    shape: &[usize],
+    ctx: &EvalCtx<'a>,
+    pool: &mut Pool,
+    ops: &mut usize,
+) -> Option<VecValue<'a>> {
+    let f = match filter {
+        None => return Some(term),
+        Some(f) => f,
+    };
+    match eval_vec(f, bx, ctx, pool, ops) {
+        None => {
+            term.release(pool);
+            None
+        }
+        Some(VecValue::Scalar(c)) => {
+            if c != 0.0 {
+                Some(term)
+            } else {
+                term.release(pool);
+                let mut ident = pool.take_array(shape);
+                if identity != 0.0 {
+                    ident.fill(identity);
+                }
+                Some(VecValue::Owned {
+                    data: ident,
+                    origin: lo.iter().copied().collect(),
+                })
+            }
+        }
+        Some(mask) => vec_select(mask, term, VecValue::Scalar(identity), pool),
+    }
+}
+
 /// Try to evaluate an arrayop body over the output box as whole-array kernels.
 /// A pure-map stencil (`contract_names` empty) walks the body once; an einsum
 /// stencil folds the body over its contracted indices ([`eval_vec_contracted`]).
@@ -334,35 +385,18 @@ pub(super) fn try_eval_arrayop_vectorized<'a>(
             cvals: &[],
         };
         let body_v = eval_vec(body, &bx, ctx, pool, &mut ops)?;
-        // Pure-map §5.3 filter: an excluded output cell contributes the reduction
-        // identity 0̄ (`out = filter ? body : identity`), matching the oracle's
-        // per-cell `filter_excludes` on a non-contracting aggregate.
-        match filter {
-            None => body_v,
-            Some(f) => match eval_vec(f, &bx, ctx, pool, &mut ops) {
-                None => {
-                    body_v.release(pool);
-                    return None;
-                }
-                Some(VecValue::Scalar(c)) => {
-                    if c != 0.0 {
-                        body_v
-                    } else {
-                        body_v.release(pool);
-                        let mut ident = pool.take_array(&shape);
-                        let idv = reduce.identity();
-                        if idv != 0.0 {
-                            ident.fill(idv);
-                        }
-                        VecValue::Owned {
-                            data: ident,
-                            origin: lo.clone(),
-                        }
-                    }
-                }
-                Some(mask) => vec_select(mask, body_v, VecValue::Scalar(reduce.identity()), pool)?,
-            },
-        }
+        // Pure-map §5.3 filter: see [`apply_filter_gate`].
+        apply_filter_gate(
+            body_v,
+            filter,
+            reduce.identity(),
+            &bx,
+            &lo,
+            &shape,
+            ctx,
+            pool,
+            &mut ops,
+        )?
     } else {
         eval_vec_contracted(
             output_idx_names,
@@ -621,42 +655,13 @@ pub(super) fn eval_vec_contracted<'a>(
                 return None;
             }
         };
-        // §5.3 filter: a combination for which the predicate is false contributes
-        // the additive identity 0̄ (acc ⊕ 0̄ = acc). Gate the term with the filter
-        // mask — `vec_select(mask, term, identity)` — reusing the identical
-        // predicate the oracle's `filter_excludes` applies per cell. A SCALAR-false
-        // mask replaces the whole term with the identity; a SCALAR-true keeps it.
-        let term = match filter {
-            None => term,
-            Some(f) => match eval_vec(f, &bx, ctx, pool, ops) {
-                None => {
-                    term.release(pool);
-                    acc.release(pool);
-                    return None;
-                }
-                Some(VecValue::Scalar(c)) => {
-                    if c != 0.0 {
-                        term
-                    } else {
-                        term.release(pool);
-                        let mut ident = pool.take_array(shape);
-                        if identity != 0.0 {
-                            ident.fill(identity);
-                        }
-                        VecValue::Owned {
-                            data: ident,
-                            origin: lo.iter().copied().collect(),
-                        }
-                    }
-                }
-                Some(mask) => match vec_select(mask, term, VecValue::Scalar(identity), pool) {
-                    Some(t) => t,
-                    None => {
-                        acc.release(pool);
-                        return None;
-                    }
-                },
-            },
+        // §5.3 filter: see [`apply_filter_gate`].
+        let term = match apply_filter_gate(term, filter, identity, &bx, lo, shape, ctx, pool, ops) {
+            Some(t) => t,
+            None => {
+                acc.release(pool);
+                return None;
+            }
         };
         // `vec_combine` releases both operands on a shape mismatch before
         // returning `None`, so `?` (bail to the oracle) leaks no pooled buffer.
