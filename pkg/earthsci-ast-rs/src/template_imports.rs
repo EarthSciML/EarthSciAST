@@ -11,8 +11,9 @@
 //! 2. merge imported `index_sets` into the document registry;
 //! 3. close and fold this document's metaparameters (loader-API bindings,
 //!    then defaults; `metaparameter_unbound` if still open);
-//! 4. §9.7.3 registration-time body composition (`compose_template_bodies`,
-//!    invoked per component from `lower_expression_templates`);
+//! 4. §9.7.3 registration-time body-reference validation
+//!    (`validate_template_body_references`, invoked per component from
+//!    `lower_expression_templates`);
 //! 5. the §9.6.3 fixpoint on fully-concrete trees.
 //!
 //! Round-trip is Option A, which expands CALL SITES and does NOT delete
@@ -39,7 +40,7 @@
 
 use crate::lower_expression_templates::{
     ExpressionTemplateError, collect_apply_names as compose_collect_apply_names,
-    compose_template_bodies, reject_expression_templates_pre_v04, validate_templates,
+    reject_expression_templates_pre_v04, validate_template_body_references, validate_templates,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -1704,9 +1705,9 @@ fn resolve_import_entry(
 /// Resolve a template-library document in its OWN scope: its imports
 /// (depth-first post-order), then its own templates / index sets /
 /// metaparameters appended in declaration order (esm-spec §9.7.4), then
-/// §9.7.3 body composition — so a BC-layer body reference to an imported
-/// interior stencil closes here, before any `only` filtering by a downstream
-/// importer.
+/// §9.7.3 body-reference validation — so a BC-layer body reference to an
+/// imported interior stencil is checked here, while the referenced template is
+/// still in scope, before any `only` filtering by a downstream importer.
 fn process_library(
     raw: &Value,
     dir: &Path,
@@ -1766,9 +1767,9 @@ fn process_library(
         )?;
     }
 
-    // §9.7.3 body composition in the library's own scope, so downstream
-    // `only` filtering sees closed bodies.
-    compose_template_bodies(&mut scope.templates, origin)?;
+    // §9.7.3 body-reference validation in the library's own scope, before any
+    // downstream `only` filtering can hide a referenced template.
+    validate_template_body_references(&scope.templates, origin)?;
     Ok(scope)
 }
 
@@ -1807,7 +1808,7 @@ fn has_import_machinery(raw: &Value) -> bool {
 /// (`metaparameters` is the loader-API binding site 4; already-closed edge
 /// bindings win, then API bindings, then defaults) and fold,
 /// expression-position substitution, and — for a root library file — §9.7.3
-/// body composition.
+/// body-reference validation.
 ///
 /// Returns an order-preserving JSON tree ready for
 /// [`crate::lower_expression_templates::lower_expression_templates`] with
@@ -1900,9 +1901,9 @@ pub fn resolve_template_machinery(
     // --- fold structural sites on the closed document ---
     fold_closed_document(&mut root, &mut top_templates, &mut doc_isets)?;
 
-    // --- root library file: compose bodies (VALIDATION only) ---
+    // --- root library file: validate template-body references ---
     if is_library {
-        compose_template_bodies(&mut top_templates, "document")?;
+        validate_template_body_references(&top_templates, "document")?;
     }
 
     // esm-spec §9.6.4 rule 5: OPTION A EXPANDS CALL SITES; IT DOES NOT DELETE

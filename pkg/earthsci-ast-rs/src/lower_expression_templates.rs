@@ -316,11 +316,11 @@ pub(crate) fn validate_templates(
             )
         })?;
         // A body MAY reference other match-less in-scope templates via
-        // apply_expression_template nodes (esm-spec §9.7.3); those are
-        // checked (acyclic, depth <= MAX_TEMPLATE_EXPANSION_DEPTH) and
-        // inlined at registration by `compose_template_bodies` — the old
-        // any-nesting rejection is now cycle-only
-        // (`apply_expression_template_recursive_body`).
+        // apply_expression_template nodes (esm-spec §9.7.3); the reference
+        // graph is checked (acyclic — `apply_expression_template_recursive_body`
+        // — and depth <= MAX_TEMPLATE_EXPANSION_DEPTH) at registration by
+        // `validate_template_body_references`, with the references themselves
+        // preserved uninlined (§9.6.4 rule 2).
 
         // An optional `match` pattern turns the entry into an auto-applied
         // rewrite rule (esm-spec §9.6); it MUST NOT contain nested
@@ -447,11 +447,11 @@ pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// Registration-time body **checking** (esm-spec §9.7.3, Option B / esm
-/// 0.9.0): template bodies MAY reference other in-scope MATCH-LESS templates
-/// via `apply_expression_template` nodes. Builds the body-reference graph,
-/// rejects cycles (`apply_expression_template_recursive_body`), references to
-/// undeclared or `match`-bearing templates
+/// Registration-time body-reference **validation** (esm-spec §9.7.3, Option B
+/// / esm 0.9.0): template bodies MAY reference other in-scope MATCH-LESS
+/// templates via `apply_expression_template` nodes. Builds the body-reference
+/// graph, rejects cycles (`apply_expression_template_recursive_body`),
+/// references to undeclared or `match`-bearing templates
 /// (`apply_expression_template_unknown_template`), and chains deeper than
 /// `MAX_TEMPLATE_EXPANSION_DEPTH` templates (`template_body_expansion_too_deep`).
 ///
@@ -459,12 +459,11 @@ pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
 /// are **NOT inlined** — the references are preserved uninlined and denote
 /// their expansion (§9.6.4 rule 2). Target-bearing flags (§9.6.4 rule 3) are
 /// computed separately by [`template_target_bearing`]. This runs BEFORE the
-/// §9.6.3 fixpoint ever consults a `match` rule; it now only validates the DAG.
-/// `templates` is not mutated (the `&mut` is retained for call-site
-/// compatibility with the import machinery). Mirrors the Julia reference
-/// `_compose_template_bodies!`.
-pub(crate) fn compose_template_bodies(
-    templates: &mut Map<String, Value>,
+/// §9.6.3 fixpoint ever consults a `match` rule, validates the DAG only, and
+/// never mutates `templates`. Mirrors the Julia reference
+/// `_compose_template_bodies!` (which likewise only validates).
+pub(crate) fn validate_template_body_references(
+    templates: &Map<String, Value>,
     scope: &str,
 ) -> Result<(), ExpressionTemplateError> {
     if templates.is_empty() {
@@ -827,7 +826,7 @@ fn transitive_reachable(
 /// an op in **T** anywhere (including inside nested references' `bindings`), OR
 /// it references — transitively through the §9.7.3-checked acyclic DAG — a
 /// target-bearing template. The DAG is acyclic (checked by
-/// `compose_template_bodies`), so a memoized DFS terminates. Mirrors the Julia
+/// `validate_template_body_references`), so a memoized DFS terminates. Mirrors the Julia
 /// reference `_template_target_bearing`.
 fn template_target_bearing(named: &Named) -> std::collections::HashMap<String, bool> {
     transitive_reachable(named, |body| direct_t_op(body, &mut PtrSet::default()))
@@ -1882,10 +1881,7 @@ pub fn lower_expression_templates(value: &mut Value) -> Result<(), ExpressionTem
             // validate the body-reference DAG (acyclic, depth-bounded,
             // references resolve to match-less templates). Bodies are NOT
             // inlined — references are preserved (§9.6.4).
-            {
-                let mut chk = templates.clone();
-                compose_template_bodies(&mut chk, &scope_base)?;
-            }
+            validate_template_body_references(&templates, &scope_base)?;
             let named = build_named(&templates);
             let rules = collect_match_rules(&templates, &named, &iset_names, &scope_base)?;
             let target_bearing = template_target_bearing(&named);
