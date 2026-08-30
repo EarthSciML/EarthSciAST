@@ -147,18 +147,13 @@ pub fn expressions_equal(expr1: &Expr, expr2: &Expr) -> bool {
 }
 
 /// Collect the set of variable names referenced anywhere in `expr`.
+///
+/// Delegates to the canonical walker in [`crate::expression`], which visits
+/// the full [`crate::types::ExpressionNode::for_each_child`] child set —
+/// sidecar children (`aggregate.expr`, `filter`, `values`, integral bounds, …)
+/// included, not just `args`.
 pub fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
-    match expr {
-        Expr::Variable(name) => {
-            vars.insert(name.clone());
-        }
-        Expr::Operator(node) => {
-            for arg in &node.args {
-                collect_variables(arg, vars);
-            }
-        }
-        Expr::Number(_) | Expr::Integer(_) => {}
-    }
+    crate::expression::collect_variables(expr, vars);
 }
 
 /// Count operator applications in an expression (leaves contribute zero).
@@ -479,5 +474,34 @@ mod tests {
         let mut nums = 0usize;
         count_numbers_in_expression(&expr, &mut nums);
         assert_eq!(nums, 2);
+    }
+
+    /// Variables that appear only in sidecar child positions (`aggregate.expr`,
+    /// `filter`) — never in `args` — must still be collected. This pins that
+    /// [`collect_variables`] walks the canonical `for_each_child` child set
+    /// rather than only `args`.
+    #[test]
+    fn collect_variables_visits_sidecar_children() {
+        let expr: Expr = serde_json::from_value(serde_json::json!({
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "expr": { "op": "*", "args": ["rate", { "op": "index", "args": ["y", "i"] }] },
+            "filter": { "op": ">", "args": ["threshold", 0.0] },
+            "ranges": { "i": { "from": "cells" } }
+        }))
+        .expect("valid aggregate expression JSON");
+
+        let mut vars = HashSet::new();
+        collect_variables(&expr, &mut vars);
+        assert_eq!(
+            vars,
+            HashSet::from([
+                "rate".to_string(),
+                "y".to_string(),
+                "i".to_string(),
+                "threshold".to_string(),
+            ])
+        );
     }
 }
