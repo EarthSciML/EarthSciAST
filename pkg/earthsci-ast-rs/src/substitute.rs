@@ -480,6 +480,7 @@ pub fn substitute_in_reaction_system_with_context(
 mod tests {
     use super::*;
     use crate::ModelVariable;
+    use crate::test_support::{test_file, var};
     use crate::types::ExpressionNode;
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -548,22 +549,15 @@ mod tests {
 
     #[test]
     fn test_scoped_context_creation() {
-        use crate::{EsmFile, Metadata, VariableType};
+        use crate::{EsmFile, VariableType};
 
         let mut models = IndexMap::new();
         let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("K".to_string()),
                 default: Some(298.15),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("K"))
             },
         );
 
@@ -571,51 +565,14 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                subsystems: None,
-                reference: None,
                 variables: model_variables,
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let context = ScopedContext::from_esm_file(&esm_file);
@@ -632,22 +589,15 @@ mod tests {
 
     #[test]
     fn test_scoped_reference_resolution() {
-        use crate::{EsmFile, Metadata, VariableType};
+        use crate::{EsmFile, VariableType};
 
         let mut models = IndexMap::new();
         let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("K".to_string()),
                 default: Some(298.15),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("K"))
             },
         );
 
@@ -655,51 +605,14 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                subsystems: None,
-                reference: None,
                 variables: model_variables,
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let context = ScopedContext::from_esm_file(&esm_file);
@@ -719,22 +632,15 @@ mod tests {
 
     #[test]
     fn test_substitute_with_scoped_context() {
-        use crate::{EsmFile, Metadata, VariableType};
+        use crate::{EsmFile, VariableType};
 
         let mut models = IndexMap::new();
         let mut model_variables = IndexMap::new();
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("K".to_string()),
                 default: Some(298.15),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("K"))
             },
         );
 
@@ -742,51 +648,14 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                subsystems: None,
-                reference: None,
                 variables: model_variables,
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let context = ScopedContext::from_esm_file(&esm_file);
@@ -805,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_hierarchical_scoped_substitution() {
-        use crate::{EsmFile, Metadata, VariableType};
+        use crate::{EsmFile, VariableType};
 
         // Create a more complex model with hierarchical scoped references
         let mut models = IndexMap::new();
@@ -813,29 +682,15 @@ mod tests {
         model_variables.insert(
             "Chemistry.FastChem.O3".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("mol/L".to_string()),
                 default: Some(40e-9),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("mol/L"))
             },
         );
         model_variables.insert(
             "Chemistry.FastChem.k_rate".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Parameter,
-                units: Some("s-1".to_string()),
                 default: Some(1.8e-12),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, Some("s-1"))
             },
         );
 
@@ -843,51 +698,14 @@ mod tests {
             "Atmosphere".to_string(),
             Model {
                 name: Some("Atmosphere".to_string()),
-                subsystems: None,
-                reference: None,
                 variables: model_variables,
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let context = ScopedContext::from_esm_file(&esm_file);
@@ -1029,22 +847,13 @@ mod tests {
         // Create a model with discrete and continuous events
         let model = Model {
             name: Some("TestModel".to_string()),
-            subsystems: None,
-            reference: None,
             variables: {
                 let mut vars = IndexMap::new();
                 vars.insert(
                     "state_var".to_string(),
                     ModelVariable {
-                        default_units: None,
-                        var_type: VariableType::Unknown,
-                        units: Some("m".to_string()),
                         default: Some(0.0),
-                        description: None,
-                        shape: None,
-                        location: None,
-                        distribution: None,
-                        update: None,
+                        ..var(VariableType::Unknown, Some("m"))
                     },
                 );
                 vars
@@ -1078,12 +887,7 @@ mod tests {
                 priority: None,
                 description: None,
             }]),
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         };
 
         let result = substitute_in_model(&model, &substitutions);

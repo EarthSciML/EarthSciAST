@@ -363,7 +363,8 @@ fn factor_model(model: &mut Model, indep: &str) -> (usize, Vec<usize>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ExpressionNode, Metadata, ModelVariable, VariableType};
+    use crate::test_support::{test_file, var as typed_var};
+    use crate::types::{ExpressionNode, ModelVariable, VariableType};
     use indexmap::IndexMap;
 
     fn var(name: &str) -> Expr {
@@ -391,95 +392,31 @@ mod tests {
         let mut models = IndexMap::new();
         models.insert(model_name.into(), model);
         EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.2.0".into(),
-            metadata: Metadata {
-                name: Some("test".into()),
-                description: None,
-                authors: None,
-                license: None,
-                created: None,
-                modified: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         }
     }
 
     fn state_var() -> ModelVariable {
         ModelVariable {
-            default_units: None,
-            var_type: VariableType::Unknown,
-            units: None,
             default: Some(1.0),
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
+            ..typed_var(VariableType::Unknown, None)
         }
     }
 
     fn observed_var() -> ModelVariable {
-        ModelVariable {
-            default_units: None,
-            var_type: VariableType::Unknown,
-            units: None,
-            default: None,
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
-        }
+        typed_var(VariableType::Unknown, None)
     }
 
     fn param_var() -> ModelVariable {
         ModelVariable {
-            default_units: None,
-            var_type: VariableType::Parameter,
-            units: None,
             default: Some(0.5),
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
+            ..typed_var(VariableType::Parameter, None)
         }
     }
 
     fn empty_model() -> Model {
-        Model {
-            name: None,
-            reference: None,
-            variables: IndexMap::new(),
-            equations: vec![],
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
-        }
+        Model::default()
     }
 
     #[test]

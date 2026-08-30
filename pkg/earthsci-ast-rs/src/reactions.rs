@@ -214,12 +214,8 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
                 var_type,
                 units: species.units.clone(),
                 default: species.default,
-                default_units: None,
                 description: species.description.clone(),
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..Default::default()
             },
         );
     }
@@ -239,12 +235,8 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
                 var_type: VariableType::Parameter,
                 units: param.units.clone(),
                 default: param.default,
-                default_units: None,
                 description: param.description.clone(),
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..Default::default()
             },
         );
     }
@@ -252,19 +244,12 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
     let equations = lower_reactions_to_equations(&system.reactions, &system.species)?;
 
     Ok(Model {
-        name: None,
         reference: system.reference.clone(),
         variables,
         equations,
         discrete_events: system.discrete_events.clone(),
         continuous_events: system.continuous_events.clone(),
-        subsystems: None,
-        description: None,
-        tolerance: None,
-        tests: None,
-        initialization_equations: None,
-        guesses: None,
-        system_kind: None,
+        ..Default::default()
     })
 }
 
@@ -414,16 +399,7 @@ pub fn stoichiometric_matrix(system: &ReactionSystem) -> Vec<Vec<f64>> {
 /// use earthsci_ast::{ReactionSystem, stoichiometric_matrix_parallel};
 ///
 /// // Assuming you have a reaction system
-/// let reaction_system = ReactionSystem {
-///     reference: None,
-///     species: indexmap::IndexMap::new(),
-///     parameters: indexmap::IndexMap::new(),
-///     reactions: vec![],
-///     constraint_equations: None,
-///     discrete_events: None,
-///     continuous_events: None,
-///     subsystems: None,
-/// };
+/// let reaction_system = ReactionSystem::default();
 ///
 /// let matrix = stoichiometric_matrix_parallel(&reaction_system).unwrap();
 /// # }
@@ -515,7 +491,6 @@ mod tests {
         );
 
         let system = ReactionSystem {
-            reference: None,
             species,
             parameters,
             reactions: vec![Reaction {
@@ -529,10 +504,7 @@ mod tests {
                 rate: Expr::Variable("k1".to_string()),
                 reference: None,
             }],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("derives");
@@ -550,7 +522,6 @@ mod tests {
     #[test]
     fn test_derive_odes_simple() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -572,10 +543,7 @@ mod tests {
                     }),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should derive ODEs successfully");
@@ -623,7 +591,6 @@ mod tests {
             },
         );
         let system = ReactionSystem {
-            reference: None,
             species,
             parameters: IndexMap::new(),
             reactions: vec![create_test_reaction(
@@ -631,10 +598,7 @@ mod tests {
                 vec![("B", 1.0)],
                 Expr::Variable("k".to_string()),
             )],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should derive ODEs successfully");
@@ -696,7 +660,6 @@ mod tests {
     #[test]
     fn test_stoichiometric_matrix() {
         let system = ReactionSystem {
-            reference: None,
             species: [
                 create_test_species("A"),
                 create_test_species("B"),
@@ -725,10 +688,7 @@ mod tests {
                     Expr::Variable("k3".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let matrix = stoichiometric_matrix(&system);
@@ -753,14 +713,10 @@ mod tests {
     #[test]
     fn test_stoichiometric_matrix_empty() {
         let system = ReactionSystem {
-            reference: None,
             species: indexmap::IndexMap::new(),
             parameters: IndexMap::new(),
             reactions: vec![],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let matrix = stoichiometric_matrix(&system);
@@ -770,14 +726,10 @@ mod tests {
     #[test]
     fn test_derive_odes_empty_system() {
         let system = ReactionSystem {
-            reference: None,
             species: indexmap::IndexMap::new(),
             parameters: IndexMap::new(),
             reactions: vec![],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should handle empty system");
@@ -788,7 +740,6 @@ mod tests {
     #[test]
     fn test_derive_odes_unknown_species_error() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -798,10 +749,7 @@ mod tests {
                 vec![("A", 1.0)],
                 Expr::Variable("k1".to_string()),
             )],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let result = derive_odes(&system);
@@ -817,7 +765,6 @@ mod tests {
     #[test]
     fn test_derive_odes_mass_action_kinetics() {
         let system = ReactionSystem {
-            reference: None,
             species: [
                 create_test_species("A"),
                 create_test_species("B"),
@@ -834,10 +781,7 @@ mod tests {
                     Expr::Variable("k1".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should derive ODEs successfully");
@@ -871,7 +815,6 @@ mod tests {
     #[test]
     fn test_derive_odes_source_reaction() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -880,10 +823,7 @@ mod tests {
                 // Source reaction: -> A with rate k0 (no substrates)
                 create_test_reaction(vec![], vec![("A", 1.0)], Expr::Variable("k0".to_string())),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should handle source reactions");
@@ -901,7 +841,6 @@ mod tests {
     #[test]
     fn test_derive_odes_sink_reaction() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -914,10 +853,7 @@ mod tests {
                     Expr::Variable("k_deg".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should handle sink reactions");
@@ -946,7 +882,6 @@ mod tests {
     #[test]
     fn test_derive_odes_higher_order_reaction() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A"), create_test_species("B")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -959,10 +894,7 @@ mod tests {
                     Expr::Variable("k1".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should handle higher order reactions");
@@ -995,7 +927,6 @@ mod tests {
     #[test]
     fn test_derive_odes_reactions_with_no_substrates_and_products() {
         let system = ReactionSystem {
-            reference: None,
             species: [create_test_species("A")]
                 .into_iter()
                 .collect::<IndexMap<_, _>>(),
@@ -1005,10 +936,7 @@ mod tests {
                 vec![], // No products
                 Expr::Variable("k1".to_string()),
             )],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let result = derive_odes(&system);
@@ -1024,7 +952,6 @@ mod tests {
     #[test]
     fn test_derive_odes_complex_reaction_network() {
         let system = ReactionSystem {
-            reference: None,
             species: [
                 create_test_species("A"),
                 create_test_species("B"),
@@ -1054,10 +981,7 @@ mod tests {
                     Expr::Variable("k3".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let model = derive_odes(&system).expect("Should handle complex networks");
@@ -1081,7 +1005,6 @@ mod tests {
     #[cfg(feature = "parallel")]
     fn test_stoichiometric_matrix_parallel() {
         let system = ReactionSystem {
-            reference: None,
             species: [
                 create_test_species("A"),
                 create_test_species("B"),
@@ -1104,10 +1027,7 @@ mod tests {
                     Expr::Variable("k2".to_string()),
                 ),
             ],
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         // Test the parallel version

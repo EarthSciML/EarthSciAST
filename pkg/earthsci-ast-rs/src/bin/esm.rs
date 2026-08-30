@@ -1712,29 +1712,19 @@ fn run_extract(
         std::process::exit(1);
     }
 
-    // Create a new ESM file with just the requested component
+    // Create a new ESM file with just the requested component. The extracted
+    // component is a NEW document. Any template call sites it had were
+    // already expanded at load, and metaparameters already folded, so it
+    // declares neither.
     let mut extracted_esm = earthsci_ast::EsmFile {
-        component_templates: None,
-        coordinates: None,
-        coupling_roles: None,
-        // The extracted component is a NEW document. Any template call
-        // sites it had were already expanded at load, and metaparameters
-        // already folded, so it declares neither.
-        expression_templates: None,
-        metaparameters: None,
         esm: esm_file.esm.clone(),
         metadata: esm_file.metadata.clone(),
         // Document-scoped registry (v0.8.0): preserve it on the
         // extracted component so its `{ "from": <set> }` ranges resolve.
         index_sets: esm_file.index_sets.clone(),
-        models: None,
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-        coupling: None,
         domain: esm_file.domain.clone(),
         function_tables: esm_file.function_tables.clone(),
+        ..Default::default()
     };
 
     // Extract the specific component

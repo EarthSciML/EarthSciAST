@@ -534,58 +534,17 @@ pub fn replace_coupling(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Expr, Metadata, VariableType};
-    use indexmap::IndexMap;
+    use crate::test_support::{test_file, var};
+    use crate::{Expr, VariableType};
 
     fn create_empty_esm_file() -> EsmFile {
-        EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        }
+        test_file()
     }
 
     fn create_simple_model() -> Model {
         Model {
-            reference: None,
-            subsystems: None,
             name: Some("Test Model".to_string()),
-            variables: IndexMap::new(),
-            equations: vec![],
-            discrete_events: None,
-            continuous_events: None,
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         }
     }
 
@@ -623,15 +582,8 @@ mod tests {
     fn test_add_variable() {
         let model = create_simple_model();
         let variable = ModelVariable {
-            default_units: None,
-            var_type: VariableType::Parameter,
-            units: Some("mol/L".to_string()),
             default: Some(1.0),
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
+            ..var(VariableType::Parameter, Some("mol/L"))
         };
 
         let result = add_variable(&model, "test_var", variable);
@@ -646,29 +598,12 @@ mod tests {
         let mut model = create_simple_model();
         model.variables.insert(
             "existing_var".to_string(),
-            ModelVariable {
-                default_units: None,
-                var_type: VariableType::Parameter,
-                units: None,
-                default: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
-            },
+            var(VariableType::Parameter, None),
         );
 
         let variable = ModelVariable {
-            default_units: None,
-            var_type: VariableType::Unknown,
-            units: Some("mol/L".to_string()),
             default: Some(1.0),
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
+            ..var(VariableType::Unknown, Some("mol/L"))
         };
 
         let result = add_variable(&model, "existing_var", variable);

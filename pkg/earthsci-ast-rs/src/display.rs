@@ -2246,14 +2246,7 @@ mod tests {
             name: Some("TestModel".to_string()),
             description: Some("Test description".to_string()),
             authors: Some(vec!["Test Author".to_string()]),
-            license: None,
-            created: None,
-            modified: None,
-            tags: None,
-            references: None,
-            system_class: None,
-            dae_info: None,
-            discretized_from: None,
+            ..Default::default()
         };
 
         // Create a simple reaction system
@@ -2303,14 +2296,10 @@ mod tests {
         );
 
         let reaction_system = ReactionSystem {
-            reference: None,
             species,
             parameters,
             reactions,
-            constraint_equations: None,
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
+            ..Default::default()
         };
 
         let mut reaction_systems = IndexMap::new();
@@ -2318,23 +2307,10 @@ mod tests {
 
         // Create ESM file
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
             esm: "0.1.0".to_string(),
             metadata,
-            models: None,
             reaction_systems: Some(reaction_systems),
-            operators: None,
-            enums: None,
-
-            data_sources: None,
-            coupling: None,
-            function_tables: None,
+            ..Default::default()
         };
 
         // Test the display output

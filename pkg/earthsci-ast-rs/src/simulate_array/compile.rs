@@ -497,19 +497,9 @@ impl ArrayCompiled {
         // `[lo, hi]` ranges — what discretized stencils emit — need no
         // registry and work here.
         let model = Model {
-            name: None,
-            reference: None,
             variables,
             equations: flat.equations.clone(),
-            discrete_events: None,
-            continuous_events: None,
-            subsystems: None,
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         };
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve

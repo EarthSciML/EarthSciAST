@@ -2860,17 +2860,7 @@ mod tests {
     /// Build a bare state [`crate::ModelVariable`] carrying only a declared
     /// unit string (all other metadata omitted).
     fn state_var_with_units(units: Option<&str>) -> crate::ModelVariable {
-        crate::ModelVariable {
-            default_units: None,
-            var_type: crate::VariableType::Unknown,
-            units: units.map(str::to_string),
-            default: None,
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
-        }
+        crate::test_support::var(crate::VariableType::Unknown, units)
     }
 
     #[test]
