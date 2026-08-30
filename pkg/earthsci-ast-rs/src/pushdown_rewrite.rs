@@ -39,6 +39,8 @@ use std::fmt;
 
 use serde_json::{Map, Value, json};
 
+use crate::aggregate::{ReduceKind, Semiring};
+
 /// A malformed gate/record encountered while deriving provider gates (mirrors
 /// the Julia `RefreshError` sites in pushdown_rewrite.jl and the Python
 /// `PushdownRewriteError`).
@@ -149,28 +151,51 @@ fn pd_matvec_factors(body: &Value, c_sym: &str, out_syms: &[&str]) -> Option<(St
     Some((aname?.to_string(), ename?.to_string()))
 }
 
-/// (⊕ spelling, 0̄) — mirrors the Julia `_aggregate_oplus_identity` used by
-/// the semiring guard; only the `("+", 0.0)` comparison matters to this pass.
-fn semiring_oplus(semiring: &str) -> Option<(&'static str, f64)> {
-    match semiring {
-        "sum_product" => Some(("+", 0.0)),
-        "max_product" => Some(("max", f64::NEG_INFINITY)),
-        "min_sum" => Some(("min", f64::INFINITY)),
-        "max_sum" => Some(("max", f64::NEG_INFINITY)),
-        "bool_and_or" => Some(("or", 0.0)),
-        _ => None,
+/// The `reduce` spelling of a registry ⊕ — how the guard's string comparison
+/// names each [`ReduceKind`].
+fn reduce_spelling(rk: ReduceKind) -> &'static str {
+    match rk {
+        ReduceKind::Sum => "+",
+        ReduceKind::Product => "*",
+        ReduceKind::Max => "max",
+        ReduceKind::Min => "min",
+        ReduceKind::Or => "or",
+        ReduceKind::And => "and",
     }
 }
 
+/// (⊕ spelling, 0̄) — mirrors the Julia `_aggregate_oplus_identity` used by
+/// the semiring guard; only the `("+", 0.0)` comparison matters to this pass.
+/// DERIVED from the closed §5.1 registry ([`Semiring::from_name`] →
+/// [`Semiring::oplus`] → [`ReduceKind::identity`]) — the same source
+/// `value_invention::vi_oplus` reduces through — so a semiring added to the
+/// registry cannot be missed here.
+fn semiring_oplus(semiring: &str) -> Option<(&'static str, f64)> {
+    let oplus = Semiring::from_name(semiring)?.oplus();
+    Some((reduce_spelling(oplus), oplus.identity()))
+}
+
+/// 0̄ for a legacy `reduce` spelling; identities come from the registry
+/// ([`ReduceKind::identity`]), the string→⊕ domain stays this pass's own.
+///
+/// DISCREPANCY (recorded, not resolved): the registry's legacy arm,
+/// [`crate::aggregate::effective_reduce_kind`], folds `"or"` and every
+/// unrecognized `reduce` spelling into its `Sum` default (the strict-superset
+/// promise), which would spell ⊕ as `"+"` with identity `0` and let this
+/// pass's additive-monoid guard fire on such a node. This pass has always
+/// kept `"or"` as its own ⊕ (the guard then refuses) and refused unrecognized
+/// spellings outright; deriving the domain from `effective_reduce_kind` would
+/// silently widen the rewrite, so only the identities are shared.
 fn oplus_identity(reduce: &str) -> Option<f64> {
-    match reduce {
-        "+" => Some(0.0),
-        "max" => Some(f64::NEG_INFINITY),
-        "min" => Some(f64::INFINITY),
-        "*" => Some(1.0),
-        "or" => Some(0.0),
-        _ => None,
-    }
+    let rk = match reduce {
+        "+" => ReduceKind::Sum,
+        "*" => ReduceKind::Product,
+        "max" => ReduceKind::Max,
+        "min" => ReduceKind::Min,
+        "or" => ReduceKind::Or,
+        _ => return None,
+    };
+    Some(rk.identity())
 }
 
 fn pd_oplus(agg: &Value) -> Option<(String, f64)> {
