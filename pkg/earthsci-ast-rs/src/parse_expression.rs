@@ -1422,8 +1422,8 @@ fn flatten(e: &Expr) -> Expr {
 /// # Errors
 ///
 /// Returns an [`ExpressionParseError`] on malformed input, or on an operator
-/// that has no text surface yet (`table_lookup`, `broadcast`, `enum`,
-/// `intersect_polygon`).
+/// that has no text surface yet (`table_lookup` in its CALL spelling — the
+/// bracket form `visc[T=temp]` parses — `broadcast`, and `enum`).
 ///
 /// # Examples
 ///

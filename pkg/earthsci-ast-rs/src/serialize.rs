@@ -26,7 +26,7 @@ use std::path::Path;
 ///     component_templates: None,
 ///     coordinates: None,
 ///     coupling_roles: None,
-///     esm: "0.1.0".to_string(),
+///     esm: "1.0.0".to_string(),
 ///     metadata: Metadata {
 ///         name: Some("test_model".to_string()),
 ///         description: None,
@@ -54,7 +54,7 @@ use std::path::Path;
 /// };
 ///
 /// let json = to_json(&esm_file).expect("Failed to serialize ESM file");
-/// assert!(json.contains("\"esm\": \"0.1.0\""));
+/// assert!(json.contains("\"esm\": \"1.0.0\""));
 /// ```
 pub fn to_json(esm_file: &EsmFile) -> Result<String, EsmError> {
     serde_json::to_string_pretty(esm_file).map_err(EsmError::JsonParse)
