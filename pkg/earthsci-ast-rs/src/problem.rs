@@ -635,7 +635,9 @@ fn resolve_observed_key<'a>(
     if name.contains('.') {
         return NameResolution::Miss; // rule 3 is for bare names only
     }
-    let mut matches: Vec<&String> = keys.filter(|k| k.rsplit('.').next() == Some(name)).collect();
+    let mut matches: Vec<&String> = keys
+        .filter(|k| k.rsplit('.').next() == Some(name))
+        .collect();
     matches.sort();
     if single_component && matches.len() == 1 {
         return NameResolution::Key(matches[0].clone());
@@ -686,7 +688,10 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
     // as it always has.)
     if !single
         && let NameResolution::Ambiguous(matches) = resolve_observed_key(
-            prob.build.fields.keys().chain(inspection.setup_arrays.keys()),
+            prob.build
+                .fields
+                .keys()
+                .chain(inspection.setup_arrays.keys()),
             model,
             single,
             name,
