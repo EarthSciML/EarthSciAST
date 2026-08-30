@@ -741,7 +741,7 @@ fn propagate_power_dim(
     // indeterminate, but its VALUE is exactly what a power needs. It may arrive
     // as EITHER `Expr::Number` (JSON `2.0`) or `Expr::Integer` (JSON `2`).
     let literal_exp = match &op.args[1] {
-        Expr::Integer(i) => Some(f64::from(*i as i32)),
+        Expr::Integer(i) => Some(*i as f64),
         Expr::Number(n) => Some(*n),
         _ => None,
     };
@@ -2458,6 +2458,25 @@ mod tests {
             u.dimensions.get(&Dimension::Length),
             Some(&Rational::int(2))
         );
+    }
+
+    /// An `Expr::Integer` exponent is an i64 and is read at full width. A value
+    /// above `i32::MAX` has no representable rational dimension exponent, so it
+    /// reports `UnknownUnit` naming the ORIGINAL value — it must not truncate
+    /// to a bogus i32 and propagate a confidently wrong dimension.
+    #[test]
+    fn propagate_huge_integer_exponent_does_not_wrap() {
+        let env = env_of(&[("L", "m")]);
+        let exp = i64::from(i32::MAX) + 6;
+        let expr = op("^", vec![Expr::Variable("L".into()), Expr::Integer(exp)]);
+        let err = Unit::propagate(&expr, &env).unwrap_err();
+        match err {
+            UnitError::UnknownUnit(msg) => assert!(
+                msg.contains(&exp.to_string()),
+                "finding must name the untruncated exponent, got: {msg}"
+            ),
+            other => panic!("expected UnknownUnit, got {other:?}"),
+        }
     }
 
     #[test]
