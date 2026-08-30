@@ -135,11 +135,13 @@ fn test_model_substitution() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
         variables,
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
@@ -205,6 +207,7 @@ fn test_reaction_system_substitution() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -214,6 +217,7 @@ fn test_reaction_system_substitution() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -248,6 +252,9 @@ fn test_reaction_system_substitution() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,

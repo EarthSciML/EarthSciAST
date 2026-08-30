@@ -861,6 +861,7 @@ mod tests {
                 equations: vec![
                     ddt("x", Expr::Variable("rate".to_string())),
                     Equation {
+                        comment: None,
                         lhs: Expr::Variable("rate".to_string()),
                         rhs: Expr::operator(ExpressionNode {
                             op: "*".to_string(),

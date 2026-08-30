@@ -120,6 +120,7 @@ fn op(name: &str, args: Vec<Expr>) -> Expr {
 
 fn ddt(state_name: &str, rhs: Expr) -> Equation {
     Equation {
+        comment: None,
         lhs: Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![var(state_name)],
@@ -148,6 +149,7 @@ fn make_model(
         variables.insert(n, v);
     }
     Model {
+        analyses: None,
         name: Some(name.to_string()),
         subsystems: None,
         reference: None,
@@ -946,6 +948,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
         brownian_parameters: IndexMap::new(),
         field_ics: Vec::new(),
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![var("u")],
@@ -1071,6 +1074,7 @@ fn test_error_grad_in_array_simulator_rejected() {
         vec![state("u", 0.0)],
         vec![],
         vec![Equation {
+            comment: None,
             lhs,
             rhs: arrayop_body,
         }],
@@ -1133,6 +1137,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
     let mut variables = indexmap::IndexMap::new();
     variables.insert("u".to_string(), u);
     let model = Model {
+        analyses: None,
         name: Some("ArrUnknown".to_string()),
         subsystems: None,
         reference: None,
@@ -1140,6 +1145,7 @@ fn test_error_unknown_variable_in_array_model_rejected() {
         // Second equation references the undeclared scalar `undefined_var`.
         equations: vec![
             Equation {
+                comment: None,
                 lhs: good_lhs,
                 rhs: good_rhs,
             },

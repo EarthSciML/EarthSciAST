@@ -1632,6 +1632,202 @@ pub struct ModelTest {
     pub expression_template_imports: Vec<serde_json::Value>,
 }
 
+/// Generated range of values for one [`SweepDimension`] (schema `SweepRange`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SweepRange {
+    /// First value of the range.
+    pub start: f64,
+
+    /// Last value of the range.
+    pub stop: f64,
+
+    /// Number of values (≥ 2 per the schema).
+    pub count: i64,
+
+    /// `"linear"` (default) | `"log"` spacing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<String>,
+}
+
+/// One axis of a [`ParameterSweep`] (schema `SweepDimension`): exactly one of
+/// `values` / `range` is present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SweepDimension {
+    /// Name of the parameter to vary (local to the enclosing component).
+    pub parameter: String,
+
+    /// Enumerated values for this axis; mutually exclusive with `range`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<f64>>,
+
+    /// Generated range for this axis; mutually exclusive with `values`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<SweepRange>,
+}
+
+/// A parameter-sweep specification on a [`ModelAnalysis`] (schema
+/// `ParameterSweep`). Only Cartesian-product sweeps exist: the run count is
+/// the product of the dimensions' lengths.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterSweep {
+    /// Combination strategy; the schema pins it to the constant `"cartesian"`.
+    #[serde(rename = "type")]
+    pub sweep_type: String,
+
+    /// The swept axes, one per parameter.
+    pub dimensions: Vec<SweepDimension>,
+}
+
+/// Axis specification of an analysis [`Plot`] (schema `PlotAxis`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlotAxis {
+    /// Variable or parameter name (local or subsystem-scoped).
+    pub variable: String,
+
+    /// Human-readable axis label; viewers fall back to the variable name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// A [`Plot`]'s `y` field (schema `Plot.y` oneOf): a single axis, or an array
+/// of axes for inline multi-series line/scatter plots. Untagged: an object is
+/// the single-axis form, an array the multi-series form — the two JSON shapes
+/// never collide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PlotY {
+    /// Single y-axis.
+    Axis(PlotAxis),
+    /// Inline multi-series axes (≥ 1 per the schema).
+    Axes(Vec<PlotAxis>),
+}
+
+/// A scalar value derived from a trajectory, used for heatmap / color
+/// channels (schema `PlotValue`). Exactly one of `at_time` / `reduce` should
+/// be given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlotValue {
+    /// Variable whose trajectory is reduced to a scalar per run.
+    pub variable: String,
+
+    /// Simulation time at which to sample the variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_time: Option<f64>,
+
+    /// Time-reduction: `max` | `min` | `mean` | `integral` | `final`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce: Option<String>,
+}
+
+/// A single named series of a multi-series line/scatter [`Plot`] (schema
+/// `PlotSeries`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlotSeries {
+    /// Series display name.
+    pub name: String,
+
+    /// Variable plotted by this series.
+    pub variable: String,
+}
+
+/// A plot specification of a [`ModelAnalysis`] (schema `Plot`). Structural
+/// information only — axes, series selection, value reductions; styling is
+/// the viewer's concern.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Plot {
+    /// Identifier unique within the analysis's `plots` array.
+    pub id: String,
+
+    /// `"line"` | `"scatter"` | `"heatmap"` | `"field_slice"` | `"field_snapshot"`.
+    #[serde(rename = "type")]
+    pub plot_type: String,
+
+    /// Human-readable description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// X-axis specification.
+    pub x: PlotAxis,
+
+    /// Y-axis specification: single axis or inline multi-series array.
+    pub y: PlotY,
+
+    /// Color channel for heatmap / field_snapshot plots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<PlotValue>,
+
+    /// Multiple named series for line/scatter plots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<PlotSeries>>,
+
+    /// For field_slice / field_snapshot: simulation time at which to extract
+    /// the spatial field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_time: Option<f64>,
+
+    /// For field plots: non-plotted spatial dimension name → the numeric
+    /// coordinate at which to slice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_coords: Option<HashMap<String, f64>>,
+
+    /// Iso-levels to overlay as contour lines on a field plot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contours: Option<Vec<f64>>,
+}
+
+/// Inline illustrative analysis of how to run the enclosing component
+/// (schema `Analysis`): run configuration plus plots derived from the
+/// result. Carried by [`Model::analyses`] and [`ReactionSystem::analyses`],
+/// the same way [`ModelTest`] serves both components' `tests`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAnalysis {
+    /// Identifier unique within this component's `analyses` array.
+    pub id: String,
+
+    /// Human-readable description of what this analysis illustrates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Initial state for this run: either the legacy flat scalar-override map
+    /// (name → number) or the esm-spec §11.4 `{type, values}` discriminated
+    /// union, whose `expression` form carries per-cell expression ASTs. Held
+    /// as raw JSON so both branches pass through verbatim (the same
+    /// raw-where-verbatim-is-the-contract treatment as
+    /// [`ModelTest::expression_template_imports`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<serde_json::Value>,
+
+    /// Parameter overrides, keyed by parameter name (local to this component).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<HashMap<String, f64>>,
+
+    /// Simulation time interval for this analysis.
+    pub time_span: TimeSpan,
+
+    /// Optional parameter sweep: when present the analysis is a family of
+    /// runs, one per Cartesian combination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_sweep: Option<ParameterSweep>,
+
+    /// Plot specifications derived from this analysis's run(s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plots: Option<Vec<Plot>>,
+
+    /// esm-spec §9.7.10 / §6.7 per-run template-library imports — authored
+    /// per-run configuration that survives `parse → emit`, exactly as on
+    /// [`ModelTest::expression_template_imports`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expression_template_imports: Vec<serde_json::Value>,
+}
+
 /// A document-scoped index set declared in a model's `index_sets` registry
 /// (RFC semiring-faq-unified-ir §5.2 / §8). Unifies ESM `domain.spatial` grid
 /// dims and ESI categorical index sets under one shape. `kind` selects which
@@ -1770,6 +1966,12 @@ pub struct Model {
     /// Inline validation tests that exercise this model in isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests: Option<Vec<ModelTest>>,
+
+    /// Inline illustrative analyses of how to run this model (schema
+    /// `Model.analyses`); previously unmodelled here and so dropped on
+    /// round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyses: Option<Vec<ModelAnalysis>>,
 
     /// Equations that hold only at t=0 (initialization-only, not time-stepped).
     /// Introduced for aerosol equilibrium / plume-rise style models (gt-ebuq).
@@ -2367,6 +2569,13 @@ pub struct Equation {
 
     /// Right-hand side expression
     pub rhs: Expr,
+
+    /// Author's annotation on this equation (schema `Equation._comment`).
+    /// The schema allows it explicitly alongside `additionalProperties:
+    /// false`, so it is normative document content and must survive
+    /// `parse → emit` — the field exists purely for that pass-through.
+    #[serde(rename = "_comment", default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 impl Default for Equation {
@@ -2374,6 +2583,7 @@ impl Default for Equation {
         Equation {
             lhs: Expr::Integer(0),
             rhs: Expr::Integer(0),
+            comment: None,
         }
     }
 }
@@ -2547,6 +2757,25 @@ pub struct ReactionSystem {
     /// Named child reaction systems (subsystems), keyed by unique identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subsystems: Option<IndexMap<String, serde_json::Value>>,
+
+    /// System-level default numerical tolerance for inline tests (schema
+    /// `ReactionSystem.tolerance`, the [`Model::tolerance`] counterpart);
+    /// previously unmodelled here and so dropped on round trip — as were
+    /// `tests` and `analyses` below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance: Option<Tolerance>,
+
+    /// Inline validation tests that exercise this reaction system in
+    /// isolation (schema `ReactionSystem.tests`, same `Test` entries as
+    /// [`Model::tests`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests: Option<Vec<ModelTest>>,
+
+    /// Inline illustrative analyses of how to run this reaction system
+    /// (schema `ReactionSystem.analyses`, same `Analysis` entries as
+    /// [`Model::analyses`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyses: Option<Vec<ModelAnalysis>>,
 }
 
 /// Chemical species in a reaction system. Keyed by name in the parent map.
@@ -2560,6 +2789,13 @@ pub struct Species {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<f64>,
 
+    /// The unit the `default` VALUE is expressed in, when it is not the
+    /// species' declared `units` (schema `Species.default_units`); previously
+    /// unmodelled here and so dropped on round trip. See
+    /// [`ModelVariable::default_units`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_units: Option<String>,
+
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -2570,8 +2806,15 @@ pub struct Species {
     pub constant: Option<bool>,
 }
 
-/// Parameter in a reaction system
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameter in a reaction system.
+///
+/// Carries the same value machinery as a model parameter (schema
+/// `Parameter`): a fixed `default` or a `distribution`, with an optional
+/// `update` saying when it refreshes — so the field set mirrors the
+/// parameter-side of [`ModelVariable`]. This struct previously modelled only
+/// `units`/`default`/`description`, silently DROPPING the rest on a
+/// `parse → emit` round trip (a `{kind: "data", …}` update block among them).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Parameter {
     /// Physical units
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2581,9 +2824,30 @@ pub struct Parameter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<f64>,
 
+    /// The unit the `default` VALUE is expressed in, when it is not the
+    /// parameter's declared `units`. See [`ModelVariable::default_units`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_units: Option<String>,
+
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// Arrayed-parameter shape: ordered index-set names from the
+    /// document-scoped `index_sets` registry. `None` means scalar. See
+    /// [`ModelVariable::shape`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<Vec<String>>,
+
+    /// Draw the value from a distribution instead of fixing it at `default`
+    /// (mutually exclusive with `default`). See [`ModelVariable::distribution`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<Distribution>,
+
+    /// When this parameter refreshes and what it refreshes from
+    /// (esm-spec §5.4). See [`ModelVariable::update`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<ParameterUpdateSpec>,
 }
 
 /// Chemical reaction

@@ -1344,6 +1344,7 @@ fn apply_variable_map_removals(
                     // is that equation form that makes `to` an observed unknown
                     // (esm-spec §6.3.1).
                     parts.equations.push(Equation {
+                        comment: None,
                         lhs: Expr::Variable(to.clone()),
                         rhs: Expr::operator(node.clone()),
                     });
@@ -1523,6 +1524,7 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         .map(|eq| Equation {
             lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
             rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
+            comment: eq.comment.clone(),
         })
         .collect();
 
@@ -1650,6 +1652,7 @@ fn build_reaction_block(
         .map(|eq| Equation {
             lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
             rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
+            comment: eq.comment,
         })
         .collect();
 
@@ -2269,6 +2272,7 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
                 expanded.push(Equation {
                     lhs: crate::substitute::substitute(&eq.lhs, &subs),
                     rhs: crate::substitute::substitute(&eq.rhs, &subs),
+                    comment: eq.comment.clone(),
                 });
             }
         } else {
@@ -2502,7 +2506,11 @@ fn apply_couple(
         if eq_val.get("lhs").is_some() || eq_val.get("rhs").is_some() {
             let lhs = parse_connector_side(eq_val, "lhs", systems)?;
             let rhs = parse_connector_side(eq_val, "rhs", systems)?;
-            new_equations.push(Equation { lhs, rhs });
+            new_equations.push(Equation {
+                comment: None,
+                lhs,
+                rhs,
+            });
         } else if eq_val.get("to").is_some() {
             inject_connector_term(eq_val, systems, per_system)?;
         } else {

@@ -31,11 +31,13 @@ fn test_undefined_variable_in_model() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
         variables,
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::Variable("y".to_string()), // 'y' is not defined
             rhs: Expr::Number(1.0),
         }],
@@ -133,16 +135,19 @@ fn test_equation_count_mismatch() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
         variables,
         equations: vec![
             Equation {
+                comment: None,
                 lhs: Expr::Variable("x".to_string()),
                 rhs: Expr::Number(1.0),
             },
             Equation {
+                comment: None,
                 lhs: Expr::Variable("x".to_string()),
                 rhs: Expr::Number(2.0),
             },
@@ -217,6 +222,7 @@ fn test_undefined_species_in_reaction() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -242,6 +248,9 @@ fn test_undefined_species_in_reaction() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -354,6 +363,7 @@ fn test_valid_file_passes() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Valid Model".to_string()),

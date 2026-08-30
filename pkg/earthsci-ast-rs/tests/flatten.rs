@@ -101,6 +101,7 @@ fn reaction_system(
             (
                 n.to_string(),
                 Species {
+                    default_units: None,
                     units: None,
                     default: d,
                     description: None,
@@ -114,6 +115,10 @@ fn reaction_system(
         parameters.insert(
             name.to_string(),
             Parameter {
+                default_units: None,
+                shape: None,
+                distribution: None,
+                update: None,
                 units: None,
                 default,
                 description: None,
@@ -121,6 +126,9 @@ fn reaction_system(
         );
     }
     ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         reference: None,
         species,
         parameters,
@@ -210,11 +218,13 @@ fn flatten_mixed_model_and_reaction_system() {
     models.insert(
         "dyn".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: model_vars,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("y"),
                 rhs: Expr::Number(1.0),
             }],
@@ -404,11 +414,13 @@ fn flatten_conflicting_derivative_raises_error() {
     models.insert(
         "sys".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: model_vars,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("X"),
                 rhs: Expr::Number(0.0),
             }],
@@ -516,11 +528,13 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "A".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars_a,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("u"),
                 rhs: var("k"),
             }],
@@ -537,11 +551,13 @@ fn flatten_operator_compose_sums_matched_rhses() {
     models.insert(
         "B".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars_b,
             equations: vec![Equation {
+                comment: None,
                 lhs: Expr::operator(ExpressionNode {
                     op: "D".to_string(),
                     args: vec![Expr::Variable("A.u".to_string())],
@@ -662,11 +678,13 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "M".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars_m,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("u"),
                 rhs: var("T"),
             }],
@@ -683,6 +701,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     models.insert(
         "S".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
@@ -758,11 +777,13 @@ fn flatten_couple_includes_connector_equations() {
     models.insert(
         "A".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars_a,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("x"),
                 rhs: Expr::Number(0.0),
             }],
@@ -835,11 +856,13 @@ fn flatten_model_wraps_and_namespaces_under_declared_name() {
         },
     );
     let model = Model {
+        analyses: None,
         subsystems: None,
         name: Some("Nested".to_string()),
         reference: None,
         variables: vars,
         equations: vec![Equation {
+            comment: None,
             lhs: ddt("q"),
             rhs: Expr::Number(1.0),
         }],
@@ -891,11 +914,13 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
     models.insert(
         "transport".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("c"),
                 // RHS contains grad(c, x) — not supported at Rust Core tier.
                 rhs: Expr::operator(ExpressionNode {
@@ -973,11 +998,13 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     models.insert(
         "pde".to_string(),
         Model {
+            analyses: None,
             subsystems: None,
             name: None,
             reference: None,
             variables: vars,
             equations: vec![Equation {
+                comment: None,
                 lhs: ddt("c"),
                 rhs: Expr::operator(ExpressionNode {
                     op: "D".to_string(),

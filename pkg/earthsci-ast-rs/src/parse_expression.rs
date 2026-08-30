@@ -1496,6 +1496,7 @@ pub fn parse_equation(src: &str) -> Result<Equation, ExpressionParseError> {
     lhs_toks.push(Tok::simple(Kind::Eof, toks[split].pos));
     let rhs_toks: Vec<Tok> = toks[split + 1..].to_vec();
     Ok(Equation {
+        comment: None,
         lhs: Parser::new(lhs_toks).parse_entry()?,
         rhs: Parser::new(rhs_toks).parse_entry()?,
     })

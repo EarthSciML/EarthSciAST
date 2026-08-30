@@ -118,6 +118,7 @@ mod tests {
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
+                    comment: None,
                     lhs: Expr::Variable("d(x)/dt".to_string()),
                     rhs: Expr::Number(1.0),
                 }],

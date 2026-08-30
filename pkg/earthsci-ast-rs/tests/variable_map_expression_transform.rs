@@ -76,6 +76,7 @@ fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable
 
 fn make_model(variables: IndexMap<String, ModelVariable>, equations: Vec<Equation>) -> Model {
     Model {
+        analyses: None,
         subsystems: None,
         name: None,
         reference: None,
@@ -148,6 +149,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
         make_model(
             vars_src,
             vec![Equation {
+                comment: None,
                 lhs: Expr::Variable("F".to_string()),
                 rhs: Expr::Number(4.0),
             }],
@@ -158,6 +160,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
         make_model(
             vars_sink,
             vec![Equation {
+                comment: None,
                 lhs: ddt("u"),
                 rhs: Expr::Variable("F_in".to_string()),
             }],

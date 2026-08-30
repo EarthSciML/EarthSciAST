@@ -37,6 +37,7 @@ pub(crate) fn var(vt: VariableType, units: Option<&str>) -> ModelVariable {
 /// LHS.
 pub(crate) fn ddt(target: &str, rhs: Expr) -> Equation {
     Equation {
+        comment: None,
         lhs: Expr::operator(ExpressionNode {
             op: "D".to_string(),
             args: vec![Expr::Variable(target.to_string())],

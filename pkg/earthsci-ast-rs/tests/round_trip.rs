@@ -83,7 +83,6 @@ fn assert_lossless_round_trip(name: &str, fixture: &str) -> EsmFile {
 
 /// Test round-trip serialization for minimal chemistry fixture
 #[test]
-#[ignore = "exposes round-trip field drop: reaction-system parameters lose `shape` and `update` (types.rs `Parameter` models only units/default/description); tracked"]
 fn test_minimal_chemistry_round_trip() {
     assert_lossless_round_trip(
         "minimal_chemistry",
@@ -124,7 +123,6 @@ fn test_metadata_variations_round_trip() {
 
 /// Test round-trip for coupled atmospheric system
 #[test]
-#[ignore = "exposes round-trip field drop: `Equation` loses the schema-sanctioned `_comment` field (esm-schema.json Equation allows it; types.rs `Equation` has only lhs/rhs); tracked"]
 fn test_coupled_atmospheric_system_round_trip() {
     assert_lossless_round_trip(
         "coupled_atmospheric_system",
@@ -185,7 +183,6 @@ fn test_coupling_round_trip() {
 
 /// Test round-trip for data loaders
 #[test]
-#[ignore = "exposes round-trip field drop: `Equation` loses the schema-sanctioned `_comment` field; tracked (same defect as test_coupled_atmospheric_system_round_trip)"]
 fn test_data_sources_round_trip() {
     assert_lossless_round_trip(
         "data_sources_comprehensive",
@@ -202,9 +199,9 @@ fn test_data_sources_round_trip() {
 /// pins from the other side (esm-libraries-spec §8). Round-tripping a document
 /// the loader refuses is not a thing this test can assert.
 ///
-/// `comprehensive_compatibility_test.esm` has its own (currently ignored)
-/// test below: it carries reaction-system parameter `shape`/`update` fields
-/// the round-trip drops.
+/// `comprehensive_compatibility_test.esm` has its own test below: it carries
+/// the reaction-system parameter `shape`/`update` fields the round-trip once
+/// dropped.
 #[test]
 fn test_version_compatibility_round_trip() {
     assert_lossless_round_trip(
@@ -214,7 +211,6 @@ fn test_version_compatibility_round_trip() {
 }
 
 #[test]
-#[ignore = "exposes round-trip field drop: reaction-system parameters lose `shape` and `update`; tracked (same defect as test_minimal_chemistry_round_trip)"]
 fn test_comprehensive_compatibility_round_trip() {
     assert_lossless_round_trip(
         "comprehensive_compatibility_test",
@@ -252,8 +248,8 @@ fn test_mathematical_correctness_round_trip() {
 /// index arguments preserved.
 ///
 /// The FULL lossless comparison for this fixture lives in
-/// `test_index_outside_arrayop_lossless` (currently ignored: the fixture's
-/// equation `_comment` fields are dropped).
+/// `test_index_outside_arrayop_lossless`, which also pins the fixture's
+/// equation `_comment` fields.
 #[test]
 fn test_index_outside_arrayop_round_trip() {
     let fixture = include_str!("../../../tests/indexing/idx_outside_arrayop.esm");
@@ -282,7 +278,6 @@ fn test_index_outside_arrayop_round_trip() {
 }
 
 #[test]
-#[ignore = "exposes round-trip field drop: `Equation` loses the schema-sanctioned `_comment` field; tracked (same defect as test_coupled_atmospheric_system_round_trip)"]
 fn test_index_outside_arrayop_lossless() {
     assert_lossless_round_trip(
         "idx_outside_arrayop",
@@ -311,7 +306,6 @@ fn test_scoping_round_trip() {
 
 /// Test round-trip for metadata inheritance
 #[test]
-#[ignore = "exposes round-trip field drop: reaction-system parameters lose `shape` and `update`; tracked (same defect as test_minimal_chemistry_round_trip)"]
 fn test_metadata_inheritance_round_trip() {
     assert_lossless_round_trip(
         "metadata_inheritance_coupled",
@@ -555,7 +549,6 @@ fn test_fractional_stoichiometry_round_trip() {
 
 /// v0.5.0: tests_analyses_comprehensive fixture (includes multi-series y array form) round-trips.
 #[test]
-#[ignore = "exposes round-trip field drop: `Model` loses `analyses`, and `ReactionSystem` loses `tolerance`, `tests`, and `analyses` (types.rs models none of them); tracked"]
 fn test_tests_analyses_comprehensive_round_trip() {
     assert_lossless_round_trip(
         "tests_analyses_comprehensive",

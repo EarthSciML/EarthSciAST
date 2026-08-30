@@ -268,6 +268,7 @@ pub(super) fn mount_subsystems(
             model.equations.push(crate::types::Equation {
                 lhs: rename_all(&eq.lhs),
                 rhs: rename_all(&eq.rhs),
+                comment: eq.comment.clone(),
             });
         }
     }
@@ -2223,6 +2224,7 @@ fn rewrite_equation_to_const(model: &mut Model, name: &str, buf: &[f64]) {
         model.equations.push(crate::types::Equation {
             lhs: Expr::Variable(name.to_string()),
             rhs: const_node,
+            comment: None,
         });
     }
 }

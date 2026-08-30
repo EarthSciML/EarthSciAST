@@ -44,6 +44,7 @@ fn test_component_graph_generation() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
@@ -67,6 +68,7 @@ fn test_component_graph_generation() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -77,6 +79,9 @@ fn test_component_graph_generation() {
     };
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -154,6 +159,7 @@ fn test_component_graph_exports() {
     };
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("SimpleModel".to_string()),
@@ -257,11 +263,13 @@ fn test_model_expression_graph() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("ExprTest".to_string()),
         variables,
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
@@ -325,6 +333,7 @@ fn test_reaction_system_expression_graph() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -334,6 +343,7 @@ fn test_reaction_system_expression_graph() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -368,6 +378,9 @@ fn test_reaction_system_expression_graph() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -414,6 +427,7 @@ fn test_component_existence() {
     };
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),

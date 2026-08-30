@@ -2158,6 +2158,7 @@ mod tests {
         let env = env_of(&[("x", "m"), ("accel", "m/s^2"), ("mass", "kg")]);
 
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
             rhs: Expr::Variable("accel".into()),
         };
@@ -2169,6 +2170,7 @@ mod tests {
         );
 
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
             rhs: Expr::Variable("mass".into()),
         };
@@ -2792,6 +2794,7 @@ mod tests {
         // `t` is declared, so D(h)/dt is determinate (m/s) and matches v.
         let env = env_of(&[("h", "m"), ("v", "m/s"), ("t", "s")]);
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("v".into()),
         };
@@ -2804,6 +2807,7 @@ mod tests {
         // LHS-vs-RHS comparison proves the mismatch: D(h)/dt is m/s, h is m.
         let env = env_of(&[("h", "m"), ("v", "m/s"), ("t", "s")]);
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("h".into()),
         };
@@ -2811,6 +2815,7 @@ mod tests {
 
         // The consistent equation is accepted.
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("v".into()),
         };
@@ -2826,6 +2831,7 @@ mod tests {
 
         // d(m)/dt = kg: ratio m/kg is not a power of time ⇒ provable mismatch.
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("mass".into()),
         };
@@ -2834,6 +2840,7 @@ mod tests {
 
         // d(m)/dt = m/s: ratio is exactly `s` ⇒ reconcilable, no finding.
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("h".into())], "t"),
             rhs: Expr::Variable("v".into()),
         };
@@ -2847,6 +2854,7 @@ mod tests {
         // it is the idiom used across the shared valid corpus.
         let env = env_of(&[("x", "dimensionless")]);
         let eq = Equation {
+            comment: None,
             lhs: op_with_wrt("D", vec![Expr::Variable("x".into())], "t"),
             rhs: op("-", vec![Expr::Variable("x".into())]),
         };
@@ -2896,6 +2904,7 @@ mod tests {
         // a false DimensionMismatch (which a dimensionless coercion of `x`
         // against `y`'s metres would have produced).
         let eq = Equation {
+            comment: None,
             lhs: Expr::Variable("y".into()),
             rhs: Expr::Variable("x".into()),
         };

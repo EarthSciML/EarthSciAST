@@ -50,11 +50,13 @@ fn test_analysis_features_integration() {
     );
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Simple Model".to_string()),
         variables,
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::operator(ExpressionNode {
                 op: "D".to_string(),
                 args: vec![Expr::Variable("x".to_string())],
@@ -92,6 +94,7 @@ fn test_analysis_features_integration() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -101,6 +104,7 @@ fn test_analysis_features_integration() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -135,6 +139,9 @@ fn test_analysis_features_integration() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -224,6 +231,7 @@ fn test_editing_operations() {
 
     // Create a simple model
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
@@ -258,6 +266,7 @@ fn test_editing_operations() {
 
     // Test adding equations
     let new_eq = Equation {
+        comment: None,
         lhs: Expr::Variable("test_var".to_string()),
         rhs: Expr::Number(42.0),
     };

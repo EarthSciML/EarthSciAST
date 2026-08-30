@@ -2257,6 +2257,7 @@ mod tests {
                 default: Some(1.8e-12),
                 units: Some("cm3/molec/s".to_string()),
                 description: Some("Rate constant".to_string()),
+                ..Default::default()
             },
         );
 
@@ -2283,6 +2284,7 @@ mod tests {
                 units: Some("molec/cm3".to_string()),
                 description: None,
                 constant: None,
+                ..Default::default()
             },
         );
         species.insert(
@@ -2292,6 +2294,7 @@ mod tests {
                 units: Some("molec/cm3".to_string()),
                 description: None,
                 constant: None,
+                ..Default::default()
             },
         );
 
@@ -2348,6 +2351,7 @@ mod tests {
                 args: vec![Expr::Variable("beta".to_string()), Expr::Number(2.0)],
                 ..Default::default()
             }),
+            ..Default::default()
         };
         assert_eq!(to_unicode(&eq), "α = β·2");
         assert_eq!(to_ascii(&eq), "alpha = beta * 2");

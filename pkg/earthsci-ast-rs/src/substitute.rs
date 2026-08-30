@@ -120,6 +120,7 @@ fn map_exprs_in_model(model: &Model, m: &mut dyn FnMut(&Expr) -> Expr) -> Model 
             .map(|eq| Equation {
                 lhs: m(&eq.lhs),
                 rhs: m(&eq.rhs),
+                comment: eq.comment.clone(),
             })
             .collect(),
         discrete_events: model.discrete_events.as_ref().map(|events| {

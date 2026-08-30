@@ -168,7 +168,11 @@ pub fn lower_reactions_to_equations(
             ..Default::default()
         });
 
-        equations.push(Equation { lhs, rhs });
+        equations.push(Equation {
+            comment: None,
+            lhs,
+            rhs,
+        });
     }
 
     Ok(equations)
@@ -424,6 +428,7 @@ mod tests {
         (
             name.to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -473,6 +478,7 @@ mod tests {
         species.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 default: Some(1.0),
                 units: Some("molec/cm3".to_string()),
                 description: None,
@@ -484,6 +490,10 @@ mod tests {
         parameters.insert(
             "k1".to_string(),
             crate::types::Parameter {
+                default_units: None,
+                shape: None,
+                distribution: None,
+                update: None,
                 default: Some(1.8e-12),
                 units: Some("cm3/molec/s".to_string()),
                 description: Some("Rate constant".to_string()),
@@ -584,6 +594,7 @@ mod tests {
         species.insert(
             "R".to_string(),
             Species {
+                default_units: None,
                 units: Some("1".to_string()),
                 default: Some(2.0),
                 description: None,

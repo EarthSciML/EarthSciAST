@@ -615,6 +615,7 @@ mod tests {
     fn test_add_equation() {
         let model = create_simple_model();
         let equation = Equation {
+            comment: None,
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
         };
@@ -630,6 +631,7 @@ mod tests {
     fn test_remove_equation() {
         let mut model = create_simple_model();
         model.equations.push(Equation {
+            comment: None,
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
         });

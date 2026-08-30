@@ -86,6 +86,7 @@ fn propagate_dh_equals_v() {
     });
 
     let eq = Equation {
+        comment: None,
         lhs: dh,
         rhs: Expr::Variable("v".to_string()),
     };

@@ -14,6 +14,7 @@ fn test_simple_stoichiometric_matrix() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -23,6 +24,7 @@ fn test_simple_stoichiometric_matrix() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -48,6 +50,9 @@ fn test_simple_stoichiometric_matrix() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -78,6 +83,7 @@ fn test_multiple_reaction_stoichiometric_matrix() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -87,6 +93,7 @@ fn test_multiple_reaction_stoichiometric_matrix() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -96,6 +103,7 @@ fn test_multiple_reaction_stoichiometric_matrix() {
         m.insert(
             "C".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -137,6 +145,9 @@ fn test_multiple_reaction_stoichiometric_matrix() {
     ];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -173,6 +184,7 @@ fn test_stoichiometric_coefficients() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -182,6 +194,7 @@ fn test_stoichiometric_coefficients() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -191,6 +204,7 @@ fn test_stoichiometric_coefficients() {
         m.insert(
             "C".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -222,6 +236,9 @@ fn test_stoichiometric_coefficients() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -249,6 +266,7 @@ fn test_reversible_reactions() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -258,6 +276,7 @@ fn test_reversible_reactions() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -299,6 +318,9 @@ fn test_reversible_reactions() {
     ];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -333,6 +355,7 @@ fn test_complex_reaction_network() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -342,6 +365,7 @@ fn test_complex_reaction_network() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -351,6 +375,7 @@ fn test_complex_reaction_network() {
         m.insert(
             "C".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -360,6 +385,7 @@ fn test_complex_reaction_network() {
         m.insert(
             "D".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -369,6 +395,7 @@ fn test_complex_reaction_network() {
         m.insert(
             "E".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -439,6 +466,9 @@ fn test_complex_reaction_network() {
     ];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -481,6 +511,9 @@ fn test_complex_reaction_network() {
 #[test]
 fn test_empty_reaction_system() {
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species: indexmap::IndexMap::new(),
@@ -506,6 +539,7 @@ fn test_no_reactions() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -516,6 +550,9 @@ fn test_no_reactions() {
     };
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -542,6 +579,7 @@ fn test_default_coefficients() {
         m.insert(
             "A".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(1.0),
                 description: None,
@@ -551,6 +589,7 @@ fn test_default_coefficients() {
         m.insert(
             "B".to_string(),
             Species {
+                default_units: None,
                 units: Some("mol/L".to_string()),
                 default: Some(0.0),
                 description: None,
@@ -576,6 +615,9 @@ fn test_default_coefficients() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,

@@ -81,11 +81,13 @@ fn test_structural_validation() {
     // Create a model with equations but no variables (should fail structural validation)
     let variables = IndexMap::new();
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
         variables,
         equations: vec![Equation {
+            comment: None,
             lhs: Expr::Variable("x".to_string()),
             rhs: Expr::Number(1.0),
         }],
@@ -183,6 +185,7 @@ fn test_stoichiometric_matrix() {
     species.insert(
         "A".to_string(),
         Species {
+            default_units: None,
             units: Some("mol/L".to_string()),
             default: Some(1.0),
             description: None,
@@ -192,6 +195,7 @@ fn test_stoichiometric_matrix() {
     species.insert(
         "B".to_string(),
         Species {
+            default_units: None,
             units: Some("mol/L".to_string()),
             default: Some(0.0),
             description: None,
@@ -215,6 +219,9 @@ fn test_stoichiometric_matrix() {
     }];
 
     let rs = ReactionSystem {
+        tolerance: None,
+        tests: None,
+        analyses: None,
         subsystems: None,
         reference: None,
         species,
@@ -250,6 +257,7 @@ fn test_component_graph() {
     };
 
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("TestModel".to_string()),
@@ -323,6 +331,7 @@ fn test_pretty_printing() {
 #[test]
 fn test_editing() {
     let model = Model {
+        analyses: None,
         subsystems: None,
         reference: None,
         name: Some("Test Model".to_string()),
