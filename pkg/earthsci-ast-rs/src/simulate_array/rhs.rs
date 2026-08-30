@@ -171,10 +171,6 @@ pub(super) fn refill_state_arrays(
     }
 }
 
-/// Scatter a logical array's values into the flat `dy` block at `offset`, in
-/// column-major order (the state-vector convention), in place — replacing the
-/// old `arrayd_to_col_major` + `copy_from_slice` (which allocated a `Vec` per
-/// rule). Addresses elements explicitly, so it is layout-agnostic.
 /// Scatter a logical array into a *sub-block* of a variable's flat `dy` block,
 /// in column-major order (the state-vector layout). `dest_lo[d]` is the 0-based
 /// start of the sub-block along axis `d` within the variable's box (extent

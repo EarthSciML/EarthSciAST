@@ -282,14 +282,6 @@ pub(crate) fn resolve_expr_ranges(
     resolve_expr_ranges_with_extents(expr, index_sets, empty_derived_extents())
 }
 
-/// [`resolve_expr_ranges`] with the value-invention derived extents in hand —
-/// see [`resolve_aggregate_ranges_with_extents`] for what `derived_extents`
-/// means and why an ISRM-shaped document needs it.
-///
-/// `pub` (not `pub(crate)`) because a Rust *runner* that drives value invention
-/// itself — rather than through [`crate::simulate_array::ArrayCompiled`] — holds
-/// a bare [`Expr`] and the engine's extents, and has no other way to turn the
-/// document's `{ "from": <derived set> }` references into evaluable bounds.
 /// `true` iff any node in `e`'s subtree still carries an unresolved
 /// `{ "from": <index set> }` range reference. The sharing-aware gate for
 /// [`resolve_expr_ranges_with_extents`]: after load-time interning
@@ -309,6 +301,14 @@ fn contains_unresolved_range(e: &Expr) -> bool {
     }
 }
 
+/// [`resolve_expr_ranges`] with the value-invention derived extents in hand —
+/// see [`resolve_aggregate_ranges_with_extents`] for what `derived_extents`
+/// means and why an ISRM-shaped document needs it.
+///
+/// `pub` (not `pub(crate)`) because a Rust *runner* that drives value invention
+/// itself — rather than through [`crate::simulate_array::ArrayCompiled`] — holds
+/// a bare [`Expr`] and the engine's extents, and has no other way to turn the
+/// document's `{ "from": <derived set> }` references into evaluable bounds.
 pub fn resolve_expr_ranges_with_extents(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,

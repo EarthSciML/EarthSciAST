@@ -1179,13 +1179,6 @@ impl Compiled {
         Ok((time, state, stats, retcode))
     }
 
-    /// Reconstruct algebraic-state values along the output trajectory
-    /// (esm-0kt). The integrator carries the algebraic slots forward
-    /// without advancing them, so the natural state matrix shows the
-    /// algebraic IC at every sample. Recompute from the differential
-    /// states + parameters at each output time. No-op for a system without
-    /// algebraic states.
-    #[cfg(feature = "solve")]
     /// The trajectories of the named observed variables over an output grid.
     ///
     /// The companion to [`Self::evaluate_static_observeds`] for a system that
@@ -1207,6 +1200,7 @@ impl Compiled {
     ///
     /// Returns `InvalidParameter` for a name that is not an observed variable;
     /// the caller resolves spellings (API_SPEC §5.8) before getting here.
+    #[cfg(feature = "solve")]
     pub(crate) fn observed_trajectories(
         &self,
         names: &[String],
@@ -1254,6 +1248,13 @@ impl Compiled {
         Ok(out)
     }
 
+    /// Reconstruct algebraic-state values along the output trajectory
+    /// (esm-0kt). The integrator carries the algebraic slots forward
+    /// without advancing them, so the natural state matrix shows the
+    /// algebraic IC at every sample. Recompute from the differential
+    /// states + parameters at each output time. No-op for a system without
+    /// algebraic states.
+    #[cfg(feature = "solve")]
     fn reconstruct_algebraic_trajectory(
         &self,
         time: &[f64],

@@ -2088,13 +2088,6 @@ fn model_contains_arg_witness(model: &Model) -> bool {
         })
 }
 
-/// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
-/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
-/// established self-contained build-time array channel — see the geometry
-/// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
-/// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
-/// the Rust analogue of the Julia reference's `const_arrays` registry and the
-/// Python interpreter's join-free const-observed pre-materialization.
 /// Is this parameter refreshed from OUTSIDE the model — every update rule
 /// reading either a data source (`from`) or a registered handler?
 ///
@@ -2126,6 +2119,13 @@ fn observed_bodies(model: &Model) -> std::collections::BTreeMap<String, Expr> {
         .observed_definitions
 }
 
+/// Gather the build-time-CONSTANT factor arrays the value-invention engine reads
+/// (`index(gx, g)` etc.): every variable whose `expression` is a `const` op (the
+/// established self-contained build-time array channel — see the geometry
+/// `src_poly`/`tgt_poly` fixtures). Each is evaluated once, with no state /
+/// params / `t` (a `const` literal needs none), into its dense `ArrayD`. This is
+/// the Rust analogue of the Julia reference's `const_arrays` registry and the
+/// Python interpreter's join-free const-observed pre-materialization.
 fn collect_const_factor_arrays(model: &Model) -> HashMap<String, ArrayD<f64>> {
     let mut out: HashMap<String, ArrayD<f64>> = HashMap::new();
     for (name, body) in observed_bodies(model) {

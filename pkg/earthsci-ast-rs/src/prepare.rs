@@ -798,6 +798,11 @@ fn gated_fetch_plan(
     })
 }
 
+/// The build pipeline's internal observation sink, erased so a helper can report
+/// without knowing whether an observer is attached or what it captured.
+type ReportFn<'a> =
+    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
+
 /// Run a gate's plan, reporting through `report` and honouring a cancel.
 ///
 /// One request, unless `batch` splits the gated axis' index list into contiguous
@@ -807,11 +812,6 @@ fn gated_fetch_plan(
 /// in place rather than via `ndarray::concatenate` matters at this size: the SR
 /// slabs are hundreds of MB, and holding every piece plus their concatenation
 /// would peak at twice the answer instead of the answer plus one batch.
-/// The build pipeline's internal observation sink, erased so a helper can report
-/// without knowing whether an observer is attached or what it captured.
-type ReportFn<'a> =
-    dyn FnMut(PreparePhase, usize, Option<usize>, &str) -> Result<(), PrepareError> + 'a;
-
 #[allow(clippy::too_many_arguments)]
 fn run_gated_fetch(
     key: &str,
@@ -939,31 +939,6 @@ pub(crate) fn slice_whole(full: ArrayD<f64>, selection: &[AxisSel]) -> ArrayD<f6
 // The entry point.
 // --------------------------------------------------------------------------- //
 
-/// Prepare `doc` (a raw parsed `.esm` document) once: run the pushdown rewrite
-/// (when opted in), materialize CONST providers, evaluate the build-time
-/// coordinates, run value-invention, feed the member factor back, fetch the
-/// gated providers pre-sliced, and evaluate the whole observed graph in
-/// dependency order. Returns the [`PreparedBuild`] artifact.
-///
-/// `providers` maps the CONSUMING PARAMETER's namespaced name
-/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
-/// rewrite record's gate routes onto a gated array is DEFERRED and fetched
-/// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
-/// variables, so the consuming parameter is the only spelling that names one
-/// field and every field: two parameters may read one `file_variable`
-/// differently, and two models may declare the same parameter name against one
-/// source. `const_arrays` are the caller-supplied build-time factor arrays
-/// (keyed by model-local or `<Source>.<file_variable>` names — the routing
-/// aliasing surfaces both spellings).
-///
-/// # Watching a long build
-///
-/// A build over real data is not fast: on the InMAP ISRM the gated fetch alone
-/// is tens of gigabytes and the whole `prepare` runs for the better part of a
-/// quarter of an hour. [`crate::problem::ProblemOptions::progress`] observes it as it goes —
-/// per gated request and per observed, not merely per phase — and returning
-/// [`Flow::Cancel`] stops it at a named point. Pair it with
-/// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
 /// Does `raw` carry an esm-spec §9.7.2 import EDGE — at the top level of a
 /// library file, or inside a component?
 ///
@@ -993,14 +968,36 @@ fn has_template_import_edge(raw: &JsonValue) -> bool {
     })
 }
 
-/// Run the deterministic-per-document pipeline: pushdown rewrite → loader
-/// extent discovery → typed load → provider materialization → build-time
-/// coordinate evaluation → value invention → member-factor feedback → gated
-/// pre-sliced fetch → dependency-ordered observed-graph evaluation.
+/// Run the deterministic-per-document pipeline over `doc` (a raw parsed `.esm`
+/// document), once: pushdown rewrite (when opted in) → loader extent discovery
+/// → typed load → provider materialization → build-time coordinate evaluation
+/// → value invention → member-factor feedback → gated pre-sliced fetch →
+/// dependency-ordered observed-graph evaluation. Returns the [`PreparedBuild`]
+/// artifact.
+///
+/// `providers` maps the CONSUMING PARAMETER's namespaced name
+/// (`"<ModelPath>.<param>"`) to a CONST [`PrepareProvider`]; an entry the
+/// rewrite record's gate routes onto a gated array is DEFERRED and fetched
+/// pre-sliced after value-invention. From esm 1.0.0 a data source declares no
+/// variables, so the consuming parameter is the only spelling that names one
+/// field and every field: two parameters may read one `file_variable`
+/// differently, and two models may declare the same parameter name against one
+/// source. `const_arrays` are the caller-supplied build-time factor arrays
+/// (keyed by model-local or `<Source>.<file_variable>` names — the routing
+/// aliasing surfaces both spellings).
 ///
 /// Crate-internal: the public entry point is
 /// [`crate::problem::esm_problem`], which calls this and then compiles the
 /// right-hand side.
+///
+/// # Watching a long build
+///
+/// A build over real data is not fast: on the InMAP ISRM the gated fetch alone
+/// is tens of gigabytes and the whole `prepare` runs for the better part of a
+/// quarter of an hour. [`crate::problem::ProblemOptions::progress`] observes it as it goes —
+/// per gated request and per observed, not merely per phase — and returning
+/// [`Flow::Cancel`] stops it at a named point. Pair it with
+/// [`PrepareOptions::gated_fetch_batch`] so the fetch itself is interruptible.
 pub(crate) fn run_prepare(
     doc: &JsonValue,
     const_arrays: HashMap<String, ArrayD<f64>>,
