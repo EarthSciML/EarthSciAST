@@ -32,7 +32,6 @@ from __future__ import annotations
 import functools
 import os
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -279,10 +278,13 @@ def _view_state_array(name: str, ctx: EvalContext) -> np.ndarray:
     return data.reshape(shape, order="C")
 
 
+_MISSING = object()
+
+
 def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
     """Resolve a bare name reference."""
-    if name in ctx.locals:
-        v = ctx.locals[name]
+    v = ctx.locals.get(name, _MISSING)
+    if v is not _MISSING:
         # Index symbols are usually scalars, but the vectorized stencil path
         # (``_materialize_map``) binds them to ndarray ranges so a whole region
         # evaluates in one pass; pass arrays through unchanged.
@@ -1399,7 +1401,17 @@ def _gather_index(
             raise NumpyInterpreterError(
                 f"index got {len(idxs)} indices for array of shape {arr_val.shape}"
             )
-        gathered = [np.rint(np.asarray(i, dtype=float)).astype(np.intp) - 1 for i in idxs]
+        # Per-subscript: rint → intp → 1-based→0-based. float64 ndarrays (the
+        # overwhelmingly common case: bound ranges ± affine offsets) skip the
+        # no-op asarray, and the -1 runs in place on the astype-owned copy —
+        # identical values, two fewer temporaries on the RHS-hot path.
+        gathered = []
+        for i in idxs:
+            if not (isinstance(i, np.ndarray) and i.dtype == np.float64):
+                i = np.asarray(i, dtype=float)
+            zi = np.rint(i).astype(np.intp)
+            zi -= 1
+            gathered.append(zi)
         return arr_val[tuple(gathered)]
     # 1-based -> 0-based.
     zero_idx = tuple(int(round(float(i))) - 1 for i in idxs)
@@ -1615,21 +1627,41 @@ def _bind_broadcast_range(
     ctx.locals[sym] = np.asarray(values, dtype=float).reshape(shp)
 
 
-@contextmanager
-def _bound_index_box(ctx: EvalContext, syms: list[str], ranges: list[list[int]]) -> Iterator[None]:
+class _bound_index_box:
     """Bind each index symbol to its 1-based ``range`` reshaped to broadcast on
     its own axis of the ``len(syms)``-D box (so a body evaluates over the whole
     box in one pass), restoring ``ctx.locals`` on exit. The shared save / bind /
     restore of the whole-box vectorized paths (:func:`_materialize_map`,
-    :func:`_eval_arrayop_reduce_vectorized`)."""
-    prev = dict(ctx.locals)
-    try:
-        ndim = len(syms)
-        for axis, s in enumerate(syms):
-            _bind_broadcast_range(ctx, s, np.asarray(ranges[axis], dtype=float), axis, ndim)
-        yield
-    finally:
-        ctx.locals = prev
+    :func:`_eval_arrayop_reduce_vectorized`). A plain slotted context manager —
+    not ``@contextmanager`` — because it brackets every vectorized arrayop
+    evaluation on the RHS-hot path and the generator protocol's frame cost is
+    measurable there."""
+
+    __slots__ = ("ctx", "syms", "ranges", "prev")
+
+    def __init__(self, ctx: EvalContext, syms: list[str], ranges: list[list[int]]) -> None:
+        self.ctx = ctx
+        self.syms = syms
+        self.ranges = ranges
+
+    def __enter__(self) -> None:
+        ctx = self.ctx
+        prev = dict(ctx.locals)
+        self.prev = prev
+        try:
+            ndim = len(self.syms)
+            for axis, s in enumerate(self.syms):
+                _bind_broadcast_range(
+                    ctx, s, np.asarray(self.ranges[axis], dtype=float), axis, ndim
+                )
+        except BaseException:
+            # The generator form restored ctx.locals even when binding itself
+            # raised; keep that guarantee.
+            ctx.locals = prev
+            raise
+
+    def __exit__(self, *exc: object) -> None:
+        self.ctx.locals = self.prev
 
 
 def _expand_reduce_ranges(resolved: dict[str, Any], reduce_syms: list[str]) -> list[list[int]]:
@@ -1644,6 +1676,7 @@ def _materialize_makearray_vectorized(
     ctx: EvalContext,
     out_syms: list[str],
     out_shape: tuple[int, ...],
+    allow_codegen: bool = False,
 ) -> np.ndarray:
     """Materialize a ``makearray`` in one pass per region (no per-cell loop).
 
@@ -1658,10 +1691,40 @@ def _materialize_makearray_vectorized(
     if not regions or len(regions) != len(values):
         raise NumpyInterpreterError("makearray: empty or mismatched regions/values")
     ndim = len(out_syms)
+    # Tier-1 codegen per region: each region's box binding is node-static (its
+    # bounds are the node's own, its symbols the caller's out_syms), so the
+    # region value lowers once to a flat generated function with the binding
+    # baked in. Keyed by (out_syms, out_shape) in case one makearray node is
+    # shared under parents that name the box differently. A ``None`` entry
+    # means that region declined; it stays on the compiled closure.
+    region_fns: list | None = None
+    if allow_codegen and not _CODEGEN_DISABLE:
+        key = (tuple(out_syms), tuple(out_shape))
+        cache = getattr(ma, "_cg_regions", None)
+        if cache is None:
+            cache = {}
+            ma._cg_regions = cache
+        region_fns = cache.get(key)
+        if region_fns is None:
+            from . import numpy_codegen
+
+            region_fns = []
+            for region, val_expr in zip(regions, values):
+                if len(region) != ndim:
+                    region_fns.append(None)  # the loop below raises the mismatch
+                    continue
+                env: dict[str, np.ndarray] = {}
+                for axis, (lo, hi) in enumerate(region):
+                    vals = np.arange(int(lo), int(hi) + 1, dtype=float)
+                    shp = [1] * ndim
+                    shp[axis] = vals.size
+                    env[out_syms[axis]] = vals.reshape(shp)
+                region_fns.append(numpy_codegen.compile_box_body(val_expr, env))
+            cache[key] = region_fns
     out = np.zeros(out_shape, dtype=float)
     prev = dict(ctx.locals)
     try:
-        for region, val_expr in zip(regions, values):
+        for k, (region, val_expr) in enumerate(zip(regions, values)):
             if len(region) != ndim:
                 raise NumpyInterpreterError("makearray region ndim mismatch")
             slicer: list[slice] = []
@@ -1672,9 +1735,11 @@ def _materialize_makearray_vectorized(
                 )
                 slicer.append(slice(lo_i - 1, hi_i))
             # Compiled body: this region value is the per-step front stencil,
-            # re-evaluated every implicit-solver step, so lower it once to a
-            # closure and skip the eval_expr dispatch walk on each step.
-            out[tuple(slicer)] = _compile_expr(val_expr)(ctx)
+            # re-evaluated every implicit-solver step, so lower it once (to the
+            # Tier-1 generated function when available, else a closure) and
+            # skip the eval_expr dispatch walk on each step.
+            fn = region_fns[k] if region_fns is not None else None
+            out[tuple(slicer)] = fn(ctx) if fn is not None else _compile_expr(val_expr)(ctx)
     finally:
         ctx.locals = prev
     return out
@@ -1686,6 +1751,8 @@ def _materialize_map(
     out_syms: list[str],
     out_ranges_exp: list[list[int]],
     out_shape: tuple[int, ...],
+    node: ExprNode | None = None,
+    dynamic: bool = False,
 ) -> np.ndarray | None:
     """Vectorized fast path for a pure (non-reducing) arrayop map — the shape
     finite-difference / level-set stencils take.
@@ -1713,10 +1780,13 @@ def _materialize_map(
             and body.args[0].op == "makearray"
             and list(body.args[1:]) == list(out_syms)
         ):
-            return _materialize_makearray_vectorized(body.args[0], ctx, out_syms, out_shape)
+            return _materialize_makearray_vectorized(
+                body.args[0], ctx, out_syms, out_shape, allow_codegen=node is not None
+            )
 
+        fn = _codegen_box_fn(node, "_cg_map", body, out_syms, out_ranges_exp, dynamic=dynamic)
         with _bound_index_box(ctx, out_syms, out_ranges_exp):
-            val = _compile_expr(body)(ctx)
+            val = fn(ctx)
         # `np.asarray(..., dtype=float)` / `.astype(float)` below would DISCARD
         # an imaginary part behind a ComplexWarning; refuse instead.
         res = np.asarray(_require_real(val, "arrayop map body"), dtype=float)
@@ -1736,6 +1806,84 @@ _CONTRACTION_BOX_CAP = 1 << 22
 # contraction back to the scalar loop, so the two paths can be diffed bitwise.
 _CONTRACT_DISABLE = os.environ.get("ESS_NP_CONTRACT_DISABLE", "") == "1"
 
+# Kill switch (oracle): ESS_NP_CODEGEN_DISABLE=1 routes every whole-box body
+# back to the compiled-closure tier, so the Tier-1 source codegen
+# (numpy_codegen.compile_box_body) can be diffed bitwise against it.
+_CODEGEN_DISABLE = os.environ.get("ESS_NP_CODEGEN_DISABLE", "") == "1"
+
+
+# A dynamically-keyed codegen cache (a {"from": ...}-ranged node) stops
+# compiling new variants past this many distinct boxes — a box that genuinely
+# varies per call would otherwise recompile forever.
+_CODEGEN_DYN_CAP = 8
+# Content keys hash every range value; past this many total values the per-call
+# key cost stops being negligible next to the numpy work, so decline.
+_CODEGEN_DYN_KEY_CAP = 4096
+
+
+def _codegen_build(
+    body: Expr, syms: list[str], range_lists: list[list[int]]
+) -> Callable[[EvalContext], Any] | None:
+    """Build the Tier-1 generated evaluator for ``body`` over the box binding
+    ``syms[axis] -> range_lists[axis]``. The baked environment is built by the
+    same reshape rule as :func:`_bind_broadcast_range`, so the folded constants
+    are the exact arrays the caller binds into ``ctx.locals``."""
+    from . import numpy_codegen
+
+    ndim = len(syms)
+    env: dict[str, np.ndarray] = {}
+    for axis, s in enumerate(syms):
+        vals = np.asarray(range_lists[axis], dtype=float)
+        shp = [1] * ndim
+        shp[axis] = vals.size
+        env[s] = vals.reshape(shp)
+    return numpy_codegen.compile_box_body(body, env)
+
+
+def _codegen_box_fn(
+    node: ExprNode | None,
+    attr: str,
+    body: Expr,
+    syms: list[str],
+    range_lists: list[list[int]],
+    dynamic: bool = False,
+) -> Callable[[EvalContext], Any]:
+    """Resolve the evaluator for a box-bound body: the source-codegen'd
+    function (numpy_codegen, Tier 1) specialized to this node's box when
+    available, else the compiled closure.
+
+    A STATIC node (dispatch prep cached — all ranges dense literals) caches one
+    function on ``node`` under ``attr`` (``None`` = declined once, stays
+    declined). A DYNAMIC node (a ``{"from": ...}`` range, resolved against the
+    registry per call) caches per RESOLVED box under ``attr + "_dyn"``, keyed
+    by the box content itself — so a registry that hands back a different box
+    is simply a cache miss and compiles its own specialization, never a stale
+    binding. ``node`` is ``None`` where the caller cannot vouch for a cache
+    home at all; those stay on the closure tier."""
+    if node is None or _CODEGEN_DISABLE:
+        return _compile_expr(body)
+    if not dynamic:
+        fn = getattr(node, attr, _MISSING)
+        if fn is _MISSING:
+            fn = _codegen_build(body, syms, range_lists)
+            setattr(node, attr, fn)
+        return fn if fn is not None else _compile_expr(body)
+    if sum(len(r) for r in range_lists) > _CODEGEN_DYN_KEY_CAP:
+        return _compile_expr(body)
+    dyn_attr = attr + "_dyn"
+    cache = getattr(node, dyn_attr, None)
+    if cache is None:
+        cache = {}
+        setattr(node, dyn_attr, cache)
+    key = tuple((s, tuple(r)) for s, r in zip(syms, range_lists))
+    fn = cache.get(key, _MISSING)
+    if fn is _MISSING:
+        if len(cache) >= _CODEGEN_DYN_CAP:
+            return _compile_expr(body)
+        fn = _codegen_build(body, syms, range_lists)
+        cache[key] = fn
+    return fn if fn is not None else _compile_expr(body)
+
 
 def _eval_arrayop_contraction_broadcast(
     body: Expr,
@@ -1747,6 +1895,8 @@ def _eval_arrayop_contraction_broadcast(
     resolved: dict[str, Any],
     reducer: str,
     empty_zero: float,
+    node: ExprNode | None = None,
+    dynamic: bool = False,
 ) -> np.ndarray | None:
     """Whole-box fast path for a PLAIN contraction (no join / filter / ragged
     range) whose body the einsum decomposer rejects — affine or computed
@@ -1782,13 +1932,24 @@ def _eval_arrayop_contraction_broadcast(
     if total > _CONTRACTION_BOX_CAP:
         return None
     ndim = len(out_syms) + len(reduce_syms)
+    # Tier-1 codegen over the combined out × reduce box: the axis order below
+    # (out symbols first, then the contracted symbols) is the order the baked
+    # environment is built in, so the folded constants are the bound arrays.
+    fn = _codegen_box_fn(
+        node,
+        "_cg_contract",
+        body,
+        out_syms + reduce_syms,
+        out_ranges_exp + red_ranges_exp,
+        dynamic=dynamic,
+    )
     prev = dict(ctx.locals)
     try:
         for axis, (s, r) in enumerate(zip(out_syms, out_ranges_exp)):
             _bind_broadcast_range(ctx, s, np.asarray(r, dtype=float), axis, ndim)
         for k, (s, r) in enumerate(zip(reduce_syms, red_ranges_exp)):
             _bind_broadcast_range(ctx, s, np.asarray(r, dtype=float), len(out_syms) + k, ndim)
-        box = _compile_expr(body)(ctx)
+        box = fn(ctx)
     except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError):
         return None
     finally:
@@ -1975,36 +2136,85 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """
     if expr.expr is None:
         raise NumpyInterpreterError("aggregate / arrayop requires an 'expr' body")
-    output_idx = list(expr.output_idx or [])
     raw_ranges = expr.ranges or {}
 
-    out_syms: list[str] = [s for s in output_idx if isinstance(s, str)]
-    for s in out_syms:
-        if s not in raw_ranges:
-            raise NumpyInterpreterError(
-                f"aggregate / arrayop output index {s!r} has no declared range"
+    # Per-node dispatch prep cache: for a node whose range specs are all dense
+    # literal lists, everything computed below (symbol partition, semiring
+    # resolution, expanded ranges, output shape) is a pure function of the NODE
+    # — no ctx enters — yet it was re-derived on every one of the ~300k arrayop
+    # evaluations a stiff solve makes. Cache it on the ExprNode (like
+    # ``_compiled_fn``); the cached lists are never mutated downstream. Any
+    # ``{"from": ...}`` reference resolves against ctx.index_sets, so such
+    # nodes stay uncached and take the original path unchanged.
+    prep = getattr(expr, "_arrayop_prep", None)
+    if prep is not None:
+        (
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
+            otimes,
+            red_ranges_exp,
+            sym_0based,
+        ) = prep
+        ragged_reduce = False
+    else:
+        output_idx = list(expr.output_idx or [])
+
+        out_syms = [s for s in output_idx if isinstance(s, str)]
+        for s in out_syms:
+            if s not in raw_ranges:
+                raise NumpyInterpreterError(
+                    f"aggregate / arrayop output index {s!r} has no declared range"
+                )
+
+        reducer, empty_zero, otimes = _resolve_semiring(expr)
+
+        # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
+        # pass through unchanged, so existing arrayop fixtures are byte-for-byte
+        # identical; ragged sets become per-parent dynamic bounds.
+        resolved = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
+
+        out_ranges_exp = []
+        for s in out_syms:
+            rs = resolved[s]
+            if isinstance(rs, _RaggedRange):
+                raise NumpyInterpreterError(
+                    f"output index {s!r} cannot reference a ragged index set: ragged "
+                    f"sets are per-parent and have no dense output extent (RFC §5.2)"
+                )
+            out_ranges_exp.append(_expand_range(rs))
+        out_shape = tuple(len(r) for r in out_ranges_exp)
+
+        reduce_syms = [s for s in raw_ranges if s not in out_syms]
+        ragged_reduce = any(isinstance(resolved[s], _RaggedRange) for s in reduce_syms)
+
+        red_ranges_exp = None
+        sym_0based = None
+        if all(isinstance(v, (list, tuple)) for v in raw_ranges.values()):
+            # Static dense node: precompute the reduce expansions + 0-based
+            # lists too (identical to the inline construction below) and cache.
+            red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
+            sym_0based = {}
+            for s, r in zip(out_syms, out_ranges_exp):
+                sym_0based[s] = [x - 1 for x in r]
+            for s, r in zip(reduce_syms, red_ranges_exp):
+                sym_0based[s] = [x - 1 for x in r]
+            expr._arrayop_prep = (
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+                otimes,
+                red_ranges_exp,
+                sym_0based,
             )
-
-    reducer, empty_zero, otimes = _resolve_semiring(expr)
-
-    # Resolve {"from": ...} index-set references (RFC §5.2). Dense list ranges
-    # pass through unchanged, so existing arrayop fixtures are byte-for-byte
-    # identical; ragged sets become per-parent dynamic bounds.
-    resolved: dict[str, Any] = {s: _resolve_range_spec(raw_ranges[s], ctx) for s in raw_ranges}
-
-    out_ranges_exp: list[list[int]] = []
-    for s in out_syms:
-        rs = resolved[s]
-        if isinstance(rs, _RaggedRange):
-            raise NumpyInterpreterError(
-                f"output index {s!r} cannot reference a ragged index set: ragged "
-                f"sets are per-parent and have no dense output extent (RFC §5.2)"
-            )
-        out_ranges_exp.append(_expand_range(rs))
-    out_shape = tuple(len(r) for r in out_ranges_exp)
-
-    reduce_syms: list[str] = [s for s in raw_ranges if s not in out_syms]
-    ragged_reduce = any(isinstance(resolved[s], _RaggedRange) for s in reduce_syms)
 
     # M2: a value-equality join (RFC §5.3) and/or a boolean filter predicate
     # gate which index combinations contribute a ⊗-term. They share one scalar
@@ -2145,14 +2355,14 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             empty_zero,
         )
 
-    red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
-
-    # Pre-compute 0-based index lists for the fast path.
-    sym_0based: dict[str, list[int]] = {}
-    for s, r in zip(out_syms, out_ranges_exp):
-        sym_0based[s] = [x - 1 for x in r]
-    for s, r in zip(reduce_syms, red_ranges_exp):
-        sym_0based[s] = [x - 1 for x in r]
+    if red_ranges_exp is None:
+        # Non-static node (a {"from": ...} range): derive per call, as before.
+        red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
+        sym_0based = {}
+        for s, r in zip(out_syms, out_ranges_exp):
+            sym_0based[s] = [x - 1 for x in r]
+        for s, r in zip(reduce_syms, red_ranges_exp):
+            sym_0based[s] = [x - 1 for x in r]
 
     # The vectorized path multiplies factors, so it is valid only when the
     # semiring's ⊗ is × (sum_product, max_product, and the legacy no-semiring
@@ -2164,6 +2374,13 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         )
         if fast is not None:
             return fast
+
+    # Tier-1 codegen: a node whose dispatch prep is cached (all ranges dense
+    # literals) has a STATIC box and bakes its binding into one generated
+    # function; a {"from": ...}-ranged node resolves its box per call, so its
+    # generated functions are cached per resolved-box CONTENT instead (a
+    # registry change is a cache miss, never a stale binding).
+    cg_dynamic = getattr(expr, "_arrayop_prep", None) is None
 
     # Whole-box broadcast contraction: the plain contractions the einsum
     # decomposer rejects (affine / computed subscripts, indicator gates — the
@@ -2182,6 +2399,8 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             resolved,
             reducer,
             empty_zero,
+            node=expr,
+            dynamic=cg_dynamic,
         )
         if unrolled is not None:
             return unrolled
@@ -2192,7 +2411,9 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # the body over the whole box via shifted-slice gathers, one pass instead of
     # one Python interpreter pass per cell. Falls through on any mismatch.
     if not reduce_syms:
-        mapped = _materialize_map(expr.expr, ctx, out_syms, out_ranges_exp, out_shape)
+        mapped = _materialize_map(
+            expr.expr, ctx, out_syms, out_ranges_exp, out_shape, node=expr, dynamic=cg_dynamic
+        )
         if mapped is not None:
             return mapped
 
@@ -3466,7 +3687,11 @@ def _eval_makearray(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     if expr.output_idx:
         out_syms = [s for s in expr.output_idx if isinstance(s, str)]
         if len(out_syms) == ndim:
-            return _materialize_makearray_vectorized(expr, ctx, out_syms, tuple(shape))
+            # Codegen is safe here: the box (this node's own output_idx ×
+            # its region bounds) is entirely node-derived, hence static.
+            return _materialize_makearray_vectorized(
+                expr, ctx, out_syms, tuple(shape), allow_codegen=True
+            )
 
     out = np.zeros(tuple(shape), dtype=float)
     for region, value_expr in zip(regions, values):
