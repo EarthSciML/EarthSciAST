@@ -1471,97 +1471,21 @@ pub fn to_json_graph<G: Graph>(graph: &G) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Metadata;
+    use crate::test_support::test_file;
     use crate::{Expr, ExpressionNode as ExprNode, Model, ReactionSystem};
     use indexmap::IndexMap;
-
-    /// An `EsmFile` with every optional container empty, to be spread with
-    /// `..empty_file()` so a test names only the fields it cares about.
-    fn empty_file() -> EsmFile {
-        EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "1.0.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-            coupling: None,
-            function_tables: None,
-        }
-    }
 
     /// An empty model carrying only a display name.
     fn test_model(name: &str) -> Model {
         Model {
-            reference: None,
-            subsystems: None,
             name: Some(name.to_string()),
-            variables: IndexMap::new(),
-            equations: vec![],
-            discrete_events: None,
-            continuous_events: None,
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         }
     }
 
     #[test]
     fn test_component_graph_empty() {
-        let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        };
+        let esm_file = test_file();
 
         let graph = component_graph(&esm_file);
         assert_eq!(graph.nodes.len(), 0);
@@ -1571,73 +1495,12 @@ mod tests {
     #[test]
     fn test_component_graph_with_models() {
         let mut models = IndexMap::new();
-        models.insert(
-            "model1".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Test Model 1".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
-        models.insert(
-            "model2".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Test Model 2".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
+        models.insert("model1".to_string(), test_model("Test Model 1"));
+        models.insert("model2".to_string(), test_model("Test Model 2"));
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let graph = component_graph(&esm_file);
@@ -1655,55 +1518,11 @@ mod tests {
     #[test]
     fn test_component_exists() {
         let mut models = IndexMap::new();
-        models.insert(
-            "test_model".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Test Model".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
+        models.insert("test_model".to_string(), test_model("Test Model"));
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         assert!(component_exists(&esm_file, "test_model"));
@@ -1713,70 +1532,15 @@ mod tests {
     #[test]
     fn test_get_component_type() {
         let mut models = IndexMap::new();
-        models.insert(
-            "test_model".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Test Model".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
+        models.insert("test_model".to_string(), test_model("Test Model"));
 
         let mut reaction_systems = IndexMap::new();
-        reaction_systems.insert(
-            "test_rs".to_string(),
-            ReactionSystem {
-                reference: None,
-                species: IndexMap::new(),
-                parameters: IndexMap::new(),
-                reactions: vec![],
-                constraint_equations: None,
-                discrete_events: None,
-                continuous_events: None,
-                subsystems: None,
-            },
-        );
+        reaction_systems.insert("test_rs".to_string(), ReactionSystem::default());
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
             reaction_systems: Some(reaction_systems),
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         assert_eq!(
@@ -1894,42 +1658,8 @@ mod tests {
     #[test]
     fn test_component_graph_variable_map_edge_extraction() {
         let mut models = IndexMap::new();
-        models.insert(
-            "source".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Source System".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
-        models.insert(
-            "target".to_string(),
-            Model {
-                reference: None,
-                subsystems: None,
-                name: Some("Target System".to_string()),
-                variables: IndexMap::new(),
-                equations: vec![],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
-            },
-        );
+        models.insert("source".to_string(), test_model("Source System"));
+        models.insert("target".to_string(), test_model("Target System"));
 
         let coupling_entries = vec![crate::CouplingEntry::VariableMap {
             from: "source.var".to_string(),
@@ -1940,35 +1670,9 @@ mod tests {
         }];
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
             coupling: Some(coupling_entries),
-            function_tables: None,
+            ..test_file()
         };
 
         let graph = component_graph(&esm_file);
@@ -1999,7 +1703,6 @@ mod tests {
         }
 
         let esm_file = EsmFile {
-            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source".to_string(),
                 to: "target".to_string(),
@@ -2008,7 +1711,7 @@ mod tests {
                 description: None,
             }]),
             models: Some(models),
-            ..empty_file()
+            ..test_file()
         };
 
         let graph = component_graph(&esm_file);
@@ -2048,7 +1751,6 @@ mod tests {
         }
 
         let esm_file = EsmFile {
-            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source.var".to_string(),
                 to: "target.param".to_string(),
@@ -2057,7 +1759,7 @@ mod tests {
                 description: None,
             }]),
             models: Some(models),
-            ..empty_file()
+            ..test_file()
         };
 
         let graph = component_graph(&esm_file);
@@ -2081,7 +1783,6 @@ mod tests {
         }
 
         let esm_file = EsmFile {
-            component_templates: None,
             coupling: Some(vec![crate::CouplingEntry::VariableMap {
                 from: "source.var".to_string(),
                 to: "target.param".to_string(),
@@ -2090,7 +1791,7 @@ mod tests {
                 description: None,
             }]),
             models: Some(models),
-            ..empty_file()
+            ..test_file()
         };
 
         let json: serde_json::Value =
@@ -2117,7 +1818,7 @@ mod tests {
     fn canonical_renderers_match_the_inherent_methods() {
         let esm_file = EsmFile {
             models: Some(IndexMap::from([("m".to_string(), test_model("M"))])),
-            ..empty_file()
+            ..test_file()
         };
 
         let cg = component_graph(&esm_file);

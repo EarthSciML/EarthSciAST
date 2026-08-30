@@ -127,6 +127,34 @@ pub struct EsmFile {
     pub component_templates: Option<IndexMap<String, serde_json::Value>>,
 }
 
+/// The empty document: every optional section absent, `esm` set to
+/// [`crate::SCHEMA_VERSION`]. A manual impl rather than a derive because the
+/// derived `esm: String::new()` is not a version at all — the schema requires
+/// a semver string — whereas the current-spec empty document is a coherent
+/// value to spread from (`EsmFile { models: Some(..), ..Default::default() }`).
+impl Default for EsmFile {
+    fn default() -> Self {
+        EsmFile {
+            esm: crate::SCHEMA_VERSION.to_string(),
+            metadata: Metadata::default(),
+            index_sets: None,
+            coordinates: None,
+            expression_templates: None,
+            metaparameters: None,
+            models: None,
+            reaction_systems: None,
+            data_sources: None,
+            operators: None,
+            enums: None,
+            coupling: None,
+            coupling_roles: None,
+            domain: None,
+            function_tables: None,
+            component_templates: None,
+        }
+    }
+}
+
 /// A single named axis inside a [`FunctionTable`] (esm-spec §9.5).
 ///
 /// `values` MUST be strictly-increasing finite floats with at least 2 entries
@@ -209,7 +237,7 @@ pub struct Reference {
 }
 
 /// Metadata section
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metadata {
     /// Human-readable model name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1703,7 +1731,7 @@ pub struct Coordinate {
 }
 
 /// ODE-based model component
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
     /// Human-readable model name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1819,6 +1847,28 @@ pub struct ModelVariable {
     /// event lists with their `functional_affect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<ParameterUpdateSpec>,
+}
+
+/// The bare variable: every optional field absent, `var_type` a `parameter`.
+/// A manual impl because [`VariableType`] has no derivable default — `type`
+/// is a required field on the wire — and of the two kinds only a parameter is
+/// coherent with nothing else set (an unknown with no defining equation is a
+/// structural error). Construction sites are still expected to state the type
+/// they mean: `ModelVariable { var_type: .., ..Default::default() }`.
+impl Default for ModelVariable {
+    fn default() -> Self {
+        ModelVariable {
+            var_type: VariableType::Parameter,
+            units: None,
+            default: None,
+            default_units: None,
+            description: None,
+            shape: None,
+            location: None,
+            distribution: None,
+            update: None,
+        }
+    }
 }
 
 impl ModelVariable {
@@ -2467,7 +2517,7 @@ pub enum RootFindDirection {
 }
 
 /// Reaction network component
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReactionSystem {
     /// Academic citation or data source reference
     #[serde(skip_serializing_if = "Option::is_none")]

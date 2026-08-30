@@ -23,34 +23,12 @@ use std::path::Path;
 /// use earthsci_ast::{EsmFile, Metadata, to_json};
 ///
 /// let esm_file = EsmFile {
-///     component_templates: None,
-///     coordinates: None,
-///     coupling_roles: None,
 ///     esm: "1.0.0".to_string(),
 ///     metadata: Metadata {
 ///         name: Some("test_model".to_string()),
-///         description: None,
-///         authors: None,
-///         created: None,
-///         modified: None,
-///         license: None,
-///         tags: None,
-///         references: None,
-///         system_class: None,
-///         dae_info: None,
-///         discretized_from: None,
+///         ..Default::default()
 ///     },
-///     index_sets: None,
-///     expression_templates: None,
-///     metaparameters: None,
-///     models: None,
-///     reaction_systems: None,
-///     data_sources: None,
-///     operators: None,
-///     enums: None,
-///     coupling: None,
-///     domain: None,
-///     function_tables: None,
+///     ..Default::default()
 /// };
 ///
 /// let json = to_json(&esm_file).expect("Failed to serialize ESM file");
@@ -98,6 +76,7 @@ pub fn write_path<P: AsRef<Path>>(esm_file: &EsmFile, path: P) -> Result<(), Esm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::var;
     use crate::types::{Equation, Metadata, ModelVariable, VariableType};
     use crate::{Expr, Model};
     use indexmap::IndexMap;
@@ -105,35 +84,12 @@ mod tests {
     #[test]
     fn test_save_minimal_file() {
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
             esm: "0.1.0".to_string(),
             metadata: Metadata {
                 name: Some("test_model".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
+                ..Default::default()
             },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..Default::default()
         };
 
         let result = to_json(&esm_file);
@@ -151,70 +107,32 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()),
                 default: Some(0.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![Equation {
                     lhs: Expr::Variable("d(x)/dt".to_string()),
                     rhs: Expr::Number(1.0),
                 }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
             esm: "0.1.0".to_string(),
             metadata: Metadata {
                 name: Some("test_model".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
+                ..Default::default()
             },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..Default::default()
         };
 
         let result = to_json(&esm_file);
@@ -230,35 +148,12 @@ mod tests {
     #[test]
     fn test_save_compact() {
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
             esm: "0.1.0".to_string(),
             metadata: Metadata {
                 name: Some("test_model".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
+                ..Default::default()
             },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..Default::default()
         };
 
         let result = to_json_compact(&esm_file);

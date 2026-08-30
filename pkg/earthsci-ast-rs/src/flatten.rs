@@ -1334,13 +1334,9 @@ fn apply_variable_map_removals(
                         ModelVariable {
                             var_type: VariableType::Unknown,
                             units,
-                            default: None,
-                            default_units: None,
                             description,
                             shape,
-                            location: None,
-                            distribution: None,
-                            update: None,
+                            ..Default::default()
                         },
                     );
                     // The DEFINITION is an equation with a bare-variable LHS —
@@ -1398,44 +1394,16 @@ fn maybe_apply_pointwise_lift(
 /// [`FlattenMetadata`]. Use this when you want the spec-compliant output for
 /// a standalone component without hand-building an [`EsmFile`].
 pub fn flatten_model(model: &Model) -> Result<FlattenedSystem, FlattenError> {
-    use crate::types::Metadata;
-
     let system_name = model.name.clone().unwrap_or_else(|| "model".to_string());
 
     let mut models = IndexMap::new();
     models.insert(system_name, model.clone());
 
+    // A synthesized single-system view: it declares no templates and no
+    // metaparameters of its own (the source document's survive on IT).
     let file = EsmFile {
-        component_templates: None,
-        coordinates: None,
-        coupling_roles: None,
-        // A synthesized single-system view: it declares no templates and no
-        // metaparameters of its own (the source document's survive on IT).
-        expression_templates: None,
-        metaparameters: None,
-        esm: crate::SCHEMA_VERSION.to_string(),
-        metadata: Metadata {
-            name: None,
-            description: None,
-            authors: None,
-            license: None,
-            created: None,
-            modified: None,
-            tags: None,
-            references: None,
-            system_class: None,
-            dae_info: None,
-            discretized_from: None,
-        },
-        index_sets: None,
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-        coupling: None,
-        domain: None,
-        function_tables: None,
+        ..Default::default()
     };
 
     flatten(&file)
@@ -1643,12 +1611,8 @@ fn build_reaction_block(
             },
             units: species.units.clone(),
             default: species.default,
-            default_units: None,
             description: species.description.clone(),
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
+            ..Default::default()
         };
         if species.constant == Some(true) {
             parameters.insert(namespaced, var);
@@ -1665,12 +1629,8 @@ fn build_reaction_block(
                 var_type: VariableType::Parameter,
                 units: param.units.clone(),
                 default: param.default,
-                default_units: None,
                 description: param.description.clone(),
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..Default::default()
             },
         );
     }
@@ -3262,50 +3222,13 @@ fn apply_pointwise_lift(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Equation, Metadata, Model, ModelVariable, VariableType};
+    use crate::test_support::{ddt, var};
+    use crate::types::{Model, ModelVariable, VariableType};
     use std::collections::HashMap;
-
-    fn make_metadata() -> Metadata {
-        Metadata {
-            name: None,
-            description: None,
-            authors: None,
-            license: None,
-            created: None,
-            modified: None,
-            tags: None,
-            references: None,
-            system_class: None,
-            dae_info: None,
-            discretized_from: None,
-        }
-    }
-
-    fn empty_file() -> EsmFile {
-        EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: make_metadata(),
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        }
-    }
 
     #[test]
     fn test_flatten_empty_file_errors() {
-        let err = flatten(&empty_file()).unwrap_err();
+        let err = flatten(&EsmFile::default()).unwrap_err();
         assert!(matches!(err, FlattenError::Empty));
     }
 
@@ -3315,29 +3238,15 @@ mod tests {
         vars.insert(
             "x".to_string(),
             ModelVariable {
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()),
                 default: Some(0.0),
-                default_units: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
         vars.insert(
             "k".to_string(),
             ModelVariable {
-                var_type: VariableType::Parameter,
-                units: None,
                 default: Some(1.0),
-                default_units: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, None)
             },
         );
 
@@ -3346,36 +3255,15 @@ mod tests {
             "sys".to_string(),
             Model {
                 name: Some("System".to_string()),
-                subsystems: None,
-                reference: None,
                 variables: vars,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::Variable("k".to_string()),
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                equations: vec![ddt("x", Expr::Variable("k".to_string()))],
+                ..Default::default()
             },
         );
 
         let file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            coupling_roles: None,
             models: Some(models),
-            ..empty_file()
+            ..Default::default()
         };
 
         let flat = flatten(&file).unwrap();
@@ -3421,51 +3309,15 @@ mod tests {
 
     // ---- Test helpers for the variable_map unit check + pointwise lift ----
 
-    fn var(vt: VariableType, units: Option<&str>) -> ModelVariable {
-        ModelVariable {
-            var_type: vt,
-            units: units.map(|u| u.to_string()),
-            default: None,
-            default_units: None,
-            description: None,
-            shape: None,
-            location: None,
-            distribution: None,
-            update: None,
-        }
-    }
-
-    fn ddt(target: &str, rhs: Expr) -> Equation {
-        Equation {
-            lhs: Expr::operator(ExpressionNode {
-                op: "D".to_string(),
-                args: vec![Expr::Variable(target.to_string())],
-                wrt: Some("t".to_string()),
-                ..Default::default()
-            }),
-            rhs,
-        }
-    }
-
     fn make_model(vars: Vec<(&str, ModelVariable)>, equations: Vec<Equation>) -> Model {
         let mut variables = IndexMap::new();
         for (name, v) in vars {
             variables.insert(name.to_string(), v);
         }
         Model {
-            name: None,
-            subsystems: None,
-            reference: None,
             variables,
             equations,
-            discrete_events: None,
-            continuous_events: None,
-            description: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         }
     }
 
@@ -3488,8 +3340,6 @@ mod tests {
         models.insert("dst".to_string(), dst);
 
         EsmFile {
-            component_templates: None,
-            coordinates: None,
             models: Some(models),
             coupling: Some(vec![CouplingEntry::VariableMap {
                 from: "src.T".to_string(),
@@ -3498,7 +3348,7 @@ mod tests {
                 factor: None,
                 description: None,
             }]),
-            ..empty_file()
+            ..Default::default()
         }
     }
 

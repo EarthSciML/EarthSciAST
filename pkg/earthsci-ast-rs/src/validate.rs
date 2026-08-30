@@ -660,43 +660,14 @@ pub(crate) struct SystemInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{ddt, test_file, var};
     use crate::types::{Equation, ExpressionNode, Metadata, ModelVariable, VariableType};
     use crate::{Expr, Model};
     use indexmap::IndexMap;
 
     #[test]
     fn test_validate_empty_file() {
-        let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        };
+        let esm_file = test_file();
 
         let result = validate(&esm_file);
         assert!(result.is_valid);
@@ -708,79 +679,22 @@ mod tests {
     fn test_validate_model_with_undefined_variable() {
         let mut models = IndexMap::new();
         let mut variables = IndexMap::new();
-        variables.insert(
-            "x".to_string(),
-            ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: None,
-                default: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
-            },
-        );
+        variables.insert("x".to_string(), var(VariableType::Unknown, None));
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::Variable("undefined_var".to_string()), // This should cause an error
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                // The undeclared RHS reference should cause an error.
+                equations: vec![ddt("x", Expr::Variable("undefined_var".to_string()))],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -803,96 +717,23 @@ mod tests {
         let mut variables = IndexMap::new();
 
         // Define two state variables
-        variables.insert(
-            "x".to_string(),
-            ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: None,
-                default: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
-            },
-        );
-        variables.insert(
-            "y".to_string(),
-            ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: None,
-                default: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
-            },
-        );
+        variables.insert("x".to_string(), var(VariableType::Unknown, None));
+        variables.insert("y".to_string(), var(VariableType::Unknown, None));
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![
-                    // Only one equation for two state variables
-                    Equation {
-                        lhs: Expr::operator(ExpressionNode {
-                            op: "D".to_string(),
-                            args: vec![Expr::Variable("x".to_string())],
-                            wrt: Some("t".to_string()),
-                            dim: None,
-                            ..Default::default()
-                        }),
-                        rhs: Expr::Variable("x".to_string()),
-                    },
-                ],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                // Only one equation for two state variables
+                equations: vec![ddt("x", Expr::Variable("x".to_string()))],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -919,37 +760,7 @@ mod tests {
     #[test]
     fn test_validation_result_structure() {
         // Test that the new ValidationResult structure works as expected
-        let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        };
+        let esm_file = test_file();
 
         let result = validate(&esm_file);
 
@@ -970,70 +781,21 @@ mod tests {
         let mut variables = IndexMap::new();
 
         // An unknown that NO equation defines - the defect.
-        variables.insert(
-            "total".to_string(),
-            ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: None,
-                default: None,
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
-            },
-        );
+        variables.insert("total".to_string(), var(VariableType::Unknown, None));
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![], // No equations needed for this test
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -1067,15 +829,8 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()),
                 default: Some(1.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
@@ -1083,15 +838,8 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Parameter,
-                units: Some("1/s".to_string()),
                 default: Some(0.1),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, Some("1/s"))
             },
         );
 
@@ -1100,36 +848,18 @@ mod tests {
         variables.insert(
             "rate".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m/s".to_string()),
-                default: None,
                 description: Some("Rate of change".to_string()),
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m/s"))
             },
         );
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
                 equations: vec![
-                    Equation {
-                        lhs: Expr::operator(ExpressionNode {
-                            op: "D".to_string(),
-                            args: vec![Expr::Variable("x".to_string())],
-                            wrt: Some("t".to_string()),
-                            dim: None,
-                            ..Default::default()
-                        }),
-                        rhs: Expr::Variable("rate".to_string()),
-                    },
+                    ddt("x", Expr::Variable("rate".to_string())),
                     Equation {
                         lhs: Expr::Variable("rate".to_string()),
                         rhs: Expr::operator(ExpressionNode {
@@ -1142,47 +872,13 @@ mod tests {
                         }),
                     },
                 ],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -1269,15 +965,8 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()), // meters
                 default: Some(1.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
@@ -1285,85 +974,34 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Parameter,
-                units: Some("1/s".to_string()), // per second
                 default: Some(0.1),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, Some("1/s"))
             },
         );
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::operator(ExpressionNode {
+                equations: vec![ddt(
+                    "x",
+                    Expr::operator(ExpressionNode {
                         op: "*".to_string(),
                         args: vec![
                             Expr::Variable("k".to_string()),
                             Expr::Variable("x".to_string()),
                         ],
-                        wrt: None,
-                        dim: None,
                         ..Default::default()
                     }),
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                )],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -1392,15 +1030,8 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()), // meters
                 default: Some(1.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
@@ -1409,75 +1040,25 @@ mod tests {
             "k".to_string(),
             ModelVariable {
                 default_units: None,
-                var_type: VariableType::Parameter,
-                units: Some("kg".to_string()), // mass units (incompatible)
                 default: Some(0.1),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, Some("kg")) // mass units (incompatible)
             },
         );
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::Variable("k".to_string()), // Just k, not k*x
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                // Just k, not k*x
+                equations: vec![ddt("x", Expr::Variable("k".to_string()))],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -1507,15 +1088,8 @@ mod tests {
         variables.insert(
             "position".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()),
                 default: Some(0.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
@@ -1523,76 +1097,28 @@ mod tests {
         variables.insert(
             "velocity".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Parameter,
-                units: Some("m/s".to_string()),
                 default: Some(1.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Parameter, Some("m/s"))
             },
         );
 
         models.insert(
             "test_model".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("position".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::Variable("velocity".to_string()),
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                equations: vec![ddt("position", Expr::Variable("velocity".to_string()))],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
             metadata: Metadata {
                 name: Some("Unit Test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
+                ..Default::default()
             },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..Default::default()
         };
 
         let result = validate(&esm_file);
@@ -1619,82 +1145,32 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default_units: None,
-                var_type: VariableType::Unknown,
-                units: Some("m".to_string()), // meters
                 default: Some(1.0),
-                description: None,
-                shape: None,
-                location: None,
-                distribution: None,
-                update: None,
+                ..var(VariableType::Unknown, Some("m"))
             },
         );
 
         models.insert(
             "test".to_string(),
             Model {
-                reference: None,
-                subsystems: None,
                 name: Some("Test Model".to_string()),
                 variables,
-                equations: vec![Equation {
-                    lhs: Expr::operator(ExpressionNode {
-                        op: "D".to_string(),
-                        args: vec![Expr::Variable("x".to_string())],
-                        wrt: Some("t".to_string()),
-                        dim: None,
-                        ..Default::default()
-                    }),
-                    rhs: Expr::operator(ExpressionNode {
+                // exp(x) where x has units - should warn
+                equations: vec![ddt(
+                    "x",
+                    Expr::operator(ExpressionNode {
                         op: "exp".to_string(),
-                        args: vec![Expr::Variable("x".to_string())], // exp(x) where x has units - should warn
-                        wrt: None,
-                        dim: None,
+                        args: vec![Expr::Variable("x".to_string())],
                         ..Default::default()
                     }),
-                }],
-                discrete_events: None,
-                continuous_events: None,
-                description: None,
-                tolerance: None,
-                tests: None,
-                initialization_equations: None,
-                guesses: None,
-                system_kind: None,
+                )],
+                ..Default::default()
             },
         );
 
         let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
             models: Some(models),
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
+            ..test_file()
         };
 
         let result = validate(&esm_file);
@@ -1741,37 +1217,7 @@ mod tests {
         // validate() only does structural validation, validate_text() does both
 
         // Create a valid EsmFile structure
-        let esm_file = EsmFile {
-            component_templates: None,
-            coordinates: None,
-            expression_templates: None,
-            metaparameters: None,
-            coupling_roles: None,
-            domain: None,
-            index_sets: None,
-            esm: "0.1.0".to_string(),
-            metadata: Metadata {
-                name: Some("test".to_string()),
-                description: None,
-                authors: None,
-                created: None,
-                modified: None,
-                license: None,
-                tags: None,
-                references: None,
-                system_class: None,
-                dae_info: None,
-                discretized_from: None,
-            },
-            models: None,
-            reaction_systems: None,
-            data_sources: None,
-            operators: None,
-            enums: None,
-
-            coupling: None,
-            function_tables: None,
-        };
+        let esm_file = test_file();
 
         // JSON that should fail schema validation (has invalid variable type)
         let invalid_json = r#"

@@ -103,6 +103,8 @@ pub(crate) mod serialize;
 pub(crate) mod structural;
 pub(crate) mod substitute;
 pub(crate) mod template_imports;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod types;
 pub(crate) mod unit_conversion;
 pub(crate) mod units;
