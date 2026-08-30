@@ -316,7 +316,7 @@ pub(super) fn run_reference(
                             }
                         };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, &get);
+                            eval_micro_op(op, &mut regs, get);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];

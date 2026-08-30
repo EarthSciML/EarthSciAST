@@ -2023,7 +2023,7 @@ unsafe fn exec_fused_elem(
                 }
             };
             for op in &fs.micro {
-                eval_micro_op(op, &mut regs, &get);
+                eval_micro_op(op, &mut regs, get);
             }
             for &(reg, optr) in outs {
                 unsafe { *optr.add(at) = regs[reg as usize] };
