@@ -383,7 +383,6 @@ fn test_compact_expr_all_operators() {
         ("*", vec![4.0, 5.0], 20.0),
         ("/", vec![15.0, 3.0], 5.0),
         ("^", vec![2.0, 3.0], 8.0),
-        ("**", vec![3.0, 2.0], 9.0),
     ];
 
     for (op, args, expected) in test_cases {
@@ -407,6 +406,23 @@ fn test_compact_expr_all_operators() {
             "Failed for operator {op}: got {result}, expected {expected}"
         );
     }
+
+    // `**` is not an operator in this format — the registry has no alias
+    // mechanism (see op_registry's `the_registry_has_no_operator_aliases`),
+    // so the evaluator must reject it rather than treat it as a spelling
+    // of `^`.
+    let alias_expr = Expr::operator(ExpressionNode {
+        op: "**".to_string(),
+        args: vec![Expr::Number(3.0), Expr::Number(2.0)],
+        wrt: None,
+        dim: None,
+        ..Default::default()
+    });
+    let compact = CompactExpr::from_expr(&alias_expr);
+    assert!(
+        compact.evaluate_fast(&HashMap::new()).is_err(),
+        "`**` must be rejected as an unsupported operator"
+    );
 
     // Test unary operators
     let unary_test_cases = vec![

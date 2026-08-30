@@ -425,7 +425,7 @@ impl CompactExpr {
                         }
                         stack.push(a / b);
                     }
-                    "^" | "**" => {
+                    "^" => {
                         let (a, b) = pop2(&mut stack)?;
                         stack.push(a.powf(b));
                     }
