@@ -6,148 +6,84 @@ use earthsci_ast::*;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
-/// Test simple variable replacement
-#[test]
-fn test_simple_var_replace() {
-    let fixture = include_str!("../../../tests/substitution/simple_var_replace.json");
-    let test_data: serde_json::Value =
-        serde_json::from_str(fixture).expect("Failed to parse simple var replace fixture");
+/// Run every case in a substitution fixture file. Each fixture is a JSON
+/// ARRAY of cases carrying `input`, `bindings`, and `expected` (plus an
+/// optional `description`). Every key is REQUIRED: a missing or renamed key —
+/// or an empty case list — is a test failure, never a silent pass. (The
+/// previous version of these tests probed the fixture root for object keys
+/// that do not exist in the array-shaped fixtures, so they asserted nothing.)
+fn run_substitution_fixture(name: &str, fixture: &str) {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(fixture)
+        .unwrap_or_else(|e| panic!("{name}: fixture must be a JSON array of cases: {e}"));
+    assert!(!cases.is_empty(), "{name}: fixture has no cases");
 
-    if let (Some(input_expr), Some(substitutions_data), Some(expected_expr)) = (
-        test_data.get("input_expression"),
-        test_data.get("substitutions"),
-        test_data.get("expected_result"),
-    ) {
-        // Parse input expression
-        let input_str =
-            serde_json::to_string(input_expr).expect("Failed to serialize input expression");
-        let input: Expr =
-            serde_json::from_str(&input_str).expect("Failed to parse input expression");
+    for (i, case) in cases.iter().enumerate() {
+        let label = match case.get("description").and_then(|d| d.as_str()) {
+            Some(d) => format!("{name}[{i}] ({d})"),
+            None => format!("{name}[{i}]"),
+        };
 
-        // Parse substitutions
+        let input: Expr = serde_json::from_value(
+            case.get("input")
+                .unwrap_or_else(|| panic!("{label}: case key 'input' missing"))
+                .clone(),
+        )
+        .unwrap_or_else(|e| panic!("{label}: failed to parse 'input': {e}"));
+
+        let bindings_obj = case
+            .get("bindings")
+            .unwrap_or_else(|| panic!("{label}: case key 'bindings' missing"))
+            .as_object()
+            .unwrap_or_else(|| panic!("{label}: 'bindings' must be an object"));
         let mut substitutions = HashMap::new();
-        if let Some(subs_obj) = substitutions_data.as_object() {
-            for (var_name, sub_expr) in subs_obj {
-                let sub_str =
-                    serde_json::to_string(sub_expr).expect("Failed to serialize substitution");
-                let sub: Expr =
-                    serde_json::from_str(&sub_str).expect("Failed to parse substitution");
-                substitutions.insert(var_name.clone(), sub);
-            }
+        for (var_name, sub_expr) in bindings_obj {
+            let sub: Expr = serde_json::from_value(sub_expr.clone()).unwrap_or_else(|e| {
+                panic!("{label}: failed to parse binding for '{var_name}': {e}")
+            });
+            substitutions.insert(var_name.clone(), sub);
         }
 
-        // Parse expected result
-        let expected_str =
-            serde_json::to_string(expected_expr).expect("Failed to serialize expected result");
-        let expected: Expr =
-            serde_json::from_str(&expected_str).expect("Failed to parse expected result");
+        let expected: Expr = serde_json::from_value(
+            case.get("expected")
+                .unwrap_or_else(|| panic!("{label}: case key 'expected' missing"))
+                .clone(),
+        )
+        .unwrap_or_else(|e| panic!("{label}: failed to parse 'expected': {e}"));
 
-        // Perform substitution
         let result = substitute(&input, &substitutions);
-
-        // Compare results (this is simplified - real comparison would be more sophisticated)
         assert_eq!(
             serde_json::to_value(&result).expect("Failed to serialize result"),
             serde_json::to_value(&expected).expect("Failed to serialize expected"),
-            "Substitution result doesn't match expected"
+            "{label}: substitution result doesn't match expected"
         );
     }
+}
+
+/// Test simple variable replacement
+#[test]
+fn test_simple_var_replace() {
+    run_substitution_fixture(
+        "simple_var_replace",
+        include_str!("../../../tests/substitution/simple_var_replace.json"),
+    );
 }
 
 /// Test nested substitution
 #[test]
 fn test_nested_substitution() {
-    let fixture = include_str!("../../../tests/substitution/nested_substitution.json");
-    let test_data: serde_json::Value =
-        serde_json::from_str(fixture).expect("Failed to parse nested substitution fixture");
-
-    if let (Some(input_expr), Some(substitutions_data), Some(expected_expr)) = (
-        test_data.get("input_expression"),
-        test_data.get("substitutions"),
-        test_data.get("expected_result"),
-    ) {
-        // Parse input expression
-        let input_str =
-            serde_json::to_string(input_expr).expect("Failed to serialize input expression");
-        let input: Expr =
-            serde_json::from_str(&input_str).expect("Failed to parse input expression");
-
-        // Parse substitutions
-        let mut substitutions = HashMap::new();
-        if let Some(subs_obj) = substitutions_data.as_object() {
-            for (var_name, sub_expr) in subs_obj {
-                let sub_str =
-                    serde_json::to_string(sub_expr).expect("Failed to serialize substitution");
-                let sub: Expr =
-                    serde_json::from_str(&sub_str).expect("Failed to parse substitution");
-                substitutions.insert(var_name.clone(), sub);
-            }
-        }
-
-        // Parse expected result
-        let expected_str =
-            serde_json::to_string(expected_expr).expect("Failed to serialize expected result");
-        let expected: Expr =
-            serde_json::from_str(&expected_str).expect("Failed to parse expected result");
-
-        // Perform substitution
-        let result = substitute(&input, &substitutions);
-
-        // Compare results
-        assert_eq!(
-            serde_json::to_value(&result).expect("Failed to serialize result"),
-            serde_json::to_value(&expected).expect("Failed to serialize expected"),
-            "Nested substitution result doesn't match expected"
-        );
-    }
+    run_substitution_fixture(
+        "nested_substitution",
+        include_str!("../../../tests/substitution/nested_substitution.json"),
+    );
 }
 
 /// Test scoped reference substitution
 #[test]
 fn test_scoped_reference() {
-    let fixture = include_str!("../../../tests/substitution/scoped_reference.json");
-    let test_data: serde_json::Value =
-        serde_json::from_str(fixture).expect("Failed to parse scoped reference fixture");
-
-    if let (Some(input_expr), Some(substitutions_data), Some(expected_expr)) = (
-        test_data.get("input_expression"),
-        test_data.get("substitutions"),
-        test_data.get("expected_result"),
-    ) {
-        // Parse input expression
-        let input_str =
-            serde_json::to_string(input_expr).expect("Failed to serialize input expression");
-        let input: Expr =
-            serde_json::from_str(&input_str).expect("Failed to parse input expression");
-
-        // Parse substitutions
-        let mut substitutions = HashMap::new();
-        if let Some(subs_obj) = substitutions_data.as_object() {
-            for (var_name, sub_expr) in subs_obj {
-                let sub_str =
-                    serde_json::to_string(sub_expr).expect("Failed to serialize substitution");
-                let sub: Expr =
-                    serde_json::from_str(&sub_str).expect("Failed to parse substitution");
-                substitutions.insert(var_name.clone(), sub);
-            }
-        }
-
-        // Parse expected result
-        let expected_str =
-            serde_json::to_string(expected_expr).expect("Failed to serialize expected result");
-        let expected: Expr =
-            serde_json::from_str(&expected_str).expect("Failed to parse expected result");
-
-        // Perform substitution
-        let result = substitute(&input, &substitutions);
-
-        // Compare results
-        assert_eq!(
-            serde_json::to_value(&result).expect("Failed to serialize result"),
-            serde_json::to_value(&expected).expect("Failed to serialize expected"),
-            "Scoped reference substitution result doesn't match expected"
-        );
-    }
+    run_substitution_fixture(
+        "scoped_reference",
+        include_str!("../../../tests/substitution/scoped_reference.json"),
+    );
 }
 
 /// Test substitution in model context
@@ -239,13 +175,25 @@ fn test_model_substitution() {
     // Perform substitution on model
     let result = substitute_in_model(&model, &substitutions);
 
-    // Check that substitution worked
-    if let Some(equation) = result.equations.first()
-        && let Expr::Operator(rhs_node) = &equation.rhs
-        && let Expr::Number(val) = &rhs_node.args[0]
-    {
-        assert_eq!(*val, 0.2, "Expected k to be substituted with 0.2");
-    }
+    // Check that substitution worked. Every step is a hard requirement: a
+    // shape mismatch is a failure, not a silently skipped assertion.
+    let equation = result
+        .equations
+        .first()
+        .expect("substituted model must keep its one equation");
+    let Expr::Operator(rhs_node) = &equation.rhs else {
+        panic!(
+            "expected operator RHS after substitution, got {:?}",
+            equation.rhs
+        );
+    };
+    let Expr::Number(val) = &rhs_node.args[0] else {
+        panic!(
+            "expected k substituted with a number, got {:?}",
+            rhs_node.args[0]
+        );
+    };
+    assert_eq!(*val, 0.2, "Expected k to be substituted with 0.2");
 }
 
 /// Test substitution in reaction system context
@@ -317,13 +265,25 @@ fn test_reaction_system_substitution() {
     // Perform substitution on reaction system
     let result = substitute_in_reaction_system(&rs, &substitutions);
 
-    // Check that substitution worked
-    if let Some(reaction) = result.reactions.first()
-        && let Expr::Operator(rate_node) = &reaction.rate
-        && let Expr::Number(val) = &rate_node.args[0]
-    {
-        assert_eq!(*val, 1.5, "Expected k_rate to be substituted with 1.5");
-    }
+    // Check that substitution worked. Every step is a hard requirement: a
+    // shape mismatch is a failure, not a silently skipped assertion.
+    let reaction = result
+        .reactions
+        .first()
+        .expect("substituted reaction system must keep its one reaction");
+    let Expr::Operator(rate_node) = &reaction.rate else {
+        panic!(
+            "expected operator rate after substitution, got {:?}",
+            reaction.rate
+        );
+    };
+    let Expr::Number(val) = &rate_node.args[0] else {
+        panic!(
+            "expected k_rate substituted with a number, got {:?}",
+            rate_node.args[0]
+        );
+    };
+    assert_eq!(*val, 1.5, "Expected k_rate to be substituted with 1.5");
 }
 
 /// Test complex substitution patterns
@@ -375,10 +335,33 @@ fn test_complex_substitution_patterns() {
     // Perform substitution
     let result = substitute(&complex_expr, &substitutions);
 
-    // Verify that substitution occurred in nested structures
-    if let Expr::Operator(result_node) = result {
-        assert_eq!(result_node.args.len(), 3, "Expected 3 arguments in result");
-    }
+    // Verify that substitution occurred in nested structures — at every
+    // depth, not just that the top-level shape survived.
+    let Expr::Operator(result_node) = &result else {
+        panic!("expected operator result, got {result:?}");
+    };
+    assert_eq!(result_node.args.len(), 3, "Expected 3 arguments in result");
+    let Expr::Operator(first_term) = &result_node.args[0] else {
+        panic!("expected a*x^2 term, got {:?}", result_node.args[0]);
+    };
+    assert_eq!(
+        first_term.args[0],
+        Expr::Number(1.0),
+        "a must be substituted inside the first nested term"
+    );
+    let Expr::Operator(second_term) = &result_node.args[1] else {
+        panic!("expected b*x term, got {:?}", result_node.args[1]);
+    };
+    assert_eq!(
+        second_term.args[0],
+        Expr::Number(-2.0),
+        "b must be substituted inside the second nested term"
+    );
+    assert_eq!(
+        result_node.args[2],
+        Expr::Number(1.0),
+        "c must be substituted at the top level"
+    );
 }
 
 /// Test substitution with no-op (identity)

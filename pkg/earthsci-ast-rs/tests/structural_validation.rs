@@ -407,11 +407,7 @@ fn test_undefined_variable_contexts() {
     ];
 
     for (name, fixture) in fixtures {
-        assert_fixture_structurally_rejected(
-            name,
-            fixture,
-            StructuralErrorCode::UndefinedVariable,
-        );
+        assert_fixture_structurally_rejected(name, fixture, StructuralErrorCode::UndefinedVariable);
     }
 }
 
