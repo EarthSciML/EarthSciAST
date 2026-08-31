@@ -3,7 +3,10 @@
 [![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-**EarthSciML Serialization Format** — A language-agnostic JSON-based format for earth science model components, their composition, and runtime configuration.
+**EarthSciML Abstract Syntax Tree Format** — A language-agnostic JSON-based format for earth science model components, their composition, and runtime configuration.
+
+[!NOTE]
+For the most part, this is a project that has been grown rather than built. As such, don't be surprised by occasional eccentricities!
 
 ## Overview
 
