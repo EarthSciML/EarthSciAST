@@ -279,10 +279,38 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dae_info: Option<DaeInfo>,
 
-    /// Provenance stamp: the `metadata.name` of the input ESM that
-    /// `discretize()` was called on. Absent on undiscretized inputs.
+    /// Provenance stamp identifying the source document `discretize()` was
+    /// called on. Absent on undiscretized inputs.
+    ///
+    /// The schema types this an OBJECT (`{"name": …}`), not a bare string. It
+    /// was declared `Option<String>` here until 2026-08-31, which made a
+    /// schema-valid discretized document a hard serde DESERIALIZATION ERROR on
+    /// load, and made this binding's own `discretize()` emit a schema-INVALID
+    /// bare string. No corpus fixture stamped it, so nothing caught either
+    /// half; `tests/valid/metadata_discretized_stamps.esm` now does.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub discretized_from: Option<String>,
+    pub discretized_from: Option<DiscretizedFrom>,
+
+    /// Reserved extension point for downstream-catalog machine-readable
+    /// metadata (e.g. the EarthSciDiscretizations rule-library catalog).
+    ///
+    /// Free-form JSON: the schema validates only that this is an object, and
+    /// its description is normative that core tooling "MUST NOT assign meaning
+    /// to them and MUST preserve them across parse → emit like any other
+    /// metadata field" (esm-spec §3). So it is held as an opaque
+    /// [`serde_json::Value`] and never inspected — round-tripping the author's
+    /// content verbatim is the whole contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_esd: Option<serde_json::Value>,
+}
+
+/// Provenance stamp written to `metadata.discretized_from` by `discretize()`
+/// per RFC §12: identifies the source document the discretized one came from.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DiscretizedFrom {
+    /// The `metadata.name` of the source document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Summary of DAE classification stamped onto `metadata.dae_info` by

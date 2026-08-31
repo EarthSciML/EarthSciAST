@@ -125,6 +125,7 @@ fn test_structural_validation() {
             system_class: None,
             dae_info: None,
             discretized_from: None,
+            x_esd: None,
         },
         models: Some(models),
         reaction_systems: None,
@@ -254,6 +255,7 @@ fn test_component_graph() {
         system_class: None,
         dae_info: None,
         discretized_from: None,
+        x_esd: None,
     };
 
     let model = Model {

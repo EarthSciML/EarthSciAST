@@ -218,7 +218,10 @@ pub fn discretize(esm: &EsmFile, options: DiscretizeOptions) -> Result<EsmFile, 
     let mut out = esm.clone();
     let input_name = esm.metadata.name.clone();
     apply_dae_contract(&mut out, options.dae_support)?;
-    out.metadata.discretized_from = input_name;
+    // The schema types this stamp an object, not a bare string; emitting the
+    // string directly (as this did until 2026-08-31) produced a document that
+    // failed its own schema.
+    out.metadata.discretized_from = Some(crate::types::DiscretizedFrom { name: input_name });
     Ok(out)
 }
 
@@ -648,7 +651,13 @@ mod tests {
         let esm = minimal_esm("M", m);
 
         let out = discretize(&esm, DiscretizeOptions { dae_support: true }).expect("ok");
-        assert_eq!(out.metadata.discretized_from.as_deref(), Some("test"));
+        assert_eq!(
+            out.metadata
+                .discretized_from
+                .as_ref()
+                .and_then(|d| d.name.as_deref()),
+            Some("test")
+        );
         assert_eq!(out.metadata.system_class.as_deref(), Some("ode"));
     }
 

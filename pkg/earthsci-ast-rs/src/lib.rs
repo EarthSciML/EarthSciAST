@@ -261,11 +261,11 @@ pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
-    DiscreteEventTrigger, Distribution, DistributionParam, Domain, Equation, EsmFile, Expr,
-    ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest, ModelTestAssertion,
-    ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction, ReactionSystem,
-    RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance, UnitConversion,
-    UpdateValue, VariableMapTransform, VariableType,
+    DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest,
+    ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
+    ReactionSystem, RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance,
+    UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,

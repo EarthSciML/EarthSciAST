@@ -24,7 +24,14 @@ fn pure_ode_fixture_stamps_ode_class() {
     assert_eq!(info.algebraic_equation_count, 0);
     assert_eq!(info.factored_equation_count, Some(0));
     assert_eq!(info.per_model.get("M").copied(), Some(0));
-    assert_eq!(out.metadata.discretized_from.as_deref(), Some("pure_ode"));
+    // The stamp is an OBJECT per the schema (`{"name": …}`), not a bare string.
+    assert_eq!(
+        out.metadata
+            .discretized_from
+            .as_ref()
+            .and_then(|d| d.name.as_deref()),
+        Some("pure_ode")
+    );
 }
 
 #[test]

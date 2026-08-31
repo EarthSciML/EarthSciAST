@@ -1,0 +1,143 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DampedOscillatorDiscretized",
+    "description": "A discretized document carrying the full set of metadata stamps that discretize() writes (RFC §12) plus a downstream-catalog x_esd extension block. Exists so that parse -> emit is exercised over metadata keys no other corpus fixture sets: system_class, dae_info, discretized_from and x_esd. discretized_from is an OBJECT ({\"name\": ...}), not a bare string; a binding that types it as a string fails to LOAD this file rather than silently dropping a field.",
+    "authors": [
+      "EarthSciAST Conformance Corpus"
+    ],
+    "license": "AGPL-3.0",
+    "created": "2026-08-31T00:00:00Z",
+    "tags": [
+      "metadata",
+      "discretize",
+      "provenance",
+      "x-esd"
+    ],
+    "system_class": "ode",
+    "dae_info": {
+      "algebraic_equation_count": 0,
+      "per_model": {
+        "DampedOscillator": 0
+      }
+    },
+    "discretized_from": {
+      "name": "DampedOscillatorContinuous"
+    },
+    "x_esd": {
+      "catalog": "EarthSciDiscretizations",
+      "catalog_version": "0.3.0",
+      "rules_applied": [
+        {
+          "rule": "second_order_to_first_order",
+          "target": "DampedOscillator"
+        }
+      ],
+      "provenance": {
+        "generated_by": "discretize()",
+        "nested": {
+          "deep": [
+            1,
+            2.5,
+            "three",
+            true,
+            null
+          ]
+        }
+      }
+    }
+  },
+  "models": {
+    "DampedOscillator": {
+      "reference": {
+        "citation": "Classical damped harmonic oscillator, written as a first-order ODE pair."
+      },
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0,
+          "description": "Displacement"
+        },
+        "v": {
+          "type": "unknown",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "Velocity"
+        },
+        "omega": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 2.0,
+          "description": "Angular frequency"
+        },
+        "zeta": {
+          "type": "parameter",
+          "units": "dimensionless",
+          "default": 0.1,
+          "description": "Damping ratio"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "v"
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "v"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "^",
+                        "args": [
+                          "omega",
+                          2
+                        ]
+                      }
+                    ]
+                  },
+                  "x"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  "zeta",
+                  "omega",
+                  "v"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "domain": {
+    "temporal": {
+      "start": "2026-01-01T00:00:00Z",
+      "end": "2026-01-01T01:00:00Z"
+    },
+    "element_type": "Float64"
+  }
+}

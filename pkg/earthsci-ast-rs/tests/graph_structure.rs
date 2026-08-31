@@ -25,6 +25,7 @@ fn test_component_graph_generation() {
         system_class: None,
         dae_info: None,
         discretized_from: None,
+        x_esd: None,
     };
 
     let mut variables = IndexMap::new();
@@ -156,6 +157,7 @@ fn test_component_graph_exports() {
         system_class: None,
         dae_info: None,
         discretized_from: None,
+        x_esd: None,
     };
 
     let model = Model {
@@ -424,6 +426,7 @@ fn test_component_existence() {
         system_class: None,
         dae_info: None,
         discretized_from: None,
+        x_esd: None,
     };
 
     let model = Model {

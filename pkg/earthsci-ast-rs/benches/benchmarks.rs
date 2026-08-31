@@ -108,6 +108,7 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             system_class: None,
             dae_info: None,
             discretized_from: None,
+            x_esd: None,
         },
         index_sets: None,
         expression_templates: None,

@@ -28,6 +28,7 @@ fn empty_metadata() -> Metadata {
         system_class: None,
         dae_info: None,
         discretized_from: None,
+        x_esd: None,
     }
 }
 
