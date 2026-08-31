@@ -102,9 +102,27 @@ pub struct Coordinate {
 }
 
 /// ODE-based model component
+///
+/// # `name` / `description` are NOT schema keys
+///
+/// The schema's `Model` is `additionalProperties: false` and declares neither
+/// `name` (a model's name is its key in the `models` map) nor `description`.
+/// Both fields below are therefore schema-INVALID the moment they are set, and
+/// `save()` will happily emit a document that fails its own schema. They are
+/// harmless only while they stay `None`, which is what every load-parsed model
+/// leaves them as — no deserializer ever fills them, because the wire form has
+/// no such keys.
+///
+/// They are not dead, though: [`crate::update_model_metadata`] — a tier-
+/// `extension`, Rust-only entry in `api-surface.json` — sets both, so its ONLY
+/// observable effect is to make a valid document invalid. `graph.rs` also reads
+/// `name` for a component-node label, where it is always `None` in practice.
+/// Left in place deliberately rather than removed: deleting them changes a
+/// published API surface, which is a decision for whoever owns that surface,
+/// not a drive-by fix. Do not start populating them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
-    /// Human-readable model name
+    /// Human-readable model name. NOT a schema key — see the type-level note.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
@@ -130,7 +148,7 @@ pub struct Model {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subsystems: Option<IndexMap<String, serde_json::Value>>,
 
-    /// Brief description
+    /// Brief description. NOT a schema key — see the type-level note.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 

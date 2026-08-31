@@ -4,6 +4,40 @@
 //! Every test compares the FULL saved document against the original fixture via
 //! [`assert_lossless_round_trip`], so a dropped or altered field anywhere in the
 //! document is a hard failure — not just the two fields the old tests spot-checked.
+//!
+//! # Coverage, and the fixtures deliberately NOT here
+//!
+//! The fixture list below is hardcoded `include_str!`s, not the shared corpus
+//! manifest, so it pins a subset of `tests/valid/**` rather than all of it.
+//! Promoting it to the manifest is owned separately; until then, a field fixed
+//! against a drop should gain an entry here so the fix stays pinned.
+//!
+//! A whole-corpus `load` → `save` sweep does NOT come back clean, and most of
+//! what it reports is CORRECT behaviour that a future audit should not re-flag.
+//! Three load-time transforms are specified to change the document:
+//!
+//! * **Eager template expansion** (esm-spec §9.6.4 rule 3) — a reference whose
+//!   template is target-bearing expands before emit.
+//! * **Metaparameter folding** (§9.7.6) — `index_sets` sizes and bounds
+//!   spelled as open metaparameter expressions fold to integers.
+//! * **Subsystem `ref` resolution** (§4.7) — a `subsystems` entry's `ref` is
+//!   replaced by the inlined component it names.
+//!
+//! And per §9.6.4 rule 5, a **component-level authored `match` rule** — one
+//! consumed by the §9.6.3 fixpoint and invocable by nothing — is REQUIRED to be
+//! dropped from the emitted component. `advection_reaction_loaded_ic_bc.esm`
+//! and `derivative_trailing_boundary_operands.esm` each lose a component
+//! `expression_templates` registry to exactly that rule; both are correct.
+//!
+//! The one genuine gap the sweep still shows is `expression_templates_arrhenius.esm`,
+//! whose component registry holds a **match-less** entry. Rule 5 says those
+//! "survive verbatim (they remain referenceable)", so emitting it expanded is a
+//! divergence from Option B — but a deliberate, documented one: this binding's
+//! typed IR is Expand-at-build (see the comment on `expand` in `parse.rs`), so
+//! the typed structs never see an `apply_expression_template` node or an
+//! `expression_templates` block, and a round-trip through them is Option-A by
+//! construction. Closing that needs the reference-preserving emit path, not a
+//! type change here.
 
 use earthsci_ast::*;
 use serde_json::Value;
@@ -623,6 +657,111 @@ fn test_stoichiometry_emits_integer_literal() {
     assert!(
         !frac_json.contains("\"stoichiometry\": 2.0"),
         "the source-spelled `2.0` must normalize to the integer literal `2`:\n{frac_json}"
+    );
+}
+
+/// The `metadata.discretized_from` / `metadata.x_esd` stamps round-trip.
+///
+/// This fixture exists because nothing else in the corpus sets either key, and
+/// their absence hid two defects at once (fixed 2026-08-31):
+///
+/// * `discretized_from` is schema-typed an OBJECT (`{"name": …}`) but was
+///   declared `Option<String>` here, so a schema-valid discretized document was
+///   a hard serde DESERIALIZATION ERROR — a load failure, not a silent drop —
+///   and this binding's own `discretize()` emitted a schema-INVALID bare string.
+/// * `x_esd` had no field at all, so it was silently dropped, in violation of
+///   its own normative description: core tooling "MUST NOT assign meaning to
+///   them and MUST preserve them across parse → emit like any other metadata
+///   field".
+///
+/// The typed assertions below are what make this test fail for the RIGHT reason
+/// if either regresses: the whole-document comparison alone would still pass if
+/// both the load and the emit reverted to the bare-string spelling together.
+#[test]
+fn test_metadata_discretized_stamps_round_trip() {
+    let parsed = assert_lossless_round_trip(
+        "metadata_discretized_stamps",
+        include_str!("../../../tests/valid/metadata_discretized_stamps.esm"),
+    );
+
+    let from = parsed
+        .metadata
+        .discretized_from
+        .as_ref()
+        .expect("discretized_from must survive load");
+    assert_eq!(from.name.as_deref(), Some("DampedOscillatorContinuous"));
+
+    // `x_esd` is opaque to core tooling, so assert it arrives byte-for-byte as
+    // authored rather than probing any structure the core is entitled to know.
+    let x_esd = parsed.metadata.x_esd.as_ref().expect("x_esd must survive");
+    let original: Value = serde_json::from_str(include_str!(
+        "../../../tests/valid/metadata_discretized_stamps.esm"
+    ))
+    .unwrap();
+    assert_eq!(x_esd, &original["metadata"]["x_esd"]);
+}
+
+/// `expect_cadence` — the optional AUTHOR assertion on a node's cadence class
+/// (CONFORMANCE_SPEC.md §5.7.6 rule 3) — survives parse → emit on every node.
+///
+/// It is a diagnostic/test hook that changes no semantics: the
+/// dependency-partition pass DERIVES each node's class and merely errors when a
+/// present assertion disagrees. Nothing consumes it, so it is authored content
+/// and must round-trip — as it already did in the Go and TypeScript bindings
+/// while Rust dropped it. Dropping it silently disarmed the assertion that
+/// guards the whole §5.7 contract on any document this binding re-emitted, and
+/// these fixtures carry one on every meaningful node.
+#[test]
+fn test_expect_cadence_round_trip() {
+    let fixtures = [
+        (
+            "cadence/mixed_stencil",
+            include_str!("../../../tests/valid/cadence/mixed_stencil.esm"),
+        ),
+        (
+            "cadence/pure_topology",
+            include_str!("../../../tests/valid/cadence/pure_topology.esm"),
+        ),
+        (
+            "cadence/pure_pointwise",
+            include_str!("../../../tests/valid/cadence/pure_pointwise.esm"),
+        ),
+        (
+            "cadence/discrete_remesh_stencil",
+            include_str!("../../../tests/valid/cadence/discrete_remesh_stencil.esm"),
+        ),
+        (
+            "cadence/loader_const_seed",
+            include_str!("../../../tests/valid/cadence/loader_const_seed.esm"),
+        ),
+        (
+            "cadence/loader_temporal_seed",
+            include_str!("../../../tests/valid/cadence/loader_temporal_seed.esm"),
+        ),
+        (
+            "cadence/observed_leaf_seeds",
+            include_str!("../../../tests/valid/cadence/observed_leaf_seeds.esm"),
+        ),
+    ];
+
+    for (name, fixture) in fixtures {
+        assert_lossless_round_trip(name, fixture);
+    }
+}
+
+/// `coupling[].lifting` survives on a `variable_map` entry, not only on the
+/// `operator_compose` entry that was the sole variant carrying the field.
+///
+/// The schema declares `lifting` on `CouplingOperatorCompose`, `CouplingCouple`
+/// AND `CouplingVariableMap`; this binding typed it only on the first, so the
+/// six `variable_map` entries in this fixture lost theirs on emit. Only
+/// `operator_compose` acts on the value (the `"pointwise"` promotion in the
+/// flattener) — on the other two variants it is carried for round-trip alone.
+#[test]
+fn test_coupling_lifting_round_trip() {
+    assert_lossless_round_trip(
+        "wildfire_atmosphere_ocean",
+        include_str!("../../../tests/valid/wildfire_atmosphere_ocean.esm"),
     );
 }
 
