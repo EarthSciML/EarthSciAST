@@ -235,6 +235,10 @@ fn pd_flip(op: &str) -> &'static str {
 /// Condition of the first `ifelse(cond, then, else)` in a raw subtree.
 /// Object-value iteration is insertion-ordered (`preserve_order`), matching
 /// the Python `dict.values()` walk exactly.
+///
+/// Hand-rolled rather than `crate::json_visit`: a first-match search returning
+/// a borrowed reference with an early return, which the shared visitors don't
+/// provide.
 fn pd_find_ifelse_cond(e: &Value) -> Option<&Value> {
     match e {
         Value::Object(m) => {
@@ -592,6 +596,9 @@ fn pd_templates(model: &Value) -> Option<&Map<String, Value>> {
 
 /// Does `node` carry a surviving `apply_expression_template` reference?
 /// Descends every object value, `bindings` included.
+///
+/// Hand-rolled rather than `crate::json_visit`: a short-circuiting existence
+/// test, and the read-only shared visitor cannot stop early.
 fn pd_has_apply(node: &Value) -> bool {
     match node {
         Value::Object(m) => {
@@ -604,6 +611,9 @@ fn pd_has_apply(node: &Value) -> bool {
 
 /// The `name` of the first surviving reference in `node` (pre-order), for the
 /// residual diagnostic; `None` when it carries none.
+///
+/// Hand-rolled rather than `crate::json_visit`: short-circuits at the first
+/// reference node and does not descend into it.
 fn pd_first_apply_name(node: &Value) -> Option<String> {
     match node {
         Value::Object(m) => {
@@ -1154,44 +1164,38 @@ fn pd_cell_factors(
     out: &mut BTreeMap<String, Vec<String>>,
     bad: &mut BTreeMap<String, String>,
 ) {
-    match node {
-        Value::Object(o) => {
-            if o.get("op").and_then(Value::as_str) == Some("index")
-                && let Some(a) = o.get("args").and_then(Value::as_array)
-                && a.len() >= 2
-                && let Some(f) = a[0].as_str()
-                && let Some(shape) = variables
-                    .get(f)
-                    .and_then(|v| v.get("shape"))
-                    .and_then(Value::as_array)
-                && shape.first().and_then(Value::as_str) == Some(c_set)
-            {
-                if a[1].as_str() == Some(c_sym) {
-                    out.entry(f.to_string()).or_insert_with(|| {
-                        shape
-                            .iter()
-                            .map(|t| t.as_str().unwrap_or_default().to_string())
-                            .collect()
-                    });
-                } else if pd_mentions_sym(&a[1], c_sym) {
-                    bad.entry(f.to_string())
-                        .or_insert_with(|| pd_subscript_sketch(&a[1]));
-                }
-            }
-            for v in o.values() {
-                pd_cell_factors(v, c_sym, variables, c_set, out, bad);
+    crate::json_visit::visit_values(node, &mut |_path, v| {
+        let Some(o) = v.as_object() else { return };
+        if o.get("op").and_then(Value::as_str) == Some("index")
+            && let Some(a) = o.get("args").and_then(Value::as_array)
+            && a.len() >= 2
+            && let Some(f) = a[0].as_str()
+            && let Some(shape) = variables
+                .get(f)
+                .and_then(|v| v.get("shape"))
+                .and_then(Value::as_array)
+            && shape.first().and_then(Value::as_str) == Some(c_set)
+        {
+            if a[1].as_str() == Some(c_sym) {
+                out.entry(f.to_string()).or_insert_with(|| {
+                    shape
+                        .iter()
+                        .map(|t| t.as_str().unwrap_or_default().to_string())
+                        .collect()
+                });
+            } else if pd_mentions_sym(&a[1], c_sym) {
+                bad.entry(f.to_string())
+                    .or_insert_with(|| pd_subscript_sketch(&a[1]));
             }
         }
-        Value::Array(xs) => {
-            for x in xs {
-                pd_cell_factors(x, c_sym, variables, c_set, out, bad);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Does `node` reference the loop symbol `sym` anywhere?
+///
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
+/// (`name` entries are labels, not references, and are skipped) and the test
+/// short-circuits.
 fn pd_mentions_sym(node: &Value, sym: &str) -> bool {
     match node {
         Value::String(s) => s == sym,
@@ -1340,36 +1344,26 @@ fn pd_refuse_ungatherable(
 /// entry, a range key, a scalar field or a template `name`, none of which are
 /// variable references.
 fn pd_rewrite_rects(node: &mut Value, rectmap: &HashMap<String, String>) {
-    match node {
-        Value::Object(m) => {
-            if m.get("op").and_then(Value::as_str) == Some("index")
-                && let Some(a) = m.get_mut("args").and_then(Value::as_array_mut)
-                && let Some(first) = a.first_mut()
-                && let Some(f) = first.as_str()
-                && let Some(g) = rectmap.get(f)
-            {
-                *first = Value::String(g.clone());
-            }
-            if m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
-                && let Some(b) = m.get_mut("bindings").and_then(Value::as_object_mut)
-            {
-                for v in b.values_mut() {
-                    if let Some(g) = v.as_str().and_then(|sv| rectmap.get(sv)) {
-                        *v = Value::String(g.clone());
-                    }
+    crate::json_visit::visit_values_mut(node, &mut |v| {
+        let Some(m) = v.as_object_mut() else { return };
+        if m.get("op").and_then(Value::as_str) == Some("index")
+            && let Some(a) = m.get_mut("args").and_then(Value::as_array_mut)
+            && let Some(first) = a.first_mut()
+            && let Some(f) = first.as_str()
+            && let Some(g) = rectmap.get(f)
+        {
+            *first = Value::String(g.clone());
+        }
+        if m.get("op").and_then(Value::as_str) == Some(APPLY_OP)
+            && let Some(b) = m.get_mut("bindings").and_then(Value::as_object_mut)
+        {
+            for v in b.values_mut() {
+                if let Some(g) = v.as_str().and_then(|sv| rectmap.get(sv)) {
+                    *v = Value::String(g.clone());
                 }
             }
-            for v in m.values_mut() {
-                pd_rewrite_rects(v, rectmap);
-            }
         }
-        Value::Array(xs) => {
-            for x in xs {
-                pd_rewrite_rects(x, rectmap);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 fn pd_ix(f: impl Into<Value>, idx: impl Into<Value>) -> Value {
@@ -1398,29 +1392,19 @@ fn pd_collect_stale_rects(
     rectmap: &HashMap<String, String>,
     out: &mut std::collections::BTreeSet<String>,
 ) {
-    match node {
-        Value::Object(m) => {
-            if m.get("op").and_then(Value::as_str) == Some("index")
-                && let Some(f) = m
-                    .get("args")
-                    .and_then(Value::as_array)
-                    .and_then(|a| a.first())
-                    .and_then(Value::as_str)
-                && rectmap.contains_key(f)
-            {
-                out.insert(f.to_string());
-            }
-            for v in m.values() {
-                pd_collect_stale_rects(v, rectmap, out);
-            }
+    crate::json_visit::visit_values(node, &mut |_path, v| {
+        if let Some(m) = v.as_object()
+            && m.get("op").and_then(Value::as_str) == Some("index")
+            && let Some(f) = m
+                .get("args")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+                .and_then(Value::as_str)
+            && rectmap.contains_key(f)
+        {
+            out.insert(f.to_string());
         }
-        Value::Array(xs) => {
-            for x in xs {
-                pd_collect_stale_rects(x, rectmap, out);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// POST-CONDITION of the forward arm's rect re-pointing, discharged on the
