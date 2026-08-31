@@ -171,3 +171,14 @@ pub enum CompileError {
     #[error("Flatten failed: {0}")]
     Flatten(#[from] FlattenError),
 }
+
+impl CompileError {
+    /// Shorthand constructor for [`CompileError::InterpreterBuildError`], the
+    /// catch-all build failure, whose `{ details: format!(…) }` spelling is
+    /// otherwise repeated at every raise site.
+    pub fn build_err(details: impl Into<String>) -> Self {
+        CompileError::InterpreterBuildError {
+            details: details.into(),
+        }
+    }
+}

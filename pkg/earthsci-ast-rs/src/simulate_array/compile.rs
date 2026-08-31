@@ -157,26 +157,22 @@ pub(super) fn parse_subsystem_model(
     sub_name: &str,
     value: &serde_json::Value,
 ) -> Result<(Model, HashMap<String, IndexSet>), CompileError> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| CompileError::InterpreterBuildError {
-            details: format!("subsystem '{sub_name}' is not a JSON object"),
-        })?;
+    let obj = value.as_object().ok_or_else(|| {
+        CompileError::build_err(format!("subsystem '{sub_name}' is not a JSON object"))
+    })?;
     if obj.contains_key("models") {
         let file: EsmFile = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::InterpreterBuildError {
-                details: format!("subsystem '{sub_name}' does not parse as an ESM file: {e}"),
-            }
+            CompileError::build_err(format!(
+                "subsystem '{sub_name}' does not parse as an ESM file: {e}"
+            ))
         })?;
         let models = file.models.unwrap_or_default();
         if models.len() != 1 {
-            return Err(CompileError::InterpreterBuildError {
-                details: format!(
-                    "subsystem '{sub_name}' resolves to a file with {} models; exactly one is \
+            return Err(CompileError::build_err(format!(
+                "subsystem '{sub_name}' resolves to a file with {} models; exactly one is \
                      required to mount it",
-                    models.len()
-                ),
-            });
+                models.len()
+            )));
         }
         let model = models.into_values().next().expect("len checked above");
         Ok((
@@ -185,25 +181,21 @@ pub(super) fn parse_subsystem_model(
         ))
     } else if obj.contains_key("variables") || obj.contains_key("equations") {
         let model: Model = serde_json::from_value(value.clone()).map_err(|e| {
-            CompileError::InterpreterBuildError {
-                details: format!("subsystem '{sub_name}' does not parse as a model: {e}"),
-            }
+            CompileError::build_err(format!(
+                "subsystem '{sub_name}' does not parse as a model: {e}"
+            ))
         })?;
         Ok((model, HashMap::new()))
     } else if obj.contains_key("ref") {
-        Err(CompileError::InterpreterBuildError {
-            details: format!(
-                "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
+        Err(CompileError::build_err(format!(
+            "subsystem '{sub_name}' is an unresolved {{\"ref\": …}}; load the document \
                  through the official loader (crate::parse::load_path) so \
                  resolve_subsystem_refs_raw inlines it first"
-            ),
-        })
+        )))
     } else {
-        Err(CompileError::InterpreterBuildError {
-            details: format!(
-                "subsystem '{sub_name}' has neither 'models' nor 'variables'/'equations'"
-            ),
-        })
+        Err(CompileError::build_err(format!(
+            "subsystem '{sub_name}' has neither 'models' nor 'variables'/'equations'"
+        )))
     }
 }
 
@@ -250,12 +242,10 @@ pub(super) fn mount_subsystems(
         for (vname, var) in &sub_model.variables {
             let mounted = format!("{sub_name}.{vname}");
             if model.variables.contains_key(&mounted) {
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!(
-                        "mounting subsystem '{sub_name}' would overwrite existing variable \
+                return Err(CompileError::build_err(format!(
+                    "mounting subsystem '{sub_name}' would overwrite existing variable \
                          '{mounted}'"
-                    ),
-                });
+                )));
             }
             let mut var = var.clone();
             // A parameter `update`'s Expressions are the only ones a variable
@@ -317,14 +307,12 @@ pub(super) fn apply_ragged_factor_scope(
         if best.len() > 1 {
             let mut names: Vec<String> = best.iter().map(|s| (**s).clone()).collect();
             names.sort();
-            return Err(CompileError::InterpreterBuildError {
-                details: format!(
-                    "ragged index set '{set_name}': keyed factor '{fname}' is ambiguous in the \
+            return Err(CompileError::build_err(format!(
+                "ragged index set '{set_name}': keyed factor '{fname}' is ambiguous in the \
                      model scope — {} candidates at namespace depth {mindepth}: {}",
-                    names.len(),
-                    names.join(", ")
-                ),
-            });
+                names.len(),
+                names.join(", ")
+            )));
         }
         Ok(Some((*best[0]).clone()))
     };
@@ -359,15 +347,12 @@ pub(super) fn apply_ragged_factor_scope(
 impl ArrayCompiled {
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
         let Some(models) = &file.models else {
-            return Err(CompileError::InterpreterBuildError {
-                details: "File has no models to simulate".to_string(),
-            });
+            return Err(CompileError::build_err("File has no models to simulate"));
         };
         if models.len() != 1 {
-            return Err(CompileError::InterpreterBuildError {
-                details: "Array-op path currently only supports a single model file (no coupling)"
-                    .to_string(),
-            });
+            return Err(CompileError::build_err(
+                "Array-op path currently only supports a single model file (no coupling)",
+            ));
         }
         let (model_name, model) = models.iter().next().unwrap();
         // v0.8.0: `index_sets` is document-scoped (one registry shared by all
@@ -396,15 +381,12 @@ impl ArrayCompiled {
     /// compiled rules); this path holds ~one. Same build stages, same result.
     pub fn from_file_owned(file: EsmFile) -> Result<Self, CompileError> {
         let Some(models) = file.models else {
-            return Err(CompileError::InterpreterBuildError {
-                details: "File has no models to simulate".to_string(),
-            });
+            return Err(CompileError::build_err("File has no models to simulate"));
         };
         if models.len() != 1 {
-            return Err(CompileError::InterpreterBuildError {
-                details: "Array-op path currently only supports a single model file (no coupling)"
-                    .to_string(),
-            });
+            return Err(CompileError::build_err(
+                "Array-op path currently only supports a single model file (no coupling)",
+            ));
         }
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
@@ -1005,9 +987,9 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
             if scope.contains(name) {
                 return Ok(());
             }
-            Err(CompileError::InterpreterBuildError {
-                details: format!("Unknown variable '{name}' referenced in expression"),
-            })
+            Err(CompileError::build_err(format!(
+                "Unknown variable '{name}' referenced in expression"
+            )))
         }
         Expr::Operator(node) => {
             let mut first_err: Option<CompileError> = None;
@@ -1510,9 +1492,9 @@ fn lower_arrayop_derivative(
         filter,
     } = d;
     if !var_shapes.contains_key(&var) {
-        return Err(CompileError::InterpreterBuildError {
-            details: format!("Array-op derivative targets unknown state variable '{var}'"),
-        });
+        return Err(CompileError::build_err(format!(
+            "Array-op derivative targets unknown state variable '{var}'"
+        )));
     }
     // Mark the covered slots.
     let shape = &var_shapes[&var];
@@ -1555,11 +1537,11 @@ fn lower_indexed_derivative(
     rhs_rules: &mut Vec<RhsRule>,
 ) -> Result<(), CompileError> {
     // Indexed: find slot.
-    let shape = var_shapes
-        .get(&var)
-        .ok_or_else(|| CompileError::InterpreterBuildError {
-            details: format!("Scalar derivative targets unknown state variable '{var}'"),
-        })?;
+    let shape = var_shapes.get(&var).ok_or_else(|| {
+        CompileError::build_err(format!(
+            "Scalar derivative targets unknown state variable '{var}'"
+        ))
+    })?;
     let flat = multi_to_flat_col_major(indices, &shape.shape, &shape.origin);
     let slot = shape.flat_offset + flat;
     covered_slots.insert(slot);
@@ -1584,8 +1566,10 @@ fn lower_bare_derivative(
 ) -> Result<(), CompileError> {
     let shape = var_shapes
         .get(&var)
-        .ok_or_else(|| CompileError::InterpreterBuildError {
-            details: format!("Scalar derivative targets unknown state variable '{var}'"),
+        .ok_or_else(|| {
+            CompileError::build_err(format!(
+                "Scalar derivative targets unknown state variable '{var}'"
+            ))
         })?
         .clone();
     // The result's declared index-set axis names, when they line up
@@ -1741,9 +1725,9 @@ fn check_state_slots_covered(
 ) -> Result<(), CompileError> {
     for (i, name) in slots.scalar_state_names.iter().enumerate() {
         if !covered_slots.contains(&i) {
-            return Err(CompileError::InterpreterBuildError {
-                details: format!("State slot '{name}' has no defining derivative equation."),
-            });
+            return Err(CompileError::build_err(format!(
+                "State slot '{name}' has no defining derivative equation."
+            )));
         }
     }
     Ok(())
@@ -2338,22 +2322,20 @@ pub fn run_value_invention<S: std::hash::BuildHasher>(
     // aggregate `key`/`distinct`/`arg` fields), with the document-scoped
     // `index_sets` registry merged down as a sibling — mirroring the engine's own
     // `model_json` fixture helper and `crate::cadence`.
-    let mut model_json =
-        serde_json::to_value(model).map_err(|e| CompileError::InterpreterBuildError {
-            details: format!("value-invention: could not serialize model: {e}"),
-        })?;
+    let mut model_json = serde_json::to_value(model).map_err(|e| {
+        CompileError::build_err(format!("value-invention: could not serialize model: {e}"))
+    })?;
     if let JsonValue::Object(m) = &mut model_json {
-        let is_json =
-            serde_json::to_value(index_sets).map_err(|e| CompileError::InterpreterBuildError {
-                details: format!("value-invention: could not serialize index_sets: {e}"),
-            })?;
+        let is_json = serde_json::to_value(index_sets).map_err(|e| {
+            CompileError::build_err(format!(
+                "value-invention: could not serialize index_sets: {e}"
+            ))
+        })?;
         m.insert("index_sets".to_string(), is_json);
     }
 
     materialize_value_invention(&model_json, &const_arrays, &params, &HashMap::new()).map_err(|e| {
-        CompileError::InterpreterBuildError {
-            details: format!("value-invention materialize failed: {}", e.0),
-        }
+        CompileError::build_err(format!("value-invention materialize failed: {}", e.0))
     })
 }
 
@@ -3095,9 +3077,9 @@ pub(super) fn infer_shapes(
         let mins = per_var_min.get(&name_s).cloned().unwrap_or_default();
         let maxes = per_var_max.get(&name_s).cloned().unwrap_or_default();
         if mins.len() != maxes.len() {
-            return Err(CompileError::InterpreterBuildError {
-                details: format!("Inconsistent index rank for variable '{name_s}'"),
-            });
+            return Err(CompileError::build_err(format!(
+                "Inconsistent index rank for variable '{name_s}'"
+            )));
         }
         let shape: Vec<usize> = mins
             .iter()

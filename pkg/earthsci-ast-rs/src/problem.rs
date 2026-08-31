@@ -701,28 +701,24 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
         cands.sort();
         cands.dedup();
         return Err(SimulateError::Compile(
-            crate::compile_error::CompileError::InterpreterBuildError {
-                details: format!(
-                    "observed_field: '{name}' is a bare name and this EsmProblem has {} \
+            crate::compile_error::CompileError::build_err(format!(
+                "observed_field: '{name}' is a bare name and this EsmProblem has {} \
                      components ({}); qualify it as one of: {}",
-                    components.len(),
-                    components
-                        .iter()
-                        .filter(|c| !c.is_empty())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    cands.join(", ")
-                ),
-            },
+                components.len(),
+                components
+                    .iter()
+                    .filter(|c| !c.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                cands.join(", ")
+            )),
         ));
     }
     Err(SimulateError::Compile(
-        crate::compile_error::CompileError::InterpreterBuildError {
-            details: format!(
-                "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
-            ),
-        },
+        crate::compile_error::CompileError::build_err(format!(
+            "observed_field: '{name}' is not a build-time-evaluable observed of this EsmProblem"
+        )),
     ))
 }
 
@@ -803,10 +799,9 @@ pub fn observed_trajectories(
         Backend::Scalar(c) => c,
         Backend::Array(_) => {
             return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError {
-                    details: "observed_trajectory: this EsmProblem is on the array runtime,                               which materializes observeds per cell rather than through the                               scalar graph"
-                        .to_string(),
-                },
+                crate::compile_error::CompileError::build_err(
+                    "observed_trajectory: this EsmProblem is on the array runtime,                               which materializes observeds per cell rather than through the                               scalar graph",
+                ),
             ));
         }
         Backend::Static(reason) => {
@@ -850,24 +845,20 @@ fn resolve_observed_name(
         // the remedy in the diagnostic — the author cannot qualify it without
         // being told which spellings exist.
         NameResolution::Ambiguous(matches) => Err(SimulateError::Compile(
-            crate::compile_error::CompileError::InterpreterBuildError {
-                details: format!(
-                    "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
-                    components_of(declared, model),
-                    matches
-                        .iter()
-                        .map(|k| qualify(model, k))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
+            crate::compile_error::CompileError::build_err(format!(
+                "observed_trajectory: '{name}' is a bare name and this EsmProblem has {}                          components; qualify it as one of: {}",
+                components_of(declared, model),
+                matches
+                    .iter()
+                    .map(|k| qualify(model, k))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         )),
         NameResolution::Miss => Err(SimulateError::Compile(
-            crate::compile_error::CompileError::InterpreterBuildError {
-                details: format!(
-                    "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
-                ),
-            },
+            crate::compile_error::CompileError::build_err(format!(
+                "observed_trajectory: '{name}' is not an observed variable of this EsmProblem"
+            )),
         )),
     }
 }
@@ -1091,14 +1082,16 @@ pub fn esm_problem<'a>(
     match input {
         ProblemInput::Path(path) => {
             let text = std::fs::read_to_string(path).map_err(|e| {
-                SimulateError::Compile(crate::compile_error::CompileError::InterpreterBuildError {
-                    details: format!("reading {}: {e}", path.display()),
-                })
+                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                    "reading {}: {e}",
+                    path.display()
+                )))
             })?;
             let raw: JsonValue = serde_json::from_str(&text).map_err(|e| {
-                SimulateError::Compile(crate::compile_error::CompileError::InterpreterBuildError {
-                    details: format!("parsing {}: {e}", path.display()),
-                })
+                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                    "parsing {}: {e}",
+                    path.display()
+                )))
             })?;
             owned_json = Some(raw);
         }
@@ -1135,9 +1128,9 @@ pub fn esm_problem<'a>(
     {
         {
             let text = serde_json::to_string(raw).map_err(|e| {
-                SimulateError::Compile(crate::compile_error::CompileError::InterpreterBuildError {
-                    details: format!("re-serializing the prepared document: {e}"),
-                })
+                SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                    "re-serializing the prepared document: {e}"
+                )))
             })?;
             match crate::parse::load_string(&text) {
                 Ok(f) => owned_file = Some(f),
@@ -1148,9 +1141,9 @@ pub fn esm_problem<'a>(
                     // this is only fatal when the caller wanted a solve.
                     if opts.compile == Compile::Always {
                         return Err(SimulateError::Compile(
-                            crate::compile_error::CompileError::InterpreterBuildError {
-                                details: format!("typed parse of the prepared document: {e}"),
-                            },
+                            crate::compile_error::CompileError::build_err(format!(
+                                "typed parse of the prepared document: {e}"
+                            )),
                         ));
                     }
                 }
@@ -1307,9 +1300,7 @@ fn compile_backend(
     let Some(file) = file else {
         if mode == Compile::Always {
             return Err(SimulateError::Compile(
-                crate::compile_error::CompileError::InterpreterBuildError {
-                    details: "no typed document to compile".to_string(),
-                },
+                crate::compile_error::CompileError::build_err("no typed document to compile"),
             ));
         }
         return Ok(Backend::Static(
