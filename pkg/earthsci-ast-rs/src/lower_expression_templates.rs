@@ -232,6 +232,10 @@ impl<T> PtrMemo<T> {
 
 /// Reject `apply_expression_template` nodes inside a `match` pattern
 /// (esm-spec §9.7.3: match patterns MUST NOT reference templates).
+///
+/// Hand-rolled rather than `crate::json_visit`: the diagnostic needs the
+/// offender's path AND early error return, which the shared visitors don't
+/// combine.
 fn assert_no_nested_apply(
     body: &Value,
     template_name: &str,
@@ -427,24 +431,14 @@ pub const MAX_TEMPLATE_EXPANSION_DEPTH: usize = 32;
 
 /// Collect the `name`s of every `apply_expression_template` node in a tree.
 pub(crate) fn collect_apply_names(x: &Value, out: &mut Vec<String>) {
-    match x {
-        Value::Array(arr) => {
-            for c in arr {
-                collect_apply_names(c, out);
-            }
+    crate::json_visit::visit_values(x, &mut |_path, v| {
+        if let Some(obj) = v.as_object()
+            && obj.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP)
+            && let Some(name) = obj.get("name").and_then(|w| w.as_str())
+        {
+            out.push(name.to_string());
         }
-        Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP)
-                && let Some(name) = obj.get("name").and_then(|v| v.as_str())
-            {
-                out.push(name.to_string());
-            }
-            for (_, v) in obj {
-                collect_apply_names(v, out);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Registration-time body-reference **validation** (esm-spec §9.7.3, Option B
@@ -1667,23 +1661,14 @@ fn rewrite_to_fixpoint(
     ))
 }
 
-fn find_apply_paths(view: &Value, path: &str, hits: &mut Vec<String>) {
-    match view {
-        Value::Array(arr) => {
-            for (i, child) in arr.iter().enumerate() {
-                find_apply_paths(child, &format!("{path}/{i}"), hits);
-            }
+fn find_apply_paths(view: &Value, hits: &mut Vec<String>) {
+    crate::json_visit::visit_values(view, &mut |path, v| {
+        if let Some(obj) = v.as_object()
+            && obj.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP)
+        {
+            hits.push(path.to_string());
         }
-        Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP) {
-                hits.push(path.to_string());
-            }
-            for (k, v) in obj {
-                find_apply_paths(v, &format!("{path}/{k}"), hits);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Reject `expression_templates` and `apply_expression_template` constructs
@@ -1715,7 +1700,7 @@ pub fn reject_expression_templates_pre_v04(view: &Value) -> Result<(), Expressio
             }
         }
     }
-    find_apply_paths(view, "", &mut offences);
+    find_apply_paths(view, &mut offences);
 
     if !offences.is_empty() {
         return Err(err(
@@ -1806,7 +1791,7 @@ fn has_template_machinery(value: &Value) -> bool {
         }
     }
     let mut hits = Vec::new();
-    find_apply_paths(value, "", &mut hits);
+    find_apply_paths(value, &mut hits);
     !hits.is_empty()
 }
 
@@ -1998,6 +1983,10 @@ const GEOMETRY_MANIFOLD_VALUES: [&str; 3] = ["planar", "spherical", "geodesic"];
 /// site has been substituted, so an out-of-set value here is a real defect
 /// (e.g. a template invocation binding the manifold parameter to a non-member
 /// literal). Errors with code `geometry_manifold_invalid`.
+///
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
+/// (`expression_templates` subtrees are skipped) and the diagnostic needs the
+/// offender's path with an early error return.
 pub fn validate_geometry_manifolds(
     tree: &Value,
     path: &str,
@@ -2058,6 +2047,10 @@ pub fn validate_geometry_manifolds(
 /// legally carry metaparameter names there; only concrete integer pairs are
 /// checked (a fully-folded document tree carries nothing else in bound
 /// position). Mirrors the Julia reference `_validate_makearray_regions`.
+///
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
+/// (`expression_templates` subtrees are skipped) and the diagnostic needs the
+/// offender's path with an early error return.
 pub fn validate_makearray_regions(tree: &Value, path: &str) -> Result<(), ExpressionTemplateError> {
     match tree {
         Value::Array(arr) => {
@@ -2732,27 +2725,16 @@ pub(crate) fn rename_apply_refs(
     value: &mut Value,
     rename: &std::collections::HashMap<String, String>,
 ) {
-    match value {
-        Value::Array(items) => {
-            for v in items {
-                rename_apply_refs(v, rename);
-            }
+    crate::json_visit::visit_values_mut(value, &mut |v| {
+        let Some(map) = v.as_object_mut() else { return };
+        if map.get("op").and_then(|w| w.as_str()) == Some(APPLY_OP)
+            && let Some(Value::String(n)) = map.get("name")
+            && let Some(newname) = rename.get(n)
+        {
+            let newname = newname.clone();
+            map.insert("name".to_string(), Value::String(newname));
         }
-        Value::Object(map) => {
-            let is_apply = map.get("op").and_then(|v| v.as_str()) == Some(APPLY_OP);
-            if is_apply
-                && let Some(Value::String(n)) = map.get("name")
-                && let Some(newname) = rename.get(n)
-            {
-                let newname = newname.clone();
-                map.insert("name".to_string(), Value::String(newname));
-            }
-            for (_, v) in map.iter_mut() {
-                rename_apply_refs(v, rename);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// The set of template names the flatten-time registry merge MUST owner-path

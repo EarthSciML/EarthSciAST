@@ -1341,7 +1341,10 @@ fn push_unique(out: &mut Vec<String>, name: &str) {
     }
 }
 
-/// Pre-order walk adding the base name of every `index(base, …)` node reached.
+/// Pre-order walk adding the base name of every `index(base, …)` node
+/// reached. Children are enumerated by [`ExpressionNode::for_each_child`]
+/// (the crate's one canonical child walker), so first-appearance order
+/// follows its contractual field order.
 fn collect_index_bases(e: &Expr, out: &mut Vec<String>) {
     let Expr::Operator(n) = e else { return };
     if n.op == "index"
@@ -1349,40 +1352,7 @@ fn collect_index_bases(e: &Expr, out: &mut Vec<String>) {
     {
         push_unique(out, base);
     }
-    for a in &n.args {
-        collect_index_bases(a, out);
-    }
-    for side in [n.lower.as_deref(), n.upper.as_deref(), n.expr.as_deref()]
-        .into_iter()
-        .flatten()
-    {
-        collect_index_bases(side, out);
-    }
-    if let Some(f) = n.filter.as_deref() {
-        collect_index_bases(f, out);
-    }
-    if let Some(vs) = &n.values {
-        for v in vs {
-            collect_index_bases(v, out);
-        }
-    }
-    if let Some(k) = n.key.as_deref() {
-        collect_index_bases(k, out);
-    }
-    if let Some(b) = &n.bindings {
-        let mut keys: Vec<&String> = b.keys().collect();
-        keys.sort();
-        for k in keys {
-            collect_index_bases(&b[k], out);
-        }
-    }
-    if let Some(ax) = &n.axes {
-        let mut keys: Vec<&String> = ax.keys().collect();
-        keys.sort();
-        for k in keys {
-            collect_index_bases(&ax[k], out);
-        }
-    }
+    n.for_each_child(&mut |c| collect_index_bases(c, out));
 }
 
 // --- normalization -----------------------------------------------------------

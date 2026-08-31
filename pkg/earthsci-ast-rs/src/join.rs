@@ -163,20 +163,10 @@ pub fn resolve_aggregate_joins(
     // Parameter-update expressions are the only Expressions still carried on a
     // variable from esm 1.0.0; an unknown's definition is an equation, lowered
     // above.
-    let mut failure = None;
     for var in model.variables.values_mut() {
-        var.for_each_expression_mut(&mut |expr| {
-            if failure.is_none()
-                && let Err(e) = lower_expr_joins(expr, index_sets)
-            {
-                failure = Some(e);
-            }
-        });
+        var.try_for_each_expression_mut(&mut |expr| lower_expr_joins(expr, index_sets))?;
     }
-    match failure {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    Ok(())
 }
 
 /// `true` iff any node in `e`'s subtree carries a `join` clause. The
@@ -215,20 +205,8 @@ fn lower_expr_joins(
     // `join`-bearing aggregate nested in a grouping `key` or a template
     // `bindings` value is lowered too — not just the hand-picked subset this
     // used to enumerate (bug D: `key`/`bindings` were skipped, leaving a `join`
-    // clause in the typed IR). `for_each_child_mut`'s closure cannot return, so
-    // the first lowering error is captured and propagated afterwards.
-    let mut err: Option<CompileError> = None;
-    node.for_each_child_mut(&mut |child| {
-        if err.is_none()
-            && let Err(e) = lower_expr_joins(child, index_sets)
-        {
-            err = Some(e);
-        }
-    });
-    match err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    // clause in the typed IR). The first lowering error propagates.
+    node.try_for_each_child_mut(&mut |child| lower_expr_joins(child, index_sets))
 }
 
 /// Classify and lower one aggregate node's join clauses (see the module docs):

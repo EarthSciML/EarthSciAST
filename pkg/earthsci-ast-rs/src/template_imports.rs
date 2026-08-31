@@ -257,6 +257,8 @@ fn collect_metaparam_decls(
 /// may be a symbolic metaparameter expression (`{op, args}` over the
 /// importer's still-open names) spliced in for a deferred fold at the
 /// importer's close (esm-spec §9.7.6 binding value flow, site 1).
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
+/// (the `META_SUBST_SKIP_KEYS` entries are copied verbatim, not walked).
 fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
     match x {
         Value::String(s) => match values.get(s) {
@@ -405,6 +407,9 @@ fn try_fold(x: &Value, ctx: &str) -> Result<Option<i64>, ExpressionTemplateError
     Ok(Some(acc))
 }
 
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
+/// (`op` entries are operator names, not metaparameter names, and are
+/// skipped).
 fn collect_names(x: &Value, out: &mut Vec<String>) {
     match x {
         Value::String(s) => out.push(s.clone()),
@@ -534,55 +539,27 @@ pub(crate) fn eval_meta_expr(
 /// later binding site. Index-set sizes are folded separately by
 /// [`fold_index_set_sizes`].
 fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTemplateError> {
-    match x {
-        Value::Array(arr) => {
-            for v in arr {
-                fold_structural_sites(v, ctx)?;
-            }
-            Ok(())
-        }
-        Value::Object(obj) => {
-            let op = obj
-                .get("op")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if op == "aggregate" {
-                if let Some(Value::Object(ranges)) = obj.get_mut("ranges") {
-                    let keys: Vec<String> = ranges.keys().cloned().collect();
-                    for k in keys {
-                        if let Some(Value::Array(rv)) = ranges.get_mut(&k) {
-                            // {from: ...} index-set refs are untouched.
-                            for entry in rv.iter_mut() {
-                                if as_int(entry).is_some() {
-                                    continue;
-                                }
-                                if let Some(f) =
-                                    try_fold(entry, &format!("{ctx}: aggregate ranges.{k}"))?
-                                {
-                                    *entry = Value::from(f);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if op == "makearray"
-                && let Some(Value::Array(regions)) = obj.get_mut("regions")
-            {
-                for region in regions.iter_mut() {
-                    let Value::Array(region_arr) = region else {
-                        continue;
-                    };
-                    for bounds in region_arr.iter_mut() {
-                        let Value::Array(bounds_arr) = bounds else {
-                            continue;
-                        };
-                        for entry in bounds_arr.iter_mut() {
+    crate::json_visit::try_visit_values_mut(x, &mut |v| {
+        let Some(obj) = v.as_object_mut() else {
+            return Ok(());
+        };
+        let op = obj
+            .get("op")
+            .and_then(|w| w.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if op == "aggregate" {
+            if let Some(Value::Object(ranges)) = obj.get_mut("ranges") {
+                let keys: Vec<String> = ranges.keys().cloned().collect();
+                for k in keys {
+                    if let Some(Value::Array(rv)) = ranges.get_mut(&k) {
+                        // {from: ...} index-set refs are untouched.
+                        for entry in rv.iter_mut() {
                             if as_int(entry).is_some() {
                                 continue;
                             }
                             if let Some(f) =
-                                try_fold(entry, &format!("{ctx}: makearray regions bound"))?
+                                try_fold(entry, &format!("{ctx}: aggregate ranges.{k}"))?
                             {
                                 *entry = Value::from(f);
                             }
@@ -590,13 +567,32 @@ fn fold_structural_sites(x: &mut Value, ctx: &str) -> Result<(), ExpressionTempl
                     }
                 }
             }
-            for (_, v) in obj.iter_mut() {
-                fold_structural_sites(v, ctx)?;
+        } else if op == "makearray"
+            && let Some(Value::Array(regions)) = obj.get_mut("regions")
+        {
+            for region in regions.iter_mut() {
+                let Value::Array(region_arr) = region else {
+                    continue;
+                };
+                for bounds in region_arr.iter_mut() {
+                    let Value::Array(bounds_arr) = bounds else {
+                        continue;
+                    };
+                    for entry in bounds_arr.iter_mut() {
+                        if as_int(entry).is_some() {
+                            continue;
+                        }
+                        if let Some(f) =
+                            try_fold(entry, &format!("{ctx}: makearray regions bound"))?
+                        {
+                            *entry = Value::from(f);
+                        }
+                    }
+                }
             }
-            Ok(())
         }
-        _ => Ok(()),
-    }
+        Ok(())
+    })
 }
 
 /// Fold interval `size` metaparameter expressions in an `index_sets`
@@ -727,6 +723,9 @@ fn name_map(
 /// spelled). Without this the rule body/registry would use the renamed set while
 /// `where` still named the original, and registration would fail with
 /// `template_constraint_unknown_index_set`.
+///
+/// Hand-rolled rather than `crate::json_visit`: nearly every object entry has
+/// a key-dependent substitution or skip rule.
 fn rename_walk(
     x: &Value,
     varmap: &IndexMap<String, String>,
@@ -868,39 +867,34 @@ fn rename_decl(
 /// ranges KEYS from their `expr` occurrences, so it is rejected. Mirrors the
 /// Julia `_collect_bound_syms!`.
 fn collect_bound_syms(x: &Value, out: &mut std::collections::HashSet<String>) {
-    match x {
-        Value::Array(arr) => {
-            for v in arr {
-                collect_bound_syms(v, out);
-            }
+    crate::json_visit::visit_values(x, &mut |_path, v| {
+        let Some(obj) = v.as_object() else { return };
+        if obj.get("op").and_then(|w| w.as_str()) != Some("aggregate") {
+            return;
         }
-        Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some("aggregate") {
-                if let Some(oi) = obj.get("output_idx").and_then(|v| v.as_array()) {
-                    for e in oi {
-                        if let Some(s) = e.as_str() {
-                            out.insert(s.to_string());
-                        }
-                    }
-                }
-                if let Some(rg) = obj.get("ranges").and_then(|v| v.as_object()) {
-                    for k in rg.keys() {
-                        out.insert(k.clone());
-                    }
+        if let Some(oi) = obj.get("output_idx").and_then(|w| w.as_array()) {
+            for e in oi {
+                if let Some(s) = e.as_str() {
+                    out.insert(s.to_string());
                 }
             }
-            for v in obj.values() {
-                collect_bound_syms(v, out);
+        }
+        if let Some(rg) = obj.get("ranges").and_then(|w| w.as_object()) {
+            for k in rg.keys() {
+                out.insert(k.clone());
             }
         }
-        _ => {}
-    }
+    });
 }
 
 /// Every bare string in a variable-reference position of a declaration (the
 /// positions `varmap` would rewrite), minus the per-template `params` shadow
 /// set. Used for the rebind occurs-check and the freshness (collision) guard.
 /// Mirrors the Julia `_collect_ref_names!`.
+///
+/// Hand-rolled rather than `crate::json_visit`: descent is key-dependent —
+/// index-set/axis/`of`/protected object entries are skipped entirely, in
+/// lockstep with [`rename_walk`]'s substitution positions.
 fn collect_ref_names(
     x: &Value,
     shadowed: &std::collections::HashSet<String>,
@@ -2370,24 +2364,13 @@ fn coupling_referenced_systems(entry: &Map<String, Value>) -> std::collections::
 /// string of the form `"System.var"`) to `out`. Used for `event` entries whose
 /// system references are spread across conditions/affects.
 fn collect_scoped_owners(x: &Value, out: &mut std::collections::HashSet<String>) {
-    match x {
-        Value::String(s) => {
-            if let Some((head, _)) = s.split_once('.') {
-                out.insert(head.to_string());
-            }
+    crate::json_visit::visit_values(x, &mut |_path, v| {
+        if let Value::String(s) = v
+            && let Some((head, _)) = s.split_once('.')
+        {
+            out.insert(head.to_string());
         }
-        Value::Array(a) => {
-            for v in a {
-                collect_scoped_owners(v, out);
-            }
-        }
-        Value::Object(m) => {
-            for v in m.values() {
-                collect_scoped_owners(v, out);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// esm-spec §9.7.10 form B / §10.8: for each `coupling` entry carrying an

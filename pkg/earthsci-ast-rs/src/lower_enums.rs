@@ -121,54 +121,38 @@ fn lower_enum_node(
     Ok(Value::Object(out))
 }
 
+/// Return a copy of `node` with every `enum`-op object replaced by its
+/// lowered `const` node. A replacement's fields are all leaves, so the
+/// visitor's descent into it finds nothing further to lower; on error the
+/// partially transformed copy is discarded and the caller's value is left
+/// untouched.
 fn walk(
     node: &Value,
     enums: &HashMap<String, HashMap<String, i64>>,
 ) -> Result<Value, EnumLoweringError> {
-    match node {
-        Value::Array(arr) => {
-            let mut out = Vec::with_capacity(arr.len());
-            for c in arr {
-                out.push(walk(c, enums)?);
-            }
-            Ok(Value::Array(out))
+    let mut out = node.clone();
+    crate::json_visit::try_visit_values_mut(&mut out, &mut |v| {
+        if let Value::Object(obj) = v
+            && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
+        {
+            *v = lower_enum_node(obj, enums)?;
         }
-        Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some(ENUM_OP) {
-                lower_enum_node(obj, enums)
-            } else {
-                let mut out = Map::new();
-                for (k, v) in obj {
-                    out.insert(k.clone(), walk(v, enums)?);
-                }
-                Ok(Value::Object(out))
-            }
-        }
-        _ => Ok(node.clone()),
-    }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
-fn find_enum_paths(view: &Value, path: &str, hits: &mut Vec<String>) {
-    match view {
-        Value::Array(arr) => {
-            for (i, child) in arr.iter().enumerate() {
-                find_enum_paths(child, &format!("{path}/{i}"), hits);
-            }
+/// Record the path of every `enum`-op node under `view`, in pre-order. The
+/// walk also descends into a matched node's own fields (they hold only the
+/// two name strings in a well-formed node, so nothing further matches there).
+fn find_enum_paths(view: &Value, hits: &mut Vec<String>) {
+    crate::json_visit::visit_values(view, &mut |path, v| {
+        if let Value::Object(obj) = v
+            && obj.get("op").and_then(|w| w.as_str()) == Some(ENUM_OP)
+        {
+            hits.push(path.to_string());
         }
-        Value::Object(obj) => {
-            if obj.get("op").and_then(|v| v.as_str()) == Some(ENUM_OP) {
-                hits.push(path.to_string());
-                for (k, v) in obj {
-                    find_enum_paths(v, &format!("{path}/{k}"), hits);
-                }
-            } else {
-                for (k, v) in obj {
-                    find_enum_paths(v, &format!("{path}/{k}"), hits);
-                }
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Lower every `enum`-op node in `file` to a `{op: "const", value: <int>}`
@@ -231,7 +215,7 @@ pub fn lower_enums_raw(value: &mut Value) -> Result<(), EnumLoweringError> {
 
     // Fast path: no enum-op nodes anywhere; skip the rebuild.
     let mut paths: Vec<String> = Vec::new();
-    find_enum_paths(value, "", &mut paths);
+    find_enum_paths(value, &mut paths);
     if paths.is_empty() {
         return Ok(());
     }
@@ -241,7 +225,7 @@ pub fn lower_enums_raw(value: &mut Value) -> Result<(), EnumLoweringError> {
 
     // Defensive: assert no enum nodes remain.
     let mut leftover: Vec<String> = Vec::new();
-    find_enum_paths(value, "", &mut leftover);
+    find_enum_paths(value, &mut leftover);
     if !leftover.is_empty() {
         return Err(err(
             codes::ENUM_LOWERING_RESIDUAL,

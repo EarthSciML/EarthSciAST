@@ -1984,21 +1984,9 @@ fn reject_spatial_operators(expr: &Expr) -> Result<(), FlattenError> {
             // (`aggregate.expr` bodies, `filter` predicates, integral `lower`/
             // `upper` bounds, `makearray.values`, `key`, `axes`, `bindings`) and
             // not merely `args` — an `args`-only walk let a spatial/sugar op
-            // buried in a sidecar escape the gate entirely. The first error is
-            // captured and propagated unchanged, preserving the byte-identical
-            // `FlattenError::UnloweredOperator` diagnostic the callers expect.
-            let mut first_err: Option<FlattenError> = None;
-            node.for_each_child(&mut |child| {
-                if first_err.is_none()
-                    && let Err(e) = reject_spatial_operators(child)
-                {
-                    first_err = Some(e);
-                }
-            });
-            match first_err {
-                Some(e) => Err(e),
-                None => Ok(()),
-            }
+            // buried in a sidecar escape the gate entirely. The first offender's
+            // `FlattenError::UnloweredOperator` diagnostic propagates unchanged.
+            node.try_for_each_child(&mut |child| reject_spatial_operators(child))
         }
     }
 }
@@ -2922,7 +2910,9 @@ pub(crate) fn extract_ic_target(lhs: &Expr) -> Option<String> {
 // the grid through the existing array evaluator. Mirrors the Julia reference
 // `_apply_pointwise_lift!` (flatten.jl).
 
-/// Collect every `makearray` node reachable from `expr`.
+/// Collect every `makearray` node reachable from `expr`, recursing through
+/// [`ExpressionNode::for_each_child`] so no expression-bearing sidecar field
+/// is missed; nodes land in its contractual pre-order.
 fn collect_makearrays<'a>(acc: &mut Vec<&'a ExpressionNode>, expr: &'a Expr) {
     let Expr::Operator(node) = expr else {
         return;
@@ -2930,17 +2920,7 @@ fn collect_makearrays<'a>(acc: &mut Vec<&'a ExpressionNode>, expr: &'a Expr) {
     if node.op == "makearray" {
         acc.push(node);
     }
-    for a in &node.args {
-        collect_makearrays(acc, a);
-    }
-    if let Some(e) = &node.expr {
-        collect_makearrays(acc, e);
-    }
-    if let Some(vs) = &node.values {
-        for v in vs {
-            collect_makearrays(acc, v);
-        }
-    }
+    node.for_each_child(&mut |c| collect_makearrays(acc, c));
 }
 
 /// First `Variable` leaf name in an index-argument expression (the loop variable
