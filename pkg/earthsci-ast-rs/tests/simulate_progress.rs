@@ -191,7 +191,7 @@ fn opts(progress: Option<ProgressFn>, saveat: Option<Vec<f64>>) -> SolveOptions 
         maxiters: 100_000,
         saveat,
         progress,
-        callback: None,
+        ..Default::default()
     }
 }
 

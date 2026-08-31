@@ -62,8 +62,7 @@ fn reservoir_reactant_held_fixed() {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: Some(sample_times.clone()),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = compiled
         .solve((0.0, 3.0), &par, &ic, &opts)

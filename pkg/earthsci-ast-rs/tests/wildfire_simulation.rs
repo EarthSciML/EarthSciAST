@@ -71,8 +71,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: Some(times),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let ics = test.initial_conditions.clone().unwrap_or_default();
     earthsci_ast::esm_problem(
@@ -145,8 +144,7 @@ fn wildfire_regrid_trajectory_and_constant_states() {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: Some(vec![0.0, 3600.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = earthsci_ast::esm_problem(
         &file,

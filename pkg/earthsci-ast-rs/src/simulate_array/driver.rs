@@ -1,5 +1,5 @@
 //! Solver plumbing on [`ArrayCompiled`]: `solve` / `solve_inspect`
-//! (diffsol problem build, RHS/Jacobian closures, scalar-observed trajectory
+//! (diffsol problem build, RHS/Jacobian closures, observed trajectory
 //! exposure), the `debug_*` RHS entry points, and the external forcing-channel
 //! handle ([`ArrayCompiled::forcing_handle`]).
 
@@ -461,6 +461,7 @@ impl ArrayCompiled {
                 solution_metadata(solver_name, &stats, tape_fallbacks),
                 &param_vec,
                 &setup,
+                &opts.output_observed,
             );
         }
 
@@ -488,6 +489,7 @@ impl ArrayCompiled {
             solution_metadata(solver_name, &stats, tape_fallbacks),
             &param_vec,
             &setup,
+            &opts.output_observed,
         )
     }
 
@@ -806,11 +808,12 @@ impl ArrayCompiled {
     }
 
     /// Solution assembly, shared by the single-segment and segmented exits:
-    /// expose scalar observed trajectories alongside the states (see
-    /// [`Self::append_scalar_observed_trajectories`]), then drain the §5.5.5
+    /// expose observed trajectories alongside the states (see
+    /// [`Self::append_observed_trajectories`]), then drain the §5.5.5
     /// const-array OOB latch so a trajectory built on a const-array bug fails
     /// loudly instead of carrying the `NaN` the gather substituted.
     #[cfg(feature = "solve")]
+    #[allow(clippy::too_many_arguments)]
     fn assemble_solution(
         &self,
         time: Vec<f64>,
@@ -819,15 +822,17 @@ impl ArrayCompiled {
         metadata: SolutionMetadata,
         param_vec: &[f64],
         setup: &SolveSetup,
+        output_observed: &[String],
     ) -> Result<Solution, SimulateError> {
         let mut state_variable_names = self.scalar_state_names.clone();
-        self.append_scalar_observed_trajectories(
+        self.append_observed_trajectories(
             &time,
             &mut state,
             &mut state_variable_names,
             param_vec,
             &setup.static_obs,
             &setup.cadence.varying_rules,
+            output_observed,
         );
         if let Some(details) = crate::simulate_array::take_const_array_oob() {
             return Err(
@@ -1119,18 +1124,29 @@ impl ArrayCompiled {
         Ok((time, state, stats, retcode))
     }
 
-    /// Expose scalar observed trajectories (e.g. an `area` FAQ) alongside the
-    /// states so inline conformance assertions can read algebraic quantities
+    /// Expose observed trajectories (e.g. an `area` FAQ) alongside the states
+    /// so inline conformance assertions can read algebraic quantities
     /// (RFC §8.1; CONFORMANCE_SPEC.md §5.8). The integrator carries only the
     /// state vector, so re-evaluate the (dependency-ordered, derived-ring-aware)
-    /// observeds from the state trajectory at each output node and append the
-    /// scalar ones as extra rows (with matching entries in
-    /// `state_variable_names`). Array-valued observeds (the clip ring, the
-    /// const polygons) are not scalar rows and are skipped. Mirrors the Python
-    /// `_simulate_with_numpy` output-observed exposure. A model with no
-    /// observed rules (or an empty trajectory) is untouched.
+    /// observeds from the state trajectory at each output node and append them
+    /// as extra rows (with matching entries in `state_variable_names`). Mirrors
+    /// the Python `_simulate_with_numpy` output-observed exposure. A model with
+    /// no observed rules (or an empty trajectory) is untouched.
+    ///
+    /// **Scalar observeds are always exposed; array-valued ones only on
+    /// request.** `requested` is [`SolveOptions::output_observed`] — the
+    /// caller-named subset of streaming-output-sinks RFC decision 8. An
+    /// array-valued observed (the clip ring, the const polygons, a gridded
+    /// emissions field) is `n_cells` rows, not one, so materializing every one
+    /// of them unasked would multiply the trajectory's memory by the grid size;
+    /// a requested one is flattened to one row per cell named exactly like a
+    /// state cell — `name[i,j,…]`, 1-based and column-major, the spelling
+    /// [`build_slot_tables`] gives the state and the one
+    /// [`crate::derive_output_plan`] inverts back into a labeled output array.
+    /// Names may be bare or `Model.`-qualified.
     #[cfg(feature = "solve")]
-    fn append_scalar_observed_trajectories(
+    #[allow(clippy::too_many_arguments)]
+    fn append_observed_trajectories(
         &self,
         time: &[f64],
         state: &mut Vec<Vec<f64>>,
@@ -1138,10 +1154,12 @@ impl ArrayCompiled {
         param_vec: &[f64],
         static_obs: &ArrMap,
         varying_rules: &[AlgebraicRule],
+        requested: &[String],
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
         }
+        let wanted = self.resolve_requested_observeds(requested);
         let nt = time.len();
 
         // ---- per-node evaluation state, allocated ONCE ----------------------
@@ -1203,10 +1221,14 @@ impl ArrayCompiled {
         // hoisted static observed's rank is already in `obs`.
         let probe_owned: Vec<AlgebraicRule>;
         let probe_rules: &[AlgebraicRule] = if prune {
+            // A REQUESTED array-valued observed becomes rows as well, so it
+            // must be in the probe cone even though its rank is already known.
             let unknown: HashSet<String> = self
                 .observed_rules
                 .iter()
-                .filter(|r| !observed_rule_is_array_valued(r))
+                .filter(|r| {
+                    !observed_rule_is_array_valued(r) || wanted.contains(observed_rule_var(r))
+                })
                 .map(|r| observed_rule_var(r).clone())
                 .collect();
             match dependency_cone(varying_rules, &unknown) {
@@ -1242,24 +1264,41 @@ impl ArrayCompiled {
                 &mut RhsStats::default(),
             );
         }
-        // A name the probe did not materialize is, by construction, either
-        // array-valued or outside the cone of anything that could be 0-D, so the
-        // `unwrap_or(false)` verdict is the same one the full materialization
-        // would have produced.
-        let scalar_obs: Vec<String> = self
+        // What becomes rows: every 0-D observed, as before, plus every
+        // CALLER-REQUESTED array-valued one, at one row per cell.
+        //
+        // A name the probe did not materialize at all is skipped, and the
+        // verdict is the same one the full materialization would have produced:
+        // by construction such a name is either array-valued and unrequested —
+        // so not a row either way — or outside the cone of anything that could
+        // be 0-D. A requested array observed IS in the probe cone (see above),
+        // so its rank and shape are known here; taking the shape from the probe
+        // rather than per node is what keeps the row block from shifting if a
+        // later node fails to materialize the name.
+        let emit: Vec<ObservedRows> = self
             .observed_rules
             .iter()
-            .map(|r| observed_rule_var(r).clone())
-            .filter(|name| obs.get(name).map(|a| a.ndim() == 0).unwrap_or(false))
+            .filter_map(|rule| {
+                let name = observed_rule_var(rule);
+                let arr = obs.get(name)?;
+                if arr.ndim() == 0 {
+                    Some(ObservedRows::scalar(name.clone()))
+                } else if wanted.contains(name) {
+                    Some(ObservedRows::gridded(name.clone(), arr.shape().to_vec()))
+                } else {
+                    None
+                }
+            })
             .collect();
-        if scalar_obs.is_empty() {
+        if emit.is_empty() {
             return;
         }
+        let n_rows: usize = emit.iter().map(ObservedRows::n_rows).sum();
 
         // Value pass: the cone of the rows we actually emit.
         let value_owned: Vec<AlgebraicRule>;
         let value_rules: &[AlgebraicRule] = if prune {
-            let seeds: HashSet<String> = scalar_obs.iter().cloned().collect();
+            let seeds: HashSet<String> = emit.iter().map(|e| e.name.clone()).collect();
             match dependency_cone(varying_rules, &seeds) {
                 None => varying_rules,
                 Some(cone) => {
@@ -1271,14 +1310,32 @@ impl ArrayCompiled {
             varying_rules
         };
 
-        let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(nt); scalar_obs.len()];
+        let mut rows: Vec<Vec<f64>> = vec![Vec::with_capacity(nt); n_rows];
         let record = |obs: &ArrMap, rows: &mut Vec<Vec<f64>>| {
-            for (j, name) in scalar_obs.iter().enumerate() {
-                rows[j].push(
-                    obs.get(name)
-                        .and_then(|a| a.first().copied())
-                        .unwrap_or(f64::NAN),
-                );
+            let mut j = 0usize;
+            for e in &emit {
+                match obs.get(&e.name) {
+                    Some(a) if e.shape.is_empty() => {
+                        rows[j].push(a.first().copied().unwrap_or(f64::NAN));
+                        j += 1;
+                    }
+                    Some(a) if a.shape() == e.shape.as_slice() => {
+                        // Column-major, the order the cell keys were named in.
+                        for v in arrayd_to_col_major(a) {
+                            rows[j].push(v);
+                            j += 1;
+                        }
+                    }
+                    // Absent at this node, or a rank the probe did not see: NaN
+                    // across the block, so the fault shows in the values rather
+                    // than silently shifting every later row.
+                    _ => {
+                        for _ in 0..e.n_rows() {
+                            rows[j].push(f64::NAN);
+                            j += 1;
+                        }
+                    }
+                }
             }
         };
         record(&obs, &mut rows);
@@ -1321,10 +1378,40 @@ impl ArrayCompiled {
                 record(&obs, &mut rows);
             }
         }
-        for (name, row) in scalar_obs.into_iter().zip(rows) {
-            state_variable_names.push(name);
-            state.push(row);
+        let mut rows = rows.into_iter();
+        for e in &emit {
+            for name in e.row_names() {
+                let Some(row) = rows.next() else { break };
+                state_variable_names.push(name);
+                state.push(row);
+            }
         }
+    }
+
+    /// The observed-rule names `requested` (bare or `Model.`-qualified) names.
+    ///
+    /// The same both-ways match [`crate::derive_output_plan`] applies to an
+    /// output request, so a name that selects a variable there selects the rule
+    /// that produces it here: exact, or equal after dropping the dotted prefix
+    /// from either side. A name matching nothing is not an error — the output
+    /// plan diagnoses it with [`crate::OutputError::UnknownObserved`], which can
+    /// also see the state slots and so tells the caller the whole truth.
+    #[cfg(feature = "solve")]
+    fn resolve_requested_observeds(&self, requested: &[String]) -> HashSet<String> {
+        if requested.is_empty() {
+            return HashSet::new();
+        }
+        let bare = |n: &str| n.rsplit('.').next().unwrap_or(n).to_string();
+        self.observed_rules
+            .iter()
+            .map(observed_rule_var)
+            .filter(|var| {
+                requested.iter().any(|r| {
+                    r == *var || bare(r) == **var || *r == bare(var) || bare(r) == bare(var)
+                })
+            })
+            .cloned()
+            .collect()
     }
 
     /// Names of the observeds that are STATE-FREE and `t`-free: their transitive
@@ -1427,10 +1514,59 @@ impl ArrayCompiled {
     }
 }
 
+/// One observed's contribution to the appended trajectory rows: a 0-D observed
+/// is a single row named after itself, an array-valued one is `n_cells` rows
+/// named `base[i,j,…]` (1-based, column-major) — the identical cell-key scheme
+/// [`build_slot_tables`] gives an array STATE, so the two are indistinguishable
+/// to [`crate::derive_output_gridding`] and land on the same emergent grid.
+#[cfg(feature = "solve")]
+struct ObservedRows {
+    /// The observed rule's variable name.
+    name: String,
+    /// Gridded shape, in cell-key axis order; EMPTY for a 0-D observed.
+    shape: Vec<usize>,
+}
+
+#[cfg(feature = "solve")]
+impl ObservedRows {
+    fn scalar(name: String) -> Self {
+        ObservedRows {
+            name,
+            shape: Vec::new(),
+        }
+    }
+
+    fn gridded(name: String, shape: Vec<usize>) -> Self {
+        ObservedRows { name, shape }
+    }
+
+    /// How many trajectory rows this observed contributes (1 for a scalar).
+    fn n_rows(&self) -> usize {
+        self.shape.iter().product::<usize>().max(1)
+    }
+
+    /// The row names, in the order [`ObservedRows::n_rows`] counts them.
+    fn row_names(&self) -> Vec<String> {
+        if self.shape.is_empty() {
+            return vec![self.name.clone()];
+        }
+        (0..self.n_rows())
+            .map(|flat| {
+                let idx = flat_to_multi_col_major(flat, &self.shape)
+                    .iter()
+                    .map(|i| (i + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{}[{}]", self.name, idx)
+            })
+            .collect()
+    }
+}
+
 /// `true` when the observed-trajectory dependency-cone pruning is switched off
 /// by `ESS_OUTOBS_PRUNE_DISABLE=1`. The A/B kill switch for that optimization,
 /// mirroring `ESS_VEC_DISABLE` / `ESS_CSE_DISABLE`: with it set,
-/// [`ArrayCompiled::append_scalar_observed_trajectories`] materializes the full
+/// [`ArrayCompiled::append_observed_trajectories`] materializes the full
 /// varying rule set at every output node exactly as it did before.
 fn outobs_prune_disabled() -> bool {
     use std::sync::OnceLock;
@@ -1444,7 +1580,7 @@ fn outobs_prune_disabled() -> bool {
 
 /// Is this observed rule's value provably an ARRAY (`ndim ≥ 1`) *without*
 /// evaluating it? Used only to keep a rule out of the 0-D probe in
-/// [`ArrayCompiled::append_scalar_observed_trajectories`], so it must never
+/// [`ArrayCompiled::append_observed_trajectories`], so it must never
 /// claim "array" for a rule that can materialize 0-D. Both arms read the rank
 /// straight off the rule's own output box:
 ///

@@ -103,8 +103,7 @@ fn opts() -> SolveOptions {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     }
 }
 

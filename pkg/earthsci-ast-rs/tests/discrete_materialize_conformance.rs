@@ -165,8 +165,7 @@ fn discrete_materialize_trajectory_matches_golden() {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: None,
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     // Segment-by-segment: refresh `src` at each boundary (forcing frozen for the

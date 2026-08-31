@@ -167,8 +167,7 @@ fn subsystem_loader_trajectory_matches_golden() {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: Some(want_times),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = compiled
         .solve((t0, t1), &HashMap::new(), &HashMap::new(), &opts)

@@ -405,8 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: None,
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     println!("=== Segmented discrete-cadence solve (coupled, forced, non-PDE) ===\n");

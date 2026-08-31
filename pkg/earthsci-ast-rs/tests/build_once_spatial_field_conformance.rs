@@ -130,8 +130,7 @@ fn build_once_spatial_field_trajectory_matches_golden() {
         reltol: 1e-10,
         maxiters: 1_000_000,
         saveat: Some(want_times.clone()),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = earthsci_ast::esm_problem(
         &file,

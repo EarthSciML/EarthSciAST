@@ -210,8 +210,7 @@ fn execute_component(
             reltol: 1e-10,
             maxiters: 1_000_000,
             saveat: Some(sample_times.clone()),
-            progress: None,
-            callback: None,
+            ..Default::default()
         };
 
         let tspan = (t.time_span.start, t.time_span.end);

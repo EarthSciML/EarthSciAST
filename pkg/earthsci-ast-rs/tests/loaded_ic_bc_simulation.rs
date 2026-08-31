@@ -156,8 +156,7 @@ fn loaded_ic_bc_simulation_provider_injection() {
         reltol: 1e-10,
         maxiters: 10_000_000,
         saveat: Some(vec![0.0, 600.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = compiled
         .solve((0.0, 600.0), &HashMap::new(), &HashMap::new(), &opts)

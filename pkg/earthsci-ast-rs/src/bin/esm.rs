@@ -125,6 +125,16 @@ enum Commands {
         /// Output file for results
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Observed field to write alongside the state; repeat for several.
+        /// Output is the state PLUS the fields named here, never every
+        /// observed by default (streaming-output-sinks RFC decision 8).
+        #[arg(long = "observed", value_name = "NAME")]
+        observed: Vec<String>,
+        /// Shape of --output: `flat` is the flat state rows keyed by cell key;
+        /// `grid` is the derived output plan — dimension-labeled, row-major
+        /// [time, …spatial] arrays with CF coordinates and attributes.
+        #[arg(long, default_value = "flat")]
+        format: SimulateFormat,
     },
     /// Show information about an ESM file
     Info {
@@ -263,6 +273,16 @@ enum GraphFormat {
     Dot,
     Mermaid,
     Json,
+}
+
+/// `simulate --format`.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SimulateFormat {
+    /// The flat solver state: one row per cell key, no axis metadata.
+    Flat,
+    /// The `derive_output_plan` result: one entry per emergent grid, each with
+    /// its dimensions, CF dimension coordinates and row-major variable arrays.
+    Grid,
 }
 
 /// `convert --to`.
@@ -2200,6 +2220,8 @@ fn run_simulate(
     file: PathBuf,
     time: f64,
     output: Option<PathBuf>,
+    observed: Vec<String>,
+    format: SimulateFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
@@ -2207,7 +2229,13 @@ fn run_simulate(
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
 
-    let opts = earthsci_ast::SolveOptions::default();
+    // RFC decision 8: the runner must EVALUATE and append a requested observed
+    // before an output plan can find a slot for it, so the request travels with
+    // the solve rather than being applied to the finished solution.
+    let opts = earthsci_ast::SolveOptions {
+        output_observed: observed.clone(),
+        ..Default::default()
+    };
     let prob = earthsci_ast::esm_problem(
         &esm_file,
         (0.0, time),
@@ -2242,17 +2270,135 @@ fn run_simulate(
     }
 
     if let Some(output_path) = output {
-        let out = serde_json::json!({
-            "time": sol.time,
-            "state": sol.state,
-            "state_variable_names": sol.state_variable_names,
-            "alg": sol.metadata.alg,
-            "retcode": sol.retcode.name(),
-        });
-        fs::write(&output_path, serde_json::to_string_pretty(&out)?)?;
+        let out = match format {
+            SimulateFormat::Flat => serde_json::json!({
+                "time": sol.time,
+                "state": sol.state,
+                "state_variable_names": sol.state_variable_names,
+                "alg": sol.metadata.alg,
+                "retcode": sol.retcode.name(),
+            }),
+            SimulateFormat::Grid => gridded_results(&esm_file, &sol, &observed)?,
+        };
+        // Streamed, and pretty so a 600k-cell field is one value per line and
+        // `diff` against a reference dataset reports the cells that moved.
+        let mut w = std::io::BufWriter::new(fs::File::create(&output_path)?);
+        serde_json::to_writer_pretty(&mut w, &out)?;
+        std::io::Write::write_all(&mut w, b"\n")?;
+        std::io::Write::flush(&mut w)?;
         println!("Results written to: {}", output_path.display());
     }
     Ok(())
+}
+
+/// The `simulate --format grid` document: [`earthsci_ast::derive_output_plan`]
+/// applied to the solution's own flat slot names, then filled.
+///
+/// The plan is the whole of the derivation — which variables are output, how
+/// the flat column-major state inverts into row-major `[time, …spatial]`
+/// arrays, what the axes are really called, and which CF coordinates and
+/// attributes describe them — so this function only renders it. The rendering
+/// is field-for-field `earthsciio::format::OutputSchema` (see
+/// `tests/data_output_zarr_roundtrip.rs`, which builds exactly this from a
+/// plan), so pointing the CLI at a real Zarr sink later is a swap of the
+/// serializer, not of the derivation. It is deliberately NOT done here:
+/// EarthSciIO is behind the opt-in `esio` feature, which raises the crate's
+/// MSRV above its declared 1.89, and `esm` ships on the default features.
+fn gridded_results(
+    esm_file: &earthsci_ast::EsmFile,
+    sol: &earthsci_ast::Solution,
+    observed: &[String],
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let plan = earthsci_ast::derive_output_plan(esm_file, &sol.state_variable_names, observed)
+        .map_err(|e| fail(format!("deriving the output plan: {e}")))?;
+
+    let n_records = sol.time.len();
+    let n_slots = sol.state.len();
+    let mut grids = Vec::with_capacity(plan.grids.len());
+    for grid in &plan.grids {
+        // One buffer per variable, `[time, …spatial]` row-major, filled a whole
+        // record at a time so the flat state is transposed once.
+        let mut data: Vec<Vec<f64>> = grid
+            .vars
+            .iter()
+            .map(|v| vec![0.0f64; n_records * v.values_per_record()])
+            .collect();
+        let mut flat = vec![0.0f64; n_slots];
+        for r in 0..n_records {
+            for (i, slot) in flat.iter_mut().enumerate() {
+                *slot = sol.state[i][r];
+            }
+            for (v, buf) in grid.vars.iter().zip(data.iter_mut()) {
+                v.gridding
+                    .scatter_record(&flat, buf, r)
+                    .map_err(|e| fail(format!("gridding '{}': {e}", v.name)))?;
+            }
+        }
+
+        let mut dims = vec![serde_json::json!([grid.time_dim, n_records])];
+        dims.extend(grid.dims.iter().map(|(n, l)| serde_json::json!([n, l])));
+
+        let mut coords = vec![serde_json::json!({
+            "name": grid.time_dim,
+            "values": sol.time,
+            "attrs": {},
+        })];
+        coords.extend(
+            grid.coords.iter().map(
+                |c| serde_json::json!({ "name": c.name, "values": c.values, "attrs": c.attrs }),
+            ),
+        );
+
+        let vars: Vec<serde_json::Value> = grid
+            .vars
+            .iter()
+            .zip(data)
+            .map(|(v, buf)| {
+                serde_json::json!({
+                    "name": v.name,
+                    "dims": v.dims,
+                    "attrs": v.attrs,
+                    "dtype": v.dtype,
+                    "data": buf,
+                })
+            })
+            .collect();
+
+        grids.push(serde_json::json!({
+            "dims": dims,
+            "time_dim": grid.time_dim,
+            "coords": coords,
+            "vars": vars,
+        }));
+    }
+
+    println!(
+        "Output plan: {} grid(s), {} variable(s)",
+        plan.grids.len(),
+        plan.n_vars()
+    );
+    for grid in &plan.grids {
+        let axes: Vec<String> = grid.dims.iter().map(|(n, l)| format!("{n}={l}")).collect();
+        println!(
+            "  [{}] {}",
+            if axes.is_empty() {
+                "scalar".to_string()
+            } else {
+                axes.join(", ")
+            },
+            grid.vars
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    Ok(serde_json::json!({
+        "alg": sol.metadata.alg,
+        "retcode": sol.retcode.name(),
+        "grids": grids,
+    }))
 }
 
 fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -2831,7 +2977,13 @@ fn main() -> std::process::ExitCode {
             file,
             analysis_type,
         } => run_analyze(file, analysis_type),
-        Commands::Simulate { file, time, output } => run_simulate(file, time, output),
+        Commands::Simulate {
+            file,
+            time,
+            output,
+            observed,
+            format,
+        } => run_simulate(file, time, output, observed, format),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
         Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),
