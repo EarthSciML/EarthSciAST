@@ -365,81 +365,80 @@ fn test_editing() {
     assert_eq!(updated_model.variables.len(), 1);
 }
 
-/// Test FunctionalAffect structure has all required fields
+/// A coupling `event` entry carrying either of the two keys esm 1.0.0 removed
+/// (RFC unified-variable-model D5) must be REJECTED, not silently dropped.
+///
+/// The schema's `CouplingEvent` def is `additionalProperties: false` and lists
+/// neither `functional_affect` nor `discrete_parameters`, so the refusal lands
+/// at the schema layer inside `load_string` — the same layer the Julia oracle
+/// refuses them at (`pkg/EarthSciAST.jl/src/coupling_imports.jl` notes the
+/// construct is gone; `scripts/migrate-0x-to-1.0.0.py` records either key as a
+/// migration BLOCKER rather than rewriting it).
 #[test]
-fn test_functional_affect_fields() {
-    use serde_json;
+fn test_coupling_event_rejects_removed_0x_keys() {
+    fn doc(extra: &str) -> String {
+        format!(
+            r#"{{
+              "esm": "1.0.0",
+              "metadata": {{ "name": "removed_event_keys" }},
+              "models": {{
+                "a": {{
+                  "variables": {{ "x": {{ "type": "unknown", "units": "1" }} }},
+                  "equations": [
+                    {{ "lhs": {{ "op": "D", "args": ["x"] }}, "rhs": 1.0 }}
+                  ]
+                }}
+              }},
+              "coupling": [
+                {{
+                  "type": "event",
+                  "event_type": "continuous",
+                  "conditions": [{{ "op": ">", "args": ["a.x", 1.0] }}],
+                  "affects": [{{ "lhs": "a.x", "rhs": 0.0 }}]{extra}
+                }}
+              ]
+            }}"#
+        )
+    }
 
-    // Test that FunctionalAffect has all required fields
-    let functional_affect = FunctionalAffect {
-        handler_id: "test_handler".to_string(),
-        read_vars: vec!["var1".to_string(), "var2".to_string()],
-        read_params: vec!["param1".to_string()],
-        modified_params: Some(vec!["param2".to_string()]),
-        config: Some(serde_json::json!({
-            "threshold": 0.5,
-            "update_frequency": 10
-        })),
-    };
+    // Control: the same document without either key loads cleanly, so a
+    // failure below is attributable to the key and nothing else.
+    load_string(&doc("")).expect("baseline coupling event should load");
 
-    // Test serialization
-    let json = serde_json::to_string_pretty(&functional_affect)
-        .expect("Failed to serialize FunctionalAffect");
+    for (key, extra) in [
+        (
+            "functional_affect",
+            r#","functional_affect": {"handler_id": "h", "read_vars": [], "read_params": []}"#,
+        ),
+        ("discrete_parameters", r#","discrete_parameters": ["k"]"#),
+    ] {
+        let text = doc(extra);
 
-    // Verify JSON contains required fields
-    assert!(json.contains("handler_id"));
-    assert!(json.contains("read_vars"));
-    assert!(json.contains("read_params"));
-    assert!(json.contains("modified_params"));
-    assert!(json.contains("config"));
+        // (a) `load_string` refuses the document outright.
+        let err = load_string(&text)
+            .err()
+            .unwrap_or_else(|| panic!("coupling event carrying `{key}` must be rejected"));
+        assert!(
+            matches!(err, EsmError::SchemaValidation(_)),
+            "`{key}` should be refused at the schema layer, got: {err:?}"
+        );
 
-    // Test deserialization
-    let deserialized: FunctionalAffect =
-        serde_json::from_str(&json).expect("Failed to deserialize FunctionalAffect");
-
-    assert_eq!(deserialized.handler_id, "test_handler");
-    assert_eq!(deserialized.read_vars, vec!["var1", "var2"]);
-    assert_eq!(deserialized.read_params, vec!["param1"]);
-    assert_eq!(
-        deserialized.modified_params,
-        Some(vec!["param2".to_string()])
-    );
-    assert!(deserialized.config.is_some());
-}
-
-/// Test FunctionalAffect with minimal fields
-#[test]
-fn test_functional_affect_minimal() {
-    use serde_json;
-
-    // Test with only required fields
-    let functional_affect = FunctionalAffect {
-        handler_id: "minimal_handler".to_string(),
-        read_vars: vec!["var1".to_string()],
-        read_params: vec!["param1".to_string()],
-        modified_params: None,
-        config: None,
-    };
-
-    // Test serialization - should not include None fields due to skip_serializing_if
-    let json = serde_json::to_string_pretty(&functional_affect)
-        .expect("Failed to serialize minimal FunctionalAffect");
-
-    // Verify JSON has required fields but not optional ones
-    assert!(json.contains("handler_id"));
-    assert!(json.contains("read_vars"));
-    assert!(json.contains("read_params"));
-    // These should be skipped
-    assert!(!json.contains("modified_params"));
-    assert!(!json.contains("config"));
-
-    // Test deserialization
-    let deserialized: FunctionalAffect =
-        serde_json::from_str(&json).expect("Failed to deserialize minimal FunctionalAffect");
-
-    assert_eq!(deserialized.handler_id, "minimal_handler");
-    assert_eq!(deserialized.read_vars, vec!["var1"]);
-    assert_eq!(deserialized.read_params, vec!["param1"]);
-    assert_eq!(deserialized.modified_params, None);
-    assert_eq!(deserialized.config, None);
+        // (b) `validate_text` reports it as a per-violation record: the
+        // `additionalProperties` keyword at the offending entry's own JSON
+        // pointer, naming that key and nothing else. This is the pin — the
+        // `oneOf` umbrella record beside it merely quotes the whole instance.
+        let result = validate_text(&text, None);
+        assert!(
+            !result.is_valid,
+            "document carrying `{key}` must be invalid"
+        );
+        let expected = format!("Additional properties are not allowed ('{key}' was unexpected)");
+        assert!(
+            result.schema_errors.iter().any(|e| e.path == "/coupling/0"
+                && e.keyword == "additionalProperties"
+                && e.message == expected),
+            "expected an additionalProperties record at /coupling/0 naming `{key}`, got: {:?}",
+            result.schema_errors
+        );
+    }
 }

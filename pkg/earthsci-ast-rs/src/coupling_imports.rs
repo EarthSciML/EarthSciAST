@@ -228,14 +228,12 @@ fn rewrite_entry_in_place(
             {
                 rewrite_expr(e, expr_fn);
             }
-            if let Some(fa) = entry.get_mut("functional_affect")
-                && fa.is_object()
-            {
-                for key in ["read_vars", "read_params", "modified_params"] {
-                    rewrite_string_array(fa, key, struct_fn);
-                }
-            }
-            rewrite_string_array(entry, "discrete_parameters", struct_fn);
+            // esm 1.0.0: an event carries neither a `functional_affect` handler
+            // descriptor nor a `discrete_parameters` list — both moved onto the
+            // parameter they write (esm-spec §5.4, §5.5), and the schema's
+            // `CouplingEvent` def rejects either key outright. Matches the
+            // Julia oracle's note at the same point in
+            // `pkg/EarthSciAST.jl/src/coupling_imports.jl`.
         }
         _ => {}
     }

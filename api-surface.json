@@ -89,17 +89,17 @@
     }
   },
   "counts": {
-    "symbols": 849,
+    "symbols": 848,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 298,
       "typescript": 231,
       "python": 243,
-      "rust": 325,
+      "rust": 324,
       "go": 383
     },
     "by_tier": {
-      "extension": 587,
+      "extension": 586,
       "stable": 262
     }
   },
@@ -3677,14 +3677,6 @@
         "go": "FunctionTableAxis",
         "julia": "FunctionTableAxis",
         "python": "FunctionTableAxis"
-      }
-    },
-    {
-      "name": "functional_affect",
-      "kind": "type",
-      "tier": "extension",
-      "bindings": {
-        "rust": "FunctionalAffect"
       }
     },
     {

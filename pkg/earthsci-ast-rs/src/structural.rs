@@ -726,7 +726,8 @@ fn document_declared_names(esm_file: &EsmFile) -> HashSet<String> {
 ///
 /// 3. **`_var`** — §6.4, the operator-model placeholder, legal wherever a state
 ///    variable is legal (equation LHS/RHS, a continuous event's
-///    `affects`/`affect_neg`, a `functional_affect`'s `read_vars`).
+///    `affects`/`affect_neg`). The 0.x `functional_affect`'s `read_vars` was a
+///    fourth such site; esm 1.0.0 removed the construct.
 fn implicitly_declared_symbols(esm_file: &EsmFile) -> HashSet<String> {
     let mut symbols = HashSet::new();
 
@@ -2236,6 +2237,15 @@ fn validate_discrete_event(
     // affect unknowns only, so the check that a listed name really was a
     // parameter has become its inverse — `event_affects_parameter`, reached
     // through `affects` — and lives in `validate_event_affects`.
+    //
+    // A document that still SPELLS `discrete_parameters` (or the companion
+    // `functional_affect`) is refused one layer up, not here: every event def in
+    // the schema — `DiscreteEvent`, `ContinuousEvent`, and the coupling
+    // `CouplingEvent` — is `additionalProperties: false` and lists neither key,
+    // so the key never reaches a typed value this pass could inspect. Do not add
+    // a structural mirror of that refusal; it would be unreachable. The pin is
+    // `test_coupling_event_rejects_removed_0x_keys` in
+    // `tests/basic_functionality.rs`.
     if let Some(ref affects) = event.affects {
         validate_event_affects(
             affects,

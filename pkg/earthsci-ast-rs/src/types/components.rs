@@ -531,18 +531,18 @@ pub enum CouplingEntry {
         /// Trigger specification (for discrete events)
         #[serde(skip_serializing_if = "Option::is_none")]
         trigger: Option<DiscreteEventTrigger>,
-        /// Affect equations
+        /// Affect equations. esm 1.0.0: `affects` is the ONLY affect channel.
+        /// The 0.x `functional_affect` handler descriptor and the
+        /// `discrete_parameters` list are gone (RFC unified-variable-model D5)
+        /// — a parameter that changes during a run carries its own `update`
+        /// block, so every affect LHS names an unknown. The schema's
+        /// `CouplingEvent` def is `additionalProperties: false`, so either key
+        /// is a schema-layer rejection rather than a silently dropped field.
         #[serde(skip_serializing_if = "Option::is_none")]
         affects: Option<Vec<AffectEquation>>,
-        /// Functional affect handler
-        #[serde(skip_serializing_if = "Option::is_none")]
-        functional_affect: Option<FunctionalAffect>,
         /// Separate affects for negative-going zero crossings
         #[serde(skip_serializing_if = "Option::is_none")]
         affect_neg: Option<Vec<AffectEquation>>,
-        /// Parameters modified by this event
-        #[serde(skip_serializing_if = "Option::is_none")]
-        discrete_parameters: Option<Vec<String>>,
         /// Root finding direction
         #[serde(skip_serializing_if = "Option::is_none")]
         root_find: Option<RootFindDirection>,

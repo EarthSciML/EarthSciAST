@@ -90,26 +90,11 @@ pub struct ContinuousEvent {
     pub description: Option<String>,
 }
 
-/// Functional affect specification for events
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionalAffect {
-    /// Registered identifier for the affect implementation
-    pub handler_id: String,
-
-    /// State variables accessed by the handler
-    pub read_vars: Vec<String>,
-
-    /// Parameters accessed by the handler
-    pub read_params: Vec<String>,
-
-    /// Parameters modified by the handler
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modified_params: Option<Vec<String>>,
-
-    /// Handler-specific configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<serde_json::Value>,
-}
+// The 0.x `FunctionalAffect` descriptor is deliberately absent. esm 1.0.0 (RFC
+// unified-variable-model D5) removed it along with the `discrete_parameters`
+// event lists: a handler's only write channel was `modified_params`, so it now
+// lives ON the parameter it writes as a `ParameterUpdate` carrying a
+// [`FunctionalUpdate`] (`update.handler`), and events affect unknowns only.
 
 /// Root finding direction for continuous events
 #[derive(Debug, Clone, Serialize, Deserialize)]
