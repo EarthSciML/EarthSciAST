@@ -1004,68 +1004,98 @@ pub(crate) fn run_prepare(
     providers: Vec<(String, Box<dyn PrepareProvider>)>,
     opts: &PrepareOptions,
 ) -> Result<PreparedBuild, PrepareError> {
-    let log = |msg: &str| {
-        if opts.verbose {
-            println!("{msg}");
-        }
-    };
-
-    // The observation point. Every phase boundary and every countable unit of
-    // work inside the two phases that dominate a large build goes through here,
-    // so the phase structure `verbose` narrates and the phase structure a host
-    // observes cannot drift — there is only one.
-    //
-    // Returns `Err` on `Flow::Cancel`, which unwinds `prepare` through the `?`
-    // it is already threaded on. The message names the phase and the item, so a
-    // cancel is attributable to a point in the build rather than to a wall
-    // clock the library does not have.
-    let mut report = |phase: PreparePhase,
-                      done: usize,
-                      total: Option<usize>,
-                      item: &str|
-     -> Result<(), PrepareError> {
-        let Some(cb) = &opts.progress else {
-            return Ok(());
-        };
-        let p = PrepareProgress {
-            phase,
-            done,
-            total,
-            item,
-        };
-        match cb(&p) {
-            Flow::Continue => Ok(()),
-            Flow::Cancel => Err(err(format!(
-                "{} {phase}{}",
-                PrepareError::CANCELLED_PREFIX,
-                if item.is_empty() {
-                    match total {
-                        Some(t) => format!(" ({done} of {t} done)"),
-                        None => String::new(),
-                    }
-                } else {
-                    match total {
-                        Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
-                        None => format!(" at '{item}'"),
-                    }
-                }
-            ))),
-        }
-    };
-
-    // ---- extent discovery: a loader that measures its OWN record count ------
-    // FIRST, ahead of the rewrite, because a discovered extent binds a
-    // metaparameter and every resolution below closes metaparameters at the
-    // loader API (§9.7.6 site 4). This is the Julia ordering (`simulate.jl`
-    // prepare); Rust used to discover AFTER the rewrite, which was harmless only
-    // for as long as nothing between the two steps folded a metaparameter — the
-    // §9.7 resolution below does. A gated provider is still rejected outright:
-    // its extent is the value-invention set's, which does not exist yet — the
-    // provider's OWN declared gate is caught here, the gate the rewrite record
-    // derives in the check after the rewrite.
     let mut providers = providers;
-    let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
     let mut metaparameters = opts.metaparameters.clone();
+    let discovered = discover_loader_extents(&mut providers, opts, &mut metaparameters)?;
+
+    let resolved = resolve_pushdown_imports(doc, opts, &metaparameters)?;
+    let doc: &JsonValue = resolved.as_ref().unwrap_or(doc);
+    let provider_keys: Vec<String> = providers.iter().map(|(k, _)| k.clone()).collect();
+    let rw = apply_pushdown_rewrite(doc, opts, &provider_keys)?;
+    check_discovered_gate_conflict(&discovered, &rw.pd_gates)?;
+
+    let mut st = BuildState::load_document(rw.rewritten.as_ref(), opts, metaparameters)?;
+    let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
+    st.alias_pushdown_names(&rw.pd_coupling);
+    st.seal_const_registry();
+    st.collect_observed_defs()?;
+    st.eval_buildtime_coordinates()?;
+    st.invent_values()?;
+    st.feed_member_factors()?;
+    st.fetch_gated_providers(gated, &rw.pd_coupling)?;
+    st.eval_observed_graph()?;
+    Ok(st.finish(rw.rewritten.into_owned()))
+}
+
+/// Verbose-mode narration; a no-op unless [`PrepareOptions::verbose`] is set.
+fn vlog(opts: &PrepareOptions, msg: &str) {
+    if opts.verbose {
+        println!("{msg}");
+    }
+}
+
+/// The observation point. Every phase boundary and every countable unit of
+/// work inside the two phases that dominate a large build goes through here,
+/// so the phase structure `verbose` narrates and the phase structure a host
+/// observes cannot drift — there is only one.
+///
+/// Returns `Err` on `Flow::Cancel`, which unwinds `prepare` through the `?`
+/// it is already threaded on. The message names the phase and the item, so a
+/// cancel is attributable to a point in the build rather than to a wall
+/// clock the library does not have.
+fn report_progress(
+    opts: &PrepareOptions,
+    phase: PreparePhase,
+    done: usize,
+    total: Option<usize>,
+    item: &str,
+) -> Result<(), PrepareError> {
+    let Some(cb) = &opts.progress else {
+        return Ok(());
+    };
+    let p = PrepareProgress {
+        phase,
+        done,
+        total,
+        item,
+    };
+    match cb(&p) {
+        Flow::Continue => Ok(()),
+        Flow::Cancel => Err(err(format!(
+            "{} {phase}{}",
+            PrepareError::CANCELLED_PREFIX,
+            if item.is_empty() {
+                match total {
+                    Some(t) => format!(" ({done} of {t} done)"),
+                    None => String::new(),
+                }
+            } else {
+                match total {
+                    Some(t) => format!(" at '{item}' ({} of {t})", done + 1),
+                    None => format!(" at '{item}'"),
+                }
+            }
+        ))),
+    }
+}
+
+/// Extent discovery: a loader that measures its OWN record count.
+///
+/// FIRST, ahead of the rewrite, because a discovered extent binds a
+/// metaparameter and every resolution below closes metaparameters at the
+/// loader API (§9.7.6 site 4). This is the Julia ordering (`simulate.jl`
+/// prepare); Rust used to discover AFTER the rewrite, which was harmless only
+/// for as long as nothing between the two steps folded a metaparameter — the
+/// §9.7 resolution below does. A gated provider is still rejected outright:
+/// its extent is the value-invention set's, which does not exist yet — the
+/// provider's OWN declared gate is caught here, the gate the rewrite record
+/// derives in the check after the rewrite.
+fn discover_loader_extents(
+    providers: &mut [(String, Box<dyn PrepareProvider>)],
+    opts: &PrepareOptions,
+    metaparameters: &mut BTreeMap<String, i64>,
+) -> Result<HashMap<String, ArrayD<f64>>, PrepareError> {
+    let mut discovered: HashMap<String, ArrayD<f64>> = HashMap::new();
     let mut discovered_by: BTreeMap<String, (i64, String)> = BTreeMap::new();
     for (key, prov) in providers.iter_mut() {
         let Some(mp) = prov.extent_metaparameter() else {
@@ -1100,62 +1130,101 @@ pub(crate) fn run_prepare(
                  declare its own extent"
             )));
         }
-        log(&format!("  [prepare] extent {mp} <- {key} = {n}"));
+        vlog(opts, &format!("  [prepare] extent {mp} <- {key} = {n}"));
         discovered_by.insert(mp.clone(), (n, key.clone()));
         metaparameters.insert(mp, n);
         discovered.insert(key.clone(), a);
     }
+    Ok(discovered)
+}
 
-    // ---- Phase-1 semantics: pushdown prepass BEFORE the typed parse ---------
-    // §9.7 imports resolve BEFORE the recogniser looks. `desugar_pushdown`
-    // expands `apply_expression_template` references to find the containment
-    // predicate, but it can only expand what is IN SCOPE — and an import edge
-    // puts the library's templates and index sets in scope at LOAD, which has
-    // not happened yet on this raw-JSON path. Skipping this makes a document
-    // that factors its binning body through an imported library fail detection
-    // silently and fetch every provider-backed array whole.
-    report(PreparePhase::Rewrite, 0, None, "")?;
-    let resolved: Option<JsonValue> = if opts.pushdown_rewrite && has_template_import_edge(doc) {
+/// Phase-1 semantics: pushdown prepass BEFORE the typed parse.
+///
+/// §9.7 imports resolve BEFORE the recogniser looks. `desugar_pushdown`
+/// expands `apply_expression_template` references to find the containment
+/// predicate, but it can only expand what is IN SCOPE — and an import edge
+/// puts the library's templates and index sets in scope at LOAD, which has
+/// not happened yet on this raw-JSON path. Skipping this makes a document
+/// that factors its binning body through an imported library fail detection
+/// silently and fetch every provider-backed array whole.
+fn resolve_pushdown_imports(
+    doc: &JsonValue,
+    opts: &PrepareOptions,
+    metaparameters: &BTreeMap<String, i64>,
+) -> Result<Option<JsonValue>, PrepareError> {
+    report_progress(opts, PreparePhase::Rewrite, 0, None, "")?;
+    if opts.pushdown_rewrite && has_template_import_edge(doc) {
         resolve_template_machinery(
             doc,
             opts.base_path
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .as_path(),
-            &metaparameters,
+            metaparameters,
         )
-        .map_err(|e| err(format!("resolve template imports: {}", e.message)))?
+        .map_err(|e| err(format!("resolve template imports: {}", e.message)))
     } else {
-        None
-    };
-    let doc: &JsonValue = resolved.as_ref().unwrap_or(doc);
+        Ok(None)
+    }
+}
+
+/// What the pushdown rewrite phase hands the rest of the pipeline.
+struct RewriteOutcome<'a> {
+    /// The document the typed load parses: the rewrite's output when it fired,
+    /// the input borrowed unchanged otherwise.
+    rewritten: std::borrow::Cow<'a, JsonValue>,
+    /// Record-derived provider gates (the rewrite's own `metadata.x_esd.pushdown`).
+    pd_gates: HashMap<String, ProviderGate>,
+    /// The pushdown coupling routing (loader key → namespaced model name).
+    pd_coupling: Vec<(String, String)>,
+}
+
+/// Run the pushdown rewrite (when opted in) and read its gate and coupling
+/// metadata off the rewritten document.
+fn apply_pushdown_rewrite<'a>(
+    doc: &'a JsonValue,
+    opts: &PrepareOptions,
+    provider_keys: &[String],
+) -> Result<RewriteOutcome<'a>, PrepareError> {
     let rewritten = if opts.pushdown_rewrite {
         desugar_pushdown(doc, opts.model_name.as_deref()).map_err(|e| err(e.0))?
     } else {
         std::borrow::Cow::Borrowed(doc)
     };
     let rewrite_fired = matches!(rewritten, std::borrow::Cow::Owned(_));
-    let provider_keys: Vec<String> = providers.iter().map(|(k, _)| k.clone()).collect();
     let pd_gates: HashMap<String, ProviderGate> = if rewrite_fired {
-        pushdown_provider_gates(&rewritten, &provider_keys).map_err(|e| err(e.0))?
+        pushdown_provider_gates(&rewritten, provider_keys).map_err(|e| err(e.0))?
     } else {
         HashMap::new()
     };
     let pd_coupling = pushdown_coupling_pairs(&rewritten);
-    log(&format!(
-        "  [prepare] pushdown rewrite {}",
-        if rewrite_fired {
-            "fired"
-        } else {
-            "did not fire"
-        }
-    ));
+    vlog(
+        opts,
+        &format!(
+            "  [prepare] pushdown rewrite {}",
+            if rewrite_fired {
+                "fired"
+            } else {
+                "did not fire"
+            }
+        ),
+    );
+    Ok(RewriteOutcome {
+        rewritten,
+        pd_gates,
+        pd_coupling,
+    })
+}
 
-    // A discovered extent and a record-derived gate are mutually exclusive: a
-    // gated slab's extent belongs to the gating set, which value-invention has
-    // not materialised yet. (The provider's OWN declared gate is caught in the
-    // discovery loop above; this catches the gate the rewrite record derives,
-    // which only exists now.)
+/// A discovered extent and a record-derived gate are mutually exclusive: a
+/// gated slab's extent belongs to the gating set, which value-invention has
+/// not materialised yet. (The provider's OWN declared gate is caught in the
+/// discovery loop above; this catches the gate the rewrite record derives,
+/// which only exists now.)
+fn check_discovered_gate_conflict(
+    discovered: &HashMap<String, ArrayD<f64>>,
+    pd_gates: &HashMap<String, ProviderGate>,
+) -> Result<(), PrepareError> {
     for key in discovered.keys() {
         if pd_gates.contains_key(key) {
             return Err(err(format!(
@@ -1165,373 +1234,505 @@ pub(crate) fn run_prepare(
             )));
         }
     }
+    Ok(())
+}
 
-    // ---- typed load (metaparameters closed at the loader API) ---------------
-    report(PreparePhase::Load, 0, None, "")?;
-    let text = serde_json::to_string(rewritten.as_ref())
-        .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
-    let load_opts = LoadOptions {
-        base_path: opts.base_path.clone(),
-        metaparameters,
-    };
-    let file = crate::parse::load_string_with_options(&text, &load_opts)
-        .map_err(|e| err(format!("load rewritten document: {e}")))?;
-    let index_sets: HashMap<String, IndexSet> = file
-        .index_sets
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let models = file
-        .models
-        .as_ref()
-        .ok_or_else(|| err("document has no models"))?;
-    let model_name = match &opts.model_name {
-        Some(n) => n.clone(),
-        None if models.len() == 1 => models.keys().next().unwrap().clone(),
-        None => return Err(err("document holds several models; pass model_name")),
-    };
-    let model = models
-        .get(&model_name)
-        .ok_or_else(|| err(format!("model '{model_name}' not found in the document")))?
-        .clone();
+/// The build pipeline's accumulator state: the evaluation namespace plus the
+/// artifacts each phase deposits for the phases after it. One method per
+/// phase; [`run_prepare`] is the phase list.
+struct BuildState<'o> {
+    opts: &'o PrepareOptions,
+    /// The typed model under build.
+    model: Model,
+    model_name: String,
+    index_sets: HashMap<String, IndexSet>,
+    /// The scalar evaluation scope (declared 0-D parameter defaults, overridden).
+    param_vals: Vec<f64>,
+    param_names: Vec<String>,
+    /// The evaluation namespace: the build-time factor data, then everything
+    /// the pipeline materialises into it (gated slabs, member factors,
+    /// evaluated observeds).
+    arrays: ArrMap,
+    /// The CONST-ARRAY registry (see [`BuildState::seal_const_registry`]).
+    const_scope: ConstArrayScope,
+    /// Observed definitions, their join-free partition, and dependency order.
+    defs: HashMap<String, Expr>,
+    join_free: HashSet<String>,
+    order: Vec<String>,
+    /// Evaluated observed fields — the [`PreparedBuild::fields`] payload.
+    fields: HashMap<String, ArrayD<f64>>,
+    /// Value-invention products.
+    members: HashMap<String, Vec<i64>>,
+    extents: HashMap<String, i64>,
+    /// The gated providers' keys, sorted — [`PreparedBuild::gated_provider_keys`].
+    gated_keys: Vec<String>,
+}
 
-    let (param_vals, param_names) = scalar_params(&model, &opts.parameters);
-
-    // ---- provider injection: eager CONST materialization; gated deferral ----
-    // Held as the interpreter's own `ArrMap` (one rehash of the caller's map,
-    // MOVING the values) so the observed-graph loop below can lend it to the
-    // evaluator without the per-observed deep clone of every provider slab that
-    // this map's SR arrays would otherwise cost.
-    let mut arrays: ArrMap = const_arrays.into_iter().collect();
-    let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
-    let n_providers = providers.len();
-    for (i, (k, mut prov)) in providers.into_iter().enumerate() {
-        report(
-            PreparePhase::ConstProviders,
-            i,
-            Some(n_providers),
-            k.as_str(),
-        )?;
-        if let Some(a) = discovered.remove(&k) {
-            // Already materialized by the extent-discovery pre-pass; never
-            // sampled twice.
-            arrays.insert(k, a);
-        } else if let Some(gate) = pd_gates.get(&k) {
-            // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
-            // defer — value-invention must derive the gating set's members
-            // before the rows to fetch are known.
-            gated.push((k, prov, gate.clone()));
-        } else if let Some(gate) = prov.gate_spec() {
-            // Provider-declared gate (the fallback protocol) — also deferred.
-            gated.push((k, prov, gate));
-        } else if !prov.is_const() {
-            return Err(err(format!(
-                "prepare: provider '{k}' is DISCRETE (non-empty refresh times); \
-                 prepare() is build-time-only"
-            )));
-        } else {
-            let a = prov
-                .sample()
-                .map_err(|e| err(format!("materialize const provider '{k}': {}", e.0)))?;
-            log(&format!(
-                "  [prepare] const provider {k} -> {:?}",
-                a.shape()
-            ));
-            arrays.insert(k, a);
-        }
-    }
-    report(
-        PreparePhase::ConstProviders,
-        n_providers,
-        Some(n_providers),
-        "",
-    )?;
-    let mut gated_keys: Vec<String> = gated.iter().map(|(k, _, _)| k.clone()).collect();
-    gated_keys.sort();
-
-    // ---- pushdown-path name aliasing ----------------------------------------
-    if opts.pushdown_rewrite {
-        inject_aliases(&mut arrays, &pd_coupling);
+impl<'o> BuildState<'o> {
+    fn log(&self, msg: &str) {
+        vlog(self.opts, msg);
     }
 
-    // ---- the CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5) -----------------
-    // Everything in `arrays` at THIS point is build-time factor data: the
-    // caller's `const_arrays`, the materialized const providers, and the
-    // pushdown coupling aliases. That is exactly the Julia reference's
-    // `const_arrays` registry, so a gather on one of these names is a
-    // CONST-ARRAY gather — an out-of-range index raises
-    // `E_TREEWALK_CONSTARRAY_OOB` rather than silently reading the state
-    // gather's zero ghost, which §5.5.5 says is never a const array's. The
-    // observeds this function evaluates below are inserted into `arrays` as it
-    // goes and are deliberately NOT in the registry: they are observed gathers
-    // and keep the zero-ghost convention.
-    let const_scope = ConstArrayScope::from_names(arrays.keys().cloned());
-
-    // ---- observed definitions + the join-free partition ---------------------
-    // Resolve each OVERLAP gate's two range symbols while the ranges still
-    // carry their `{ "from": <index set> }` linkage (`eval_observed` resolves
-    // ranges on its own clone, which erases it). Without this the dense
-    // evaluator cannot tell which loop symbol each envelope side runs over and
-    // declines to let the gate drive — correct, but back at `O(∏ranges)`.
-    // Infallible: an unresolvable gate simply stays undriven.
-    let mut defs = observed_defs(&model);
-    {
-        let var_shapes = crate::join::declared_var_shapes(&model);
-        for e in defs.values_mut() {
-            crate::join::resolve_overlap_syms_expr(e, &var_shapes);
-        }
+    fn report(
+        &self,
+        phase: PreparePhase,
+        done: usize,
+        total: Option<usize>,
+        item: &str,
+    ) -> Result<(), PrepareError> {
+        report_progress(self.opts, phase, done, total, item)
     }
-    let defs = defs;
-    let join_free: HashSet<String> = defs
-        .iter()
-        .filter(|(_, e)| match e {
-            Expr::Operator(node) => node.join.as_ref().map(|j| j.is_empty()).unwrap_or(true),
-            _ => true,
+
+    /// Typed load (metaparameters closed at the loader API).
+    fn load_document(
+        rewritten: &JsonValue,
+        opts: &'o PrepareOptions,
+        metaparameters: BTreeMap<String, i64>,
+    ) -> Result<Self, PrepareError> {
+        report_progress(opts, PreparePhase::Load, 0, None, "")?;
+        let text = serde_json::to_string(rewritten)
+            .map_err(|e| err(format!("serialize rewritten document: {e}")))?;
+        let load_opts = LoadOptions {
+            base_path: opts.base_path.clone(),
+            metaparameters,
+        };
+        let file = crate::parse::load_string_with_options(&text, &load_opts)
+            .map_err(|e| err(format!("load rewritten document: {e}")))?;
+        let index_sets: HashMap<String, IndexSet> = file
+            .index_sets
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let models = file
+            .models
+            .as_ref()
+            .ok_or_else(|| err("document has no models"))?;
+        let model_name = match &opts.model_name {
+            Some(n) => n.clone(),
+            None if models.len() == 1 => models.keys().next().unwrap().clone(),
+            None => return Err(err("document holds several models; pass model_name")),
+        };
+        let model = models
+            .get(&model_name)
+            .ok_or_else(|| err(format!("model '{model_name}' not found in the document")))?
+            .clone();
+
+        let (param_vals, param_names) = scalar_params(&model, &opts.parameters);
+
+        Ok(BuildState {
+            opts,
+            model,
+            model_name,
+            index_sets,
+            param_vals,
+            param_names,
+            arrays: ArrMap::default(),
+            const_scope: ConstArrayScope::default(),
+            defs: HashMap::new(),
+            join_free: HashSet::new(),
+            order: Vec::new(),
+            fields: HashMap::new(),
+            members: HashMap::new(),
+            extents: HashMap::new(),
+            gated_keys: Vec::new(),
         })
-        .map(|(n, _)| n.clone())
-        .collect();
-    let order = observed_order(&defs)?;
+    }
 
-    // ---- build-time coordinate path: producer-seeded join-free closure ------
-    // (the Rust analogue of Julia's `_derive_binning_coords` general-eval
-    // seeding; tolerant — an unresolved coordinate degrades to the engine's
-    // own fail-closed contract downstream, exactly as in Python.)
-    let seeds: Vec<&Expr> = model
-        .equations
-        .iter()
-        .filter_map(|eq| match &eq.rhs {
-            Expr::Operator(node)
-                if matches!(node.op.as_str(), "aggregate" | "arrayop")
-                    && node.distinct == Some(true)
-                    && node.join.as_ref().map(|j| !j.is_empty()).unwrap_or(false) =>
-            {
-                Some(&eq.rhs)
+    /// Provider injection: eager CONST materialization; gated deferral.
+    ///
+    /// The namespace is held as the interpreter's own `ArrMap` (one rehash of
+    /// the caller's map, MOVING the values) so the observed-graph loop below
+    /// can lend it to the evaluator without the per-observed deep clone of
+    /// every provider slab that this map's SR arrays would otherwise cost.
+    ///
+    /// Returns the DEFERRED providers (with their gates), to be fetched
+    /// pre-sliced after value-invention.
+    fn inject_providers(
+        &mut self,
+        const_arrays: HashMap<String, ArrayD<f64>>,
+        providers: Vec<(String, Box<dyn PrepareProvider>)>,
+        mut discovered: HashMap<String, ArrayD<f64>>,
+        pd_gates: &HashMap<String, ProviderGate>,
+    ) -> Result<Vec<(String, Box<dyn PrepareProvider>, ProviderGate)>, PrepareError> {
+        self.arrays = const_arrays.into_iter().collect();
+        let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
+        let n_providers = providers.len();
+        for (i, (k, mut prov)) in providers.into_iter().enumerate() {
+            self.report(
+                PreparePhase::ConstProviders,
+                i,
+                Some(n_providers),
+                k.as_str(),
+            )?;
+            if let Some(a) = discovered.remove(&k) {
+                // Already materialized by the extent-discovery pre-pass; never
+                // sampled twice.
+                self.arrays.insert(k, a);
+            } else if let Some(gate) = pd_gates.get(&k) {
+                // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
+                // defer — value-invention must derive the gating set's members
+                // before the rows to fetch are known.
+                gated.push((k, prov, gate.clone()));
+            } else if let Some(gate) = prov.gate_spec() {
+                // Provider-declared gate (the fallback protocol) — also deferred.
+                gated.push((k, prov, gate));
+            } else if !prov.is_const() {
+                return Err(err(format!(
+                    "prepare: provider '{k}' is DISCRETE (non-empty refresh times); \
+                     prepare() is build-time-only"
+                )));
+            } else {
+                let a = prov
+                    .sample()
+                    .map_err(|e| err(format!("materialize const provider '{k}': {}", e.0)))?;
+                self.log(&format!(
+                    "  [prepare] const provider {k} -> {:?}",
+                    a.shape()
+                ));
+                self.arrays.insert(k, a);
             }
-            _ => None,
-        })
-        .collect();
-    let mut fields: HashMap<String, ArrayD<f64>> = HashMap::new();
-    if !seeds.is_empty() {
-        let needed = producer_seed_closure(&seeds, &defs, &join_free);
+        }
+        self.report(
+            PreparePhase::ConstProviders,
+            n_providers,
+            Some(n_providers),
+            "",
+        )?;
+        self.gated_keys = gated.iter().map(|(k, _, _)| k.clone()).collect();
+        self.gated_keys.sort();
+        Ok(gated)
+    }
+
+    /// Pushdown-path name aliasing.
+    fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
+        if self.opts.pushdown_rewrite {
+            inject_aliases(&mut self.arrays, pd_coupling);
+        }
+    }
+
+    /// The CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5).
+    ///
+    /// Everything in `arrays` at THIS point is build-time factor data: the
+    /// caller's `const_arrays`, the materialized const providers, and the
+    /// pushdown coupling aliases. That is exactly the Julia reference's
+    /// `const_arrays` registry, so a gather on one of these names is a
+    /// CONST-ARRAY gather — an out-of-range index raises
+    /// `E_TREEWALK_CONSTARRAY_OOB` rather than silently reading the state
+    /// gather's zero ghost, which §5.5.5 says is never a const array's. The
+    /// observeds this pipeline evaluates below are inserted into `arrays` as it
+    /// goes and are deliberately NOT in the registry: they are observed gathers
+    /// and keep the zero-ghost convention.
+    fn seal_const_registry(&mut self) {
+        self.const_scope = ConstArrayScope::from_names(self.arrays.keys().cloned());
+    }
+
+    /// Observed definitions + the join-free partition.
+    ///
+    /// Resolve each OVERLAP gate's two range symbols while the ranges still
+    /// carry their `{ "from": <index set> }` linkage (`eval_observed` resolves
+    /// ranges on its own clone, which erases it). Without this the dense
+    /// evaluator cannot tell which loop symbol each envelope side runs over and
+    /// declines to let the gate drive — correct, but back at `O(∏ranges)`.
+    /// Infallible: an unresolvable gate simply stays undriven.
+    fn collect_observed_defs(&mut self) -> Result<(), PrepareError> {
+        let mut defs = observed_defs(&self.model);
+        {
+            let var_shapes = crate::join::declared_var_shapes(&self.model);
+            for e in defs.values_mut() {
+                crate::join::resolve_overlap_syms_expr(e, &var_shapes);
+            }
+        }
+        self.join_free = defs
+            .iter()
+            .filter(|(_, e)| match e {
+                Expr::Operator(node) => node.join.as_ref().map(|j| j.is_empty()).unwrap_or(true),
+                _ => true,
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        self.order = observed_order(&defs)?;
+        self.defs = defs;
+        Ok(())
+    }
+
+    /// Build-time coordinate path: producer-seeded join-free closure.
+    ///
+    /// (The Rust analogue of Julia's `_derive_binning_coords` general-eval
+    /// seeding; tolerant — an unresolved coordinate degrades to the engine's
+    /// own fail-closed contract downstream, exactly as in Python.)
+    fn eval_buildtime_coordinates(&mut self) -> Result<(), PrepareError> {
+        let seeds: Vec<&Expr> = self
+            .model
+            .equations
+            .iter()
+            .filter_map(|eq| match &eq.rhs {
+                Expr::Operator(node)
+                    if matches!(node.op.as_str(), "aggregate" | "arrayop")
+                        && node.distinct == Some(true)
+                        && node.join.as_ref().map(|j| !j.is_empty()).unwrap_or(false) =>
+                {
+                    Some(&eq.rhs)
+                }
+                _ => None,
+            })
+            .collect();
+        if seeds.is_empty() {
+            return Ok(());
+        }
+        let needed = producer_seed_closure(&seeds, &self.defs, &self.join_free);
         let no_extents: HashMap<String, i64> = HashMap::new();
-        let coords: Vec<&String> = order.iter().filter(|n| needed.contains(*n)).collect();
+        let coords: Vec<&String> = self.order.iter().filter(|n| needed.contains(*n)).collect();
         let n_coords = coords.len();
         for (i, name) in coords.into_iter().enumerate() {
-            report(PreparePhase::Coordinates, i, Some(n_coords), name.as_str())?;
+            self.report(PreparePhase::Coordinates, i, Some(n_coords), name.as_str())?;
             match eval_observed(
                 name,
-                &defs[name],
-                &arrays,
-                &param_vals,
-                &param_names,
-                &index_sets,
+                &self.defs[name],
+                &self.arrays,
+                &self.param_vals,
+                &self.param_names,
+                &self.index_sets,
                 &no_extents,
-                &const_scope,
+                &self.const_scope,
             ) {
                 Ok(a) => {
-                    log(&format!(
+                    self.log(&format!(
                         "  [prepare] build-time coordinate {name} -> {:?}",
                         a.shape()
                     ));
-                    arrays.insert(name.clone(), a.clone());
-                    fields.insert(name.clone(), a);
+                    self.arrays.insert(name.clone(), a.clone());
+                    self.fields.insert(name.clone(), a);
                 }
                 Err(e) => {
                     // Tolerant (mirrors Python's skip_unresolved=True): the
                     // producer then fails with ITS diagnostic if it truly
                     // needed this coordinate.
-                    log(&format!(
+                    self.log(&format!(
                         "  [prepare] build-time coordinate {name} skipped ({})",
                         e.0
                     ));
                 }
             }
         }
-        report(PreparePhase::Coordinates, n_coords, Some(n_coords), "")?;
+        self.report(PreparePhase::Coordinates, n_coords, Some(n_coords), "")?;
+        Ok(())
     }
 
-    // ---- VALUE INVENTION: the graph derives its own support set -------------
-    report(PreparePhase::ValueInvention, 0, None, "")?;
-    let vi = run_value_invention(&model, &index_sets, Some(&arrays))
-        .map_err(|e| err(format!("value invention: {e}")))?;
-    let mut members: HashMap<String, Vec<i64>> = HashMap::new();
-    for (faq, mem) in &vi.members {
-        let ids: Vec<i64> = mem
+    /// VALUE INVENTION: the graph derives its own support set.
+    fn invent_values(&mut self) -> Result<(), PrepareError> {
+        self.report(PreparePhase::ValueInvention, 0, None, "")?;
+        let vi = run_value_invention(&self.model, &self.index_sets, Some(&self.arrays))
+            .map_err(|e| err(format!("value invention: {e}")))?;
+        let mut members: HashMap<String, Vec<i64>> = HashMap::new();
+        for (faq, mem) in &vi.members {
+            let ids: Vec<i64> = mem
+                .iter()
+                .map(|k| match k {
+                    crate::relational::Key::Int(i) => Ok(*i),
+                    other => Err(err(format!(
+                        "faq '{faq}': expected scalar integer member keys, got {other:?}"
+                    ))),
+                })
+                .collect::<Result<_, _>>()?;
+            members.insert(faq.clone(), ids);
+        }
+        self.members = members;
+        self.extents = vi.extents.clone();
+        Ok(())
+    }
+
+    /// Hook 1: derived-set member ids fed back as the member_factor.
+    ///
+    /// Collected and SORTED first, so both the observed event stream and the
+    /// verbose narration are deterministic; `index_sets` is a `HashMap` and
+    /// iterating it directly made the order vary run to run.
+    fn feed_member_factors(&mut self) -> Result<(), PrepareError> {
+        let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = self
+            .index_sets
             .iter()
-            .map(|k| match k {
-                crate::relational::Key::Int(i) => Ok(*i),
-                other => Err(err(format!(
-                    "faq '{faq}': expected scalar integer member keys, got {other:?}"
-                ))),
+            .filter(|(_, is)| is.kind == "derived")
+            .filter_map(|(sname, is)| {
+                let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
+                Some((sname, mf, self.members.get(faq)?))
             })
-            .collect::<Result<_, _>>()?;
-        members.insert(faq.clone(), ids);
-    }
-    let extents = vi.extents.clone();
-
-    // ---- Hook 1: derived-set member ids fed back as the member_factor -------
-    // Collected and SORTED first, so both the observed event stream and the
-    // verbose narration are deterministic; `index_sets` is a `HashMap` and
-    // iterating it directly made the order vary run to run.
-    let mut mf_sets: Vec<(&String, &String, &Vec<i64>)> = index_sets
-        .iter()
-        .filter(|(_, is)| is.kind == "derived")
-        .filter_map(|(sname, is)| {
-            let (mf, faq) = (is.member_factor.as_ref()?, is.from_faq.as_ref()?);
-            Some((sname, mf, members.get(faq)?))
-        })
-        .collect();
-    mf_sets.sort_by(|a, b| a.0.cmp(b.0));
-    let n_mf = mf_sets.len();
-    for (i, (sname, mf, mem)) in mf_sets.into_iter().enumerate() {
-        report(PreparePhase::MemberFactors, i, Some(n_mf), mf.as_str())?;
-        let v: Vec<f64> = mem.iter().map(|&m| m as f64).collect();
-        log(&format!(
-            "  [prepare] member_factor {mf} <- |{sname}| = {}",
-            v.len()
-        ));
-        let arr = ArrayD::from_shape_vec(IxDyn(&[v.len()]), v)
-            .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
-        arrays.insert(mf.clone(), arr);
-    }
-    report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
-
-    // ---- Hook 2: gated-provider deferral → post-VI pre-sliced fetch ---------
-    // Every gate is PLANNED before any of it is issued, so the phase reports one
-    // running "request i of N" across all providers rather than restarting the
-    // count at each one. Planning is pure bookkeeping over the invented members
-    // — it reads nothing and costs nothing next to the fetch it describes.
-    let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());
-    for (key, prov, gate) in &gated {
-        if gate.applies_to.len() != 1 {
-            return Err(err(format!(
-                "gated provider '{key}': applies_to lists {} variables; bind one \
-                 provider per variable (providers[\"<ModelPath>.<param>\"]) so each gated \
-                 fetch is a single field",
-                gate.applies_to.len()
-            )));
+            .collect();
+        mf_sets.sort_by(|a, b| a.0.cmp(b.0));
+        let n_mf = mf_sets.len();
+        for (i, (sname, mf, mem)) in mf_sets.into_iter().enumerate() {
+            self.report(PreparePhase::MemberFactors, i, Some(n_mf), mf.as_str())?;
+            let v: Vec<f64> = mem.iter().map(|&m| m as f64).collect();
+            self.log(&format!(
+                "  [prepare] member_factor {mf} <- |{sname}| = {}",
+                v.len()
+            ));
+            let arr = ArrayD::from_shape_vec(IxDyn(&[v.len()]), v)
+                .map_err(|e| err(format!("member factor '{mf}': {e}")))?;
+            self.arrays.insert(mf.clone(), arr);
         }
-        let mut plan = gated_fetch_plan(key, gate, &index_sets, &members, &extents)?;
-        plan.n_requests = if prov.supports_selection() {
-            match &plan.selection[plan.gated_pos] {
-                AxisSel::Indices(idx) => idx
-                    .len()
-                    .div_ceil(opts.gated_fetch_batch.unwrap_or(usize::MAX).max(1))
-                    .max(1),
-                // Neither is a support set, so `run_gated_fetch` refuses them —
-                // but it refuses them THERE, with a message naming the provider.
-                // Counting them as one request keeps this pass a pure estimate
-                // of the progress denominator rather than a second place that
-                // decides what a gate may be.
-                AxisSel::All | AxisSel::Range { .. } => 1,
+        self.report(PreparePhase::MemberFactors, n_mf, Some(n_mf), "")?;
+        Ok(())
+    }
+
+    /// Hook 2: gated-provider deferral → post-VI pre-sliced fetch.
+    ///
+    /// Every gate is PLANNED before any of it is issued, so the phase reports one
+    /// running "request i of N" across all providers rather than restarting the
+    /// count at each one. Planning is pure bookkeeping over the invented members
+    /// — it reads nothing and costs nothing next to the fetch it describes.
+    fn fetch_gated_providers(
+        &mut self,
+        gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)>,
+        pd_coupling: &[(String, String)],
+    ) -> Result<(), PrepareError> {
+        let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());
+        for (key, prov, gate) in &gated {
+            if gate.applies_to.len() != 1 {
+                return Err(err(format!(
+                    "gated provider '{key}': applies_to lists {} variables; bind one \
+                     provider per variable (providers[\"<ModelPath>.<param>\"]) so each gated \
+                     fetch is a single field",
+                    gate.applies_to.len()
+                )));
             }
-        } else {
-            1
+            let mut plan =
+                gated_fetch_plan(key, gate, &self.index_sets, &self.members, &self.extents)?;
+            plan.n_requests = if prov.supports_selection() {
+                match &plan.selection[plan.gated_pos] {
+                    AxisSel::Indices(idx) => idx
+                        .len()
+                        .div_ceil(self.opts.gated_fetch_batch.unwrap_or(usize::MAX).max(1))
+                        .max(1),
+                    // Neither is a support set, so `run_gated_fetch` refuses them —
+                    // but it refuses them THERE, with a message naming the provider.
+                    // Counting them as one request keeps this pass a pure estimate
+                    // of the progress denominator rather than a second place that
+                    // decides what a gate may be.
+                    AxisSel::All | AxisSel::Range { .. } => 1,
+                }
+            } else {
+                1
+            };
+            plans.push(plan);
+        }
+        let total_requests: usize = plans.iter().map(|p| p.n_requests).sum();
+        let mut issued = 0usize;
+
+        let opts = self.opts;
+        let mut report = |phase: PreparePhase, done: usize, total: Option<usize>, item: &str| {
+            report_progress(opts, phase, done, total, item)
         };
-        plans.push(plan);
-    }
-    let total_requests: usize = plans.iter().map(|p| p.n_requests).sum();
-    let mut issued = 0usize;
-
-    for ((key, mut prov, gate), plan) in gated.into_iter().zip(plans) {
-        let arr = run_gated_fetch(
-            &key,
-            prov.as_mut(),
-            &plan,
-            opts.gated_fetch_batch,
-            &mut issued,
+        for ((key, mut prov, gate), plan) in gated.into_iter().zip(plans) {
+            let arr = run_gated_fetch(
+                &key,
+                prov.as_mut(),
+                &plan,
+                opts.gated_fetch_batch,
+                &mut issued,
+                total_requests,
+                &mut report,
+            )?;
+            if arr.shape().get(plan.gated_pos_out).copied() != Some(plan.gated_extent) {
+                return Err(err(format!(
+                    "gated provider '{key}': fetched compact axis is {:?} but the gating \
+                     set extent is {}",
+                    arr.shape().get(plan.gated_pos_out),
+                    plan.gated_extent
+                )));
+            }
+            // Surface the compact slab under the MODEL variable this provider feeds
+            // (its local tail — the authored spelling the un-flattened expressions
+            // use). From esm 1.0.0 the key IS that variable's namespaced name, so it
+            // answers on the routing's `to` side; the `frm` side still answers for a
+            // provider registered under the SOURCE's spelling, and the gate's tail is
+            // the last resort.
+            //
+            // ONE registry entry per slab, and it must be THIS provider's own: the SR
+            // slabs are hundreds of MB so aliasing would deep-copy, and — load-bearing
+            // for CORRECTNESS, not only for memory — sibling sources may feed the SAME
+            // variable name. `isrm.esm` fetches one zarr array at three emission
+            // layers through three providers that differ in nothing but the
+            // `{"fixed": [layer]}` axis of their `gated_select`. Publishing a slab
+            // under every key with the same dotted TAIL (as the Julia and Python hooks
+            // once did) makes all three providers claim all three keys, so whichever
+            // is written last silently wins for all of them and every layer is
+            // contracted against one arbitrary sibling's slab. Both arms below match
+            // a key EXACTLY; never a name-tail expansion.
+            let target = pd_coupling
+                .iter()
+                .find(|(frm, to)| frm == &key || to == &key)
+                .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
+                .unwrap_or_else(|| gate.applies_to[0].clone());
+            self.log(&format!(
+                "  [prepare] gated fetch {key} -> {target} {:?}",
+                arr.shape()
+            ));
+            self.arrays.insert(target, arr);
+        }
+        self.report(
+            PreparePhase::GatedFetch,
             total_requests,
-            &mut report,
+            Some(total_requests),
+            "",
         )?;
-        if arr.shape().get(plan.gated_pos_out).copied() != Some(plan.gated_extent) {
-            return Err(err(format!(
-                "gated provider '{key}': fetched compact axis is {:?} but the gating \
-                 set extent is {}",
-                arr.shape().get(plan.gated_pos_out),
-                plan.gated_extent
-            )));
-        }
-        // Surface the compact slab under the MODEL variable this provider feeds
-        // (its local tail — the authored spelling the un-flattened expressions
-        // use). From esm 1.0.0 the key IS that variable's namespaced name, so it
-        // answers on the routing's `to` side; the `frm` side still answers for a
-        // provider registered under the SOURCE's spelling, and the gate's tail is
-        // the last resort.
-        //
-        // ONE registry entry per slab, and it must be THIS provider's own: the SR
-        // slabs are hundreds of MB so aliasing would deep-copy, and — load-bearing
-        // for CORRECTNESS, not only for memory — sibling sources may feed the SAME
-        // variable name. `isrm.esm` fetches one zarr array at three emission
-        // layers through three providers that differ in nothing but the
-        // `{"fixed": [layer]}` axis of their `gated_select`. Publishing a slab
-        // under every key with the same dotted TAIL (as the Julia and Python hooks
-        // once did) makes all three providers claim all three keys, so whichever
-        // is written last silently wins for all of them and every layer is
-        // contracted against one arbitrary sibling's slab. Both arms below match
-        // a key EXACTLY; never a name-tail expansion.
-        let target = pd_coupling
+        Ok(())
+    }
+
+    /// Evaluate the whole observed graph in dependency order.
+    ///
+    /// Every observed that still needs evaluating, counted up front: `order`
+    /// includes the coordinate pre-pass's products, and a `total` that a `continue`
+    /// silently makes unreachable is a bar that never fills.
+    fn eval_observed_graph(&mut self) -> Result<(), PrepareError> {
+        let pending: Vec<&String> = self
+            .order
             .iter()
-            .find(|(frm, to)| frm == &key || to == &key)
-            .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
-            .unwrap_or_else(|| gate.applies_to[0].clone());
-        log(&format!(
-            "  [prepare] gated fetch {key} -> {target} {:?}",
-            arr.shape()
-        ));
-        arrays.insert(target, arr);
+            .filter(|n| !self.fields.contains_key(*n))
+            .collect();
+        let n_pending = pending.len();
+        for (i, name) in pending.iter().enumerate() {
+            self.report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
+            let t = std::time::Instant::now();
+            let a = eval_observed(
+                name,
+                &self.defs[*name],
+                &self.arrays,
+                &self.param_vals,
+                &self.param_names,
+                &self.index_sets,
+                &self.extents,
+                &self.const_scope,
+            )?;
+            self.log(&format!(
+                "  [prepare] {name:<24} shape={:?}  {:>7.1} s",
+                a.shape(),
+                t.elapsed().as_secs_f64()
+            ));
+            // Into the evaluation namespace ONLY while later observeds may still
+            // read it; each is MOVED into `fields` after the loop rather than held
+            // in both maps at once.
+            self.arrays.insert((*name).clone(), a);
+        }
+        for name in pending {
+            if let Some(a) = self.arrays.remove(name) {
+                self.fields.insert(name.clone(), a);
+            }
+        }
+        self.report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
+        Ok(())
     }
-    report(
-        PreparePhase::GatedFetch,
-        total_requests,
-        Some(total_requests),
-        "",
-    )?;
 
-    // ---- evaluate the whole observed graph in dependency order --------------
-    // Every observed that still needs evaluating, counted up front: `order`
-    // includes the coordinate pre-pass's products, and a `total` that a `continue`
-    // silently makes unreachable is a bar that never fills.
-    let pending: Vec<&String> = order.iter().filter(|n| !fields.contains_key(*n)).collect();
-    let n_pending = pending.len();
-    for (i, name) in pending.iter().enumerate() {
-        report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
-        let t = std::time::Instant::now();
-        let a = eval_observed(
-            name,
-            &defs[*name],
-            &arrays,
-            &param_vals,
-            &param_names,
-            &index_sets,
-            &extents,
-            &const_scope,
-        )?;
-        log(&format!(
-            "  [prepare] {name:<24} shape={:?}  {:>7.1} s",
-            a.shape(),
-            t.elapsed().as_secs_f64()
-        ));
-        // Into the evaluation namespace ONLY while later observeds may still
-        // read it; each is MOVED into `fields` after the loop rather than held
-        // in both maps at once.
-        arrays.insert((*name).clone(), a);
-    }
-    for name in pending {
-        if let Some(a) = arrays.remove(name) {
-            fields.insert(name.clone(), a);
+    /// Assemble the [`PreparedBuild`] artifact from the accumulated state.
+    fn finish(self, doc: JsonValue) -> PreparedBuild {
+        PreparedBuild {
+            doc,
+            model_name: self.model_name,
+            fields: self.fields,
+            members: self.members,
+            extents: self.extents,
+            gated_provider_keys: self.gated_keys,
         }
     }
-    report(PreparePhase::Observeds, n_pending, Some(n_pending), "")?;
-
-    Ok(PreparedBuild {
-        doc: rewritten.into_owned(),
-        model_name,
-        fields,
-        members,
-        extents,
-        gated_provider_keys: gated_keys,
-    })
 }
 
 // --------------------------------------------------------------------------- //
