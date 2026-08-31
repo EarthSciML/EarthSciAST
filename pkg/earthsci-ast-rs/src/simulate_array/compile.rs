@@ -1294,12 +1294,12 @@ fn build_observed_rules(
         let Some(eq) = def_eq.get(name.as_str()) else {
             continue;
         };
-        if let Some((var, idx_names, ranges, body)) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
+        if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
             observed_rules.push(AlgebraicRule::ArrayLoop {
-                var,
-                output_idx_names: idx_names,
-                output_ranges: ranges,
-                body: Rc::new(body),
+                var: a.var,
+                output_idx_names: a.idx_names,
+                output_ranges: a.ranges,
+                body: Rc::new(a.body),
             });
         } else {
             observed_rules.push(lower_algebraic_body(
@@ -1316,13 +1316,13 @@ fn build_observed_rules(
     // one the classification calls observed. An observed's own defining equation
     // was lowered above, so it is skipped here rather than emitted twice.
     for eq in &model.equations {
-        if let Some((var, idx_names, ranges, body)) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
-            if eliminated.contains(&var) && !observed_names.contains(&var) {
+        if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
+            if eliminated.contains(&a.var) && !observed_names.contains(&a.var) {
                 observed_rules.push(AlgebraicRule::ArrayLoop {
-                    var,
-                    output_idx_names: idx_names,
-                    output_ranges: ranges,
-                    body: Rc::new(body),
+                    var: a.var,
+                    output_idx_names: a.idx_names,
+                    output_ranges: a.ranges,
+                    body: Rc::new(a.body),
                 });
             }
             continue;
@@ -2957,13 +2957,25 @@ pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Deriv
     })
 }
 
+/// The parsed pieces of an algebraic `arrayop(expr=index(var, …)) = arrayop(…)`
+/// definition, as extracted by [`extract_algebraic_arrayop`]. The counterpart
+/// of [`DerivArrayop`] for equations that define a variable's value rather
+/// than its derivative.
+pub(super) struct AlgebraicArrayop {
+    /// Defined (algebraic) variable name.
+    pub(super) var: String,
+    /// Output loop index names (LHS aggregate `output_idx`).
+    pub(super) idx_names: Vec<String>,
+    /// Concrete `(lo, hi)` bounds per output index, in `idx_names` order.
+    pub(super) ranges: Vec<(i64, i64)>,
+    /// Scalar RHS body evaluated per output tuple.
+    pub(super) body: Expr,
+}
+
 /// Extract an algebraic `arrayop(expr=index(var, idx...)) = arrayop(...)`
 /// definition. Matches fixtures 02 and 04 where an algebraic variable is
 /// defined through an arrayop whose body is just `index(v, i...)`.
-pub(super) fn extract_algebraic_arrayop(
-    lhs: &Expr,
-    rhs: &Expr,
-) -> Option<(String, Vec<String>, Vec<(i64, i64)>, Expr)> {
+pub(super) fn extract_algebraic_arrayop(lhs: &Expr, rhs: &Expr) -> Option<AlgebraicArrayop> {
     let Expr::Operator(node) = lhs else {
         return None;
     };
@@ -3014,7 +3026,12 @@ pub(super) fn extract_algebraic_arrayop(
         }
         other => other.clone(),
     };
-    Some((var_name, idx_names, ranges, rhs_body))
+    Some(AlgebraicArrayop {
+        var: var_name,
+        idx_names,
+        ranges,
+        body: rhs_body,
+    })
 }
 
 /// Shape inference: per state variable, infer its shape from every
