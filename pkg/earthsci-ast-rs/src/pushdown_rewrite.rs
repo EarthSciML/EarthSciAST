@@ -833,6 +833,22 @@ fn pd_mirror_specs(
     out
 }
 
+/// One matched FORWARD binning observed (`E[c] = Σ_r …`) in the plan.
+///
+/// The envelopes are the ones [`pd_parse_containment`] read out of THIS
+/// aggregate's own containment predicate — the gate emitted onto the rewritten
+/// `E` is derived, not authored.
+struct ForwardBinSpec {
+    /// The binning observed's name (`E`).
+    ename: String,
+    /// Its binding's cell symbol.
+    c_sym: String,
+    /// The gate's source envelope factor names.
+    src_env: Vec<String>,
+    /// The gate's target envelope factor names.
+    tgt_env: [String; 4],
+}
+
 /// The detected pushdown plan (the Julia/Python plan dict, typed).
 struct Plan {
     c_set: String,
@@ -844,12 +860,8 @@ struct Plan {
     /// `applies_to` — the one collection-order-dependent list that leaks into
     /// the emitted document; mirrors the Julia `sort!(A_names)`).
     a_names: Vec<String>,
-    /// `(E name, cell symbol, gate src_env, gate tgt_env)` per matched
-    /// FORWARD binning observed. The envelopes are the ones
-    /// [`pd_parse_containment`] read out of THIS aggregate's own containment
-    /// predicate — the gate emitted onto the rewritten `E` is derived, not
-    /// authored.
-    e_specs: Vec<(String, String, Vec<String>, [String; 4])>,
+    /// The matched FORWARD binning observeds.
+    e_specs: Vec<ForwardBinSpec>,
     /// `(P name, gate src_env, gate tgt_env)` per MIRRORED binning observed,
     /// sorted by name. These receive ONLY the gate (§5.5.7 "MIRRORED arm").
     mirror_specs: Vec<(String, Vec<String>, [String; 4])>,
@@ -865,6 +877,134 @@ struct Plan {
     rep_ename: String,
     rep_csym: String,
     rep_rsym: String,
+}
+
+/// One consumer whose reduction matched the pushdown pattern (see
+/// [`pd_match_conc`]), together with the FORWARD binning observed it reads.
+struct ConcMatch<'a> {
+    /// The reduction's contracted symbol.
+    s_sym: &'a String,
+    /// The cell index set (the mat-vec array's first axis).
+    c_set: &'a str,
+    /// The record index set the reduction is shaped on.
+    r_set: &'a str,
+    /// The provider-backed rank-2 `[c_set, r_set]` array factor (`A`).
+    aname: String,
+    /// The FORWARD binning observed (`E`).
+    ename: String,
+    /// `E`'s aggregate body on the detection view.
+    eagg: &'a Value,
+    /// `E`'s binning binding.
+    bind: Binning,
+}
+
+/// Match ONE declared unknown against the pushdown consumer pattern: an
+/// additive-`(+, 0)` mat-vec reduction over a declared rank-2 parameter and a
+/// FORWARD binning observed. Returns `None` when any guard refuses; a binning
+/// factor that is binning-shaped but unreadable additionally records a
+/// `pushdown_join_unrecognised` diagnostic into `diags`.
+fn pd_match_conc<'a>(
+    model: &'a Value,
+    defs: &'a Map<String, Value>,
+    variables: &'a Map<String, Value>,
+    cname: &str,
+    cv: &Value,
+    diags: &mut Vec<Value>,
+) -> Option<ConcMatch<'a>> {
+    if !pd_is_unknown(cv) {
+        return None;
+    }
+    // An OBSERVED unknown is one with a bare-variable-LHS defining
+    // equation (esm-spec §6.3.1); one without is a state or algebraic
+    // unknown and matches nothing here.
+    let agg = pd_def_view(model, defs, cname)?;
+    if !is_aggregate_op(op_of(agg)) {
+        return None;
+    }
+    let (oplus, ident) = pd_oplus(agg)?;
+    if !(oplus == "+" && ident == 0.0) {
+        return None; // SEMIRING GUARD
+    }
+    let oi = agg.get("output_idx").and_then(Value::as_array)?;
+    if oi.len() != 1 {
+        return None;
+    }
+    let rcv_sym = oi[0].as_str()?;
+    let ranges = ranges_of(agg)?;
+    if ranges.len() != 2 || !ranges.contains_key(rcv_sym) {
+        return None;
+    }
+    let s_sym = ranges.keys().find(|k| k.as_str() != rcv_sym)?;
+    let c_set = range_from(ranges.get(s_sym))?;
+    let r_set = range_from(ranges.get(rcv_sym))?;
+    let body = agg.get("expr")?;
+    let (aname, ename) = pd_matvec_factors(body, s_sym, &[rcv_sym])?;
+    // A must be a declared rank-2 parameter [c_set, r_set].
+    let av = variables.get(&aname)?;
+    let a_ok = av.get("type").and_then(Value::as_str) == Some("parameter")
+        && av
+            .get("shape")
+            .and_then(Value::as_array)
+            .map(|s| s.len() == 2 && s[0].as_str() == Some(c_set) && s[1].as_str() == Some(r_set))
+            .unwrap_or(false);
+    if !a_ok {
+        return None;
+    }
+    let ev = variables.get(&ename)?;
+    let eagg = pd_def_view(model, defs, &ename)?;
+    let Some(bind) = pd_detect_binning(ev, eagg, c_set, None) else {
+        // `ev` is the rank-1 factor of a `+`-mat-vec against a
+        // provider-backed `[c_set, r_set]` array: the join position. If it
+        // is ALSO binning-shaped but unreadable, say so — silence here is
+        // the ungated whole-array fetch that surfaces hours later.
+        if let Some((reason, template)) = pd_binning_refusal(ev, eagg, c_set) {
+            diags.push(json!({
+                "code": "pushdown_join_unrecognised",
+                "variable": ename,
+                "consumer": cname,
+                "array": aname,
+                "index_set": c_set,
+                "reason": reason,
+                "template": match template {
+                    Some(t) => Value::String(t),
+                    None => Value::Null,
+                },
+                "consequence": PD_UNGATED_CONSEQUENCE,
+            }));
+        }
+        return None;
+    };
+    if !bind.out_is_cell {
+        return None; // FORWARD arm only
+    }
+    Some(ConcMatch {
+        s_sym,
+        c_set,
+        r_set,
+        aname,
+        ename,
+        eagg,
+        bind,
+    })
+}
+
+/// Deterministic, deduplicated diagnostic order: `variables` is a
+/// key-ordered map but the same E can be reached from several `conc`
+/// consumers.
+fn pd_order_diags(diags: &mut Vec<Value>) {
+    diags.sort_by(|a, b| {
+        let k = |v: &Value| {
+            (
+                v["variable"].as_str().unwrap_or("").to_string(),
+                v["consumer"].as_str().unwrap_or("").to_string(),
+                v["array"].as_str().unwrap_or("").to_string(),
+            )
+        };
+        k(a).cmp(&k(b))
+    });
+    diags.dedup_by(|a, b| {
+        a["variable"] == b["variable"] && a["consumer"] == b["consumer"] && a["array"] == b["array"]
+    });
 }
 
 /// Detect the pushdown pattern across a model's observeds.
@@ -885,168 +1025,67 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     let mut diags: Vec<Value> = Vec::new();
     let mut conc_specs: Vec<(String, String)> = Vec::new();
     let mut a_names: Vec<String> = Vec::new();
-    let mut e_specs: Vec<(String, String, Vec<String>, [String; 4])> = Vec::new();
+    let mut e_specs: Vec<ForwardBinSpec> = Vec::new();
     let mut cell_factors: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut cell_bad: BTreeMap<String, String> = BTreeMap::new();
     let mut plan: Option<Plan> = None;
 
     for (cname, cv) in variables {
-        if !pd_is_unknown(cv) {
-            continue;
-        }
-        // An OBSERVED unknown is one with a bare-variable-LHS defining
-        // equation (esm-spec §6.3.1); one without is a state or algebraic
-        // unknown and matches nothing here.
-        let Some(agg) = pd_def_view(model, defs, cname) else {
+        let Some(m) = pd_match_conc(model, defs, variables, cname, cv, &mut diags) else {
             continue;
         };
-        if !is_aggregate_op(op_of(agg)) {
-            continue;
-        }
-        let Some((oplus, ident)) = pd_oplus(agg) else {
-            continue;
-        };
-        if !(oplus == "+" && ident == 0.0) {
-            continue; // SEMIRING GUARD
-        }
-        let Some(oi) = agg.get("output_idx").and_then(Value::as_array) else {
-            continue;
-        };
-        if oi.len() != 1 {
-            continue;
-        }
-        let Some(rcv_sym) = oi[0].as_str() else {
-            continue;
-        };
-        let Some(ranges) = ranges_of(agg) else {
-            continue;
-        };
-        if ranges.len() != 2 || !ranges.contains_key(rcv_sym) {
-            continue;
-        }
-        let Some(s_sym) = ranges.keys().find(|k| k.as_str() != rcv_sym) else {
-            continue;
-        };
-        let Some(c_set) = range_from(ranges.get(s_sym)) else {
-            continue;
-        };
-        let Some(r_set) = range_from(ranges.get(rcv_sym)) else {
-            continue;
-        };
-        let Some(body) = agg.get("expr") else {
-            continue;
-        };
-        let Some((aname, ename)) = pd_matvec_factors(body, s_sym, &[rcv_sym]) else {
-            continue;
-        };
-        // A must be a declared rank-2 parameter [c_set, r_set].
-        let Some(av) = variables.get(&aname) else {
-            continue;
-        };
-        let a_ok = av.get("type").and_then(Value::as_str) == Some("parameter")
-            && av
-                .get("shape")
-                .and_then(Value::as_array)
-                .map(|s| {
-                    s.len() == 2 && s[0].as_str() == Some(c_set) && s[1].as_str() == Some(r_set)
-                })
-                .unwrap_or(false);
-        if !a_ok {
-            continue;
-        }
-        let Some(ev) = variables.get(&ename) else {
-            continue;
-        };
-        let Some(eagg) = pd_def_view(model, defs, &ename) else {
-            continue;
-        };
-        let Some(bind) = pd_detect_binning(ev, eagg, c_set, None) else {
-            // `ev` is the rank-1 factor of a `+`-mat-vec against a
-            // provider-backed `[c_set, r_set]` array: the join position. If it
-            // is ALSO binning-shaped but unreadable, say so — silence here is
-            // the ungated whole-array fetch that surfaces hours later.
-            if let Some((reason, template)) = pd_binning_refusal(ev, eagg, c_set) {
-                diags.push(json!({
-                    "code": "pushdown_join_unrecognised",
-                    "variable": ename,
-                    "consumer": cname,
-                    "array": aname,
-                    "index_set": c_set,
-                    "reason": reason,
-                    "template": match template {
-                        Some(t) => Value::String(t),
-                        None => Value::Null,
-                    },
-                    "consequence": PD_UNGATED_CONSEQUENCE,
-                }));
-            }
-            continue;
-        };
-        if !bind.out_is_cell {
-            continue; // FORWARD arm only
-        }
 
         match &plan {
             None => {
                 plan = Some(Plan {
-                    c_set: c_set.to_string(),
-                    rcv_set: r_set.to_string(),
-                    r_set: bind.r_set.clone(),
+                    c_set: m.c_set.to_string(),
+                    rcv_set: m.r_set.to_string(),
+                    r_set: m.bind.r_set.clone(),
                     conc_specs: Vec::new(),
                     a_names: Vec::new(),
                     e_specs: Vec::new(),
                     mirror_specs: Vec::new(),
-                    src_env: bind.src_env.clone(),
-                    tgt_env: bind.tgt_env.clone(),
+                    src_env: m.bind.src_env.clone(),
+                    tgt_env: m.bind.tgt_env.clone(),
                     cell_factors: BTreeMap::new(),
                     cell_bad: BTreeMap::new(),
-                    rep_ename: ename.clone(),
-                    rep_csym: bind.c_sym.clone(),
-                    rep_rsym: bind.r_sym.clone(),
+                    rep_ename: m.ename.clone(),
+                    rep_csym: m.bind.c_sym.clone(),
+                    rep_rsym: m.bind.r_sym.clone(),
                 });
             }
-            Some(p) if !(c_set == p.c_set && r_set == p.rcv_set) => {
+            Some(p) if !(m.c_set == p.c_set && m.r_set == p.rcv_set) => {
                 continue; // narrow: one cell set
             }
             Some(_) => {}
         }
-        conc_specs.push((cname.clone(), s_sym.clone()));
-        if !a_names.contains(&aname) {
-            a_names.push(aname);
+        conc_specs.push((cname.clone(), m.s_sym.clone()));
+        if !a_names.contains(&m.aname) {
+            a_names.push(m.aname);
         }
-        if !e_specs.iter().any(|(e, ..)| e == &ename) {
+        if !e_specs.iter().any(|s| s.ename == m.ename) {
             // Collected on the DETECTION view, like every other pattern read: a
             // body factored through a template must yield the same gather set
             // as its longhand twin (esm-spec §9.6.4 rule 2). Emission still
             // edits the authored body / call-site bindings, and
             // `pd_assert_rects_rebound` proves the substitution landed.
             pd_cell_factors(
-                eagg,
-                &bind.c_sym,
+                m.eagg,
+                &m.bind.c_sym,
                 variables,
-                c_set,
+                m.c_set,
                 &mut cell_factors,
                 &mut cell_bad,
             );
-            e_specs.push((ename, bind.c_sym, bind.src_env, bind.tgt_env));
+            e_specs.push(ForwardBinSpec {
+                ename: m.ename,
+                c_sym: m.bind.c_sym,
+                src_env: m.bind.src_env,
+                tgt_env: m.bind.tgt_env,
+            });
         }
     }
-    // Deterministic, deduplicated diagnostic order: `variables` is a
-    // key-ordered map but the same E can be reached from several `conc`
-    // consumers.
-    diags.sort_by(|a, b| {
-        let k = |v: &Value| {
-            (
-                v["variable"].as_str().unwrap_or("").to_string(),
-                v["consumer"].as_str().unwrap_or("").to_string(),
-                v["array"].as_str().unwrap_or("").to_string(),
-            )
-        };
-        k(a).cmp(&k(b))
-    });
-    diags.dedup_by(|a, b| {
-        a["variable"] == b["variable"] && a["consumer"] == b["consumer"] && a["array"] == b["array"]
-    });
+    pd_order_diags(&mut diags);
     let Some(mut plan) = plan else {
         return (None, diags);
     };
@@ -1060,7 +1099,7 @@ fn pd_detect(model: &Value, defs: &Map<String, Value>) -> (Option<Plan>, Vec<Val
     // fixed `c_set`/`r_set`: the mirror is a RIDER on the rewrite, never its
     // trigger, so a document holding only mirrored binning aggregates is not
     // rewritten at all (§5.5.7).
-    let forward_names: Vec<String> = e_specs.iter().map(|(e, ..)| e.clone()).collect();
+    let forward_names: Vec<String> = e_specs.iter().map(|s| s.ename.clone()).collect();
     plan.mirror_specs = pd_mirror_specs(model, defs, &plan.c_set, &plan.r_set, &forward_names);
     plan.conc_specs = conc_specs;
     plan.a_names = a_names;
@@ -1465,6 +1504,399 @@ fn pd_canonicalize_equations(model: &mut Value) {
     *eqs = structural;
 }
 
+/// The emission jobs' shared state: the plan under emission, the generated
+/// construct names, the gather set, and its re-pointing map — derived once in
+/// [`PdEmit::new`]. One method per emission job; [`pd_apply`] is the job list.
+struct PdEmit<'p> {
+    plan: &'p Plan,
+    /// The derived index set's name (`pd_support__<c>`).
+    setname: String,
+    /// The generated producer aggregate's id (`pd_faq__<c>`).
+    faqid: String,
+    /// The member state variable's name (`pd_members__<c>`).
+    memvar: String,
+    /// The member_factor const parameter's name (`pd_member_factor__<c>`).
+    mfactor: String,
+    /// The gather set: the envelope factors PLUS every other array a binning
+    /// body reads on the cell axis. Envelopes lead, so a document whose bodies
+    /// read nothing else emits exactly what it emitted before; the rest follow in
+    /// sorted order (`cell_factors` is a BTreeMap).
+    rects: Vec<String>,
+    /// Rect factor name → its cell-gather observed's name.
+    rectmap: HashMap<String, String>,
+    /// The document's OWN index-set names, snapshotted before the emission
+    /// adds the derived one. A gather's trailing ranges are author-declared
+    /// axes, so this is the right set to check them against.
+    index_set_names: HashSet<String>,
+}
+
+impl<'p> PdEmit<'p> {
+    fn new(esm: &Value, plan: &'p Plan) -> Result<Self, PushdownRewriteError> {
+        let c = &plan.c_set;
+        let setname = format!("pd_support__{c}");
+        pd_refuse_ungatherable(&plan.cell_bad, c, &setname)?;
+        let index_set_names: HashSet<String> = esm
+            .get("index_sets")
+            .and_then(Value::as_object)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let mut rects: Vec<String> = Vec::new();
+        for f in &plan.tgt_env {
+            if !rects.contains(f) {
+                rects.push(f.clone());
+            }
+        }
+        for f in plan.cell_factors.keys() {
+            if !rects.contains(f) {
+                rects.push(f.clone());
+            }
+        }
+        let rectmap: HashMap<String, String> = rects
+            .iter()
+            .map(|f| (f.clone(), format!("pd_cell__{c}__{f}")))
+            .collect();
+        Ok(PdEmit {
+            plan,
+            setname,
+            faqid: format!("pd_faq__{c}"),
+            memvar: format!("pd_members__{c}"),
+            mfactor: format!("pd_member_factor__{c}"),
+            rects,
+            rectmap,
+            index_set_names,
+        })
+    }
+
+    /// The cell-gather observed's name for rect factor `f`.
+    fn cellgath(&self, f: &str) -> String {
+        format!("pd_cell__{}__{f}", self.plan.c_set)
+    }
+
+    /// The derived index set.
+    fn add_derived_index_set(
+        &self,
+        root: &mut Map<String, Value>,
+    ) -> Result<(), PushdownRewriteError> {
+        let index_sets = root
+            .entry("index_sets")
+            .or_insert_with(|| Value::Object(Map::new()));
+        index_sets
+            .as_object_mut()
+            .ok_or_else(|| PushdownRewriteError("index_sets is not an object".into()))?
+            .insert(
+                self.setname.clone(),
+                json!({
+                    "kind": "derived",
+                    "from_faq": self.faqid,
+                    "member_factor": self.mfactor,
+                }),
+            );
+        Ok(())
+    }
+
+    /// Producer filter comparisons, deep-copied from the representative E
+    /// BEFORE E is rewritten (they must keep full-grid rect factor refs).
+    /// Read off the DEFINING EQUATION: esm 1.0.0 has no variable
+    /// `expression` field.
+    fn producer_filter(
+        &self,
+        model: &Value,
+        templates: Option<&Map<String, Value>>,
+    ) -> Result<Value, PushdownRewriteError> {
+        let repexpr = pd_def(model, &self.plan.rep_ename)
+            .cloned()
+            .ok_or_else(|| {
+                PushdownRewriteError("representative E lost its defining equation".into())
+            })?;
+        // When the call site hides the predicate behind a template reference, read it
+        // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
+        // rect references, which is exactly what the pre-rewrite expansion yields.
+        // The expansion is a scratch value: nothing of it is emitted except these
+        // comparisons, so the document's template block and call sites are untouched.
+        // A template-free document never builds one, so its emitted filter is
+        // byte-identical to before.
+        let rep_expanded = repexpr
+            .get("expr")
+            .and_then(|e| pd_expand_for_detection(e, templates));
+        let ifcond = repexpr
+            .get("expr")
+            .and_then(pd_find_ifelse_cond)
+            .or_else(|| rep_expanded.as_ref().and_then(pd_find_ifelse_cond))
+            .ok_or_else(|| {
+                PushdownRewriteError(
+                    "pushdown desugar: representative E lost its containment ifelse".into(),
+                )
+            })?;
+        let comps: Vec<Value> = if matches!(op_of(ifcond), Some("and") | Some("*")) {
+            ifcond
+                .get("args")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            vec![ifcond.clone()]
+        };
+        Ok(json!({"op": "*", "args": comps}))
+    }
+
+    /// Member state var + member_factor param.
+    fn add_member_vars(&self, model: &mut Value) -> Result<(), PushdownRewriteError> {
+        let mv = model
+            .get_mut("variables")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
+        mv.insert(
+            self.memvar.clone(),
+            json!({"type": "unknown", "shape": [self.setname.clone()]}),
+        );
+        mv.insert(
+            self.mfactor.clone(),
+            json!({"type": "parameter", "default": 0.0, "shape": [self.setname.clone()]}),
+        );
+        Ok(())
+    }
+
+    /// Per-rect cell-gather observeds.
+    ///
+    /// The DECLARATION is a bare `unknown`; what makes it observed is the
+    /// bare-variable-LHS equation added alongside (esm-spec §6.3.1).
+    fn add_cell_gathers(&self, model: &mut Value) -> Result<(), PushdownRewriteError> {
+        let c = &self.plan.c_set;
+        let mv = model
+            .get_mut("variables")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
+        let mut cellgath_defs: Vec<(String, Value)> = Vec::new();
+        let mut sorted_rects: Vec<&String> = self.rects.iter().collect();
+        sorted_rects.sort();
+        for f in sorted_rects {
+            let fallback: Vec<String> = mv
+                .get(f)
+                .and_then(|v| v.get("shape"))
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .map(|t| t.as_str().unwrap_or_default().to_string())
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![c.clone()]);
+            let shape: &[String] = self.plan.cell_factors.get(f).unwrap_or(&fallback);
+            let (decl, defn) = pd_gather_defn(
+                f,
+                shape,
+                &self.setname,
+                &self.mfactor,
+                &self.index_set_names,
+                c,
+            )?;
+            mv.insert(self.cellgath(f), decl);
+            cellgath_defs.push((self.cellgath(f), defn));
+        }
+
+        // The cell-gather DEFINITIONS, now that the `variables` borrow is done.
+        for (name, rhs) in cellgath_defs {
+            pd_set_def(model, &name, rhs);
+        }
+        Ok(())
+    }
+
+    /// Gate the provider-backed arrays onto the derived axis.
+    fn gate_provider_arrays(&self, model: &mut Value) -> Result<(), PushdownRewriteError> {
+        let mv = model
+            .get_mut("variables")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
+        for a in &self.plan.a_names {
+            if let Some(av) = mv.get_mut(a).and_then(Value::as_object_mut) {
+                av.insert(
+                    "shape".to_string(),
+                    json!([self.setname.clone(), self.plan.rcv_set.clone()]),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Rewrite E: axis -> derived set, rect factors -> cell gathers, + GATE.
+    ///
+    /// The rewritten `E` still reduces over the FULL record axis, so without a
+    /// gate it visits |support|*|records| pairs -- 1520*43650 on isrm.esm.
+    /// Attach the SAME overlap clause the producer carries, re-pointed at the
+    /// generated cell gathers, and the enumeration driver (§5.5.6) walks one
+    /// candidate partner list per output cell instead. The clause is derived,
+    /// not authored: its envelopes are exactly the ones `pd_parse_containment`
+    /// read out of this aggregate's own containment predicate.
+    fn rewrite_forward_es(
+        &self,
+        model: &mut Value,
+        templates: Option<&Map<String, Value>>,
+    ) -> Result<(), PushdownRewriteError> {
+        for spec in &self.plan.e_specs {
+            let ename = &spec.ename;
+            let expr = pd_def_mut(model, ename).ok_or_else(|| {
+                PushdownRewriteError(format!("E '{ename}' lost its defining equation"))
+            })?;
+            if let Some(from) = expr
+                .get_mut("ranges")
+                .and_then(|r| r.get_mut(&spec.c_sym))
+                .and_then(Value::as_object_mut)
+            {
+                from.insert("from".to_string(), Value::String(self.setname.clone()));
+            }
+            pd_rewrite_rects(expr, &self.rectmap);
+            if let Some(args) = expr.get_mut("args").and_then(Value::as_array_mut) {
+                for s in args.iter_mut() {
+                    if let Some(name) = s.as_str()
+                        && let Some(g) = self.rectmap.get(name)
+                    {
+                        *s = Value::String(g.clone());
+                    }
+                }
+            }
+            if expr.get("join").is_none()
+                && let Some(eo) = expr.as_object_mut()
+            {
+                let gathered: Vec<String> = spec
+                    .tgt_env
+                    .iter()
+                    .map(|f| self.rectmap.get(f).cloned().unwrap_or_else(|| f.clone()))
+                    .collect();
+                eo.insert(
+                    "join".to_string(),
+                    Value::Array(vec![pd_overlap_clause(&spec.src_env, &gathered)]),
+                );
+            }
+            let expr_snapshot = expr.clone();
+            if let Some(evo) = model
+                .get_mut("variables")
+                .and_then(|v| v.get_mut(ename))
+                .and_then(Value::as_object_mut)
+            {
+                evo.insert("shape".to_string(), json!([self.setname.clone()]));
+            }
+            pd_assert_rects_rebound(&expr_snapshot, ename, &self.rectmap, templates)?;
+        }
+        Ok(())
+    }
+
+    /// MIRRORED orientation: gate only.
+    ///
+    /// A per-record binning aggregate `P[r] = SUM_{c in C} [contains(cell_c, pt_r)]*...`
+    /// is the same join read the other way round. It gets ONLY the gate -- no
+    /// derived index set, no `distinct` producer, no `member_factor`, no
+    /// provider gating -- because it wants the FULL record axis: every record
+    /// must produce a value, and a record outside the grid must come out as the
+    /// semiring identity (the driver leaves such a position with no term and the
+    /// identity fill emits 0). There is nothing to compact, so a mirrored
+    /// value-invention would derive a support set nobody reads. Its envelopes
+    /// stay the document's own const-array factors (the cell axis is not
+    /// re-pointed), so the mirror also needs no rect gathers.
+    fn gate_mirrors(&self, model: &mut Value) {
+        for (pname, p_src, p_tgt) in &self.plan.mirror_specs {
+            let Some(pexpr) = pd_def_mut(model, pname) else {
+                continue;
+            };
+            if pexpr.get("join").is_none()
+                && let Some(po) = pexpr.as_object_mut()
+            {
+                po.insert(
+                    "join".to_string(),
+                    Value::Array(vec![pd_overlap_clause(p_src, p_tgt)]),
+                );
+            }
+        }
+    }
+
+    /// Restrict the conc reductions to the derived axis.
+    fn restrict_conc(&self, model: &mut Value) {
+        for (cname, ssym) in &self.plan.conc_specs {
+            if let Some(from) = pd_def_mut(model, cname)
+                .and_then(|e| e.get_mut("ranges"))
+                .and_then(|r| r.get_mut(ssym))
+                .and_then(Value::as_object_mut)
+            {
+                from.insert("from".to_string(), Value::String(self.setname.clone()));
+            }
+        }
+    }
+
+    /// Generated `distinct` producer (reuses E's containment + geometry).
+    fn append_producer(&self, model: &mut Value, prod_filter: Value) {
+        let mut prod_args: Vec<String> = Vec::new();
+        for s in self.plan.src_env.iter().chain(self.plan.tgt_env.iter()) {
+            if !prod_args.contains(s) {
+                prod_args.push(s.clone());
+            }
+        }
+        let mut prod_ranges = Map::new();
+        prod_ranges.insert(
+            self.plan.rep_rsym.clone(),
+            json!({"from": self.plan.r_set.clone()}),
+        );
+        prod_ranges.insert(
+            self.plan.rep_csym.clone(),
+            json!({"from": self.plan.c_set.clone()}),
+        );
+        let producer = json!({
+            "lhs": pd_ix(self.memvar.clone(), "m"),
+            "rhs": {
+                "op": "aggregate",
+                "output_idx": ["m"],
+                "ranges": prod_ranges,
+                "expr": {"op": "true", "args": []},
+                "distinct": true,
+                "semiring": "bool_and_or",
+                "id": self.faqid.clone(),
+                "join": [pd_overlap_clause(&self.plan.src_env, &self.plan.tgt_env)],
+                "filter": prod_filter,
+                "key": {"op": "skolem", "label": "cell", "args": [self.plan.rep_csym.clone()]},
+                "args": prod_args,
+            },
+        });
+        let eqs = model
+            .as_object_mut()
+            .expect("model is an object")
+            .entry("equations")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        match eqs.as_array_mut() {
+            Some(list) => list.push(producer),
+            None => {
+                *eqs = Value::Array(vec![producer]);
+            }
+        }
+    }
+
+    /// Inspectable pushdown provenance / gated_select record.
+    fn record_provenance(self, root: &mut Map<String, Value>) -> Result<(), PushdownRewriteError> {
+        let md = root
+            .entry("metadata")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let md = md
+            .as_object_mut()
+            .ok_or_else(|| PushdownRewriteError("metadata is not an object".into()))?;
+        let xesd = md
+            .entry("x_esd")
+            .or_insert_with(|| Value::Object(Map::new()));
+        xesd.as_object_mut()
+            .ok_or_else(|| PushdownRewriteError("metadata.x_esd is not an object".into()))?
+            .insert(
+                "pushdown".to_string(),
+                json!({
+                    "derived_set": self.setname,
+                    "producer_id": self.faqid,
+                    "member_factor": self.mfactor,
+                    "member_var": self.memvar,
+                    "gated_select": {
+                        "gated_by": self.setname,
+                        "applies_to": self.plan.a_names.clone(),
+                        "gated_axis": 0,
+                    },
+                }),
+            );
+        Ok(())
+    }
+}
+
 fn pd_apply(
     esm: &Value,
     mname: &str,
@@ -1472,313 +1904,31 @@ fn pd_apply(
     templates: Option<&Map<String, Value>>,
 ) -> Result<Value, PushdownRewriteError> {
     let mut d = esm.clone(); // fresh, mutable (input purity)
-    let c = &plan.c_set;
-    let setname = format!("pd_support__{c}");
-    let faqid = format!("pd_faq__{c}");
-    let memvar = format!("pd_members__{c}");
-    let mfactor = format!("pd_member_factor__{c}");
-    let cellgath = |f: &str| format!("pd_cell__{c}__{f}");
-
-    // The gather set is the envelope factors PLUS every other array a binning
-    // body reads on the cell axis. Envelopes lead, so a document whose bodies
-    // read nothing else emits exactly what it emitted before; the rest follow in
-    // sorted order (`cell_factors` is a BTreeMap).
-    pd_refuse_ungatherable(&plan.cell_bad, c, &setname)?;
-    // The document's OWN index-set names, snapshotted before the mutable borrow
-    // below adds the derived one. A gather's trailing ranges are author-declared
-    // axes, so this is the right set to check them against.
-    let index_set_names: HashSet<String> = esm
-        .get("index_sets")
-        .and_then(Value::as_object)
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut rects: Vec<String> = Vec::new();
-    for f in &plan.tgt_env {
-        if !rects.contains(f) {
-            rects.push(f.clone());
-        }
-    }
-    for f in plan.cell_factors.keys() {
-        if !rects.contains(f) {
-            rects.push(f.clone());
-        }
-    }
-    let rectmap: HashMap<String, String> = rects.iter().map(|f| (f.clone(), cellgath(f))).collect();
+    let emit = PdEmit::new(esm, plan)?;
 
     let root = d
         .as_object_mut()
         .ok_or_else(|| PushdownRewriteError("document is not an object".into()))?;
-
-    // --- derived index set ---
-    let index_sets = root
-        .entry("index_sets")
-        .or_insert_with(|| Value::Object(Map::new()));
-    index_sets
-        .as_object_mut()
-        .ok_or_else(|| PushdownRewriteError("index_sets is not an object".into()))?
-        .insert(
-            setname.clone(),
-            json!({
-                "kind": "derived",
-                "from_faq": faqid,
-                "member_factor": mfactor,
-            }),
-        );
+    emit.add_derived_index_set(root)?;
 
     let model = root
         .get_mut("models")
         .and_then(|m| m.get_mut(mname))
         .filter(|m| m.is_object())
         .ok_or_else(|| PushdownRewriteError(format!("model '{mname}' is not an object")))?;
-    // --- producer filter comparisons, deep-copied from the representative E
-    //     BEFORE E is rewritten (they must keep full-grid rect factor refs).
-    //     Read off the DEFINING EQUATION: esm 1.0.0 has no variable
-    //     `expression` field. ---
-    let repexpr = pd_def(model, &plan.rep_ename).cloned().ok_or_else(|| {
-        PushdownRewriteError("representative E lost its defining equation".into())
-    })?;
-    // When the call site hides the predicate behind a template reference, read it
-    // off the EXPANDED body (§9.6.4 rule 2) — the producer wants the FULL-GRID
-    // rect references, which is exactly what the pre-rewrite expansion yields.
-    // The expansion is a scratch value: nothing of it is emitted except these
-    // comparisons, so the document's template block and call sites are untouched.
-    // A template-free document never builds one, so its emitted filter is
-    // byte-identical to before.
-    let rep_expanded = repexpr
-        .get("expr")
-        .and_then(|e| pd_expand_for_detection(e, templates));
-    let ifcond = repexpr
-        .get("expr")
-        .and_then(pd_find_ifelse_cond)
-        .or_else(|| rep_expanded.as_ref().and_then(pd_find_ifelse_cond))
-        .ok_or_else(|| {
-            PushdownRewriteError(
-                "pushdown desugar: representative E lost its containment ifelse".into(),
-            )
-        })?;
-    let comps: Vec<Value> = if matches!(op_of(ifcond), Some("and") | Some("*")) {
-        ifcond
-            .get("args")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        vec![ifcond.clone()]
-    };
-    let prod_filter = json!({"op": "*", "args": comps});
-
-    let mv = model
-        .get_mut("variables")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
-
-    // --- member state var + member_factor param ---
-    mv.insert(
-        memvar.clone(),
-        json!({"type": "unknown", "shape": [setname.clone()]}),
-    );
-    mv.insert(
-        mfactor.clone(),
-        json!({"type": "parameter", "default": 0.0, "shape": [setname.clone()]}),
-    );
-
-    // --- per-rect cell-gather observeds ---
-    // The DECLARATION is a bare `unknown`; what makes it observed is the
-    // bare-variable-LHS equation added below (esm-spec §6.3.1).
-    let mut cellgath_defs: Vec<(String, Value)> = Vec::new();
-    let mut sorted_rects: Vec<&String> = rects.iter().collect();
-    sorted_rects.sort();
-    for f in sorted_rects {
-        let fallback: Vec<String> = mv
-            .get(f)
-            .and_then(|v| v.get("shape"))
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .map(|t| t.as_str().unwrap_or_default().to_string())
-                    .collect()
-            })
-            .unwrap_or_else(|| vec![c.clone()]);
-        let shape: &[String] = plan.cell_factors.get(f).unwrap_or(&fallback);
-        let (decl, defn) = pd_gather_defn(f, shape, &setname, &mfactor, &index_set_names, c)?;
-        mv.insert(cellgath(f), decl);
-        cellgath_defs.push((cellgath(f), defn));
-    }
-
-    // The cell-gather DEFINITIONS, now that the `variables` borrow is done.
-    for (name, rhs) in cellgath_defs {
-        pd_set_def(model, &name, rhs);
-    }
-    let mv = model
-        .get_mut("variables")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| PushdownRewriteError("model variables is not an object".into()))?;
-
-    // --- gate the provider-backed arrays onto the derived axis ---
-    for a in &plan.a_names {
-        if let Some(av) = mv.get_mut(a).and_then(Value::as_object_mut) {
-            av.insert(
-                "shape".to_string(),
-                json!([setname.clone(), plan.rcv_set.clone()]),
-            );
-        }
-    }
-
-    // --- rewrite E: axis -> derived set, rect factors -> cell gathers, + GATE ---
-    // The rewritten `E` still reduces over the FULL record axis, so without a
-    // gate it visits |support|*|records| pairs -- 1520*43650 on isrm.esm.
-    // Attach the SAME overlap clause the producer carries, re-pointed at the
-    // generated cell gathers, and the enumeration driver (§5.5.6) walks one
-    // candidate partner list per output cell instead. The clause is derived,
-    // not authored: its envelopes are exactly the ones `pd_parse_containment`
-    // read out of this aggregate's own containment predicate.
-    for (ename, csym, e_src, e_tgt) in &plan.e_specs {
-        let expr = pd_def_mut(model, ename).ok_or_else(|| {
-            PushdownRewriteError(format!("E '{ename}' lost its defining equation"))
-        })?;
-        if let Some(from) = expr
-            .get_mut("ranges")
-            .and_then(|r| r.get_mut(csym))
-            .and_then(Value::as_object_mut)
-        {
-            from.insert("from".to_string(), Value::String(setname.clone()));
-        }
-        pd_rewrite_rects(expr, &rectmap);
-        if let Some(args) = expr.get_mut("args").and_then(Value::as_array_mut) {
-            for s in args.iter_mut() {
-                if let Some(name) = s.as_str()
-                    && let Some(g) = rectmap.get(name)
-                {
-                    *s = Value::String(g.clone());
-                }
-            }
-        }
-        if expr.get("join").is_none()
-            && let Some(eo) = expr.as_object_mut()
-        {
-            let gathered: Vec<String> = e_tgt
-                .iter()
-                .map(|f| rectmap.get(f).cloned().unwrap_or_else(|| f.clone()))
-                .collect();
-            eo.insert(
-                "join".to_string(),
-                Value::Array(vec![pd_overlap_clause(e_src, &gathered)]),
-            );
-        }
-        let expr_snapshot = expr.clone();
-        if let Some(evo) = model
-            .get_mut("variables")
-            .and_then(|v| v.get_mut(ename))
-            .and_then(Value::as_object_mut)
-        {
-            evo.insert("shape".to_string(), json!([setname.clone()]));
-        }
-        pd_assert_rects_rebound(&expr_snapshot, ename, &rectmap, templates)?;
-    }
-
-    // --- MIRRORED orientation: gate only ---
-    // A per-record binning aggregate `P[r] = SUM_{c in C} [contains(cell_c, pt_r)]*...`
-    // is the same join read the other way round. It gets ONLY the gate -- no
-    // derived index set, no `distinct` producer, no `member_factor`, no
-    // provider gating -- because it wants the FULL record axis: every record
-    // must produce a value, and a record outside the grid must come out as the
-    // semiring identity (the driver leaves such a position with no term and the
-    // identity fill emits 0). There is nothing to compact, so a mirrored
-    // value-invention would derive a support set nobody reads. Its envelopes
-    // stay the document's own const-array factors (the cell axis is not
-    // re-pointed), so the mirror also needs no rect gathers.
-    for (pname, p_src, p_tgt) in &plan.mirror_specs {
-        let Some(pexpr) = pd_def_mut(model, pname) else {
-            continue;
-        };
-        if pexpr.get("join").is_none()
-            && let Some(po) = pexpr.as_object_mut()
-        {
-            po.insert(
-                "join".to_string(),
-                Value::Array(vec![pd_overlap_clause(p_src, p_tgt)]),
-            );
-        }
-    }
-
-    // --- restrict the conc reductions to the derived axis ---
-    for (cname, ssym) in &plan.conc_specs {
-        if let Some(from) = pd_def_mut(model, cname)
-            .and_then(|e| e.get_mut("ranges"))
-            .and_then(|r| r.get_mut(ssym))
-            .and_then(Value::as_object_mut)
-        {
-            from.insert("from".to_string(), Value::String(setname.clone()));
-        }
-    }
-
-    // --- generated `distinct` producer (reuses E's containment + geometry) ---
-    let mut prod_args: Vec<String> = Vec::new();
-    for s in plan.src_env.iter().chain(plan.tgt_env.iter()) {
-        if !prod_args.contains(s) {
-            prod_args.push(s.clone());
-        }
-    }
-    let mut prod_ranges = Map::new();
-    prod_ranges.insert(plan.rep_rsym.clone(), json!({"from": plan.r_set.clone()}));
-    prod_ranges.insert(plan.rep_csym.clone(), json!({"from": c.clone()}));
-    let producer = json!({
-        "lhs": pd_ix(memvar.clone(), "m"),
-        "rhs": {
-            "op": "aggregate",
-            "output_idx": ["m"],
-            "ranges": prod_ranges,
-            "expr": {"op": "true", "args": []},
-            "distinct": true,
-            "semiring": "bool_and_or",
-            "id": faqid.clone(),
-            "join": [pd_overlap_clause(&plan.src_env, &plan.tgt_env)],
-            "filter": prod_filter,
-            "key": {"op": "skolem", "label": "cell", "args": [plan.rep_csym.clone()]},
-            "args": prod_args,
-        },
-    });
-    let eqs = model
-        .as_object_mut()
-        .expect("model is an object")
-        .entry("equations")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    match eqs.as_array_mut() {
-        Some(list) => list.push(producer),
-        None => {
-            *eqs = Value::Array(vec![producer]);
-        }
-    }
+    let prod_filter = emit.producer_filter(model, templates)?;
+    emit.add_member_vars(model)?;
+    emit.add_cell_gathers(model)?;
+    emit.gate_provider_arrays(model)?;
+    emit.rewrite_forward_es(model, templates)?;
+    emit.gate_mirrors(model);
+    emit.restrict_conc(model);
+    emit.append_producer(model, prod_filter);
 
     // --- canonical equation order (CONFORMANCE_SPEC.md §5.5.7) ---------------
     pd_canonicalize_equations(model);
 
-    // --- inspectable pushdown provenance / gated_select record ---
-    let md = root
-        .entry("metadata")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let md = md
-        .as_object_mut()
-        .ok_or_else(|| PushdownRewriteError("metadata is not an object".into()))?;
-    let xesd = md
-        .entry("x_esd")
-        .or_insert_with(|| Value::Object(Map::new()));
-    xesd.as_object_mut()
-        .ok_or_else(|| PushdownRewriteError("metadata.x_esd is not an object".into()))?
-        .insert(
-            "pushdown".to_string(),
-            json!({
-                "derived_set": setname,
-                "producer_id": faqid,
-                "member_factor": mfactor,
-                "member_var": memvar,
-                "gated_select": {
-                    "gated_by": setname,
-                    "applies_to": plan.a_names.clone(),
-                    "gated_axis": 0,
-                },
-            }),
-        );
+    emit.record_provenance(root)?;
     Ok(d)
 }
 
