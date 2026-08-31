@@ -560,25 +560,21 @@ fn resolve_index_set_ref(
     index_sets: &HashMap<String, IndexSet>,
     derived_extents: &HashMap<String, i64>,
 ) -> Result<ResolvedRange, CompileError> {
-    let set = index_sets
-        .get(from)
-        .ok_or_else(|| {
-            CompileError::build_err(format!(
-                "aggregate range '{idx_name}' references index set '{from}', which is not declared \
+    let set = index_sets.get(from).ok_or_else(|| {
+        CompileError::build_err(format!(
+            "aggregate range '{idx_name}' references index set '{from}', which is not declared \
                  in the document `index_sets` registry (no implicit interval inference; RFC \
                  semiring-faq-unified-ir §5.2)"
-            ))
-        })?;
+        ))
+    })?;
 
     match set.kind.as_str() {
         "interval" => {
-            let size = set
-                .size
-                .ok_or_else(|| {
-                    CompileError::build_err(format!(
-                        "index set '{from}' has kind \"interval\" but no `size`"
-                    ))
-                })?;
+            let size = set.size.ok_or_else(|| {
+                CompileError::build_err(format!(
+                    "index set '{from}' has kind \"interval\" but no `size`"
+                ))
+            })?;
             Ok(ResolvedRange::Static([1, size]))
         }
         "categorical" => {
@@ -614,15 +610,12 @@ fn resolve_index_set_ref(
                      parent (RFC semiring-faq-unified-ir §5.2)"
                 )));
             }
-            let offsets =
-                set.offsets
-                    .clone()
-                    .ok_or_else(|| {
-                        CompileError::build_err(format!(
-                            "ragged index set '{from}' (aggregate range '{idx_name}') requires an \
+            let offsets = set.offsets.clone().ok_or_else(|| {
+                CompileError::build_err(format!(
+                    "ragged index set '{from}' (aggregate range '{idx_name}') requires an \
                              `offsets` backing factor giving |set(parent)| per parent tuple"
-                        ))
-                    })?;
+                ))
+            })?;
             Ok(ResolvedRange::Ragged {
                 offsets,
                 of: parents.to_vec(),
@@ -781,8 +774,14 @@ mod tests {
             effective_reduce_kind(None, Some("*")),
             Ok(ReduceKind::Product)
         );
-        assert_eq!(effective_reduce_kind(None, Some("max")), Ok(ReduceKind::Max));
-        assert_eq!(effective_reduce_kind(None, Some("min")), Ok(ReduceKind::Min));
+        assert_eq!(
+            effective_reduce_kind(None, Some("max")),
+            Ok(ReduceKind::Max)
+        );
+        assert_eq!(
+            effective_reduce_kind(None, Some("min")),
+            Ok(ReduceKind::Min)
+        );
     }
 
     #[test]
@@ -864,10 +863,7 @@ mod tests {
         let nested = Expr::Operator(
             ExpressionNode {
                 op: "+".to_string(),
-                args: vec![
-                    Expr::Variable("z".to_string()),
-                    bad_agg(None, Some("mean")),
-                ],
+                args: vec![Expr::Variable("z".to_string()), bad_agg(None, Some("mean"))],
                 ..Default::default()
             }
             .into(),

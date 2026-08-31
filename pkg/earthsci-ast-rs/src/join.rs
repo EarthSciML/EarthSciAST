@@ -481,13 +481,11 @@ fn key_column(
                     Ok((positions, vals))
                 }
                 "interval" => {
-                    let size = set
-                        .size
-                        .ok_or_else(|| {
-                            CompileError::build_err(format!(
-                                "interval index set '{from}' (join key '{sym}') has no `size`"
-                            ))
-                        })?;
+                    let size = set.size.ok_or_else(|| {
+                        CompileError::build_err(format!(
+                            "interval index set '{from}' (join key '{sym}') has no `size`"
+                        ))
+                    })?;
                     let positions: Vec<i64> = (1..=size).collect();
                     let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
                     Ok((positions, vals))

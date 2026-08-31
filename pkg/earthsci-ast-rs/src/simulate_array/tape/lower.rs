@@ -2067,7 +2067,7 @@ impl<'m> TapeBuilder<'m> {
                 body,
                 ..
             } => {
-                // Mirror of `materialize_observeds_append`'s vectorized-path
+                // Mirror of `materialize_observeds_pass`'s vectorized-path
                 // guard: 1-origin ranges over a non-empty padded box.
                 let padded_shape: Vec<usize> =
                     output_ranges.iter().map(|(_, hi)| *hi as usize).collect();

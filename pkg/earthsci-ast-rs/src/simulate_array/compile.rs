@@ -2938,8 +2938,8 @@ pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Deriv
             // safe here only because this is a pattern matcher with no error
             // channel AND `from_model` runs `validate_oplus_spellings` over the
             // whole model first, so such a node cannot reach this point.
-            let rop = effective_reduce_kind(rnode.semiring.as_deref(), rnode.reduce.as_deref())
-                .ok()?;
+            let rop =
+                effective_reduce_kind(rnode.semiring.as_deref(), rnode.reduce.as_deref()).ok()?;
             let mut c_names: Vec<String> = Vec::new();
             let mut c_dims: Vec<ContractDim> = Vec::new();
             if let Some(rhs_ranges) = &rnode.ranges {
