@@ -1871,7 +1871,7 @@ fn run_extract(
     if let Some(ref operators) = esm_file.operators
         && let Some(op) = operators.get(&component)
     {
-        let mut extracted_op = HashMap::new();
+        let mut extracted_op = indexmap::IndexMap::new();
         extracted_op.insert(component.clone(), op.clone());
         extracted_esm.operators = Some(extracted_op);
     }

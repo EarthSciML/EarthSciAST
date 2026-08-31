@@ -37,7 +37,7 @@ pub struct EsmFile {
     /// trip silently DROPPED the whole registry (the same class of defect as
     /// the `IndexSet::member_factor` omission below).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinates: Option<HashMap<String, Coordinate>>,
+    pub coordinates: Option<IndexMap<String, Coordinate>>,
 
     /// Top-level rewrite-rule registry — the payload of a template-library file
     /// (esm-spec §9.7.1).
@@ -73,13 +73,13 @@ pub struct EsmFile {
 
     /// Registered runtime operators (by reference)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub operators: Option<HashMap<String, Operator>>,
+    pub operators: Option<IndexMap<String, Operator>>,
 
     /// File-local enum declarations (esm-spec §9.3): each entry maps a
     /// symbolic name to a positive integer. The `enum` AST op resolves to a
     /// `const` integer at load time using these mappings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enums: Option<HashMap<String, HashMap<String, i64>>>,
+    pub enums: Option<IndexMap<String, IndexMap<String, i64>>>,
 
     /// Composition and coupling rules
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,7 +91,7 @@ pub struct EsmFile {
     /// index_sets/metaparameters/expression_templates. Presence of this key is
     /// the sole positive identifier of the coupling-library file kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coupling_roles: Option<HashMap<String, CouplingRole>>,
+    pub coupling_roles: Option<IndexMap<String, CouplingRole>>,
 
     /// The single temporal domain shared by every component in the document
     /// (v0.8.0). A document has at most one domain; all spatial models live on
