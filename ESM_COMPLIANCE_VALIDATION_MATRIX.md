@@ -251,10 +251,11 @@ Where:
 | BEHAV-10-B-002 | A multi-pair `on` clause over the same two loop symbols is ONE composite key: a combination is admitted iff EVERY listed pair agrees (tuple equality on the §5.5.1 rule-4 skolem tuple). Pairs over different symbol pairs are separate gates | CONFORMANCE_SPEC.md §5.5.8, §5.5.1 | Yes | behavioral |
 | BEHAV-10-B-003 | The match set MUST be built ONCE per node, hashing to bucket ONLY, and emitted ordered by the canonical key then by left then right position — so duplicate / reversed / permuted inputs give a byte-identical pair list | CONFORMANCE_SPEC.md §5.5.8, §5.5 rule 5 | Yes | determinism |
 | BEHAV-10-B-004 | The gate MUST DRIVE enumeration under the same three binding cases as §5.5.6 (both contracted ⇒ pairs; one bound ⇒ partner list; both bound ⇒ membership test), so the contraction costs `O(\|matches\|·∏ungated)` and not `O(∏ranges)`. An output position with no candidate pair takes the semiring identity `0̄` | CONFORMANCE_SPEC.md §5.5.8, §5.5.6 | Yes | performance |
+| BEHAV-10-B-004a | SHOULD: both gated symbols contracted ALONGSIDE other contracted axes (a rollup that also reduces over an unrelated axis) is driven by letting the LATER gated axis enumerate only the partners of the earlier one's current binding — still an order-preserving subsequence, and it removes the whole `N_later` factor | CONFORMANCE_SPEC.md §5.5.8 | Yes | performance |
 | BEHAV-10-B-005 | Driving MUST be a pure optimisation of the enumeration EXTENT: the driven and undriven results MUST be identical (bit-identical for a floating ⊕, since the driven walk is an order-preserving subsequence of the filtered full product) | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-006 | Because an `on` gate is EXACT rather than a conservative broad phase, a binding MUST keep every evaluation path that does not consult the gate — a vectorised/whole-array overlay, a compiled tape, a build-time observed evaluator — applying the equality. Resolving the clause into a gate ALONE, and leaving such a path evaluating an ungated product, is silently wrong rather than merely slow | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 
-> **Binding status (2026-08-31)**: **Rust** implements all six.
+> **Binding status (2026-08-31)**: **Rust** implements all six plus the -004a SHOULD.
 > `join.rs::resolve_aggregate_joins` resolves each pair to `(loop symbol, KeyColumn)` —
 > `Const` (index-set members / interval IDs) or `Column` (a declared 1-D variable) —
 > emits the equality into `filter` for -006 and attaches a `JoinClause::on_gate` for

@@ -471,6 +471,13 @@ impl OverlapIndex {
         };
         adj.get(&pos).map(Vec::as_slice).unwrap_or(NO_PARTNERS)
     }
+
+    /// [`Self::partners`] restricted to the inclusive range `[lo, hi]`, still
+    /// ascending — the contiguous subslice a driven inner loop walks in place of
+    /// its own range. No copy (see [`restrict_to_range`]).
+    pub fn partners_in(&self, side: Side, pos: i64, lo: i64, hi: i64) -> &[i64] {
+        restrict_to_range(self.partners(side, pos), lo, hi)
+    }
 }
 
 /// How an overlap gate drives an enumeration — the shared decision the

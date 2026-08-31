@@ -1404,6 +1404,19 @@ three binding cases are the same three:
   same ascending order its own range would have visited them;
 * both bound ⇒ a single membership test.
 
+A fourth shape is worth naming because a relational rollup hits it as soon as it
+also reduces over an unrelated axis (a MOVES emissions total summed over months
+as well as over the two joined tables), and §5.5.6's first case does not cover
+it: **both gated symbols contracted alongside OTHER contracted axes**, where the
+pair list cannot bind the whole tuple. A binding SHOULD still drive it, by
+walking the product in its usual order except that the LATER of the two gated
+axes enumerates only the partners of the earlier one's current binding. That is
+still the exact order-preserving subsequence — every axis before the later gated
+one is untouched, and the later one drops precisely the non-candidate values, in
+place — so it is bit-identical, and it removes the whole `N_later` factor. (This
+is a SHOULD, not a MUST: unlike the three cases above, a binding that falls back
+here is slower on a shape that is common but not universal.)
+
 **Identity fill (normative).** As in §5.5.6: an output position with no
 candidate pair is never visited and MUST read as the semiring's `0̄`. An
 unmatched row is `0` under the additive monoid — not a hole, not `NaN`.

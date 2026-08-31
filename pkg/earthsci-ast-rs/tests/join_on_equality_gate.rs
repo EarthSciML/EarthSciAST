@@ -676,3 +676,94 @@ fn driving_is_bit_identical_to_the_undriven_full_product() {
         }
     }
 }
+
+/// Both gated symbols contracted ALONGSIDE a third contracted axis — the shape
+/// the pair list cannot bind on its own, and the one a MOVES rollup reaches as
+/// soon as it also sums over, say, months. The later gated axis iterates only
+/// its partner list, so the walk still drops the whole `N_r` factor; and it must
+/// stay bit-identical to the same document with the driver off.
+#[test]
+fn extra_contracted_axis_still_drives_the_later_gated_symbol() {
+    let t = keyed_tables(20, 40, 10); // 20·(40/10) = 80 matches of 800 tuples
+    const NM: usize = 3; // the extra ungated contracted axis
+    assert_eq!(t.match_count(), 80);
+
+    let mut vars = serde_json::Map::new();
+    for (name, set) in [
+        ("lkey", "lrows"),
+        ("activity", "lrows"),
+        ("rkey", "rrows"),
+        ("rate", "rrows"),
+    ] {
+        vars.insert(name.into(), json!({"type": "parameter", "shape": [set]}));
+    }
+    vars.insert("T".into(), json!({"type": "unknown", "shape": ["one"]}));
+    // T[q] = Σ_{l, m, r : keys equal} activity[l]·rate[r]·m  — `m` is ungated,
+    // and the contracted names sort to [l, m, r], so the two gated dims are NOT
+    // adjacent and the later one (r) is the restricted axis.
+    let node = json!({
+        "op": "aggregate",
+        "reduce": "+",
+        "output_idx": ["q"],
+        "ranges": {
+            "q": {"from": "one"}, "l": {"from": "lrows"},
+            "m": {"from": "months"}, "r": {"from": "rrows"}
+        },
+        "join": [{"on": [["lkey", "rkey"]]}],
+        "args": ["lkey", "rkey", "activity", "rate"],
+        "expr": {"op": "*", "args": [ix("activity", "l"), ix("rate", "r"), "m"]}
+    });
+    let doc = json!({
+        "esm": "1.0.0",
+        "metadata": {"name": "join_on_extra_axis"},
+        "index_sets": {
+            "one": {"kind": "interval", "size": 1},
+            "months": {"kind": "interval", "size": NM},
+            "lrows": {"kind": "interval", "size": t.nl()},
+            "rrows": {"kind": "interval", "size": t.nr()}
+        },
+        "models": {"J": {
+            "variables": Value::Object(vars),
+            "equations": [{"lhs": "T", "rhs": node}]
+        }}
+    });
+    let go = |gate_on: bool| -> (f64, u64) {
+        let prev = set_join_gate_enabled(gate_on);
+        reset_overlap_enum_visits();
+        let prep = esm_problem(
+            &doc,
+            (0.0, 0.0),
+            ProblemOptions {
+                model_name: Some("J".into()),
+                const_arrays: t.const_arrays(),
+                build_providers: Vec::new(),
+                ..Default::default()
+            },
+        )
+        .expect("prepare");
+        let v = overlap_enum_visits();
+        set_join_gate_enabled(prev);
+        (observed_field(&prep, "T").expect("T materialized")[0], v)
+    };
+    let (driven, visits) = go(true);
+    let (undriven, undriven_visits) = go(false);
+
+    assert_eq!(undriven_visits, 0, "the kill-switch arm must not drive");
+    assert_eq!(
+        driven.to_bits(),
+        undriven.to_bits(),
+        "an extra contracted axis moved the total: {driven} vs {undriven}"
+    );
+    let oracle: f64 = t.oracle().iter().sum::<f64>() * (1..=NM as i64).sum::<i64>() as f64;
+    assert!(
+        (driven - oracle).abs() < 1e-9,
+        "total {driven} != oracle {oracle}"
+    );
+    // Leaves visited = matches x |months|; the interior sweep costs N_l x |months|
+    // on top, but the whole N_r factor is gone.
+    assert_eq!(
+        visits,
+        t.match_count() * NM as u64,
+        "the later gated axis must walk only its partner list"
+    );
+}

@@ -1829,6 +1829,11 @@ pub(super) fn reduce_contraction(
 //     `O(|candidates|)` in total rather than `O(N_c·N_r)`.
 //   PAIRS — both gated axes are contracted AND are the only two contracted axes
 //     (the scalar-reduction form); the candidate pairs bind both at once.
+//   PARTNER-RESTRICTED — both gated axes are contracted alongside OTHER
+//     contracted axes, so the pair list cannot bind the whole tuple. The
+//     product is walked lexicographically as usual except that the LATER gated
+//     axis iterates only the partners of the earlier one's current value. Still
+//     the exact order-preserving subsequence; drops the whole `N_later` factor.
 //   REJECT — both gated axes are already bound and the pair is not a candidate:
 //     no leaf is admitted at all.
 //
@@ -2309,7 +2314,85 @@ pub(super) fn reduce_contraction_gated(
             }
             reduce_over_pairs(spec, &tuples, ctx)
         }
-        DrivePlan::Pairs | DrivePlan::Full => reduce_over_sources(spec, &full_sources(ranges), ctx),
+        // Both gated symbols contracted, but NOT as the only two contracted dims
+        // (so the pair list cannot bind the whole tuple). Walk the product
+        // lexicographically as usual, except that the LATER gated dim iterates
+        // only the partners of the EARLIER one's current value. That is still
+        // the exact order-preserving subsequence — every dim before the later
+        // gated one is untouched, and the later one drops precisely the
+        // non-candidate values, in place — so the ⊕-reduction stays
+        // bit-identical, while the cost loses the whole `N_later` factor.
+        DrivePlan::Pairs => {
+            if let (GateAxis::Contracted(a), GateAxis::Contracted(b)) = (place.src, place.tgt)
+                && a != b
+            {
+                let (p, q, bound_is_src) = if a < b { (a, b, true) } else { (b, a, false) };
+                let mut acc = reduce.identity();
+                drive_partner_restricted(spec, ranges, gate, p, q, bound_is_src, 0, &mut acc, ctx);
+                return acc;
+            }
+            reduce_over_sources(spec, &full_sources(ranges), ctx)
+        }
+        DrivePlan::Full => reduce_over_sources(spec, &full_sources(ranges), ctx),
+    }
+}
+
+/// One level of the general both-contracted driven walk (see the `DrivePlan::Pairs`
+/// arm of [`reduce_contraction_gated`]): dim `q` — the LATER of the two gated
+/// dims — enumerates only the gate partners of dim `p`'s current binding,
+/// restricted to `q`'s own range; every other dim walks its range as it always
+/// did, in the same odometer order (last dim fastest, which is what recursing
+/// depth-first on ascending `d` produces).
+#[allow(clippy::too_many_arguments)]
+fn drive_partner_restricted(
+    spec: &ReduceSpec,
+    ranges: &[(i64, i64)],
+    gate: &JoinGate,
+    p: usize,
+    q: usize,
+    bound_is_src: bool,
+    d: usize,
+    acc: &mut f64,
+    ctx: &mut EvalCtx,
+) {
+    let &ReduceSpec {
+        contract_names,
+        body,
+        reduce,
+        filter,
+        cell,
+    } = spec;
+    if d == ranges.len() {
+        crate::broad_phase::bump_overlap_enum_visits(1);
+        if !filter_excludes(filter, cell, ctx) {
+            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            *acc = reduce.combine(*acc, term);
+        }
+        return;
+    }
+    let (lo, hi) = ranges[d];
+    if d == q {
+        let Some(&bound) = ctx.loop_binds.get(&contract_names[p]) else {
+            return;
+        };
+        let side = if bound_is_src {
+            crate::broad_phase::Side::Src
+        } else {
+            crate::broad_phase::Side::Tgt
+        };
+        // Borrowed from the gate, which is disjoint from `ctx` — no per-level
+        // allocation on a walk that runs once per interior tuple.
+        let parts = gate.index.partners_in(side, bound, lo, hi);
+        for i in 0..parts.len() {
+            let v = parts[i];
+            set_bind(&mut ctx.loop_binds, &contract_names[d], v);
+            drive_partner_restricted(spec, ranges, gate, p, q, bound_is_src, d + 1, acc, ctx);
+        }
+        return;
+    }
+    for v in lo..=hi {
+        set_bind(&mut ctx.loop_binds, &contract_names[d], v);
+        drive_partner_restricted(spec, ranges, gate, p, q, bound_is_src, d + 1, acc, ctx);
     }
 }
 
