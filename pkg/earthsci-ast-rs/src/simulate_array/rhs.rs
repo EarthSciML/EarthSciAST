@@ -314,51 +314,21 @@ pub(super) fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state:
 }
 
 /// Evaluate the observed algebraic rules (already dependency-ordered at build
-/// time) at the given state/time into a name→array map, registering any
-/// FAQ-materialized derived ring under its producer id in `derived_rings`. An
-/// observed whose body yields an array (a `const` polygon, the clip ring) is
-/// stored as an array so downstream `index(...)` reads address it; a scalar body
-/// (an `area` FAQ) is a 0-D array. Shared by the RHS driver ([`evaluate_rhs`])
-/// and the output-time observed exposure ([`ArrayCompiled::simulate`]) so both
-/// see identical observed values.
-// Positional signature kept for the driver's call sites; the body groups the
-// arguments into an [`EvalEnv`] immediately.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn materialize_observeds(
-    observed_rules: &[AlgebraicRule],
-    state_arrays: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    const_arrays: &ConstArrayScope,
-) -> ArrMap {
-    let mut observed_arrays: ArrMap = ArrMap::default();
-    let env = EvalEnv {
-        state_arrays,
-        params,
-        param_names,
-        t,
-        derived_rings,
-        derived_extents: empty_derived_extents(),
-        forcing,
-        // One-shot materialization: no CSE memo (nothing to amortize the
-        // structural analysis over).
-        cse: None,
-        const_arrays,
-    };
-    materialize_observeds_into(&mut observed_arrays, observed_rules, &env);
-    observed_arrays
-}
-
-/// Like [`materialize_observeds`] but writes into a reused container (ess-mro),
-/// so the observed map is not reallocated each RHS call. The container is
-/// cleared (capacity retained) then repopulated; for models with no observeds
-/// — the vectorized PDE path — it stays empty and nothing is allocated. The
-/// observed *value* arrays themselves are still materialized fresh (only models
-/// that actually carry algebraic observeds pay that, and they are outside the
-/// zero-allocation stencil path being verified).
+/// time) at `env`'s state/time into the name→array map `dst`, registering any
+/// FAQ-materialized derived ring under its producer id in the environment's
+/// `derived_rings`. An observed whose body yields an array (a `const` polygon,
+/// the clip ring) is stored as an array so downstream `index(...)` reads
+/// address it; a scalar body (an `area` FAQ) is a 0-D array. Shared by the RHS
+/// driver ([`evaluate_rhs`]) and the output-time observed exposure
+/// ([`ArrayCompiled::simulate`]) so both see identical observed values.
+///
+/// `dst` is a reused container (ess-mro), so the observed map is not
+/// reallocated each RHS call: it is cleared (capacity retained) then
+/// repopulated; for models with no observeds — the vectorized PDE path — it
+/// stays empty and nothing is allocated. The observed *value* arrays
+/// themselves are still materialized fresh (only models that actually carry
+/// algebraic observeds pay that, and they are outside the zero-allocation
+/// stencil path being verified).
 pub(super) fn materialize_observeds_into(
     dst: &mut ArrMap,
     observed_rules: &[AlgebraicRule],
@@ -390,9 +360,9 @@ pub(super) struct ObsPass<'a> {
 }
 
 /// Positional wrapper over [`materialize_observeds_pass`], kept so the
-/// driver's call sites and the tape/reference executors' fallback arms keep
-/// their call shape; in-module callers build an [`ObsPass`] and call
-/// [`materialize_observeds_pass`] directly.
+/// tape/reference executors' fallback arms keep their call shape; every other
+/// caller builds an [`ObsPass`] and calls [`materialize_observeds_pass`]
+/// directly.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_observeds_append(
     dst: &mut ArrMap,
@@ -634,36 +604,15 @@ pub(super) struct RhsCall<'a> {
 /// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
 /// driver. `ESS_TAPE_CHECK=N` runs BOTH paths for the first N calls of each
 /// taped scratch and asserts bitwise-equal `dy`.
-//
-// Positional signature kept for the driver's RHS/Jacobian closures; the body
-// groups the arguments into an [`RhsCall`] immediately.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_rhs_with_scratch(
-    rhs_rules: &[RhsRule],
-    observed_rules: &[AlgebraicRule],
-    var_shapes: &IndexMap<String, VarShape>,
-    param_names: &[String],
-    state: &[f64],
-    params: &[f64],
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    t: f64,
+    call: &RhsCall,
     dy: &mut [f64],
     force_scalar: bool,
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
-    let call = RhsCall {
-        rhs_rules,
-        observed_rules,
-        var_shapes,
-        param_names,
-        state,
-        params,
-        forcing,
-        t,
-    };
     if force_scalar || scratch.tape.is_none() {
-        evaluate_rhs_legacy(&call, dy, force_scalar, stats, scratch);
+        evaluate_rhs_legacy(call, dy, force_scalar, stats, scratch);
         return;
     }
     // Take the tape out so the legacy check arm below can borrow the whole
@@ -678,7 +627,7 @@ pub(super) fn evaluate_rhs_with_scratch(
             *v = 0.0;
         }
         let mut check_stats = RhsStats::default();
-        evaluate_rhs_legacy(&call, &mut tape.check_buf, false, &mut check_stats, scratch);
+        evaluate_rhs_legacy(call, &mut tape.check_buf, false, &mut check_stats, scratch);
     }
 
     // Fallback rules evaluate through the interpreter's `EvalCtx`, which
@@ -686,12 +635,12 @@ pub(super) fn evaluate_rhs_with_scratch(
     // fully-taped program reads the flat state directly through strided
     // views and skips this entirely).
     if tape.exec.n_fallback > 0 {
-        refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
+        refill_state_arrays(&mut scratch.state_arrays, call.var_shapes, call.state);
     }
     let const_scope = Rc::clone(&scratch.const_arrays);
     run_tape_call(
         &mut tape,
-        &call,
+        call,
         &scratch.state_arrays,
         &const_scope,
         dy,
@@ -702,8 +651,9 @@ pub(super) fn evaluate_rhs_with_scratch(
         for (k, (a, b)) in dy.iter().zip(tape.check_buf.iter()).enumerate() {
             assert!(
                 a.to_bits() == b.to_bits(),
-                "ESS_TAPE_CHECK: dy[{k}] diverged at t={t}: tape {a:e} ({:016x}) vs \
+                "ESS_TAPE_CHECK: dy[{k}] diverged at t={}: tape {a:e} ({:016x}) vs \
                  legacy {b:e} ({:016x})",
+                call.t,
                 a.to_bits(),
                 b.to_bits()
             );
@@ -1101,7 +1051,7 @@ mod elementwise_array_observed_tests {
     //! `S_n`, …) rather than one inlined `D(state)` RHS. The array runtime
     //! evaluates each declared array observed WHOLESALE — `eval` looks every
     //! array-valued observed reference up in the observed-array map and
-    //! broadcasts the elementwise ops over it — and `materialize_observeds`
+    //! broadcasts the elementwise ops over it — and `materialize_observeds_pass`
     //! builds them in dependency order, so the decomposition runs as authored
     //! with no special per-cell lift. This is the Rust mirror of the Julia
     //! `_fold_elementwise_array_observeds` pass; the test locks the behaviour so

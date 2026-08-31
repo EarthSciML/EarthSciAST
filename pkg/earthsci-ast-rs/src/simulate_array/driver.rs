@@ -93,14 +93,16 @@ impl ArrayCompiled {
         let mut scratch = RhsScratch::new(&self.var_shapes);
         scratch.set_const_arrays(Rc::clone(&self.const_scope));
         evaluate_rhs_with_scratch(
-            &self.rhs_rules,
-            &self.observed_rules,
-            &self.var_shapes,
-            &self.param_names,
-            state,
-            &param_vec,
-            &self.forcing,
-            t,
+            &RhsCall {
+                rhs_rules: &self.rhs_rules,
+                observed_rules: &self.observed_rules,
+                var_shapes: &self.var_shapes,
+                param_names: &self.param_names,
+                state,
+                params: &param_vec,
+                forcing: &self.forcing,
+                t,
+            },
             &mut dy,
             force_scalar,
             &mut stats,
@@ -171,14 +173,16 @@ impl ArrayCompiled {
             *slot = 0.0;
         }
         evaluate_rhs_with_scratch(
-            &self.rhs_rules,
-            &self.observed_rules,
-            &self.var_shapes,
-            &self.param_names,
-            state,
-            param_vec,
-            &self.forcing,
-            t,
+            &RhsCall {
+                rhs_rules: &self.rhs_rules,
+                observed_rules: &self.observed_rules,
+                var_shapes: &self.var_shapes,
+                param_names: &self.param_names,
+                state,
+                params: param_vec,
+                forcing: &self.forcing,
+                t,
+            },
             dy,
             false,
             stats,
@@ -566,20 +570,25 @@ impl ArrayCompiled {
     ) -> SolveSetup {
         let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
-        let static_obs = materialize_observeds(
-            &cadence.static_rules,
-            &sa0,
-            param_vec,
-            &self.param_names,
-            t0,
+        let mut static_obs = ArrMap::default();
+        let env = EvalEnv {
+            state_arrays: &sa0,
+            params: param_vec,
+            param_names: &self.param_names,
+            t: t0,
             // The regrid's FAQ rings are produced AND consumed within this
             // one-time static pass (its ring-consuming aggregates are themselves
             // static), so the sink is discarded after — no varying rule reads a
             // static ring, and each RHS eval starts from empty `derived_rings`.
-            &static_rings_cell,
-            &self.forcing,
-            &self.const_scope,
-        );
+            derived_rings: &static_rings_cell,
+            derived_extents: empty_derived_extents(),
+            forcing: &self.forcing,
+            // One-shot materialization: no CSE memo (nothing to amortize the
+            // structural analysis over).
+            cse: None,
+            const_arrays: &self.const_scope,
+        };
+        materialize_observeds_into(&mut static_obs, &cadence.static_rules, &env);
         drop(static_rings_cell);
         SolveSetup {
             cadence,
@@ -615,20 +624,25 @@ impl ArrayCompiled {
         if !boundaries.is_empty() {
             let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
             let mut snapshot = setup.static_obs.clone();
-            materialize_observeds_append(
+            materialize_observeds_pass(
                 &mut snapshot,
                 &setup.cadence.varying_rules,
-                &setup.sa0,
-                param_vec,
-                &self.param_names,
-                t0,
-                &dr,
-                &self.forcing,
-                // Build-time t0 snapshot: vectorized overlay (bit-identical).
-                false,
+                &ObsPass {
+                    env: EvalEnv {
+                        state_arrays: &setup.sa0,
+                        params: param_vec,
+                        param_names: &self.param_names,
+                        t: t0,
+                        derived_rings: &dr,
+                        derived_extents: empty_derived_extents(),
+                        forcing: &self.forcing,
+                        cse: None,
+                        const_arrays: &self.const_scope,
+                    },
+                    // Build-time t0 snapshot: vectorized overlay (bit-identical).
+                    force_scalar: false,
+                },
                 &mut RhsStats::default(),
-                None,
-                &self.const_scope,
             );
             for rule in &setup.cadence.varying_rules {
                 let name = observed_rule_var(rule);
@@ -877,19 +891,24 @@ impl ArrayCompiled {
             let sa_seg = build_state_arrays(&self.var_shapes, u0);
             let seg_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
             let mut seed = static_obs.clone();
-            materialize_observeds_append(
+            materialize_observeds_pass(
                 &mut seed,
                 segment_static_rules,
-                &sa_seg,
-                param_vec,
-                &self.param_names,
-                t0,
-                &seg_rings,
-                &self.forcing,
-                false,
+                &ObsPass {
+                    env: EvalEnv {
+                        state_arrays: &sa_seg,
+                        params: param_vec,
+                        param_names: &self.param_names,
+                        t: t0,
+                        derived_rings: &seg_rings,
+                        derived_extents: empty_derived_extents(),
+                        forcing: &self.forcing,
+                        cse: None,
+                        const_arrays: &self.const_scope,
+                    },
+                    force_scalar: false,
+                },
                 &mut RhsStats::default(),
-                None,
-                &self.const_scope,
             );
             seed
         };
@@ -940,14 +959,16 @@ impl ArrayCompiled {
             }
             let mut scratch = rhs_scratch.borrow_mut();
             evaluate_rhs_with_scratch(
-                &rhs_rules,
-                &varying_rules_rhs,
-                &var_shapes,
-                &param_names,
-                y_s,
-                p_s,
-                &forcing_rhs,
-                t,
+                &RhsCall {
+                    rhs_rules: &rhs_rules,
+                    observed_rules: &varying_rules_rhs,
+                    var_shapes: &var_shapes,
+                    param_names: &param_names,
+                    state: y_s,
+                    params: p_s,
+                    forcing: &forcing_rhs,
+                    t,
+                },
                 dy_s,
                 false,
                 &mut RhsStats::default(),
@@ -986,28 +1007,32 @@ impl ArrayCompiled {
                 s
             });
             evaluate_rhs_with_scratch(
-                &rhs_rules_jac,
-                &varying_rules_jac,
-                &var_shapes_jac,
-                &param_names_jac,
-                y_s,
-                p_s,
-                &forcing_jac,
-                t,
+                &RhsCall {
+                    rhs_rules: &rhs_rules_jac,
+                    observed_rules: &varying_rules_jac,
+                    var_shapes: &var_shapes_jac,
+                    param_names: &param_names_jac,
+                    state: y_s,
+                    params: p_s,
+                    forcing: &forcing_jac,
+                    t,
+                },
                 &mut f_y,
                 false,
                 &mut RhsStats::default(),
                 scratch,
             );
             evaluate_rhs_with_scratch(
-                &rhs_rules_jac,
-                &varying_rules_jac,
-                &var_shapes_jac,
-                &param_names_jac,
-                &y_perturbed,
-                p_s,
-                &forcing_jac,
-                t,
+                &RhsCall {
+                    rhs_rules: &rhs_rules_jac,
+                    observed_rules: &varying_rules_jac,
+                    var_shapes: &var_shapes_jac,
+                    param_names: &param_names_jac,
+                    state: &y_perturbed,
+                    params: p_s,
+                    forcing: &forcing_jac,
+                    t,
+                },
                 &mut f_yp,
                 false,
                 &mut RhsStats::default(),
@@ -1196,20 +1221,25 @@ impl ArrayCompiled {
         };
         if !probe_rules.is_empty() {
             bind_cse(probe_rules);
-            materialize_observeds_append(
+            materialize_observeds_pass(
                 &mut obs,
                 probe_rules,
-                &sa,
-                param_vec,
-                &self.param_names,
-                time[0],
-                &dr,
-                &self.forcing,
-                // Output-node observed snapshot: vectorized overlay.
-                false,
+                &ObsPass {
+                    env: EvalEnv {
+                        state_arrays: &sa,
+                        params: param_vec,
+                        param_names: &self.param_names,
+                        t: time[0],
+                        derived_rings: &dr,
+                        derived_extents: empty_derived_extents(),
+                        forcing: &self.forcing,
+                        cse: Some(&cse),
+                        const_arrays: &self.const_scope,
+                    },
+                    // Output-node observed snapshot: vectorized overlay.
+                    force_scalar: false,
+                },
                 &mut RhsStats::default(),
-                Some(&cse),
-                &self.const_scope,
             );
         }
         // A name the probe did not materialize is, by construction, either
@@ -1269,19 +1299,24 @@ impl ArrayCompiled {
                 refill_state_arrays(&mut sa, &self.var_shapes, &flat);
                 obs.retain(|name, _| static_keys.contains(name));
                 dr.borrow_mut().clear();
-                materialize_observeds_append(
+                materialize_observeds_pass(
                     &mut obs,
                     value_rules,
-                    &sa,
-                    param_vec,
-                    &self.param_names,
-                    time[k],
-                    &dr,
-                    &self.forcing,
-                    false,
+                    &ObsPass {
+                        env: EvalEnv {
+                            state_arrays: &sa,
+                            params: param_vec,
+                            param_names: &self.param_names,
+                            t: time[k],
+                            derived_rings: &dr,
+                            derived_extents: empty_derived_extents(),
+                            forcing: &self.forcing,
+                            cse: Some(&cse),
+                            const_arrays: &self.const_scope,
+                        },
+                        force_scalar: false,
+                    },
                     &mut RhsStats::default(),
-                    Some(&cse),
-                    &self.const_scope,
                 );
                 record(&obs, &mut rows);
             }
