@@ -12,13 +12,15 @@
 //! Two independent things are asserted throughout, because the driver is only
 //! legitimate if BOTH hold:
 //!
-//! 1. **Differential correctness.** Every gated document is compared against the
-//!    same document with the `join` clause replaced by the hand-written equality
-//!    `filter` it lowers to — the pre-gate path — and the two must agree
-//!    BIT-for-bit, not merely to a tolerance. The driven walk emits an
-//!    order-preserving subsequence of the filtered full product, so anything
-//!    less than bit-identity is a bug. Each is independently checked against a
-//!    plain-Rust oracle, so a shared mistake cannot pass.
+//! 1. **Differential correctness**, two ways. Every gated document is compared
+//!    against the same document with the `join` clause replaced by the
+//!    hand-written equality `filter` it lowers to — the pre-gate path — and, in
+//!    `driving_is_bit_identical_to_the_undriven_full_product`, against the very
+//!    same document with the driver killed (`set_join_gate_enabled(false)`).
+//!    Both must agree BIT-for-bit, not merely to a tolerance: the driven walk
+//!    emits an order-preserving subsequence of the filtered full product, so
+//!    anything less than bit-identity is a bug. Each is independently checked
+//!    against a plain-Rust oracle, so a shared mistake cannot pass.
 //! 2. **Cost.** The gated arm's leaf-visit count (`overlap_enum_visits`, bumped
 //!    only on the gate-DRIVEN unroll) tracks the MATCH count, not the index-set
 //!    product. A visit count of zero means the gate silently declined and the
