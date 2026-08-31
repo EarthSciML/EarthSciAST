@@ -318,6 +318,53 @@ pub fn reset_overlap_enum_visits() {
     ENUM_VISITS.with(|c| c.set(0));
 }
 
+/// Kill-switch for the whole join-gate DRIVER (`ESS_JOIN_GATE_DISABLE=1`, or
+/// [`set_join_gate_enabled`] within a thread).
+///
+/// With it set, an aggregate carrying either kind of gate — a `join.overlap`
+/// broad phase (§5.5.6) or a value-equality `join.on` match set (§5.5.8) — walks
+/// the untouched full product and lets the `filter` decide, which is exactly the
+/// pre-driver path. That is what makes the driver's central claim DIRECTLY
+/// testable rather than by analogy: the same document, same build, gate on vs
+/// gate off, must give bit-identical numbers. It is also how the before/after
+/// benchmark measures a "before" that is the real engine on the real document
+/// rather than a hand-written stand-in.
+///
+/// Thread-local (seeded from the environment once) rather than a process-wide
+/// `OnceLock`, so one test process can measure both arms.
+fn join_gate_env_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::env::var("ESS_JOIN_GATE_DISABLE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+thread_local! {
+    static GATE_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Is the join-gate driver on for this thread? See [`join_gate_env_disabled`].
+pub fn join_gate_enabled() -> bool {
+    GATE_ENABLED.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            let v = !join_gate_env_disabled();
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// Turn the join-gate driver on/off for THIS thread, returning the previous
+/// setting so a caller can restore it.
+pub fn set_join_gate_enabled(on: bool) -> bool {
+    let prev = join_gate_enabled();
+    GATE_ENABLED.with(|c| c.set(Some(on)));
+    prev
+}
+
 /// Which side of an overlap gate a position lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {

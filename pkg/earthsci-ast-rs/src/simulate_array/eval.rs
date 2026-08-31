@@ -1948,6 +1948,13 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
 /// pipeline both evaluate observeds in dependency order). The ordering
 /// constraint the hook exists to satisfy is satisfied structurally.
 pub(super) fn resolve_join_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<JoinGate> {
+    // The driver kill-switch (`ESS_JOIN_GATE_DISABLE=1`). Declining here is the
+    // pre-driver path exactly: the full product, decided by `filter`. It is what
+    // makes "the driver changes cost, never an answer" a directly testable
+    // claim on the SAME document rather than an argument.
+    if !crate::broad_phase::join_gate_enabled() {
+        return None;
+    }
     for clause in join {
         let Some(ov) = &clause.overlap else {
             // Not an overlap clause — try the value-equality gate the build-time

@@ -83,11 +83,12 @@ pub mod analysis {
 }
 
 /// Planar spatial-index broad phase behind the overlap join-gate, plus the
-/// brute-force oracle and the visit counter the scaling tests assert on.
+/// brute-force oracle, the visit counter the scaling tests assert on, and the
+/// driver kill-switch the differential tests flip.
 pub mod broad_phase {
     pub use crate::broad_phase::{
         OverlapIndex, broad_phase_candidates, broad_phase_candidates_bruteforce, envelope_vectors,
-        overlap_enum_visits, reset_overlap_enum_visits,
+        join_gate_enabled, overlap_enum_visits, reset_overlap_enum_visits, set_join_gate_enabled,
     };
 }
 

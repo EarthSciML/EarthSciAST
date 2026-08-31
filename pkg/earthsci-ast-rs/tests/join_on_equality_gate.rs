@@ -29,7 +29,9 @@
 
 use std::collections::HashMap;
 
-use earthsci_ast::extension::broad_phase::{overlap_enum_visits, reset_overlap_enum_visits};
+use earthsci_ast::extension::broad_phase::{
+    overlap_enum_visits, reset_overlap_enum_visits, set_join_gate_enabled,
+};
 use earthsci_ast::{ProblemOptions, esm_problem, observed_field};
 use ndarray::{ArrayD, IxDyn};
 use serde_json::{Value, json};
@@ -603,4 +605,60 @@ fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
         t.match_count(),
         "both symbols bound from the candidate pairs"
     );
+}
+
+
+// ---------------------------------------------------------------------------
+// The driver is a pure optimisation — proved on the SAME document
+// ---------------------------------------------------------------------------
+
+/// The sharpest form of the differential: one document, one build, evaluated
+/// with the driver ON and with it OFF (`ESS_JOIN_GATE_DISABLE` /
+/// `set_join_gate_enabled`). With the gate off, the aggregate walks the
+/// untouched full product and the lowered equality `filter` decides — the
+/// pre-driver path exactly. The two must give BIT-identical numbers, because
+/// the driven walk emits the order-preserving subsequence of the terms the
+/// filtered product emitted, not a re-associated sum of them.
+#[test]
+fn driving_is_bit_identical_to_the_undriven_full_product() {
+    let cases = [
+        Tables::simple(vec![7.0, 9.0, 4.0, 7.0, 9.0, 7.0], vec![7.0, 4.0, 9.0, 7.0]),
+        Tables::simple(vec![1.0, 2.0, 3.0], vec![50.0, 51.0]), // no matches
+        keyed_tables(40, 60, 7),                               // dense m2m
+        keyed_tables(40, 60, 60),                              // sparse
+        Tables {
+            lkey: vec![7.0, 7.0, 9.0, 9.0],
+            lkey2: Some(vec![1.0, 2.0, 1.0, 3.0]),
+            rkey: vec![7.0, 7.0, 9.0],
+            rkey2: Some(vec![1.0, 5.0, 1.0]),
+            activity: vec![1.5, 2.25, 3.125, 4.0625],
+            rate: vec![10.5, 20.25, 30.125],
+        }, // composite key, non-dyadic values so re-association would show
+    ];
+    for (i, t) in cases.iter().enumerate() {
+        let prev = set_join_gate_enabled(false);
+        let (undriven, undriven_visits) = run(t, Gate::On);
+        set_join_gate_enabled(true);
+        let (driven, driven_visits) = run(t, Gate::On);
+        set_join_gate_enabled(prev);
+
+        assert_eq!(
+            undriven_visits, 0,
+            "case {i}: the kill-switch arm must not drive"
+        );
+        assert_eq!(
+            driven_visits,
+            t.match_count(),
+            "case {i}: the driven arm must visit exactly the matches"
+        );
+        for l in 0..t.nl() {
+            assert_eq!(
+                driven[l].to_bits(),
+                undriven[l].to_bits(),
+                "case {i}: E[{l}] moved when the gate drove: {} vs {}",
+                driven[l],
+                undriven[l]
+            );
+        }
+    }
 }
