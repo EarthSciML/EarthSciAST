@@ -3414,7 +3414,13 @@ special-case older versions to recover Option A matching. Motivation and measure
    **template-library file** (§9.7.1) is the only file kind with a choice:
 
    - **Generic load** — the root document is a template-library file (§9.7.1) **and** the
-     load supplies no loader-API metaparameter bindings (§9.7.6 site 4). The document's own
+     load supplies an **empty** set of loader-API metaparameter bindings (§9.7.6 site 4).
+     Empty and absent are the same signal: a binding MUST treat a missing argument, a null
+     argument, and an empty map identically, so `load(lib)` and `load(lib, metaparameters={})`
+     select the same mode in every binding. Only a **non-empty** binding set instantiates.
+     (Bindings whose language makes absent and empty hard to distinguish therefore need not
+     distinguish them, and a caller cannot freeze a library by passing an empty map.) The
+     document's own
      metaparameters are **not** closed. They stay open; every §9.7.6 admissible structural
      site whose metaparameter expression still names one of them (an
      `index_sets.<name>.size`, an `aggregate` dense `ranges` entry, a `makearray` `regions`
@@ -3443,16 +3449,22 @@ special-case older versions to recover Option A matching. Motivation and measure
      `makearray_region_inverted` (§4.3.2), and the fold-time exact-division/overflow half of
      `metaparameter_type_error` (§9.7.6) — has no folded form to run on and is discharged at
      instantiation instead, at the binding site that supplied the values.
-   - **Instantiating load** — every other load: one that supplies loader-API bindings
-     (§9.7.6 site 4), one that reaches the document through an `expression_template_imports`
-     edge (site 1) or a §4.7 subsystem edge (site 3), and any load of a file that is not a
-     template-library file. Metaparameters close in the §9.7.6 site order, defaults apply,
-     a still-open defaultless metaparameter at the root document's close is
-     `metaparameter_unbound`, every structural site folds to a concrete integer, and emit is
-     concrete. A document carrying components is never a library file (§9.7.1), so a
-     component's materialized registry is always post-fold as stated above. A binding MAY
-     expose an explicit instantiate-with-defaults entry point for a library root; it is an
-     instantiating load with an empty binding set, and no conformance fixture depends on it.
+   - **Instantiating load** — every other load: one that supplies a **non-empty** set of
+     loader-API bindings (§9.7.6 site 4), one that reaches the document through an
+     `expression_template_imports` edge (site 1) or a §4.7 subsystem edge (site 3), and any
+     load of a file that is not a template-library file. Metaparameters close in the §9.7.6
+     site order, defaults apply, a still-open defaultless metaparameter at the root
+     document's close is `metaparameter_unbound`, every structural site folds to a concrete
+     integer, and emit is concrete. A document carrying components is never a library file
+     (§9.7.1), so a component's materialized registry is always post-fold as stated above.
+     **Instantiation is all-or-nothing.** A binding set need not name every metaparameter —
+     the unnamed ones take their `default` by site 5 — but a metaparameter that is neither
+     bound nor defaulted is `metaparameter_unbound` at the root close, exactly as at an
+     import edge. A partial binding therefore either instantiates the whole document or
+     fails; it never yields a half-folded file, which would be the mixed mode forbidden
+     below. A binding MAY expose an explicit instantiate-with-defaults entry point for a
+     library root — a distinct call, not an empty binding set, which selects the generic
+     mode; no conformance fixture depends on such an entry point.
 
    The modes MUST NOT be mixed. Emitting the folded form from a generic load silently
    destroys the library's genericity: the emitted file still carries `metaparameters` and so
@@ -3698,7 +3710,7 @@ This section makes `expression_templates` shareable across files and components,
 
 #### 9.7.1 Template-library files
 
-A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with bindings, it instantiates and folds like any other document.
+A **template-library file** is a valid ESM document (`esm`, `metadata`) whose payload is top-level `expression_templates` (required, non-empty), plus optionally top-level `index_sets`, `metaparameters` (§9.7.6), and `expression_template_imports` (libraries may layer on other libraries). It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`. Purity keeps the two reference mechanisms disjoint: a §4.7 subsystem file is never importable as a library (`template_import_not_library`), and a library file is never includable as a subsystem (`subsystem_ref_is_template_library`). This file kind is also the one that selects the **generic** load mode of §9.6.4 rule 5: a library loaded as the root with no loader-API metaparameter bindings (an empty binding set and an absent one being the same signal — §9.6.4 rule 5) keeps its metaparameters open and its structural integer sites symbolic, and round-trips to itself; loaded through an import edge, or with a non-empty binding set, it instantiates and folds like any other document.
 
 #### 9.7.2 The `expression_template_imports` field
 
@@ -3756,7 +3768,7 @@ Because instantiation happens per edge, a diamond whose two paths bind the same 
 
 **Ordering within load.** Per document, innermost-first: resolve imports (recursively, instantiating at each edge) → merge index sets → close and fold this document's metaparameters (**except on the §9.6.4-rule-5 generic-load path**, below) → §9.7.3 body checking (target-bearing flags; no inlining) → the §9.6.4-rule-3 eager-expansion pre-pass → the §9.6.3 fixpoint on fully-concrete trees. An import-edge binding expression carrying open importer names is substituted at the edge but only **folds at the "close and fold this document's metaparameters" step**, once those names are bound — so a child index-set size derived from an importer metaparameter (`NTGT = NX*NY`) becomes concrete together with the importer's own sizes, not before. Because a §4.7 subsystem ref is resolved as its own complete document only **after** the mounting document has closed its metaparameters (subsystem refs resolve post-close), its binding expressions fold against that closed environment and the mounted form is fully concrete when it splices in — the load stays deterministic and byte-identical across bindings. Validators discharge on the folded, reference-preserving form (§9.6.9). Round-trip emits the reference-preserving form — **folded on an instantiating load, symbolic on a generic load** (§9.6.4 rule 5). **The import EDGE is expanded away; the DECLARATIONS survive** (§9.6.4 rule 5). `expression_template_imports` is a call site — the fixpoint consumes it and it does **not** survive `parse → emit`. A top-level `expression_templates` registry and a top-level `metaparameters` block are *declarations*, peers of `index_sets`: they **do** survive `parse → emit` verbatim. Source files remain the source of truth for the consumed constructs (import edges and eagerly-expanded call sites). (An earlier revision said all three declaration kinds were stripped, which contradicted rule 5 and made a conforming library file unrepresentable — legal on disk, illegal the moment it was loaded and re-emitted.)
 
-**The generic-load exception (§9.6.4 rule 5).** When the root document is a template-library file (§9.7.1) and the load supplies no loader-API metaparameter bindings (site 4), the "close and fold this document's metaparameters" step **does not run**: the document's metaparameters stay open, its structural integer sites stay symbolic exactly as authored, and site 5 does not apply, so an open metaparameter is not `metaparameter_unbound`. An **import-free** library file therefore round-trips to **itself**; a library that imports round-trips to its self-contained form, which is import-free and round-trips to itself. Everything upstream of that step is unchanged — the library's own import edges are still resolved and instantiated innermost-first, and their `bindings` still close the metaparameters they name — so what stays open is exactly the set this file leaves open to its future importer, which is what §9.7.6 site 2 (re-export) requires in order to reach the grid file at the bottom of a chain. Every other load, including a load of this same file through an import edge or with loader-API bindings, closes and folds as stated above. (An earlier revision folded unconditionally, which contradicted rule 5's round-trip requirement and silently froze a library's sizes at their defaults on re-emit while the file still carried `metaparameters` and still looked generic.)
+**The generic-load exception (§9.6.4 rule 5).** When the root document is a template-library file (§9.7.1) and the load supplies no loader-API metaparameter bindings (site 4) — an empty binding set and an absent one being the same signal, so only a non-empty set instantiates — the "close and fold this document's metaparameters" step **does not run**: the document's metaparameters stay open, its structural integer sites stay symbolic exactly as authored, and site 5 does not apply, so an open metaparameter is not `metaparameter_unbound`. An **import-free** library file therefore round-trips to **itself**; a library that imports round-trips to its self-contained form, which is import-free and round-trips to itself. Everything upstream of that step is unchanged — the library's own import edges are still resolved and instantiated innermost-first, and their `bindings` still close the metaparameters they name — so what stays open is exactly the set this file leaves open to its future importer, which is what §9.7.6 site 2 (re-export) requires in order to reach the grid file at the bottom of a chain. Every other load, including a load of this same file through an import edge or with loader-API bindings, closes and folds as stated above. (An earlier revision folded unconditionally, which contradicted rule 5's round-trip requirement and silently froze a library's sizes at their defaults on re-emit while the file still carried `metaparameters` and still looked generic.)
 
 #### 9.7.7 Import renaming, namespacing, and free-name rebinding
 
