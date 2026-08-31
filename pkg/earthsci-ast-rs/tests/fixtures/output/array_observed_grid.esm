@@ -1,0 +1,83 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ArrayObservedGrid",
+    "description": "Array-observed output fixture: one array state `c` decaying pointwise over a 3x2 lon/lat grid, plus an ARRAY-VALUED observed `flux[i,j] = k * c[i,j] * (i + 10*j)`. The per-cell weight `i + 10*j` is distinct in every cell and asymmetric across the two axes, so a plan that transposed lon against lat, or read the flat cells row-major instead of column-major, produces visibly wrong values rather than a permutation that happens to compare equal. The `coordinates` registry supplies rectilinear lon/lat values and CF metadata so a written array's rows are identifiable.",
+    "authors": ["EarthSciML Test Suite"],
+    "tags": ["streaming-output", "array-state", "array-observed", "coordinates-registry"]
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": 3 },
+    "lat": { "kind": "interval", "size": 2 }
+  },
+  "coordinates": {
+    "lon": {
+      "values": [-100.0, -90.0, -80.0],
+      "standard_name": "longitude",
+      "units": "degrees_east",
+      "axis": "X"
+    },
+    "lat": {
+      "values": [30.0, 40.0],
+      "standard_name": "latitude",
+      "units": "degrees_north",
+      "axis": "Y"
+    }
+  },
+  "models": {
+    "Grid": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "kg",
+          "shape": ["lon", "lat"],
+          "default": 1.0,
+          "description": "Gridded tracer with pointwise exponential decay."
+        },
+        "flux": {
+          "type": "unknown",
+          "units": "kg/s",
+          "shape": ["lon", "lat"],
+          "description": "Gridded observed: the decay flux, weighted per cell."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.001,
+          "description": "Decay rate (scalar)."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "D(c) = -k * c, pointwise over the whole grid.",
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "c"] }
+        },
+        {
+          "_comment": "flux[i,j] = k * c[i,j] * (i + 10*j) -- an ARRAY-valued observed.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i", "j"],
+            "expr": { "op": "index", "args": ["flux", "i", "j"] },
+            "ranges": { "i": [1, 3], "j": [1, 2] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i", "j"],
+            "expr": {
+              "op": "*",
+              "args": [
+                "k",
+                { "op": "index", "args": ["c", "i", "j"] },
+                { "op": "+", "args": ["i", { "op": "*", "args": [10, "j"] }] }
+              ]
+            },
+            "ranges": { "i": [1, 3], "j": [1, 2] }
+          }
+        }
+      ]
+    }
+  }
+}
