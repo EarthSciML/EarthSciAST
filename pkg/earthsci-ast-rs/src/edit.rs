@@ -894,6 +894,7 @@ mod tests {
             to: "model2.y".to_string(),
             transform: crate::types::VariableMapTransform::Named("identity".to_string()),
             factor: None,
+            lifting: None,
             description: Some("Variable mapping".to_string()),
         };
 
@@ -926,6 +927,7 @@ mod tests {
                 to: "model2.y".to_string(),
                 transform: crate::types::VariableMapTransform::Named("identity".to_string()),
                 factor: None,
+                lifting: None,
                 description: Some("Second coupling".to_string()),
             },
         ]);
@@ -997,6 +999,7 @@ mod tests {
             to: "new_target.param".to_string(),
             transform: crate::types::VariableMapTransform::Named("linear".to_string()),
             factor: Some(2.0),
+            lifting: None,
             description: Some("New coupling".to_string()),
         };
 
@@ -1015,6 +1018,7 @@ mod tests {
                 to,
                 transform,
                 factor,
+                lifting: _,
                 description,
             } => {
                 assert_eq!(from, "new_source.var");

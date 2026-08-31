@@ -723,6 +723,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
         to: "M.T".to_string(),
         transform: earthsci_ast::VariableMapTransform::Named("param_to_var".to_string()),
         factor: None,
+        lifting: None,
         description: None,
     }];
 
@@ -806,6 +807,7 @@ fn flatten_couple_includes_connector_equations() {
     let coupling = vec![CouplingEntry::Couple {
         systems: vec!["A".to_string()],
         connector,
+        lifting: None,
         description: None,
     }];
     let file = EsmFile {

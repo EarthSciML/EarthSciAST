@@ -499,6 +499,12 @@ pub enum CouplingEntry {
         systems: Vec<String>,
         /// Connector definition with equations
         connector: serde_json::Value,
+        /// Strategy for mapping between 0-D and spatial systems — one of
+        /// `pointwise`, `broadcast`, `mean`, `integral`. Schema-declared on
+        /// `CouplingCouple` exactly as on `CouplingOperatorCompose`; carried
+        /// so an authored value survives parse → emit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lifting: Option<String>,
         /// Optional description
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -516,6 +522,12 @@ pub enum CouplingEntry {
         /// permitted with an Expression transform)
         #[serde(skip_serializing_if = "Option::is_none")]
         factor: Option<f64>,
+        /// Strategy for mapping between 0-D and spatial systems — one of
+        /// `pointwise`, `broadcast`, `mean`, `integral`. Schema-declared on
+        /// `CouplingVariableMap` exactly as on `CouplingOperatorCompose`;
+        /// carried so an authored value survives parse → emit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lifting: Option<String>,
         /// Optional description
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,

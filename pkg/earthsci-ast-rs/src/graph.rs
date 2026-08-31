@@ -1666,6 +1666,7 @@ mod tests {
             to: "target.param".to_string(),
             transform: crate::types::VariableMapTransform::Named("identity".to_string()),
             factor: None,
+            lifting: None,
             description: None,
         }];
 
@@ -1708,6 +1709,7 @@ mod tests {
                 to: "target".to_string(),
                 transform: crate::types::VariableMapTransform::Named("identity".to_string()),
                 factor: None,
+                lifting: None,
                 description: None,
             }]),
             models: Some(models),
@@ -1756,6 +1758,7 @@ mod tests {
                 to: "target.param".to_string(),
                 transform: crate::types::VariableMapTransform::Named("identity".to_string()),
                 factor: None,
+                lifting: None,
                 description: None,
             }]),
             models: Some(models),
@@ -1788,6 +1791,7 @@ mod tests {
                 to: "target.param".to_string(),
                 transform: crate::types::VariableMapTransform::Named("identity".to_string()),
                 factor: None,
+                lifting: None,
                 description: None,
             }]),
             models: Some(models),

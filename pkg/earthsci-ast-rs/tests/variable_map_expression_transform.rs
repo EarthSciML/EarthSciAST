@@ -177,6 +177,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
             to: "Sink.F_in".to_string(),
             transform,
             factor,
+            lifting: None,
             description: None,
         }]),
         ..empty_file()

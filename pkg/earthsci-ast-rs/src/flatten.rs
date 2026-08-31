@@ -2040,6 +2040,13 @@ fn apply_coupling_entry(
         CouplingEntry::Couple {
             systems,
             connector,
+            // Carried for round-trip only. The flattener acts on `lifting`
+            // solely for `operator_compose` (the `"pointwise"` promotion in
+            // `lift_pointwise_states`); on a `couple`/`variable_map` entry it
+            // is emitted back unchanged, exactly as before this field was
+            // typed — it used to be dropped at load, so no flattening
+            // behaviour is being changed here.
+            lifting: _,
             description,
         } => {
             apply_couple(systems, connector, per_system)?;
@@ -2054,6 +2061,8 @@ fn apply_coupling_entry(
             to,
             transform,
             factor,
+            // Round-trip only — see the note on the `Couple` arm above.
+            lifting: _,
             description,
         } => {
             match transform {
@@ -3337,6 +3346,7 @@ mod tests {
                 to: "dst.temp".to_string(),
                 transform: VariableMapTransform::Named("identity".to_string()),
                 factor: None,
+                lifting: None,
                 description: None,
             }]),
             ..Default::default()
