@@ -5,8 +5,8 @@
 
 **EarthSciML Abstract Syntax Tree Format** — A language-agnostic JSON-based format for earth science model components, their composition, and runtime configuration.
 
-[!NOTE]
-For the most part, this is a project that has been grown rather than built. As such, don't be surprised by occasional eccentricities!
+> [!NOTE]
+> For the most part, this is a project that has been grown rather than built. As such, don't be surprised by occasional eccentricities!
 
 ## Overview
 
