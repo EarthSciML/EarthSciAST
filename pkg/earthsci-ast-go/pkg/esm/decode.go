@@ -641,6 +641,7 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 		Domain          *Domain                   `json:"domain,omitempty"`
 		FunctionTables  map[string]FunctionTable  `json:"function_tables,omitempty"`
 		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
+		Coordinates     map[string]Coordinate     `json:"coordinates,omitempty"`
 	}
 
 	var temp TempESMFile
@@ -659,6 +660,7 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 	esm.Domain = temp.Domain
 	esm.FunctionTables = temp.FunctionTables
 	esm.IndexSets = temp.IndexSets
+	esm.Coordinates = temp.Coordinates
 
 	// Handle coupling array with proper type deserialization
 	if rawIsPresent(temp.Coupling) {

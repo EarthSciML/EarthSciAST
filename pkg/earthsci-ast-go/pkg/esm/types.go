@@ -971,10 +971,14 @@ type Connector struct {
 
 // ConnectorEquation represents a single equation in a connector
 type ConnectorEquation struct {
-	From       string     `json:"from"`
-	To         string     `json:"to"`
-	Transform  string     `json:"transform"` // "additive", "multiplicative", "replacement"
-	Expression Expression `json:"expression"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Transform string `json:"transform"` // "additive", "multiplicative", "replacement"
+	// Expression is OPTIONAL: esm-schema.json `$defs/ConnectorEquation` requires
+	// only from/to/transform. Without `omitempty` the nil interface emitted
+	// `"expression": null` into every connector equation authored without one —
+	// an ADDED key, so a load → save did not just lose content, it invented it.
+	Expression Expression `json:"expression,omitempty"`
 }
 
 // ========================================
@@ -1024,6 +1028,36 @@ type Metadata struct {
 	Modified   *string     `json:"modified,omitempty"`
 	Tags       []string    `json:"tags,omitempty"`
 	References []Reference `json:"references,omitempty"`
+	// SystemClass, DAEInfo and DiscretizedFrom are the three diagnostics a
+	// `discretize()` pass stamps onto a derived document (esm-schema.json
+	// `$defs/Metadata`; discretization RFC §12). They are ordinary metadata as
+	// far as this binding is concerned: it neither produces nor reads them, but
+	// a document that arrives carrying them must leave carrying them. All three
+	// are `omitempty` — every one is optional, and hardly any document (none
+	// authored by hand) carries any of them.
+	//
+	// The two object-valued ones are held as raw JSON rather than typed structs.
+	// The schema declares their known properties but does NOT set
+	// `additionalProperties: false` on either, so a producer may stamp keys this
+	// binding has never heard of — and a typed model would drop exactly those,
+	// which is the defect class this modelling exists to close. Raw JSON also
+	// keeps their integers spelled as integers; see XESD below.
+	SystemClass     *string         `json:"system_class,omitempty"` // "ode" | "dae"
+	DAEInfo         json.RawMessage `json:"dae_info,omitempty"`
+	DiscretizedFrom json.RawMessage `json:"discretized_from,omitempty"`
+	// XESD is the reserved extension point for downstream-catalog metadata
+	// (esm-spec §3). Its schema description is NORMATIVE and explicit: the core
+	// spec never interprets, validates, or transforms its contents, and "core
+	// tooling MUST NOT assign meaning to them and MUST preserve them across
+	// parse → emit like any other metadata field."
+	//
+	// Held as raw JSON — the same device ESMFile.Metaparameters uses — because
+	// that is what makes "preserve" literal. A typed model would fix a shape the
+	// spec deliberately leaves free, and a `map[string]any` would round every
+	// integer in the block through float64 and re-emit `1` as `1.0`;
+	// canonicalizeValue passes a json.RawMessage through untouched.
+	// `omitempty`: a zero-length RawMessage is an absent key, not a null.
+	XESD json.RawMessage `json:"x_esd,omitempty"`
 }
 
 // ========================================
@@ -1053,6 +1087,35 @@ type IndexSet struct {
 	Of      []string `json:"of,omitempty"`
 	Offsets *string  `json:"offsets,omitempty"`
 	Values  *string  `json:"values,omitempty"`
+}
+
+// Coordinate is one entry of the document-scoped `coordinates` registry
+// (RFC streaming-output-sinks §8): it marks an existing data array — a model
+// unknown or parameter named by `source` — or an inline literal `values` vector
+// as a physical coordinate, and attaches CF metadata to it. Exactly one of
+// Source / Values is present; the coordinate's shape comes from whichever it is,
+// so no per-axis attachment is needed.
+//
+// This binding is schema-only for coordinates: it stores and round-trips the
+// declarations, resolves nothing, and writes no output files.
+type Coordinate struct {
+	// Source names an existing data array supplying this coordinate's values.
+	// Mutually exclusive with Values; `omitempty` because exactly one of the two
+	// is authored and the other key must not appear.
+	Source *string `json:"source,omitempty"`
+	// Values is the inline literal 1-D coordinate vector (finite floats),
+	// mutually exclusive with Source.
+	Values []float64 `json:"values,omitempty"`
+	// StandardName is the CF standard name emitted as the coordinate variable's
+	// `standard_name` attribute.
+	StandardName *string `json:"standard_name,omitempty"`
+	// Units is the CF/UDUNITS units string. Advisory at load time (no unit
+	// checking), matching FunctionTableAxis.Units.
+	Units *string `json:"units,omitempty"`
+	// Axis is the optional CF axis role ("X"|"Y"|"Z"|"T") of a 1-D monotonic
+	// dimension coordinate; auxiliary coordinates have no single axis and omit
+	// it, so it must be `omitempty` — the schema's enum admits no empty string.
+	Axis *string `json:"axis,omitempty"`
 }
 
 // ESMFile represents the top-level ESM file structure
@@ -1092,6 +1155,15 @@ type ESMFile struct {
 	// names from it. As of v0.8.0 this moved from a per-Model field to
 	// document scope: one registry, shared by every model.
 	IndexSets map[string]IndexSet `json:"index_sets,omitempty"`
+	// Coordinates is the document-scoped, OPTIONAL registry of coordinate
+	// variables (RFC streaming-output-sinks §8), keyed by name. Purely additive:
+	// a document without it emits exactly as before, which is why it is
+	// `omitempty` — materializing `"coordinates": {}` on every coordinate-less
+	// document would be pure noise. Go modelled no field for it at all, so
+	// `json.Unmarshal` dropped the whole block at parse and the emitter had
+	// nothing to emit: the CF metadata that tells an output writer which arrays
+	// are latitude and longitude was silently deleted by a load → save.
+	Coordinates map[string]Coordinate `json:"coordinates,omitempty"`
 	// Metaparameters is the top-level §9.7.1 metaparameter declaration block, and
 	// ExpressionTemplates the top-level rewrite-rule registry — the payload of a
 	// template-library file (§9.7.1).

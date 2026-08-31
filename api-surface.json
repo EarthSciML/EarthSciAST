@@ -96,11 +96,11 @@
       "typescript": 231,
       "python": 243,
       "rust": 324,
-      "go": 383
+      "go": 384
     },
     "by_tier": {
-      "extension": 586,
-      "stable": 262
+      "extension": 585,
+      "stable": 263
     }
   },
   "planned": [
@@ -1748,8 +1748,9 @@
     {
       "name": "coordinate",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
+        "go": "Coordinate",
         "rust": "Coordinate"
       }
     },
