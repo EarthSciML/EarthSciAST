@@ -402,16 +402,15 @@ impl ArrayCompiled {
         let params_owned = params;
         let ics_owned = initial_conditions;
         let (t0, t_end) = tspan;
-        let n_states = self.n_states;
 
         // Validate the override names and build the positional param vector
         // and the initial state vector `u0` (loaded-field / coordinate
         // `ic`s folded in — see [`Self::build_initial_state`]).
         // §5.5.5: the per-cell oracle LATCHES an out-of-range const-array gather
         // rather than raising (the tree walk returns a bare `Value`). Clear the
-        // latch before the solve and drain it at every exit below, so a
-        // trajectory built on a const-array bug fails loudly instead of carrying
-        // the `NaN` the gather substituted.
+        // latch before the solve; `assemble_solution` drains it at every exit,
+        // so a trajectory built on a const-array bug fails loudly instead of
+        // carrying the `NaN` the gather substituted.
         crate::simulate_array::take_const_array_oob();
         let param_vec = self.build_param_vec(params_owned)?;
         let ic_vec = self.build_initial_state(ics_owned, &param_vec)?;
@@ -421,30 +420,89 @@ impl ArrayCompiled {
         // first record so the static regrid geometry sees a populated buffer.
         refresh_fn(t0)?;
 
-        // Hoist the STATE-FREE / `t`-free observeds (ess: static-observed hoist)
-        // out of the per-step RHS. Within a single `simulate` call the forcing
-        // buffer is constant (the free `simulate` never refreshes it between
-        // segments), so a rule whose transitive references reach no state
-        // variable and no `t` is CONSTANT across the whole solve: the
-        // conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
-        // rings), the regridded terrain and its slopes, the Rothermel
-        // coefficients derived from the CONST forcing. Materialize them ONCE here
-        // and seed them into every RHS eval, rather than recomputing the
-        // (expensive) regrid on every step. A model with no such observeds hoists
-        // nothing and stays byte-identical to the un-hoisted path.
-        // Three-tier cadence split (cadence.rs lattice `CONST ⊏ DISCRETE ⊏
-        // CONTINUOUS`):
-        //   * CONST      (static_names)      — materialized ONCE at setup below.
-        //   * DISCRETE   (segment_static)    — state-free & `t`-free but reaches a
-        //                                      refreshed forcing buffer; constant
-        //                                      WITHIN a segment, so materialized
-        //                                      once per segment in `run_one_segment`.
-        //   * CONTINUOUS (continuous_rules)  — reaches `t` or state; re-evaluated
-        //                                      every RHS step.
-        // Collapsing DISCRETE into CONTINUOUS (the old two-tier split) recomputed
-        // the per-cell conservative regrid every step — the dominant cost of a
-        // coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
-        // for the non-hot observed-trajectory output pass.
+        let cadence = self.partition_observed_cadence(discrete_forcing);
+        let setup = self.hoist_static_observeds(cadence, &ic_vec, &param_vec, t0);
+
+        if let Some(insp) = inspect {
+            self.fill_solve_inspection(insp, &setup, &param_vec, t0, boundaries);
+        }
+
+        let solver_name = match opts.alg {
+            Alg::Bdf => "Bdf",
+            Alg::Sdirk => "Sdirk",
+            Alg::Erk => "Erk",
+        };
+
+        let (tape, tape_fallbacks) = self.build_solve_tape(discrete_forcing);
+
+        // CONST / single-segment (or no output grid to align segment samples on):
+        // the original un-segmented run — byte-identical to the pre-segmentation
+        // driver (one `run_one_segment` over the whole span with `opts` verbatim).
+        if boundaries.is_empty() || opts.saveat.is_none() {
+            let (time, state, stats, retcode) = self.run_one_segment(
+                t0,
+                t_end,
+                &ic_vec,
+                &param_vec,
+                &setup.static_obs,
+                &setup.cadence.segment_static_rules,
+                &setup.cadence.continuous_rules,
+                opts,
+                tape.as_ref(),
+            )?;
+            return self.assemble_solution(
+                time,
+                state,
+                retcode,
+                solution_metadata(solver_name, &stats, tape_fallbacks),
+                &param_vec,
+                &setup,
+            );
+        }
+
+        let run = SegmentedRun {
+            t0,
+            t_end,
+            boundaries,
+            ic_vec: &ic_vec,
+            param_vec: &param_vec,
+            setup: &setup,
+            opts,
+            tape: tape.as_ref(),
+        };
+        let (time, state, stats, retcode) = self.run_segmented(&run, &mut refresh_fn)?;
+
+        // Note: `assemble_solution` re-evaluates the varying observeds against
+        // the CURRENT (last-segment) forcing buffer, so an appended scalar
+        // observed reading a discrete forcing reflects the final hour — the
+        // array STATE trajectory (the fire front) is per-segment correct, which
+        // is what the runner reads.
+        self.assemble_solution(
+            time,
+            state,
+            retcode,
+            solution_metadata(solver_name, &stats, tape_fallbacks),
+            &param_vec,
+            &setup,
+        )
+    }
+
+    /// Three-tier cadence split of the observed rules (cadence.rs lattice
+    /// `CONST ⊏ DISCRETE ⊏ CONTINUOUS`):
+    ///   * CONST      (`static_rules`)         — materialized ONCE at setup (see
+    ///                                           [`Self::hoist_static_observeds`]).
+    ///   * DISCRETE   (`segment_static_rules`) — state-free & `t`-free but reaches a
+    ///                                           refreshed forcing buffer; constant
+    ///                                           WITHIN a segment, so materialized
+    ///                                           once per segment in `run_one_segment`.
+    ///   * CONTINUOUS (`continuous_rules`)     — reaches `t` or state; re-evaluated
+    ///                                           every RHS step.
+    /// Collapsing DISCRETE into CONTINUOUS (the old two-tier split) recomputed
+    /// the per-cell conservative regrid every step — the dominant cost of a
+    /// coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
+    /// for the non-hot observed-trajectory output pass.
+    #[cfg(feature = "solve")]
+    fn partition_observed_cadence(&self, discrete_forcing: &HashSet<String>) -> ObservedCadence {
         let static_names = self.classify_static_observeds(discrete_forcing);
         let seg_invariant_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let static_rules: Vec<AlgebraicRule> = self
@@ -474,12 +532,40 @@ impl ArrayCompiled {
             .filter(|r| !static_names.contains(observed_rule_var(r)))
             .cloned()
             .collect();
+        ObservedCadence {
+            static_names,
+            static_rules,
+            segment_static_rules,
+            continuous_rules,
+            varying_rules,
+        }
+    }
+
+    /// Hoist the STATE-FREE / `t`-free observeds (ess: static-observed hoist)
+    /// out of the per-step RHS. Within a single `simulate` call the forcing
+    /// buffer is constant (the free `simulate` never refreshes it between
+    /// segments), so a rule whose transitive references reach no state
+    /// variable and no `t` is CONSTANT across the whole solve: the
+    /// conservative-regrid geometry (`intersect_polygon` over the src×tgt cell
+    /// rings), the regridded terrain and its slopes, the Rothermel
+    /// coefficients derived from the CONST forcing. Materialize them ONCE here
+    /// and seed them into every RHS eval, rather than recomputing the
+    /// (expensive) regrid on every step. A model with no such observeds hoists
+    /// nothing and stays byte-identical to the un-hoisted path.
+    #[cfg(feature = "solve")]
+    fn hoist_static_observeds(
+        &self,
+        cadence: ObservedCadence,
+        ic_vec: &[f64],
+        param_vec: &[f64],
+        t0: f64,
+    ) -> SolveSetup {
         let static_rings_cell: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-        let sa0 = build_state_arrays(&self.var_shapes, &ic_vec);
+        let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
         let static_obs = materialize_observeds(
-            &static_rules,
+            &cadence.static_rules,
             &sa0,
-            &param_vec,
+            param_vec,
             &self.param_names,
             t0,
             // The regrid's FAQ rings are produced AND consumed within this
@@ -491,123 +577,115 @@ impl ArrayCompiled {
             &self.const_scope,
         );
         drop(static_rings_cell);
+        SolveSetup {
+            cadence,
+            sa0,
+            static_obs,
+        }
+    }
 
-        // Build observability (see `BuildInspection`): the hoisted static
-        // observeds ARE the build-once products (regrid geometry, regridded
-        // terrain, slopes). Nothing downstream consults the sink, so the
-        // integration is unchanged.
-        if let Some(insp) = inspect {
-            self.fill_inspection(insp, &static_obs, &static_names, &param_vec);
-            // Segmented (DISCRETE) run: the time-varying regrid observeds (the
-            // ERA5 t_xy/rh_xy/u_xy/v_xy over the first hour's slice) are NOT in
-            // the static hoist, so ALSO snapshot them at t0 into `setup_arrays` —
-            // a caller reading the build-time per-cell forcing (the runner's
-            // forcing print) then still sees the ERA5 fields at their t=0 record.
-            if !boundaries.is_empty() {
-                let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-                let mut snapshot = static_obs.clone();
-                materialize_observeds_append(
-                    &mut snapshot,
-                    &varying_rules,
-                    &sa0,
-                    &param_vec,
-                    &self.param_names,
-                    t0,
-                    &dr,
-                    &self.forcing,
-                    // Build-time t0 snapshot: vectorized overlay (bit-identical).
-                    false,
-                    &mut RhsStats::default(),
-                    None,
-                    &self.const_scope,
-                );
-                for rule in &varying_rules {
-                    let name = observed_rule_var(rule);
-                    if let Some(a) = snapshot.get(name) {
-                        insp.setup_arrays.insert(name.clone(), a.clone());
-                    }
+    /// Build observability (see `BuildInspection`): the hoisted static
+    /// observeds ARE the build-once products (regrid geometry, regridded
+    /// terrain, slopes). Nothing downstream consults the sink, so the
+    /// integration is unchanged.
+    #[cfg(feature = "solve")]
+    fn fill_solve_inspection(
+        &self,
+        insp: &mut BuildInspection,
+        setup: &SolveSetup,
+        param_vec: &[f64],
+        t0: f64,
+        boundaries: &[f64],
+    ) {
+        self.fill_inspection(
+            insp,
+            &setup.static_obs,
+            &setup.cadence.static_names,
+            param_vec,
+        );
+        // Segmented (DISCRETE) run: the time-varying regrid observeds (the
+        // ERA5 t_xy/rh_xy/u_xy/v_xy over the first hour's slice) are NOT in
+        // the static hoist, so ALSO snapshot them at t0 into `setup_arrays` —
+        // a caller reading the build-time per-cell forcing (the runner's
+        // forcing print) then still sees the ERA5 fields at their t=0 record.
+        if !boundaries.is_empty() {
+            let dr: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+            let mut snapshot = setup.static_obs.clone();
+            materialize_observeds_append(
+                &mut snapshot,
+                &setup.cadence.varying_rules,
+                &setup.sa0,
+                param_vec,
+                &self.param_names,
+                t0,
+                &dr,
+                &self.forcing,
+                // Build-time t0 snapshot: vectorized overlay (bit-identical).
+                false,
+                &mut RhsStats::default(),
+                None,
+                &self.const_scope,
+            );
+            for rule in &setup.cadence.varying_rules {
+                let name = observed_rule_var(rule);
+                if let Some(a) = snapshot.get(name) {
+                    insp.setup_arrays.insert(name.clone(), a.clone());
                 }
             }
         }
+    }
 
-        let solver_name = match opts.alg {
-            Alg::Bdf => "Bdf",
-            Alg::Sdirk => "Sdirk",
-            Alg::Erk => "Erk",
-        };
-
-        // Step 3b: compile the tape program ONCE per solve and share it across
-        // every integration segment (each segment's fresh RHS scratch gets its
-        // own slab and re-runs the CONST/SEGMENT sections — the same cadence as
-        // the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
-        // wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
-        // pure per-cell oracle reference) implies it, since the tape compiles
-        // the vectorized overlay's semantics.
-        //
-        // The build report's fallback list is kept, not dropped: a rule the
-        // tape could not compile is evaluated by the per-cell oracle, whose
-        // cost grows with the cell count, and that is invisible from the
-        // outside (the numbers are bit-identical — only the runtime differs).
-        // It rides out on [`SolutionMetadata::tape_fallbacks`] so a caller —
-        // including the wasm/JS host, which has no other window into the
-        // build — can name the offending rule and the reason.
+    /// Step 3b: compile the tape program ONCE per solve and share it across
+    /// every integration segment (each segment's fresh RHS scratch gets its
+    /// own slab and re-runs the CONST/SEGMENT sections — the same cadence as
+    /// the static-observed hoist above). `ESS_TAPE_DISABLE=1` reverts
+    /// wholesale to the legacy interpreter path; `ESS_VEC_DISABLE=1` (the
+    /// pure per-cell oracle reference) implies it, since the tape compiles
+    /// the vectorized overlay's semantics.
+    ///
+    /// The build report's fallback list is kept, not dropped: a rule the
+    /// tape could not compile is evaluated by the per-cell oracle, whose
+    /// cost grows with the cell count, and that is invisible from the
+    /// outside (the numbers are bit-identical — only the runtime differs).
+    /// It rides out on [`SolutionMetadata::tape_fallbacks`] so a caller —
+    /// including the wasm/JS host, which has no other window into the
+    /// build — can name the offending rule and the reason.
+    #[cfg(feature = "solve")]
+    fn build_solve_tape(
+        &self,
+        discrete_forcing: &HashSet<String>,
+    ) -> (SolveTape, Vec<(String, String)>) {
         let mut tape_fallbacks: Vec<(String, String)> = Vec::new();
-        let tape: Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)> =
-            if tape_disabled() || vec_disabled() {
-                None
-            } else {
-                let (prog, report) = self.build_tape(discrete_forcing);
-                tape_fallbacks = report.fallbacks;
-                Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
-            };
+        let tape: SolveTape = if tape_disabled() || vec_disabled() {
+            None
+        } else {
+            let (prog, report) = self.build_tape(discrete_forcing);
+            tape_fallbacks = report.fallbacks;
+            Some((Rc::new(prog), Rc::new(self.observed_rules.clone())))
+        };
+        (tape, tape_fallbacks)
+    }
 
-        // CONST / single-segment (or no output grid to align segment samples on):
-        // the original un-segmented run — byte-identical to the pre-segmentation
-        // driver (one `run_one_segment` over the whole span with `opts` verbatim).
-        if boundaries.is_empty() || opts.saveat.is_none() {
-            let (time, mut state, stats, retcode) = self.run_one_segment(
-                t0,
-                t_end,
-                &ic_vec,
-                &param_vec,
-                &static_obs,
-                &segment_static_rules,
-                &continuous_rules,
-                opts,
-                tape.as_ref(),
-            )?;
-            let mut state_variable_names = self.scalar_state_names.clone();
-            self.append_scalar_observed_trajectories(
-                &time,
-                &mut state,
-                &mut state_variable_names,
-                &param_vec,
-                &static_obs,
-                &varying_rules,
-            );
-            if let Some(details) = crate::simulate_array::take_const_array_oob() {
-                return Err(
-                    crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
-                );
-            }
-            return Ok(Solution {
-                time,
-                state,
-                state_variable_names,
-                retcode,
-                metadata: SolutionMetadata {
-                    alg: solver_name.to_string(),
-                    n_rhs_calls: stats.n_rhs_calls,
-                    n_jacobian_calls: stats.n_jacobian_calls,
-                    n_accepted_steps: stats.n_accepted_steps,
-                    n_rejected_steps: stats.n_rejected_steps,
-                    tape_fallbacks,
-                },
-            });
-        }
+    /// DISCRETE: integrate in segments split on the refresh boundaries. Segment
+    /// endpoints = t0, each boundary strictly inside (t0, t_end) ascending, t_end.
+    #[cfg(feature = "solve")]
+    fn run_segmented(
+        &self,
+        run: &SegmentedRun<'_>,
+        refresh_fn: &mut impl FnMut(f64) -> Result<(), SimulateError>,
+    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, SolveStats, ReturnCode), SimulateError> {
+        let &SegmentedRun {
+            t0,
+            t_end,
+            boundaries,
+            ic_vec,
+            param_vec,
+            setup,
+            opts,
+            tape,
+        } = run;
+        let n_states = self.n_states;
 
-        // DISCRETE: integrate in segments split on the refresh boundaries. Segment
-        // endpoints = t0, each boundary strictly inside (t0, t_end) ascending, t_end.
         let mut endpoints: Vec<f64> = vec![t0];
         for &b in boundaries {
             if b > t0 && b < t_end && *endpoints.last().unwrap() < b {
@@ -619,7 +697,7 @@ impl ArrayCompiled {
         }
 
         let global_out = opts.saveat.clone().expect("output grid checked Some");
-        let mut u0 = ic_vec.clone();
+        let mut u0 = ic_vec.to_vec();
         let mut time: Vec<f64> = Vec::new();
         let mut state: Vec<Vec<f64>> = vec![Vec::new(); n_states];
         // Each segment integrates with its own fresh diffsol solver, so the
@@ -630,7 +708,7 @@ impl ArrayCompiled {
         for w in endpoints.windows(2) {
             let (a, b) = (w[0], w[1]);
             // Refresh the live buffer at the START of every segment after the
-            // first (t0 was already primed by `refresh_fn(t0)` above).
+            // first (t0 was already primed by `refresh_fn(t0)` in `solve_core`).
             if a != t0 {
                 refresh_fn(a)?;
             }
@@ -674,12 +752,12 @@ impl ArrayCompiled {
                 a,
                 b,
                 &u0,
-                &param_vec,
-                &static_obs,
-                &segment_static_rules,
-                &continuous_rules,
+                param_vec,
+                &setup.static_obs,
+                &setup.cadence.segment_static_rules,
+                &setup.cadence.continuous_rules,
                 &seg_opts,
-                tape.as_ref(),
+                tape,
             )?;
             stats += seg_stats;
             // A segment that stopped early ends the whole run: the state at its
@@ -706,22 +784,33 @@ impl ArrayCompiled {
             }
         }
 
-        // Expose scalar observed trajectories alongside the states (see
-        // [`Self::append_scalar_observed_trajectories`]). Note: this re-evaluates
-        // the varying observeds against the CURRENT (last-segment) forcing buffer,
-        // so an appended scalar observed reading a discrete forcing reflects the
-        // final hour — the array STATE trajectory (the fire front) is per-segment
-        // correct, which is what the runner reads.
+        Ok((time, state, stats, retcode))
+    }
+
+    /// Solution assembly, shared by the single-segment and segmented exits:
+    /// expose scalar observed trajectories alongside the states (see
+    /// [`Self::append_scalar_observed_trajectories`]), then drain the §5.5.5
+    /// const-array OOB latch so a trajectory built on a const-array bug fails
+    /// loudly instead of carrying the `NaN` the gather substituted.
+    #[cfg(feature = "solve")]
+    fn assemble_solution(
+        &self,
+        time: Vec<f64>,
+        mut state: Vec<Vec<f64>>,
+        retcode: ReturnCode,
+        metadata: SolutionMetadata,
+        param_vec: &[f64],
+        setup: &SolveSetup,
+    ) -> Result<Solution, SimulateError> {
         let mut state_variable_names = self.scalar_state_names.clone();
         self.append_scalar_observed_trajectories(
             &time,
             &mut state,
             &mut state_variable_names,
-            &param_vec,
-            &static_obs,
-            &varying_rules,
+            param_vec,
+            &setup.static_obs,
+            &setup.cadence.varying_rules,
         );
-
         if let Some(details) = crate::simulate_array::take_const_array_oob() {
             return Err(
                 crate::compile_error::CompileError::InterpreterBuildError { details }.into(),
@@ -732,14 +821,7 @@ impl ArrayCompiled {
             state,
             state_variable_names,
             retcode,
-            metadata: SolutionMetadata {
-                alg: solver_name.to_string(),
-                n_rhs_calls: stats.n_rhs_calls,
-                n_jacobian_calls: stats.n_jacobian_calls,
-                n_accepted_steps: stats.n_accepted_steps,
-                n_rejected_steps: stats.n_rejected_steps,
-                tape_fallbacks,
-            },
+            metadata,
         })
     }
 
@@ -1386,6 +1468,69 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
         return true;
     }
     node.any_child(&mut expr_blocks_output_pruning)
+}
+
+/// The solve-wide tape program plus the FULL observed rule list its fallback
+/// indices resolve against (`None` => legacy interpreter).
+#[cfg(feature = "solve")]
+type SolveTape = Option<(Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>;
+
+/// The run's [`SolutionMetadata`] — one construction for both driver exits.
+#[cfg(feature = "solve")]
+fn solution_metadata(
+    solver_name: &str,
+    stats: &SolveStats,
+    tape_fallbacks: Vec<(String, String)>,
+) -> SolutionMetadata {
+    SolutionMetadata {
+        alg: solver_name.to_string(),
+        n_rhs_calls: stats.n_rhs_calls,
+        n_jacobian_calls: stats.n_jacobian_calls,
+        n_accepted_steps: stats.n_accepted_steps,
+        n_rejected_steps: stats.n_rejected_steps,
+        tape_fallbacks,
+    }
+}
+
+/// The three-tier cadence partition of one solve's observed rules (see
+/// [`ArrayCompiled::partition_observed_cadence`]).
+#[cfg(feature = "solve")]
+struct ObservedCadence {
+    /// The CONST tier's names — consulted by the build inspection.
+    static_names: HashSet<String>,
+    /// CONST: materialized once at setup (the hoisted `static_obs`).
+    static_rules: Vec<AlgebraicRule>,
+    /// DISCRETE remainder: materialized once per segment.
+    segment_static_rules: Vec<AlgebraicRule>,
+    /// CONTINUOUS: re-evaluated every RHS step.
+    continuous_rules: Vec<AlgebraicRule>,
+    /// DISCRETE ∪ CONTINUOUS — the non-hot observed-trajectory output pass.
+    varying_rules: Vec<AlgebraicRule>,
+}
+
+/// The solve-wide products of the cadence partition and the static hoist,
+/// shared by every segment and by both driver exits.
+#[cfg(feature = "solve")]
+struct SolveSetup {
+    cadence: ObservedCadence,
+    /// The t0 state arrays the hoist (and the inspection snapshot) evaluate over.
+    sa0: ArrMap,
+    /// The CONST observeds, materialized ONCE — seeded into every RHS eval.
+    static_obs: ArrMap,
+}
+
+/// One segmented (DISCRETE-cadence) integration's fixed inputs — bundled so
+/// [`ArrayCompiled::run_segmented`] takes the run plus the refresh callback.
+#[cfg(feature = "solve")]
+struct SegmentedRun<'a> {
+    t0: f64,
+    t_end: f64,
+    boundaries: &'a [f64],
+    ic_vec: &'a [f64],
+    param_vec: &'a [f64],
+    setup: &'a SolveSetup,
+    opts: &'a SolveOptions,
+    tape: Option<&'a (Rc<TapeProgram>, Rc<Vec<AlgebraicRule>>)>,
 }
 
 /// The transitive dependency cone of `seeds` within a dependency-ORDERED rule
