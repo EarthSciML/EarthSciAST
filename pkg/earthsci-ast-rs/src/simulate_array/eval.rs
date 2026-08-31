@@ -1932,14 +1932,23 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
     ctx.forcing.borrow().get(name).map(|a| a.len())
 }
 
-/// Resolve the first drivable OVERLAP clause of `join` into a gate, building
-/// (or reusing) its broad-phase candidate index.
+/// Resolve the first drivable clause of `join` into a gate, building (or
+/// reusing) its candidate pair index — a broad-phase envelope set for an
+/// `overlap` clause (§5.5.6), an [`crate::relational::equijoin`] match set for
+/// a resolved `on` clause (§5.5.8).
 ///
 /// Returns `None` — and the caller then walks the untouched full product — when
-/// there is no overlap clause, when its range symbols were not resolved at
-/// build time ([`crate::join::resolve_overlap_join_syms`]), or when an envelope
-/// factor is not array data in this context. Declining is always SAFE: the gate
-/// is a conservative superset, so the full product yields the same terms.
+/// there is no drivable clause, when an overlap clause's range symbols were not
+/// resolved at build time ([`crate::join::resolve_overlap_join_syms`]), when an
+/// envelope factor is not array data in this context, or when an `on` gate's
+/// key columns cannot be read as exact-equality keys here.
+///
+/// Declining is always SAFE. For an overlap gate the candidate set is a
+/// conservative superset behind the author's narrow `filter`, so the full
+/// product yields the same terms. For an `on` gate — which is EXACT, and has no
+/// author-supplied narrow phase — safety comes from `crate::join` having ALSO
+/// lowered the equality into `filter` (§5.5.8); the full product then applies
+/// the identical predicate.
 ///
 /// **On Julia's "Hook 1b".** The Julia reference resolves its gates at BUILD
 /// time out of a `const_arrays` registry, so an envelope factor living on a
