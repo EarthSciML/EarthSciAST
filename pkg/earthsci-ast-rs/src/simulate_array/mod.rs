@@ -584,6 +584,63 @@ impl Pool {
     }
 }
 
+/// The rule-invariant slice of an evaluation environment: everything an
+/// [`EvalCtx`] carries EXCEPT the observed-array map (whose borrow must be
+/// re-taken after each observed rule writes its output) and the per-loop
+/// index binds. Built once per RHS call / materialization pass from the
+/// natural source objects; the `EvalCtx` literal itself is then written
+/// exactly once — in [`EvalEnv::ctx`] — instead of being hand-assembled at
+/// every evaluation site. Field semantics are documented on [`EvalCtx`].
+#[derive(Clone, Copy)]
+struct EvalEnv<'a> {
+    state_arrays: &'a ArrMap,
+    params: &'a [f64],
+    param_names: &'a [String],
+    t: f64,
+    /// See [`EvalCtx::derived_rings`].
+    derived_rings: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    /// See [`EvalCtx::derived_extents`]. The compiled-RHS paths pass
+    /// [`empty_derived_extents`] (their derived sets were densified to
+    /// intervals at build time); the standalone expression entry point
+    /// carries real extents.
+    derived_extents: &'a HashMap<String, i64>,
+    /// See [`EvalCtx::forcing`].
+    forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    /// See [`EvalCtx::cse`].
+    cse: Option<&'a CseRt>,
+    /// See [`EvalCtx::const_arrays`].
+    const_arrays: &'a ConstArrayScope,
+}
+
+impl<'a> EvalEnv<'a> {
+    /// A fresh evaluation context (empty loop binds) over this environment,
+    /// reading observed values from `observed_arrays`.
+    fn ctx(&self, observed_arrays: &'a ArrMap) -> EvalCtx<'a> {
+        EvalCtx {
+            state_arrays: self.state_arrays,
+            observed_arrays,
+            params: self.params,
+            param_names: self.param_names,
+            loop_binds: IdxMap::default(),
+            t: self.t,
+            derived_rings: self.derived_rings,
+            derived_extents: self.derived_extents,
+            forcing: self.forcing,
+            cse: self.cse,
+            const_arrays: self.const_arrays,
+        }
+    }
+
+    /// Like [`Self::ctx`] but with no CSE memo — the per-cell oracle loops
+    /// evaluate without one.
+    fn oracle_ctx(&self, observed_arrays: &'a ArrMap) -> EvalCtx<'a> {
+        EvalCtx {
+            cse: None,
+            ..self.ctx(observed_arrays)
+        }
+    }
+}
+
 struct EvalCtx<'a> {
     state_arrays: &'a ArrMap,
     observed_arrays: &'a ArrMap,

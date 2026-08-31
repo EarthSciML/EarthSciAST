@@ -1155,7 +1155,19 @@ mod prepare_impl {
         }
     }
 
-    /// `{data_sources key -> [(flattened parameter name, local name, `update.from`)]}`.
+    /// One parameter's data binding to a source (see [`document_bindings`]).
+    struct ParamBinding<'a> {
+        /// The parameter's flattened (namespaced) path — the provider key.
+        key: String,
+        /// The parameter's bare name within its model.
+        local: String,
+        /// The parameter's `update.from` binding object (`file_variable`,
+        /// `codes`, `unit_conversion`, …).
+        from: &'a serde_json::Value,
+    }
+
+    /// `{data_sources key -> [ParamBinding]}` — per source, the consuming
+    /// parameters' flattened names, local names, and `update.from` bindings.
     ///
     /// From 1.0.0 a data source declares no variables of its own: the CONSUMING
     /// PARAMETER carries `update: {kind: "data", source, from: {file_variable,
@@ -1174,9 +1186,7 @@ mod prepare_impl {
     /// Models, nested subsystems and variables are all walked in sorted order,
     /// so the constructed provider set — and therefore the diagnostics — are
     /// deterministic.
-    fn document_bindings(
-        doc: &serde_json::Value,
-    ) -> HashMap<String, Vec<(String, String, &serde_json::Value)>> {
+    fn document_bindings(doc: &serde_json::Value) -> HashMap<String, Vec<ParamBinding<'_>>> {
         fn sorted_keys(node: Option<&serde_json::Value>) -> Vec<&str> {
             let mut keys: Vec<&str> = node
                 .and_then(serde_json::Value::as_object)
@@ -1189,7 +1199,7 @@ mod prepare_impl {
         fn visit<'a>(
             model: &'a serde_json::Value,
             prefix: &str,
-            out: &mut HashMap<String, Vec<(String, String, &'a serde_json::Value)>>,
+            out: &mut HashMap<String, Vec<ParamBinding<'a>>>,
         ) {
             let vars = model.get("variables");
             for vname in sorted_keys(vars) {
@@ -1218,11 +1228,11 @@ mod prepare_impl {
                     } else {
                         format!("{prefix}.{vname}")
                     };
-                    out.entry(source.to_string()).or_default().push((
+                    out.entry(source.to_string()).or_default().push(ParamBinding {
                         key,
-                        vname.to_string(),
-                        binding,
-                    ));
+                        local: vname.to_string(),
+                        from: binding,
+                    });
                     break; // the FIRST data rule of an `update` (esm-spec §5.4)
                 }
             }
@@ -1238,7 +1248,7 @@ mod prepare_impl {
             }
         }
 
-        let mut out: HashMap<String, Vec<(String, String, &serde_json::Value)>> = HashMap::new();
+        let mut out: HashMap<String, Vec<ParamBinding<'_>>> = HashMap::new();
         let models = doc.get("models");
         for mname in sorted_keys(models) {
             visit(
@@ -1248,7 +1258,7 @@ mod prepare_impl {
             );
         }
         for entries in out.values_mut() {
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries.sort_by(|a, b| a.key.cmp(&b.key));
         }
         out
     }
@@ -1371,16 +1381,18 @@ mod prepare_impl {
                 .unwrap_or_default();
 
             let mut columns: Vec<ColumnSpec> = Vec::new();
-            for (key, vname, binding) in consumers {
-                let fv = binding
+            for b in consumers {
+                let key = &b.key;
+                let fv = b
+                    .from
                     .get("file_variable")
                     .and_then(serde_json::Value::as_str)
-                    .unwrap_or(vname);
+                    .unwrap_or(&b.local);
                 columns.push(ColumnSpec {
                     name: key.clone(),
                     file_variable: fv.to_string(),
-                    codes: parse_codes(&format!("{key}.update.from"), binding)?,
-                    unit_conversion: parse_unit_conversion(binding.get("unit_conversion"), key)
+                    codes: parse_codes(&format!("{key}.update.from"), b.from)?,
+                    unit_conversion: parse_unit_conversion(b.from.get("unit_conversion"), key)
                         .map_err(|e| perr(e.to_string()))?,
                 });
             }
@@ -1408,11 +1420,12 @@ mod prepare_impl {
                 None
             };
 
-            for (spec, (key, _vname, binding)) in columns.iter().zip(consumers) {
+            for (spec, b) in columns.iter().zip(consumers) {
+                let key = &b.key;
                 let loader = make_loader(vec![spec.file_variable.clone()]);
                 let mut builder = EsioProvider::builder(loader, cache.clone())
                     .var(spec.file_variable.clone(), key.clone());
-                let select = parse_declared_select(doc, &format!("{key}.update.from"), binding)?
+                let select = parse_declared_select(doc, &format!("{key}.update.from"), b.from)?
                     .or_else(|| loader_select.clone());
                 if let Some(axes) = select {
                     builder = builder.declared_select(axes);

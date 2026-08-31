@@ -367,21 +367,28 @@ fn params_gen(params: &[f64]) -> u64 {
 /// Execute one RHS call through the tape: prime the CONST + SEGMENT sections
 /// if needed (first call of the scratch, or a changed parameter vector), then
 /// run the CONTINUOUS section. Writes `dy` (caller-zeroed) and bumps `stats`.
-#[allow(clippy::too_many_arguments)]
+/// The caller supplies the shared per-call inputs as an [`RhsCall`] (the
+/// remaining [`Env`] fields — the program, the FULL observed-rule list, the
+/// intra-call ring registry, and the row-major state mirror — are owned by
+/// the tape context or created inside the call).
 pub(in crate::simulate_array) fn run_tape_call(
     ctx: &mut TapeCtx,
-    rhs_rules: &[RhsRule],
-    var_shapes: &IndexMap<String, VarShape>,
-    param_names: &[String],
+    call: &RhsCall,
     state_arrays: &ArrMap,
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    state: &[f64],
-    params: &[f64],
-    t: f64,
+    const_arrays: &ConstArrayScope,
     dy: &mut [f64],
     stats: &mut RhsStats,
-    const_arrays: &ConstArrayScope,
 ) {
+    let &RhsCall {
+        rhs_rules,
+        var_shapes,
+        param_names,
+        state,
+        params,
+        forcing,
+        t,
+        ..
+    } = call;
     // Parameter epoch: bit-exact generation hash of the params slice → epoch
     // bump on change (the negative-control test in `tests/tape_exec.rs`
     // guards this: bypassing it serves stale CONST values).
@@ -2397,12 +2404,10 @@ pub(super) fn run_rhs_oracle(
     dy: &mut [f64],
     const_arrays: &ConstArrayScope,
 ) {
-    let mut ctx = EvalCtx {
+    let env = EvalEnv {
         state_arrays,
-        observed_arrays,
         params,
         param_names,
-        loop_binds: IdxMap::default(),
         t,
         derived_rings,
         derived_extents: empty_derived_extents(),
@@ -2410,6 +2415,7 @@ pub(super) fn run_rhs_oracle(
         cse: None,
         const_arrays,
     };
+    let mut ctx = env.ctx(observed_arrays);
     match rule {
         RhsRule::Scalar { slot, body } | RhsRule::IndexedScalar { slot, body } => {
             dy[*slot] = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
@@ -2429,24 +2435,24 @@ pub(super) fn run_rhs_oracle(
             let filter = filter.as_deref();
             let static_ranges = static_contract_ranges(contract_dims);
             let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
+            let cellbox = CellBox {
+                names: output_idx_names,
+                origin: &output_origin,
+            };
+            let spec = ReduceSpec {
+                contract_names,
+                body,
+                reduce: *reduce,
+                filter,
+                cell: Some(&cellbox),
+            };
             let mut tuples = CartesianTuples::new(output_ranges);
             while let Some(tuple) = tuples.next() {
                 for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
                     set_bind(&mut ctx.loop_binds, name, *val);
                 }
-                let v = reduce_contraction(
-                    contract_names,
-                    contract_dims,
-                    static_ranges.as_deref(),
-                    body,
-                    *reduce,
-                    filter,
-                    Some(&CellBox {
-                        names: output_idx_names,
-                        origin: &output_origin,
-                    }),
-                    &mut ctx,
-                );
+                let v =
+                    reduce_contraction(&spec, contract_dims, static_ranges.as_deref(), &mut ctx);
                 let actual_multi: Vec<i64> = lhs_idx_exprs
                     .iter()
                     .map(|e| eval_simple_index(e, &ctx.loop_binds))

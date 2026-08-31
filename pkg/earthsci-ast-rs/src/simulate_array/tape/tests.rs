@@ -1384,19 +1384,23 @@ fn export_demotion_skips_unread_publishes() {
 
     let run_call = |ctx: &mut super::exec::TapeCtx, dy: &mut [f64]| {
         let mut stats = RhsStats::default();
+        let call = super::super::RhsCall {
+            rhs_rules: &compiled.rhs_rules,
+            observed_rules: &compiled.observed_rules,
+            var_shapes: &compiled.var_shapes,
+            param_names: &compiled.param_names,
+            state: &state,
+            params: &param_vec,
+            forcing: &compiled.forcing,
+            t: 0.0,
+        };
         super::exec::run_tape_call(
             ctx,
-            &compiled.rhs_rules,
-            &compiled.var_shapes,
-            &compiled.param_names,
+            &call,
             &super::super::ArrMap::default(),
-            &compiled.forcing,
-            &state,
-            &param_vec,
-            0.0,
+            &compiled.const_scope,
             dy,
             &mut stats,
-            &compiled.const_scope,
         );
     };
 

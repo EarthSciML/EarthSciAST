@@ -1617,12 +1617,10 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
     // Standalone expression evaluation (FAQ rings, area integrands) carries no
     // loader forcing — an empty buffer keeps the channel byte-identical here.
     let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let mut ctx = EvalCtx {
+    let env = EvalEnv {
         state_arrays: &empty,
-        observed_arrays: inputs,
         params,
         param_names,
-        loop_binds: IdxMap::default(),
         t,
         derived_rings: &derived_rings,
         derived_extents,
@@ -1632,6 +1630,7 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         cse: None,
         const_arrays,
     };
+    let mut ctx = env.ctx(inputs);
     take_const_array_oob(); // discard any latch left by an earlier failed call
     let v = eval(expr, &mut ctx);
     match take_const_array_oob() {
@@ -1651,6 +1650,23 @@ pub(super) struct CellBox<'a> {
     pub names: &'a [String],
     /// The lower bound of each output axis, in the same order.
     pub origin: &'a [i64],
+}
+
+/// The cell-invariant description of one ⊕-reduction: the contracted index
+/// symbols, the body and optional `filter` expressions, the semiring, and the
+/// output box an ARRAY-valued filter aligns against. Built once outside the
+/// per-cell loop, so the contraction kernels take it as one argument instead
+/// of threading five positionally.
+pub(super) struct ReduceSpec<'a> {
+    pub(super) contract_names: &'a [String],
+    pub(super) body: &'a Expr,
+    pub(super) reduce: ReduceKind,
+    /// Optional `filter` predicate (§5.3): combinations for which it is false
+    /// contribute the additive identity 0̄. `None` ⇒ no gating.
+    pub(super) filter: Option<&'a Expr>,
+    /// The output box (see [`CellBox`]), or `None` when there is none to align
+    /// an array-valued filter against.
+    pub(super) cell: Option<&'a CellBox<'a>>,
 }
 
 /// Evaluate an `aggregate`/`arrayop` `filter` predicate under the current loop
@@ -1732,15 +1748,18 @@ pub(super) fn filter_excludes(
 /// array-op-derivative ([`RhsRule::ArrayLoop`]) paths, mirroring the Julia
 /// `_expand_int_range_dyn` einsum loop and the Python `_expand_ragged` gather.
 pub(super) fn reduce_contraction(
-    contract_names: &[String],
+    spec: &ReduceSpec,
     contract_dims: &[ContractDim],
     static_ranges: Option<&[(i64, i64)]>,
-    body: &Expr,
-    reduce: ReduceKind,
-    filter: Option<&Expr>,
-    cell: Option<&CellBox>,
     ctx: &mut EvalCtx,
 ) -> f64 {
+    let &ReduceSpec {
+        contract_names,
+        body,
+        reduce,
+        filter,
+        cell,
+    } = spec;
     if contract_names.is_empty() {
         // Pointwise: a filtered-out cell contributes the additive identity 0̄.
         return if filter_excludes(filter, cell, ctx) {
@@ -2001,19 +2020,19 @@ impl DimSrc<'_> {
 /// `ranges` is this cell's resolved contraction bounds (the same slice the
 /// ungated path walks). The output-index tuple is already bound in
 /// `ctx.loop_binds`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn reduce_contraction_gated(
-    contract_names: &[String],
+    spec: &ReduceSpec,
     ranges: &[(i64, i64)],
-    body: &Expr,
-    reduce: ReduceKind,
-    filter: Option<&Expr>,
-    cell: Option<&CellBox>,
     gate: &OverlapGate,
     place: &GatePlacement,
     ctx: &mut EvalCtx,
 ) -> f64 {
     use crate::broad_phase::DrivePlan;
+    let &ReduceSpec {
+        contract_names,
+        reduce,
+        ..
+    } = spec;
 
     // A gated symbol that is an OUTPUT index is already bound for this cell; a
     // contracted one is free. Anything else means the gate does not describe
@@ -2029,15 +2048,7 @@ pub(super) fn reduce_contraction_gated(
         bound_of(place.src, &gate.sym_src, ctx),
         bound_of(place.tgt, &gate.sym_tgt, ctx),
     ) else {
-        return reduce_over_sources(
-            contract_names,
-            &full_sources(ranges),
-            body,
-            reduce,
-            filter,
-            cell,
-            ctx,
-        );
+        return reduce_over_sources(spec, &full_sources(ranges), ctx);
     };
 
     let free_dim = match (place.src, place.tgt) {
@@ -2055,7 +2066,7 @@ pub(super) fn reduce_contraction_gated(
             let d = free_dim.expect("a Restrict plan names a free contracted dim");
             let mut srcs = full_sources(ranges);
             srcs[d] = DimSrc::List(vals);
-            reduce_over_sources(contract_names, &srcs, body, reduce, filter, cell, ctx)
+            reduce_over_sources(spec, &srcs, ctx)
         }
         DrivePlan::Pairs
             if contract_names.len() == 2
@@ -2080,17 +2091,9 @@ pub(super) fn reduce_contraction_gated(
             if !src_is_slow {
                 tuples.sort_unstable();
             }
-            reduce_over_pairs(contract_names, &tuples, body, reduce, filter, cell, ctx)
+            reduce_over_pairs(spec, &tuples, ctx)
         }
-        DrivePlan::Pairs | DrivePlan::Full => reduce_over_sources(
-            contract_names,
-            &full_sources(ranges),
-            body,
-            reduce,
-            filter,
-            cell,
-            ctx,
-        ),
+        DrivePlan::Pairs | DrivePlan::Full => reduce_over_sources(spec, &full_sources(ranges), ctx),
     }
 }
 
@@ -2105,16 +2108,14 @@ fn full_sources(ranges: &[(i64, i64)]) -> SmallVec<[DimSrc<'_>; 4]> {
 /// dimension varying fastest — bit-for-bit the order
 /// [`crate::simulate_array::layout::CartesianTuples`] walks, so a restricted
 /// dimension emits the exact subsequence of the terms the full product emitted.
-#[allow(clippy::too_many_arguments)]
-fn reduce_over_sources(
-    contract_names: &[String],
-    srcs: &[DimSrc],
-    body: &Expr,
-    reduce: ReduceKind,
-    filter: Option<&Expr>,
-    cell: Option<&CellBox>,
-    ctx: &mut EvalCtx,
-) -> f64 {
+fn reduce_over_sources(spec: &ReduceSpec, srcs: &[DimSrc], ctx: &mut EvalCtx) -> f64 {
+    let &ReduceSpec {
+        contract_names,
+        body,
+        reduce,
+        filter,
+        cell,
+    } = spec;
     let mut acc = reduce.identity();
     let n = srcs.len();
     if n == 0 {
@@ -2160,16 +2161,14 @@ fn reduce_over_sources(
 /// the gate's candidate pairs (already reordered to match the odometer's
 /// slow/fast convention), so the emitted term sequence is the exact
 /// subsequence the filtered full product emitted.
-#[allow(clippy::too_many_arguments)]
-fn reduce_over_pairs(
-    contract_names: &[String],
-    tuples: &[(i64, i64)],
-    body: &Expr,
-    reduce: ReduceKind,
-    filter: Option<&Expr>,
-    cell: Option<&CellBox>,
-    ctx: &mut EvalCtx,
-) -> f64 {
+fn reduce_over_pairs(spec: &ReduceSpec, tuples: &[(i64, i64)], ctx: &mut EvalCtx) -> f64 {
+    let &ReduceSpec {
+        contract_names,
+        body,
+        reduce,
+        filter,
+        cell,
+    } = spec;
     let mut acc = reduce.identity();
     for &(a, b) in tuples {
         crate::broad_phase::bump_overlap_enum_visits(1);
@@ -2686,15 +2685,22 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             );
         }
     } else {
+        let cellbox = CellBox {
+            names: idx_names,
+            origin: &origin,
+        };
+        let spec = ReduceSpec {
+            contract_names: &contract_names,
+            body,
+            reduce,
+            filter,
+            cell: Some(&cellbox),
+        };
         let mut tuples = CartesianTuples::new(&ranges);
         while let Some(tuple) = tuples.next() {
             for (name, val) in idx_names.iter().zip(tuple.iter()) {
                 set_bind(&mut ctx.loop_binds, name, *val);
             }
-            let cellbox = CellBox {
-                names: idx_names,
-                origin: &origin,
-            };
             let v = match &gate {
                 Some((g, place)) => {
                     // This cell's contraction bounds: the hoisted static ones
@@ -2708,28 +2714,11 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                             &derived
                         }
                     };
-                    reduce_contraction_gated(
-                        &contract_names,
-                        cell_ranges,
-                        body,
-                        reduce,
-                        filter,
-                        Some(&cellbox),
-                        g,
-                        place,
-                        ctx,
-                    )
+                    reduce_contraction_gated(&spec, cell_ranges, g, place, ctx)
                 }
-                None => reduce_contraction(
-                    &contract_names,
-                    &contract_dims,
-                    static_ranges.as_deref(),
-                    body,
-                    reduce,
-                    filter,
-                    Some(&cellbox),
-                    ctx,
-                ),
+                None => {
+                    reduce_contraction(&spec, &contract_dims, static_ranges.as_deref(), ctx)
+                }
             };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;

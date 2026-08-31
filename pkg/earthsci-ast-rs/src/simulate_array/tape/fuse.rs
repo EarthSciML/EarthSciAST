@@ -1077,7 +1077,7 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
         });
     }
 
-    let mut sink = Sink {
+    let sink = Sink {
         stats: FuseStats {
             instrs_before: n,
             ..Default::default()
@@ -1089,18 +1089,25 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
         adj_hist: FxHashMap::default(),
         chain_hist: FxHashMap::default(),
     };
+    let mut fx = FuseCtx {
+        prog,
+        readers: &readers,
+        sink,
+        cfg,
+    };
 
     let mut section_counts = [0usize; 3];
     for (sec, cad) in [Cadence::Const, Cadence::Segment, Cadence::Continuous]
         .into_iter()
         .enumerate()
     {
-        let range = prog.section_range(cad);
-        let start_len = sink.instrs.len();
-        fuse_section(prog, range, &readers, &mut sink, cfg);
-        section_counts[sec] = sink.instrs.len() - start_len;
+        let range = fx.prog.section_range(cad);
+        let start_len = fx.sink.instrs.len();
+        fuse_section(&mut fx, range);
+        section_counts[sec] = fx.sink.instrs.len() - start_len;
     }
 
+    let mut sink = fx.sink;
     sink.stats.instrs_after = sink.instrs.len();
     let desc = |m: FxHashMap<String, usize>| -> Vec<(String, usize)> {
         let mut v: Vec<_> = m.into_iter().collect();
@@ -1144,20 +1151,27 @@ impl Sink {
     }
 }
 
+/// The state [`fuse_section`] and its helpers share for the whole pass: the
+/// (read-only) source program, the global per-slot reader index, the
+/// rewritten-program [`Sink`], and the superop configuration — grouped so the
+/// helpers stop threading four positional arguments alongside their real
+/// inputs.
+struct FuseCtx<'a> {
+    prog: &'a TapeProgram,
+    readers: &'a [SmallVec<[u32; 4]>],
+    sink: Sink,
+    cfg: SuperopCfg,
+}
+
 /// Finalize one group: emit either its `Fused` instruction (plus any
 /// re-materialized gathers) or, for trivial groups, the original
 /// instructions verbatim.
-fn flush_one(
-    g: GBuilder,
-    prog: &TapeProgram,
-    readers: &[SmallVec<[u32; 4]>],
-    sink: &mut Sink,
-    cfg: SuperopCfg,
-) {
+fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
+    let prog = fx.prog;
     let has_compute = g.micro.iter().any(|m| !matches!(m, MicroOp::Mov { .. }));
     if g.member_instrs.len() < 2 || g.micro.is_empty() || !has_compute {
         for &ix in &g.member_instrs {
-            sink.passthrough(prog, ix as usize);
+            fx.sink.passthrough(prog, ix as usize);
         }
         return;
     }
@@ -1180,9 +1194,11 @@ fn flush_one(
     // read of its output slot.
     let mut kept_shifted: Vec<bool> = vec![true; shifted_segs.len()];
     for &(orig_ix, slot, input_ix) in &folded {
-        let external = readers[slot as usize].iter().any(|r| !members.contains(r));
+        let external = fx.readers[slot as usize]
+            .iter()
+            .any(|r| !members.contains(r));
         if external {
-            sink.passthrough(prog, orig_ix as usize);
+            fx.sink.passthrough(prog, orig_ix as usize);
             let old = inputs[input_ix as usize].shifted_ix.expect("was shifted");
             kept_shifted[old as usize] = false;
             inputs[input_ix as usize] = FusedInput {
@@ -1193,7 +1209,7 @@ fn flush_one(
                 load_reg: u16::MAX,
             };
         } else {
-            sink.stats.n_gathers_folded += 1;
+            fx.sink.stats.n_gathers_folded += 1;
         }
     }
     // Compact the shifted-input table.
@@ -1214,7 +1230,9 @@ fn flush_one(
     // Live-outs.
     let mut outputs: SmallVec<[(u16, SlotId); 2]> = SmallVec::new();
     for &(slot, ssa) in &defs {
-        let external = readers[slot as usize].iter().any(|r| !members.contains(r));
+        let external = fx.readers[slot as usize]
+            .iter()
+            .any(|r| !members.contains(r));
         if external {
             outputs.push((ssa, slot));
         }
@@ -1229,7 +1247,7 @@ fn flush_one(
         for i in 0..micro.len().saturating_sub(1) {
             if uses[i] == 1 && reads_reg(&micro[i + 1], i as u16) {
                 let key = format!("{}>{}", mop_label(&micro[i]), mop_label(&micro[i + 1]));
-                *sink.adj_hist.entry(key).or_insert(0) += n_elems;
+                *fx.sink.adj_hist.entry(key).or_insert(0) += n_elems;
             }
         }
         let arith = |op: &MicroOp| matches!(op, MicroOp::Bin { op, .. } if bin2_arith(*op));
@@ -1245,7 +1263,7 @@ fn flush_one(
                     len += 1;
                 }
                 if len >= 2 {
-                    *sink.chain_hist.entry(len).or_insert(0) += n_elems;
+                    *fx.sink.chain_hist.entry(len).or_insert(0) += n_elems;
                 }
                 i += len;
             } else {
@@ -1254,9 +1272,9 @@ fn flush_one(
         }
     }
 
-    merge_superops(&mut micro, &mut outputs, cfg);
+    merge_superops(&mut micro, &mut outputs, fx.cfg);
     for op in &micro {
-        *sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
+        *fx.sink.micro_hist.entry(mop_label(op)).or_insert(0) += n_elems;
     }
     let n_regs = allocate_registers(&mut micro, &mut outputs);
     // Bin3 executes all-pointer: its scalar operands read from per-scalar
@@ -1279,8 +1297,8 @@ fn flush_one(
     }
 
     let n_members = member_instrs.len();
-    sink.stats.n_groups += 1;
-    sink.stats.n_member_instrs += n_members;
+    fx.sink.stats.n_groups += 1;
+    fx.sink.stats.n_member_instrs += n_members;
     let bucket = match n_members {
         0..=3 => 0,
         4..=7 => 1,
@@ -1289,10 +1307,10 @@ fn flush_one(
         32..=63 => 4,
         _ => 5,
     };
-    sink.stats.group_size_hist[bucket] += 1;
+    fx.sink.stats.group_size_hist[bucket] += 1;
 
-    let spec_ix = sink.fused.len() as u32;
-    sink.fused.push(FusedSpec {
+    let spec_ix = fx.sink.fused.len() as u32;
+    fx.sink.fused.push(FusedSpec {
         shape,
         inputs,
         scalars,
@@ -1305,17 +1323,11 @@ fn flush_one(
         n_fused_instrs: n_members as u32,
         n_folded_gathers: folded.len() as u32,
     });
-    sink.instrs.push(Instr::Fused { spec: spec_ix });
-    sink.prov.push(prov);
+    fx.sink.instrs.push(Instr::Fused { spec: spec_ix });
+    fx.sink.prov.push(prov);
 }
 
-fn fuse_section(
-    prog: &TapeProgram,
-    range: std::ops::Range<usize>,
-    readers: &[SmallVec<[u32; 4]>],
-    sink: &mut Sink,
-    cfg: SuperopCfg,
-) {
+fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     let mut open: Vec<GBuilder> = Vec::new();
 
     // Flush every open group that DEFINES one of the slots `ins` reads,
@@ -1325,13 +1337,10 @@ fn fuse_section(
         ins: &Instr,
         keep_shape: Option<&super::super::DimU>,
         open: &mut Vec<GBuilder>,
-        prog: &TapeProgram,
-        readers: &[SmallVec<[u32; 4]>],
-        sink: &mut Sink,
-        cfg: SuperopCfg,
+        fx: &mut FuseCtx,
     ) {
         let mut hazard: Vec<usize> = Vec::new();
-        ins.for_each_read(&prog.dy_writes, &prog.fused, |s| {
+        ins.for_each_read(&fx.prog.dy_writes, &fx.prog.fused, |s| {
             for (gi, g) in open.iter().enumerate() {
                 if keep_shape != Some(&g.shape) && g.defines(s) && !hazard.contains(&gi) {
                     hazard.push(gi);
@@ -1341,7 +1350,7 @@ fn fuse_section(
         hazard.sort_unstable();
         for &gi in hazard.iter().rev() {
             let g = open.remove(gi);
-            flush_one(g, prog, readers, sink, cfg);
+            flush_one(g, fx);
         }
     }
 
@@ -1351,22 +1360,20 @@ fn fuse_section(
         open: &mut Vec<GBuilder>,
         shape: super::super::DimU,
         prov: u32,
-        prog: &TapeProgram,
-        readers: &[SmallVec<[u32; 4]>],
-        sink: &mut Sink,
-        cfg: SuperopCfg,
+        fx: &mut FuseCtx,
     ) -> usize {
         if let Some(gi) = open.iter().position(|g| g.shape == shape) {
             return gi;
         }
         if open.len() >= MAX_OPEN_GROUPS {
             let g = open.remove(0);
-            flush_one(g, prog, readers, sink, cfg);
+            flush_one(g, fx);
         }
         open.push(GBuilder::new(shape, prov));
         open.len() - 1
     }
 
+    let prog = fx.prog;
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
@@ -1379,20 +1386,20 @@ fn fuse_section(
         } = ins
         {
             for g in open.drain(..) {
-                flush_one(g, prog, readers, sink, cfg);
+                flush_one(g, fx);
             }
             let zone_end = (i + 1 + *n_true as usize + *n_false as usize).min(range.end);
             for j in i..zone_end {
-                sink.passthrough(prog, j);
+                fx.sink.passthrough(prog, j);
             }
             i = zone_end;
             continue;
         }
         if matches!(ins, Instr::Fallback { .. }) {
             for g in open.drain(..) {
-                flush_one(g, prog, readers, sink, cfg);
+                flush_one(g, fx);
             }
-            sink.passthrough(prog, i);
+            fx.sink.passthrough(prog, i);
             i += 1;
             continue;
         }
@@ -1415,24 +1422,16 @@ fn fuse_section(
             if let Some(geom) = geom {
                 // A gather whose SOURCE is defined by an open group forces
                 // that group to materialize first.
-                flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
+                flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(
-                    &mut open,
-                    shape,
-                    prog.provenance[i],
-                    prog,
-                    readers,
-                    sink,
-                    cfg,
-                );
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], fx);
                 open[gi].add_folded_gather(i as u32, *src, plan_ref, geom, *out);
                 i += 1;
                 continue;
             }
             // Unfoldable: pass through (with the usual read hazards).
-            flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
-            sink.passthrough(prog, i);
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
             i += 1;
             continue;
         }
@@ -1455,34 +1454,26 @@ fn fuse_section(
             _ => None,
         };
         if let Some(shape) = elem_shape {
-            flush_hazards(ins, Some(&shape), &mut open, prog, readers, sink, cfg);
-            let gi = find_or_open(
-                &mut open,
-                shape.clone(),
-                prog.provenance[i],
-                prog,
-                readers,
-                sink,
-                cfg,
-            );
+            flush_hazards(ins, Some(&shape), &mut open, fx);
+            let gi = find_or_open(&mut open, shape.clone(), prog.provenance[i], fx);
             if open[gi].try_add(i as u32, ins, prog) {
                 i += 1;
                 continue;
             }
             // Unfusable operand (an observed read): the target group may
             // still hold slots this instruction reads — flush it too.
-            flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
-            sink.passthrough(prog, i);
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
             i += 1;
             continue;
         }
 
         // Everything else passes through, flushing any group it reads from.
-        flush_hazards(ins, None, &mut open, prog, readers, sink, cfg);
-        sink.passthrough(prog, i);
+        flush_hazards(ins, None, &mut open, fx);
+        fx.sink.passthrough(prog, i);
         i += 1;
     }
     for g in open.drain(..) {
-        flush_one(g, prog, readers, sink, cfg);
+        flush_one(g, fx);
     }
 }

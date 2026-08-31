@@ -321,6 +321,8 @@ pub(super) fn build_state_arrays(var_shapes: &IndexMap<String, VarShape>, state:
 /// (an `area` FAQ) is a 0-D array. Shared by the RHS driver ([`evaluate_rhs`])
 /// and the output-time observed exposure ([`ArrayCompiled::simulate`]) so both
 /// see identical observed values.
+// Positional signature kept for the driver's call sites; the body groups the
+// arguments into an [`EvalEnv`] immediately.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_observeds(
     observed_rules: &[AlgebraicRule],
@@ -333,17 +335,20 @@ pub(super) fn materialize_observeds(
     const_arrays: &ConstArrayScope,
 ) -> ArrMap {
     let mut observed_arrays: ArrMap = ArrMap::default();
-    materialize_observeds_into(
-        &mut observed_arrays,
-        observed_rules,
+    let env = EvalEnv {
         state_arrays,
         params,
         param_names,
         t,
         derived_rings,
+        derived_extents: empty_derived_extents(),
         forcing,
+        // One-shot materialization: no CSE memo (nothing to amortize the
+        // structural analysis over).
+        cse: None,
         const_arrays,
-    );
+    };
+    materialize_observeds_into(&mut observed_arrays, observed_rules, &env);
     observed_arrays
 }
 
@@ -357,40 +362,36 @@ pub(super) fn materialize_observeds(
 pub(super) fn materialize_observeds_into(
     dst: &mut ArrMap,
     observed_rules: &[AlgebraicRule],
-    state_arrays: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    const_arrays: &ConstArrayScope,
+    env: &EvalEnv,
 ) {
     dst.clear();
-    materialize_observeds_append(
-        dst,
-        observed_rules,
-        state_arrays,
-        params,
-        param_names,
-        t,
-        derived_rings,
-        forcing,
+    let pass = ObsPass {
+        env: *env,
         // Build/setup materialization: use the vectorized overlay (bit-identical
         // to the oracle, and this runs once, off the per-step hot path).
-        false,
-        &mut RhsStats::default(),
-        None,
-        const_arrays,
-    );
+        force_scalar: false,
+    };
+    materialize_observeds_pass(dst, observed_rules, &pass, &mut RhsStats::default());
 }
 
-/// Like [`materialize_observeds_into`] but does NOT clear `dst` first — the
-/// rules are evaluated and their outputs inserted on top of whatever is already
-/// there. This is what lets the RHS seed the hoisted static observeds (ess:
-/// static-observed hoist) into `dst` and then materialize only the *varying*
-/// rules over them, without recomputing the statics every step. A varying rule
-/// may reference an already-seeded static observed by name (they are read from
-/// `dst`), so the seed must be in place before this runs.
+/// One observed-materialization pass: the rule-invariant evaluation
+/// environment plus the oracle switch, grouped so
+/// [`materialize_observeds_pass`] takes named fields instead of a dozen
+/// positional arguments.
+pub(super) struct ObsPass<'a> {
+    /// The rule-invariant evaluation environment.
+    pub(super) env: EvalEnv<'a>,
+    /// When true, evaluate array observeds via the per-cell oracle (the
+    /// correctness reference), skipping the vectorized whole-array fast path.
+    /// Production passes `false`; the equivalence test passes `true` to obtain
+    /// the reference values — mirroring the `force_scalar` contract the
+    /// RHS-rule driver already honours (see [`RhsStats`]).
+    pub(super) force_scalar: bool,
+}
+
+/// Positional wrapper over [`materialize_observeds_pass`], kept so the tape
+/// executor's fallback arm keeps its call shape; in-module callers build an
+/// [`ObsPass`] and call [`materialize_observeds_pass`] directly.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_observeds_append(
     dst: &mut ArrMap,
@@ -401,24 +402,47 @@ pub(super) fn materialize_observeds_append(
     t: f64,
     derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
     forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    // When true, evaluate array observeds via the per-cell oracle (the
-    // correctness reference), skipping the vectorized whole-array fast path.
-    // Production passes `false`; the equivalence test passes `true` to obtain
-    // the reference values — mirroring the `force_scalar` contract the RHS-rule
-    // driver already honours (see [`RhsStats`]).
     force_scalar: bool,
-    // Records how each array observed was materialized (vectorized vs per-cell),
-    // mirroring the `vectorized_rules`/`scalar_rules` split for state rules.
     stats: &mut RhsStats,
-    // Common-subexpression memo (ess-cse), or `None` on the build-time /
-    // one-shot materialization paths, which run once and so have nothing to
-    // amortize the structural analysis over.
     cse: Option<&CseRt>,
-    // Which of the arrays in scope are CONST-ARRAY factors (§5.5.5), so an
-    // out-of-range gather on one raises `E_TREEWALK_CONSTARRAY_OOB` instead of
-    // silently reading the state gather's zero ghost.
     const_arrays: &ConstArrayScope,
 ) {
+    let pass = ObsPass {
+        env: EvalEnv {
+            state_arrays,
+            params,
+            param_names,
+            t,
+            derived_rings,
+            derived_extents: empty_derived_extents(),
+            forcing,
+            cse,
+            const_arrays,
+        },
+        force_scalar,
+    };
+    materialize_observeds_pass(dst, observed_rules, &pass, stats);
+}
+
+/// Like [`materialize_observeds_into`] but does NOT clear `dst` first — the
+/// rules are evaluated and their outputs inserted on top of whatever is already
+/// there. This is what lets the RHS seed the hoisted static observeds (ess:
+/// static-observed hoist) into `dst` and then materialize only the *varying*
+/// rules over them, without recomputing the statics every step. A varying rule
+/// may reference an already-seeded static observed by name (they are read from
+/// `dst`), so the seed must be in place before this runs.
+///
+/// `stats` records how each array observed was materialized (vectorized vs
+/// per-cell), mirroring the `vectorized_rules`/`scalar_rules` split for state
+/// rules.
+pub(super) fn materialize_observeds_pass(
+    dst: &mut ArrMap,
+    observed_rules: &[AlgebraicRule],
+    pass: &ObsPass,
+    stats: &mut RhsStats,
+) {
+    let ObsPass { env, force_scalar } = pass;
+    let force_scalar = *force_scalar;
     for rule in observed_rules {
         match rule {
             AlgebraicRule::Scalar { var, body } => {
@@ -433,27 +457,15 @@ pub(super) fn materialize_observeds_append(
                 // why it went unnoticed. `vec_trace_on()` is env-driven and so
                 // always false on wasm.
                 let t_start = vec_trace_on().then(std::time::Instant::now);
-                let mut ctx = EvalCtx {
-                    state_arrays,
-                    observed_arrays: &*dst,
-                    params,
-                    param_names,
-                    loop_binds: IdxMap::default(),
-                    t,
-                    derived_rings,
-                    // EMPTY on every compiled-RHS context in this file, and
-                    // deliberately so: `ArrayCompiled::from_model` densifies each
-                    // value-invented derived set to an `interval` (via
-                    // `rewrite_derived_index_sets`) BEFORE resolving ranges, so a
-                    // compiled rule's axes are already static bounds and no
-                    // `DerivedDyn` survives to consult the map. The channel earns
-                    // its keep on the standalone `eval_expression_with_extents`
-                    // entry point instead. See `EvalCtx::derived_extents`.
-                    derived_extents: empty_derived_extents(),
-                    forcing,
-                    cse,
-                    const_arrays,
-                };
+                // `derived_extents` is EMPTY on every compiled-RHS context in
+                // this file, and deliberately so: `ArrayCompiled::from_model`
+                // densifies each value-invented derived set to an `interval`
+                // (via `rewrite_derived_index_sets`) BEFORE resolving ranges,
+                // so a compiled rule's axes are already static bounds and no
+                // `DerivedDyn` survives to consult the map. The channel earns
+                // its keep on the standalone `eval_expression_with_extents`
+                // entry point instead. See `EvalCtx::derived_extents`.
+                let mut ctx = env.ctx(&*dst);
                 let arr = match eval(body, &mut ctx) {
                     Value::Array(a) => *a,
                     Value::Scalar(s) => ArrayD::from_elem(IxDyn(&[]), s),
@@ -519,19 +531,7 @@ pub(super) fn materialize_observeds_append(
                     && !padded_shape.contains(&0)
                 {
                     let materialized = {
-                        let ctx = EvalCtx {
-                            state_arrays,
-                            observed_arrays: &*dst,
-                            params,
-                            param_names,
-                            loop_binds: IdxMap::default(),
-                            t,
-                            derived_rings,
-                            derived_extents: empty_derived_extents(),
-                            forcing,
-                            cse,
-                            const_arrays,
-                        };
+                        let ctx = env.ctx(&*dst);
                         // The THREAD's persistent pool, not a fresh one per
                         // observed: a model with dozens of array observeds
                         // re-materialized every step got an empty pool on each
@@ -587,19 +587,7 @@ pub(super) fn materialize_observeds_append(
                     // read borrow of `dst` releases before the write below). The
                     // output index names are the same every cell, so `set_bind`
                     // rebinds in place — no per-cell `IdxMap` alloc or key clone.
-                    let mut ctx = EvalCtx {
-                        state_arrays,
-                        observed_arrays: &*dst,
-                        params,
-                        param_names,
-                        loop_binds: IdxMap::default(),
-                        t,
-                        derived_rings,
-                        derived_extents: empty_derived_extents(),
-                        forcing,
-                        cse: None,
-                        const_arrays,
-                    };
+                    let mut ctx = env.oracle_ctx(&*dst);
                     let mut tuples = CartesianTuples::new(output_ranges);
                     while let Some(tuple) = tuples.next() {
                         for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
@@ -619,12 +607,35 @@ pub(super) fn materialize_observeds_append(
     }
 }
 
+/// The per-call RHS inputs shared by every evaluation path — the compiled
+/// rules, the model tables, and the solver-supplied state/parameter/time
+/// slices — grouped so the dispatcher, the legacy interpreter and the tape
+/// executor stop threading a dozen positional arguments.
+pub(super) struct RhsCall<'a> {
+    pub(super) rhs_rules: &'a [RhsRule],
+    pub(super) observed_rules: &'a [AlgebraicRule],
+    pub(super) var_shapes: &'a IndexMap<String, VarShape>,
+    pub(super) param_names: &'a [String],
+    pub(super) state: &'a [f64],
+    pub(super) params: &'a [f64],
+    /// External refreshable forcing-array channel (PR-1, ess-14f.7): the
+    /// model-lifetime buffer a discrete-cadence driver refreshes between
+    /// segments. Borrowed (not owned by the per-call scratch) so the same
+    /// buffer is read across every RHS call within a segment. Empty ⇒ no
+    /// behaviour change vs. the scalar-`p` path.
+    pub(super) forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    pub(super) t: f64,
+}
+
 /// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
 /// compiled tape ([`RhsScratch::install_tape`]) and the caller is not asking
 /// for the per-cell oracle, the call runs through the fast tape executor;
 /// otherwise the legacy interpreter path runs, byte-identical to the pre-tape
 /// driver. `ESS_TAPE_CHECK=N` runs BOTH paths for the first N calls of each
 /// taped scratch and asserts bitwise-equal `dy`.
+//
+// Positional signature kept for the driver's RHS/Jacobian closures; the body
+// groups the arguments into an [`RhsCall`] immediately.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_rhs_with_scratch(
     rhs_rules: &[RhsRule],
@@ -640,21 +651,18 @@ pub(super) fn evaluate_rhs_with_scratch(
     stats: &mut RhsStats,
     scratch: &mut RhsScratch,
 ) {
+    let call = RhsCall {
+        rhs_rules,
+        observed_rules,
+        var_shapes,
+        param_names,
+        state,
+        params,
+        forcing,
+        t,
+    };
     if force_scalar || scratch.tape.is_none() {
-        evaluate_rhs_legacy(
-            rhs_rules,
-            observed_rules,
-            var_shapes,
-            param_names,
-            state,
-            params,
-            forcing,
-            t,
-            dy,
-            force_scalar,
-            stats,
-            scratch,
-        );
+        evaluate_rhs_legacy(&call, dy, force_scalar, stats, scratch);
         return;
     }
     // Take the tape out so the legacy check arm below can borrow the whole
@@ -669,20 +677,7 @@ pub(super) fn evaluate_rhs_with_scratch(
             *v = 0.0;
         }
         let mut check_stats = RhsStats::default();
-        evaluate_rhs_legacy(
-            rhs_rules,
-            observed_rules,
-            var_shapes,
-            param_names,
-            state,
-            params,
-            forcing,
-            t,
-            &mut tape.check_buf,
-            false,
-            &mut check_stats,
-            scratch,
-        );
+        evaluate_rhs_legacy(&call, &mut tape.check_buf, false, &mut check_stats, scratch);
     }
 
     // Fallback rules evaluate through the interpreter's `EvalCtx`, which
@@ -695,17 +690,11 @@ pub(super) fn evaluate_rhs_with_scratch(
     let const_scope = Rc::clone(&scratch.const_arrays);
     run_tape_call(
         &mut tape,
-        rhs_rules,
-        var_shapes,
-        param_names,
+        &call,
         &scratch.state_arrays,
-        forcing,
-        state,
-        params,
-        t,
+        &const_scope,
         dy,
         stats,
-        &const_scope,
     );
 
     if tape.check_remaining > 0 {
@@ -732,21 +721,8 @@ pub(super) fn evaluate_rhs_with_scratch(
 /// unchanged: the oracle for `debug_eval_rhs*`, the `ESS_TAPE_DISABLE`
 /// wholesale fallback, the `ESS_TAPE_CHECK` comparison arm, the Jacobian
 /// closure, and every scratch without an installed tape.
-#[allow(clippy::too_many_arguments)]
 fn evaluate_rhs_legacy(
-    rhs_rules: &[RhsRule],
-    observed_rules: &[AlgebraicRule],
-    var_shapes: &IndexMap<String, VarShape>,
-    param_names: &[String],
-    state: &[f64],
-    params: &[f64],
-    // External refreshable forcing-array channel (PR-1, ess-14f.7): the
-    // model-lifetime buffer a discrete-cadence driver refreshes between
-    // segments. Borrowed (not owned by the per-call scratch) so the same buffer
-    // is read across every RHS call within a segment. Empty ⇒ no behaviour
-    // change vs. the scalar-`p` path.
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    t: f64,
+    call: &RhsCall,
     dy: &mut [f64],
     // When true, skip the vectorized fast path and evaluate every array-op
     // derivative via the per-cell oracle. Production always passes `false`
@@ -759,6 +735,16 @@ fn evaluate_rhs_legacy(
     // not allocate.
     scratch: &mut RhsScratch,
 ) {
+    let &RhsCall {
+        rhs_rules,
+        observed_rules,
+        var_shapes,
+        param_names,
+        state,
+        params,
+        forcing,
+        t,
+    } = call;
     // (a) Refill the persistent per-variable state arrays in place from the
     //     flat state vector (no per-call allocation).
     refill_state_arrays(&mut scratch.state_arrays, var_shapes, state);
@@ -855,69 +841,56 @@ fn evaluate_rhs_legacy(
             ..
         } = &mut *scratch;
         observed_arrays.retain(|k, _| static_keys.contains(k));
-        materialize_observeds_append(
-            observed_arrays,
-            observed_rules,
-            state_arrays,
-            params,
-            param_names,
-            t,
-            &derived_rings,
-            forcing,
+        let pass = ObsPass {
+            env: EvalEnv {
+                state_arrays,
+                params,
+                param_names,
+                t,
+                derived_rings: &derived_rings,
+                derived_extents: empty_derived_extents(),
+                forcing,
+                // ess-cse: the observed bodies are where the expanded
+                // discretization subtrees live, so this is the memo's main
+                // beneficiary.
+                cse: Some(&*cse),
+                const_arrays,
+            },
             // Honour the oracle contract: `force_scalar` runs observeds per-cell
             // too, so the reference trajectory is fully un-vectorized.
             force_scalar,
-            stats,
-            // ess-cse: the observed bodies are where the expanded discretization
-            // subtrees live, so this is the memo's main beneficiary.
-            Some(&*cse),
-            const_arrays,
-        );
+        };
+        materialize_observeds_pass(observed_arrays, observed_rules, &pass, stats);
     }
 
     // Emit observed shapes we need for downstream variable lookups.
 
     // Split the scratch into disjoint field borrows: the state/observed arrays
     // are read (shared) while the buffer pool is checked out (exclusive).
-    let state_arrays = &scratch.state_arrays;
     let observed_arrays = &scratch.observed_arrays;
-    let cse = Some(&scratch.cse);
+    let env = EvalEnv {
+        state_arrays: &scratch.state_arrays,
+        params,
+        param_names,
+        t,
+        derived_rings: &derived_rings,
+        derived_extents: empty_derived_extents(),
+        forcing,
+        cse: Some(&scratch.cse),
+        const_arrays,
+    };
     let pool = &mut scratch.pool;
 
     // (c) Evaluate each RHS rule and write into dy.
     for rule in rhs_rules {
         match rule {
             RhsRule::Scalar { slot, body } => {
-                let mut ctx = EvalCtx {
-                    state_arrays,
-                    observed_arrays,
-                    params,
-                    param_names,
-                    loop_binds: IdxMap::default(),
-                    t,
-                    derived_rings: &derived_rings,
-                    derived_extents: empty_derived_extents(),
-                    forcing,
-                    cse,
-                    const_arrays,
-                };
+                let mut ctx = env.ctx(observed_arrays);
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
             }
             RhsRule::IndexedScalar { slot, body } => {
-                let mut ctx = EvalCtx {
-                    state_arrays,
-                    observed_arrays,
-                    params,
-                    param_names,
-                    loop_binds: IdxMap::default(),
-                    t,
-                    derived_rings: &derived_rings,
-                    derived_extents: empty_derived_extents(),
-                    forcing,
-                    cse,
-                    const_arrays,
-                };
+                let mut ctx = env.ctx(observed_arrays);
                 let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
                 dy[*slot] = v;
             }
@@ -961,19 +934,7 @@ fn evaluate_rhs_legacy(
                         .as_ref()
                         .and_then(|shifts| subblock_dest(vs, output_ranges, shifts))
                     {
-                        let ctx = EvalCtx {
-                            state_arrays,
-                            observed_arrays,
-                            params,
-                            param_names,
-                            loop_binds: IdxMap::default(),
-                            t,
-                            derived_rings: &derived_rings,
-                            derived_extents: empty_derived_extents(),
-                            forcing,
-                            cse,
-                            const_arrays,
-                        };
+                        let ctx = env.ctx(observed_arrays);
                         if let Some((val, ops)) = try_eval_arrayop_vectorized(
                             output_idx_names,
                             output_ranges,
@@ -1037,19 +998,7 @@ fn evaluate_rhs_legacy(
                 // `filter` is resolved against, so a per-cell mask means the same
                 // thing here as it does on the vectorized path.
                 let output_origin: Vec<i64> = output_ranges.iter().map(|(lo, _)| *lo).collect();
-                let mut ctx = EvalCtx {
-                    state_arrays,
-                    observed_arrays,
-                    params,
-                    param_names,
-                    loop_binds: IdxMap::default(),
-                    t,
-                    derived_rings: &derived_rings,
-                    derived_extents: empty_derived_extents(),
-                    forcing,
-                    cse: None,
-                    const_arrays,
-                };
+                let mut ctx = env.oracle_ctx(observed_arrays);
                 // ---- Forward prefix scan (O(N) instead of the O(N²) triangle)
                 // A cumulative reduction (esm-spec §4.3.1) is a triangular double
                 // loop that re-sums, for every output cell, the window the
@@ -1109,6 +1058,17 @@ fn evaluate_rhs_legacy(
                     continue;
                 }
 
+                let cellbox = CellBox {
+                    names: output_idx_names,
+                    origin: &output_origin,
+                };
+                let spec = ReduceSpec {
+                    contract_names,
+                    body,
+                    reduce: *reduce,
+                    filter,
+                    cell: Some(&cellbox),
+                };
                 let mut tuples = CartesianTuples::new(output_ranges);
                 while let Some(tuple) = tuples.next() {
                     for (name, val) in output_idx_names.iter().zip(tuple.iter()) {
@@ -1116,19 +1076,8 @@ fn evaluate_rhs_legacy(
                     }
                     // Generalized einsum: contracted indices (incl. ragged
                     // per-cell dynamic bounds) are unrolled and ⊕-combined here.
-                    let v = reduce_contraction(
-                        contract_names,
-                        contract_dims,
-                        static_ranges.as_deref(),
-                        body,
-                        *reduce,
-                        filter,
-                        Some(&CellBox {
-                            names: output_idx_names,
-                            origin: &output_origin,
-                        }),
-                        &mut ctx,
-                    );
+                    let v =
+                        reduce_contraction(&spec, contract_dims, static_ranges.as_deref(), &mut ctx);
                     let actual_multi: Vec<i64> = lhs_idx_exprs
                         .iter()
                         .map(|e| eval_simple_index(e, &ctx.loop_binds))
