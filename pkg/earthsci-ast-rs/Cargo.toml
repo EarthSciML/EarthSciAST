@@ -18,8 +18,12 @@ name = "esm"
 path = "src/bin/esm.rs"
 # The CLI depends on clap; without this, a --no-default-features build would
 # try (and fail) to compile the binary. With it, cargo simply skips the bin
-# target when the `cli` feature is off — no per-item cfg gates needed.
-required-features = ["cli"]
+# target when neither feature is on — no per-item cfg gates needed.
+#
+# `solve` belongs here too: `esm simulate` and `esm test` call the
+# `solve`-gated `earthsci_ast::solve`, so `--no-default-features --features cli`
+# used to fail to compile the binary with E0425 rather than skipping it.
+required-features = ["cli", "solve"]
 
 # The cross-language conformance ADAPTER binaries. Phase-6 H-5: `esm` is the
 # only shipped command-line tool, so these three are behind a NON-DEFAULT
