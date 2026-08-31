@@ -5,7 +5,7 @@
 //!
 //! 1. [`distinct`]        — deduplicate tuples (unique mesh edges from face→vertex lists)
 //! 2. [`equijoin`]        — value-equality equi-join (connectivity inversion, *edges of cell i*;
-//!                          also the `join.on` equality gate's candidate set, §5.5.8)
+//!    also the `join.on` equality gate's candidate set, §5.5.8)
 //! 3. [`skolem`] / [`skolem_edge`] — deterministic content-addressed key from a tuple
 //! 4. [`rank`]            — dense integer renumbering of a distinct set
 //! 5. [`group_aggregate`] — group-by + associative/commutative semiring `⊕` (sum/min/max/…)

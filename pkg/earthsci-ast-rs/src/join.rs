@@ -417,22 +417,35 @@ fn lower_node_joins(
             // The left key drives matching; it must resolve to one of this
             // node's loop symbols, either by naming it (or the index set it
             // draws from) or by naming a 1-D data column over that index set.
-            let l = resolve_side(left, &declared, &set_to_syms, &ranges, index_sets, var_shapes)?
-                .ok_or_else(|| CompileError::UnsupportedFeatureError {
-                    feature: "value-equality join over data-derived columns".to_string(),
-                    message: format!(
-                        "join key column '{left}' does not resolve to a loop index of this \
+            let l = resolve_side(
+                left,
+                &declared,
+                &set_to_syms,
+                &ranges,
+                index_sets,
+                var_shapes,
+            )?
+            .ok_or_else(|| CompileError::UnsupportedFeatureError {
+                feature: "value-equality join over data-derived columns".to_string(),
+                message: format!(
+                    "join key column '{left}' does not resolve to a loop index of this \
                          aggregate ({declared:?}): it names neither a range symbol, nor an index \
                          set one of those ranges draws from, nor a declared 1-D data column over \
                          such an index set (RFC semiring-faq-unified-ir §5.3)"
-                    ),
-                })?;
+                ),
+            })?;
 
             // A right key resolving to no loop symbol at all is the degenerate
             // positional case: the factors already combine on the shared symbol,
             // so the join is a structural no-op.
-            let Some(r) =
-                resolve_side(right, &declared, &set_to_syms, &ranges, index_sets, var_shapes)?
+            let Some(r) = resolve_side(
+                right,
+                &declared,
+                &set_to_syms,
+                &ranges,
+                index_sets,
+                var_shapes,
+            )?
             else {
                 continue;
             };
@@ -775,13 +788,11 @@ fn key_column(
                     Ok((positions, vals))
                 }
                 "interval" => {
-                    let size = set
-                        .size
-                        .ok_or_else(|| {
-                            CompileError::build_err(format!(
-                                "interval index set '{from}' (join key '{sym}') has no `size`"
-                            ))
-                        })?;
+                    let size = set.size.ok_or_else(|| {
+                        CompileError::build_err(format!(
+                            "interval index set '{from}' (join key '{sym}') has no `size`"
+                        ))
+                    })?;
                     let positions: Vec<i64> = (1..=size).collect();
                     let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
                     Ok((positions, vals))

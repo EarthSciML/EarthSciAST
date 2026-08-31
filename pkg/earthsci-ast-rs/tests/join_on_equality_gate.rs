@@ -166,14 +166,17 @@ impl Tables {
             ("rkey", "rrows"),
             ("rate", "rrows"),
         ] {
-            vars.insert(
-                name.into(),
-                json!({"type": "parameter", "shape": [set]}),
-            );
+            vars.insert(name.into(), json!({"type": "parameter", "shape": [set]}));
         }
         if composite {
-            vars.insert("lkey2".into(), json!({"type": "parameter", "shape": ["lrows"]}));
-            vars.insert("rkey2".into(), json!({"type": "parameter", "shape": ["rrows"]}));
+            vars.insert(
+                "lkey2".into(),
+                json!({"type": "parameter", "shape": ["lrows"]}),
+            );
+            vars.insert(
+                "rkey2".into(),
+                json!({"type": "parameter", "shape": ["rrows"]}),
+            );
         }
         vars.insert("E".into(), json!({"type": "unknown", "shape": ["lrows"]}));
 
@@ -284,11 +287,12 @@ fn many_to_many_data_column_join_matches_the_hand_written_filter() {
     // Key 7 appears 3x left and 2x right => all 3·2 = 6 combined terms exist
     // (the DEFINED many-to-many cardinality of §5.3, not an error to guard
     // against); key 9 is 2x1; key 4 is 1x1.
-    let t = Tables::simple(
-        vec![7.0, 9.0, 4.0, 7.0, 9.0, 7.0],
-        vec![7.0, 4.0, 9.0, 7.0],
+    let t = Tables::simple(vec![7.0, 9.0, 4.0, 7.0, 9.0, 7.0], vec![7.0, 4.0, 9.0, 7.0]);
+    assert_eq!(
+        t.match_count(),
+        3 * 2 + 2 + 1,
+        "the m2m fixture is 3·2 (key 7) + 2·1 (key 9) + 1·1 (key 4)"
     );
-    assert_eq!(t.match_count(), 3 * 2 + 2 * 1 + 1, "the m2m fixture is 3·2+2+1");
     let visits = assert_gate_matches_filter(&t, "many-to-many");
     assert_eq!(
         visits,
@@ -313,7 +317,10 @@ fn composite_key_join_requires_every_listed_pair_to_agree() {
     // (l0,r0) on (7,1) and (l2,r2) on (9,1) — 2 of the 12 tuples.
     assert_eq!(t.match_count(), 2);
     let visits = assert_gate_matches_filter(&t, "composite key");
-    assert_eq!(visits, 2, "a composite key matches on the TUPLE, not per column");
+    assert_eq!(
+        visits, 2,
+        "a composite key matches on the TUPLE, not per column"
+    );
 }
 
 #[test]
@@ -395,12 +402,19 @@ fn work_tracks_the_match_count_not_the_index_set_product() {
     let small = keyed_tables(200, 200, 200); // product 40 000
     let large = keyed_tables(200, 2000, 2000); // product 400 000
     assert_eq!(small.match_count(), 200, "one match per left row");
-    assert_eq!(large.match_count(), 200, "same match count, 10x the product");
+    assert_eq!(
+        large.match_count(),
+        200,
+        "same match count, 10x the product"
+    );
 
     let (_, v_small) = run(&small, Gate::On);
     let (_, v_large) = run(&large, Gate::On);
 
-    assert!(v_small > 0, "visits of 0 means the gate declined and never drove");
+    assert!(
+        v_small > 0,
+        "visits of 0 means the gate declined and never drove"
+    );
     assert_eq!(v_small, small.match_count(), "small arm is match-driven");
     assert_eq!(
         v_large,
@@ -515,7 +529,11 @@ fn categorical_member_key_columns_join_many_to_many() {
         // empty sequence to `-0.0` while the engine's empty ⊕-reduction is the
         // semiring identity `+0.0` (§5.6). The two ARE equal as numbers; only
         // the oracle's spelling of zero differs.
-        assert_eq!(got[l], want, "E[{l}] = {} but the oracle says {want}", got[l]);
+        assert_eq!(
+            got[l], want,
+            "E[{l}] = {} but the oracle says {want}",
+            got[l]
+        );
     }
     assert_eq!(visits, 4, "coal 2x2; oil and gas match nothing");
 }
@@ -525,10 +543,7 @@ fn categorical_member_key_columns_join_many_to_many() {
 /// both symbols at once from the sorted candidate pairs.
 #[test]
 fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
-    let t = Tables::simple(
-        vec![7.0, 9.0, 7.0, 4.0],
-        vec![7.0, 4.0, 9.0, 7.0],
-    );
+    let t = Tables::simple(vec![7.0, 9.0, 7.0, 4.0], vec![7.0, 4.0, 9.0, 7.0]);
     // T[q] = Σ_{l,r : keys equal} activity[l]·rate[r], q over a singleton axis.
     let mut vars = serde_json::Map::new();
     for (name, set) in [
@@ -606,7 +621,6 @@ fn scalar_reduction_drives_both_contracted_symbols_from_the_pairs() {
         "both symbols bound from the candidate pairs"
     );
 }
-
 
 // ---------------------------------------------------------------------------
 // The driver is a pure optimisation — proved on the SAME document

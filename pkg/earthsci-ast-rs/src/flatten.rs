@@ -1762,7 +1762,7 @@ fn namespace_join_names(
             // are namespaced by the same rule; its loop symbols are binders and
             // are not. (Resolution runs after flattening, so this is normally
             // `None` — it exists so the two orders agree.)
-            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(&ns)),
+            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ns)),
         })
         .collect();
     (out != join).then_some(out)
@@ -2766,7 +2766,7 @@ fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
                         sym_src: ov.sym_src.clone(),
                         sym_tgt: ov.sym_tgt.clone(),
                     }),
-                    on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(&ren)),
+                    on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
                 })
                 .collect(),
         );

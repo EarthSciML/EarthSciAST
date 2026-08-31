@@ -2148,9 +2148,7 @@ fn side_keys(
         parts.push(k);
     }
     let keys = (0..positions.len())
-        .map(|t| {
-            crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false)
-        })
+        .map(|t| crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false))
         .collect();
     Some((positions, keys))
 }
