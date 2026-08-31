@@ -10,10 +10,26 @@ use serde_json::Value;
 
 /// Collect the differences between two JSON documents as JSON-pointer-style
 /// paths. Object keys and array elements compare exactly, with one deliberate
-/// exception: numbers compare by MATHEMATICAL VALUE, per the ESM
-/// canonical-number rule (CONFORMANCE_SPEC.md §5.5.3 rule 1) — an integral
-/// float normalizes to an integer literal on save (`0.0` → `0`), so the
-/// spelling `1` vs `1.0` is explicitly not information.
+/// exception: numbers compare by MATHEMATICAL VALUE, not by spelling.
+///
+/// That exception is a TOLERANCE for where the crate stands TODAY, not a
+/// statement of a rule it keeps everywhere. The canonical-number rule
+/// (CONFORMANCE_SPEC.md §5.5.3.1 rule 1) does say an integral,
+/// `i64`-representable value must be written as an integer literal, and the
+/// crate implements it at the sites that are settled — `Expr::Number` via
+/// `serialize_canonical_f64`, `canon_number` in the golden emitter, and
+/// `StoichiometricEntry::coefficient`. It is not yet applied to every typed
+/// `f64` field: `time_span`, `default`, `factor` and friends still go through
+/// derived serde, and their spelling diverges across the five bindings — both
+/// integral `.0` retention and exponent form (`1e-9` vs `1e-09` vs `1.0e-9`).
+///
+/// That divergence is being closed, not tolerated forever: the ruling is to
+/// extend rule 1 to the whole document `save()` path in all five bindings, so
+/// integral typed floats become integer literals everywhere. That work is
+/// scoped separately. Until it lands in all five, comparing by value is what
+/// keeps these round-trips honest about STRUCTURE and CONTENT — tightening to
+/// a spelling comparison today would simply go red on the fields still
+/// awaiting the change. Once it lands, this SHOULD be tightened.
 fn value_diff(path: &str, a: &Value, b: &Value, out: &mut Vec<String>) {
     if out.len() > 20 {
         return;
@@ -514,7 +530,9 @@ fn test_reservoir_species_constant_round_trip() {
 /// Reaction systems with fractional stoichiometries (ISOP+O3 → 0.87 CH2O, …)
 /// must load and re-serialize without truncating the coefficients: the
 /// round-tripped JSON is value-equal to the source fixture (numeric spelling
-/// aside, per the §5.5.3 canonical-number rule).
+/// aside — see [`value_diff`]). The INTEGRAL coefficients in this fixture do
+/// additionally survive byte-identically, which
+/// [`test_stoichiometry_emits_integer_literal`] pins directly.
 #[test]
 fn test_fractional_stoichiometry_round_trip() {
     let parsed = assert_lossless_round_trip(
@@ -545,6 +563,67 @@ fn test_fractional_stoichiometry_round_trip() {
     let r4 = &rs.reactions[3];
     let substrates = r4.substrates.as_ref().expect("R4 substrates missing");
     assert_eq!(substrates[0].coefficient, 2.0);
+}
+
+/// An integral stoichiometric coefficient must reach the wire as an INTEGER
+/// literal — `"stoichiometry": 1`, never `"stoichiometry": 1.0` — per
+/// CONFORMANCE_SPEC.md §5.5.3.1 rule 1, and matching what the Julia, Python,
+/// Go and TypeScript bindings all emit.
+///
+/// This asserts on the emitted TEXT rather than a reparsed `serde_json::Value`
+/// on purpose. `StoichiometricEntry::coefficient` is a typed `f64`, so a
+/// parsed comparison — including [`value_diff`] above, which compares numbers
+/// by value — cannot see the difference between `1` and `1.0` and stayed blind
+/// to a real divergence from all four sibling bindings for as long as it
+/// existed. Deleting the `serialize_with` attribute on that field must turn
+/// this test red.
+///
+/// Modeled on Go's `TestSaveTypedFloatFields`
+/// (`pkg/earthsci-ast-go/pkg/esm/canonical_test.go`), which pins the same
+/// property for `VariableMapCoupling.Factor`.
+#[test]
+fn test_stoichiometry_emits_integer_literal() {
+    // `minimal_chemistry` is the first entry of the cross-language round-trip
+    // manifest, and every one of its coefficients is spelled as an integer.
+    let fixture = include_str!("../../../tests/valid/minimal_chemistry.esm");
+    assert!(
+        fixture.contains("\"stoichiometry\": 1\n") || fixture.contains("\"stoichiometry\": 1,"),
+        "fixture precondition: minimal_chemistry spells its coefficients as integers"
+    );
+
+    let parsed: EsmFile = load_string(fixture).expect("parse minimal_chemistry");
+    let serialized = to_json(&parsed).expect("serialize minimal_chemistry");
+
+    assert!(
+        serialized.contains("\"stoichiometry\": 1"),
+        "expected an integer-literal coefficient in the emitted text"
+    );
+    assert!(
+        !serialized.contains("\"stoichiometry\": 1.0"),
+        "integral coefficient emitted with a trailing `.0`, diverging from the \
+         Julia / Python / Go / TypeScript bindings:\n{serialized}"
+    );
+
+    // Fractional coefficients keep their float spelling: the rule normalizes
+    // integral values only, it does not round anything.
+    let frac_src = include_str!("../../../tests/valid/fractional_stoichiometry.esm");
+    // This fixture spells one integral coefficient as `2.0`, which exercises
+    // the "regardless of source spelling" half of the rule.
+    assert!(
+        frac_src.contains("\"stoichiometry\": 2.0"),
+        "fixture precondition: fractional_stoichiometry spells one coefficient `2.0`"
+    );
+
+    let frac: EsmFile = load_string(frac_src).expect("parse fractional_stoichiometry");
+    let frac_json = to_json(&frac).expect("serialize fractional_stoichiometry");
+    assert!(
+        frac_json.contains("\"stoichiometry\": 0.87"),
+        "fractional coefficients must survive as floats"
+    );
+    assert!(
+        !frac_json.contains("\"stoichiometry\": 2.0"),
+        "the source-spelled `2.0` must normalize to the integer literal `2`:\n{frac_json}"
+    );
 }
 
 /// v0.5.0: tests_analyses_comprehensive fixture (includes multi-series y array form) round-trips.
