@@ -175,24 +175,26 @@ fn semiring_oplus(semiring: &str) -> Option<(&'static str, f64)> {
     Some((reduce_spelling(oplus), oplus.identity()))
 }
 
-/// 0̄ for a legacy `reduce` spelling; identities come from the registry
+/// 0̄ for a `reduce` spelling; identities come from the registry
 /// ([`ReduceKind::identity`]), the string→⊕ domain stays this pass's own.
 ///
-/// DISCREPANCY (recorded, not resolved): the registry's legacy arm,
-/// [`crate::aggregate::effective_reduce_kind`], folds `"or"` and every
-/// unrecognized `reduce` spelling into its `Sum` default (the strict-superset
-/// promise), which would spell ⊕ as `"+"` with identity `0` and let this
-/// pass's additive-monoid guard fire on such a node. This pass has always
-/// kept `"or"` as its own ⊕ (the guard then refuses) and refused unrecognized
-/// spellings outright; deriving the domain from `effective_reduce_kind` would
-/// silently widen the rewrite, so only the identities are shared.
+/// The domain is the schema's CLOSED `reduce` enum, `+ * max min`, and nothing
+/// else. `"or"` used to be admitted here as a sixth spelling; the schema has
+/// never allowed it, so the arm was unreachable from any valid file, and
+/// [`crate::aggregate::effective_reduce_kind`] now rejects it too. `or` remains
+/// a perfectly reachable ⊕ — but only as `bool_and_or`'s, through the
+/// `semiring` field, which [`pd_oplus`] resolves via [`semiring_oplus`] before
+/// it ever consults `reduce`.
+///
+/// An unrecognized spelling still returns `None` (the pass declines to rewrite)
+/// rather than raising: this is an optimization, and the diagnostic for an
+/// out-of-enum file belongs to `aggregate::validate_oplus_spellings`.
 fn oplus_identity(reduce: &str) -> Option<f64> {
     let rk = match reduce {
         "+" => ReduceKind::Sum,
         "*" => ReduceKind::Product,
         "max" => ReduceKind::Max,
         "min" => ReduceKind::Min,
-        "or" => ReduceKind::Or,
         _ => return None,
     };
     Some(rk.identity())

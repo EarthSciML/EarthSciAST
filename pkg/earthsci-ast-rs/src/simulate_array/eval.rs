@@ -2527,7 +2527,12 @@ pub(super) fn arrayop_spec(node: &ExpressionNode) -> Option<ArrayOpSpec<'_>> {
         .iter()
         .map(|k| ContractDim::from_range(&ranges_map[*k]))
         .collect();
-    let reduce = effective_reduce_kind(node.semiring.as_deref(), node.reduce.as_deref());
+    // `None` here means "this node is not an evaluable aggregate", which every
+    // caller already handles. An out-of-enum ⊕ spelling would land in that same
+    // bucket, so it is NOT reported here — it is rejected up front by
+    // `aggregate::validate_oplus_spellings`, which `ArrayCompiled::from_model`
+    // runs over the whole model before any of this is reachable.
+    let reduce = effective_reduce_kind(node.semiring.as_deref(), node.reduce.as_deref()).ok()?;
     // §5.3 filter: a boolean predicate gating which index combinations
     // contribute a ⊗-term. Absent ⇒ every combination contributes (byte-
     // identical to the no-filter form).

@@ -5,7 +5,9 @@
 //! lowering helpers.
 
 use super::*;
-use crate::aggregate::{effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges};
+use crate::aggregate::{
+    effective_reduce_kind, is_aggregate_op, resolve_aggregate_ranges, validate_oplus_spellings,
+};
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
@@ -625,6 +627,12 @@ impl ArrayCompiled {
         // into a concrete `[lo, hi]` interval before shape inference / rule
         // building, so every downstream consumer sees only dense intervals.
         resolve_aggregate_ranges(&mut model_owned, index_sets)?;
+        // Reject any aggregate whose ⊕ is spelled outside the schema's closed
+        // `reduce` / `semiring` enums. The gate lives here, at the one funnel
+        // every array-runtime build passes through, because the seams that
+        // actually resolve ⊕ (`extract_derivative_arrayop`, `arrayop_spec`)
+        // return `Option` and so could only decline silently.
+        validate_oplus_spellings(&model_owned)?;
 
         // Stages (0)-(5) read the model immutably; only OWNED products leave
         // this block, so stage (6) below can borrow the model mutably (it
@@ -1657,7 +1665,10 @@ fn lower_wholearray_producer_lift(
         body: Box::new(body),
         contract_names: Vec::new(),
         contract_dims: Vec::new(),
-        reduce: effective_reduce_kind(None, None),
+        // No contracted index, so ⊕ never folds anything; carry the schema's
+        // stated default. (This used to be spelled `effective_reduce_kind(None,
+        // None)`, which only obscured that there is no node to read it off.)
+        reduce: ReduceKind::Sum,
         filter: None,
     });
     Ok(())
@@ -2923,7 +2934,12 @@ pub(super) fn extract_derivative_arrayop(lhs: &Expr, rhs: &Expr) -> Option<Deriv
     let (rhs_body, contract_names, contract_dims, reduce, filter) = match rhs {
         Expr::Operator(rnode) if is_aggregate_op(&rnode.op) => {
             let b = rnode.expr.as_ref().map(|b| b.as_ref().clone())?;
-            let rop = effective_reduce_kind(rnode.semiring.as_deref(), rnode.reduce.as_deref());
+            // Declining (rather than reporting) an out-of-enum ⊕ spelling is
+            // safe here only because this is a pattern matcher with no error
+            // channel AND `from_model` runs `validate_oplus_spellings` over the
+            // whole model first, so such a node cannot reach this point.
+            let rop = effective_reduce_kind(rnode.semiring.as_deref(), rnode.reduce.as_deref())
+                .ok()?;
             let mut c_names: Vec<String> = Vec::new();
             let mut c_dims: Vec<ContractDim> = Vec::new();
             if let Some(rhs_ranges) = &rnode.ranges {

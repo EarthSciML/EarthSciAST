@@ -1441,7 +1441,13 @@ fn vi_materialize_producer(ctx: &ViCtx, node: &Value) -> Result<Vec<Key>, ValueI
 fn vi_oplus(node: &Value) -> Result<(SemiringOp, f64), ValueInventionError> {
     let semiring = node.get("semiring").and_then(|v| v.as_str());
     let reduce = node.get("reduce").and_then(|v| v.as_str());
-    let rk = effective_reduce_kind(semiring, reduce);
+    // Value invention runs before the array runtime's `validate_oplus_spellings`
+    // gate and has its own error channel, so an out-of-enum ⊕ spelling is
+    // reported here directly, naming the offending field and value.
+    let rk = match effective_reduce_kind(semiring, reduce) {
+        Ok(rk) => rk,
+        Err(bad) => return err(format!("grouped value-invention reduction: {bad}")),
+    };
     let op = match rk {
         ReduceKind::Sum => SemiringOp::Sum,
         ReduceKind::Product => SemiringOp::Prod,

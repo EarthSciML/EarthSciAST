@@ -8,8 +8,10 @@
 //!   The `reduce` field names ⊕ only; ⊗ and both identities come from the
 //!   registry table here, never from the file. [`effective_reduce_kind`] is the
 //!   single entry point the evaluator uses to pick the ⊕ reducer for a node:
-//!   the semiring wins when present, otherwise the legacy `reduce` string
-//!   drives it exactly as before (the strict-superset promise).
+//!   the semiring wins when present, otherwise the `reduce` string drives it.
+//!   Both fields are closed enums, and a spelling outside either one is an
+//!   error, not a silent fold to `Sum` — [`validate_oplus_spellings`] is the
+//!   fail-fast gate that raises it before any rule is built.
 //! - **§5.2 Index sets.** [`resolve_aggregate_ranges`] rewrites every
 //!   `{ "from": <name> }` range reference against the model `index_sets`
 //!   registry, **erroring on an undeclared name** (no implicit interval
@@ -30,6 +32,8 @@
 //!   tag. (The legacy `"arrayop"` alias was removed in ESM v0.8.0.)
 
 use std::collections::HashMap;
+
+use thiserror::Error;
 
 use crate::compile_error::CompileError;
 use crate::types::{Expr, IndexSet, Model, RangeSpec};
@@ -147,26 +151,145 @@ impl Semiring {
     }
 }
 
-/// Resolve the effective ⊕ reducer for an `aggregate`/`arrayop` node.
+/// Why ⊕ could not be named: the node carries a spelling outside one of the
+/// two closed schema enums.
+///
+/// [`effective_reduce_kind`] is consulted from three different error domains —
+/// [`CompileError`], `value_invention::ValueInventionError`, and the
+/// infallible array evaluator — so it reports the defect as this small
+/// self-describing value and lets each caller render it into the error type it
+/// owns rather than forcing one of those types on the others.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BadOplus {
+    /// `semiring` is not one of the five §5.1 registry names.
+    #[error(
+        "aggregate `semiring` is '{0}', which is not in the closed RFC §5.1 registry \
+         (sum_product, max_product, min_sum, max_sum, bool_and_or)"
+    )]
+    Semiring(String),
+    /// `reduce` is not one of the four spellings the schema's closed enum allows.
+    #[error(
+        "aggregate `reduce` is '{0}', which is not in the schema's closed enum \
+         (+, *, max, min); a ⊕ outside it — the boolean `or` included — is named by \
+         setting `semiring`, not by inventing a `reduce` spelling"
+    )]
+    Reduce(String),
+}
+
+/// Resolve the effective ⊕ reducer for an `aggregate` node.
 ///
 /// Per RFC §5.1, when `semiring` is present it is authoritative: ⊕ and its
-/// identity come from the registry, never the file. When absent, the legacy
-/// `reduce` string names ⊕ directly (today's behavior — the strict-superset
-/// promise). Total and infallible: an absent/unrecognized `reduce` falls back
-/// to `Sum`, exactly matching the evaluator's pre-existing default.
-pub fn effective_reduce_kind(semiring: Option<&str>, reduce: Option<&str>) -> ReduceKind {
-    // A recognized semiring is authoritative for ⊕. An unrecognized name (the
-    // schema's closed enum should have rejected it) falls through to the legacy
-    // `reduce` string rather than mis-aggregating.
-    if let Some(sr) = semiring.and_then(Semiring::from_name) {
-        return sr.oplus();
+/// identity come from the registry, never the file. When absent, the `reduce`
+/// string names ⊕ directly.
+///
+/// Both fields are CLOSED enums in `esm-schema.json`, and this function holds
+/// that line rather than papering over a violation. It used to be total, with
+/// two distinct fallbacks, and both were silent:
+///
+/// - An unregistered `semiring` fell through to the `reduce` string. That looks
+///   conservative, but a node naming a semiring normally omits `reduce`
+///   entirely (the semiring supersedes it) — so the fall-through's *common*
+///   case landed on the `reduce` default and returned `Sum`, which is exactly
+///   the silent mis-aggregation it was meant to avoid. It is now
+///   [`BadOplus::Semiring`]: the presence of the key is authoritative even when
+///   its value is unreadable. Julia's `_aggregate_oplus_identity` and Python's
+///   `_resolve_semiring` both raise here, and this module's own
+///   [`crate::pushdown_rewrite`] already refused rather than falling through,
+///   so the fall-through made this function the sole outlier.
+/// - An unrecognized `reduce` folded to `Sum`, so a typo (`"sum"`, `"mean"`)
+///   mis-aggregated in silence. It is now [`BadOplus::Reduce`].
+///
+/// `reduce: None` and `reduce: Some("+")` both still mean `Sum` — that is the
+/// schema's stated default, not a fallback.
+///
+/// Callers that cannot carry an error (a pattern matcher returning `Option`,
+/// the evaluator) rely on [`validate_oplus_spellings`] having rejected the file
+/// up front, and merely decline.
+pub fn effective_reduce_kind(
+    semiring: Option<&str>,
+    reduce: Option<&str>,
+) -> Result<ReduceKind, BadOplus> {
+    if let Some(name) = semiring {
+        return Semiring::from_name(name)
+            .map(Semiring::oplus)
+            .ok_or_else(|| BadOplus::Semiring(name.to_string()));
     }
     match reduce {
-        Some("*") => ReduceKind::Product,
-        Some("max") => ReduceKind::Max,
-        Some("min") => ReduceKind::Min,
-        // "+", None, or anything else → today's default reducer.
-        _ => ReduceKind::Sum,
+        None | Some("+") => Ok(ReduceKind::Sum),
+        Some("*") => Ok(ReduceKind::Product),
+        Some("max") => Ok(ReduceKind::Max),
+        Some("min") => Ok(ReduceKind::Min),
+        Some(other) => Err(BadOplus::Reduce(other.to_string())),
+    }
+}
+
+/// Reject every `aggregate` node in `model` whose `semiring` / `reduce` lies
+/// outside the closed schema enums, naming the offending spelling.
+///
+/// The fail-fast gate for the array runtime. [`effective_reduce_kind`] is
+/// reached from seams with no error channel of their own — an
+/// `Option`-returning pattern matcher (`extract_derivative_arrayop`) and the
+/// infallible evaluator (`arrayop_spec`, whose `None` is a NaN sentinel) — so
+/// folding the defect into their `None` would only trade one silent fallback
+/// for another. The diagnostic is raised HERE instead: once, over the whole
+/// model, before any rule is built. Called from `ArrayCompiled::from_model`
+/// alongside the other §5.2 / §5.3 pre-passes, which leaves those seams with
+/// nothing to do but decline on an input that can no longer reach them.
+///
+/// Read-only and unconditional, unlike [`resolve_aggregate_ranges`]: that pass
+/// may skip a subtree because rewriting one would copy-on-write split shared
+/// `Arc` payloads, whereas this one rewrites nothing and so must not skip.
+pub fn validate_oplus_spellings(model: &Model) -> Result<(), CompileError> {
+    for eq in &model.equations {
+        check_expr_oplus(&eq.lhs)?;
+        check_expr_oplus(&eq.rhs)?;
+    }
+    if let Some(init_eqs) = &model.initialization_equations {
+        for eq in init_eqs {
+            check_expr_oplus(&eq.lhs)?;
+            check_expr_oplus(&eq.rhs)?;
+        }
+    }
+    // As in `resolve_aggregate_ranges_with_extents`: what a variable still
+    // carries is a parameter's `update`, whose expressions may embed an
+    // aggregate too.
+    let mut failure = None;
+    for var in model.variables.values() {
+        var.for_each_expression(&mut |expr| {
+            if failure.is_none()
+                && let Err(e) = check_expr_oplus(expr)
+            {
+                failure = Some(e);
+            }
+        });
+    }
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// [`validate_oplus_spellings`] for one expression subtree.
+fn check_expr_oplus(expr: &Expr) -> Result<(), CompileError> {
+    let Expr::Operator(node) = expr else {
+        return Ok(());
+    };
+    if is_aggregate_op(&node.op)
+        && let Err(bad) = effective_reduce_kind(node.semiring.as_deref(), node.reduce.as_deref())
+    {
+        return Err(CompileError::build_err(bad.to_string()));
+    }
+    let mut failure = None;
+    node.for_each_child(&mut |child| {
+        if failure.is_none()
+            && let Err(e) = check_expr_oplus(child)
+        {
+            failure = Some(e);
+        }
+    });
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 
@@ -558,6 +681,7 @@ fn resolve_index_set_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{Equation, ExpressionNode};
 
     fn interval(size: i64) -> IndexSet {
         IndexSet {
@@ -635,31 +759,122 @@ mod tests {
         // Semiring present → its ⊕ wins regardless of (or absent) `reduce`.
         assert_eq!(
             effective_reduce_kind(Some("min_sum"), None),
-            ReduceKind::Min
+            Ok(ReduceKind::Min)
         );
         assert_eq!(
             effective_reduce_kind(Some("max_sum"), Some("+")),
-            ReduceKind::Max
+            Ok(ReduceKind::Max)
         );
         assert_eq!(
             effective_reduce_kind(Some("max_product"), None),
-            ReduceKind::Max
+            Ok(ReduceKind::Max)
         );
         assert_eq!(
             effective_reduce_kind(Some("bool_and_or"), None),
-            ReduceKind::Or
+            Ok(ReduceKind::Or)
         );
-        // No semiring → legacy reduce string, default "+".
-        assert_eq!(effective_reduce_kind(None, None), ReduceKind::Sum);
-        assert_eq!(effective_reduce_kind(None, Some("+")), ReduceKind::Sum);
-        assert_eq!(effective_reduce_kind(None, Some("*")), ReduceKind::Product);
-        assert_eq!(effective_reduce_kind(None, Some("max")), ReduceKind::Max);
-        assert_eq!(effective_reduce_kind(None, Some("min")), ReduceKind::Min);
-        // Unknown semiring falls back to the legacy reduce rather than panicking.
+        // No semiring → the `reduce` string; absent and "+" are both the
+        // schema's stated DEFAULT of Sum, not a fallback.
+        assert_eq!(effective_reduce_kind(None, None), Ok(ReduceKind::Sum));
+        assert_eq!(effective_reduce_kind(None, Some("+")), Ok(ReduceKind::Sum));
+        assert_eq!(
+            effective_reduce_kind(None, Some("*")),
+            Ok(ReduceKind::Product)
+        );
+        assert_eq!(effective_reduce_kind(None, Some("max")), Ok(ReduceKind::Max));
+        assert_eq!(effective_reduce_kind(None, Some("min")), Ok(ReduceKind::Min));
+    }
+
+    #[test]
+    fn spellings_outside_the_closed_enums_are_rejected() {
+        // An unregistered `semiring` no longer falls through to `reduce`: the
+        // presence of the key is authoritative even when its value is not
+        // readable, matching Julia and Python. (This case previously returned
+        // `Min`.)
         assert_eq!(
             effective_reduce_kind(Some("bogus"), Some("min")),
-            ReduceKind::Min
+            Err(BadOplus::Semiring("bogus".to_string()))
         );
+        // ...and with `reduce` absent — the shape a semiring node normally has
+        // — the old fall-through silently produced Sum.
+        assert_eq!(
+            effective_reduce_kind(Some("bogus"), None),
+            Err(BadOplus::Semiring("bogus".to_string()))
+        );
+        // A `reduce` outside the schema's closed enum is an error, not Sum.
+        for bad in ["sum", "prod", "mean", "and", ""] {
+            assert_eq!(
+                effective_reduce_kind(None, Some(bad)),
+                Err(BadOplus::Reduce(bad.to_string())),
+                "reduce={bad:?}"
+            );
+        }
+        // `or` names a legitimate ⊕, but only through `bool_and_or`; it is not
+        // a `reduce` spelling the schema admits.
+        assert_eq!(
+            effective_reduce_kind(None, Some("or")),
+            Err(BadOplus::Reduce("or".to_string()))
+        );
+        assert_eq!(
+            effective_reduce_kind(Some("bool_and_or"), None),
+            Ok(ReduceKind::Or)
+        );
+    }
+
+    #[test]
+    fn validate_oplus_spellings_names_the_offending_spelling() {
+        let bad_agg = |semiring: Option<&str>, reduce: Option<&str>| {
+            let mut node = ExpressionNode {
+                op: "aggregate".to_string(),
+                ..Default::default()
+            };
+            node.semiring = semiring.map(str::to_string);
+            node.reduce = reduce.map(str::to_string);
+            node.expr = Some(Box::new(Expr::Variable("x".to_string())));
+            Expr::Operator(node.into())
+        };
+        let model_with = |rhs: Expr| {
+            let mut m = Model::default();
+            m.equations.push(Equation {
+                lhs: Expr::Variable("y".to_string()),
+                rhs,
+                ..Default::default()
+            });
+            m
+        };
+
+        // In-enum spellings pass, including the absent/default form.
+        for ok in [
+            bad_agg(None, None),
+            bad_agg(None, Some("max")),
+            bad_agg(Some("bool_and_or"), None),
+        ] {
+            assert!(validate_oplus_spellings(&model_with(ok)).is_ok());
+        }
+
+        let err = validate_oplus_spellings(&model_with(bad_agg(None, Some("mean"))))
+            .expect_err("an out-of-enum `reduce` must be rejected");
+        assert!(err.to_string().contains("mean"), "{err}");
+
+        let err = validate_oplus_spellings(&model_with(bad_agg(Some("bogus"), None)))
+            .expect_err("an unregistered `semiring` must be rejected");
+        assert!(err.to_string().contains("bogus"), "{err}");
+
+        // The walk descends into nested subtrees, not just the equation root.
+        let nested = Expr::Operator(
+            ExpressionNode {
+                op: "+".to_string(),
+                args: vec![
+                    Expr::Variable("z".to_string()),
+                    bad_agg(None, Some("mean")),
+                ],
+                ..Default::default()
+            }
+            .into(),
+        );
+        let err = validate_oplus_spellings(&model_with(nested))
+            .expect_err("a nested aggregate must be reached");
+        assert!(err.to_string().contains("mean"), "{err}");
     }
 
     #[test]
