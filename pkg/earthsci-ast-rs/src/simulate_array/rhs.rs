@@ -359,42 +359,6 @@ pub(super) struct ObsPass<'a> {
     pub(super) force_scalar: bool,
 }
 
-/// Positional wrapper over [`materialize_observeds_pass`], kept so the
-/// tape/reference executors' fallback arms keep their call shape; every other
-/// caller builds an [`ObsPass`] and calls [`materialize_observeds_pass`]
-/// directly.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn materialize_observeds_append(
-    dst: &mut ArrMap,
-    observed_rules: &[AlgebraicRule],
-    state_arrays: &ArrMap,
-    params: &[f64],
-    param_names: &[String],
-    t: f64,
-    derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
-    force_scalar: bool,
-    stats: &mut RhsStats,
-    cse: Option<&CseRt>,
-    const_arrays: &ConstArrayScope,
-) {
-    let pass = ObsPass {
-        env: EvalEnv {
-            state_arrays,
-            params,
-            param_names,
-            t,
-            derived_rings,
-            derived_extents: empty_derived_extents(),
-            forcing,
-            cse,
-            const_arrays,
-        },
-        force_scalar,
-    };
-    materialize_observeds_pass(dst, observed_rules, &pass, stats);
-}
-
 /// Like [`materialize_observeds_into`] but does NOT clear `dst` first — the
 /// rules are evaluated and their outputs inserted on top of whatever is already
 /// there. This is what lets the RHS seed the hoisted static observeds (ess:

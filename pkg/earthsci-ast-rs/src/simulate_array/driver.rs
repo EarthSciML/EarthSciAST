@@ -1450,7 +1450,7 @@ fn outobs_prune_disabled() -> bool {
 ///
 ///   * an `ArrayLoop` writes a box of rank `output_ranges.len()` on BOTH the
 ///     vectorized fast path and the per-cell oracle (see
-///     [`materialize_observeds_append`]);
+///     [`materialize_observeds_pass`]);
 ///   * a `Scalar` rule whose body is an `aggregate` carrying a body (`expr`) and
 ///     a non-empty `output_idx` is evaluated by [`eval_arrayop`], which returns
 ///     a `Value::Array` of rank `output_idx.len()`. (Without `expr` the oracle

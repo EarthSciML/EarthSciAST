@@ -205,36 +205,34 @@ pub(super) fn run_reference(
             }
             Instr::Fallback { rule } => {
                 let info = &prog.rules[*rule as usize];
+                // Both fallback arms re-enter the interpreter under the same
+                // contract: no CSE memo, and an empty compiled-RHS
+                // derived-extents map.
+                let env = EvalEnv {
+                    state_arrays: &state_arrays,
+                    params,
+                    param_names: &compiled.param_names,
+                    t,
+                    derived_rings: &derived_rings,
+                    derived_extents: empty_derived_extents(),
+                    forcing: &compiled.forcing,
+                    cse: None,
+                    const_arrays: &compiled.const_scope,
+                };
                 match info.kind {
                     RuleKind::Observed(i) => {
                         let rule = &compiled.observed_rules[i];
-                        materialize_observeds_append(
+                        materialize_observeds_pass(
                             &mut obs,
                             std::slice::from_ref(rule),
-                            &state_arrays,
-                            params,
-                            &compiled.param_names,
-                            t,
-                            &derived_rings,
-                            &compiled.forcing,
-                            false,
+                            &ObsPass {
+                                env,
+                                force_scalar: false,
+                            },
                             &mut RhsStats::default(),
-                            None,
-                            &compiled.const_scope,
                         );
                     }
                     RuleKind::Rhs(i) => {
-                        let env = EvalEnv {
-                            state_arrays: &state_arrays,
-                            params,
-                            param_names: &compiled.param_names,
-                            t,
-                            derived_rings: &derived_rings,
-                            derived_extents: empty_derived_extents(),
-                            forcing: &compiled.forcing,
-                            cse: None,
-                            const_arrays: &compiled.const_scope,
-                        };
                         run_rhs_oracle(
                             &compiled.rhs_rules[i],
                             &compiled.var_shapes,

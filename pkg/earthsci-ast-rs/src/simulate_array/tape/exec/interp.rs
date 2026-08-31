@@ -258,19 +258,14 @@ pub(super) fn run_range(
                 let info = &prog.rules[*rule as usize];
                 match info.kind {
                     RuleKind::Observed(i) => {
-                        materialize_observeds_append(
+                        materialize_observeds_pass(
                             obs,
                             std::slice::from_ref(&env.observed_rules[i]),
-                            env.state_arrays,
-                            env.params,
-                            env.param_names,
-                            env.t,
-                            env.derived_rings,
-                            env.forcing,
-                            false,
+                            &ObsPass {
+                                env: env.eval_env(),
+                                force_scalar: false,
+                            },
                             stats,
-                            None,
-                            env.const_arrays,
                         );
                     }
                     RuleKind::Rhs(i) => {
