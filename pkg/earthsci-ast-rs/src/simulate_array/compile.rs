@@ -1432,11 +1432,11 @@ fn classify_field_ics(model: &Model) -> Vec<(String, Expr)> {
 
 /// (7) Build the RHS rules. Each equation with a derivative LHS produces
 /// either a scalar slot write, an indexed scalar slot write, or an array
-/// loop. Then (7b) held-at-ic states (no `D`, no algebraic definition) carry
-/// every cell at its ic with zero derivative — their slots are marked covered
-/// without emitting a rule (the RHS zero-initializes `dy` each call and never
-/// writes them) — and (8) every state slot must end up with a defining
-/// equation.
+/// loop — one lowering function per form below. Then (7b) held-at-ic states
+/// (no `D`, no algebraic definition) carry every cell at its ic with zero
+/// derivative — their slots are marked covered without emitting a rule (the
+/// RHS zero-initializes `dy` each call and never writes them) — and (8) every
+/// state slot must end up with a defining equation.
 fn build_rhs_rules(
     model: &Model,
     slots: &SlotTables,
@@ -1452,178 +1452,278 @@ fn build_rhs_rules(
     let array_axes = declared_axis_names(model);
 
     for eq in &model.equations {
-        if let Some(DerivArrayop {
-            var,
-            idx_names,
-            ranges,
-            lhs_idx_exprs,
-            body,
-            contract_names,
-            contract_dims,
-            reduce,
-            filter,
-        }) = extract_derivative_arrayop(&eq.lhs, &eq.rhs)
-        {
-            // Array-op derivative over (idx_names, ranges).
-            if !var_shapes.contains_key(&var) {
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!("Array-op derivative targets unknown state variable '{var}'"),
-                });
-            }
-            // Mark the covered slots.
-            let shape = &var_shapes[&var];
-            for tuple in cartesian_range(&ranges) {
-                // Map to column-major flat offset using actual LHS index expressions.
-                let binds: HashMap<String, i64> = idx_names
-                    .iter()
-                    .zip(tuple.iter())
-                    .map(|(n, v)| (n.clone(), *v))
-                    .collect();
-                let actual_multi: Vec<i64> = lhs_idx_exprs
-                    .iter()
-                    .map(|e| eval_simple_index(e, &binds))
-                    .collect();
-                let flat = multi_to_flat_col_major(&actual_multi, &shape.shape, &shape.origin);
-                covered_slots.insert(shape.flat_offset + flat);
-            }
-            rhs_rules.push(RhsRule::ArrayLoop {
-                var_name: var,
-                output_idx_names: idx_names,
-                output_ranges: ranges,
-                lhs_idx_exprs,
-                body: Box::new(body),
-                contract_names,
-                contract_dims,
-                reduce,
-                filter,
-            });
+        if let Some(d) = extract_derivative_arrayop(&eq.lhs, &eq.rhs) {
+            lower_arrayop_derivative(d, var_shapes, &mut covered_slots, &mut rhs_rules)?;
             continue;
         }
         // Scalar D(var, t) = rhs.
         if let Some((var, idx_opt)) = extract_derivative_scalar(&eq.lhs) {
-            if let Some(indices) = idx_opt {
-                // Indexed: find slot.
-                let shape =
-                    var_shapes
-                        .get(&var)
-                        .ok_or_else(|| CompileError::InterpreterBuildError {
-                            details: format!(
-                                "Scalar derivative targets unknown state variable '{var}'"
-                            ),
-                        })?;
-                let flat = multi_to_flat_col_major(&indices, &shape.shape, &shape.origin);
-                let slot = shape.flat_offset + flat;
-                covered_slots.insert(slot);
-                rhs_rules.push(RhsRule::IndexedScalar {
-                    slot,
-                    body: Box::new(eq.rhs.clone()),
-                });
-                continue;
-            } else {
-                let shape = var_shapes
-                    .get(&var)
-                    .ok_or_else(|| CompileError::InterpreterBuildError {
-                        details: format!(
-                            "Scalar derivative targets unknown state variable '{var}'"
-                        ),
-                    })?
-                    .clone();
-                // The result's declared index-set axis names, when they line up
-                // with the shape actually compiled for it. This is what makes
-                // the bare RHS's operands alignable BY NAME below; a state
-                // whose shape was inferred from index usage rather than
-                // declared (or declared at a different rank) has no usable
-                // names and keeps the positional lowering.
-                let target_axes: Option<&[String]> = model
-                    .variables
-                    .get(&var)
-                    .and_then(|v| v.shape.as_deref())
-                    .filter(|d| d.len() == shape.shape.len());
-                if shape.shape.is_empty() {
-                    // Plain scalar D(var, t) = rhs.
-                    let slot = shape.flat_offset;
-                    covered_slots.insert(slot);
-                    rhs_rules.push(RhsRule::Scalar {
-                        slot,
-                        body: Box::new(eq.rhs.clone()),
-                    });
-                } else if rhs_has_array_producer(&eq.rhs) {
-                    // Whole-array `D(var) = <rhs containing a lowered stencil>`
-                    // (an array-PRODUCING `makearray`/`aggregate` in elementwise
-                    // position, the form a §9.6.3 discretization rewrite emits):
-                    // lift to the per-cell `arrayop` (ArrayLoop) form the
-                    // derivative partition consumes — output loops over the full
-                    // declared shape, each array leaf and array producer gathered
-                    // per cell via `index(node, loops…)`. This is the loop-form
-                    // analog of the Julia `_lift_wholearray_deriv_equations`
-                    // (shape_promotion.jl) and keeps the rule eligible for the
-                    // vectorized whole-array fast path (ess-bdm).
-                    let ndim = shape.shape.len();
-                    let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
-                    let output_ranges: Vec<(i64, i64)> = shape
-                        .shape
-                        .iter()
-                        .zip(shape.origin.iter())
-                        .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
-                        .collect();
-                    let lhs_idx_exprs: Vec<Expr> =
-                        loops.iter().map(|l| Expr::Variable(l.clone())).collect();
-                    let plan = build_gather_plan(&eq.rhs, &array_axes, &var, target_axes, false)?;
-                    let body =
-                        index_array_leaves_by_loops(&eq.rhs, &array_axes, Some(&plan), &loops);
-                    let total = shape.shape.iter().copied().product::<usize>().max(1);
-                    for flat in 0..total {
-                        covered_slots.insert(shape.flat_offset + flat);
-                    }
-                    rhs_rules.push(RhsRule::ArrayLoop {
-                        var_name: var.clone(),
-                        output_idx_names: loops,
-                        output_ranges,
-                        lhs_idx_exprs,
-                        body: Box::new(body),
-                        contract_names: Vec::new(),
-                        contract_dims: Vec::new(),
-                        reduce: effective_reduce_kind(None, None),
-                        filter: None,
-                    });
-                } else {
-                    // Whole-array `D(var) = <array-valued rhs>` over a declared
-                    // array shape: enumerate cells and emit one per-cell scalar
-                    // rule, indexing each array-shaped RHS leaf by that cell
-                    // (elementwise semantics). This is the array-runtime analog
-                    // of the Julia `_lift_wholearray_deriv_equations` lift.
-                    let plan = build_gather_plan(&eq.rhs, &array_axes, &var, target_axes, true)?;
-                    let total = shape.shape.iter().copied().product::<usize>().max(1);
-                    for flat in 0..total {
-                        let multi0 = flat_to_multi_col_major(flat, &shape.shape);
-                        let cell: Vec<i64> = multi0
-                            .iter()
-                            .zip(shape.origin.iter())
-                            .map(|(m, o)| *m as i64 + *o)
-                            .collect();
-                        let body = index_array_leaves(&eq.rhs, &array_axes, Some(&plan), &cell);
-                        let slot = shape.flat_offset + flat;
-                        covered_slots.insert(slot);
-                        rhs_rules.push(RhsRule::IndexedScalar {
-                            slot,
-                            body: Box::new(body),
-                        });
-                    }
-                }
-                continue;
+            match idx_opt {
+                Some(indices) => lower_indexed_derivative(
+                    var,
+                    &indices,
+                    &eq.rhs,
+                    var_shapes,
+                    &mut covered_slots,
+                    &mut rhs_rules,
+                )?,
+                None => lower_bare_derivative(
+                    var,
+                    &eq.rhs,
+                    model,
+                    &array_axes,
+                    var_shapes,
+                    &mut covered_slots,
+                    &mut rhs_rules,
+                )?,
             }
+            continue;
         }
         // Otherwise: algebraic equation (or something we don't support).
         // If the LHS is algebraic for an eliminated variable it was
         // already consumed above; ignore here.
     }
 
-    // (7b) Held-at-ic states (no `D`, no algebraic definition) carry every
-    //      cell at its ic with zero derivative: mark their slots covered
-    //      without emitting a rule. The RHS zero-initializes `dy` each call
-    //      and never writes these slots, so they stay constant (a state that
-    //      feeds an observed — e.g. `phi` into `heat_release` — must not
-    //      drift).
+    cover_held_at_ic_slots(held_at_ic, var_shapes, &mut covered_slots);
+    check_state_slots_covered(slots, &covered_slots)?;
+
+    Ok(rhs_rules)
+}
+
+/// Lower an array-op derivative over `(idx_names, ranges)` to one
+/// [`RhsRule::ArrayLoop`], marking the covered slots.
+fn lower_arrayop_derivative(
+    d: DerivArrayop,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut HashSet<usize>,
+    rhs_rules: &mut Vec<RhsRule>,
+) -> Result<(), CompileError> {
+    let DerivArrayop {
+        var,
+        idx_names,
+        ranges,
+        lhs_idx_exprs,
+        body,
+        contract_names,
+        contract_dims,
+        reduce,
+        filter,
+    } = d;
+    if !var_shapes.contains_key(&var) {
+        return Err(CompileError::InterpreterBuildError {
+            details: format!("Array-op derivative targets unknown state variable '{var}'"),
+        });
+    }
+    // Mark the covered slots.
+    let shape = &var_shapes[&var];
+    for tuple in cartesian_range(&ranges) {
+        // Map to column-major flat offset using actual LHS index expressions.
+        let binds: HashMap<String, i64> = idx_names
+            .iter()
+            .zip(tuple.iter())
+            .map(|(n, v)| (n.clone(), *v))
+            .collect();
+        let actual_multi: Vec<i64> = lhs_idx_exprs
+            .iter()
+            .map(|e| eval_simple_index(e, &binds))
+            .collect();
+        let flat = multi_to_flat_col_major(&actual_multi, &shape.shape, &shape.origin);
+        covered_slots.insert(shape.flat_offset + flat);
+    }
+    rhs_rules.push(RhsRule::ArrayLoop {
+        var_name: var,
+        output_idx_names: idx_names,
+        output_ranges: ranges,
+        lhs_idx_exprs,
+        body: Box::new(body),
+        contract_names,
+        contract_dims,
+        reduce,
+        filter,
+    });
+    Ok(())
+}
+
+/// Lower an indexed scalar derivative `D(var[i,…], t) = rhs` to one
+/// [`RhsRule::IndexedScalar`] at the resolved slot.
+fn lower_indexed_derivative(
+    var: String,
+    indices: &[i64],
+    rhs: &Expr,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut HashSet<usize>,
+    rhs_rules: &mut Vec<RhsRule>,
+) -> Result<(), CompileError> {
+    // Indexed: find slot.
+    let shape = var_shapes
+        .get(&var)
+        .ok_or_else(|| CompileError::InterpreterBuildError {
+            details: format!("Scalar derivative targets unknown state variable '{var}'"),
+        })?;
+    let flat = multi_to_flat_col_major(indices, &shape.shape, &shape.origin);
+    let slot = shape.flat_offset + flat;
+    covered_slots.insert(slot);
+    rhs_rules.push(RhsRule::IndexedScalar {
+        slot,
+        body: Box::new(rhs.clone()),
+    });
+    Ok(())
+}
+
+/// Lower a bare-variable derivative `D(var, t) = rhs`: a plain scalar slot
+/// write when the state is 0-D, otherwise one of the two whole-array lifts
+/// ([`lower_wholearray_producer_lift`] / [`lower_wholearray_percell`]).
+fn lower_bare_derivative(
+    var: String,
+    rhs: &Expr,
+    model: &Model,
+    array_axes: &HashMap<String, Vec<String>>,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut HashSet<usize>,
+    rhs_rules: &mut Vec<RhsRule>,
+) -> Result<(), CompileError> {
+    let shape = var_shapes
+        .get(&var)
+        .ok_or_else(|| CompileError::InterpreterBuildError {
+            details: format!("Scalar derivative targets unknown state variable '{var}'"),
+        })?
+        .clone();
+    // The result's declared index-set axis names, when they line up
+    // with the shape actually compiled for it. This is what makes
+    // the bare RHS's operands alignable BY NAME below; a state
+    // whose shape was inferred from index usage rather than
+    // declared (or declared at a different rank) has no usable
+    // names and keeps the positional lowering.
+    let target_axes: Option<&[String]> = model
+        .variables
+        .get(&var)
+        .and_then(|v| v.shape.as_deref())
+        .filter(|d| d.len() == shape.shape.len());
+    if shape.shape.is_empty() {
+        // Plain scalar D(var, t) = rhs.
+        let slot = shape.flat_offset;
+        covered_slots.insert(slot);
+        rhs_rules.push(RhsRule::Scalar {
+            slot,
+            body: Box::new(rhs.clone()),
+        });
+    } else if rhs_has_array_producer(rhs) {
+        lower_wholearray_producer_lift(
+            var,
+            rhs,
+            &shape,
+            target_axes,
+            array_axes,
+            covered_slots,
+            rhs_rules,
+        )?;
+    } else {
+        lower_wholearray_percell(
+            var,
+            rhs,
+            &shape,
+            target_axes,
+            array_axes,
+            covered_slots,
+            rhs_rules,
+        )?;
+    }
+    Ok(())
+}
+
+/// Whole-array `D(var) = <rhs containing a lowered stencil>`
+/// (an array-PRODUCING `makearray`/`aggregate` in elementwise
+/// position, the form a §9.6.3 discretization rewrite emits):
+/// lift to the per-cell `arrayop` (ArrayLoop) form the
+/// derivative partition consumes — output loops over the full
+/// declared shape, each array leaf and array producer gathered
+/// per cell via `index(node, loops…)`. This is the loop-form
+/// analog of the Julia `_lift_wholearray_deriv_equations`
+/// (shape_promotion.jl) and keeps the rule eligible for the
+/// vectorized whole-array fast path (ess-bdm).
+fn lower_wholearray_producer_lift(
+    var: String,
+    rhs: &Expr,
+    shape: &VarShape,
+    target_axes: Option<&[String]>,
+    array_axes: &HashMap<String, Vec<String>>,
+    covered_slots: &mut HashSet<usize>,
+    rhs_rules: &mut Vec<RhsRule>,
+) -> Result<(), CompileError> {
+    let ndim = shape.shape.len();
+    let loops: Vec<String> = (0..ndim).map(|d| format!("_lp{d}_{var}")).collect();
+    let output_ranges: Vec<(i64, i64)> = shape
+        .shape
+        .iter()
+        .zip(shape.origin.iter())
+        .map(|(sz, o)| (*o, *o + *sz as i64 - 1))
+        .collect();
+    let lhs_idx_exprs: Vec<Expr> = loops.iter().map(|l| Expr::Variable(l.clone())).collect();
+    let plan = build_gather_plan(rhs, array_axes, &var, target_axes, false)?;
+    let body = index_array_leaves_by_loops(rhs, array_axes, Some(&plan), &loops);
+    let total = shape.shape.iter().copied().product::<usize>().max(1);
+    for flat in 0..total {
+        covered_slots.insert(shape.flat_offset + flat);
+    }
+    rhs_rules.push(RhsRule::ArrayLoop {
+        var_name: var.clone(),
+        output_idx_names: loops,
+        output_ranges,
+        lhs_idx_exprs,
+        body: Box::new(body),
+        contract_names: Vec::new(),
+        contract_dims: Vec::new(),
+        reduce: effective_reduce_kind(None, None),
+        filter: None,
+    });
+    Ok(())
+}
+
+/// Whole-array `D(var) = <array-valued rhs>` over a declared
+/// array shape: enumerate cells and emit one per-cell scalar
+/// rule, indexing each array-shaped RHS leaf by that cell
+/// (elementwise semantics). This is the array-runtime analog
+/// of the Julia `_lift_wholearray_deriv_equations` lift.
+fn lower_wholearray_percell(
+    var: String,
+    rhs: &Expr,
+    shape: &VarShape,
+    target_axes: Option<&[String]>,
+    array_axes: &HashMap<String, Vec<String>>,
+    covered_slots: &mut HashSet<usize>,
+    rhs_rules: &mut Vec<RhsRule>,
+) -> Result<(), CompileError> {
+    let plan = build_gather_plan(rhs, array_axes, &var, target_axes, true)?;
+    let total = shape.shape.iter().copied().product::<usize>().max(1);
+    for flat in 0..total {
+        let multi0 = flat_to_multi_col_major(flat, &shape.shape);
+        let cell: Vec<i64> = multi0
+            .iter()
+            .zip(shape.origin.iter())
+            .map(|(m, o)| *m as i64 + *o)
+            .collect();
+        let body = index_array_leaves(rhs, array_axes, Some(&plan), &cell);
+        let slot = shape.flat_offset + flat;
+        covered_slots.insert(slot);
+        rhs_rules.push(RhsRule::IndexedScalar {
+            slot,
+            body: Box::new(body),
+        });
+    }
+    Ok(())
+}
+
+/// (7b) Held-at-ic states (no `D`, no algebraic definition) carry every
+///      cell at its ic with zero derivative: mark their slots covered
+///      without emitting a rule. The RHS zero-initializes `dy` each call
+///      and never writes these slots, so they stay constant (a state that
+///      feeds an observed — e.g. `phi` into `heat_release` — must not
+///      drift).
+fn cover_held_at_ic_slots(
+    held_at_ic: &HashSet<String>,
+    var_shapes: &IndexMap<String, VarShape>,
+    covered_slots: &mut HashSet<usize>,
+) {
     for name in held_at_ic {
         if let Some(vs) = var_shapes.get(name) {
             let total = vs.shape.iter().copied().product::<usize>().max(1);
@@ -1632,8 +1732,13 @@ fn build_rhs_rules(
             }
         }
     }
+}
 
-    // (8) Every state slot must have a defining equation.
+/// (8) Every state slot must have a defining equation.
+fn check_state_slots_covered(
+    slots: &SlotTables,
+    covered_slots: &HashSet<usize>,
+) -> Result<(), CompileError> {
     for (i, name) in slots.scalar_state_names.iter().enumerate() {
         if !covered_slots.contains(&i) {
             return Err(CompileError::InterpreterBuildError {
@@ -1641,8 +1746,7 @@ fn build_rhs_rules(
             });
         }
     }
-
-    Ok(rhs_rules)
+    Ok(())
 }
 
 /// Evaluate a state-free build-time expression (grid geometry, §11.4.1
