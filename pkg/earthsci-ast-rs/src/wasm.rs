@@ -1,32 +1,39 @@
 //! WASM bindings for earthsci-ast
 //!
 //! This module provides WebAssembly bindings for use with TypeScript/JavaScript.
+//!
+//! The whole module is gated on `feature = "wasm"` at its `mod` declaration in
+//! `lib.rs`, so items here carry no per-item `wasm` gate; the ODE-solver
+//! exports are additionally gated on `feature = "solve"` alone.
 
-#[cfg(feature = "wasm")]
 use crate::{
     EsmFile, graph::component_graph as rust_component_graph, load_string as rust_load_string,
     performance::CompactExpr, stoichiometric_matrix, substitute_in_model,
     substitute_in_reaction_system, to_json as rust_to_json, validate as rust_validate,
 };
-#[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
+
+/// The string `JsValue` every fallible export throws: `"{context}: {error}"`.
+/// One constructor so the per-site `map_err(|e| JsValue::from_str(...))`
+/// closures cannot drift in shape.
+fn js_err<E: std::fmt::Display>(context: &str) -> impl Fn(E) -> JsValue + '_ {
+    move |e| JsValue::from_str(&format!("{context}: {e}"))
+}
 
 /// Serialize any `Serialize` value to a plain JS object (never an ES `Map`),
 /// so JS callers get uniform dot-access across every export. All exports go
 /// through this one helper — previously some returned `Map`s and some plain
 /// objects depending on which serializer they used.
-#[cfg(feature = "wasm")]
 fn to_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsValue> {
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     value
         .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+        .map_err(js_err("Serialization error"))
 }
 
 /// Render every model equation and reaction rate of a loaded file with one of
 /// the real expression pretty-printers from [`crate::display`] (the same ones
 /// the CLI `pretty` command uses).
-#[cfg(feature = "wasm")]
 fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) -> String {
     let mut out = String::new();
     if let Some(models) = &esm_file.models {
@@ -62,33 +69,25 @@ fn render_expressions(esm_file: &EsmFile, render: fn(&crate::Expr) -> String) ->
 }
 
 /// Load an ESM file from JSON string (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn load_string(json_str: &str) -> Result<JsValue, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Load error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Load error"))?;
     to_js(&esm_file)
 }
 
 /// Serialize an ESM file to a JSON string (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_json(esm_file_js: &JsValue) -> Result<String, JsValue> {
     let esm_file: EsmFile = serde_wasm_bindgen::from_value(esm_file_js.clone())
-        .map_err(|e| JsValue::from_str(&format!("Deserialization error: {e}")))?;
+        .map_err(js_err("Deserialization error"))?;
 
-    match rust_to_json(&esm_file) {
-        Ok(json) => Ok(json),
-        Err(e) => Err(JsValue::from_str(&format!("Save error: {e}"))),
-    }
+    rust_to_json(&esm_file).map_err(js_err("Save error"))
 }
 
 /// Validate an ESM file (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
 
     let result = rust_validate(&esm_file);
     to_js(&result)
@@ -98,47 +97,39 @@ pub fn validate(json_str: &str) -> Result<JsValue, JsValue> {
 /// printer ([`crate::display::to_unicode`]) — the same renderer the CLI's
 /// `pretty` command uses. (Earlier versions returned a metadata summary
 /// instead of rendered math.)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_unicode(json_str: &str) -> Result<String, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
     Ok(render_expressions(&esm_file, crate::display::to_unicode))
 }
 
 /// Pretty-print every equation and reaction rate with the LaTeX expression
 /// printer ([`crate::display::to_latex`]).
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_latex(json_str: &str) -> Result<String, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
     Ok(render_expressions(&esm_file, crate::display::to_latex))
 }
 
 /// Pretty-print every equation and reaction rate with the ASCII expression
 /// printer ([`crate::display::to_ascii`]) — pure-ASCII output, unlike the
 /// Unicode renderer.
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn to_ascii(json_str: &str) -> Result<String, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
     Ok(render_expressions(&esm_file, crate::display::to_ascii))
 }
 
 /// Substitute expressions in ESM file (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue> {
     use crate::Expr;
 
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
 
     // Parse bindings as JSON object
-    let bindings: serde_json::Value = serde_json::from_str(bindings_str)
-        .map_err(|e| JsValue::from_str(&format!("Bindings parse error: {e}")))?;
+    let bindings: serde_json::Value =
+        serde_json::from_str(bindings_str).map_err(js_err("Bindings parse error"))?;
 
     // Convert bindings to Expr objects
     let mut expr_bindings = std::collections::HashMap::new();
@@ -189,30 +180,24 @@ pub fn substitute(json_str: &str, bindings_str: &str) -> Result<String, JsValue>
     }
 
     // Convert back to JSON string
-    match rust_to_json(&result_file) {
-        Ok(json) => Ok(json),
-        Err(e) => Err(JsValue::from_str(&format!("Save error: {e}"))),
-    }
+    rust_to_json(&result_file).map_err(js_err("Save error"))
 }
 
 /// Create a compact expression for fast evaluation (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn create_compact_expression(expr_str: &str) -> Result<JsValue, JsValue> {
     // Parse expression from JSON string
-    let expr: crate::Expr = serde_json::from_str(expr_str)
-        .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let expr: crate::Expr = serde_json::from_str(expr_str).map_err(js_err("Parse error"))?;
 
     let compact = CompactExpr::from_expr(&expr);
     to_js(&compact)
 }
 
 /// Compute stoichiometric matrix (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValue, JsValue> {
-    let reaction_system: crate::ReactionSystem = serde_json::from_str(reaction_system_str)
-        .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let reaction_system: crate::ReactionSystem =
+        serde_json::from_str(reaction_system_str).map_err(js_err("Parse error"))?;
 
     let matrix = stoichiometric_matrix(&reaction_system);
     to_js(&matrix)
@@ -231,16 +216,13 @@ pub fn compute_stoichiometric_matrix(reaction_system_str: &str) -> Result<JsValu
 /// A system whose `independentVariables` is not `["t"]` still has an
 /// undiscretized spatial operator; discretized (array-op) PDEs report `["t"]`
 /// here and run in the browser like any other file (EarthSciAST-akz).
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
     use crate::types::ModelVariable;
     use indexmap::IndexMap;
 
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
-    let flat =
-        crate::flatten(&esm_file).map_err(|e| JsValue::from_str(&format!("Flatten error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
+    let flat = crate::flatten(&esm_file).map_err(js_err("Flatten error"))?;
 
     let to_vars = |vars: &IndexMap<String, ModelVariable>| -> Vec<serde_json::Value> {
         vars.iter()
@@ -328,7 +310,7 @@ pub fn simulate_inputs(json_str: &str) -> Result<JsValue, JsValue> {
 /// (`esm-libraries-spec.md` §2.5.1). This export builds the EsmProblem and solves
 /// it in one call because a `wasm_bindgen` boundary cannot hand a host a
 /// `EsmProblem` handle without a lifetime story JS has no way to honour.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 #[wasm_bindgen]
 pub fn solve(
     json_str: &str,
@@ -341,8 +323,7 @@ pub fn solve(
 ) -> Result<JsValue, JsValue> {
     use crate::problem::{ProblemOptions, esm_problem, solve as rust_solve};
 
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
 
     let opts = parse_solve_options(opts_str, t0, t_end, progress)?;
 
@@ -360,9 +341,8 @@ pub fn solve(
             ..Default::default()
         },
     )
-    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
-    let sol =
-        rust_solve(&prob, &opts).map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
+    .map_err(js_err("EsmProblem build error"))?;
+    let sol = rust_solve(&prob, &opts).map_err(js_err("Solve error"))?;
 
     to_js(&solution_json(&sol))
 }
@@ -371,7 +351,6 @@ pub fn solve(
 ///
 /// Shared by [`solve`], [`observed_fields`] and [`Problem`] so the three cannot
 /// disagree about what an empty binding map means.
-#[cfg(feature = "wasm")]
 fn parse_binding_map(
     s: &str,
     what: &str,
@@ -380,7 +359,7 @@ fn parse_binding_map(
     if s.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
-    serde_json::from_str(s).map_err(|e| JsValue::from_str(&format!("{what} parse error: {e}")))
+    serde_json::from_str(s).map_err(js_err(&format!("{what} parse error")))
 }
 
 /// [`solve`]'s options object, including the progress observer.
@@ -389,7 +368,7 @@ fn parse_binding_map(
 /// spelling of `alg` / `solver`, the same `outputPoints`, and the same cancel
 /// convention. Two parsers for one options object is two behaviours waiting to
 /// diverge.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 fn parse_solve_options(
     opts_str: &str,
     t0: f64,
@@ -403,8 +382,7 @@ fn parse_solve_options(
         if s.is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(s)
-                .map_err(|e| JsValue::from_str(&format!("Options parse error: {e}")))?
+            serde_json::from_str(s).map_err(js_err("Options parse error"))?
         }
     };
 
@@ -469,7 +447,7 @@ fn parse_solve_options(
 }
 
 /// A solution in the object shape [`solve`] has always returned.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 fn solution_json(sol: &crate::simulate::Solution) -> serde_json::Value {
     serde_json::json!({
         "time": sol.time,
@@ -484,7 +462,7 @@ fn solution_json(sol: &crate::simulate::Solution) -> serde_json::Value {
 }
 
 /// [`solve`]'s `metadata` object.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 fn metadata_json(sol: &crate::simulate::Solution) -> serde_json::Value {
     serde_json::json!({
         "alg": sol.metadata.alg,
@@ -532,7 +510,6 @@ fn metadata_json(sol: &crate::simulate::Solution) -> serde_json::Value {
 /// model is usually none. Deciding which of the two entry points a document
 /// wants is the host's job, and `names.length` is not the way to do it —
 /// [`crate::classification`] answers it from the document.
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn observed_fields(
     json_str: &str,
@@ -543,8 +520,7 @@ pub fn observed_fields(
 ) -> Result<JsValue, JsValue> {
     use crate::problem::{ProblemOptions, esm_problem, observed_field};
 
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
 
     let prob = esm_problem(
         &esm_file,
@@ -555,7 +531,7 @@ pub fn observed_fields(
             ..Default::default()
         },
     )
-    .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+    .map_err(js_err("EsmProblem build error"))?;
 
     let names = prob.observed_field_names();
     let mut fields = serde_json::Map::with_capacity(names.len());
@@ -563,8 +539,7 @@ pub fn observed_fields(
         // Every name came from `observed_field_names`, so a miss is a defect in
         // the resolver rather than a caller error — report it as one instead of
         // silently returning a short map.
-        let a = observed_field(&prob, name)
-            .map_err(|e| JsValue::from_str(&format!("observed_field({name}): {e}")))?;
+        let a = observed_field(&prob, name).map_err(js_err(&format!("observed_field({name})")))?;
         fields.insert(
             name.clone(),
             serde_json::json!({
@@ -594,11 +569,9 @@ pub fn observed_fields(
 /// Files whose RHS is not array-compilable at all (pure scalar ODE systems)
 /// report `nRules: 0` — they never build a tape and have nothing to fall back
 /// from.
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn tape_report(json_str: &str) -> Result<JsValue, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
     let compiled = match crate::simulate_array::ArrayCompiled::from_file(&esm_file) {
         Ok(c) => c,
         // Not an array model: no tape, nothing to report.
@@ -620,11 +593,9 @@ pub fn tape_report(json_str: &str) -> Result<JsValue, JsValue> {
 }
 
 /// Generate component graph for ESM file (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
-    let esm_file =
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+    let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
 
     let graph = rust_component_graph(&esm_file);
     to_js(&graph)
@@ -637,11 +608,10 @@ pub fn component_graph(json_str: &str) -> Result<JsValue, JsValue> {
 ///
 /// The spherical/geodesic path runs the in-module `s2rst` kernel — no host setup,
 /// no JS bridge. Only a degenerate ring errors.
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
-    let ring: Vec<(f64, f64)> = serde_json::from_str(ring_json)
-        .map_err(|e| JsValue::from_str(&format!("ring parse error: {e}")))?;
+    let ring: Vec<(f64, f64)> =
+        serde_json::from_str(ring_json).map_err(js_err("ring parse error"))?;
     let m = crate::geometry::Manifold::from_flag(manifold)
         .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
     crate::geometry::polygon_area(&ring, m).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -652,24 +622,20 @@ pub fn polygon_area(ring_json: &str, manifold: &str) -> Result<f64, JsValue> {
 /// edge-touching clip). `a_json`/`b_json` are JSON `[lon, lat]` arrays; `manifold`
 /// is `"planar" | "spherical" | "geodesic"`. Like [`polygon_area`], every
 /// manifold is served in-module — the spherical/geodesic clip needs no host setup.
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn intersect_polygon(a_json: &str, b_json: &str, manifold: &str) -> Result<String, JsValue> {
-    let a: Vec<(f64, f64)> = serde_json::from_str(a_json)
-        .map_err(|e| JsValue::from_str(&format!("a parse error: {e}")))?;
-    let b: Vec<(f64, f64)> = serde_json::from_str(b_json)
-        .map_err(|e| JsValue::from_str(&format!("b parse error: {e}")))?;
+    let a: Vec<(f64, f64)> = serde_json::from_str(a_json).map_err(js_err("a parse error"))?;
+    let b: Vec<(f64, f64)> = serde_json::from_str(b_json).map_err(js_err("b parse error"))?;
     let m = crate::geometry::Manifold::from_flag(manifold)
         .ok_or_else(|| JsValue::from_str(&format!("unknown manifold '{manifold}'")))?;
     let ring = crate::geometry::intersect_polygon(&a, &b, m)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    serde_json::to_string(&ring).map_err(|e| JsValue::from_str(&format!("serialize error: {e}")))
+    serde_json::to_string(&ring).map_err(js_err("serialize error"))
 }
 
 /// Report the crate and supported-schema versions. (The native performance
 /// feature flags were dropped from this report: they are never enabled in a
 /// wasm build, so advertising them here was misleading.)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn get_version_info() -> JsValue {
     let info = serde_json::json!({
@@ -680,13 +646,12 @@ pub fn get_version_info() -> JsValue {
 }
 
 /// Benchmark parsing performance (WASM version)
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
 pub fn benchmark_parsing(json_str: &str, iterations: u32) -> Result<f64, JsValue> {
     let start = js_sys::Date::now();
 
     for _ in 0..iterations {
-        rust_load_string(json_str).map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        rust_load_string(json_str).map_err(js_err("Parse error"))?;
     }
 
     let end = js_sys::Date::now();
@@ -786,13 +751,13 @@ mod tests {
 /// from: an observed's trajectory is a function of both, and making the host
 /// pass the problem back in would let it pass a DIFFERENT one — silently
 /// producing numbers from the wrong parameter bindings.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 #[wasm_bindgen]
 pub struct Problem {
     inner: std::rc::Rc<crate::problem::EsmProblem>,
 }
 
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 #[wasm_bindgen]
 impl Problem {
     /// Build a problem from a document. The arguments are [`solve`]'s leading
@@ -810,8 +775,7 @@ impl Problem {
     ) -> Result<Problem, JsValue> {
         use crate::problem::{Compile, ProblemOptions, esm_problem};
 
-        let esm_file = rust_load_string(json_str)
-            .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
+        let esm_file = rust_load_string(json_str).map_err(js_err("Parse error"))?;
         let prob = esm_problem(
             &esm_file,
             (t0, t_end),
@@ -827,7 +791,7 @@ impl Problem {
                 ..Default::default()
             },
         )
-        .map_err(|e| JsValue::from_str(&format!("EsmProblem build error: {e}")))?;
+        .map_err(js_err("EsmProblem build error"))?;
         Ok(Problem {
             inner: std::rc::Rc::new(prob),
         })
@@ -844,8 +808,7 @@ impl Problem {
     ) -> Result<Solution, JsValue> {
         let (t0, t_end) = self.inner.tspan();
         let opts = parse_solve_options(opts_str, t0, t_end, progress)?;
-        let sol = crate::problem::solve(&self.inner, &opts)
-            .map_err(|e| JsValue::from_str(&format!("Solve error: {e}")))?;
+        let sol = crate::problem::solve(&self.inner, &opts).map_err(js_err("Solve error"))?;
         Ok(Solution {
             inner: sol,
             problem: self.inner.clone(),
@@ -870,8 +833,7 @@ impl Problem {
             if s.is_empty() {
                 None
             } else {
-                let v: Vec<f64> = serde_json::from_str(s)
-                    .map_err(|e| JsValue::from_str(&format!("Tspan parse error: {e}")))?;
+                let v: Vec<f64> = serde_json::from_str(s).map_err(js_err("Tspan parse error"))?;
                 if v.len() != 2 {
                     return Err(JsValue::from_str("Tspan must be [t0, t_end]"));
                 }
@@ -887,7 +849,7 @@ impl Problem {
                 callbacks: None,
             },
         )
-        .map_err(|e| JsValue::from_str(&format!("Remake error: {e}")))?;
+        .map_err(js_err("Remake error"))?;
         Ok(Problem {
             inner: std::rc::Rc::new(next),
         })
@@ -900,7 +862,7 @@ impl Problem {
     /// and a trajectory is not.
     pub fn observed_field(&self, name: &str) -> Result<JsValue, JsValue> {
         let a = crate::problem::observed_field(&self.inner, name)
-            .map_err(|e| JsValue::from_str(&format!("observed_field({name}): {e}")))?;
+            .map_err(js_err(&format!("observed_field({name})")))?;
         to_js(&serde_json::json!({
             "shape": a.shape(),
             "values": a.iter().copied().collect::<Vec<f64>>(),
@@ -945,14 +907,14 @@ impl Problem {
 /// Holding the problem is what lets [`Solution::observed`] answer at all: an
 /// observed is a pure function of `(state, params, t)`, the problem holds the
 /// function and this holds the arguments.
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 #[wasm_bindgen]
 pub struct Solution {
     inner: crate::simulate::Solution,
     problem: std::rc::Rc<crate::problem::EsmProblem>,
 }
 
-#[cfg(all(feature = "wasm", feature = "solve"))]
+#[cfg(feature = "solve")]
 #[wasm_bindgen]
 impl Solution {
     /// The whole trajectory in [`solve`]'s object shape, so a host can move
@@ -993,7 +955,7 @@ impl Solution {
     /// §5.8's rule.
     pub fn observed(&self, name: &str) -> Result<Vec<f64>, JsValue> {
         crate::problem::observed_trajectory(&self.problem, &self.inner, name)
-            .map_err(|e| JsValue::from_str(&format!("observed({name}): {e}")))
+            .map_err(js_err(&format!("observed({name})")))
     }
 
     /// Several observeds in ONE pass over the output grid.
@@ -1012,10 +974,10 @@ impl Solution {
     /// specific name or an explanation" asks [`Solution::observed`].
     #[wasm_bindgen(js_name = observedMany)]
     pub fn observed_many(&self, names_str: &str) -> Result<JsValue, JsValue> {
-        let names: Vec<String> = serde_json::from_str(names_str)
-            .map_err(|e| JsValue::from_str(&format!("Names parse error: {e}")))?;
+        let names: Vec<String> =
+            serde_json::from_str(names_str).map_err(js_err("Names parse error"))?;
         let rows = crate::problem::observed_trajectories(&self.problem, &self.inner, &names)
-            .map_err(|e| JsValue::from_str(&format!("observedMany: {e}")))?;
+            .map_err(js_err("observedMany"))?;
         let out: serde_json::Map<String, serde_json::Value> = rows
             .into_iter()
             .map(|(n, row)| (n, serde_json::json!(row)))
