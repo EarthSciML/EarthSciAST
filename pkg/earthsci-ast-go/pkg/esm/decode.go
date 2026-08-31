@@ -181,14 +181,17 @@ func unmarshalOptionalExpression(raw json.RawMessage) (Expression, error) {
 func (e *Equation) UnmarshalJSON(data []byte) error {
 	// Define a temporary struct with the same structure but using json.RawMessage
 	type TempEquation struct {
-		LHS json.RawMessage `json:"lhs"`
-		RHS json.RawMessage `json:"rhs"`
+		LHS     json.RawMessage `json:"lhs"`
+		RHS     json.RawMessage `json:"rhs"`
+		Comment *string         `json:"_comment,omitempty"`
 	}
 
 	var temp TempEquation
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
+
+	e.Comment = temp.Comment
 
 	// Unmarshal LHS
 	lhs, err := UnmarshalExpression(temp.LHS)

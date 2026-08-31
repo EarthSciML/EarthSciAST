@@ -124,6 +124,19 @@ type Expression any
 type Equation struct {
 	LHS Expression `json:"lhs"`
 	RHS Expression `json:"rhs"`
+	// Comment is the schema-sanctioned `_comment` annotation (esm-schema.json
+	// `$defs/Equation`): free prose the author attached to THIS equation. The
+	// core carries no meaning for it, but it is authored content, so dropping
+	// it on parse → emit silently strips every equation annotation from a
+	// document edited through this binding. `omitempty`: the key is optional
+	// and absent from the overwhelming majority of equations, so emitting a
+	// null (or an empty string) for the unannotated case would add noise to
+	// every document — and `"_comment": null` fails the schema's `string` type.
+	//
+	// Rebuilds that construct a NEW Equation from an old one (substitution,
+	// namespacing, flattening) must carry it across explicitly; a fresh
+	// Equation{LHS, RHS} literal would drop it.
+	Comment *string `json:"_comment,omitempty"`
 }
 
 // AffectEquation represents an equation that affects a variable (for events)

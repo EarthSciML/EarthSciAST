@@ -135,6 +135,8 @@ func substituteScalarField(field *string, bindings map[string]Expression, file *
 }
 
 // SubstituteInEquation substitutes variables in both LHS and RHS of an equation.
+// The equation's `_comment` annotation rides along: substitution rewrites the
+// expressions, it does not make the author's note about this equation stale.
 func SubstituteInEquation(eq Equation, bindings map[string]Expression) (Equation, error) {
 	lhs, err := substituteRecursiveWithContext(eq.LHS, bindings, nil, "")
 	if err != nil {
@@ -144,7 +146,7 @@ func SubstituteInEquation(eq Equation, bindings map[string]Expression) (Equation
 	if err != nil {
 		return Equation{}, err
 	}
-	return Equation{LHS: lhs, RHS: rhs}, nil
+	return Equation{LHS: lhs, RHS: rhs, Comment: eq.Comment}, nil
 }
 
 // SubstituteInAffectEquation substitutes variables in an affect equation.
@@ -255,7 +257,7 @@ func SubstituteInModelWithContext(model Model, bindings map[string]Expression, f
 	// Substitute in equations
 	newEquations := make([]Equation, len(model.Equations))
 	for i, eq := range model.Equations {
-		newEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS)}
+		newEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS), Comment: eq.Comment}
 	}
 	newModel.Equations = newEquations
 
@@ -348,7 +350,7 @@ func SubstituteInReactionSystemWithContext(system ReactionSystem, bindings map[s
 	// Substitute in constraint equations
 	newConstraintEquations := make([]Equation, len(system.ConstraintEquations))
 	for i, eq := range system.ConstraintEquations {
-		newConstraintEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS)}
+		newConstraintEquations[i] = Equation{LHS: sub(eq.LHS), RHS: sub(eq.RHS), Comment: eq.Comment}
 	}
 	newSystem.ConstraintEquations = newConstraintEquations
 
