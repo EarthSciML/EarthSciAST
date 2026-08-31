@@ -2307,6 +2307,22 @@ fn expr_references(e: &Expr, name: &str) -> bool {
     }
 }
 
+/// The outer-tuple-invariant description of one forward prefix scan
+/// (esm-spec §4.3.1): the detected [`PrefixScan`], the two symbols it binds,
+/// the swept bounds, and the term body/semiring. Built once outside the
+/// outer-cell loop; [`run_prefix_scan`] takes it as one argument.
+pub(super) struct ScanSweep<'a> {
+    pub(super) scan: PrefixScan,
+    /// The scanned OUTPUT index symbol (the axis the accumulator sweeps).
+    pub(super) i_name: &'a str,
+    /// The contracted symbol the monotone filter admits (`j <= i` / `j < i`).
+    pub(super) j_name: &'a str,
+    /// Inclusive `(lo, hi)` bounds of the scanned axis.
+    pub(super) bounds: (i64, i64),
+    pub(super) body: &'a Expr,
+    pub(super) reduce: ReduceKind,
+}
+
 /// Run one forward prefix scan along `scan.axis`, writing each output cell
 /// through `emit`.
 ///
@@ -2319,15 +2335,18 @@ fn expr_references(e: &Expr, name: &str) -> bool {
 /// writes first, so the first cell emits the untouched identity — the empty
 /// reduction the spec requires, not an error.
 pub(super) fn run_prefix_scan(
-    scan: PrefixScan,
-    i_name: &str,
-    j_name: &str,
-    (lo, hi): (i64, i64),
-    body: &Expr,
-    reduce: ReduceKind,
+    sweep: &ScanSweep,
     ctx: &mut EvalCtx,
     mut emit: impl FnMut(i64, f64, &EvalCtx),
 ) {
+    let &ScanSweep {
+        scan,
+        i_name,
+        j_name,
+        bounds: (lo, hi),
+        body,
+        reduce,
+    } = sweep;
     // Evaluate the one term admitted at step `i` (the body at `j = i`). The
     // scanned output symbol is bound too: it is out of scope for the body by
     // construction (`detect_prefix_scan` rejected a body that reads it), but
@@ -2663,6 +2682,14 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             .enumerate()
             .filter(|(d, _)| *d != scan.axis)
             .collect();
+        let sweep = ScanSweep {
+            scan,
+            i_name: &idx_names[scan.axis],
+            j_name: &contract_names[0],
+            bounds: (scan_lo, scan_hi),
+            body,
+            reduce,
+        };
         let mut full = vec![0i64; ranges.len()];
         let mut outer = CartesianTuples::new(&outer_ranges);
         while let Some(otuple) = outer.next() {
@@ -2670,19 +2697,10 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 set_bind(&mut ctx.loop_binds, name, *val);
                 full[*d] = *val;
             }
-            run_prefix_scan(
-                scan,
-                &idx_names[scan.axis],
-                &contract_names[0],
-                (scan_lo, scan_hi),
-                body,
-                reduce,
-                ctx,
-                |i, acc, _| {
-                    full[scan.axis] = i;
-                    buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
-                },
-            );
+            run_prefix_scan(&sweep, ctx, |i, acc, _| {
+                full[scan.axis] = i;
+                buf[multi_to_flat_col_major(&full, &shape, &origin)] = acc;
+            });
         }
     } else {
         let cellbox = CellBox {
@@ -2716,9 +2734,7 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                     };
                     reduce_contraction_gated(&spec, cell_ranges, g, place, ctx)
                 }
-                None => {
-                    reduce_contraction(&spec, &contract_dims, static_ranges.as_deref(), ctx)
-                }
+                None => reduce_contraction(&spec, &contract_dims, static_ranges.as_deref(), ctx),
             };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;

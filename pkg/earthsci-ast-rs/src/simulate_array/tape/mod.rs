@@ -202,16 +202,7 @@ impl ArrayCompiled {
     ) -> (TapeProgram, TapeBuildReport) {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
-        let (prog, vn_hits) = build_tape_program(
-            &self.rhs_rules,
-            &self.observed_rules,
-            &self.var_shapes,
-            &self.param_names,
-            &const_names,
-            &seg_names,
-            &self.const_scope,
-            fuse,
-        );
+        let (prog, vn_hits) = build_tape_program(self, &const_names, &seg_names, fuse);
         let report = make_report(&prog, vn_hits);
         (prog, report)
     }

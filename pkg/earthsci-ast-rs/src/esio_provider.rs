@@ -1228,11 +1228,13 @@ mod prepare_impl {
                     } else {
                         format!("{prefix}.{vname}")
                     };
-                    out.entry(source.to_string()).or_default().push(ParamBinding {
-                        key,
-                        local: vname.to_string(),
-                        from: binding,
-                    });
+                    out.entry(source.to_string())
+                        .or_default()
+                        .push(ParamBinding {
+                            key,
+                            local: vname.to_string(),
+                            from: binding,
+                        });
                     break; // the FIRST data rule of an `update` (esm-spec §5.4)
                 }
             }

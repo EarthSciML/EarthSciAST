@@ -341,6 +341,7 @@ fn apply_filter_gate<'a>(
 /// of AST nodes visited (N-independent) — or `None` if the body contains a
 /// construct the vectorized path does not handle (the caller then uses the
 /// per-cell oracle).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn try_eval_arrayop_vectorized<'a>(
     output_idx_names: &[String],
     output_ranges: &[(i64, i64)],

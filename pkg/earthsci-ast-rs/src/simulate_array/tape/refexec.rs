@@ -224,18 +224,23 @@ pub(super) fn run_reference(
                         );
                     }
                     RuleKind::Rhs(i) => {
+                        let env = EvalEnv {
+                            state_arrays: &state_arrays,
+                            params,
+                            param_names: &compiled.param_names,
+                            t,
+                            derived_rings: &derived_rings,
+                            derived_extents: empty_derived_extents(),
+                            forcing: &compiled.forcing,
+                            cse: None,
+                            const_arrays: &compiled.const_scope,
+                        };
                         run_rhs_oracle(
                             &compiled.rhs_rules[i],
                             &compiled.var_shapes,
-                            &compiled.param_names,
-                            &state_arrays,
+                            &env,
                             &obs,
-                            params,
-                            t,
-                            &derived_rings,
-                            &compiled.forcing,
                             dy,
-                            &compiled.const_scope,
                         );
                     }
                 }

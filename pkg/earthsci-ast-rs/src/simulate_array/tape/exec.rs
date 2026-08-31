@@ -351,6 +351,25 @@ struct Env<'a> {
     const_arrays: &'a ConstArrayScope,
 }
 
+impl<'a> Env<'a> {
+    /// The interpreter environment for the fallback arms that re-enter the
+    /// per-cell oracle: no CSE memo, and the compiled-RHS derived-extents map
+    /// is empty (see `EvalCtx::derived_extents`).
+    fn eval_env(&self) -> EvalEnv<'a> {
+        EvalEnv {
+            state_arrays: self.state_arrays,
+            params: self.params,
+            param_names: self.param_names,
+            t: self.t,
+            derived_rings: self.derived_rings,
+            derived_extents: empty_derived_extents(),
+            forcing: self.forcing,
+            cse: None,
+            const_arrays: self.const_arrays,
+        }
+    }
+}
+
 /// `bind_params`-style parameter-vector generation hash (bit-exact).
 fn params_gen(params: &[f64]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -2302,19 +2321,7 @@ fn run_range(
                         );
                     }
                     RuleKind::Rhs(i) => {
-                        run_rhs_oracle(
-                            &env.rhs_rules[i],
-                            env.var_shapes,
-                            env.param_names,
-                            env.state_arrays,
-                            obs,
-                            env.params,
-                            env.t,
-                            env.derived_rings,
-                            env.forcing,
-                            dy,
-                            env.const_arrays,
-                        );
+                        run_rhs_oracle(&env.rhs_rules[i], env.var_shapes, &env.eval_env(), obs, dy);
                     }
                 }
             }
@@ -2390,31 +2397,13 @@ fn run_range(
 // pinned bit-identical to this plain loop).
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn run_rhs_oracle(
+pub(super) fn run_rhs_oracle<'e>(
     rule: &RhsRule,
     var_shapes: &IndexMap<String, VarShape>,
-    param_names: &[String],
-    state_arrays: &ArrMap,
-    observed_arrays: &ArrMap,
-    params: &[f64],
-    t: f64,
-    derived_rings: &RefCell<HashMap<String, ArrayD<f64>>>,
-    forcing: &RefCell<HashMap<String, ArrayD<f64>>>,
+    env: &EvalEnv<'e>,
+    observed_arrays: &'e ArrMap,
     dy: &mut [f64],
-    const_arrays: &ConstArrayScope,
 ) {
-    let env = EvalEnv {
-        state_arrays,
-        params,
-        param_names,
-        t,
-        derived_rings,
-        derived_extents: empty_derived_extents(),
-        forcing,
-        cse: None,
-        const_arrays,
-    };
     let mut ctx = env.ctx(observed_arrays);
     match rule {
         RhsRule::Scalar { slot, body } | RhsRule::IndexedScalar { slot, body } => {

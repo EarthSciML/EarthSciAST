@@ -389,9 +389,10 @@ pub(super) struct ObsPass<'a> {
     pub(super) force_scalar: bool,
 }
 
-/// Positional wrapper over [`materialize_observeds_pass`], kept so the tape
-/// executor's fallback arm keeps its call shape; in-module callers build an
-/// [`ObsPass`] and call [`materialize_observeds_pass`] directly.
+/// Positional wrapper over [`materialize_observeds_pass`], kept so the
+/// driver's call sites and the tape/reference executors' fallback arms keep
+/// their call shape; in-module callers build an [`ObsPass`] and call
+/// [`materialize_observeds_pass`] directly.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_observeds_append(
     dst: &mut ArrMap,
@@ -1028,32 +1029,31 @@ fn evaluate_rhs_legacy(
                         .filter(|(d, _)| *d != scan.axis)
                         .map(|(_, n)| n)
                         .collect();
+                    let sweep = ScanSweep {
+                        scan,
+                        i_name: &output_idx_names[scan.axis],
+                        j_name: &contract_names[0],
+                        bounds: (scan_lo, scan_hi),
+                        body,
+                        reduce: *reduce,
+                    };
                     let mut outer = CartesianTuples::new(&outer_ranges);
                     while let Some(otuple) = outer.next() {
                         for (name, val) in outer_names.iter().zip(otuple.iter()) {
                             set_bind(&mut ctx.loop_binds, name, *val);
                         }
-                        run_prefix_scan(
-                            scan,
-                            &output_idx_names[scan.axis],
-                            &contract_names[0],
-                            (scan_lo, scan_hi),
-                            body,
-                            *reduce,
-                            &mut ctx,
-                            |_, acc, ctx| {
-                                // Address the destination exactly as the oracle
-                                // does — through the LHS index expressions under
-                                // the current binds, not by assuming a bare index.
-                                let actual_multi: Vec<i64> = lhs_idx_exprs
-                                    .iter()
-                                    .map(|e| eval_simple_index(e, &ctx.loop_binds))
-                                    .collect();
-                                let flat =
-                                    multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
-                                dy[vs.flat_offset + flat] = acc;
-                            },
-                        );
+                        run_prefix_scan(&sweep, &mut ctx, |_, acc, ctx| {
+                            // Address the destination exactly as the oracle
+                            // does — through the LHS index expressions under
+                            // the current binds, not by assuming a bare index.
+                            let actual_multi: Vec<i64> = lhs_idx_exprs
+                                .iter()
+                                .map(|e| eval_simple_index(e, &ctx.loop_binds))
+                                .collect();
+                            let flat =
+                                multi_to_flat_col_major(&actual_multi, &vs.shape, &vs.origin);
+                            dy[vs.flat_offset + flat] = acc;
+                        });
                     }
                     continue;
                 }
@@ -1076,8 +1076,12 @@ fn evaluate_rhs_legacy(
                     }
                     // Generalized einsum: contracted indices (incl. ragged
                     // per-cell dynamic bounds) are unrolled and ⊕-combined here.
-                    let v =
-                        reduce_contraction(&spec, contract_dims, static_ranges.as_deref(), &mut ctx);
+                    let v = reduce_contraction(
+                        &spec,
+                        contract_dims,
+                        static_ranges.as_deref(),
+                        &mut ctx,
+                    );
                     let actual_multi: Vec<i64> = lhs_idx_exprs
                         .iter()
                         .map(|e| eval_simple_index(e, &ctx.loop_binds))

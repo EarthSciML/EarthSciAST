@@ -1848,21 +1848,23 @@ impl<'m> TapeBuilder<'m> {
 // Rule-level driving, exports, liveness/coloring, report — in build().
 // ---------------------------------------------------------------------------
 
-/// Result of building the tape for one compiled model. Returns the program
-/// and the `(scope, hoist)` value-numbering hit counts.
+/// Result of building the tape for one compiled model (the rules, tables and
+/// const-array registry are read straight off `compiled`). Returns the
+/// program and the `(scope, hoist)` value-numbering hit counts.
 pub(super) fn build_tape_program(
-    rhs_rules: &[RhsRule],
-    observed_rules: &[AlgebraicRule],
-    var_shapes: &IndexMap<String, VarShape>,
-    param_names: &[String],
+    compiled: &ArrayCompiled,
     const_names: &HashSet<String>,
     seg_invariant_names: &HashSet<String>,
-    const_arrays: &ConstArrayScope,
     // Step 4: run the kernel-fusion post-pass with the given superop
     // configuration (`None` = the unfused program, bitwise-identical
     // results — the `ESS_TAPE_FUSE_DISABLE` arm).
     fuse: Option<super::fuse::SuperopCfg>,
 ) -> (TapeProgram, (usize, usize)) {
+    let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
+    let observed_rules: &[AlgebraicRule] = &compiled.observed_rules;
+    let var_shapes = &compiled.var_shapes;
+    let param_names: &[String] = &compiled.param_names;
+    let const_arrays: &ConstArrayScope = &compiled.const_scope;
     let observed_names: HashSet<String> = observed_rules
         .iter()
         .map(|r| observed_rule_var(r).clone())

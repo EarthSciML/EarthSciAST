@@ -58,7 +58,6 @@
 // export already runs client-side — so no native-only dependency remains, and
 // planar / geometry-free PDEs run in the browser via `crate::simulate::simulate`.
 #![allow(
-    clippy::too_many_arguments,
     clippy::type_complexity,
     clippy::collapsible_if,
     clippy::needless_range_loop
