@@ -93,7 +93,7 @@ export type ExpressionNode = ExpressionNode1 & {
    */
   op: string;
   /**
-   * Stable node identity (RFC semiring-faq-unified-ir §6.1): an optional, author-assigned identifier that makes this expression node addressable as a vertex in the inter-node dependency DAG the partition pass walks. Its primary use is to be the referent of a derived index set: an `index_sets` entry of kind "derived" names, via `from_faq`, the index-set-producing `aggregate` node that materializes it — and it names it by this id. When present it MUST be unique among the expression nodes of its model; the build-time reference-resolution pass errors on a duplicate id and on a `from_faq` that names no node. Absent ⇒ the node is addressed only by its structural path and cannot be the target of a `from_faq`. Purely additive: a file using no `id` validates and resolves exactly as before.
+   * Stable node identity (RFC semiring-faq-unified-ir §6.1): an optional, author-assigned identifier that makes this expression node addressable as a vertex in the inter-node dependency DAG the partition pass walks. Its primary use is to be the referent of a derived index set: an `index_sets` entry of kind "derived" names, via `from_faq`, the index-set-producing `aggregate` node that materializes it — and it names it by this id. When present it MUST be unique among the expression nodes of its DOCUMENT — `index_sets` is a document-scoped registry, so a `from_faq` in it resolves against every model's nodes, and per-model uniqueness would leave a cross-model reference ambiguous. The build-time reference-resolution pass errors on a duplicate id and on a `from_faq` that names no node in the document. Absent ⇒ the node is addressed only by its structural path and cannot be the target of a `from_faq`. Purely additive: a file using no `id` validates and resolves exactly as before.
    */
   id?: string;
   /**
@@ -306,39 +306,6 @@ export type DiscreteEventTrigger =
       times: [number, ...number[]];
     };
 /**
- * One native axis of a `DataLoaderSelect`. The vocabulary is shared with the projection-pushdown gate template (CONFORMANCE_SPEC §5.5): "all" keeps the axis whole; `fixed` takes one index and DROPS the axis; `range` takes a half-open strided window and keeps it; `gated_by` names a `derived` index set whose value-invention members become the axis, which DEFERS the fetch until those members exist.
- */
-export type DataSourceSelectAxis =
-  | "all"
-  | {
-      /**
-       * A single 0-based native index.
-       */
-      fixed: number | [number];
-    }
-  | {
-      range: {
-        /**
-         * Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default.
-         */
-        start?: number | string;
-        /**
-         * Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter.
-         */
-        stop: number | string;
-        /**
-         * Stride (default 1; MUST be >= 1).
-         */
-        step?: number | string;
-      };
-    }
-  | {
-      /**
-       * Name of a `kind: "derived"` index set. The axis becomes that set's materialised members in canonical (sorted) member order (CONFORMANCE_SPEC §5.5, Hook 2), so only the rows the model can reach are ever read.
-       */
-      gated_by: string;
-    };
-/**
  * A single scalar check against a model variable at a specific (variable, time) point. PDE-aware variants pin a spatial point via `coords`, or reduce the field to a scalar via `reduce` (domain-integral, mean, max, min, or error-norm). `coords` and `reduce` are mutually exclusive; if neither is given the assertion is pointwise and only valid on a 0-D component. Error-norm reductions (L2_error, Linf_error) require `reference`.
  */
 export type Assertion = Assertion1 & {
@@ -498,6 +465,39 @@ export type Parameter1 = {
   [k: string]: unknown;
 };
 /**
+ * One native axis of a `DataLoaderSelect`. The vocabulary is shared with the projection-pushdown gate template (CONFORMANCE_SPEC §5.5): "all" keeps the axis whole; `fixed` takes one index and DROPS the axis; `range` takes a half-open strided window and keeps it; `gated_by` names a `derived` index set whose value-invention members become the axis, which DEFERS the fetch until those members exist.
+ */
+export type DataSourceSelectAxis =
+  | "all"
+  | {
+      /**
+       * A single 0-based native index.
+       */
+      fixed: number | [number];
+    }
+  | {
+      range: {
+        /**
+         * Inclusive first index (default 0). A string names a `metaparameters` entry and resolves to its default.
+         */
+        start?: number | string;
+        /**
+         * Exclusive last index. A string names a `metaparameters` entry and resolves to its default, so a prefix is declared in the model's own terms (`W[0:N_SRC]`) rather than as a repeated literal that can drift from the index set sized by the same metaparameter.
+         */
+        stop: number | string;
+        /**
+         * Stride (default 1; MUST be >= 1).
+         */
+        step?: number | string;
+      };
+    }
+  | {
+      /**
+       * Name of a `kind: "derived"` index set. The axis becomes that set's materialised members in canonical (sorted) member order (CONFORMANCE_SPEC §5.5, Hook 2), so only the rows the model can reach are ever read.
+       */
+      gated_by: string;
+    };
+/**
  * A single coupling rule connecting models or reaction systems. A `data_sources` entry is not a component and cannot appear as a coupling endpoint; external data enters through a parameter's `update`.
  */
 export type CouplingEntry =
@@ -598,7 +598,7 @@ export type CouplingEvent = CouplingEvent1 & {
         times: [number, ...number[]];
       };
   /**
-   * Affect equations. Required unless functional_affect is used.
+   * Affect equations. Required: esm 1.0.0 removed the `functional_affect` alternative, so `affects` is the only affect channel. Every LHS MUST name an unknown (`event_affects_parameter` otherwise).
    */
   affects: AffectEquation[];
   affect_neg?: null | AffectEquation[];
@@ -872,7 +872,7 @@ export interface Model {
    * Named child subsystems, keyed by unique identifier. A subsystem is a child model, or a reference to an external file containing exactly one. Enables hierarchical model composition. Variables in subsystems are referenced via dot notation: "ParentModel.ChildModel.var". Each subsystem can be defined inline or included by reference via a local file path or URL. A `data_sources` entry is NOT a component and cannot be a subsystem: a model reaches external data through a parameter whose `update` names the source.
    */
   subsystems?: {
-    [k: string]: Model | DataSource | SubsystemRef;
+    [k: string]: Model | SubsystemRef;
   };
   tolerance?: Tolerance;
   /**
@@ -965,129 +965,6 @@ export interface ContinuousEvent {
    */
   reinitialize?: boolean;
   description?: string;
-}
-/**
- * A named external data source reduced to pure I/O: it locates, reads, decodes, slices, and filters bytes on disk. It performs no reprojection and no regridding, and — from 1.0.0 — it exposes no variables and is NOT a component. It cannot be a coupling endpoint, a subsystem, or a scoped-name path root; a model consumes it by declaring a parameter whose `update` names this source and binds one of its `file_variable`s. Grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters and is transformed downstream by `aggregate` FAQs and coupling expressions. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.
- */
-export interface DataSource {
-  /**
-   * Structural kind of the dataset: 'grid' (gridded array source), 'points' (scattered point/station source), or 'static' (time-invariant source). Grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its `file_variable`s and is consumed by `aggregate` FAQs downstream; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags.
-   */
-  kind: "grid" | "points" | "static";
-  source: DataSourceLocation;
-  temporal?: DataSourceTemporal;
-  determinism?: DataSourceDeterminism;
-  /**
-   * Format-specific DECODE options, passed through to the format reader verbatim (EarthSciIO calls them `reader_kwargs`): the zip `member_glob` and `skip_header_row` of an FF10 inventory, a GeoTIFF band naming, and so on. They say how bytes become an array, never what the array means — no remap, no unit conversion, no filtering (those are `variables`, `unit_conversion` and `record_filter`). A key the bound reader does not recognise MUST be an error, so a mis-spelled option cannot silently decode something else.
-   */
-  reader_options?: {
-    [k: string]: unknown;
-  };
-  select?: DataSourceSelect;
-  record_filter?: DataSourceRecordFilter;
-  extent?: DataSourceExtent;
-  reference?: Reference;
-  /**
-   * Free-form metadata about the data source. The "tags" field (array of strings) is conventional for expressing scientific role (e.g. "emissions", "reanalysis") and is not schema-validated.
-   */
-  metadata?: {
-    tags?: string[];
-    [k: string]: unknown;
-  };
-}
-/**
- * File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.
- */
-export interface DataSourceLocation {
-  /**
-   * Jinja-style URL template with substitutions. Supported: {date:<strftime>} (e.g. {date:%Y%m%d}), {var}, {sector}, {species}. Custom substitutions are allowed and the runtime must accept and pass them through.
-   */
-  url_template: string;
-  /**
-   * Ordered fallback URL templates. Runtime tries each in order, first is primary. Follows the same substitution grammar as url_template.
-   */
-  mirrors?: string[];
-}
-/**
- * Temporal coverage and record layout for a data source.
- */
-export interface DataSourceTemporal {
-  /**
-   * ISO 8601 datetime — first timestamp available from this source.
-   */
-  start?: string;
-  /**
-   * ISO 8601 datetime — last timestamp available from this source.
-   */
-  end?: string;
-  /**
-   * ISO 8601 duration describing how much time one file covers (e.g., "P1D", "P1M", "PT3H").
-   */
-  file_period?: string;
-  /**
-   * ISO 8601 duration describing spacing between samples within a file.
-   */
-  frequency?: string;
-  /**
-   * Number of time records per file. "auto" means read from file at runtime.
-   */
-  records_per_file?: number | "auto";
-  /**
-   * Name of the time coordinate variable in the file. Used when records_per_file is absent or "auto". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback.
-   */
-  time_variable?: string;
-  /**
-   * How many time records the source returns per query time — pure I/O; the source does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file).
-   */
-  records_per_sample?: 1 | 2;
-}
-/**
- * Reproducibility contract a binary-format loader advertises to bindings. A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.
- */
-export interface DataSourceDeterminism {
-  /**
-   * Byte order of on-wire numeric fields.
-   */
-  endian?: "little" | "big";
-  /**
-   * Floating-point format of metric fields.
-   */
-  float_format?: "ieee754_single" | "ieee754_double";
-  /**
-   * Integer width (in bits) of connectivity fields.
-   */
-  integer_width?: 32 | 64;
-}
-/**
- * A per-axis selection of what the source DELIVERS from an on-disk array — one entry per NATIVE array dimension, in native dims order. Declared on a source (the default for every parameter drawing from it) or on a single parameter's `from` binding (which overrides the source's). Two parameters of one source MAY read the same `file_variable` under different selections, which is how a full-grid field and a prefix of it are both declared instead of one being sliced by the caller. The selection is defined over the axis the loader DELIVERS, so it follows any `record_filter`: `range 0..200` on a filtered points table is the first 200 SURVIVING records. Whether a binding pushes it down to the reader (fetching only what it keeps) or applies it after the read is an optimization; the two MUST agree exactly.
- */
-export interface DataSourceSelect {
-  /**
-   * One selector per native array dimension, in native dims order.
-   *
-   * @minItems 1
-   */
-  axes: [DataSourceSelectAxis, ...DataSourceSelectAxis[]];
-}
-/**
- * Which records of a `points` source are DELIVERED. The surviving mask is computed ONCE for the source and applied to every parameter drawing from it, so its columns can never fall out of alignment, and the surviving count is the source's `extent`. A record is dropped when any `require_finite` variable is non-finite at it, or when a `codes` map with `unmapped: "drop"` does not recognise its value.
- */
-export interface DataSourceRecordFilter {
-  /**
-   * `file_variable` names whose value must be finite for a record to survive. (Pre-1.0.0 this named loader variable names; a source has no variables of its own now, so it names the file's.) A point with no coordinate cannot be placed and a row with no annual total cannot be weighted; dropping it is a declaration about the source, rather than a NaN travelling into the model to surface as an empty result later.
-   *
-   * @minItems 1
-   */
-  require_finite?: [string, ...string[]];
-}
-/**
- * Binds the source's DELIVERED record count to a metaparameter, for a source whose extent is not knowable until it is read. A binding samples such a source BEFORE it closes metaparameters (esm-spec §9.7.6 site 4), so an index set declared `size: "N_REC"` is sized by the data itself and no caller counts rows and passes the number in. Every parameter drawing from the source MUST agree on the count — that agreement is also the alignment check.
- */
-export interface DataSourceExtent {
-  /**
-   * Name of the `metaparameters` entry it binds. Declare that entry with a `default` (conventionally 0) so the document still validates and loads standalone.
-   */
-  metaparameter: string;
 }
 /**
  * A reference to an external ESM file containing a model or reaction system definition. The ref field can be a relative or absolute local file path, or an HTTP/HTTPS URL. Relative paths are resolved relative to the directory of the referencing file.
@@ -1491,6 +1368,129 @@ export interface Tolerance3 {
    * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
    */
   rel?: number;
+}
+/**
+ * A named external data source reduced to pure I/O: it locates, reads, decodes, slices, and filters bytes on disk. It performs no reprojection and no regridding, and — from 1.0.0 — it exposes no variables and is NOT a component. It cannot be a coupling endpoint, a subsystem, or a scoped-name path root; a model consumes it by declaring a parameter whose `update` names this source and binds one of its `file_variable`s. Grid geometry a source reads (coordinates, connectivity, metric arrays) arrives as ordinary parameters and is transformed downstream by `aggregate` FAQs and coupling expressions. Authentication and algorithm-specific tuning are runtime-only and not part of the schema.
+ */
+export interface DataSource {
+  /**
+   * Structural kind of the dataset: 'grid' (gridded array source), 'points' (scattered point/station source), or 'static' (time-invariant source). Grid geometry the source reads — coordinates, connectivity, metric arrays — arrives as ordinary parameters bound to its `file_variable`s and is consumed by `aggregate` FAQs downstream; it needs no special descriptor. Scientific role (emissions, meteorology, elevation, ...) is not schema-validated and belongs in metadata.tags.
+   */
+  kind: "grid" | "points" | "static";
+  source: DataSourceLocation;
+  temporal?: DataSourceTemporal;
+  determinism?: DataSourceDeterminism;
+  /**
+   * Format-specific DECODE options, passed through to the format reader verbatim (EarthSciIO calls them `reader_kwargs`): the zip `member_glob` and `skip_header_row` of an FF10 inventory, a GeoTIFF band naming, and so on. They say how bytes become an array, never what the array means — no remap, no unit conversion, no filtering (those are `variables`, `unit_conversion` and `record_filter`). A key the bound reader does not recognise MUST be an error, so a mis-spelled option cannot silently decode something else.
+   */
+  reader_options?: {
+    [k: string]: unknown;
+  };
+  select?: DataSourceSelect;
+  record_filter?: DataSourceRecordFilter;
+  extent?: DataSourceExtent;
+  reference?: Reference;
+  /**
+   * Free-form metadata about the data source. The "tags" field (array of strings) is conventional for expressing scientific role (e.g. "emissions", "reanalysis") and is not schema-validated.
+   */
+  metadata?: {
+    tags?: string[];
+    [k: string]: unknown;
+  };
+}
+/**
+ * File discovery configuration. Describes how to locate data files at runtime via URL templates with date/variable substitutions.
+ */
+export interface DataSourceLocation {
+  /**
+   * Jinja-style URL template with substitutions. Supported: {date:<strftime>} (e.g. {date:%Y%m%d}), {var}, {sector}, {species}. Custom substitutions are allowed and the runtime must accept and pass them through.
+   */
+  url_template: string;
+  /**
+   * Ordered fallback URL templates. Runtime tries each in order, first is primary. Follows the same substitution grammar as url_template.
+   */
+  mirrors?: string[];
+}
+/**
+ * Temporal coverage and record layout for a data source.
+ */
+export interface DataSourceTemporal {
+  /**
+   * ISO 8601 datetime — first timestamp available from this source.
+   */
+  start?: string;
+  /**
+   * ISO 8601 datetime — last timestamp available from this source.
+   */
+  end?: string;
+  /**
+   * ISO 8601 duration describing how much time one file covers (e.g., "P1D", "P1M", "PT3H").
+   */
+  file_period?: string;
+  /**
+   * ISO 8601 duration describing spacing between samples within a file.
+   */
+  frequency?: string;
+  /**
+   * Number of time records per file. "auto" means read from file at runtime.
+   */
+  records_per_file?: number | "auto";
+  /**
+   * Name of the time coordinate variable in the file. Used when records_per_file is absent or "auto". If both static declarations (records_per_file + frequency) and time_variable are present, the static declaration wins and time_variable is a fallback.
+   */
+  time_variable?: string;
+  /**
+   * How many time records the source returns per query time — pure I/O; the source does NOT interpolate. Absent or 1 (default): the single at-or-before record, time axis dropped (piecewise-constant between ticks). 2: the two records bracketing the current time (floor + successor), returned with the time axis kept at length 2 so a downstream model can interpolate in time (e.g. linearly). Only 1 and 2 are supported; higher-order temporal stencils are future work. Contrast records_per_file (records IN one file).
+   */
+  records_per_sample?: 1 | 2;
+}
+/**
+ * Reproducibility contract a binary-format loader advertises to bindings. A binding that cannot honor the declared endian / float_format / integer_width MUST reject the file at load rather than silently reinterpreting bytes.
+ */
+export interface DataSourceDeterminism {
+  /**
+   * Byte order of on-wire numeric fields.
+   */
+  endian?: "little" | "big";
+  /**
+   * Floating-point format of metric fields.
+   */
+  float_format?: "ieee754_single" | "ieee754_double";
+  /**
+   * Integer width (in bits) of connectivity fields.
+   */
+  integer_width?: 32 | 64;
+}
+/**
+ * A per-axis selection of what the source DELIVERS from an on-disk array — one entry per NATIVE array dimension, in native dims order. Declared on a source (the default for every parameter drawing from it) or on a single parameter's `from` binding (which overrides the source's). Two parameters of one source MAY read the same `file_variable` under different selections, which is how a full-grid field and a prefix of it are both declared instead of one being sliced by the caller. The selection is defined over the axis the loader DELIVERS, so it follows any `record_filter`: `range 0..200` on a filtered points table is the first 200 SURVIVING records. Whether a binding pushes it down to the reader (fetching only what it keeps) or applies it after the read is an optimization; the two MUST agree exactly.
+ */
+export interface DataSourceSelect {
+  /**
+   * One selector per native array dimension, in native dims order.
+   *
+   * @minItems 1
+   */
+  axes: [DataSourceSelectAxis, ...DataSourceSelectAxis[]];
+}
+/**
+ * Which records of a `points` source are DELIVERED. The surviving mask is computed ONCE for the source and applied to every parameter drawing from it, so its columns can never fall out of alignment, and the surviving count is the source's `extent`. A record is dropped when any `require_finite` variable is non-finite at it, or when a `codes` map with `unmapped: "drop"` does not recognise its value.
+ */
+export interface DataSourceRecordFilter {
+  /**
+   * `file_variable` names whose value must be finite for a record to survive. (Pre-1.0.0 this named loader variable names; a source has no variables of its own now, so it names the file's.) A point with no coordinate cannot be placed and a row with no annual total cannot be weighted; dropping it is a declaration about the source, rather than a NaN travelling into the model to surface as an empty result later.
+   *
+   * @minItems 1
+   */
+  require_finite?: [string, ...string[]];
+}
+/**
+ * Binds the source's DELIVERED record count to a metaparameter, for a source whose extent is not knowable until it is read. A binding samples such a source BEFORE it closes metaparameters (esm-spec §9.7.6 site 4), so an index set declared `size: "N_REC"` is sized by the data itself and no caller counts rows and passes the number in. Every parameter drawing from the source MUST agree on the count — that agreement is also the alignment check.
+ */
+export interface DataSourceExtent {
+  /**
+   * Name of the `metaparameters` entry it binds. Declare that entry with a `default` (conventionally 0) so the document still validates and loads standalone.
+   */
+  metaparameter: string;
 }
 /**
  * A file-local enum mapping symbolic names to positive integers (esm-spec.md §9.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.
