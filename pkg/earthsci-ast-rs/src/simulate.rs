@@ -1448,12 +1448,10 @@ fn classify_equations(
     for eq in &flat.equations {
         if let Some(state_name) = state_lhs_name(&eq.lhs) {
             let idx = state_index.get(&state_name).ok_or_else(|| {
-                CompileError::InterpreterBuildError {
-                    details: format!(
-                        "Equation defines D({state_name}, t) but '{state_name}' \
+                CompileError::build_err(format!(
+                    "Equation defines D({state_name}, t) but '{state_name}' \
                              is not in flat.state_variables"
-                    ),
-                }
+                ))
             })?;
             state_diff_raw[*idx] = Some(eq.rhs.clone());
         } else if let Some(name) = observed_lhs_name(&eq.lhs) {
@@ -1482,12 +1480,10 @@ fn classify_equations(
             continue;
         }
         if state_alg_raw[idx].is_none() {
-            return Err(CompileError::InterpreterBuildError {
-                details: format!(
-                    "State variable '{name}' has no D({name}, t) = ... equation in \
+            return Err(CompileError::build_err(format!(
+                "State variable '{name}' has no D({name}, t) = ... equation in \
                      flat.equations. Cannot simulate."
-                ),
-            });
+            )));
         }
     }
 
@@ -1524,14 +1520,14 @@ fn resolve_observed(
         }
     }
 
-    let order = topo_sort(&obs_deps).map_err(|cycle| CompileError::InterpreterBuildError {
-        details: format!(
+    let order = topo_sort(&obs_deps).map_err(|cycle| {
+        CompileError::build_err(format!(
             "Cyclic observed-variable dependency: {:?}",
             cycle
                 .into_iter()
                 .map(|i| observed_names_raw[i].clone())
                 .collect::<Vec<_>>()
-        ),
+        ))
     })?;
 
     let observed_names: Vec<String> = order
@@ -1552,15 +1548,13 @@ fn resolve_observed(
             // `variable.expression`) is undefined. Fail the build naming it, rather
             // than silently substituting the constant 0.0 — which turned a modelling
             // mistake into a plausible-looking zero trajectory.
-            let expr = raw
-                .as_ref()
-                .ok_or_else(|| CompileError::InterpreterBuildError {
-                    details: format!(
-                        "Observed variable '{}' has no defining expression (no \
+            let expr = raw.as_ref().ok_or_else(|| {
+                CompileError::build_err(format!(
+                    "Observed variable '{}' has no defining expression (no \
                      equation and no `expression` field); cannot simulate.",
-                        observed_names[i]
-                    ),
-                })?;
+                    observed_names[i]
+                ))
+            })?;
             resolve_expr(expr, state_index, param_index, &observed_index, Some(i))
         })
         .collect::<Result<_, _>>()?;
@@ -1593,16 +1587,14 @@ fn order_algebraic_states(
         }
     }
     topo_sort_subset(&algebraic_indices, &alg_deps_dense).map_err(|cycle| {
-        CompileError::InterpreterBuildError {
-            details: format!(
-                "Cyclic algebraic equations detected: {}",
-                cycle
-                    .into_iter()
-                    .map(|i| state_names[i].clone())
-                    .collect::<Vec<_>>()
-                    .join(" -> ")
-            ),
-        }
+        CompileError::build_err(format!(
+            "Cyclic algebraic equations detected: {}",
+            cycle
+                .into_iter()
+                .map(|i| state_names[i].clone())
+                .collect::<Vec<_>>()
+                .join(" -> ")
+        ))
     })
 }
 
@@ -2110,18 +2102,16 @@ fn resolve_expr(
                 if let Some(limit) = obs_limit
                     && i >= limit
                 {
-                    return Err(CompileError::InterpreterBuildError {
-                        details: format!(
-                            "Observed variable references not-yet-defined observed '{name}' \
+                    return Err(CompileError::build_err(format!(
+                        "Observed variable references not-yet-defined observed '{name}' \
                              (forward dependency)"
-                        ),
-                    });
+                    )));
                 }
                 Ok(ResolvedExpr::Observed(i))
             } else {
-                Err(CompileError::InterpreterBuildError {
-                    details: format!("Unknown variable '{name}' referenced in expression"),
-                })
+                Err(CompileError::build_err(format!(
+                    "Unknown variable '{name}' referenced in expression"
+                )))
             }
         }
         Expr::Operator(node) => {
