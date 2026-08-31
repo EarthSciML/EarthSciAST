@@ -168,12 +168,33 @@ pub struct StoichiometricEntry {
     pub species: String,
 
     /// Stoichiometric coefficient (positive finite number; serialized as `stoichiometry`)
-    #[serde(rename = "stoichiometry", default = "default_stoichiometry")]
+    #[serde(
+        rename = "stoichiometry",
+        default = "default_stoichiometry",
+        serialize_with = "serialize_stoichiometry"
+    )]
     pub coefficient: f64,
 }
 
 fn default_stoichiometry() -> f64 {
     1.0
+}
+
+/// Emit a stoichiometric coefficient in ESM canonical-number form
+/// (CONFORMANCE_SPEC.md §5.5.3.1 rule 1): an integral, `i64`-representable
+/// value becomes an INTEGER literal, so the overwhelmingly common `1` stays
+/// `1` across a parse / re-emit cycle instead of becoming `1.0`. Derived serde
+/// would emit the trailing `.0` and diverge from all four sibling bindings,
+/// each of which normalizes this field (Julia and Python `_emit_stoich`, Go
+/// `canonicalFloat64String`, TypeScript implicitly via `JSON.stringify`).
+///
+/// A by-reference adapter and nothing more: `serialize_with` hands the field
+/// by reference, while the shared [`serialize_canonical_f64`] takes a value.
+fn serialize_stoichiometry<S: serde::Serializer>(
+    n: &f64,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serialize_canonical_f64(*n, serializer)
 }
 
 /// Generic, runtime-agnostic description of an external data source
