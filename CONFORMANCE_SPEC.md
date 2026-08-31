@@ -1375,7 +1375,12 @@ A **composite key** is a clause listing several pairs over the same two loop
 symbols. It matches iff **every** pair agrees, which is tuple equality; the
 canonical composite key is the §5.5.1 rule-4 `skolem` tuple of the per-pair
 values, in the order the pairs are listed. Several pairs over *different* symbol
-pairs are several gates.
+pairs are several gates; so are several `join` clauses on one node. When a node
+carries more than one gate, **every** gate still restricts the admitted set (they
+compose by conjunction), but only ONE need DRIVE — the others are membership
+tests on the driven leaves. Which one drives is a binding's choice and cannot
+change the result; the reference drives the first in document order, matching
+§5.5.6's "the first overlap gate drives".
 
 **The match set (normative).** The gate's admissible pair set is
 `{ (pos_l, pos_r) : key_l(pos_l) = key_r(pos_r) }`, built **ONCE per node** (not
