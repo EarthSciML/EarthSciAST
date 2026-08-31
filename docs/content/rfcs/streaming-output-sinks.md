@@ -861,6 +861,29 @@ module is `wasm32-unknown-unknown`-clean (no filesystem, no threads, no wall clo
 protocol, `build_output_callback`, the checkpoint predicates and `zarr_restart_state` are
 **not** ported — they are the solver-integration layer, not the derivation.
 
+**Rust output EMISSION** (`esm simulate --observed <NAME> --format grid`). `derive_output_plan`
+had no production caller: `esm simulate --output` wrote the flat state rows keyed by bare cell
+key, so a gridded field came out with no axis names, no coordinate values, and no way to say
+which cell a number belonged to. The CLI now runs the plan and renders it — per grid, its
+dimensions, its CF dimension coordinates, and row-major `[time, …spatial]` variable arrays
+carrying the document's `units` / `description`. The rendering is field-for-field
+`earthsciio::format::OutputSchema`, so pointing it at a real Zarr sink is a swap of the
+serializer rather than of the derivation; it is JSON here because EarthSciIO sits behind the
+opt-in `esio` feature, whose transitive `zarrs` raises the effective MSRV above the crate's
+declared 1.89, and `esm` ships on the default features.
+
+Decision 8 needed the other half too. A plan can only grid a variable the runner left a SLOT
+for, and the array runtime exposed **scalar** observeds only — an array-valued one (a clip
+ring, a gridded emissions field) was skipped, so the only possible answer to a caller asking
+for it was `OutputError::UnknownObserved`, exactly as that error's own text predicts. The new
+`SolveOptions::output_observed` is decision 8's caller-named subset at the runner: empty by
+default (an array observed is `n_cells` rows, not one, so materializing every one unasked would
+multiply a trajectory's memory by the grid size), and a named field is appended in the same
+1-based column-major cell-key spelling the state uses — so `derive_output_gridding` inverts a
+requested observed and the state it came from identically, and the two land on one emergent
+grid. Both runners honour it: the array runtime puts the field in its observed-trajectory
+dependency cones and flattens it per cell; the scalar runtime walks its observed graph.
+
 The Rust `EsmFile` also gained the `coordinates` field itself: the registry is in
 `esm-schema.json` and in the Julia `EsmFile`, but the Rust binding never modeled it, so a
 `parse → emit` round trip silently **dropped** the whole registry (the same class of defect as

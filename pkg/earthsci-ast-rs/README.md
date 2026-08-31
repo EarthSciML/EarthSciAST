@@ -99,6 +99,11 @@ esm pretty model.esm -f latex
 # Run a simulation
 esm simulate model.esm --time 10 -o results.json
 
+# Write GRIDDED output: dimension-labeled, row-major [time, ...spatial]
+# arrays with CF coordinates, plus the named observed fields alongside the
+# state (repeat --observed for several).
+esm simulate model.esm --time 10 --observed flux --format grid -o results.json
+
 # Analyze structure / complexity / coupling
 esm analyze model.esm
 
