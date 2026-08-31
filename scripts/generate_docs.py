@@ -962,7 +962,7 @@ jobs:
 
 # Site settings
 title: "ESM Format Documentation"
-description: "Complete documentation for the EarthSciML Serialization Format"
+description: "Complete documentation for the EarthSciML Abstract Syntax Tree Format"
 baseurl: ""
 url: ""
 

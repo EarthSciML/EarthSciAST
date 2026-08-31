@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Serialization Format — Version 1.0.0**
+**EarthSciML Abstract Syntax Tree Format — Version 1.0.0**
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)

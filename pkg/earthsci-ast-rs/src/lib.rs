@@ -1,6 +1,6 @@
 //! # earthsci-ast - Rust Implementation
 //!
-//! This crate provides Rust types and utilities for the EarthSciML Serialization Format (ESM).
+//! This crate provides Rust types and utilities for the EarthSciML Abstract Syntax Tree Format (ESM).
 //!
 //! ## Features
 //!

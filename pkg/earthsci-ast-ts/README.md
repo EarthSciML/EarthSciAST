@@ -3,7 +3,7 @@
 [![npm version](https://badge.fury.io/js/@earthsciml/ast.svg)](https://badge.fury.io/js/@earthsciml/ast)
 [![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml)
 
-TypeScript types and utilities for the **EarthSciML Serialization Format**, providing complete type definitions, parsing, validation, and manipulation tools for scientific modeling data structures.
+TypeScript types and utilities for the **EarthSciML Abstract Syntax Tree Format**, providing complete type definitions, parsing, validation, and manipulation tools for scientific modeling data structures.
 
 ## Installation
 

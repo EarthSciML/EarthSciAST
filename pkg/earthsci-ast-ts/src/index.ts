@@ -2,7 +2,7 @@
  * ESM Format TypeScript Package
  *
  * Entry point for the @earthsciml/ast package, providing complete TypeScript
- * type definitions for the EarthSciML Serialization Format.
+ * type definitions for the EarthSciML Abstract Syntax Tree Format.
  *
  * @example
  * ```typescript

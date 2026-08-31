@@ -1,6 +1,6 @@
 # EarthSci Toolkit - Rust Implementation
 
-Rust implementation of the EarthSciML Serialization Format (ESM).
+Rust implementation of the EarthSciML Abstract Syntax Tree Format (ESM).
 
 ## Features
 

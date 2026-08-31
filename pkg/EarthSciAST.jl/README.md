@@ -4,7 +4,7 @@
 [![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/stable)
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/dev)
 
-EarthSciML Serialization Format Julia library.
+EarthSciML Abstract Syntax Tree Format Julia library.
 
 EarthSciAST.jl provides Julia types and functions for working with ESM format files,
 which are JSON-based serialization format for EarthSciML model components,

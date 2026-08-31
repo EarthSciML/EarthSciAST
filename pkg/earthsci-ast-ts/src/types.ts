@@ -1,5 +1,5 @@
 /**
- * EarthSciML Serialization Format TypeScript type definitions — plus a small
+ * EarthSciML Abstract Syntax Tree Format TypeScript type definitions — plus a small
  * set of RUNTIME re-exports.
  *
  * Provides the complete type definitions for the ESM format: the auto-generated

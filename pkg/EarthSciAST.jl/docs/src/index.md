@@ -6,7 +6,7 @@ CurrentModule = EarthSciAST
 
 Documentation for [EarthSciAST.jl](https://github.com/EarthSciML/EarthSciAST).
 
-EarthSciAST.jl is a Julia library for working with the EarthSciML Serialization Format (ESM format),
+EarthSciAST.jl is a Julia library for working with the EarthSciML Abstract Syntax Tree Format (ESM format),
 a JSON-based serialization format for earth science model components, their composition, and runtime configuration.
 
 ## Features

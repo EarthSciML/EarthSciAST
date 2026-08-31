@@ -1,7 +1,7 @@
 using OrderedCollections: OrderedDict
 
 """
-Type definitions for EarthSciML Serialization Format.
+Type definitions for EarthSciML Abstract Syntax Tree Format.
 
 This module defines the complete type hierarchy for the ESM format,
 matching the JSON schema definitions for language-agnostic model interchange.

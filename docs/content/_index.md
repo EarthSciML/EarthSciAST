@@ -3,7 +3,7 @@ title: "EarthSciAST"
 description: "Language-agnostic JSON-based format for earth science model components."
 ---
 
-**EarthSciML Serialization Format** — a language-agnostic JSON-based format for
+**EarthSciML Abstract Syntax Tree Format** — a language-agnostic JSON-based format for
 earth science model components, their composition, and runtime configuration.
 
 Every model is fully self-describing: all equations, variables, parameters,

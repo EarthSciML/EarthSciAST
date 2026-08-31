@@ -1,5 +1,5 @@
 """
-ESM Format - Earth System Model Serialization Format
+ESM Format - EarthSciML Abstract Syntax Tree Format
 
 A Python package for handling Earth System Model serialization and mathematical expressions.
 This is the core implementation of the ESM Library Specification (see ``esm-spec.md``);

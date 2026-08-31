@@ -10,7 +10,7 @@ enableGitInfo = true
 enableRobotsTXT = true
 
 [params]
-  description = "Complete documentation for the EarthSciML Serialization Format."
+  description = "Complete documentation for the EarthSciML Abstract Syntax Tree Format."
   repoURL = "https://github.com/EarthSciML/EarthSciAST"
 
 [markup]

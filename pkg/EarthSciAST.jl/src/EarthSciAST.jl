@@ -1,7 +1,7 @@
 """
     EarthSciAST
 
-EarthSciML Serialization Format Julia library.
+EarthSciML Abstract Syntax Tree Format Julia library.
 
 This module provides Julia types and functions for working with ESM format files,
 which are JSON-based serialization format for EarthSciML model components,
