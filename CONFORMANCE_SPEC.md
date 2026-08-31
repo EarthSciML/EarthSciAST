@@ -1430,7 +1430,7 @@ unmatched row is `0` under the additive monoid — not a hole, not `NaN`.
 leaf set is exactly the set the equality test would have admitted, in the same
 relative order, so the ⊕-reduction is bit-identical to the undriven full
 product. A binding MAY fall back to the full product for a shape outside the
-three above; that is slower and MUST give the same answer.
+four above; that is slower and MUST give the same answer.
 
 **Falling back is only safe if something still tests equality (normative).** An
 overlap gate is a *conservative* broad phase whose narrow phase is the author's
