@@ -27,236 +27,15 @@ pub(crate) fn validate_model(
     errors: &mut Vec<StructuralError>,
     warnings: &mut Vec<UnitWarning>,
 ) {
-    let model_path = format!("/models/{model_name}");
+    let ctx = ModelCtx::new(esm_file, model_name, model, system_refs);
 
-    // The §6.3.1 classification of this model, derived once: which unknowns are
-    // ODE states, which are observed (and by which equation), and which
-    // parameters are Brownian / discrete. Every check below that used to branch
-    // on a declared type reads it.
-    let class = crate::classification::Classification::of(model);
-
-    // The model's UNKNOWNS, sorted. Sorted rather than declaration-ordered
-    // because `Model::variables` is a `HashMap`, which discards the JSON key
-    // order at parse: a stable answer is the only one this binding can give.
-    let unknown_vars: Vec<String> = class.unknowns();
-    let mut defined_vars: HashSet<String> = model.variables.keys().cloned().collect();
-
-    // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
-    // the `variables` map, and none of them is an `undefined_variable`. Adding
-    // them to the in-scope set here is what lets every reference check below —
-    // equations, observed expressions, event conditions and event affects —
-    // resolve them uniformly.
-    defined_vars.extend(implicitly_declared_symbols(esm_file));
-
-    // Scoped references this model's equations may use that are NOT top-level
-    // systems: the `<sub>.<var>` fields of each DataSource mounted as a
-    // subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
-    let local_scoped = subsystem_scoped_refs(model);
-
-    // A COUPLED model — operator-composed or a coupling target — does not own
-    // every name it mentions: `operator_compose`/`couple` merge the participating
-    // systems' scopes, so it legitimately references another composed system's
-    // state by bare name. Reference integrity therefore checks it against the
-    // DOCUMENT-WIDE declared names plus the §6.4 `_var` placeholder (already in
-    // `defined_vars` via `implicitly_declared_symbols`); a name declared NOWHERE
-    // is still an `undefined_variable` (F-1). Only equation-unknown BALANCE stays
-    // skipped (its unknowns may be driven by equations another system
-    // contributes). Mirrors Go `validate.go`, TS `validate/orchestrator.ts` and
-    // Python `global_symbols`.
-    let is_coupled = coupled_system_names(esm_file).contains(model_name);
-    if is_coupled {
-        defined_vars.extend(document_declared_names(esm_file));
-    }
-
-    // Every reference check routes through this one gate, which keeps the five
-    // call sites below uniform. A coupled model is checked too (F-1) — its
-    // `defined_vars` was widened to the document scope above — so the gate no
-    // longer short-circuits. Unit propagation is a separate pass: the dimensions
-    // of what a model spells must agree regardless of which system owns a name.
-    let check_refs =
-        |expr: &crate::Expr, path: &str, idx: usize, errs: &mut Vec<StructuralError>| {
-            // Any binder introduced ANYWHERE in this expression is in scope
-            // throughout it (a `makearray` binds its grid indices for every
-            // value; see `collect_bound_symbols`). Seed those before the descent,
-            // which then adds nested binders on top per node.
-            let mut scope = defined_vars.clone();
-            collect_bound_symbols(expr, &mut scope);
-            validate_expression_references_with_systems(
-                expr,
-                &scope,
-                system_refs,
-                &local_scoped,
-                path,
-                idx,
-                errs,
-            );
-        };
-
-    // Check the equation/unknown balance (esm-spec §4.9.4).
-    //
-    // The check is UNKNOWNS vs EQUATIONS — not "state variables vs
-    // time-derivative equations". An equation is credited whichever form its LHS
-    // takes: a derivative (`D(x)/dt ~ …`), a bare variable (`x ~ …`, an
-    // algebraic/observed equation), or an EXPRESSION (`H*H*SO4 ~ Ksp`, an
-    // implicit algebraic constraint). Crediting only a bare-variable derivative
-    // LHS undercounts every algebraic equation, which is why a
-    // `system_kind: "nonlinear"` equilibrium model — no time derivative anywhere
-    // — was reported as "0 ODE equations, 2 state variables" and rejected.
-    //
-    // `initialization_equations` (§6.2) are a separate block with a separate
-    // balance and are deliberately NOT counted here.
-    let defining_equations = count_defining_equations(&model.equations);
-    if !is_coupled && defining_equations != unknown_vars.len() {
-        let (extra_equations_for, missing_equations_for) =
-            analyze_equation_mismatch(&model.equations, &unknown_vars);
-
-        // The settled cross-binding detail key is `unknowns`
-        // (tests/invalid/expected_errors.json): esm 1.0.0 balances UNKNOWNS
-        // against equations, and `state_variables` named a type that no longer
-        // exists.
-        let mut details = serde_json::json!({
-            "unknowns": unknown_vars,
-            "equations": defining_equations,
-        });
-
-        if !missing_equations_for.is_empty() {
-            details["missing_equations_for"] = serde_json::json!(missing_equations_for);
-        }
-        if !extra_equations_for.is_empty() {
-            details["extra_equations_for"] = serde_json::json!(extra_equations_for);
-        }
-
-        errors.push(StructuralError {
-            path: model_path.clone(),
-            code: StructuralErrorCode::EquationCountMismatch,
-            message: format!(
-                "Number of equations ({}) does not match number of unknowns ({})",
-                defining_equations,
-                unknown_vars.len()
-            ),
-            details,
-        });
-    }
-
-    // Build a unit environment once per model — expression-level dimensional
-    // propagation walks the Expr AST using this map. A variable with NO declared
-    // units is simply absent from the env (dimension unknown, not
-    // dimensionless), so expressions mentioning it are skipped rather than
-    // checked against a fabricated dimension.
-    //
-    // A variable whose declared unit string denotes no real unit is a different
-    // matter: it is a HARD `unit_parse_error` at the variable's own pointer
-    // (esm-spec §4.8.4). Coercing it to dimensionless would fabricate a
-    // dimension, and treating it as merely unknown would let a typo silently
-    // switch off every dimensional check that depends on it.
-    let (unit_env, unit_parse_failures) = build_unit_env(&model.variables);
-    for failure in unit_parse_failures {
-        errors.push(StructuralError {
-            path: format!("{model_path}/variables/{}", failure.name),
-            code: StructuralErrorCode::UnitParseError,
-            message: format!("Unit string '{}' is not a recognised unit", failure.units),
-            details: serde_json::json!({
-                "variable": failure.name,
-                "units": failure.units,
-            }),
-        });
-    }
-
-    // Reference integrity applies to EVERY expression-bearing block, not just
-    // `equations`. `initialization_equations` (§6.2) are a separate block with a
-    // separate balance — but they are still expressions over the model's
-    // symbols, and nothing checked them, so an undefined name in an initial
-    // condition was a silent FALSE NEGATIVE. (The sidecar fields *within* an
-    // expression — `expr`, `filter`, `key`, `lower`/`upper`, `values`, `axes`,
-    // `bindings` — are covered by the walker itself, which descends via
-    // `ExpressionNode::for_each_child` rather than `args` alone.)
-    for (eq_idx, equation) in model.initialization_equations.iter().flatten().enumerate() {
-        let eq_path = format!("{model_path}/initialization_equations/{eq_idx}");
-        // The pointer is the containing expression FIELD (§7.1.2) — `.../<eq>/lhs`
-        // or `.../<eq>/rhs` — not the whole equation.
-        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-            check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
-        }
-    }
-
-    // `guesses` (§6.3) — an initial guess for a nonlinear solve is an Expression
-    // over the model's symbols. Stored as raw JSON, so it is parsed here.
-    for (var_name, guess) in model.guesses.iter().flatten() {
-        let Ok(expr) = serde_json::from_value::<crate::Expr>(guess.clone()) else {
-            continue; // not an expression (a bare number is fine)
-        };
-        check_refs(
-            &expr,
-            &format!("{model_path}/guesses/{var_name}"),
-            0,
-            errors,
-        );
-    }
-
-    // `tests[].assertions[].reference` (§6.6) — an analytic reference solution is
-    // an Expression over the model's symbols.
-    for (t_idx, test) in model.tests.iter().flatten().enumerate() {
-        for (a_idx, assertion) in test.assertions.iter().enumerate() {
-            // Only the inline analytic-Expression form names symbols; a
-            // `{type: "from_file"}` reference points at a snapshot.
-            let Some(crate::types::AssertionReference::Expression(reference)) =
-                &assertion.reference
-            else {
-                continue;
-            };
-            check_refs(
-                reference,
-                &format!("{model_path}/tests/{t_idx}/assertions/{a_idx}/reference"),
-                0,
-                errors,
-            );
-        }
-    }
-
-    // Check that all equation references are defined and validate dimensional consistency
-    for (eq_idx, equation) in model.equations.iter().enumerate() {
-        let eq_path = format!("{model_path}/equations/{eq_idx}");
-        // Reference integrity attaches to the containing expression FIELD
-        // (§7.1.2): an undefined name on the RHS is reported at
-        // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
-        // findings below stay at the equation level — an inconsistency is a
-        // property of the equation, not of one side.)
-        for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
-            check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
-        }
-
-        // Validate dimensional consistency of the equation via expression-level
-        // propagation over the Expr AST. Every finding is reported: a provable
-        // mismatch is a hard `unit_inconsistency` error, an undeterminable
-        // dimension stays a non-blocking warning. See `record_unit_findings`.
-        record_unit_findings(
-            check_equation_dimensions(equation, &unit_env),
-            &eq_path,
-            &format!("Equation {eq_idx}"),
-            errors,
-            warnings,
-        );
-    }
-
-    // Static `aggregate`-node constraints (RFC semiring-faq-unified-ir): an
-    // undeclared `from` index set, a value-equality join over an unportable
-    // (float/null) categorical key, and a value-invention `distinct` node that
-    // reads a state variable (relational work on the continuous hot path). Each
-    // is decidable from this one document, so it belongs in `validate()`.
-    // The leaves that seed CONTINUOUS in the cadence partition
-    // (CONFORMANCE_SPEC.md §5.7.2): ODE states, algebraic unknowns, and
-    // Brownian parameters. An `aggregate` reading any of them classes
-    // CONTINUOUS, which guard 2 forbids for relational work. (An OBSERVED
-    // unknown's class depends on its defining equation, which only the cadence
-    // pass resolves; this static check stays with the leaves it can decide.)
-    let state_var_set: HashSet<String> = class
-        .ode_states
-        .iter()
-        .chain(&class.algebraic_unknowns)
-        .chain(&class.brownian_parameters)
-        .cloned()
-        .collect();
-    validate_aggregate_constraints(esm_file, model_name, model, &state_var_set, errors);
+    ctx.check_equation_balance(errors);
+    let unit_env = ctx.check_unit_declarations(errors);
+    ctx.check_initialization_equation_refs(errors);
+    ctx.check_guess_refs(errors);
+    ctx.check_test_reference_refs(errors);
+    ctx.check_equations(&unit_env, errors, warnings);
+    ctx.check_aggregate_nodes(errors);
 
     // Bare array-level expressions align their operands by index-set NAME
     // (esm-spec §4.3.4). An operand carrying an index set the result does not
@@ -265,115 +44,448 @@ pub(crate) fn validate_model(
     // time into plausible, zero-padded garbage.
     validate_array_broadcast_shapes(model_name, model, errors);
 
-    // A `default_units` that names a unit OTHER than the declared `units` means
-    // the `default` NUMBER is expressed in the wrong unit — `units: "K"` with
-    // `default: 25.0, default_units: "degC"` stores 25 for a variable that
-    // actually reads 298.15 (esm-spec §4.8; `tests/invalid/
-    // units_parameter_default_mismatch.esm`).
-    //
-    // The comparison is on unit IDENTITY, not dimension: `K` and `degC` share a
-    // dimension and (in a purely multiplicative model) a scale, differing only
-    // by an affine OFFSET that `Unit` cannot represent — so a dimensional check
-    // is structurally incapable of catching this, which is why every binding but
-    // Python missed it. Matching Python, any difference is reported.
-    for (var_name, variable) in &model.variables {
-        let (Some(declared), Some(default_units)) =
-            (variable.units.as_deref(), variable.default_units.as_deref())
-        else {
-            continue;
-        };
-        if declared.trim() == default_units.trim() {
-            continue;
-        }
-        errors.push(StructuralError {
-            path: format!("{model_path}/variables/{var_name}"),
-            code: StructuralErrorCode::UnitInconsistency,
-            message: "Parameter default value units do not match declared units".to_string(),
-            details: serde_json::json!({
-                "variable": var_name,
-                "declared_units": declared,
-                "default_value": variable.default,
-                "inferred_default_units": default_units,
-            }),
-        });
-    }
-
-    // An OBSERVED unknown's defining expression is an EQUATION from esm 1.0.0
-    // — there is no `expression` field on a variable, and an observed with
-    // nothing defining it is no longer a malformed declaration but an
-    // UNBALANCED SYSTEM, already reported above as `equation_count_mismatch`
-    // (esm-spec §4.9.4). So the checks that used to run over
-    // `variables[v].expression` now run over that equation's RHS, keyed by the
-    // unknown it defines. Reference integrity on the RHS is covered by the
-    // equations loop below; what is specific here is the DIMENSIONAL check
-    // against the unknown's declared `units`, whose error path is the VARIABLE
-    // (`/models/<M>/variables/<v>`), as pinned by
-    // `tests/invalid/expected_errors.json`.
-    for (var_name, rhs) in &class.observed_definitions {
-        let Some(variable) = model.variables.get(var_name) else {
-            continue;
-        };
-        let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
-        record_unit_findings(
-            check_expression_dimensions(rhs, declared.as_ref(), &unit_env),
-            &format!("{model_path}/variables/{var_name}"),
-            &format!("Observed variable \"{var_name}\""),
-            errors,
-            warnings,
-        );
-        if let Some(declared) = &declared {
-            check_linear_conversion_factor(
-                rhs,
-                declared,
-                model,
-                &format!("{model_path}/variables/{var_name}"),
-                var_name,
-                errors,
-            );
-        }
-    }
-
-    // The Expressions a VARIABLE still carries are the parameter-update ones
-    // (§5.4): each rule's `when` trigger, its `expression` value form, and a
-    // `from` binding's `unit_conversion`. Reference integrity applies to every
-    // expression-bearing field (§4.9.5), and nothing else walks these.
-    let mut var_names: Vec<&String> = model.variables.keys().collect();
-    var_names.sort();
-    for var_name in var_names {
-        let variable = &model.variables[var_name];
-        let base = format!("{model_path}/variables/{var_name}/update");
-        variable.for_each_expression_at(&mut |expr, site| {
-            check_refs(expr, &format!("{base}{site}"), 0, errors)
-        });
-    }
-
-    // Validate discrete events
-    if let Some(ref discrete_events) = model.discrete_events {
-        for (event_idx, event) in discrete_events.iter().enumerate() {
-            validate_discrete_event(
-                event,
-                event_idx,
-                &model_path,
-                &defined_vars,
-                &model.variables,
-                errors,
-            );
-        }
-    }
-
+    ctx.check_default_units_identity(errors);
+    ctx.check_observed_definitions(&unit_env, errors, warnings);
+    ctx.check_update_expression_refs(errors);
+    ctx.check_discrete_events(errors);
     check_physical_constant_units(model_name, model, errors);
+    ctx.check_continuous_events(errors);
+}
 
-    // Validate continuous events
-    if let Some(ref continuous_events) = model.continuous_events {
-        for (event_idx, event) in continuous_events.iter().enumerate() {
-            validate_continuous_event(
-                event,
-                event_idx,
-                &model_path,
-                &defined_vars,
-                &model.variables,
+/// The per-model validation context the `check_*` passes below share: the
+/// document, the model under check, and the scope sets every reference check
+/// resolves against — derived once in [`ModelCtx::new`].
+struct ModelCtx<'a> {
+    esm_file: &'a EsmFile,
+    model_name: &'a str,
+    model: &'a crate::Model,
+    system_refs: &'a HashMap<String, SystemInfo>,
+    model_path: String,
+    /// The §6.3.1 classification of this model, derived once: which unknowns are
+    /// ODE states, which are observed (and by which equation), and which
+    /// parameters are Brownian / discrete. Every check below that used to branch
+    /// on a declared type reads it.
+    class: crate::classification::Classification,
+    /// The model's UNKNOWNS, sorted. Sorted rather than declaration-ordered
+    /// because `Model::variables` is a `HashMap`, which discards the JSON key
+    /// order at parse: a stable answer is the only one this binding can give.
+    unknown_vars: Vec<String>,
+    defined_vars: HashSet<String>,
+    /// Scoped references this model's equations may use that are NOT top-level
+    /// systems: the `<sub>.<var>` fields of each DataSource mounted as a
+    /// subsystem (flatten lowers these to observeds `<model>.<sub>.<var>`).
+    local_scoped: HashSet<String>,
+    is_coupled: bool,
+}
+
+impl<'a> ModelCtx<'a> {
+    fn new(
+        esm_file: &'a EsmFile,
+        model_name: &'a str,
+        model: &'a crate::Model,
+        system_refs: &'a HashMap<String, SystemInfo>,
+    ) -> Self {
+        let model_path = format!("/models/{model_name}");
+        let class = crate::classification::Classification::of(model);
+        let unknown_vars: Vec<String> = class.unknowns();
+        let mut defined_vars: HashSet<String> = model.variables.keys().cloned().collect();
+
+        // esm-spec §4.9.1: three classes of symbol are in scope WITHOUT appearing in
+        // the `variables` map, and none of them is an `undefined_variable`. Adding
+        // them to the in-scope set here is what lets every reference check below —
+        // equations, observed expressions, event conditions and event affects —
+        // resolve them uniformly.
+        defined_vars.extend(implicitly_declared_symbols(esm_file));
+
+        let local_scoped = subsystem_scoped_refs(model);
+
+        // A COUPLED model — operator-composed or a coupling target — does not own
+        // every name it mentions: `operator_compose`/`couple` merge the participating
+        // systems' scopes, so it legitimately references another composed system's
+        // state by bare name. Reference integrity therefore checks it against the
+        // DOCUMENT-WIDE declared names plus the §6.4 `_var` placeholder (already in
+        // `defined_vars` via `implicitly_declared_symbols`); a name declared NOWHERE
+        // is still an `undefined_variable` (F-1). Only equation-unknown BALANCE stays
+        // skipped (its unknowns may be driven by equations another system
+        // contributes). Mirrors Go `validate.go`, TS `validate/orchestrator.ts` and
+        // Python `global_symbols`.
+        let is_coupled = coupled_system_names(esm_file).contains(model_name);
+        if is_coupled {
+            defined_vars.extend(document_declared_names(esm_file));
+        }
+
+        ModelCtx {
+            esm_file,
+            model_name,
+            model,
+            system_refs,
+            model_path,
+            class,
+            unknown_vars,
+            defined_vars,
+            local_scoped,
+            is_coupled,
+        }
+    }
+
+    /// Every reference check routes through this one gate, which keeps the five
+    /// call sites across the passes uniform. A coupled model is checked too (F-1) — its
+    /// `defined_vars` was widened to the document scope in [`ModelCtx::new`] —
+    /// so the gate no longer short-circuits. Unit propagation is a separate
+    /// pass: the dimensions of what a model spells must agree regardless of
+    /// which system owns a name.
+    fn check_refs(
+        &self,
+        expr: &crate::Expr,
+        path: &str,
+        idx: usize,
+        errs: &mut Vec<StructuralError>,
+    ) {
+        // Any binder introduced ANYWHERE in this expression is in scope
+        // throughout it (a `makearray` binds its grid indices for every
+        // value; see `collect_bound_symbols`). Seed those before the descent,
+        // which then adds nested binders on top per node.
+        let mut scope = self.defined_vars.clone();
+        collect_bound_symbols(expr, &mut scope);
+        validate_expression_references_with_systems(
+            expr,
+            &scope,
+            self.system_refs,
+            &self.local_scoped,
+            path,
+            idx,
+            errs,
+        );
+    }
+
+    /// Check the equation/unknown balance (esm-spec §4.9.4).
+    ///
+    /// The check is UNKNOWNS vs EQUATIONS — not "state variables vs
+    /// time-derivative equations". An equation is credited whichever form its LHS
+    /// takes: a derivative (`D(x)/dt ~ …`), a bare variable (`x ~ …`, an
+    /// algebraic/observed equation), or an EXPRESSION (`H*H*SO4 ~ Ksp`, an
+    /// implicit algebraic constraint). Crediting only a bare-variable derivative
+    /// LHS undercounts every algebraic equation, which is why a
+    /// `system_kind: "nonlinear"` equilibrium model — no time derivative anywhere
+    /// — was reported as "0 ODE equations, 2 state variables" and rejected.
+    ///
+    /// `initialization_equations` (§6.2) are a separate block with a separate
+    /// balance and are deliberately NOT counted here.
+    fn check_equation_balance(&self, errors: &mut Vec<StructuralError>) {
+        let defining_equations = count_defining_equations(&self.model.equations);
+        if !self.is_coupled && defining_equations != self.unknown_vars.len() {
+            let (extra_equations_for, missing_equations_for) =
+                analyze_equation_mismatch(&self.model.equations, &self.unknown_vars);
+
+            // The settled cross-binding detail key is `unknowns`
+            // (tests/invalid/expected_errors.json): esm 1.0.0 balances UNKNOWNS
+            // against equations, and `state_variables` named a type that no longer
+            // exists.
+            let mut details = serde_json::json!({
+                "unknowns": self.unknown_vars,
+                "equations": defining_equations,
+            });
+
+            if !missing_equations_for.is_empty() {
+                details["missing_equations_for"] = serde_json::json!(missing_equations_for);
+            }
+            if !extra_equations_for.is_empty() {
+                details["extra_equations_for"] = serde_json::json!(extra_equations_for);
+            }
+
+            errors.push(StructuralError {
+                path: self.model_path.clone(),
+                code: StructuralErrorCode::EquationCountMismatch,
+                message: format!(
+                    "Number of equations ({}) does not match number of unknowns ({})",
+                    defining_equations,
+                    self.unknown_vars.len()
+                ),
+                details,
+            });
+        }
+    }
+
+    /// Build a unit environment once per model — expression-level dimensional
+    /// propagation walks the Expr AST using this map. A variable with NO declared
+    /// units is simply absent from the env (dimension unknown, not
+    /// dimensionless), so expressions mentioning it are skipped rather than
+    /// checked against a fabricated dimension.
+    ///
+    /// A variable whose declared unit string denotes no real unit is a different
+    /// matter: it is a HARD `unit_parse_error` at the variable's own pointer
+    /// (esm-spec §4.8.4). Coercing it to dimensionless would fabricate a
+    /// dimension, and treating it as merely unknown would let a typo silently
+    /// switch off every dimensional check that depends on it.
+    fn check_unit_declarations(
+        &self,
+        errors: &mut Vec<StructuralError>,
+    ) -> HashMap<String, crate::units::Unit> {
+        let (unit_env, unit_parse_failures) = build_unit_env(&self.model.variables);
+        for failure in unit_parse_failures {
+            errors.push(StructuralError {
+                path: format!("{}/variables/{}", self.model_path, failure.name),
+                code: StructuralErrorCode::UnitParseError,
+                message: format!("Unit string '{}' is not a recognised unit", failure.units),
+                details: serde_json::json!({
+                    "variable": failure.name,
+                    "units": failure.units,
+                }),
+            });
+        }
+        unit_env
+    }
+
+    /// Reference integrity applies to EVERY expression-bearing block, not just
+    /// `equations`. `initialization_equations` (§6.2) are a separate block with a
+    /// separate balance — but they are still expressions over the model's
+    /// symbols, and nothing checked them, so an undefined name in an initial
+    /// condition was a silent FALSE NEGATIVE. (The sidecar fields *within* an
+    /// expression — `expr`, `filter`, `key`, `lower`/`upper`, `values`, `axes`,
+    /// `bindings` — are covered by the walker itself, which descends via
+    /// `ExpressionNode::for_each_child` rather than `args` alone.)
+    fn check_initialization_equation_refs(&self, errors: &mut Vec<StructuralError>) {
+        for (eq_idx, equation) in self
+            .model
+            .initialization_equations
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            let eq_path = format!("{}/initialization_equations/{eq_idx}", self.model_path);
+            // The pointer is the containing expression FIELD (§7.1.2) — `.../<eq>/lhs`
+            // or `.../<eq>/rhs` — not the whole equation.
+            for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+                self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+            }
+        }
+    }
+
+    /// `guesses` (§6.3) — an initial guess for a nonlinear solve is an Expression
+    /// over the model's symbols. Stored as raw JSON, so it is parsed here.
+    fn check_guess_refs(&self, errors: &mut Vec<StructuralError>) {
+        for (var_name, guess) in self.model.guesses.iter().flatten() {
+            let Ok(expr) = serde_json::from_value::<crate::Expr>(guess.clone()) else {
+                continue; // not an expression (a bare number is fine)
+            };
+            self.check_refs(
+                &expr,
+                &format!("{}/guesses/{var_name}", self.model_path),
+                0,
                 errors,
             );
+        }
+    }
+
+    /// `tests[].assertions[].reference` (§6.6) — an analytic reference solution is
+    /// an Expression over the model's symbols.
+    fn check_test_reference_refs(&self, errors: &mut Vec<StructuralError>) {
+        for (t_idx, test) in self.model.tests.iter().flatten().enumerate() {
+            for (a_idx, assertion) in test.assertions.iter().enumerate() {
+                // Only the inline analytic-Expression form names symbols; a
+                // `{type: "from_file"}` reference points at a snapshot.
+                let Some(crate::types::AssertionReference::Expression(reference)) =
+                    &assertion.reference
+                else {
+                    continue;
+                };
+                self.check_refs(
+                    reference,
+                    &format!(
+                        "{}/tests/{t_idx}/assertions/{a_idx}/reference",
+                        self.model_path
+                    ),
+                    0,
+                    errors,
+                );
+            }
+        }
+    }
+
+    /// Check that all equation references are defined and validate dimensional
+    /// consistency.
+    fn check_equations(
+        &self,
+        unit_env: &HashMap<String, crate::units::Unit>,
+        errors: &mut Vec<StructuralError>,
+        warnings: &mut Vec<UnitWarning>,
+    ) {
+        for (eq_idx, equation) in self.model.equations.iter().enumerate() {
+            let eq_path = format!("{}/equations/{eq_idx}", self.model_path);
+            // Reference integrity attaches to the containing expression FIELD
+            // (§7.1.2): an undefined name on the RHS is reported at
+            // `.../equations/<i>/rhs`, not at the whole equation. (Dimensional
+            // findings below stay at the equation level — an inconsistency is a
+            // property of the equation, not of one side.)
+            for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
+                self.check_refs(expr, &format!("{eq_path}/{field}"), eq_idx, errors);
+            }
+
+            // Validate dimensional consistency of the equation via expression-level
+            // propagation over the Expr AST. Every finding is reported: a provable
+            // mismatch is a hard `unit_inconsistency` error, an undeterminable
+            // dimension stays a non-blocking warning. See `record_unit_findings`.
+            record_unit_findings(
+                check_equation_dimensions(equation, unit_env),
+                &eq_path,
+                &format!("Equation {eq_idx}"),
+                errors,
+                warnings,
+            );
+        }
+    }
+
+    /// Static `aggregate`-node constraints (RFC semiring-faq-unified-ir): an
+    /// undeclared `from` index set, a value-equality join over an unportable
+    /// (float/null) categorical key, and a value-invention `distinct` node that
+    /// reads a state variable (relational work on the continuous hot path). Each
+    /// is decidable from this one document, so it belongs in `validate()`.
+    fn check_aggregate_nodes(&self, errors: &mut Vec<StructuralError>) {
+        // The leaves that seed CONTINUOUS in the cadence partition
+        // (CONFORMANCE_SPEC.md §5.7.2): ODE states, algebraic unknowns, and
+        // Brownian parameters. An `aggregate` reading any of them classes
+        // CONTINUOUS, which guard 2 forbids for relational work. (An OBSERVED
+        // unknown's class depends on its defining equation, which only the cadence
+        // pass resolves; this static check stays with the leaves it can decide.)
+        let state_var_set: HashSet<String> = self
+            .class
+            .ode_states
+            .iter()
+            .chain(&self.class.algebraic_unknowns)
+            .chain(&self.class.brownian_parameters)
+            .cloned()
+            .collect();
+        validate_aggregate_constraints(
+            self.esm_file,
+            self.model_name,
+            self.model,
+            &state_var_set,
+            errors,
+        );
+    }
+
+    /// A `default_units` that names a unit OTHER than the declared `units` means
+    /// the `default` NUMBER is expressed in the wrong unit — `units: "K"` with
+    /// `default: 25.0, default_units: "degC"` stores 25 for a variable that
+    /// actually reads 298.15 (esm-spec §4.8; `tests/invalid/
+    /// units_parameter_default_mismatch.esm`).
+    ///
+    /// The comparison is on unit IDENTITY, not dimension: `K` and `degC` share a
+    /// dimension and (in a purely multiplicative model) a scale, differing only
+    /// by an affine OFFSET that `Unit` cannot represent — so a dimensional check
+    /// is structurally incapable of catching this, which is why every binding but
+    /// Python missed it. Matching Python, any difference is reported.
+    fn check_default_units_identity(&self, errors: &mut Vec<StructuralError>) {
+        for (var_name, variable) in &self.model.variables {
+            let (Some(declared), Some(default_units)) =
+                (variable.units.as_deref(), variable.default_units.as_deref())
+            else {
+                continue;
+            };
+            if declared.trim() == default_units.trim() {
+                continue;
+            }
+            errors.push(StructuralError {
+                path: format!("{}/variables/{var_name}", self.model_path),
+                code: StructuralErrorCode::UnitInconsistency,
+                message: "Parameter default value units do not match declared units".to_string(),
+                details: serde_json::json!({
+                    "variable": var_name,
+                    "declared_units": declared,
+                    "default_value": variable.default,
+                    "inferred_default_units": default_units,
+                }),
+            });
+        }
+    }
+
+    /// An OBSERVED unknown's defining expression is an EQUATION from esm 1.0.0
+    /// — there is no `expression` field on a variable, and an observed with
+    /// nothing defining it is no longer a malformed declaration but an
+    /// UNBALANCED SYSTEM, already reported above as `equation_count_mismatch`
+    /// (esm-spec §4.9.4). So the checks that used to run over
+    /// `variables[v].expression` now run over that equation's RHS, keyed by the
+    /// unknown it defines. Reference integrity on the RHS is covered by the
+    /// equations loop above; what is specific here is the DIMENSIONAL check
+    /// against the unknown's declared `units`, whose error path is the VARIABLE
+    /// (`/models/<M>/variables/<v>`), as pinned by
+    /// `tests/invalid/expected_errors.json`.
+    fn check_observed_definitions(
+        &self,
+        unit_env: &HashMap<String, crate::units::Unit>,
+        errors: &mut Vec<StructuralError>,
+        warnings: &mut Vec<UnitWarning>,
+    ) {
+        for (var_name, rhs) in &self.class.observed_definitions {
+            let Some(variable) = self.model.variables.get(var_name) else {
+                continue;
+            };
+            let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
+            record_unit_findings(
+                check_expression_dimensions(rhs, declared.as_ref(), unit_env),
+                &format!("{}/variables/{var_name}", self.model_path),
+                &format!("Observed variable \"{var_name}\""),
+                errors,
+                warnings,
+            );
+            if let Some(declared) = &declared {
+                check_linear_conversion_factor(
+                    rhs,
+                    declared,
+                    self.model,
+                    &format!("{}/variables/{var_name}", self.model_path),
+                    var_name,
+                    errors,
+                );
+            }
+        }
+    }
+
+    /// The Expressions a VARIABLE still carries are the parameter-update ones
+    /// (§5.4): each rule's `when` trigger, its `expression` value form, and a
+    /// `from` binding's `unit_conversion`. Reference integrity applies to every
+    /// expression-bearing field (§4.9.5), and nothing else walks these.
+    fn check_update_expression_refs(&self, errors: &mut Vec<StructuralError>) {
+        let mut var_names: Vec<&String> = self.model.variables.keys().collect();
+        var_names.sort();
+        for var_name in var_names {
+            let variable = &self.model.variables[var_name];
+            let base = format!("{}/variables/{var_name}/update", self.model_path);
+            variable.for_each_expression_at(&mut |expr, site| {
+                self.check_refs(expr, &format!("{base}{site}"), 0, errors)
+            });
+        }
+    }
+
+    /// Validate discrete events.
+    fn check_discrete_events(&self, errors: &mut Vec<StructuralError>) {
+        if let Some(ref discrete_events) = self.model.discrete_events {
+            for (event_idx, event) in discrete_events.iter().enumerate() {
+                validate_discrete_event(
+                    event,
+                    event_idx,
+                    &self.model_path,
+                    &self.defined_vars,
+                    &self.model.variables,
+                    errors,
+                );
+            }
+        }
+    }
+
+    /// Validate continuous events.
+    fn check_continuous_events(&self, errors: &mut Vec<StructuralError>) {
+        if let Some(ref continuous_events) = self.model.continuous_events {
+            for (event_idx, event) in continuous_events.iter().enumerate() {
+                validate_continuous_event(
+                    event,
+                    event_idx,
+                    &self.model_path,
+                    &self.defined_vars,
+                    &self.model.variables,
+                    errors,
+                );
+            }
         }
     }
 }
@@ -2127,13 +2239,15 @@ fn validate_discrete_event(
     if let Some(ref affects) = event.affects {
         validate_event_affects(
             affects,
-            defined_vars,
-            variables,
-            Some(&event.trigger),
-            &event_path,
-            "affects",
-            event_name,
-            "discrete",
+            &EventAffectsCtx {
+                defined_vars,
+                variables,
+                trigger: Some(&event.trigger),
+                event_path: &event_path,
+                location: "affects",
+                event_name,
+                event_type: "discrete",
+            },
             errors,
         );
     }
@@ -2163,45 +2277,66 @@ fn validate_continuous_event(
     }
     validate_event_affects(
         &event.affects,
-        defined_vars,
-        variables,
-        None,
-        &event_path,
-        "affects",
-        event_name,
-        "continuous",
+        &EventAffectsCtx {
+            defined_vars,
+            variables,
+            trigger: None,
+            event_path: &event_path,
+            location: "affects",
+            event_name,
+            event_type: "continuous",
+        },
         errors,
     );
     if let Some(ref affect_neg) = event.affect_neg {
         validate_event_affects(
             affect_neg,
-            defined_vars,
-            variables,
-            None,
-            &event_path,
-            "affect_neg",
-            event_name,
-            "continuous",
+            &EventAffectsCtx {
+                defined_vars,
+                variables,
+                trigger: None,
+                event_path: &event_path,
+                location: "affect_neg",
+                event_name,
+                event_type: "continuous",
+            },
             errors,
         );
     }
 }
 
+/// What [`validate_event_affects`] checks a list of affect equations against:
+/// the scope and declarations the names must resolve in, plus what identifies
+/// the owning event (and its trigger, when discrete) in a finding.
+struct EventAffectsCtx<'a> {
+    defined_vars: &'a HashSet<String>,
+    variables: &'a indexmap::IndexMap<String, crate::types::ModelVariable>,
+    trigger: Option<&'a crate::DiscreteEventTrigger>,
+    event_path: &'a str,
+    /// The affects list being checked: `"affects"` or `"affect_neg"`.
+    location: &'a str,
+    event_name: &'a str,
+    /// `"discrete"` or `"continuous"`, for the finding's detail payload.
+    event_type: &'a str,
+}
+
 /// Shared affect-equation checks for discrete and continuous events: each
 /// LHS must be a declared variable, and each RHS expression must reference
 /// only declared names.
-#[allow(clippy::too_many_arguments)]
 fn validate_event_affects(
     affects: &[crate::AffectEquation],
-    defined_vars: &HashSet<String>,
-    variables: &indexmap::IndexMap<String, crate::types::ModelVariable>,
-    trigger: Option<&crate::DiscreteEventTrigger>,
-    event_path: &str,
-    location: &str,
-    event_name: &str,
-    event_type: &str,
+    ctx: &EventAffectsCtx<'_>,
     errors: &mut Vec<StructuralError>,
 ) {
+    let &EventAffectsCtx {
+        defined_vars,
+        variables,
+        trigger,
+        event_path,
+        location,
+        event_name,
+        event_type,
+    } = ctx;
     for (affect_idx, affect) in affects.iter().enumerate() {
         // esm 1.0.0: an event may affect UNKNOWNS only. A parameter that
         // changes during a run declares its own `update` block (esm-spec §5.4),
