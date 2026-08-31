@@ -1448,12 +1448,14 @@ fingerprint of the data columns.
 
 **Float keys stay forbidden.** A data column reaching a binding as floating-point
 storage is admissible **only** where every value is exactly integral, and is then
-an integer ID column. Anything else is a float key, whose equality is not
-portable across bindings (§5.5.1 rule 1): a binding MUST NOT join on it. The
-reference declines the gate in that case and lets the lowered predicate decide,
-which is correct because the predicate is float equality on the same values —
-i.e. the document is already outside the contract and gets the arithmetic it
-asked for, not a silently different answer.
+an integer ID column. Anything else is a float key, whose equality is not portable
+across bindings (§5.5.1 rule 1): a binding MUST NOT treat it as a key. Rejecting
+the document with a named error is the recommended behaviour and is what the
+Python reference does. The Rust reference instead declines the GATE and lets the
+lowered equality predicate compute float equality on the same values — the
+arithmetic the (already out-of-contract) document asked for, rather than a
+silently different answer. Either is conforming; a document that can tell them
+apart is outside the contract by construction.
 
 ### 5.6 Closed Semiring Registry (normative)
 

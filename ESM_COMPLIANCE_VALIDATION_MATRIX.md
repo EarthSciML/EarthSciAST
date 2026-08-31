@@ -270,22 +270,27 @@ Where:
 > `count(1) = 5` reads the join's cardinality directly (a binding that drops the clause
 > computes the full product's 12).
 >
-> **Julia and Python: -001 PARTIAL, -002 and -003 present in effect, -004 MISSING,
-> -005/-006 satisfied incidentally.** Both already resolve an `on` key polymorphically
-> and both already have the §5.5.6 driver, so the remaining work is to connect them —
-> the same two halves that were unconnected in Rust. Concretely:
+> **Python: -001 DONE (2026-08-31), -004 MISSING.** `_resolve_join_key_column` gained
+> the data-column branch below — resolved through `ctx.var_index_sets` and read with
+> `_overlap_env_array`, with binders tested first — so the shared fixture passes. The
+> driver (-004) is still absent.
 >
-> * **-001.** Julia `tree_walk/semiring.jl::_join_key_sym_pos_vals` and Python
->   `numpy_interpreter.py::_resolve_join_key_column` each accept exactly two key kinds:
->   an index-set member column, or a materialised **value-invention map buffer**
->   (`vi_maps.maps` / `ctx.join_key_buffers`). A MOVES-shaped join names an ordinary
->   declared 1-D variable, which is neither, and currently raises
->   `E_TREEWALK_JOIN_UNKNOWN_KEY` / "neither a declared range symbol nor an index set".
->   The fix is a third branch reading the variable's declared 1-D shape (which both
->   already thread for the overlap gate — Julia `var_shapes` in `_overlap_env_sym`,
->   Python `ctx` variable shapes, described in `numpy_interpreter.py` as "the general
->   form of `join_key_index_sets`") and its materialised array. The bin-buffer branch
->   then becomes a special case of it, not a separate kind.
+> **Julia: -001 PARTIAL, -004 MISSING. Both: -002 and -003 present in effect,
+> -005/-006 satisfied incidentally.** Julia already resolves an `on` key
+> polymorphically and already has the §5.5.6 driver, so the remaining work is to
+> connect them — the same two halves that were unconnected in Rust. Concretely:
+>
+> * **-001 (Julia).** `tree_walk/semiring.jl::_join_key_sym_pos_vals` accepts exactly
+>   two key kinds: an index-set member column, or a materialised **value-invention map
+>   buffer** (`vi_maps.maps`). A MOVES-shaped join names an ordinary declared 1-D
+>   variable, which is neither, and raises `E_TREEWALK_JOIN_UNKNOWN_KEY`. The fix is a
+>   third branch reading the variable's declared 1-D shape — `var_shapes`, which the
+>   function's own file already threads for `_overlap_env_sym` — and its materialised
+>   array; the bin-buffer branch then becomes a special case of it, not a separate
+>   kind. Python's equivalent branch (landed) is the model to follow: binders are
+>   tested FIRST so a variable sharing a name with a range symbol does not shadow the
+>   loop symbol, and a float-stored column is admitted only where every value is
+>   exactly integral.
 > * **-002.** Both currently emit ONE gate per key PAIR and AND them, which admits the
 >   same set as tuple equality, so the semantics are already right. It matters only for
 >   -004: gates over the same symbol pair must be grouped into one composite key before
