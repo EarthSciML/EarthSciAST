@@ -920,7 +920,19 @@ fn run_model_tests(
             insp = prob.take_inspection();
             Ok(sol)
         })
-        .map_err(|e| format!("simulate failed: {e}"));
+        .map_err(|e| format!("simulate failed: {e}"))
+        // A truncated or unstable run is a solve failure, not an assertion
+        // failure: without this the trajectory simply stops short and every
+        // assertion past the stop reports `no saved state at t=…`, naming the
+        // symptom rather than the cause. Same check, same message shape as the
+        // Julia binding's `_engine_setup`.
+        .and_then(|sol| {
+            if sol.retcode.is_success() {
+                Ok(sol)
+            } else {
+                Err(format!("solver retcode {}", sol.retcode))
+            }
+        });
         for (i, a) in t.assertions.iter().enumerate() {
             let (rtol, atol) = resolve_tolerance(
                 model.tolerance.as_ref(),
