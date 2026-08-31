@@ -524,7 +524,11 @@ def _parse_discrete_event_trigger(trigger_data: dict[str, Any]) -> DiscreteEvent
         return DiscreteEventTrigger(type=trigger_type, value=expression)
     if trigger_type == "periodic":
         interval = trigger_data["interval"]
-        return DiscreteEventTrigger(type=trigger_type, value=interval)
+        return DiscreteEventTrigger(
+            type=trigger_type,
+            value=interval,
+            initial_offset=trigger_data.get("initial_offset"),
+        )
     if trigger_type == "preset_times":
         times = trigger_data["times"]
         return DiscreteEventTrigger(type=trigger_type, value=times)
@@ -579,7 +583,9 @@ def _parse_discrete_event(event_data: dict[str, Any]) -> DiscreteEvent:
         trigger=trigger,
         affects=affects,
         priority=priority,
-        reinitialize=event_data.get("reinitialize", False),
+        # None (absent) is kept distinct from an explicit `false` so the
+        # author's spelling survives re-emit; read it via `.reinitializes`.
+        reinitialize=event_data.get("reinitialize"),
         description=event_data.get("description"),
     )
 
@@ -797,6 +803,8 @@ def _parse_model(model_data: dict[str, Any]) -> Model:
     if "discrete_events" in model_data:
         model.discrete_events = [_parse_discrete_event(ev) for ev in model_data["discrete_events"]]
 
+    model.reference = _parse_optional_reference(model_data)
+
     return model
 
 
@@ -819,12 +827,18 @@ def _parse_parameter(param_data: dict[str, Any]) -> Parameter:
     # does not synthesise a spurious ``default: 0.0`` — the serializer only
     # emits ``default`` when ``value`` is numeric.
     value = param_data.get("default")
+    shape = param_data.get("shape")
+    distribution = param_data.get("distribution")
+    update = param_data.get("update")
     return Parameter(
         name="",  # Name comes from the key
         value=value,
         units=param_data.get("units"),
         default_units=param_data.get("default_units"),
         description=param_data.get("description"),
+        shape=list(shape) if shape is not None else None,
+        distribution=_parse_distribution(distribution) if distribution is not None else None,
+        update=_parse_parameter_update_spec(update) if update is not None else None,
     )
 
 
@@ -841,7 +855,12 @@ def _parse_stoichiometry(entries: Any) -> dict[str, Any]:
 def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
     """Parse a reaction from JSON data."""
     rxn_id = reaction_data.get("id")
-    name = reaction_data.get("name", rxn_id)
+    # The schema requires `id` and makes `name` an OPTIONAL human-readable
+    # label. Defaulting `name` to `id` keeps every downstream consumer simple,
+    # but the emit side must not then write a `name` key the author never
+    # spelled — `name_authored` records which it was.
+    name_authored = "name" in reaction_data
+    name = reaction_data["name"] if name_authored else rxn_id
 
     # Substrates in the schema become reactants in the model.
     reactants = _parse_stoichiometry(reaction_data.get("substrates"))
@@ -853,7 +872,13 @@ def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
         rate_constant = _parse_expression(reaction_data["rate"])
 
     return Reaction(
-        name=name, id=rxn_id, reactants=reactants, products=products, rate_constant=rate_constant
+        name=name,
+        id=rxn_id,
+        reactants=reactants,
+        products=products,
+        rate_constant=rate_constant,
+        reference=_parse_optional_reference(reaction_data),
+        name_authored=name_authored,
     )
 
 
@@ -921,6 +946,8 @@ def _parse_reaction_system(rs_data: dict[str, Any]) -> ReactionSystem:
     if "discrete_events" in rs_data:
         rs.discrete_events = [_parse_discrete_event(ev) for ev in rs_data["discrete_events"]]
 
+    rs.reference = _parse_optional_reference(rs_data)
+
     return rs
 
 
@@ -933,7 +960,18 @@ def _parse_reference(ref_data: dict[str, Any]) -> Reference:
         year=None,
         doi=ref_data.get("doi"),
         url=ref_data.get("url"),
+        notes=ref_data.get("notes"),
     )
+
+
+def _parse_optional_reference(data: dict[str, Any]) -> Reference | None:
+    """Parse a component's OPTIONAL ``reference`` block, or None when absent.
+
+    Shared by models, reaction systems and individual reactions — all three
+    spell it identically (schema ``#/$defs/Reference``).
+    """
+    ref_data = data.get("reference")
+    return _parse_reference(ref_data) if isinstance(ref_data, dict) else None
 
 
 def _parse_metadata(metadata_data: dict[str, Any]) -> Metadata:
@@ -952,7 +990,22 @@ def _parse_metadata(metadata_data: dict[str, Any]) -> Metadata:
         version="1.0",  # Default version
         references=references,
         keywords=metadata_data.get("tags", []),  # Schema uses "tags" not "keywords"
+        license=metadata_data.get("license"),
+        # discretize() diagnostics (esm-spec RFC §12) and the reserved
+        # downstream-catalog extension point. All four are carried VERBATIM;
+        # for ``x_esd`` the schema makes that normative — "core tooling MUST NOT
+        # assign meaning to them and MUST preserve them across parse -> emit".
+        system_class=metadata_data.get("system_class"),
+        dae_info=_opt_deepcopy(metadata_data.get("dae_info")),
+        discretized_from=_opt_deepcopy(metadata_data.get("discretized_from")),
+        x_esd=_opt_deepcopy(metadata_data.get("x_esd")),
     )
+
+
+def _opt_deepcopy(value: Any) -> Any:
+    """Deep-copy a passthrough JSON blob so the parsed document never aliases
+    (and so can never mutate) the caller's dict. ``None`` passes through."""
+    return None if value is None else copy.deepcopy(value)
 
 
 def _parse_data_source_location(src_data: dict[str, Any]) -> DataSourceLocation:
@@ -1105,7 +1158,10 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             connector = Connector(equations=equations)
 
         return CouplingCouple(
-            description=description, systems=coupling_data.get("systems", []), connector=connector
+            description=description,
+            systems=coupling_data.get("systems", []),
+            connector=connector,
+            lifting=coupling_data.get("lifting"),
         )
 
     if coupling_type == CouplingType.VARIABLE_MAP:
@@ -1129,6 +1185,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             to_var=coupling_data.get("to"),
             transform=transform,
             factor=coupling_data.get("factor"),
+            lifting=coupling_data.get("lifting"),
         )
 
     if coupling_type == CouplingType.COUPLING_IMPORT:
@@ -1298,6 +1355,14 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "index_sets" in data and data["index_sets"] is not None:
         index_sets = dict(data["index_sets"])
 
+    # Parse the document-scoped coordinate registry (RFC streaming-output-sinks
+    # §8) — a peer of ``index_sets``, carried verbatim. Purely additive: the core
+    # spec attaches no behaviour to it beyond preservation, so a document without
+    # one emits exactly as before.
+    coordinates: dict[str, Any] = {}
+    if "coordinates" in data and data["coordinates"] is not None:
+        coordinates = copy.deepcopy(dict(data["coordinates"]))
+
     # Parse the document-scoped data-source ingest registry (esm-spec §8).
     data_sources: dict[str, DataSource] = {}
     if "data_sources" in data:
@@ -1417,6 +1482,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         coupling=coupling,
         domain=domain,
         index_sets=index_sets,
+        coordinates=coordinates,
     )
 
 

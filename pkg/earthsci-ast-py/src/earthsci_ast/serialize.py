@@ -338,6 +338,8 @@ def _serialize_discrete_event_trigger(trigger: DiscreteEventTrigger) -> dict[str
         result["expression"] = _serialize_expression(trigger.value)
     elif trigger.type == "periodic":
         result["interval"] = trigger.value
+        if trigger.initial_offset is not None:
+            result["initial_offset"] = trigger.initial_offset
     elif trigger.type == "preset_times":
         result["times"] = trigger.value
 
@@ -377,7 +379,9 @@ def _serialize_discrete_event(event: DiscreteEvent) -> dict[str, Any]:
     result["affects"] = [_serialize_affect_equation(a) for a in event.affects]
     if event.priority != 0:
         result["priority"] = event.priority
-    if event.reinitialize:
+    # Emit whenever the author spelled it — including an explicit `false`, which
+    # is the schema default but is still the document's own text.
+    if event.reinitialize is not None:
         result["reinitialize"] = event.reinitialize
     if event.description:
         result["description"] = event.description
@@ -610,6 +614,10 @@ def _serialize_model(model: Model) -> dict[str, Any]:
             name: _serialize_subsystem(sub) for name, sub in model.subsystems.items()
         }
 
+    ref = _serialize_optional_reference(model.reference)
+    if ref is not None:
+        result["reference"] = ref
+
     return result
 
 
@@ -642,7 +650,13 @@ def _serialize_species(species: Species) -> dict[str, Any]:
 
 
 def _serialize_parameter(parameter: Parameter) -> dict[str, Any]:
-    """Serialize a parameter to JSON-compatible format."""
+    """Serialize a parameter to JSON-compatible format.
+
+    ``shape`` / ``distribution`` / ``update`` are emitted alongside the scalar
+    fields: an `update` block is the ONLY channel binding a parameter to a data
+    source (esm-spec §5.4), so omitting it turned a data-driven parameter into
+    a constant — a change in computed results, not merely lost annotation.
+    """
     result = {}
     if parameter.units is not None:
         result["units"] = parameter.units
@@ -652,6 +666,12 @@ def _serialize_parameter(parameter: Parameter) -> dict[str, Any]:
         result["description"] = parameter.description
     if isinstance(parameter.value, (int, float)):
         result["default"] = parameter.value
+    if parameter.shape is not None:
+        result["shape"] = list(parameter.shape)
+    if parameter.distribution is not None:
+        result["distribution"] = _serialize_distribution(parameter.distribution)
+    if parameter.update is not None:
+        result["update"] = _serialize_parameter_update_spec(parameter.update)
     return result
 
 
@@ -659,7 +679,10 @@ def _serialize_reaction(reaction: Reaction) -> dict[str, Any]:
     """Serialize a reaction to JSON-compatible format."""
     result = {"id": reaction.id if reaction.id is not None else reaction.name}
 
-    if reaction.name:
+    # `name` is emitted only when the document spelled one. Parsing defaults it
+    # to `id`, so emitting it unconditionally invented a human-readable label
+    # the author never wrote (schema: `id` required, `name` optional).
+    if reaction.name and reaction.name_authored:
         result["name"] = reaction.name
 
     # Serialize substrates (reactants). Emit integer-valued coefficients as
@@ -685,6 +708,10 @@ def _serialize_reaction(reaction: Reaction) -> dict[str, Any]:
     # Serialize rate
     if reaction.rate_constant is not None:
         result["rate"] = _serialize_expression(reaction.rate_constant)
+
+    ref = _serialize_optional_reference(reaction.reference)
+    if ref is not None:
+        result["reference"] = ref
 
     return result
 
@@ -739,6 +766,10 @@ def _serialize_reaction_system(rs: ReactionSystem) -> dict[str, Any]:
             name: _serialize_subsystem(sub) for name, sub in rs.subsystems.items()
         }
 
+    ref = _serialize_optional_reference(rs.reference)
+    if ref is not None:
+        result["reference"] = ref
+
     return result
 
 
@@ -747,6 +778,7 @@ _REFERENCE_SPEC = (
     ("title", "citation", _OMIT_FALSY, None),
     ("doi", "doi", _OMIT_NONE, None),
     ("url", "url", _OMIT_NONE, None),
+    ("notes", "notes", _OMIT_NONE, None),
 )
 
 
@@ -755,15 +787,31 @@ def _serialize_reference(reference: Reference) -> dict[str, Any]:
     return _serialize_by_spec(reference, _REFERENCE_SPEC)
 
 
-# ``title`` -> wire key ``name``; ``keywords`` -> wire key ``tags``.
+def _serialize_optional_reference(reference: Reference | None) -> dict[str, Any] | None:
+    """Serialize a component's optional ``reference`` block, or None if absent."""
+    return None if reference is None else _serialize_reference(reference)
+
+
+# ``title`` -> wire key ``name``; ``keywords`` -> wire key ``tags``. Key order
+# follows the schema's own property order (which is also Go's struct order), so
+# ``license`` sits between ``authors`` and ``created`` and the discretize()
+# diagnostics plus the reserved extension point trail ``references``.
 _METADATA_SPEC = (
     ("title", "name", _KEEP, None),
     ("description", "description", _OMIT_NONE, None),
     ("authors", "authors", _OMIT_FALSY, None),
+    ("license", "license", _OMIT_NONE, None),
     ("created", "created", _OMIT_NONE, None),
     ("modified", "modified", _OMIT_NONE, None),
     ("keywords", "tags", _OMIT_FALSY, None),
     ("references", "references", _OMIT_FALSY, lambda rs: [_serialize_reference(r) for r in rs]),
+    ("system_class", "system_class", _OMIT_NONE, None),
+    ("dae_info", "dae_info", _OMIT_NONE, _json_deepcopy),
+    ("discretized_from", "discretized_from", _OMIT_NONE, _json_deepcopy),
+    # Emitted VERBATIM and never interpreted: the schema makes preserving
+    # ``x_esd`` across parse -> emit normative and forbids core tooling from
+    # assigning meaning to its contents.
+    ("x_esd", "x_esd", _OMIT_NONE, _json_deepcopy),
 )
 
 
@@ -953,6 +1001,8 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
                     for eq in coupling.connector.equations
                 ]
             }
+        if coupling.lifting is not None:
+            result["lifting"] = coupling.lifting
 
     elif isinstance(coupling, VariableMapCoupling):
         result["type"] = "variable_map"
@@ -969,6 +1019,8 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
                 result["transform"] = coupling.transform
         if coupling.factor is not None:
             result["factor"] = coupling.factor
+        if coupling.lifting is not None:
+            result["lifting"] = coupling.lifting
 
     elif isinstance(coupling, CouplingImport):
         # Round-trip the source entry verbatim (esm-spec §10.10.3): only the
@@ -1051,6 +1103,11 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     # semiring-faq-unified-ir §5.2). Top-level in v0.8.0 — shared by all models.
     if getattr(esm_file, "index_sets", None):
         result["index_sets"] = esm_file.index_sets
+
+    # Serialize the document-scoped coordinate registry (RFC
+    # streaming-output-sinks §8) — a peer of `index_sets`, carried verbatim.
+    if getattr(esm_file, "coordinates", None):
+        result["coordinates"] = _json_deepcopy(esm_file.coordinates)
 
     # Serialize the top-level DECLARATIONS (esm-spec §9.7.1) — peers of
     # `index_sets`. Option A expands `apply_expression_template` CALL SITES; it

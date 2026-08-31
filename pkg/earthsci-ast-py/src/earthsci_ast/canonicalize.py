@@ -320,9 +320,10 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = ("op", "args", "wrt", "dim", "fn", "name", 
 # carrying them still canonicalizes, emitting the pinned fields only. Kept for
 # parity with the Julia reference's ``_CANONICAL_IGNORED_FIELDS`` (`arg` — an
 # argmin/argmax pretty-printer witness; `bindings` — a template parameter map).
-# Python's ``ExprNode`` declares neither today, so this is a documentation /
-# forward-compat placeholder; listing them here keeps the derived non-emissible
-# set below matching Julia's contract exactly.
+# ``ExprNode`` declares ``arg`` (so an argmin/argmax node still canonicalizes,
+# with the witness dropped from the canonical bytes exactly as in Julia) but not
+# ``bindings``, whose entry stays a forward-compat placeholder; listing both here
+# keeps the derived non-emissible set below matching Julia's contract exactly.
 _CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node

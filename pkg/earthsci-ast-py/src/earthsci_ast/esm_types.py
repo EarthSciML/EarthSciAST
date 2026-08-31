@@ -69,6 +69,12 @@ class ExprNode:
     distinct: bool | None = field(default=None, metadata={"kind": "scalar"})
     # Skolem-term expression for an index-set-producing aggregate (RFC §5.5).
     key: Expr | None = field(default=None, metadata={"kind": "expr"})
+    # argmin / argmax (RFC semiring-faq-unified-ir §5.7 rule 6): names the
+    # contracted `ranges` index symbol whose VALUE (a 1-based generator id) is
+    # returned at the optimum, rather than the reduced value. Mirrors the Julia
+    # reference's `arg` field and Rust's `pub arg`; `canonicalize` already lists
+    # it in ``_CANONICAL_IGNORED_FIELDS`` for exactly this node.
+    arg: str | None = field(default=None, metadata={"kind": "scalar"})
     # Documentary relation tag for a `skolem` node (e.g. "edge"/"bin"/"pair").
     # Purely descriptive: it names the relation the emitted key belongs to and is
     # NEVER part of the key itself. ``args`` are PURE key components (exact integer
@@ -174,6 +180,7 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "filter",
     "distinct",
     "key",
+    "arg",
     "regions",
     "values",
     "shape",
@@ -467,6 +474,8 @@ class Model:
     # flat EsmFile.events view aggregates these same objects for consumers).
     continuous_events: list[ContinuousEvent] = field(default_factory=list)
     discrete_events: list[DiscreteEvent] = field(default_factory=list)
+    # Component-level citation / notes (schema `Model.reference`).
+    reference: Reference | None = None
 
 
 @dataclass
@@ -484,7 +493,13 @@ class Species:
 
 @dataclass
 class Parameter:
-    """A parameter for reaction systems."""
+    """A parameter for reaction systems.
+
+    Carries the same value machinery as a model `parameter` (schema
+    `$defs/Parameter`): a fixed `default` (``value`` here) OR a `distribution`,
+    plus an optional `update` saying when it refreshes and what from, and a
+    `shape` naming the index sets an arrayed parameter is declared over.
+    """
 
     name: str
     value: float | Expr
@@ -492,6 +507,16 @@ class Parameter:
     default_units: str | None = None
     description: str | None = None
     uncertainty: float | None = None
+    # None means scalar. REQUIRED by the schema for a parameter whose `update`
+    # is `schedule` / `data` / `remesh` — such a parameter is a buffer whose
+    # extent is fixed at setup and refilled on a discrete cadence.
+    shape: list[str] | None = None
+    # Mutually exclusive with `value` (the wire's `default`).
+    distribution: Distribution | None = None
+    # EITHER one rule OR an ordered list of >= 2, applied in declaration order.
+    # An `update` block is the ONLY channel binding a parameter to a data source
+    # (esm-spec §5.4): dropping it turns a data-driven parameter into a constant.
+    update: ParameterUpdate | list[ParameterUpdate] | None = None
 
 
 @dataclass
@@ -508,6 +533,14 @@ class Reaction:
     products: dict[str, int | float] = field(default_factory=dict)
     rate_constant: float | Expr | None = None
     conditions: dict[str, Any] = field(default_factory=dict)
+    # Per-reaction citation or notes (schema `Reaction.reference`, esm-spec §7.3).
+    reference: Reference | None = None
+    # True when the document SPELLED a `name`. The schema makes `id` required
+    # and `name` an optional human-readable label; parsing defaults `name` to
+    # `id` for the convenience of every downstream consumer, so without this
+    # flag re-emit could not tell an authored `name` from the default and
+    # invented a `name` key the author never wrote.
+    name_authored: bool = True
 
 
 @dataclass
@@ -530,6 +563,8 @@ class ReactionSystem:
     # components; the flat EsmFile.events view aggregates these same objects).
     continuous_events: list[ContinuousEvent] = field(default_factory=list)
     discrete_events: list[DiscreteEvent] = field(default_factory=list)
+    # Component-level citation / notes (schema `ReactionSystem.reference`).
+    reference: Reference | None = None
 
 
 # ========================================
@@ -717,6 +752,9 @@ class DiscreteEventTrigger:
 
     type: Literal["condition", "periodic", "preset_times"]
     value: float | Expr | str  # time value, condition expression, or external identifier
+    # `periodic` only: offset from t=0 for the first firing (schema default 0).
+    # None means the document did not spell one.
+    initial_offset: float | None = None
 
 
 @dataclass
@@ -733,8 +771,16 @@ class DiscreteEvent:
     trigger: DiscreteEventTrigger
     affects: list[AffectEquation] = field(default_factory=list)
     priority: int = 0
-    reinitialize: bool = False
+    # None means the document did not spell one (schema default: false). An
+    # EXPLICIT `false` is kept distinct from absence so it survives re-emit;
+    # every consumer wants the boolean, so read it through `reinitializes`.
+    reinitialize: bool | None = None
     description: str | None = None
+
+    @property
+    def reinitializes(self) -> bool:
+        """The effective flag: an unspelled `reinitialize` means ``False``."""
+        return bool(self.reinitialize)
 
 
 # ========================================
@@ -914,6 +960,8 @@ class CouplingCouple(BaseCouplingEntry):
     coupling_type: CouplingType = field(default=CouplingType.COUPLE, init=False)
     systems: list[str] = field(default_factory=list)
     connector: Connector | None = None
+    # Spatial-lift strategy (esm-spec §10.5); see OperatorComposeCoupling.
+    lifting: str | None = None
 
 
 @dataclass
@@ -931,6 +979,11 @@ class VariableMapCoupling(BaseCouplingEntry):
     # fully-scoped reference into the flattened coupled system.
     transform: str | Expr | None = None
     factor: float | None = None
+    # Spatial-lift strategy (esm-spec §10.5); see OperatorComposeCoupling. The
+    # schema declares `lifting` on variable_map, couple AND operator_compose —
+    # `wildfire_atmosphere_ocean.esm` maps 0-D <-> spatial with it on six
+    # variable_map edges, all of which were dropped on emit.
+    lifting: str | None = None
 
 
 @dataclass
@@ -1063,6 +1116,10 @@ class Reference:
     year: int | None = None
     doi: str | None = None
     url: str | None = None
+    # Free-form annotation (schema `Reference.notes`). It is the ONLY field a
+    # `reference` block carrying no citation/doi/url can hold, so dropping it
+    # emptied such a block entirely.
+    notes: str | None = None
 
 
 @dataclass
@@ -1078,6 +1135,17 @@ class Metadata:
     references: list[Reference] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     custom: dict[str, Any] = field(default_factory=dict)
+    # Schema `metadata.license`: an SPDX-style licence string.
+    license: str | None = None
+    # Diagnostics stamped by discretize() (esm-spec RFC §12). Core tooling only
+    # carries them; it neither derives nor validates them here.
+    system_class: str | None = None  # "ode" | "dae"
+    dae_info: dict[str, Any] | None = None
+    discretized_from: dict[str, Any] | None = None
+    # Reserved downstream-catalog extension point. The schema's description is
+    # normative: "core tooling MUST NOT assign meaning to them and MUST preserve
+    # them across parse -> emit like any other metadata field." Carried verbatim.
+    x_esd: dict[str, Any] | None = None
 
     @property
     def name(self) -> str:
@@ -1157,6 +1225,12 @@ class EsmFile:
     # aggregate range specs of the form {"from": <name>} and from variable
     # ``shape`` lists. Moved here from ``Model`` in v0.8.0.
     index_sets: dict[str, Any] = field(default_factory=dict)
+    # Document-scoped, OPTIONAL registry of coordinate variables (RFC
+    # streaming-output-sinks §8), keyed by name — a peer of `index_sets`. Each
+    # entry marks an existing data array (`source`) or an inline `values` vector
+    # as a physical coordinate and attaches CF metadata. Carried verbatim: the
+    # core spec attaches no behaviour to it beyond preservation.
+    coordinates: dict[str, Any] = field(default_factory=dict)
     # Top-level DECLARATIONS (esm-spec §9.7.1), peers of `index_sets`. Option A
     # expands `apply_expression_template` CALL SITES; it does NOT delete these
     # declarations (§9.6.4 rule 5). They survive `parse -> emit` verbatim, which
