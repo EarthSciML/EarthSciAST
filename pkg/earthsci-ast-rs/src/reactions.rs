@@ -19,10 +19,6 @@ pub enum DeriveError {
     /// Invalid stoichiometry
     #[error("Invalid stoichiometry: {0}")]
     InvalidStoichiometry(String),
-
-    /// Missing rate law
-    #[error("Missing or invalid rate law: {0}")]
-    InvalidRateLaw(String),
 }
 
 /// Lower a reaction network to an ODE equation list.

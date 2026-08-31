@@ -1379,7 +1379,6 @@ fn maybe_apply_pointwise_lift(
     if pointwise {
         apply_pointwise_lift(
             &mut parts.equations,
-            &mut parts.state_variables,
             &mut parts.lifted_shapes,
             loaded_producers,
         )?;
@@ -3091,7 +3090,6 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
 /// indexed per cell alongside the lifted species.
 fn apply_pointwise_lift(
     equations: &mut [Equation],
-    state_variables: &mut IndexMap<String, ModelVariable>,
     lifted_shapes: &mut IndexMap<String, Vec<i64>>,
     loaded_producers: &HashMap<String, usize>,
 ) -> Result<(), FlattenError> {
@@ -3178,7 +3176,6 @@ fn apply_pointwise_lift(
         // post-lift grid shape now travels in `lifted_shapes` above, which is
         // the field the spec provides for exactly this, and the array simulator
         // infers the concrete extent from the lifted equations regardless.
-        let _ = &state_variables;
 
         let idx_species = index_node(&species, &loops);
         let d_body = Expr::operator(ExpressionNode {
@@ -3393,18 +3390,11 @@ mod tests {
             ..Default::default()
         });
         let mut equations = vec![ddt("C", makearray)];
-        let mut state_variables: IndexMap<String, ModelVariable> = IndexMap::new();
-        state_variables.insert("C".to_string(), var(VariableType::Unknown, None));
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
         let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
-        let err = apply_pointwise_lift(
-            &mut equations,
-            &mut state_variables,
-            &mut lifted_shapes,
-            &loaded_producers,
-        )
-        .unwrap_err();
+        let err = apply_pointwise_lift(&mut equations, &mut lifted_shapes, &loaded_producers)
+            .unwrap_err();
         match err {
             FlattenError::DimensionPromotion { message } => {
                 assert!(message.contains("pointwise lift"), "message: {message}");

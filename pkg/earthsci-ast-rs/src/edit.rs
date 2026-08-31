@@ -665,8 +665,6 @@ mod tests {
                 lhs: "state_var".to_string(),
                 rhs: Expr::Number(1.0),
             }]),
-            functional_affect: None,
-            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -697,8 +695,6 @@ mod tests {
                 lhs: "state_var".to_string(),
                 rhs: Expr::Number(1.0),
             }]),
-            functional_affect: None,
-            discrete_parameters: None,
             reinitialize: None,
             description: None,
         }]);
@@ -737,8 +733,6 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
-            discrete_parameters: None,
-            priority: None,
             description: None,
         };
 
@@ -769,8 +763,6 @@ mod tests {
             affect_neg: None,
             root_find: None,
             reinitialize: None,
-            discrete_parameters: None,
-            priority: None,
             description: None,
         }]);
 
@@ -805,8 +797,6 @@ mod tests {
                 expression: Expr::Variable("x".to_string()),
             },
             affects: None,
-            functional_affect: None,
-            discrete_parameters: None,
             reinitialize: None,
             description: None,
         };
@@ -821,8 +811,6 @@ mod tests {
                 lhs: "y".to_string(),
                 rhs: Expr::Number(5.0),
             }]),
-            functional_affect: None,
-            discrete_parameters: None,
             reinitialize: Some(true),
             description: Some("Periodic event".to_string()),
         };

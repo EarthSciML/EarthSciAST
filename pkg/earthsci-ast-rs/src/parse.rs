@@ -633,11 +633,9 @@ fn validate_structural_json(json_value: &Value) -> Result<(), EsmError> {
         check_version_compatibility(obj, &mut errors);
         check_metadata_formats(obj, &mut errors);
         check_data_loader_temporal_durations(obj, &mut errors);
-        check_model_state_has_derivatives(obj, &mut errors);
         check_coupling_references(obj, &mut errors);
         check_circular_model_dependencies_typed(json_value, &mut errors);
         check_event_variable_references(obj, &mut errors);
-        check_event_discrete_parameters(obj, &mut errors);
         check_reaction_stoichiometries(obj, &mut errors);
     }
 
@@ -847,63 +845,6 @@ fn coupled_system_names_raw(obj: &serde_json::Map<String, Value>) -> HashSet<Str
         }
     }
     coupled
-}
-
-/// A model that declares state variables must provide at least one equation.
-/// An empty `equations: []` array paired with declared state variables is a
-/// structural contradiction — there is nothing to integrate.
-///
-/// We deliberately do NOT require *every* state variable to appear on the
-/// LHS of a D(_, t) equation: state variables may be governed by coupled
-/// equations in other models, reaction systems, or operators elsewhere in
-/// the file. Python and Julia take the same lenient-per-variable stance.
-///
-/// …and for a COUPLED model that same reasoning applies to the WHOLE BLOCK, not
-/// just to individual variables: a model composed with another may legitimately
-/// declare states and carry NO equations of its own, because every one of them
-/// lives in its partner (tests/valid/scoped_refs_coupling.esm). The check
-/// contradicted its own rationale by rejecting the empty array outright, so it
-/// is skipped for coupled systems — Go has no such check at all.
-fn check_model_state_has_derivatives(
-    obj: &serde_json::Map<String, Value>,
-    errors: &mut Vec<String>,
-) {
-    let Some(models) = obj.get("models").and_then(|v| v.as_object()) else {
-        return;
-    };
-    let coupled = coupled_system_names_raw(obj);
-    for (mname, mv) in models {
-        if coupled.contains(mname.as_str()) {
-            continue;
-        }
-        let Some(m) = mv.as_object() else { continue };
-        let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
-            continue;
-        };
-        let has_state = vars.values().any(|v| {
-            v.as_object()
-                .and_then(|o| o.get("type"))
-                .and_then(|t| t.as_str())
-                == Some("state")
-        });
-        if !has_state {
-            continue;
-        }
-        let equations = m.get("equations").and_then(|v| v.as_array());
-        match equations {
-            Some(eqs) if eqs.is_empty() => {
-                errors.push(format!(
-                    "models/{mname}: declares state variables but has an empty 'equations' array"
-                ));
-            }
-            None => {
-                errors.push(format!(
-                    "models/{mname}: declares state variables but no 'equations' field"
-                ));
-            }
-            _ => {}
-        }
-    }
 }
 
 /// `coupling[].from` and `coupling[].to` must point to variables declared
@@ -1123,61 +1064,6 @@ fn check_event_variable_references(obj: &serde_json::Map<String, Value>, errors:
                             ));
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-/// A discrete event's `discrete_parameters` list must name variables of type
-/// `parameter` — not state variables, not observed, not undeclared. Mirrors
-/// Python's `_check_discrete_parameters` (error code: `InvalidDiscreteParam`).
-fn check_event_discrete_parameters(obj: &serde_json::Map<String, Value>, errors: &mut Vec<String>) {
-    let Some(models) = obj.get("models").and_then(|v| v.as_object()) else {
-        return;
-    };
-
-    for (mname, mv) in models {
-        let Some(m) = mv.as_object() else { continue };
-        let Some(vars) = m.get("variables").and_then(|v| v.as_object()) else {
-            continue;
-        };
-        // name -> declared type
-        let var_types: std::collections::HashMap<&str, &str> = vars
-            .iter()
-            .filter_map(|(name, def)| {
-                def.as_object()
-                    .and_then(|o| o.get("type"))
-                    .and_then(|t| t.as_str())
-                    .map(|t| (name.as_str(), t))
-            })
-            .collect();
-
-        let Some(events) = m.get("discrete_events").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        for (ei, event) in events.iter().enumerate() {
-            let Some(event_obj) = event.as_object() else {
-                continue;
-            };
-            let Some(dps) = event_obj
-                .get("discrete_parameters")
-                .and_then(|v| v.as_array())
-            else {
-                continue;
-            };
-            for dp_val in dps {
-                let Some(dp) = dp_val.as_str() else { continue };
-                match var_types.get(dp) {
-                    None => errors.push(format!(
-                        "models/{mname}/discrete_events[{ei}]: discrete_parameter '{dp}' \
-                         not declared in model"
-                    )),
-                    Some(&ty) if ty != "parameter" => errors.push(format!(
-                        "models/{mname}/discrete_events[{ei}]: discrete_parameter '{dp}' \
-                         references variable of type '{ty}', expected 'parameter'"
-                    )),
-                    _ => {}
                 }
             }
         }

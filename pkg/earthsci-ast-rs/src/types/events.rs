@@ -15,14 +15,6 @@ pub struct DiscreteEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affects: Option<Vec<AffectEquation>>,
 
-    /// Functional affect specification
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub functional_affect: Option<FunctionalAffect>,
-
-    /// Parameters modified by this event
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub discrete_parameters: Option<Vec<String>>,
-
     /// Whether to reinitialize the system after the event
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reinitialize: Option<bool>,
@@ -93,14 +85,6 @@ pub struct ContinuousEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reinitialize: Option<bool>,
 
-    /// Parameters modified by this event
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub discrete_parameters: Option<Vec<String>>,
-
-    /// Event priority (lower number = higher priority)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub priority: Option<u32>,
-
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -137,73 +121,4 @@ pub enum RootFindDirection {
     Right,
     /// Detect all zero crossings
     All,
-}
-
-#[cfg(test)]
-mod discrete_event_test {
-    use super::*;
-
-    #[test]
-    fn test_discrete_event_fields_present() {
-        // Test that we can create a DiscreteEvent with discrete_parameters and reinitialize
-        let event = DiscreteEvent {
-            name: Some("test_event".to_string()),
-            trigger: DiscreteEventTrigger::Condition {
-                expression: Expr::Number(1.0),
-            },
-            affects: None,
-            functional_affect: None,
-            discrete_parameters: Some(vec!["param1".to_string(), "param2".to_string()]),
-            reinitialize: Some(true),
-            description: Some("Test event".to_string()),
-        };
-
-        // Test serialization
-        let json = serde_json::to_string(&event).expect("Serialization should work");
-        assert!(
-            json.contains("discrete_parameters"),
-            "JSON should contain discrete_parameters field"
-        );
-        assert!(
-            json.contains("reinitialize"),
-            "JSON should contain reinitialize field"
-        );
-        assert!(
-            json.contains("param1"),
-            "JSON should contain the parameter values"
-        );
-
-        // Test deserialization
-        let deserialized: DiscreteEvent =
-            serde_json::from_str(&json).expect("Deserialization should work");
-
-        assert_eq!(
-            deserialized.discrete_parameters,
-            Some(vec!["param1".to_string(), "param2".to_string()])
-        );
-        assert_eq!(deserialized.reinitialize, Some(true));
-    }
-
-    #[test]
-    fn test_discrete_event_json_parsing() {
-        let json = r#"
-        {
-            "trigger": {
-                "type": "condition",
-                "expression": 1.0
-            },
-            "discrete_parameters": ["param1", "param2"],
-            "reinitialize": true
-        }
-        "#;
-
-        let event: DiscreteEvent = serde_json::from_str(json)
-            .expect("Should parse JSON with discrete_parameters and reinitialize");
-
-        assert_eq!(
-            event.discrete_parameters,
-            Some(vec!["param1".to_string(), "param2".to_string()])
-        );
-        assert_eq!(event.reinitialize, Some(true));
-    }
 }
