@@ -100,6 +100,10 @@ use crate::types::{Expr, IndexSet, Model, VariableType};
 /// idiom to drive a build.
 pub use crate::simulate::Flow;
 
+/// A gated provider deferred by [`BuildState::inject_providers`]: its key, the
+/// provider itself, and the gate its fetch is planned against.
+type GatedProvider = (String, Box<dyn PrepareProvider>, ProviderGate);
+
 /// A build-time preparation failure.
 #[derive(Debug, Clone)]
 pub struct PrepareError(pub String);
@@ -1354,9 +1358,9 @@ impl<'o> BuildState<'o> {
         providers: Vec<(String, Box<dyn PrepareProvider>)>,
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
-    ) -> Result<Vec<(String, Box<dyn PrepareProvider>, ProviderGate)>, PrepareError> {
+    ) -> Result<Vec<GatedProvider>, PrepareError> {
         self.arrays = const_arrays.into_iter().collect();
-        let mut gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)> = Vec::new();
+        let mut gated: Vec<GatedProvider> = Vec::new();
         let n_providers = providers.len();
         for (i, (k, mut prov)) in providers.into_iter().enumerate() {
             self.report(
@@ -1582,7 +1586,7 @@ impl<'o> BuildState<'o> {
     /// — it reads nothing and costs nothing next to the fetch it describes.
     fn fetch_gated_providers(
         &mut self,
-        gated: Vec<(String, Box<dyn PrepareProvider>, ProviderGate)>,
+        gated: Vec<GatedProvider>,
         pd_coupling: &[(String, String)],
     ) -> Result<(), PrepareError> {
         let mut plans: Vec<GatedFetchPlan> = Vec::with_capacity(gated.len());

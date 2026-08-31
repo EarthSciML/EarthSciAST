@@ -489,14 +489,18 @@ impl ArrayCompiled {
 
     /// Three-tier cadence split of the observed rules (cadence.rs lattice
     /// `CONST ⊏ DISCRETE ⊏ CONTINUOUS`):
-    ///   * CONST      (`static_rules`)         — materialized ONCE at setup (see
-    ///                                           [`Self::hoist_static_observeds`]).
-    ///   * DISCRETE   (`segment_static_rules`) — state-free & `t`-free but reaches a
-    ///                                           refreshed forcing buffer; constant
-    ///                                           WITHIN a segment, so materialized
-    ///                                           once per segment in `run_one_segment`.
-    ///   * CONTINUOUS (`continuous_rules`)     — reaches `t` or state; re-evaluated
-    ///                                           every RHS step.
+    ///
+    /// ```text
+    ///   * CONST      (static_rules)         — materialized ONCE at setup (see
+    ///                                         hoist_static_observeds).
+    ///   * DISCRETE   (segment_static_rules) — state-free & t-free but reaches a
+    ///                                         refreshed forcing buffer; constant
+    ///                                         WITHIN a segment, so materialized
+    ///                                         once per segment in run_one_segment.
+    ///   * CONTINUOUS (continuous_rules)     — reaches t or state; re-evaluated
+    ///                                         every RHS step.
+    /// ```
+    ///
     /// Collapsing DISCRETE into CONTINUOUS (the old two-tier split) recomputed
     /// the per-cell conservative regrid every step — the dominant cost of a
     /// coupled loader model. `varying_rules` (DISCRETE ∪ CONTINUOUS) is retained
