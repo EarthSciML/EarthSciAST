@@ -4,7 +4,8 @@
 //! sets and dense IDs that the numeric stencil then consumes:
 //!
 //! 1. [`distinct`]        — deduplicate tuples (unique mesh edges from face→vertex lists)
-//! 2. `equijoin`          — value-equality equi-join (connectivity inversion, *edges of cell i*)
+//! 2. [`equijoin`]        — value-equality equi-join (connectivity inversion, *edges of cell i*;
+//!    also the `join.on` equality gate's candidate set, §5.5.8)
 //! 3. [`skolem`] / [`skolem_edge`] — deterministic content-addressed key from a tuple
 //! 4. [`rank`]            — dense integer renumbering of a distinct set
 //! 5. [`group_aggregate`] — group-by + associative/commutative semiring `⊕` (sum/min/max/…)
@@ -290,6 +291,76 @@ pub fn distinct(rows: &[Key]) -> Vec<Key> {
     v.sort_unstable();
     v.dedup(); // removes *consecutive* equal elements ⇒ adjacent dedup after sort
     v
+}
+
+// ── Primitive 2: equijoin (inner value-equality join) ───────────────────────
+
+/// Inner equi-join of two key columns (rule 5): every `(l, r)` position pair
+/// whose keys compare equal under the §5.5.1 total order.
+///
+/// This is the kernel behind the **`join.on` equality gate** — the value-equality
+/// mirror of the `join.overlap` broad phase (`CONFORMANCE_SPEC.md` §5.5.6 /
+/// §5.5.8). It is deliberately the *only* hashing path for value-equality
+/// matching in this crate: the dense evaluator's gate
+/// (`crate::simulate_array::eval`) and the value-invention producer both build
+/// their candidate pair set here rather than rolling a second one.
+///
+/// **Semantics (RFC `semiring-faq-unified-ir` §5.3).**
+/// - **Inner only.** A left or right position whose key matches nothing appears
+///   in no pair; downstream it therefore contributes the additive identity `0̄`.
+/// - **Many-to-many is defined.** A key occurring `m` times left and `n` times
+///   right yields all `m·n` pairs — categorical disaggregation, not an error.
+/// - **Exact equality only.** [`Key`] has no float variant, so rule 1 ("floats
+///   are forbidden in keys") holds by construction; composite (multi-column)
+///   keys are [`Key::Tuple`]s built with [`skolem`].
+///
+/// **Determinism (rule 5).** Hashing buckets ONLY: the emitted pair list is
+/// ordered by the **canonical key** first (§5.5.1 total order over the matched
+/// keys), then by left position, then by right position — never by
+/// hash-iteration or first-seen order. Duplicate, reversed and permuted inputs
+/// therefore give byte-identical output. (A consumer that needs
+/// position-ascending drive order — the dense contraction odometer does, to stay
+/// an order-preserving subsequence of the full product — sorts the pairs itself;
+/// both orders are pure functions of the input.)
+///
+/// Cost is `O(|left| + |right| + |matches|)` plus one `O(K log K)` sort over the
+/// `K` matched distinct keys — never the `O(|left|·|right|)` product.
+///
+/// Mirrors the DuckDB oracle
+/// `SELECT l.pos, r.pos FROM l JOIN r USING (key) ORDER BY key, l.pos, r.pos`.
+pub fn equijoin(left: &[Key], right: &[Key]) -> Vec<(usize, usize)> {
+    // Bucket the RIGHT side by key (IndexMap: iteration order is insertion
+    // order, independent of the hasher — and we never iterate it anyway; the
+    // emitted order comes from the sorted key list below).
+    let mut buckets: IndexMap<&Key, Vec<usize>> = IndexMap::with_capacity(right.len());
+    for (j, k) in right.iter().enumerate() {
+        buckets.entry(k).or_default().push(j);
+    }
+    // Probe with the LEFT side, collecting the matched left positions per key.
+    let mut matched: IndexMap<&Key, Vec<usize>> = IndexMap::new();
+    for (i, k) in left.iter().enumerate() {
+        if buckets.contains_key(k) {
+            matched.entry(k).or_default().push(i);
+        }
+    }
+    // Emit in canonical key order (rule 5), then left position, then right.
+    let mut keys: Vec<&Key> = matched.keys().copied().collect();
+    keys.sort_unstable();
+    let total: usize = keys
+        .iter()
+        .map(|k| matched[*k].len() * buckets[*k].len())
+        .sum();
+    let mut out = Vec::with_capacity(total);
+    for k in keys {
+        // Both position lists were collected by ascending index, so the nested
+        // walk is already (l asc, r asc) within the key.
+        for &i in &matched[k] {
+            for &j in &buckets[k] {
+                out.push((i, j));
+            }
+        }
+    }
+    out
 }
 
 // ── Primitive 4: rank (dense integer renumbering) ───────────────────────────

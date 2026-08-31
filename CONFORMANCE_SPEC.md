@@ -1333,6 +1333,135 @@ same shape MUST be left untouched — the gate is conservative and the identity
 fill is semiring-specific, and the rewrite does not attempt to reason about
 either for a non-additive monoid.
 
+#### 5.5.8 Value-equality (`join.on`) gate (normative)
+
+> The equality mirror of §5.5.6. Reference implementation: Rust
+> `earthsci-ast-rs/src/join.rs` (resolution) + `src/relational.rs::equijoin`
+> (the match set) + `src/simulate_array/eval.rs` (the driver, shared verbatim
+> with the overlap gate). Cross-language conformance: the shared fixture
+> `tests/valid/aggregate/join_on_data_columns.esm`.
+
+A `join` clause on an `aggregate` spelled `{ "on": [[l, r], …] }` (§5.3) is a
+**value-equality gate**. Its relational semantics were already fixed — inner
+only, many-to-many defined (`m·n` product terms), unmatched rows contribute the
+additive identity `0̄`, exact-equality keys only with **floats forbidden**. This
+section fixes the two things that were left implementation-defined and that
+together decide whether the construct is usable at scale: **what a key column
+may name**, and **that the gate drives enumeration**.
+
+**Key columns are polymorphic (normative).** Each side of a pair names, in this
+precedence order — the same "binders shadow declarations" order §5.5.6 fixes for
+namespacing:
+
+1. a **loop symbol** of the node carrying the clause, or the **index set** one of
+   its ranges draws `{from}`. The key values are that set's declared members (a
+   categorical set) or its integer IDs (an interval), known at build time.
+2. otherwise a **data column**: a declared **1-D variable** whose single shape
+   index set names one of that node's ranges. Its values are the key values,
+   read as data.
+
+A binding **MUST** support both. Case 2 is not an exotic extension: a relational
+port — EPA MOVES/NONROAD is the motivating one — joins one table's
+`sourceTypeID` column against another's, and that is the overwhelming majority
+of its joins. Encoding a key column as a categorical index set whose *members
+are the key values* reaches the same equality classes and remains valid, but it
+transcribes data into the schema; the legible form needs the column itself. A
+name resolving to neither is a **build error**, not a silent no-op — with one
+exception preserved from §5.3: a RIGHT key resolving to nothing, where the pair
+is the degenerate positional case and the factors already combine on the shared
+symbol.
+
+A **composite key** is a clause listing several pairs over the same two loop
+symbols. It matches iff **every** pair agrees, which is tuple equality; the
+canonical composite key is the §5.5.1 rule-4 `skolem` tuple of the per-pair
+values, in the order the pairs are listed. Several pairs over *different* symbol
+pairs are several gates; so are several `join` clauses on one node. When a node
+carries more than one gate, **every** gate still restricts the admitted set (they
+compose by conjunction), but only ONE need DRIVE — the others are membership
+tests on the driven leaves. Which one drives is a binding's choice and cannot
+change the result; the reference drives the first in document order, matching
+§5.5.6's "the first overlap gate drives".
+
+**The match set (normative).** The gate's admissible pair set is
+`{ (pos_l, pos_r) : key_l(pos_l) = key_r(pos_r) }`, built **ONCE per node** (not
+per tuple), where `pos` are the two symbols' own loop values — 1-based for an
+index-set range, `lo..=hi` for a bare interval. It is the §5.5 rule-5 join:
+**hashing may bucket only**, and the emitted pair list is ordered by the
+**canonical key** first (§5.5.1 total order), then by left position, then by
+right. Duplicate, reversed and permuted inputs therefore give a byte-identical
+pair list. A binding that then drives in position-ascending order (see below)
+derives that order from this one; both are pure functions of the input.
+
+Cost is `O(|L| + |R| + |matches|)` plus one sort over the matched distinct keys
+— never the `O(|L|·|R|)` product.
+
+**An `on` gate DRIVES enumeration.** Everything §5.5.6 says about the overlap
+gate's driver applies here **unchanged**, and a binding SHOULD implement one
+driver for both: the gate binds its two gated symbols from the match set rather
+than testing every tuple of the full product, so the cost is
+`O(|matches|·∏ungated)` rather than `O(∏ranges)`, on **any** aggregate. The
+three binding cases are the same three:
+
+* both gated symbols contracted ⇒ drive from the sorted candidate PAIRS, then
+  take the cartesian product with any ungated ranges;
+* one gated symbol already bound (an **output** index) and the other contracted
+  ⇒ the contracted one enumerates only that bound position's partners, in the
+  same ascending order its own range would have visited them;
+* both bound ⇒ a single membership test.
+
+A fourth shape is worth naming because a relational rollup hits it as soon as it
+also reduces over an unrelated axis (a MOVES emissions total summed over months
+as well as over the two joined tables), and §5.5.6's first case does not cover
+it: **both gated symbols contracted alongside OTHER contracted axes**, where the
+pair list cannot bind the whole tuple. A binding SHOULD still drive it, by
+walking the product in its usual order except that the LATER of the two gated
+axes enumerates only the partners of the earlier one's current binding. That is
+still the exact order-preserving subsequence — every axis before the later gated
+one is untouched, and the later one drops precisely the non-candidate values, in
+place — so it is bit-identical, and it removes the whole `N_later` factor. (This
+is a SHOULD, not a MUST: unlike the three cases above, a binding that falls back
+here is slower on a shape that is common but not universal.)
+
+**Identity fill (normative).** As in §5.5.6: an output position with no
+candidate pair is never visited and MUST read as the semiring's `0̄`. An
+unmatched row is `0` under the additive monoid — not a hole, not `NaN`.
+
+**The driver is a pure optimisation of the enumeration EXTENT** — the emitted
+leaf set is exactly the set the equality test would have admitted, in the same
+relative order, so the ⊕-reduction is bit-identical to the undriven full
+product. A binding MAY fall back to the full product for a shape outside the
+four above; that is slower and MUST give the same answer.
+
+**Falling back is only safe if something still tests equality (normative).** An
+overlap gate is a *conservative* broad phase whose narrow phase is the author's
+own `filter`, so declining to drive it loses nothing. An `on` gate is **exact**:
+it IS the semantics, and there is no author-supplied narrow phase behind it. A
+binding therefore MUST make every path that does not consult the gate — a
+whole-array/vectorised overlay, a compiled tape, a build-time observed
+evaluator — still apply the equality. The reference does this by ALSO lowering
+each resolved pair into a value-equality predicate ANDed into the node's
+`filter`, which makes the fallback structurally correct everywhere and makes the
+driven and undriven results directly comparable. A binding MUST NOT resolve an
+`on` clause into a gate alone and leave a non-consulting path evaluating an
+ungated product: that is silently wrong, not merely slow.
+
+**Key-column data must be build-time constant by the time the gate is built**,
+the same requirement §5.5.6 places on an overlap gate's envelope factors. A
+binding that memoises the match set MUST NOT serve a stale one; the reference
+keys its memo on the resolved gate's identity plus the lengths and a content
+fingerprint of the data columns.
+
+**Float keys stay forbidden.** A data column reaching a binding as floating-point
+storage is admissible **only** where every value is exactly integral, and is then
+an integer ID column. Anything else is a float key, whose equality is not portable
+across bindings (§5.5.1 rule 1): a binding MUST NOT treat it as a key. Rejecting
+the document with a named error is the recommended behaviour and is what the
+Python reference does. The Rust reference instead declines the GATE and lets the
+lowered equality predicate compute float equality on the same values — the
+arithmetic the (already out-of-contract) document asked for, rather than a
+silently different answer. Either is conforming; a document that can tell them
+apart is outside the contract by construction.
+
 ### 5.6 Closed Semiring Registry (normative)
 
 > This is the normative form of RFC `semiring-faq-unified-ir` §5.1 / §5.2 / §5.6.

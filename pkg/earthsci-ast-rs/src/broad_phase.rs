@@ -318,6 +318,53 @@ pub fn reset_overlap_enum_visits() {
     ENUM_VISITS.with(|c| c.set(0));
 }
 
+/// Kill-switch for the whole join-gate DRIVER (`ESS_JOIN_GATE_DISABLE=1`, or
+/// [`set_join_gate_enabled`] within a thread).
+///
+/// With it set, an aggregate carrying either kind of gate — a `join.overlap`
+/// broad phase (§5.5.6) or a value-equality `join.on` match set (§5.5.8) — walks
+/// the untouched full product and lets the `filter` decide, which is exactly the
+/// pre-driver path. That is what makes the driver's central claim DIRECTLY
+/// testable rather than by analogy: the same document, same build, gate on vs
+/// gate off, must give bit-identical numbers. It is also how the before/after
+/// benchmark measures a "before" that is the real engine on the real document
+/// rather than a hand-written stand-in.
+///
+/// Thread-local (seeded from the environment once) rather than a process-wide
+/// `OnceLock`, so one test process can measure both arms.
+fn join_gate_env_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| {
+        std::env::var("ESS_JOIN_GATE_DISABLE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+thread_local! {
+    static GATE_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Is the join-gate driver on for this thread? See [`join_gate_env_disabled`].
+pub fn join_gate_enabled() -> bool {
+    GATE_ENABLED.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            let v = !join_gate_env_disabled();
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// Turn the join-gate driver on/off for THIS thread, returning the previous
+/// setting so a caller can restore it.
+pub fn set_join_gate_enabled(on: bool) -> bool {
+    let prev = join_gate_enabled();
+    GATE_ENABLED.with(|c| c.set(Some(on)));
+    prev
+}
+
 /// Which side of an overlap gate a position lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -327,8 +374,9 @@ pub enum Side {
     Tgt,
 }
 
-/// The broad-phase candidate set of an OVERLAP join gate (§5.5.6), together
-/// with the DERIVED views the candidate-driven enumerator reads:
+/// The candidate pair set of a join GATE — the broad-phase set of an OVERLAP
+/// gate (§5.5.6) or the match set of a value-equality `on` gate (§5.5.8) —
+/// together with the DERIVED views the candidate-driven enumerator reads:
 ///
 ///   * the raw `(pos_src, pos_tgt)` membership set (the `in` test);
 ///   * the same pairs ASCENDING — the pair drive order;
@@ -357,10 +405,24 @@ impl OverlapIndex {
     /// [`broad_phase_candidates`] returns them), shifting to the 1-based range
     /// positions the enumeration bindings use.
     pub fn from_zero_based(pairs: &[(usize, usize)]) -> Self {
-        let mut sorted: Vec<(i64, i64)> = pairs
-            .iter()
-            .map(|&(q, c)| (q as i64 + 1, c as i64 + 1))
-            .collect();
+        Self::from_positions(pairs.iter().map(|&(q, c)| (q as i64 + 1, c as i64 + 1)))
+    }
+
+    /// Build the index from pairs that are ALREADY range positions — the
+    /// value-equality (`join.on`) gate's shape, whose match set is expressed in
+    /// the loop symbols' own values rather than in 0-based envelope offsets
+    /// (CONFORMANCE_SPEC.md §5.5.8). An `on` key column over an interval range
+    /// `[lo, hi]` is keyed by the symbol VALUE, not by an offset, which is why
+    /// this constructor takes the positions verbatim.
+    ///
+    /// The two constructors produce the identical structure; only the position
+    /// convention of the input differs.
+    pub fn from_pairs(pairs: &[(i64, i64)]) -> Self {
+        Self::from_positions(pairs.iter().copied())
+    }
+
+    fn from_positions(pairs: impl Iterator<Item = (i64, i64)>) -> Self {
+        let mut sorted: Vec<(i64, i64)> = pairs.collect();
         sorted.sort_unstable();
         sorted.dedup();
         let mut adj_src: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -408,6 +470,13 @@ impl OverlapIndex {
             Side::Tgt => &self.adj_tgt,
         };
         adj.get(&pos).map(Vec::as_slice).unwrap_or(NO_PARTNERS)
+    }
+
+    /// [`Self::partners`] restricted to the inclusive range `[lo, hi]`, still
+    /// ascending — the contiguous subslice a driven inner loop walks in place of
+    /// its own range. No copy (see [`restrict_to_range`]).
+    pub fn partners_in(&self, side: Side, pos: i64, lo: i64, hi: i64) -> &[i64] {
+        restrict_to_range(self.partners(side, pos), lo, hi)
     }
 }
 

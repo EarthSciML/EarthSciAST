@@ -244,6 +244,83 @@ Where:
 > as sound only because "prefix and local_names are traversal-constant". Left as its own
 > change.
 
+### BEHAV-10-B: Value-Equality (`join.on`) Gate (CONFORMANCE_SPEC §5.5.8)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-10-B-001 | An `on` key column MUST resolve in the §5.5.6 precedence order: first a LOOP SYMBOL of the clause-bearing node or the INDEX SET one of its ranges draws `{from}` (key values = declared members / interval IDs), otherwise a DATA COLUMN — any declared 1-D variable whose single shape index set names one of that node's ranges. A binding that admits only the first, or admits the second only for a value-invention bin buffer, is non-conformant | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-002 | A multi-pair `on` clause over the same two loop symbols is ONE composite key: a combination is admitted iff EVERY listed pair agrees (tuple equality on the §5.5.1 rule-4 skolem tuple). Pairs over different symbol pairs are separate gates | CONFORMANCE_SPEC.md §5.5.8, §5.5.1 | Yes | behavioral |
+| BEHAV-10-B-003 | The match set MUST be built ONCE per node, hashing to bucket ONLY, and emitted ordered by the canonical key then by left then right position — so duplicate / reversed / permuted inputs give a byte-identical pair list | CONFORMANCE_SPEC.md §5.5.8, §5.5 rule 5 | Yes | determinism |
+| BEHAV-10-B-004 | The gate MUST DRIVE enumeration under the same three binding cases as §5.5.6 (both contracted ⇒ pairs; one bound ⇒ partner list; both bound ⇒ membership test), so the contraction costs `O(\|matches\|·∏ungated)` and not `O(∏ranges)`. An output position with no candidate pair takes the semiring identity `0̄` | CONFORMANCE_SPEC.md §5.5.8, §5.5.6 | Yes | performance |
+| BEHAV-10-B-004a | SHOULD: both gated symbols contracted ALONGSIDE other contracted axes (a rollup that also reduces over an unrelated axis) is driven by letting the LATER gated axis enumerate only the partners of the earlier one's current binding — still an order-preserving subsequence, and it removes the whole `N_later` factor | CONFORMANCE_SPEC.md §5.5.8 | Yes | performance |
+| BEHAV-10-B-005 | Driving MUST be a pure optimisation of the enumeration EXTENT: the driven and undriven results MUST be identical (bit-identical for a floating ⊕, since the driven walk is an order-preserving subsequence of the filtered full product) | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-006 | Because an `on` gate is EXACT rather than a conservative broad phase, a binding MUST keep every evaluation path that does not consult the gate — a vectorised/whole-array overlay, a compiled tape, a build-time observed evaluator — applying the equality. Resolving the clause into a gate ALONE, and leaving such a path evaluating an ungated product, is silently wrong rather than merely slow | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+
+> **Binding status (2026-08-31)**: **Rust** implements all six plus the -004a SHOULD.
+> `join.rs::resolve_aggregate_joins` resolves each pair to `(loop symbol, KeyColumn)` —
+> `Const` (index-set members / interval IDs) or `Column` (a declared 1-D variable) —
+> emits the equality into `filter` for -006 and attaches a `JoinClause::on_gate` for
+> -004; `relational.rs::equijoin` is the single canonical-key-ordered match kernel for
+> -003; `simulate_array/eval.rs::resolve_join_gate` builds the pair index once per node
+> and hands it to the SAME `broad_phase::overlap_drive_plan` /
+> `reduce_contraction_gated` the overlap gate uses, so -004's three cases are shared
+> code rather than a parallel implementation. Gates:
+> `earthsci-ast-rs/tests/join_on_equality_gate.rs` (differential vs the hand-written
+> filter AND vs the same document with the driver killed, plus two scaling tests) and
+> the shared fixture `tests/valid/aggregate/join_on_data_columns.esm`, whose inline
+> `count(1) = 5` reads the join's cardinality directly (a binding that drops the clause
+> computes the full product's 12).
+>
+> **Python: -001 DONE (2026-08-31), -004 MISSING.** `_resolve_join_key_column` gained
+> the data-column branch below — resolved through `ctx.var_index_sets` and read with
+> `_overlap_env_array`, with binders tested first — so the shared fixture passes. The
+> driver (-004) is still absent.
+>
+> **Julia: -001 PARTIAL, -004 MISSING. Both: -002 and -003 present in effect,
+> -005/-006 satisfied incidentally.** Julia already resolves an `on` key
+> polymorphically and already has the §5.5.6 driver, so the remaining work is to
+> connect them — the same two halves that were unconnected in Rust. Concretely:
+>
+> * **-001 (Julia).** `tree_walk/semiring.jl::_join_key_sym_pos_vals` accepts exactly
+>   two key kinds: an index-set member column, or a materialised **value-invention map
+>   buffer** (`vi_maps.maps`). A MOVES-shaped join names an ordinary declared 1-D
+>   variable, which is neither, and raises `E_TREEWALK_JOIN_UNKNOWN_KEY`. The fix is a
+>   third branch reading the variable's declared 1-D shape — `var_shapes`, which the
+>   function's own file already threads for `_overlap_env_sym` — and its materialised
+>   array; the bin-buffer branch then becomes a special case of it, not a separate
+>   kind. Python's equivalent branch (landed) is the model to follow: binders are
+>   tested FIRST so a variable sharing a name with a range symbol does not shadow the
+>   loop symbol, and a float-stored column is admitted only where every value is
+>   exactly integral.
+> * **-002.** Both currently emit ONE gate per key PAIR and AND them, which admits the
+>   same set as tuple equality, so the semantics are already right. It matters only for
+>   -004: gates over the same symbol pair must be grouped into one composite key before
+>   driving, or the driver can use only the first pair and must re-test the rest.
+> * **-003.** Both code the two columns against a shared bucket dictionary, which gives
+>   the right equality classes. Adding -004 means also EMITTING a pair list, and that
+>   list is what rule 5 constrains: sort by canonical key, then left, then right —
+>   never dictionary iteration order.
+> * **-004** is the real work, and it is small because the driver already exists:
+>   Julia's `_overlap_drive_plan` (`broad_phase.jl`) and Python's driven scalar path
+>   (`broad_phase.OverlapIndex` + the `_join_has_overlap` routing in
+>   `numpy_interpreter.py`) both take a candidate pair index and are agnostic about
+>   where it came from. Build an `OverlapIndex`/`_JoinGate`-shaped pair set from the
+>   coded columns and route an `on` gate down the same path — including the routing
+>   predicate, which today is spelled `_join_has_overlap` and must widen to "has any
+>   drivable gate".
+> * **-006** holds today only because neither binding resolves `on` into a gate at all;
+>   it becomes load-bearing the moment -004 lands. Rust's answer is to keep lowering the
+>   equality into `filter` as well, so the whole-array/einsum fast paths and the
+>   build-time observed evaluator stay correct with no per-path work. Python in
+>   particular has several dense fast paths (`_join_admits_mask`, the einsum arm) that
+>   would otherwise need individual auditing.
+>
+> Both bindings should adopt `tests/valid/aggregate/join_on_data_columns.esm` into their
+> aggregate conformance suites (Julia `test/aggregate_conformance_test.jl`, Python
+> `tests/test_roundtrip_serialize_fields.py`'s sibling simulate suite): it fails today
+> for -001 and passes once the third key-column branch lands, independently of -004.
+> **Go** and **TypeScript** validate the join schema and do not evaluate, so no rows
+> apply to them.
+
 ---
 
 ## 4. FORMAT REQUIREMENTS

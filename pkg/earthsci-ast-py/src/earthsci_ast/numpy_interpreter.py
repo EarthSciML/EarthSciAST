@@ -2958,7 +2958,9 @@ def _resolve_join_key_column(
 ) -> tuple[str, list[Any]]:
     """Resolve one join key column to ``(range_symbol, key_values)`` (RFC §5.3).
 
-    Two key kinds are supported:
+    Three key kinds are supported, in the CONFORMANCE_SPEC §5.5.8 precedence
+    order ("binders shadow declarations" — the same order §5.5.6 fixes for
+    namespacing):
 
     * A **materialized value-invention MAP buffer** (``rg_src_bin``): the key
       names a per-cell bin buffer in ``ctx.join_key_buffers``. The range symbol
@@ -2966,8 +2968,14 @@ def _resolve_join_key_column(
       shape index set (``ctx.join_key_index_sets[key]``), and the key value at
       each 1-based position is the buffer's integer bin code — the broad-phase
       bin-skolem equi-join.
-    * A **range symbol / index set** — the existing categorical / interval key
-      column, resolved via :func:`_join_sym_for_key` / :func:`_key_member_values`.
+    * A **range symbol / index set** — the categorical / interval key column,
+      resolved via :func:`_join_sym_for_key` / :func:`_key_member_values`.
+    * A **data column** (§5.5.8): a declared 1-D variable whose shape index set
+      names one of this node's ranges, whose materialised values ARE the key
+      values. This is how a relational port (EPA MOVES/NONROAD) spells every
+      join — one table's ``sourceTypeID`` column against another's — and it
+      generalises the bin-buffer case above, which is just the same thing for a
+      buffer the value-invention pass happened to mint.
     """
     # A join key may name a value-invention MAP buffer. Match it against the
     # materialized buffers by exact name OR namespaced suffix: flatten prefixes
@@ -2999,6 +3007,47 @@ def _resolve_join_key_column(
         buf = np.asarray(ctx.join_key_buffers[key], dtype=float).reshape(-1)
         vals = [int(round(float(buf[p - 1]))) for p in sym_positions[sym]]
         return sym, vals
+    # BINDERS FIRST (§5.5.8 / §5.5.6): a key naming one of this node's own range
+    # symbols, or the index set one of them draws {from}, is the iterated-index
+    # spelling and takes precedence over any same-named declared variable.
+    if key in raw_ranges or key in set(sym_to_set.values()):
+        sym = _join_sym_for_key(key, raw_ranges, sym_to_set)
+        if sym not in sym_positions:
+            raise NumpyInterpreterError(
+                f"join key symbol {sym!r} is not an output or contracted range of "
+                f"this aggregate (RFC §5.3)"
+            )
+        return sym, _key_member_values(sym, raw_ranges, sym_positions[sym], ctx)
+
+    # Otherwise a DATA COLUMN (§5.5.8): a declared 1-D variable over one of this
+    # node's ranges. Its declared shape's index set names the range (the same
+    # first-axis rule :func:`_overlap_env_sym` applies to an envelope factor),
+    # and its materialised array supplies the key values.
+    set_key = _scoped_array_name(key, ctx.var_index_sets)
+    if set_key is not None:
+        sym = _join_sym_for_key(ctx.var_index_sets[set_key], raw_ranges, sym_to_set)
+        if sym not in sym_positions:
+            raise NumpyInterpreterError(
+                f"join key column {key!r} resolves to range symbol {sym!r}, which is "
+                f"not an output or contracted range of this aggregate (§5.5.8)"
+            )
+        col = np.asarray(_overlap_env_array(key, ctx), dtype=float).reshape(-1)
+        vals: list[Any] = []
+        for p in sym_positions[sym]:
+            v = float(col[p - 1])
+            # Float keys are forbidden (§5.5.1 rule 1): their equality is not
+            # portable. A float-stored column is admissible ONLY where every
+            # value is exactly integral, and is then an integer ID column.
+            if not np.isfinite(v) or v != round(v):
+                raise NumpyInterpreterError(
+                    f"join key column {key!r} carries the non-integral value {v} at "
+                    f"position {p}; float join keys are forbidden — equality is not "
+                    f"portable across bindings (CONFORMANCE_SPEC §5.5.8 / §5.5.1 rule 1)"
+                )
+            vals.append(int(round(v)))
+        return sym, vals
+
+    # Neither: let the existing resolver raise its named diagnostic.
     sym = _join_sym_for_key(key, raw_ranges, sym_to_set)
     if sym not in sym_positions:
         raise NumpyInterpreterError(

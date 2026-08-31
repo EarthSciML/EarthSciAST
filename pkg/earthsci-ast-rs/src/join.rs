@@ -45,20 +45,35 @@
 //!   dense einsum already combines those factors positionally, so resolution is
 //!   a structural no-op and evaluation stays byte-identical to the no-join form.
 //! - **Data-derived value-equality.** The keys resolve to two *distinct* loop
-//!   symbols — e.g. `["i", "j"]` over two categorical sets with duplicate
-//!   members. The pair is lowered into a member-value-equality predicate ANDed
-//!   into the node's `filter`: the contraction admits `(i, j)` iff the key
-//!   columns carry equal members, so a key occurring `m`×`n` times contributes
-//!   all `m·n` ⊗-terms (the defined many-to-many cardinality). Codes are assigned
-//!   by rank in the sorted union of the pair's distinct values (dense value
-//!   coding — same equality classes, independent of declared member order), so
-//!   the evaluator reuses its existing `filter` gate with no new value-equality
-//!   path on the hot loop.
-//! - **Unsupported.** The `left` key resolves to no loop symbol (a join keyed on
-//!   a genuine data column, not an iterated index); rejected with a clear error
-//!   rather than silently mis-combined.
+//!   symbols — `["i", "j"]` over two categorical sets with duplicate members, or
+//!   a pair of genuine **data columns** (`["srcTypeID", "tgtTypeID"]`, each a
+//!   declared 1-D variable whose shape index set names one of the node's
+//!   ranges — the MOVES/NONROAD shape, and the normal case). Resolution is
+//!   TWO-SIDED:
+//!   * a member-value-equality predicate is ANDed into the node's `filter`, so
+//!     every evaluation path — the vectorized overlay, the tape, the per-cell
+//!     oracle — stays correct with no new value-equality path of its own. For a
+//!     loop-symbol pair the two sides are dense-coded by rank in the sorted union
+//!     of their distinct values (same equality classes, independent of declared
+//!     member order); for a data column the predicate reads the column directly
+//!     (`index(col, sym)`).
+//!   * an [`OnGate`] — the resolved key columns and the two loop symbols — is
+//!     ATTACHED to the surviving `join` clause so the evaluator can build the
+//!     match set once and let it **DRIVE enumeration**, exactly as a
+//!     `join.overlap` gate does (CONFORMANCE_SPEC.md §5.5.8). Without it the
+//!     contraction is an `O(N·M)` nested loop that merely *tests* equality; with
+//!     it the cost is `O(|matches|·∏ungated)`. The filter is then a redundant
+//!     re-check on the driven leaves — the same relationship §5.5.6 gives the
+//!     overlap gate's narrow phase — which is what makes the driver a pure
+//!     optimisation, verifiable by differential testing against the undriven
+//!     path.
+//! - **Unresolvable.** The `left` key names neither a loop symbol of this node,
+//!   nor an index set one of its ranges draws from, nor a declared 1-D variable
+//!   over such an index set; rejected with a clear error rather than silently
+//!   mis-combined.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
@@ -131,6 +146,97 @@ impl JoinKey {
     }
 }
 
+/// Where one side of a resolved `on` key pair gets its key VALUES.
+///
+/// The two arms are the two legible spellings of a join key (§5.3): an
+/// **iterated index** whose values are the declared members of the index set it
+/// draws from (known at build time), and a genuine **data column** — a declared
+/// 1-D variable over that same index set, which is how MOVES/NONROAD spells
+/// every join (one table's `sourceTypeID` column against another's). Encoding a
+/// key column as a categorical index set whose members ARE the key values is a
+/// workable fallback, but it transcribes data into the schema; the legible form
+/// needs the column itself, so both are first-class here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyColumn {
+    /// Build-time constant key values: `positions[k]` is a value the loop symbol
+    /// takes, and `values[k]` is that position's key. Positions are the symbol's
+    /// own values (a categorical / index-set range is `1..=N`, a bare interval
+    /// range `[lo, hi]` is `lo..=hi`), matching the enumeration bindings.
+    Const {
+        /// The loop symbol's values, ascending.
+        positions: Vec<i64>,
+        /// The key value at each position, in the same order.
+        values: Vec<JoinKey>,
+    },
+    /// A declared 1-D data column read at evaluation time; position `p`
+    /// (1-based) is `column[p]`. Kept as a NAME, not a value list: the column is
+    /// data, not schema.
+    Column(String),
+}
+
+/// A resolved value-equality (`on`) join gate: the two loop symbols the clause
+/// gates and, per listed key pair, the key column that supplies each side's
+/// values. The structural mirror of [`crate::types::OverlapClause`]'s
+/// `sym_src` / `sym_tgt` (CONFORMANCE_SPEC.md §5.5.6 / §5.5.8), and like those it
+/// is resolved at build time and is NOT part of the wire form.
+///
+/// A multi-pair `on` clause (a **composite key**) resolving to the same symbol
+/// pair collapses into ONE gate carrying one column per pair; the evaluator
+/// combines them with [`crate::relational::skolem`] into a canonical composite
+/// key, so a `[["a1","b1"],["a2","b2"]]` clause matches iff BOTH pairs agree —
+/// the inner-join semantics of §5.3, not two independent gates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnGate {
+    /// A process-unique id, so the evaluator can memoize this gate's match set
+    /// without hashing its (potentially large) key columns on every lookup.
+    pub id: u64,
+    /// The loop symbol the LEFT key columns run over.
+    pub sym_l: String,
+    /// The loop symbol the RIGHT key columns run over.
+    pub sym_r: String,
+    /// One left-side key column per listed key pair.
+    pub cols_l: Vec<KeyColumn>,
+    /// One right-side key column per listed key pair, positionally paired with
+    /// [`Self::cols_l`].
+    pub cols_r: Vec<KeyColumn>,
+}
+
+impl OnGate {
+    /// This gate with every DATA-COLUMN name rewritten by `f` — the resolved
+    /// mirror of the namespacing / `variable_map` renaming a flattener applies
+    /// to the wire-form `on` names (CONFORMANCE_SPEC.md §5.5.6 "Join names are
+    /// REFERENCES"). A [`KeyColumn::Const`] carries values, not a reference, so
+    /// it is left alone, as are the loop symbols (which the node BINDS).
+    ///
+    /// Resolution runs after flattening in the standard pipeline, so in practice
+    /// this maps `None`; it exists so the two orders agree.
+    pub fn map_column_names(&self, f: impl Fn(&String) -> String) -> OnGate {
+        let map = |cols: &Vec<KeyColumn>| -> Vec<KeyColumn> {
+            cols.iter()
+                .map(|c| match c {
+                    KeyColumn::Column(n) => KeyColumn::Column(f(n)),
+                    other => other.clone(),
+                })
+                .collect()
+        };
+        OnGate {
+            id: self.id,
+            sym_l: self.sym_l.clone(),
+            sym_r: self.sym_r.clone(),
+            cols_l: map(&self.cols_l),
+            cols_r: map(&self.cols_r),
+        }
+    }
+}
+
+/// Source of [`OnGate::id`]. A gate is resolved once per node per build, and the
+/// id only ever has to distinguish gates *within* one process's evaluator cache.
+static NEXT_GATE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_gate_id() -> u64 {
+    NEXT_GATE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
 /// an owned model **before** [`crate::aggregate::resolve_aggregate_ranges`], so
 /// each aggregate range still carries its `{ "from": <index set> }` linkage and
@@ -147,26 +253,53 @@ pub fn resolve_aggregate_joins(
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
     // Resolve each OVERLAP clause's two range symbols FIRST — that resolution
-    // needs the declared shapes of the model's variables, which the per-node
-    // lowering below does not carry. See [`resolve_overlap_join_syms`].
+    // needs the declared shapes of the model's variables. The same shapes are
+    // what let an `on` key column name a genuine DATA COLUMN (a 1-D variable
+    // over the index set its loop symbol draws from), so they are computed once
+    // here and threaded into the per-node lowering too.
+    let var_shapes = declared_var_shapes(model);
     resolve_overlap_join_syms(model);
     for eq in &mut model.equations {
-        lower_expr_joins(&mut eq.lhs, index_sets)?;
-        lower_expr_joins(&mut eq.rhs, index_sets)?;
+        lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
+        lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
     }
     if let Some(init_eqs) = &mut model.initialization_equations {
         for eq in init_eqs {
-            lower_expr_joins(&mut eq.lhs, index_sets)?;
-            lower_expr_joins(&mut eq.rhs, index_sets)?;
+            lower_expr_joins(&mut eq.lhs, index_sets, &var_shapes)?;
+            lower_expr_joins(&mut eq.rhs, index_sets, &var_shapes)?;
         }
     }
     // Parameter-update expressions are the only Expressions still carried on a
     // variable from esm 1.0.0; an unknown's definition is an equation, lowered
     // above.
     for var in model.variables.values_mut() {
-        var.try_for_each_expression_mut(&mut |expr| lower_expr_joins(expr, index_sets))?;
+        var.try_for_each_expression_mut(&mut |expr| {
+            lower_expr_joins(expr, index_sets, &var_shapes)
+        })?;
     }
     Ok(())
+}
+
+/// Resolve every `join` clause in ONE expression tree (the per-expression door
+/// into the same lowering [`resolve_aggregate_joins`] applies model-wide).
+///
+/// The build-time observed pipeline (`crate::prepare`) evaluates each observed's
+/// defining expression directly rather than compiling a model, so it has no
+/// `Model` to hand to [`resolve_aggregate_joins`] — but it needs the identical
+/// resolution, and for the identical reason the overlap pass runs there: the
+/// ranges still carry their `{ "from": <index set> }` linkage here, and
+/// `eval_observed` erases it on its own clone. Without this an observed's
+/// `join.on` reached the evaluator unresolved, contributing NEITHER the
+/// equality `filter` nor the gate — i.e. an unfiltered full product.
+///
+/// Call AFTER [`resolve_overlap_syms_expr`] on the same tree, matching the
+/// order [`resolve_aggregate_joins`] uses.
+pub fn resolve_expr_joins(
+    expr: &mut Expr,
+    index_sets: &HashMap<String, IndexSet>,
+    var_shapes: &HashMap<String, Vec<String>>,
+) -> Result<(), CompileError> {
+    lower_expr_joins(expr, index_sets, var_shapes)
 }
 
 /// `true` iff any node in `e`'s subtree carries a `join` clause. The
@@ -186,6 +319,7 @@ fn contains_join(e: &Expr) -> bool {
 fn lower_expr_joins(
     expr: &mut Expr,
     index_sets: &HashMap<String, IndexSet>,
+    var_shapes: &HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
     // Sharing-aware gate: only branches actually containing a `join` clause
     // are descended (and thereby copy-on-write split); see `contains_join`.
@@ -197,7 +331,7 @@ fn lower_expr_joins(
     };
 
     if node.join.is_some() {
-        lower_node_joins(node, index_sets)?;
+        lower_node_joins(node, index_sets, var_shapes)?;
     }
 
     // Recurse into every expression-bearing child via the canonical walker
@@ -206,16 +340,18 @@ fn lower_expr_joins(
     // `bindings` value is lowered too — not just the hand-picked subset this
     // used to enumerate (bug D: `key`/`bindings` were skipped, leaving a `join`
     // clause in the typed IR). The first lowering error propagates.
-    node.try_for_each_child_mut(&mut |child| lower_expr_joins(child, index_sets))
+    node.try_for_each_child_mut(&mut |child| lower_expr_joins(child, index_sets, var_shapes))
 }
 
 /// Classify and lower one aggregate node's join clauses (see the module docs):
 /// each data-derived pair becomes a member-value-equality predicate ANDed into
-/// the node `filter`, positional pairs are dropped as no-ops, and the resolved
-/// `join` clauses are consumed.
+/// the node `filter` **and** contributes to an [`OnGate`] retained on the node
+/// for the evaluator to drive enumeration from; positional pairs are dropped as
+/// no-ops.
 fn lower_node_joins(
     node: &mut ExpressionNode,
     index_sets: &HashMap<String, IndexSet>,
+    var_shapes: &HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
     if !is_aggregate_op(&node.op) {
         return Err(CompileError::build_err(format!(
@@ -250,6 +386,14 @@ fn lower_node_joins(
     // numerically-inert no-op, which was true of the RESULT but left the COST
     // at `O(∏ranges)`.) Carried through verbatim, with the range symbols
     // `resolve_overlap_join_syms` resolved still attached.
+    //
+    // A value-equality `on` gate (§5.5.8) survives for exactly the same reason,
+    // additionally carrying the [`OnGate`] resolved below. Unlike the overlap
+    // broad phase it is EXACT rather than conservative, so the coded `filter`
+    // predicate is emitted as well: every path that does not consult the gate
+    // (the whole-array overlay, the tape, the compiled RHS loop) then still
+    // computes the same answer, and the driven path's answer is verifiably
+    // identical to the undriven one.
     let mut kept: Vec<JoinClause> = Vec::new();
     for clause in &joins {
         if clause.overlap.is_some() {
@@ -262,49 +406,98 @@ fn lower_node_joins(
                  key-column pair is required (RFC semiring-faq-unified-ir §5.3)",
             ));
         }
+        // Resolved key pairs, grouped by the SYMBOL PAIR they gate: several
+        // `on` entries over the same two loop symbols are ONE composite-key
+        // gate (all pairs must agree), not several independent ones.
+        let mut groups: Vec<(String, String, Vec<KeyColumn>, Vec<KeyColumn>)> = Vec::new();
         for pair in &clause.on {
             let left = pair[0].as_str();
             let right = pair[1].as_str();
 
-            // The left key drives matching; it must name a loop symbol. A left
-            // key that names neither a loop symbol nor an index set bound by one
-            // is a join keyed on a genuine data column — the unsupported case.
-            let sym_l = resolve_key(left, &declared, &set_to_syms).ok_or_else(|| {
-                CompileError::UnsupportedFeatureError {
-                    feature: "value-equality join over data-derived columns".to_string(),
-                    message: format!(
-                        "join key column '{left}' does not resolve to a loop index of this \
-                         aggregate ({declared:?}); a value-equality join keyed on a genuine data \
-                         column requires the relational gather the dense Rust evaluator does not \
-                         drive (RFC semiring-faq-unified-ir §5.3)"
-                    ),
-                }
+            // The left key drives matching; it must resolve to one of this
+            // node's loop symbols, either by naming it (or the index set it
+            // draws from) or by naming a 1-D data column over that index set.
+            let l = resolve_side(
+                left,
+                &declared,
+                &set_to_syms,
+                &ranges,
+                index_sets,
+                var_shapes,
+            )?
+            .ok_or_else(|| CompileError::UnsupportedFeatureError {
+                feature: "value-equality join over data-derived columns".to_string(),
+                message: format!(
+                    "join key column '{left}' does not resolve to a loop index of this \
+                         aggregate ({declared:?}): it names neither a range symbol, nor an index \
+                         set one of those ranges draws from, nor a declared 1-D data column over \
+                         such an index set (RFC semiring-faq-unified-ir §5.3)"
+                ),
             })?;
 
-            // A right key resolving to the same loop symbol — or to no loop
-            // symbol — is the degenerate positional case: the factors already
-            // combine on that shared symbol, so the join is a structural no-op.
-            let Some(sym_r) = resolve_key(right, &declared, &set_to_syms) else {
+            // A right key resolving to no loop symbol at all is the degenerate
+            // positional case: the factors already combine on the shared symbol,
+            // so the join is a structural no-op.
+            let Some(r) = resolve_side(
+                right,
+                &declared,
+                &set_to_syms,
+                &ranges,
+                index_sets,
+                var_shapes,
+            )?
+            else {
                 continue;
             };
-            if sym_l == sym_r {
+            // Same symbol AND the same key column ⇒ the pair compares a column
+            // with itself: trivially true, a structural no-op (the common dense
+            // categorical disaggregation, §7.2).
+            if l.sym == r.sym && l.col == r.col {
                 continue;
             }
 
-            // Data-derived value-equality: admit (sym_l, sym_r) iff their key
-            // columns carry equal member values. Lower to a coded-table equality
-            // predicate the evaluator gates on like any other `filter`.
-            let (pos_l, vals_l) = key_column(&sym_l, &ranges, index_sets)?;
-            let (pos_r, vals_r) = key_column(&sym_r, &ranges, index_sets)?;
-            let (codes_l, codes_r) = encode_columns(&vals_l, &vals_r);
-            conjuncts.push(Expr::operator(ExpressionNode {
-                op: "==".into(),
-                args: vec![
-                    code_lookup(&pos_l, &codes_l, &sym_l),
-                    code_lookup(&pos_r, &codes_r, &sym_r),
-                ],
-                ..Default::default()
-            }));
+            // Value-equality: admit `(sym_l, sym_r)` iff the key columns carry
+            // equal values. Lowered to a predicate the evaluator gates on like
+            // any other `filter` …
+            conjuncts.push(equality_predicate(&l, &r)?);
+
+            // … and, when the two sides run over DISTINCT loop symbols, also
+            // recorded as a gate the evaluator can drive enumeration from. A
+            // same-symbol pair (two different columns of one table) gates a
+            // single axis, which no pair-driven enumeration can accelerate, so
+            // it stays predicate-only.
+            if l.sym != r.sym {
+                let slot = groups.iter_mut().find(|(a, b, _, _)| {
+                    (*a == l.sym && *b == r.sym) || (*a == r.sym && *b == l.sym)
+                });
+                match slot {
+                    // Pairs spelled in the opposite orientation still belong to
+                    // the same gate; swap the columns into the group's order.
+                    Some((a, _, cl, cr)) if *a == r.sym => {
+                        cl.push(r.col);
+                        cr.push(l.col);
+                    }
+                    Some((_, _, cl, cr)) => {
+                        cl.push(l.col);
+                        cr.push(r.col);
+                    }
+                    None => groups.push((l.sym, r.sym, vec![l.col], vec![r.col])),
+                }
+            }
+        }
+        for (sym_l, sym_r, cols_l, cols_r) in groups {
+            kept.push(JoinClause {
+                // The wire form is preserved verbatim — resolution is additive.
+                on: clause.on.clone(),
+                overlap: None,
+                on_gate: Some(OnGate {
+                    id: next_gate_id(),
+                    sym_l,
+                    sym_r,
+                    cols_l,
+                    cols_r,
+                }),
+            });
         }
     }
 
@@ -331,6 +524,120 @@ fn lower_node_joins(
     }
 
     Ok(())
+}
+
+/// One side of an `on` key pair, resolved to the loop symbol it gates and the
+/// column supplying that symbol's key values.
+#[derive(Debug, Clone, PartialEq)]
+struct ResolvedSide {
+    sym: String,
+    col: KeyColumn,
+}
+
+/// Resolve one `on` key column (RFC §5.3), in the normative precedence order of
+/// CONFORMANCE_SPEC.md §5.5.6 ("binders shadow declarations"):
+///
+/// 1. a **loop symbol** of this node — or the index set one of its ranges draws
+///    from — whose key values are the set's declared members / the interval's
+///    integer IDs, known at build time;
+/// 2. otherwise a **data column**: a declared 1-D variable whose single shape
+///    index set names one of this node's ranges. This is the MOVES/NONROAD
+///    shape (one table's `sourceTypeID` column against another's) and the
+///    normal case for a relational port, not an exotic one.
+///
+/// `None` when it resolves to neither; the caller decides whether that is the
+/// degenerate positional no-op (right key) or an error (left key).
+fn resolve_side(
+    key: &str,
+    declared: &HashSet<&str>,
+    set_to_syms: &HashMap<&str, Vec<&str>>,
+    ranges: &HashMap<String, RangeSpec>,
+    index_sets: &HashMap<String, IndexSet>,
+    var_shapes: &HashMap<String, Vec<String>>,
+) -> Result<Option<ResolvedSide>, CompileError> {
+    if let Some(sym) = resolve_key(key, declared, set_to_syms) {
+        let (positions, values) = key_column(&sym, ranges, index_sets)?;
+        return Ok(Some(ResolvedSide {
+            sym,
+            col: KeyColumn::Const { positions, values },
+        }));
+    }
+    if let Some(shape) = var_shapes.get(key)
+        && shape.len() == 1
+        && let Some(sym) = resolve_key(&shape[0], declared, set_to_syms)
+    {
+        return Ok(Some(ResolvedSide {
+            sym,
+            col: KeyColumn::Column(key.to_string()),
+        }));
+    }
+    Ok(None)
+}
+
+/// The `filter` predicate for one resolved key pair: `<left key> == <right key>`.
+///
+/// Two **constant** columns are dense-CODED against each other first — each
+/// value replaced by its rank in the sorted union of the pair's distinct values
+/// ([`encode_columns`]) — which is what lets categorical *string* members be
+/// compared by a purely numeric evaluator, and makes the equality classes
+/// independent of declared member order. As soon as one side is a data column
+/// there is no build-time value set to code against, so both sides are compared
+/// on their RAW values: a data column reads `index(col, sym)`, and a constant
+/// column becomes a constant table of its integer IDs.
+fn equality_predicate(l: &ResolvedSide, r: &ResolvedSide) -> Result<Expr, CompileError> {
+    let (le, re) = match (&l.col, &r.col) {
+        (
+            KeyColumn::Const {
+                positions: pl,
+                values: vl,
+            },
+            KeyColumn::Const {
+                positions: pr,
+                values: vr,
+            },
+        ) => {
+            let (cl, cr) = encode_columns(vl, vr);
+            (code_lookup(pl, &cl, &l.sym), code_lookup(pr, &cr, &r.sym))
+        }
+        _ => (raw_key_expr(l)?, raw_key_expr(r)?),
+    };
+    Ok(Expr::operator(ExpressionNode {
+        op: "==".into(),
+        args: vec![le, re],
+        ..Default::default()
+    }))
+}
+
+/// One side of a raw (uncoded) key comparison — see [`equality_predicate`].
+fn raw_key_expr(s: &ResolvedSide) -> Result<Expr, CompileError> {
+    match &s.col {
+        KeyColumn::Column(name) => Ok(Expr::operator(ExpressionNode {
+            op: "index".into(),
+            args: vec![Expr::Variable(name.clone()), Expr::Variable(s.sym.clone())],
+            ..Default::default()
+        })),
+        KeyColumn::Const { positions, values } => {
+            let ints = values
+                .iter()
+                .map(|v| match v {
+                    JoinKey::Int(i) => Ok(*i),
+                    JoinKey::Cat(c) => Err(CompileError::UnsupportedFeatureError {
+                        feature: "value-equality join of a categorical member column against a \
+                                  numeric data column"
+                            .to_string(),
+                        message: format!(
+                            "join key '{}' carries the categorical member '{c}', but the other \
+                             side of the pair is a numeric data column; an index-set member \
+                             column equi-joined against a data column must carry integer IDs \
+                             (RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1)",
+                            s.sym
+                        ),
+                    }),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(code_lookup(positions, &ints, &s.sym))
+        }
+    }
 }
 
 /// Resolve every OVERLAP join clause's two range symbols in `model`, in place.
@@ -762,6 +1069,12 @@ mod tests {
     // `resolve_aggregate_joins(model)` walk is covered end-to-end by the
     // join_filter.esm integration test and the m2m conformance fixtures).
 
+    /// A model with no declared variable shapes — the fixtures below key every
+    /// join on a loop symbol, so no data column can resolve.
+    fn no_shapes() -> HashMap<String, Vec<String>> {
+        HashMap::new()
+    }
+
     fn categorical(members: &[&str]) -> IndexSet {
         IndexSet {
             kind: "categorical".into(),
@@ -825,11 +1138,10 @@ mod tests {
         isets.insert("sources".to_string(), categorical(&["coal", "coal", "oil"]));
         isets.insert("factors".to_string(), categorical(&["coal", "coal", "gas"]));
 
-        lower_expr_joins(&mut expr, &isets).unwrap();
+        lower_expr_joins(&mut expr, &isets, &no_shapes()).unwrap();
         let Expr::Operator(node) = &expr else {
             panic!("expr is not an operator");
         };
-        assert!(node.join.is_none(), "resolved join must be consumed");
         let filter = node
             .filter
             .as_ref()
@@ -838,6 +1150,21 @@ mod tests {
             panic!("filter is not an operator");
         };
         assert_eq!(f.op, "==", "a single key pair lowers to one equality gate");
+        // …and the clause SURVIVES carrying the resolved gate, so the evaluator
+        // can drive enumeration from the match set (§5.5.8) instead of testing
+        // the predicate over the full product.
+        let gate = node
+            .join
+            .as_ref()
+            .and_then(|j| j.first())
+            .and_then(|c| c.on_gate.as_ref())
+            .expect("data-derived join attaches a drivable gate");
+        assert_eq!((gate.sym_l.as_str(), gate.sym_r.as_str()), ("i", "j"));
+        assert_eq!(gate.cols_l.len(), 1, "one column per listed key pair");
+        assert!(matches!(
+            gate.cols_l[0],
+            KeyColumn::Const { .. } | KeyColumn::Column(_)
+        ));
     }
 
     #[test]
@@ -853,7 +1180,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
-        lower_expr_joins(&mut expr, &HashMap::new()).unwrap();
+        lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).unwrap();
         let Expr::Operator(node) = &expr else {
             panic!("expr is not an operator");
         };
@@ -873,7 +1200,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
-        let err = lower_expr_joins(&mut expr, &HashMap::new()).unwrap_err();
+        let err = lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).unwrap_err();
         match err {
             CompileError::UnsupportedFeatureError { feature, message } => {
                 assert!(feature.contains("value-equality join"));
@@ -890,7 +1217,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src"]);
-        assert!(lower_expr_joins(&mut expr, &HashMap::new()).is_err());
+        assert!(lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).is_err());
     }
 
     #[test]
@@ -905,7 +1232,7 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        assert!(lower_expr_joins(&mut bogus, &HashMap::new()).is_err());
+        assert!(lower_expr_joins(&mut bogus, &HashMap::new(), &no_shapes()).is_err());
     }
 
     #[test]
@@ -923,7 +1250,7 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        lower_expr_joins(&mut agg, &HashMap::new()).unwrap();
+        lower_expr_joins(&mut agg, &HashMap::new(), &no_shapes()).unwrap();
         let Expr::Operator(node) = &agg else {
             panic!("expr is not an operator");
         };

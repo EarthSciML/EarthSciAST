@@ -257,6 +257,19 @@ fn join_disaggregation_m2m_permuted_determinism() {
     run_named("join_disaggregation_m2m_permuted.esm");
 }
 
+/// CONFORMANCE_SPEC.md §5.5.8: a value-equality join whose key columns are
+/// genuine DATA COLUMNS — 1-D variables over the two ranges — not loop symbols
+/// or index sets. This is the relational-port spelling (MOVES joins one table's
+/// `sourceTypeID` against another's) and used to be REJECTED outright by the
+/// Rust binding as "value-equality join over data-derived columns". The fixture
+/// counts the admitted combinations, so the inline `expected` reads the join's
+/// cardinality directly: key 7 matches 2x2, key 9 matches 1x1, key 4 is
+/// unmatched ⇒ 5, against the join-free full product's 4x3 = 12.
+#[test]
+fn join_on_data_columns_cardinality() {
+    run_named("join_on_data_columns.esm");
+}
+
 /// §7.3 DOWNSTREAM geometric FAQ — the second half of the value-invention
 /// end-to-end chain (bead ess-my4.3.10). The first half (mesh-edge enumeration:
 /// bool_and_or + distinct + skolem, then rank) MINTS the `edges` index set as a

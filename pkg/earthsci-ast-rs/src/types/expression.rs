@@ -376,6 +376,20 @@ pub struct JoinClause {
     /// exact narrow-phase `filter`), so join lowering treats it as a no-op.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlap: Option<OverlapClause>,
+    /// The build-time resolution of this clause's `on` pairs into the two loop
+    /// symbols they gate and the key columns supplying each side's values
+    /// (CONFORMANCE_SPEC §5.5.8), attached by
+    /// [`crate::join::resolve_aggregate_joins`]. It is what lets the equality
+    /// gate DRIVE enumeration — bind the two gated symbols from the match set
+    /// instead of testing every tuple of the full product — exactly as
+    /// [`OverlapClause::sym_src`] / [`OverlapClause::sym_tgt`] do for the
+    /// spatial gate. `None` before resolution, and for a clause whose pairs are
+    /// positional no-ops.
+    ///
+    /// NOT part of the wire form: `#[serde(skip)]` keeps every document's
+    /// parse -> emit round trip byte-identical.
+    #[serde(skip)]
+    pub on_gate: Option<crate::join::OnGate>,
 }
 
 /// A spatial overlap join-gate clause (`{ "overlap": { … } }`), the broad-phase
