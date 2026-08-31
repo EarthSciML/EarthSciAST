@@ -1177,7 +1177,8 @@ macro_rules! expr_children {
             ///
             /// This is the ONE canonical definition of which fields carry child
             /// `Expr`s. Every AST traversal in this crate must go through this
-            /// family (or [`Self::map_children`] / [`Self::any_child`]) rather
+            /// family (or [`Self::map_children`] / [`Self::any_child`] /
+            /// [`Self::try_for_each_child`]) rather
             /// than enumerating fields by hand — hand-rolled walkers historically
             /// each covered a different subset and missed variables hidden in
             /// aggregate bodies, `filter` predicates, integral bounds,
@@ -1236,6 +1237,56 @@ expr_children! {
     axes: map,
     key: scalar,
     bindings: map,
+}
+
+impl ExpressionNode {
+    /// Error-propagating [`Self::for_each_child`]: visits the same child set
+    /// in the same contractual order and returns the FIRST error `f` raises
+    /// (later children are not passed to `f`).
+    ///
+    /// Defined in terms of `for_each_child` itself, so the two can never
+    /// disagree about which fields carry children. This is the walker for the
+    /// recursive "check every child, fail on the first offender" passes that
+    /// previously hand-captured the first error in a closure at each call
+    /// site.
+    pub fn try_for_each_child<'a, E>(
+        &'a self,
+        f: &mut impl FnMut(&'a Expr) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut first_err: Option<E> = None;
+        self.for_each_child(&mut |child| {
+            if first_err.is_none()
+                && let Err(e) = f(child)
+            {
+                first_err = Some(e);
+            }
+        });
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Mutable [`Self::try_for_each_child`], defined in terms of
+    /// [`Self::for_each_child_mut`] the same way. Children after the first
+    /// error are not passed to `f`, so they are left unmodified.
+    pub fn try_for_each_child_mut<E>(
+        &mut self,
+        f: &mut impl FnMut(&mut Expr) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut first_err: Option<E> = None;
+        self.for_each_child_mut(&mut |child| {
+            if first_err.is_none()
+                && let Err(e) = f(child)
+            {
+                first_err = Some(e);
+            }
+        });
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Single-child slots (`Option<Box<Expr>>`), derived from [`EXPR_CHILD_FIELDS`].
@@ -1481,6 +1532,39 @@ mod expr_child_spec_tests {
             }
         });
         assert_eq!(seen, seen_rebuilt);
+
+        // try_for_each_child: same sequence on Ok; the first Err propagates
+        // and later children are not visited. Same for the mutable variant.
+        let mut seen_try = Vec::new();
+        let ok: Result<(), ()> = node.try_for_each_child(&mut |c| {
+            if let Expr::Variable(v) = c {
+                seen_try.push(v.clone());
+            }
+            Ok(())
+        });
+        assert_eq!(ok, Ok(()));
+        assert_eq!(seen, seen_try);
+
+        let mut before_err = Vec::new();
+        let failed = node.try_for_each_child(&mut |c| {
+            if let Expr::Variable(v) = c {
+                before_err.push(v.clone());
+                if v == "expr" {
+                    return Err(format!("stopped at {v}"));
+                }
+            }
+            Ok(())
+        });
+        assert_eq!(failed, Err("stopped at expr".to_string()));
+        assert_eq!(before_err, vec!["args0", "lower", "upper", "expr"]);
+
+        let mut count_try_mut = 0usize;
+        let failed_mut: Result<(), ()> = node.try_for_each_child_mut(&mut |_c| {
+            count_try_mut += 1;
+            if count_try_mut == 2 { Err(()) } else { Ok(()) }
+        });
+        assert_eq!(failed_mut, Err(()));
+        assert_eq!(count_try_mut, 2);
     }
 }
 
@@ -2160,6 +2244,29 @@ impl ModelVariable {
             {
                 f(expr);
             }
+        }
+    }
+
+    /// Error-propagating [`ModelVariable::for_each_expression_mut`]: visits
+    /// the same expression set in the same order and returns the FIRST error
+    /// `f` raises (later expressions are not passed to `f`, so they are left
+    /// unmodified). Defined in terms of `for_each_expression_mut` itself, so
+    /// the two can never disagree about which fields carry expressions.
+    pub fn try_for_each_expression_mut<E>(
+        &mut self,
+        f: &mut impl FnMut(&mut Expr) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut first_err: Option<E> = None;
+        self.for_each_expression_mut(&mut |expr| {
+            if first_err.is_none()
+                && let Err(e) = f(expr)
+            {
+                first_err = Some(e);
+            }
+        });
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 

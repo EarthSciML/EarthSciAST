@@ -85,6 +85,7 @@ pub(crate) mod geometry;
 pub(crate) mod graph;
 pub mod intern;
 pub(crate) mod join;
+pub(crate) mod json_visit;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
 pub(crate) mod migration;
