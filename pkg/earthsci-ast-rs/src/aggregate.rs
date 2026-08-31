@@ -439,20 +439,22 @@ fn resolve_index_set_ref(
 ) -> Result<ResolvedRange, CompileError> {
     let set = index_sets
         .get(from)
-        .ok_or_else(|| CompileError::InterpreterBuildError {
-            details: format!(
+        .ok_or_else(|| {
+            CompileError::build_err(format!(
                 "aggregate range '{idx_name}' references index set '{from}', which is not declared \
                  in the document `index_sets` registry (no implicit interval inference; RFC \
                  semiring-faq-unified-ir §5.2)"
-            ),
+            ))
         })?;
 
     match set.kind.as_str() {
         "interval" => {
             let size = set
                 .size
-                .ok_or_else(|| CompileError::InterpreterBuildError {
-                    details: format!("index set '{from}' has kind \"interval\" but no `size`"),
+                .ok_or_else(|| {
+                    CompileError::build_err(format!(
+                        "index set '{from}' has kind \"interval\" but no `size`"
+                    ))
                 })?;
             Ok(ResolvedRange::Static([1, size]))
         }
@@ -461,10 +463,10 @@ fn resolve_index_set_ref(
                 .members
                 .as_ref()
                 .map(|m| m.len() as i64)
-                .ok_or_else(|| CompileError::InterpreterBuildError {
-                    details: format!(
+                .ok_or_else(|| {
+                    CompileError::build_err(format!(
                         "index set '{from}' has kind \"categorical\" but no `members`"
-                    ),
+                    ))
                 })?;
             Ok(ResolvedRange::Static([1, n]))
         }
@@ -483,22 +485,20 @@ fn resolve_index_set_ref(
             }
             let parents = of.unwrap_or_default();
             if parents.is_empty() {
-                return Err(CompileError::InterpreterBuildError {
-                    details: format!(
-                        "ragged index set '{from}' (aggregate range '{idx_name}') is referenced \
-                         without an `of` parent index; a ragged set's length is a function of its \
-                         parent (RFC semiring-faq-unified-ir §5.2)"
-                    ),
-                });
+                return Err(CompileError::build_err(format!(
+                    "ragged index set '{from}' (aggregate range '{idx_name}') is referenced \
+                     without an `of` parent index; a ragged set's length is a function of its \
+                     parent (RFC semiring-faq-unified-ir §5.2)"
+                )));
             }
             let offsets =
                 set.offsets
                     .clone()
-                    .ok_or_else(|| CompileError::InterpreterBuildError {
-                        details: format!(
+                    .ok_or_else(|| {
+                        CompileError::build_err(format!(
                             "ragged index set '{from}' (aggregate range '{idx_name}') requires an \
                              `offsets` backing factor giving |set(parent)| per parent tuple"
-                        ),
+                        ))
                     })?;
             Ok(ResolvedRange::Ragged {
                 offsets,
@@ -514,11 +514,11 @@ fn resolve_index_set_ref(
             let from_faq =
                 set.from_faq
                     .clone()
-                    .ok_or_else(|| CompileError::InterpreterBuildError {
-                        details: format!(
+                    .ok_or_else(|| {
+                        CompileError::build_err(format!(
                             "derived index set '{from}' (aggregate range '{idx_name}') is missing \
                              `from_faq` naming its producing FAQ node (RFC semiring-faq-unified-ir §5.5)"
-                        ),
+                        ))
                     })?;
             // (1) The BUILD-TIME relational producer: the value-invention engine
             //     (skolem/distinct/rank, RFC §6.1) already enumerated the distinct
@@ -549,9 +549,9 @@ fn resolve_index_set_ref(
             }
             Ok(ResolvedRange::Derived { from_faq })
         }
-        other => Err(CompileError::InterpreterBuildError {
-            details: format!("index set '{from}' has unknown kind '{other}'"),
-        }),
+        other => Err(CompileError::build_err(format!(
+            "index set '{from}' has unknown kind '{other}'"
+        ))),
     }
 }
 

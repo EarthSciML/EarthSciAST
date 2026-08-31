@@ -218,13 +218,11 @@ fn lower_node_joins(
     index_sets: &HashMap<String, IndexSet>,
 ) -> Result<(), CompileError> {
     if !is_aggregate_op(&node.op) {
-        return Err(CompileError::InterpreterBuildError {
-            details: format!(
-                "`join` is only valid on an aggregate/arrayop node, but appears on op '{}' \
-                 (RFC semiring-faq-unified-ir §5.3)",
-                node.op
-            ),
-        });
+        return Err(CompileError::build_err(format!(
+            "`join` is only valid on an aggregate/arrayop node, but appears on op '{}' \
+             (RFC semiring-faq-unified-ir §5.3)",
+            node.op
+        )));
     }
 
     let joins = node.join.take().unwrap_or_default();
@@ -259,11 +257,10 @@ fn lower_node_joins(
             continue;
         }
         if clause.on.is_empty() {
-            return Err(CompileError::InterpreterBuildError {
-                details: "`join` clause has an empty `on` list; at least one [left, right] \
-                          key-column pair is required (RFC semiring-faq-unified-ir §5.3)"
-                    .to_string(),
-            });
+            return Err(CompileError::build_err(
+                "`join` clause has an empty `on` list; at least one [left, right] \
+                 key-column pair is required (RFC semiring-faq-unified-ir §5.3)",
+            ));
         }
         for pair in &clause.on {
             let left = pair[0].as_str();
@@ -464,21 +461,17 @@ fn key_column(
                 });
             }
             let set = index_sets.get(from.as_str()).ok_or_else(|| {
-                CompileError::InterpreterBuildError {
-                    details: format!(
-                        "join key '{sym}' references index set '{from}', which is not declared \
+                CompileError::build_err(format!(
+                    "join key '{sym}' references index set '{from}', which is not declared \
                              in the document `index_sets` registry (RFC semiring-faq-unified-ir §5.3)"
-                    ),
-                }
+                ))
             })?;
             match set.kind.as_str() {
                 "categorical" => {
                     let members = set.members.as_ref().ok_or_else(|| {
-                        CompileError::InterpreterBuildError {
-                            details: format!(
-                                "categorical index set '{from}' (join key '{sym}') has no `members`"
-                            ),
-                        }
+                        CompileError::build_err(format!(
+                            "categorical index set '{from}' (join key '{sym}') has no `members`"
+                        ))
                     })?;
                     let positions: Vec<i64> = (1..=members.len() as i64).collect();
                     let vals = members
@@ -490,10 +483,10 @@ fn key_column(
                 "interval" => {
                     let size = set
                         .size
-                        .ok_or_else(|| CompileError::InterpreterBuildError {
-                            details: format!(
+                        .ok_or_else(|| {
+                            CompileError::build_err(format!(
                                 "interval index set '{from}' (join key '{sym}') has no `size`"
-                            ),
+                            ))
                         })?;
                     let positions: Vec<i64> = (1..=size).collect();
                     let vals = positions.iter().map(|p| JoinKey::Int(*p)).collect();
@@ -540,9 +533,9 @@ fn key_column(
                  keys must be dense interval / categorical columns (RFC semiring-faq-unified-ir §5.3)"
             ),
         }),
-        None => Err(CompileError::InterpreterBuildError {
-            details: format!("join key '{sym}' has no declared range on this aggregate"),
-        }),
+        None => Err(CompileError::build_err(format!(
+            "join key '{sym}' has no declared range on this aggregate"
+        ))),
     }
 }
 
@@ -556,13 +549,11 @@ fn join_key_member(m: &Value, set_name: &str) -> Result<JoinKey, CompileError> {
             KeyError::Null => "null member".to_string(),
             KeyError::NonScalar => "non-scalar member".to_string(),
         };
-        CompileError::InterpreterBuildError {
-            details: format!(
-                "{why} in join key index set '{set_name}': join keys must be integer IDs or \
-                 categorical members — floats / nulls are forbidden (equality is not portable \
-                 across bindings; RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1)"
-            ),
-        }
+        CompileError::build_err(format!(
+            "{why} in join key index set '{set_name}': join keys must be integer IDs or \
+             categorical members — floats / nulls are forbidden (equality is not portable \
+             across bindings; RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1)"
+        ))
     })
 }
 
