@@ -1036,6 +1036,12 @@ mod tests {
     // `resolve_aggregate_joins(model)` walk is covered end-to-end by the
     // join_filter.esm integration test and the m2m conformance fixtures).
 
+    /// A model with no declared variable shapes — the fixtures below key every
+    /// join on a loop symbol, so no data column can resolve.
+    fn no_shapes() -> HashMap<String, Vec<String>> {
+        HashMap::new()
+    }
+
     fn categorical(members: &[&str]) -> IndexSet {
         IndexSet {
             kind: "categorical".into(),
@@ -1099,11 +1105,10 @@ mod tests {
         isets.insert("sources".to_string(), categorical(&["coal", "coal", "oil"]));
         isets.insert("factors".to_string(), categorical(&["coal", "coal", "gas"]));
 
-        lower_expr_joins(&mut expr, &isets).unwrap();
+        lower_expr_joins(&mut expr, &isets, &no_shapes()).unwrap();
         let Expr::Operator(node) = &expr else {
             panic!("expr is not an operator");
         };
-        assert!(node.join.is_none(), "resolved join must be consumed");
         let filter = node
             .filter
             .as_ref()
@@ -1112,6 +1117,21 @@ mod tests {
             panic!("filter is not an operator");
         };
         assert_eq!(f.op, "==", "a single key pair lowers to one equality gate");
+        // …and the clause SURVIVES carrying the resolved gate, so the evaluator
+        // can drive enumeration from the match set (§5.5.8) instead of testing
+        // the predicate over the full product.
+        let gate = node
+            .join
+            .as_ref()
+            .and_then(|j| j.first())
+            .and_then(|c| c.on_gate.as_ref())
+            .expect("data-derived join attaches a drivable gate");
+        assert_eq!((gate.sym_l.as_str(), gate.sym_r.as_str()), ("i", "j"));
+        assert_eq!(gate.cols_l.len(), 1, "one column per listed key pair");
+        assert!(matches!(
+            gate.cols_l[0],
+            KeyColumn::Const { .. } | KeyColumn::Column(_)
+        ));
     }
 
     #[test]
@@ -1127,7 +1147,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
-        lower_expr_joins(&mut expr, &HashMap::new()).unwrap();
+        lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).unwrap();
         let Expr::Operator(node) = &expr else {
             panic!("expr is not an operator");
         };
@@ -1147,7 +1167,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src", "fuel"]);
-        let err = lower_expr_joins(&mut expr, &HashMap::new()).unwrap_err();
+        let err = lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).unwrap_err();
         match err {
             CompileError::UnsupportedFeatureError { feature, message } => {
                 assert!(feature.contains("value-equality join"));
@@ -1164,7 +1184,7 @@ mod tests {
             ..Default::default()
         }];
         let mut expr = agg_with_join(join, vec!["src"]);
-        assert!(lower_expr_joins(&mut expr, &HashMap::new()).is_err());
+        assert!(lower_expr_joins(&mut expr, &HashMap::new(), &no_shapes()).is_err());
     }
 
     #[test]
@@ -1179,7 +1199,7 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        assert!(lower_expr_joins(&mut bogus, &HashMap::new()).is_err());
+        assert!(lower_expr_joins(&mut bogus, &HashMap::new(), &no_shapes()).is_err());
     }
 
     #[test]
@@ -1197,7 +1217,7 @@ mod tests {
             args: vec![Expr::Variable("x".into())],
             ..Default::default()
         });
-        lower_expr_joins(&mut agg, &HashMap::new()).unwrap();
+        lower_expr_joins(&mut agg, &HashMap::new(), &no_shapes()).unwrap();
         let Expr::Operator(node) = &agg else {
             panic!("expr is not an operator");
         };

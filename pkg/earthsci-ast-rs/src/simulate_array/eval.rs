@@ -1800,16 +1800,26 @@ pub(super) fn reduce_contraction(
 }
 
 // =========================================================================== //
-// OVERLAP-gate DRIVEN contraction (CONFORMANCE_SPEC.md §5.5.6 / Wall #1)
+// GATE-DRIVEN contraction (CONFORMANCE_SPEC.md §5.5.6 / §5.5.8 / Wall #1)
 // =========================================================================== //
 //
-// An overlap gate resolves its WHOLE admissible pair set once, so it can DRIVE
-// enumeration rather than filter it. The gate drives ANY aggregate — an
-// ordinary dense reduction as much as an index-set-producing `distinct`
-// producer; nothing in the contract distinguishes them. Three shapes reach
-// here (the policy itself is [`crate::broad_phase::overlap_drive_plan`], shared
-// with the value-invention producer, which differs only in loop shape because
-// its ranges may be ragged and are therefore resolved lazily):
+// A join gate resolves its WHOLE admissible pair set once, so it can DRIVE
+// enumeration rather than filter it. TWO gate kinds reach here and they differ
+// only in how the pair set is COMPUTED — never in how it is used:
+//
+//   * a spatial OVERLAP gate (§5.5.6), whose pairs are the eps-inflated
+//     envelope candidacies of [`crate::broad_phase::broad_phase_candidates`];
+//   * a value-equality `on` gate (§5.5.8), whose pairs are the matches of
+//     [`crate::relational::equijoin`] over the two key columns — the same
+//     deterministic, canonical-key-ordered kernel the build-time relational
+//     engine uses, not a second hashing path.
+//
+// The gate drives ANY aggregate — an ordinary dense reduction as much as an
+// index-set-producing `distinct` producer; nothing in the contract
+// distinguishes them. Three shapes reach here (the policy itself is
+// [`crate::broad_phase::overlap_drive_plan`], shared with the value-invention
+// producer, which differs only in loop shape because its ranges may be ragged
+// and are therefore resolved lazily):
 //
 //   RESTRICT — one gated axis is an OUTPUT index (already bound) and the other
 //     is contracted. This is the ISRM binning aggregate `E[c] = Σ_r […]` and
@@ -1828,15 +1838,25 @@ pub(super) fn reduce_contraction(
 // the emitted terms, and hence the ⊕-reduction, are BIT-IDENTICAL to the
 // filtered full product. The driver removes work; it never changes an answer.
 //
+// That per-leaf `filter` is what makes falling through SAFE for an equality
+// gate too. An overlap gate is a conservative superset and its narrow phase is
+// the author's own `filter`; an `on` gate is EXACT, and there would be nothing
+// to re-check it with — so `crate::join` lowers every resolved `on` pair into a
+// value-equality predicate ANDed into that same `filter` (§5.5.8). Declining to
+// drive therefore costs time, never correctness, on every shape and on every
+// path that never consults a gate at all (the whole-array overlay, the tape).
+//
 // IDENTITY FILL (normative, §5.5.6). Driving means an output cell with no
 // candidate pair emits NO term. That is the correct answer, not a hole: the
 // accumulator starts at `reduce.identity()` and is returned untouched — e.g. an
 // emission record outside the grid sums to `0` under `(+, 0)`.
 
-/// A resolved overlap gate: the two range symbols its envelopes run over, and
-/// the broad-phase candidate index built ONCE from the const-array envelope
-/// factors.
-pub(super) struct OverlapGate {
+/// A resolved join gate: the two range symbols it gates, and the candidate pair
+/// index built ONCE — from the const-array envelope factors for an overlap
+/// gate, from the two key columns for a value-equality `on` gate. Everything
+/// downstream (placement, drive plan, driven unroll) reads only these three
+/// fields, which is why one struct serves both kinds.
+pub(super) struct JoinGate {
     sym_src: String,
     sym_tgt: String,
     index: Rc<crate::broad_phase::OverlapIndex>,
@@ -1870,7 +1890,7 @@ fn gate_axis(sym: &str, idx_names: &[String], contract_names: &[String]) -> Gate
 }
 
 pub(super) fn gate_placement(
-    gate: &OverlapGate,
+    gate: &JoinGate,
     idx_names: &[String],
     contract_names: &[String],
 ) -> GatePlacement {
@@ -1927,9 +1947,23 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
 /// `ctx.observed_arrays` (the prepare front door and the compiled observed
 /// pipeline both evaluate observeds in dependency order). The ordering
 /// constraint the hook exists to satisfy is satisfied structurally.
-pub(super) fn resolve_overlap_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<OverlapGate> {
+pub(super) fn resolve_join_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<JoinGate> {
     for clause in join {
-        let Some(ov) = &clause.overlap else { continue };
+        let Some(ov) = &clause.overlap else {
+            // Not an overlap clause — try the value-equality gate the build-time
+            // resolution attached (§5.5.8). Same three-field product; only the
+            // pair-set construction differs.
+            if let Some(g) = &clause.on_gate
+                && let Some(index) = resolve_equality_index(g, ctx)
+            {
+                return Some(JoinGate {
+                    sym_src: g.sym_l.clone(),
+                    sym_tgt: g.sym_r.clone(),
+                    index,
+                });
+            }
+            continue;
+        };
         let (Some(sym_src), Some(sym_tgt)) = (&ov.sym_src, &ov.sym_tgt) else {
             continue;
         };
@@ -1957,7 +1991,7 @@ pub(super) fn resolve_overlap_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option
             }
         };
         if let Some(index) = index {
-            return Some(OverlapGate {
+            return Some(JoinGate {
                 sym_src: sym_src.clone(),
                 sym_tgt: sym_tgt.clone(),
                 index,
@@ -1989,6 +2023,183 @@ fn build_overlap_index(
     let tgt = crate::broad_phase::envelope_vectors(tgt_env, &arrays).ok()?;
     let pairs = crate::broad_phase::broad_phase_candidates(&src, &tgt, eps);
     Some(crate::broad_phase::OverlapIndex::from_zero_based(&pairs))
+}
+
+// --------------------------------------------------------------------------- //
+// The value-equality (`join.on`) candidate set (CONFORMANCE_SPEC.md §5.5.8)
+// --------------------------------------------------------------------------- //
+
+/// The cache key of a resolved EQUALITY gate: the build-time gate id, the
+/// observed length of each data column, and a content fingerprint of those
+/// columns.
+///
+/// The id alone pins every [`crate::join::KeyColumn::Const`] side (its values
+/// are baked in at build time), so only the data columns need watching. §5.5.8
+/// requires an `on` key column to be build-time constant data by the time the
+/// gate is built — the same requirement §5.5.6 puts on an overlap gate's
+/// envelope factors — but a fingerprint is cheap next to the join itself (one
+/// linear fold over `f64` bits, against a hash of every key plus the match
+/// materialisation), so a column that does change is REBUILT rather than
+/// silently served a stale match set.
+type EqGateKey = (u64, SmallVec<[usize; 2]>, u64);
+
+thread_local! {
+    static EQ_GATE_CACHE: RefCell<HashMap<EqGateKey, Option<Rc<crate::broad_phase::OverlapIndex>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Run `f` on the named 1-D array WITHOUT cloning it. `lookup_variable` returns
+/// an owned `Value`, which for a 10⁷-row key column is an 80 MB copy per
+/// resolution; a gate reads each column twice (fingerprint, then keys).
+fn with_named_array<R>(name: &str, ctx: &EvalCtx, f: impl FnOnce(&ArrayD<f64>) -> R) -> Option<R> {
+    if let Some(a) = ctx.state_arrays.get(name) {
+        return Some(f(a));
+    }
+    if let Some(a) = ctx.observed_arrays.get(name) {
+        return Some(f(a));
+    }
+    let forcing = ctx.forcing.borrow();
+    forcing.get(name).map(f)
+}
+
+/// FNV-1a over an array's raw `f64` bits — a cache-invalidation fingerprint
+/// only. It never drives an emitted order, a key, or a result, so the §5.5
+/// "no non-portable hash may drive output" rule does not reach it.
+fn column_fingerprint(a: &ArrayD<f64>, acc: &mut u64) {
+    for v in a.iter() {
+        *acc ^= v.to_bits();
+        *acc = acc.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+}
+
+/// The `(positions, keys)` of one resolved key column: the loop-symbol values
+/// the column is defined at, and the [`crate::relational::Key`] at each.
+///
+/// A data column's values are `f64` in the dense evaluator, so they are
+/// admitted only when EXACTLY integral — §5.3 forbids float join keys because
+/// their equality is not portable across bindings, and a non-integral column is
+/// exactly that. Returning `None` declines the gate; the lowered `filter`
+/// predicate still computes the right answer, just without the driver.
+fn key_column_values(
+    col: &crate::join::KeyColumn,
+    ctx: &EvalCtx,
+) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    use crate::join::{JoinKey, KeyColumn};
+    match col {
+        KeyColumn::Const { positions, values } => {
+            let keys = values
+                .iter()
+                .map(|v| match v {
+                    JoinKey::Int(i) => crate::relational::Key::Int(*i),
+                    JoinKey::Cat(c) => crate::relational::Key::Str(c.clone()),
+                })
+                .collect();
+            Some((positions.clone(), keys))
+        }
+        KeyColumn::Column(name) => with_named_array(name, ctx, |a| {
+            if a.ndim() != 1 {
+                return None;
+            }
+            let mut keys = Vec::with_capacity(a.len());
+            for &v in a.iter() {
+                if !v.is_finite() || v.fract() != 0.0 {
+                    return None;
+                }
+                keys.push(crate::relational::Key::Int(v as i64));
+            }
+            // A 1-D data column is addressed 1-based by `index(col, sym)`, and
+            // its shape index set resolves the symbol's range to `[1, N]`.
+            Some(((1..=a.len() as i64).collect(), keys))
+        })?,
+    }
+}
+
+/// One side's per-position key: the single column's key for a simple `on`, or
+/// the canonical composite [`crate::relational::skolem`] tuple over every listed
+/// pair's column for a multi-pair (COMPOSITE-KEY) clause. A composite key
+/// matches iff EVERY pair agrees, which is exactly tuple equality; `skolem`
+/// gives the directed (order-preserving) canonical tuple, so the left and right
+/// sides build comparable keys as long as the pairs are listed in one order —
+/// which the build-time grouping guarantees by construction.
+fn side_keys(
+    cols: &[crate::join::KeyColumn],
+    ctx: &EvalCtx,
+) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    let (positions, first) = key_column_values(cols.first()?, ctx)?;
+    if cols.len() == 1 {
+        return Some((positions, first));
+    }
+    let mut parts: Vec<Vec<crate::relational::Key>> = Vec::with_capacity(cols.len());
+    parts.push(first);
+    for c in &cols[1..] {
+        let (p, k) = key_column_values(c, ctx)?;
+        // Every column of one side runs over the SAME loop symbol, so a length
+        // or position disagreement means the gate does not describe this node.
+        if p != positions {
+            return None;
+        }
+        parts.push(k);
+    }
+    let keys = (0..positions.len())
+        .map(|t| {
+            crate::relational::skolem(parts.iter().map(|p| p[t].clone()).collect(), false)
+        })
+        .collect();
+    Some((positions, keys))
+}
+
+/// Resolve a value-equality `on` gate into its candidate pair index, building
+/// (or reusing) the match set with [`crate::relational::equijoin`].
+///
+/// Built ONCE per node (memoized across evaluations), never per tuple — the
+/// whole point: probing `|L|+|R|` keys and materialising `|matches|` pairs
+/// replaces the `O(|L|·|R|)` product the predicate form walked. `None` declines
+/// the gate, and the lowered `filter` predicate then produces the same answer
+/// over the full product.
+fn resolve_equality_index(
+    g: &crate::join::OnGate,
+    ctx: &EvalCtx,
+) -> Option<Rc<crate::broad_phase::OverlapIndex>> {
+    use crate::join::KeyColumn;
+    if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
+        return None;
+    }
+    // Cache probe: lengths + fingerprints of the DATA columns only.
+    let mut lens: SmallVec<[usize; 2]> = SmallVec::new();
+    let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
+    for c in g.cols_l.iter().chain(g.cols_r.iter()) {
+        if let KeyColumn::Column(name) = c {
+            let n = with_named_array(name, ctx, |a| {
+                column_fingerprint(a, &mut fp);
+                a.len()
+            })?;
+            lens.push(n);
+        }
+    }
+    let key: EqGateKey = (g.id, lens, fp);
+    if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let built = build_equality_index(g, ctx).map(Rc::new);
+    EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
+    built
+}
+
+fn build_equality_index(
+    g: &crate::join::OnGate,
+    ctx: &EvalCtx,
+) -> Option<crate::broad_phase::OverlapIndex> {
+    let (pos_l, keys_l) = side_keys(&g.cols_l, ctx)?;
+    let (pos_r, keys_r) = side_keys(&g.cols_r, ctx)?;
+    // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two
+    // symbols' own values. `OverlapIndex` then re-sorts them position-ascending,
+    // which is what makes the driven walk an order-preserving subsequence of the
+    // full product; both orders are pure functions of the input.
+    let pairs: Vec<(i64, i64)> = crate::relational::equijoin(&keys_l, &keys_r)
+        .into_iter()
+        .map(|(i, j)| (pos_l[i], pos_r[j]))
+        .collect();
+    Some(crate::broad_phase::OverlapIndex::from_pairs(&pairs))
 }
 
 /// One contracted dimension's enumeration source: its own ascending interval,
@@ -2023,7 +2234,7 @@ impl DimSrc<'_> {
 pub(super) fn reduce_contraction_gated(
     spec: &ReduceSpec,
     ranges: &[(i64, i64)],
-    gate: &OverlapGate,
+    gate: &JoinGate,
     place: &GatePlacement,
     ctx: &mut EvalCtx,
 ) -> f64 {
@@ -2463,17 +2674,19 @@ pub(super) struct ArrayOpSpec<'n> {
     pub(super) contract_dims: Vec<ContractDim>,
     pub(super) reduce: ReduceKind,
     pub(super) filter: Option<&'n Expr>,
-    /// Surviving `join` clauses (CONFORMANCE_SPEC.md §5.5.6). A value-equality
-    /// `on` clause was already lowered into `filter` at build time; what
-    /// reaches here is a spatial OVERLAP gate, which the evaluator resolves
-    /// into a broad-phase candidate index and lets DRIVE the enumeration
-    /// instead of merely testing it (see [`resolve_overlap_gate`]).
+    /// Surviving `join` clauses. Either kind of gate — a spatial OVERLAP gate
+    /// (CONFORMANCE_SPEC.md §5.5.6) or a resolved value-equality `on` gate
+    /// (§5.5.8) — is resolved into a candidate pair index that DRIVES the
+    /// enumeration instead of merely testing it (see [`resolve_join_gate`]). A
+    /// value-equality clause is ADDITIONALLY lowered into `filter` at build
+    /// time, so a path that ignores `join` still computes the same answer.
     pub(super) join: Option<&'n [JoinClause]>,
 }
 
 impl ArrayOpSpec<'_> {
-    /// Does this aggregate carry an OVERLAP gate whose range symbols were
-    /// resolved at build time — i.e. one the driver can act on?
+    /// Does this aggregate carry a join GATE whose range symbols were resolved
+    /// at build time — an OVERLAP gate (§5.5.6) or a value-equality `on` gate
+    /// (§5.5.8) — i.e. one the driver can act on?
     ///
     /// The whole-array overlay and the tape lowering both consult this and
     /// decline: they evaluate the FULL product as shifted whole-array slices,
@@ -2482,9 +2695,10 @@ impl ArrayOpSpec<'_> {
     pub(super) fn has_drivable_overlap(&self) -> bool {
         self.join.is_some_and(|j| {
             j.iter().any(|c| {
-                c.overlap
-                    .as_ref()
-                    .is_some_and(|o| o.sym_src.is_some() && o.sym_tgt.is_some())
+                c.on_gate.is_some()
+                    || c.overlap
+                        .as_ref()
+                        .is_some_and(|o| o.sym_src.is_some() && o.sym_tgt.is_some())
             })
         })
     }
@@ -2560,14 +2774,15 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         Some(s) => s,
         None => return Value::Scalar(f64::NAN),
     };
-    // Resolve a spatial OVERLAP gate ONCE per node (its broad-phase candidate
-    // index is memoized across calls). When one resolves it DRIVES the
-    // contraction below instead of the full product — §5.5.6, and the whole
-    // point of the pushdown rewrite emitting a gate onto each rewritten binning
-    // aggregate.
+    // Resolve a join GATE ONCE per node — a spatial OVERLAP broad phase
+    // (§5.5.6) or a value-equality `on` match set (§5.5.8); either candidate
+    // index is memoized across calls. When one resolves it DRIVES the
+    // contraction below instead of the full product — the whole point of the
+    // pushdown rewrite emitting a gate onto each rewritten binning aggregate,
+    // and of `join.on` being a gate rather than a predicate.
     let gate = spec
         .join
-        .and_then(|j| resolve_overlap_gate(j, &*ctx))
+        .and_then(|j| resolve_join_gate(j, &*ctx))
         .map(|g| {
             let place = gate_placement(&g, spec.idx_names, &spec.contract_names);
             (g, place)
