@@ -3842,7 +3842,7 @@
           "items": {
             "$ref": "#/$defs/AffectEquation"
           },
-          "description": "Affect equations. Required unless functional_affect is used."
+          "description": "Affect equations. Required: esm 1.0.0 removed the `functional_affect` alternative, so `affects` is the only affect channel. Every LHS MUST name an unknown (`event_affects_parameter` otherwise)."
         },
         "affect_neg": {
           "oneOf": [
