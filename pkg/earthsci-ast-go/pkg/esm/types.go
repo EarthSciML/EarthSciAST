@@ -225,7 +225,14 @@ func (mv *ModelVariable) ClearDims() { mv.Shape = nil }
 // flattening both spellings of the ParameterUpdateSpec union (esm-spec 5.4).
 // A variable with no `update` returns nil.
 func (mv ModelVariable) UpdateRules() []ParameterUpdate {
-	switch u := mv.Update.(type) {
+	return updateSpecRules(mv.Update)
+}
+
+// updateSpecRules flattens either spelling of the ParameterUpdateSpec union held
+// in an `any` slot into declaration-ordered rules. Shared by ModelVariable and
+// the reaction-system Parameter, which model `update` identically.
+func updateSpecRules(spec any) []ParameterUpdate {
+	switch u := spec.(type) {
 	case nil:
 		return nil
 	case ParameterUpdate:
@@ -245,6 +252,21 @@ func (mv ModelVariable) UpdateRules() []ParameterUpdate {
 	}
 }
 
+// updateSpecFromRules is the inverse of updateSpecRules: it picks the canonical
+// spelling of the union for a rule list — the OBJECT form for a lone rule (a
+// one-element array is invalid per esm-spec §5.4), the array form for two or
+// more, and nil for none.
+func updateSpecFromRules(rules []ParameterUpdate) any {
+	switch len(rules) {
+	case 0:
+		return nil
+	case 1:
+		return rules[0]
+	default:
+		return rules
+	}
+}
+
 // HasUpdate reports whether the variable carries any update rule.
 func (mv ModelVariable) HasUpdate() bool { return len(mv.UpdateRules()) > 0 }
 
@@ -252,14 +274,7 @@ func (mv ModelVariable) HasUpdate() bool { return len(mv.UpdateRules()) > 0 }
 // lone rule as the OBJECT form (a one-element array is invalid per esm-spec
 // 5.4) and two or more as the array form. No rules clears the field.
 func (mv *ModelVariable) SetUpdate(rules []ParameterUpdate) {
-	switch len(rules) {
-	case 0:
-		mv.Update = nil
-	case 1:
-		mv.Update = rules[0]
-	default:
-		mv.Update = rules
-	}
+	mv.Update = updateSpecFromRules(rules)
 }
 
 // Update kind literals (esm-spec 5.4, "When: the six kinds").
@@ -391,19 +406,94 @@ type Model struct {
 
 // Species represents a chemical species
 type Species struct {
-	Units       *string `json:"units,omitempty"`
-	Default     any     `json:"default,omitempty"`
-	Description *string `json:"description,omitempty"`
+	Units   *string `json:"units,omitempty"`
+	Default any     `json:"default,omitempty"`
+	// DefaultUnits declares the units the scalar `default` is expressed in when
+	// they differ from `units` — the Species twin of ModelVariable.DefaultUnits.
+	// `omitempty`: an optional key, absent from most species.
+	DefaultUnits *string `json:"default_units,omitempty"`
+	Description  *string `json:"description,omitempty"`
 	// Constant marks reservoir species (held fixed, no ODE).
 	// Maps to Catalyst's isconstantspecies=true.
 	Constant *bool `json:"constant,omitempty"`
 }
 
-// Parameter represents a model parameter
+// Parameter represents a reaction-system parameter — rate constant, temperature,
+// photolysis rate.
+//
+// It carries the SAME value machinery as a model `parameter` (esm-schema.json
+// `$defs/Parameter`, whose own description says so): a fixed `default` or a
+// `distribution`, an optional `shape`, and an optional `update` saying when it
+// refreshes. Modelling only units/default/description made the type lossy in a
+// way that changed MEANING rather than presentation: an `update` block is the
+// only channel binding a parameter to a `data_sources` entry (esm-spec §5.4), so
+// dropping it silently converted a data-driven parameter into a constant held at
+// its `default`.
 type Parameter struct {
-	Units       *string `json:"units,omitempty"`
-	Default     any     `json:"default,omitempty"`
-	Description *string `json:"description,omitempty"`
+	Units   *string `json:"units,omitempty"`
+	Default any     `json:"default,omitempty"`
+	// DefaultUnits declares the units the scalar `default` is expressed in when
+	// they differ from `units`. `omitempty`: optional, usually absent.
+	DefaultUnits *string `json:"default_units,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	// Shape lists index-set names for an arrayed parameter, exactly as
+	// ModelVariable.Shape does — and for the same reason it is a POINTER to a
+	// slice rather than a plain one. `omitempty` on a `*[]string` omits only the
+	// NIL pointer (the key was absent); a pointer to an EMPTY slice still emits
+	// `"shape": []`. That distinction is load-bearing here: esm-schema.json
+	// REQUIRES `shape` on a parameter whose `update` kind is `schedule`, `data`,
+	// or `remesh` (esm-spec §5.4), and every such parameter in the corpus is a
+	// scalar authored as `"shape": []`. A plain `[]string` would collapse the
+	// authored empty array into an omitted key and re-emit a schema-INVALID
+	// document. Read it through Dims().
+	Shape *[]string `json:"shape,omitempty"`
+	// Distribution draws the parameter's value from a closed-set distribution
+	// instead of fixing it at `default` (mutually exclusive with it).
+	Distribution *Distribution `json:"distribution,omitempty"`
+	// Update is the ParameterUpdateSpec union — one ParameterUpdate object or an
+	// ordered array of two or more — held as `any` for the same reason
+	// ModelVariable.Update is. Read it through UpdateRules().
+	Update any `json:"update,omitempty"`
+}
+
+// Dims returns the parameter's declared index-set axes, treating an absent
+// `shape` and an authored empty one alike (both are scalar). Mirrors
+// ModelVariable.Dims.
+func (p Parameter) Dims() []string {
+	if p.Shape == nil {
+		return nil
+	}
+	return *p.Shape
+}
+
+// SetDims sets the parameter's `shape` to the given axes, materializing the
+// pointer. Passing a nil slice records an authored `"shape": []`; call ClearDims
+// to drop the key entirely. Mirrors ModelVariable.SetDims.
+func (p *Parameter) SetDims(dims []string) {
+	if dims == nil {
+		dims = []string{}
+	}
+	p.Shape = &dims
+}
+
+// ClearDims removes the `shape` key entirely.
+func (p *Parameter) ClearDims() { p.Shape = nil }
+
+// UpdateRules returns the parameter's update rules in declaration order,
+// flattening both spellings of the ParameterUpdateSpec union (esm-spec §5.4).
+// Mirrors ModelVariable.UpdateRules.
+func (p Parameter) UpdateRules() []ParameterUpdate {
+	return updateSpecRules(p.Update)
+}
+
+// HasUpdate reports whether the parameter carries any update rule.
+func (p Parameter) HasUpdate() bool { return len(p.UpdateRules()) > 0 }
+
+// SetUpdate stores the given rules in the canonical spelling of the union: a
+// lone rule as the OBJECT form (a one-element array is invalid per esm-spec
+// §5.4) and two or more as the array form. No rules clears the field.
+func (p *Parameter) SetUpdate(rules []ParameterUpdate) {
+	p.Update = updateSpecFromRules(rules)
 }
 
 // SubstrateProduct represents a substrate or product in a reaction.

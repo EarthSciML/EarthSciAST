@@ -405,16 +405,18 @@ func (u *ParameterUpdate) UnmarshalJSON(data []byte) error {
 // (RFC §5.4.1); a plain decode would coerce it to float64 and re-emit "1.0".
 func (s *Species) UnmarshalJSON(data []byte) error {
 	type TempSpecies struct {
-		Units       *string         `json:"units,omitempty"`
-		Default     json.RawMessage `json:"default,omitempty"`
-		Description *string         `json:"description,omitempty"`
-		Constant    *bool           `json:"constant,omitempty"`
+		Units        *string         `json:"units,omitempty"`
+		Default      json.RawMessage `json:"default,omitempty"`
+		DefaultUnits *string         `json:"default_units,omitempty"`
+		Description  *string         `json:"description,omitempty"`
+		Constant     *bool           `json:"constant,omitempty"`
 	}
 	var temp TempSpecies
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
 	s.Units = temp.Units
+	s.DefaultUnits = temp.DefaultUnits
 	s.Description = temp.Description
 	s.Constant = temp.Constant
 	def, err := unmarshalOptionalExpression(temp.Default)
@@ -428,23 +430,39 @@ func (s *Species) UnmarshalJSON(data []byte) error {
 // Custom JSON unmarshaling for Parameter. Decodes `default` through
 // UnmarshalExpression so an integer-valued default keeps its int wire shape
 // (RFC §5.4.1); a plain decode would coerce it to float64 and re-emit "1.0".
+// `shape` and `update` are decoded exactly as ModelVariable decodes them — the
+// pointer-to-slice keeps an authored `"shape": []` distinguishable from an
+// absent key, and unmarshalParameterUpdateSpec normalizes the §5.4 union.
 func (p *Parameter) UnmarshalJSON(data []byte) error {
 	type TempParameter struct {
-		Units       *string         `json:"units,omitempty"`
-		Default     json.RawMessage `json:"default,omitempty"`
-		Description *string         `json:"description,omitempty"`
+		Units        *string         `json:"units,omitempty"`
+		Default      json.RawMessage `json:"default,omitempty"`
+		DefaultUnits *string         `json:"default_units,omitempty"`
+		Description  *string         `json:"description,omitempty"`
+		Shape        *[]string       `json:"shape,omitempty"`
+		Distribution *Distribution   `json:"distribution,omitempty"`
+		Update       json.RawMessage `json:"update,omitempty"`
 	}
 	var temp TempParameter
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
 	p.Units = temp.Units
+	p.DefaultUnits = temp.DefaultUnits
 	p.Description = temp.Description
+	p.Shape = temp.Shape
+	p.Distribution = temp.Distribution
 	def, err := unmarshalOptionalExpression(temp.Default)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal parameter default: %w", err)
 	}
 	p.Default = def
+
+	update, err := unmarshalParameterUpdateSpec(temp.Update)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal parameter update: %w", err)
+	}
+	p.Update = update
 	return nil
 }
 
