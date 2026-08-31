@@ -3026,8 +3026,7 @@ fn run_conformance_test(
     out_dir: &std::path::Path,
     manifest_path: Option<&std::path::Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use serde_json::{Value, json};
-    use std::collections::BTreeMap;
+    use serde_json::json;
 
     fs::create_dir_all(out_dir)?;
 
@@ -3036,124 +3035,176 @@ fn run_conformance_test(
     let repo_root = find_repo_root()
         .ok_or("Could not locate repo root by walking up from the current directory")?;
 
-    // --- validation: load -> resolve -> validate --------------------------
-    let mut validation: BTreeMap<String, Value> = BTreeMap::new();
+    let validation = conformance_validation_sweep(&manifest, &repo_root);
+    let display = conformance_display_results(&manifest);
+    let substitution = conformance_substitution_results(&manifest)?;
+
+    let results = json!({
+        "language": "rust",
+        "validation_results": validation,
+        "display_results": display,
+        "substitution_results": substitution,
+        "errors": Vec::<String>::new(),
+    });
+
+    let results_file = out_dir.join("results.json");
+    fs::write(&results_file, serde_json::to_string_pretty(&results)?)?;
+    println!(
+        "Rust conformance results written to: {}",
+        results_file.display()
+    );
+    println!(
+        "✓ Validation sweep completed ({} files); display {} cases; substitution {} cases",
+        manifest.validation_files.len(),
+        manifest.display_cases.len(),
+        manifest.substitution_cases.len()
+    );
+
+    Ok(())
+}
+
+/// Validation phase: load -> resolve -> validate, one record per manifest file.
+fn conformance_validation_sweep(
+    manifest: &ConformanceManifest,
+    repo_root: &std::path::Path,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let mut validation: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
     for entry in &manifest.validation_files {
         let path = repo_root.join(&entry.path);
-        let mut record = serde_json::Map::new();
-        record.insert("schema_errors".into(), json!([]));
-        record.insert("structural_errors".into(), json!([]));
-
-        let content = fs::read_to_string(&path).unwrap_or_default();
-
-        // load_path anchors §4.7 subsystem refs and §9.7 template imports at the
-        // file's own directory: this IS the resolve phase.
-        let loaded = earthsci_ast::load_path(&path);
-        let resolve_ok = loaded.is_ok();
-        record.insert("resolve_ok".into(), json!(resolve_ok));
-
-        match &loaded {
-            Ok(esm_file) => {
-                // Schema validation judges the document AS WRITTEN, so it runs
-                // on the raw text; structural validation judges the RESOLVED
-                // form, so it runs on the loaded file (which has its §4.7 refs
-                // spliced in). `validate_text` is the only exported entry
-                // that reports schema errors, so its structural half is
-                // discarded — it saw the unresolved document.
-                let schema = validate_text(&content, path.parent());
-                let structural = validate(esm_file);
-                record.insert(
-                    "schema_errors".into(),
-                    json!(
-                        schema
-                            .schema_errors
-                            .iter()
-                            .map(schema_error_json)
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                record.insert(
-                    "structural_errors".into(),
-                    json!(
-                        structural
-                            .structural_errors
-                            .iter()
-                            .map(structural_error_json)
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                record.insert(
-                    "is_valid".into(),
-                    json!(
-                        schema.schema_errors.is_empty() && structural.structural_errors.is_empty()
-                    ),
-                );
-                record.insert("phase".into(), json!("validate"));
-            }
-            Err(e) => {
-                record.insert("error".into(), json!(e.to_string()));
-                record.insert("error_type".into(), json!("LoadError"));
-                record.insert("phase".into(), json!("load"));
-                record.insert("is_valid".into(), json!(false));
-                // Raw document: the load-phase rejection still yields whatever
-                // structured findings the binding is able to enumerate.
-                // `validate_text` now itself recovers the typed structural
-                // `(code, path)` records on a load rejection (best-effort raw parse
-                // + typed `validate()`), so a document rejected at load no longer
-                // records `is_valid:false` with an EMPTY `structural_errors`
-                // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
-                // `validate()` here, or every such record would be duplicated.
-                let raw = validate_text(&content, path.parent());
-                let mut structural_errors: Vec<earthsci_ast::StructuralError> =
-                    raw.structural_errors.clone();
-                // A subsystem `ref` that could not be resolved (missing file) or is
-                // ambiguous (resolves to a file with != 1 top-level system) aborts
-                // the load before any typed pass AND before `validate_text` can
-                // deserialize the document, so those findings are recovered here
-                // directly from the raw document against the file's own directory.
-                structural_errors.extend(collect_subsystem_ref_errors(&content, &path));
-
-                record.insert(
-                    "schema_errors".into(),
-                    json!(
-                        raw.schema_errors
-                            .iter()
-                            .map(schema_error_json)
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                record.insert(
-                    "structural_errors".into(),
-                    json!(
-                        structural_errors
-                            .iter()
-                            .map(structural_error_json)
-                            .collect::<Vec<_>>()
-                    ),
-                );
-            }
-        }
-
-        // The verdict is "did this binding accept the document", regardless of
-        // WHICH phase answered. A rejection at resolve is still a rejection.
-        let is_valid = record
-            .get("is_valid")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            && resolve_ok;
-        record.insert("is_valid".into(), json!(is_valid));
-        record.insert(
-            "outcome".into(),
-            json!(if is_valid { "valid" } else { "invalid" }),
+        validation.insert(
+            entry.id.clone(),
+            serde_json::Value::Object(conformance_validation_record(&path)),
         );
-        validation.insert(entry.id.clone(), Value::Object(record));
+    }
+    validation
+}
+
+/// One validation file's conformance record: schema/structural findings, the
+/// answering phase, and the accept/reject verdict.
+fn conformance_validation_record(
+    path: &std::path::Path,
+) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::json;
+
+    let mut record = serde_json::Map::new();
+    record.insert("schema_errors".into(), json!([]));
+    record.insert("structural_errors".into(), json!([]));
+
+    let content = fs::read_to_string(path).unwrap_or_default();
+
+    // load_path anchors §4.7 subsystem refs and §9.7 template imports at the
+    // file's own directory: this IS the resolve phase.
+    let loaded = earthsci_ast::load_path(path);
+    let resolve_ok = loaded.is_ok();
+    record.insert("resolve_ok".into(), json!(resolve_ok));
+
+    match &loaded {
+        Ok(esm_file) => {
+            // Schema validation judges the document AS WRITTEN, so it runs
+            // on the raw text; structural validation judges the RESOLVED
+            // form, so it runs on the loaded file (which has its §4.7 refs
+            // spliced in). `validate_text` is the only exported entry
+            // that reports schema errors, so its structural half is
+            // discarded — it saw the unresolved document.
+            let schema = validate_text(&content, path.parent());
+            let structural = validate(esm_file);
+            record.insert(
+                "schema_errors".into(),
+                json!(
+                    schema
+                        .schema_errors
+                        .iter()
+                        .map(schema_error_json)
+                        .collect::<Vec<_>>()
+                ),
+            );
+            record.insert(
+                "structural_errors".into(),
+                json!(
+                    structural
+                        .structural_errors
+                        .iter()
+                        .map(structural_error_json)
+                        .collect::<Vec<_>>()
+                ),
+            );
+            record.insert(
+                "is_valid".into(),
+                json!(schema.schema_errors.is_empty() && structural.structural_errors.is_empty()),
+            );
+            record.insert("phase".into(), json!("validate"));
+        }
+        Err(e) => {
+            record.insert("error".into(), json!(e.to_string()));
+            record.insert("error_type".into(), json!("LoadError"));
+            record.insert("phase".into(), json!("load"));
+            record.insert("is_valid".into(), json!(false));
+            // Raw document: the load-phase rejection still yields whatever
+            // structured findings the binding is able to enumerate.
+            // `validate_text` now itself recovers the typed structural
+            // `(code, path)` records on a load rejection (best-effort raw parse
+            // + typed `validate()`), so a document rejected at load no longer
+            // records `is_valid:false` with an EMPTY `structural_errors`
+            // (CONFORMANCE_SPEC §7.1.2). We must therefore NOT re-run
+            // `validate()` here, or every such record would be duplicated.
+            let raw = validate_text(&content, path.parent());
+            let mut structural_errors: Vec<earthsci_ast::StructuralError> =
+                raw.structural_errors.clone();
+            // A subsystem `ref` that could not be resolved (missing file) or is
+            // ambiguous (resolves to a file with != 1 top-level system) aborts
+            // the load before any typed pass AND before `validate_text` can
+            // deserialize the document, so those findings are recovered here
+            // directly from the raw document against the file's own directory.
+            structural_errors.extend(collect_subsystem_ref_errors(&content, path));
+
+            record.insert(
+                "schema_errors".into(),
+                json!(
+                    raw.schema_errors
+                        .iter()
+                        .map(schema_error_json)
+                        .collect::<Vec<_>>()
+                ),
+            );
+            record.insert(
+                "structural_errors".into(),
+                json!(
+                    structural_errors
+                        .iter()
+                        .map(structural_error_json)
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
     }
 
-    // --- display: render every manifest case in all three formats ----------
-    // The producer used to emit a literal `"display_results": {}` here, which the
-    // comparator scored as a category with zero divergences — a permanent,
-    // structurally unfailable 1.00 that diluted the one real category (audit C2).
-    let mut display: BTreeMap<String, Value> = BTreeMap::new();
+    // The verdict is "did this binding accept the document", regardless of
+    // WHICH phase answered. A rejection at resolve is still a rejection.
+    let is_valid = record
+        .get("is_valid")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && resolve_ok;
+    record.insert("is_valid".into(), json!(is_valid));
+    record.insert(
+        "outcome".into(),
+        json!(if is_valid { "valid" } else { "invalid" }),
+    );
+    record
+}
+
+/// Display phase: render every manifest case in all three formats.
+///
+/// The producer used to emit a literal `"display_results": {}` here, which the
+/// comparator scored as a category with zero divergences — a permanent,
+/// structurally unfailable 1.00 that diluted the one real category (audit C2).
+fn conformance_display_results(
+    manifest: &ConformanceManifest,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    use serde_json::{Value, json};
+
+    let mut display: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     for case in &manifest.display_cases {
         let parsed: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
         match parsed {
@@ -3180,9 +3231,17 @@ fn run_conformance_test(
             }
         }
     }
+    display
+}
 
-    // --- substitution ------------------------------------------------------
-    let mut substitution: BTreeMap<String, Value> = BTreeMap::new();
+/// Substitution phase.
+fn conformance_substitution_results(
+    manifest: &ConformanceManifest,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, Box<dyn std::error::Error>> {
+    use serde_json::{Value, json};
+
+    let mut substitution: std::collections::BTreeMap<String, Value> =
+        std::collections::BTreeMap::new();
     for case in &manifest.substitution_cases {
         let expr: Result<earthsci_ast::Expr, _> = serde_json::from_value(case.input.clone());
         let mut bindings: HashMap<String, earthsci_ast::Expr> = HashMap::new();
@@ -3217,29 +3276,7 @@ fn run_conformance_test(
             }
         }
     }
-
-    let results = json!({
-        "language": "rust",
-        "validation_results": validation,
-        "display_results": display,
-        "substitution_results": substitution,
-        "errors": Vec::<String>::new(),
-    });
-
-    let results_file = out_dir.join("results.json");
-    fs::write(&results_file, serde_json::to_string_pretty(&results)?)?;
-    println!(
-        "Rust conformance results written to: {}",
-        results_file.display()
-    );
-    println!(
-        "✓ Validation sweep completed ({} files); display {} cases; substitution {} cases",
-        manifest.validation_files.len(),
-        manifest.display_cases.len(),
-        manifest.substitution_cases.len()
-    );
-
-    Ok(())
+    Ok(substitution)
 }
 
 #[cfg(test)]
