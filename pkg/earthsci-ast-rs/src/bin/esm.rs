@@ -2,7 +2,7 @@
 //!
 //! Command-line interface for working with ESM files
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use earthsci_ast::extension::analysis::{
     collect_unit_types, collect_variables, contains_common_subexpressions,
     contains_expensive_operations, contains_redundant_operations, count_expression_nodes,
@@ -46,7 +46,7 @@ enum Commands {
         file: PathBuf,
         /// Output format (unicode, latex, ascii)
         #[arg(short, long, default_value = "unicode")]
-        format: String,
+        format: DisplayFormat,
     },
     /// Extract a single component from an ESM file
     Extract {
@@ -85,10 +85,10 @@ enum Commands {
         file: PathBuf,
         /// Graph level (component or expression)
         #[arg(long, default_value = "component")]
-        level: String,
+        level: GraphLevel,
         /// Output format (dot, mermaid, json)
         #[arg(short, long, default_value = "dot")]
-        format: String,
+        format: GraphFormat,
         /// System ID (for expression-level graphs)
         #[arg(long)]
         system: Option<String>,
@@ -103,7 +103,7 @@ enum Commands {
         output: Option<PathBuf>,
         /// Target format (json, compact-json)
         #[arg(long, default_value = "json")]
-        to: String,
+        to: ConvertFormat,
     },
     /// Analyze system properties and metrics
     Analyze {
@@ -112,7 +112,7 @@ enum Commands {
         file: PathBuf,
         /// Analysis type (all, structure, complexity, coupling)
         #[arg(long, default_value = "all")]
-        analysis_type: String,
+        analysis_type: AnalysisType,
     },
     /// Run basic simulations
     Simulate {
@@ -150,7 +150,7 @@ enum Commands {
         file: PathBuf,
         /// Analysis depth (shallow, deep)
         #[arg(long, default_value = "shallow")]
-        depth: String,
+        depth: CouplingDepth,
     },
     /// Memory/time analysis
     PerformanceProfile {
@@ -159,7 +159,7 @@ enum Commands {
         file: PathBuf,
         /// Profiling type (memory, time, both)
         #[arg(long, default_value = "both")]
-        profile_type: String,
+        profile_type: ProfileType,
     },
     /// Model difference report
     Compare {
@@ -171,7 +171,7 @@ enum Commands {
         file2: PathBuf,
         /// Comparison type (semantic, structural, numerical)
         #[arg(long, default_value = "semantic")]
-        comparison_type: String,
+        comparison_type: ComparisonType,
     },
     /// Expression optimization suggestions
     Optimize {
@@ -180,7 +180,7 @@ enum Commands {
         file: PathBuf,
         /// Optimization type (expression, structure, performance)
         #[arg(long, default_value = "expression")]
-        opt_type: String,
+        opt_type: OptimizeTarget,
     },
 
     // DEVELOPMENT COMMANDS
@@ -191,7 +191,7 @@ enum Commands {
         name: String,
         /// Template type (minimal, atmospheric, ecosystem, coupling)
         #[arg(long, default_value = "minimal")]
-        template: String,
+        template: InitTemplate,
     },
     /// Batch validation for test suites
     ValidateFixtures {
@@ -209,7 +209,7 @@ enum Commands {
         file: PathBuf,
         /// Benchmark type (parse, validate, simulate)
         #[arg(long, default_value = "all")]
-        bench_type: String,
+        bench_type: BenchType,
         /// Number of iterations
         #[arg(long, default_value = "100")]
         iterations: usize,
@@ -242,6 +242,134 @@ enum Commands {
         #[arg(value_name = "MANIFEST")]
         manifest: Option<PathBuf>,
     },
+}
+
+// === Enumerated flag values ================================================
+//
+// Typed `ValueEnum` flags: clap itself rejects an unknown value (with its
+// standard "invalid value … possible values …" usage error, exit 2), so the
+// handlers match exhaustively instead of each carrying a reject-unknown arm.
+
+/// `graph --level`.
+#[derive(Clone, Copy, ValueEnum)]
+enum GraphLevel {
+    Component,
+    Expression,
+}
+
+/// `graph --format` (§4.8.3 rendering formats).
+#[derive(Clone, Copy, ValueEnum)]
+enum GraphFormat {
+    Dot,
+    Mermaid,
+    Json,
+}
+
+/// `convert --to`.
+#[derive(Clone, Copy, ValueEnum)]
+enum ConvertFormat {
+    Json,
+    CompactJson,
+}
+
+/// `analyze --analysis-type`.
+#[derive(Clone, Copy, ValueEnum)]
+enum AnalysisType {
+    All,
+    Structure,
+    Complexity,
+    Coupling,
+}
+
+/// `coupling-analysis --depth`.
+#[derive(Clone, Copy, ValueEnum)]
+enum CouplingDepth {
+    Shallow,
+    Deep,
+}
+
+/// `performance-profile --profile-type`.
+#[derive(Clone, Copy, ValueEnum)]
+enum ProfileType {
+    Memory,
+    Time,
+    Both,
+}
+
+/// `compare --comparison-type`.
+#[derive(Clone, Copy, ValueEnum)]
+enum ComparisonType {
+    Semantic,
+    Structural,
+    Numerical,
+}
+
+/// `optimize --opt-type`.
+#[derive(Clone, Copy, ValueEnum)]
+enum OptimizeTarget {
+    Expression,
+    Structure,
+    Performance,
+}
+
+/// `init --template` (see the TEMPLATE_* consts).
+#[derive(Clone, Copy, ValueEnum)]
+enum InitTemplate {
+    Minimal,
+    Atmospheric,
+    Ecosystem,
+    Coupling,
+}
+
+/// `benchmark --bench-type`.
+#[derive(Clone, Copy, ValueEnum)]
+enum BenchType {
+    All,
+    Parse,
+    Validate,
+    Simulate,
+}
+
+/// The kebab-case CLI spelling of a `ValueEnum` value, for the commands that
+/// echo a flag back in their output.
+fn arg_name<T: ValueEnum>(value: &T) -> String {
+    value
+        .to_possible_value()
+        .expect("no skipped variants")
+        .get_name()
+        .to_string()
+}
+
+// === Exit discipline =======================================================
+
+/// A deliberate CLI failure (exit 1) raised after a handler has shaped its own
+/// diagnostics. [`main`] prints `message` — if any — to stderr verbatim, with
+/// no `Error:` prefix and no Debug quoting; `None` means the handler already
+/// printed everything (typically a report on stdout). Ordinary propagated
+/// errors keep the `Error: {:?}` rendering a `Result` main gives them.
+#[derive(Debug)]
+struct CliFailure {
+    message: Option<String>,
+}
+
+impl std::fmt::Display for CliFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message.as_deref().unwrap_or("command failed"))
+    }
+}
+
+impl std::error::Error for CliFailure {}
+
+/// Exit-1 failure carrying a message for stderr.
+fn fail(message: impl Into<String>) -> Box<dyn std::error::Error> {
+    Box::new(CliFailure {
+        message: Some(message.into()),
+    })
+}
+
+/// Exit-1 failure whose diagnostics the handler already printed.
+fn fail_silent() -> Box<dyn std::error::Error> {
+    Box::new(CliFailure { message: None })
 }
 
 fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
@@ -1427,12 +1555,31 @@ fn collect_esm_files(
     Ok(())
 }
 
-fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
+/// Time `iterations` repeated parses of `content` — the loop shared by
+/// `benchmark --bench-type parse` and both `performance-profile` timing
+/// reports, which print the same measurement in different shapes.
+fn time_parse(
+    content: &str,
+    iterations: usize,
+) -> Result<std::time::Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         let _ = load_string(content)?;
     }
-    let duration = start.elapsed();
+    Ok(start.elapsed())
+}
+
+/// Time `iterations` repeated validations of an already-loaded file.
+fn time_validate(esm_file: &earthsci_ast::EsmFile, iterations: usize) -> std::time::Duration {
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        let _ = validate(esm_file);
+    }
+    start.elapsed()
+}
+
+fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let duration = time_parse(content, iterations)?;
     println!(
         "Parse: {} iterations in {:?} ({:?}/iter)",
         iterations,
@@ -1444,11 +1591,7 @@ fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::erro
 
 fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
     let esm_file = load_string(content)?;
-    let start = std::time::Instant::now();
-    for _ in 0..iterations {
-        let _ = validate(&esm_file);
-    }
-    let duration = start.elapsed();
+    let duration = time_validate(&esm_file, iterations);
     println!(
         "Validate: {} iterations in {:?} ({:?}/iter)",
         iterations,
@@ -1571,33 +1714,11 @@ fn print_complexity_analysis(esm_file: &earthsci_ast::EsmFile) {
 // === CLI helpers ===========================================================
 
 /// The three expression rendering formats accepted by `pretty --format`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
 enum DisplayFormat {
     Unicode,
     Latex,
     Ascii,
-}
-
-/// Parse a `--format` value ONCE, up front, into a typed [`DisplayFormat`]. An
-/// unknown value yields the same "Unsupported format: <value>" message the
-/// per-loop match used to produce, but without ever reaching a rendering loop
-/// (the reaction-rate loop previously fell through to `unreachable!()` and
-/// panicked on a bad format for reaction-only files).
-fn parse_display_format(s: &str) -> Result<DisplayFormat, String> {
-    match s {
-        "unicode" => Ok(DisplayFormat::Unicode),
-        "latex" => Ok(DisplayFormat::Latex),
-        "ascii" => Ok(DisplayFormat::Ascii),
-        other => Err(format!("Unsupported format: {other}")),
-    }
-}
-
-/// Print the CLI's standard "Unsupported <noun>: <value>. <hint>" rejection to
-/// stderr and exit with status 1. Consolidates the dozen hand-rolled
-/// reject-unknown blocks that each duplicated this shape and its `exit(1)`.
-fn reject_unknown(noun: &str, value: &str, hint: &str) -> ! {
-    eprintln!("Unsupported {noun}: {value}. {hint}");
-    std::process::exit(1);
 }
 
 // === Per-subcommand handlers ===============================================
@@ -1646,22 +1767,16 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
                 }
             }
         }
-        std::process::exit(1);
+        return Err(fail_silent());
     }
     Ok(())
 }
 
-fn run_pretty(file: PathBuf, format: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_pretty(file: PathBuf, format: DisplayFormat) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
-    // Reject an unknown format cleanly BEFORE any rendering loop (bug fix: the
-    // reaction-rate loop used to fall through to `unreachable!()`).
-    let fmt = parse_display_format(&format).unwrap_or_else(|msg| {
-        eprintln!("{msg}");
-        std::process::exit(1);
-    });
-    let render = |expr: &earthsci_ast::Expr| match fmt {
+    let render = |expr: &earthsci_ast::Expr| match format {
         DisplayFormat::Unicode => earthsci_ast::to_unicode(expr),
         DisplayFormat::Latex => earthsci_ast::to_latex(expr),
         DisplayFormat::Ascii => earthsci_ast::to_ascii(expr),
@@ -1708,8 +1823,9 @@ fn run_extract(
 
     // Check if component exists
     if !component_exists(&esm_file, &component) {
-        eprintln!("Component '{component}' not found in the ESM file");
-        std::process::exit(1);
+        return Err(fail(format!(
+            "Component '{component}' not found in the ESM file"
+        )));
     }
 
     // Create a new ESM file with just the requested component. The extracted
@@ -1784,7 +1900,7 @@ fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Er
     println!("Comparing {} and {}:", file1.display(), file2.display());
 
     if !semantic_compare(&esm_file1, &esm_file2)? {
-        std::process::exit(1);
+        return Err(fail_silent());
     }
     Ok(())
 }
@@ -1825,12 +1941,10 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
                 println!();
             }
         } else {
-            eprintln!("Reaction system '{system}' not found");
-            std::process::exit(1);
+            return Err(fail(format!("Reaction system '{system}' not found")));
         }
     } else {
-        eprintln!("No reaction systems found in the file");
-        std::process::exit(1);
+        return Err(fail("No reaction systems found in the file"));
     }
     Ok(())
 }
@@ -1853,31 +1967,26 @@ fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::E
 /// Phase 6 made the library renderers canonical and pinned them with
 /// `tests/conformance/graph/cases.json`. A second path to the same renderings is
 /// the defect §8 item 8 removed from Go; this removes it from the CLI.
-fn render_graph<G: earthsci_ast::Graph>(
-    graph: &G,
-    format: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn render_graph<G: earthsci_ast::Graph>(graph: &G, format: GraphFormat) {
     match format {
-        "dot" => println!("{}", earthsci_ast::to_dot(graph)),
-        "mermaid" => println!("{}", earthsci_ast::to_mermaid(graph)),
-        "json" => println!("{}", earthsci_ast::to_json_graph(graph)),
-        _ => reject_unknown("graph format", format, "Use dot, mermaid, or json."),
+        GraphFormat::Dot => println!("{}", earthsci_ast::to_dot(graph)),
+        GraphFormat::Mermaid => println!("{}", earthsci_ast::to_mermaid(graph)),
+        GraphFormat::Json => println!("{}", earthsci_ast::to_json_graph(graph)),
     }
-    Ok(())
 }
 
 fn run_graph(
     file: PathBuf,
-    level: String,
-    format: String,
+    level: GraphLevel,
+    format: GraphFormat,
     system: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
-    match level.as_str() {
-        "component" => render_graph(&component_graph(&esm_file), &format),
-        "expression" => {
+    match level {
+        GraphLevel::Component => render_graph(&component_graph(&esm_file), format),
+        GraphLevel::Expression => {
             // Both forms esm-libraries-spec §5.4.5 documents. `--level=expression`
             // used to print "not yet implemented" and exit 1 — writing it meant
             // writing a second expression renderer, which routing through the
@@ -1887,21 +1996,18 @@ fn run_graph(
                 // Model and ReactionSystem.
                 Some(name) => {
                     if let Some(model) = esm_file.models.as_ref().and_then(|m| m.get(&name)) {
-                        render_graph(&expression_graph(model), &format)
+                        render_graph(&expression_graph(model), format)
                     } else if let Some(rs) = esm_file
                         .reaction_systems
                         .as_ref()
                         .and_then(|r| r.get(&name))
                     {
-                        render_graph(&expression_graph(rs), &format)
+                        render_graph(&expression_graph(rs), format)
                     } else {
-                        // reject_unknown diverges (`-> !`), so this arm needs
-                        // no Ok.
-                        reject_unknown(
-                            "system",
-                            &name,
-                            "Name a model or reaction system declared in this file.",
-                        )
+                        return Err(fail(format!(
+                            "Unsupported system: {name}. Name a model or reaction system \
+                             declared in this file."
+                        )));
                     }
                 }
                 // "all systems merged": the whole-document graph with
@@ -1913,26 +2019,25 @@ fn run_graph(
                             merge_coupled: true,
                         },
                     ),
-                    &format,
+                    format,
                 ),
             }
         }
-        _ => reject_unknown("graph level", &level, "Use component or expression."),
     }
+    Ok(())
 }
 
 fn run_convert(
     input: PathBuf,
     output: Option<PathBuf>,
-    to: String,
+    to: ConvertFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&input)?;
     let esm_file = load_string(&content)?;
 
-    let output_content = match to.as_str() {
-        "json" => to_json(&esm_file)?,
-        "compact-json" => to_json_compact(&esm_file)?,
-        _ => reject_unknown("format", &to, "Use json or compact-json."),
+    let output_content = match to {
+        ConvertFormat::Json => to_json(&esm_file)?,
+        ConvertFormat::CompactJson => to_json_compact(&esm_file)?,
     };
 
     if let Some(output_path) = output {
@@ -1944,25 +2049,17 @@ fn run_convert(
     Ok(())
 }
 
-fn run_analyze(file: PathBuf, analysis_type: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_analyze(
+    file: PathBuf,
+    analysis_type: AnalysisType,
+) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
     println!("System Analysis for: {}", file.display());
-    println!("Analysis Type: {analysis_type}");
+    println!("Analysis Type: {}", arg_name(&analysis_type));
 
-    if !matches!(
-        analysis_type.as_str(),
-        "all" | "structure" | "complexity" | "coupling"
-    ) {
-        reject_unknown(
-            "analysis type",
-            &analysis_type,
-            "Use all, structure, complexity, or coupling.",
-        );
-    }
-
-    if matches!(analysis_type.as_str(), "all" | "structure") {
+    if matches!(analysis_type, AnalysisType::All | AnalysisType::Structure) {
         {
             println!("\n=== STRUCTURAL ANALYSIS ===");
 
@@ -2021,10 +2118,10 @@ fn run_analyze(file: PathBuf, analysis_type: String) -> Result<(), Box<dyn std::
             );
         }
     }
-    if matches!(analysis_type.as_str(), "all" | "complexity") {
+    if matches!(analysis_type, AnalysisType::All | AnalysisType::Complexity) {
         print_complexity_analysis(&esm_file);
     }
-    if matches!(analysis_type.as_str(), "all" | "coupling") {
+    if matches!(analysis_type, AnalysisType::All | AnalysisType::Coupling) {
         {
             println!("\n=== COUPLING ANALYSIS ===");
             if let Some(ref coupling) = esm_file.coupling {
@@ -2276,12 +2373,15 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn run_coupling_analysis(file: PathBuf, depth: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_coupling_analysis(
+    file: PathBuf,
+    depth: CouplingDepth,
+) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
     println!("Coupling Dependency Analysis for: {}", file.display());
-    println!("Depth: {depth}");
+    println!("Depth: {}", arg_name(&depth));
 
     let graph = component_graph(&esm_file);
     println!(
@@ -2294,30 +2394,29 @@ fn run_coupling_analysis(file: PathBuf, depth: String) -> Result<(), Box<dyn std
         println!("  {} --[{}]--> {}", edge.from, edge.coupling_type, edge.to);
     }
 
-    match depth.as_str() {
-        "shallow" => {
+    match depth {
+        CouplingDepth::Shallow => {
             println!("Shallow analysis complete");
         }
-        "deep" => {
+        CouplingDepth::Deep => {
             perform_deep_coupling_analysis(&esm_file);
         }
-        _ => reject_unknown("depth", &depth, "Use shallow or deep."),
     }
     Ok(())
 }
 
 fn run_performance_profile(
     file: PathBuf,
-    profile_type: String,
+    profile_type: ProfileType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
     println!("Performance Profile for: {}", file.display());
-    println!("Profile type: {profile_type}");
+    println!("Profile type: {}", arg_name(&profile_type));
 
-    match profile_type.as_str() {
-        "memory" => {
+    match profile_type {
+        ProfileType::Memory => {
             println!("\n=== MEMORY ANALYSIS ===");
 
             // File size analysis
@@ -2389,16 +2488,12 @@ fn run_performance_profile(
                 println!("- Use references instead of duplicating common expressions");
             }
         }
-        "time" => {
+        ProfileType::Time => {
             println!("\n=== TIME ANALYSIS ===");
 
             // Parsing benchmark
             let iterations = 100;
-            let start = std::time::Instant::now();
-            for _ in 0..iterations {
-                let _ = load_string(&content)?;
-            }
-            let parse_duration = start.elapsed();
+            let parse_duration = time_parse(&content, iterations)?;
             println!(
                 "Parse time: {} iterations in {:?} ({:?}/iter)",
                 iterations,
@@ -2407,11 +2502,7 @@ fn run_performance_profile(
             );
 
             // Validation benchmark
-            let start = std::time::Instant::now();
-            for _ in 0..iterations {
-                let _ = validate(&esm_file);
-            }
-            let validate_duration = start.elapsed();
+            let validate_duration = time_validate(&esm_file, iterations);
             println!(
                 "Validate time: {} iterations in {:?} ({:?}/iter)",
                 iterations,
@@ -2450,7 +2541,7 @@ fn run_performance_profile(
                 println!("- Validation time is high; consider caching validation results");
             }
         }
-        "both" => {
+        ProfileType::Both => {
             // Run both memory and time analysis
             println!("=== COMBINED PERFORMANCE ANALYSIS ===");
             // Reuse the above logic for both types
@@ -2465,11 +2556,7 @@ fn run_performance_profile(
 
             // Time analysis (simplified)
             let iterations = 50;
-            let start = std::time::Instant::now();
-            for _ in 0..iterations {
-                let _ = load_string(&content)?;
-            }
-            let parse_duration = start.elapsed();
+            let parse_duration = time_parse(&content, iterations)?;
             println!("Parse time: {:?}/iter", parse_duration / iterations as u32);
 
             // Overall assessment
@@ -2482,7 +2569,6 @@ fn run_performance_profile(
                 println!("⚠ Large file size - consider optimization");
             }
         }
-        _ => reject_unknown("profile type", &profile_type, "Use memory, time, or both."),
     }
     Ok(())
 }
@@ -2490,7 +2576,7 @@ fn run_performance_profile(
 fn run_compare(
     file1: PathBuf,
     file2: PathBuf,
-    comparison_type: String,
+    comparison_type: ComparisonType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content1 = read_input(&file1)?;
     let content2 = read_input(&file2)?;
@@ -2498,94 +2584,82 @@ fn run_compare(
     let esm_file2 = load_string(&content2)?;
 
     println!("Comparing {} and {}:", file1.display(), file2.display());
-    println!("Comparison type: {comparison_type}");
+    println!("Comparison type: {}", arg_name(&comparison_type));
 
-    match comparison_type.as_str() {
-        "semantic" => {
+    match comparison_type {
+        ComparisonType::Semantic => {
             // Report-only: unlike `diff`, `compare` does not set a
             // failing exit code on divergence.
             let _ = semantic_compare(&esm_file1, &esm_file2)?;
         }
-        "structural" => {
+        ComparisonType::Structural => {
             perform_structural_comparison(&esm_file1, &esm_file2);
         }
-        "numerical" => {
+        ComparisonType::Numerical => {
             perform_numerical_comparison(&esm_file1, &esm_file2);
         }
-        _ => reject_unknown(
-            "comparison type",
-            &comparison_type,
-            "Use semantic, structural, or numerical.",
-        ),
     }
     Ok(())
 }
 
-fn run_optimize(file: PathBuf, opt_type: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_optimize(file: PathBuf, opt_type: OptimizeTarget) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
     let esm_file = load_string(&content)?;
 
     println!("Optimization Analysis for: {}", file.display());
-    println!("Optimization type: {opt_type}");
+    println!("Optimization type: {}", arg_name(&opt_type));
 
-    match opt_type.as_str() {
-        "expression" => {
+    match opt_type {
+        OptimizeTarget::Expression => {
             analyze_expression_optimization(&esm_file);
         }
-        "structure" => {
+        OptimizeTarget::Structure => {
             analyze_structure_optimization(&esm_file);
         }
-        "performance" => {
+        OptimizeTarget::Performance => {
             analyze_performance_optimization(&esm_file);
         }
-        _ => reject_unknown(
-            "optimization type",
-            &opt_type,
-            "Use expression, structure, or performance.",
-        ),
     }
     Ok(())
 }
 
-fn run_init(name: String, template: String) -> Result<(), Box<dyn std::error::Error>> {
+fn run_init(name: String, template: InitTemplate) -> Result<(), Box<dyn std::error::Error>> {
     println!("Creating new ESM project: {name}");
-    println!("Template: {template}");
+    println!("Template: {}", arg_name(&template));
 
     let project_dir = PathBuf::from(&name);
 
     if project_dir.exists() {
-        eprintln!("Directory '{name}' already exists");
-        std::process::exit(1);
+        return Err(fail(format!("Directory '{name}' already exists")));
     }
 
     fs::create_dir(&project_dir)?;
 
     // Create basic ESM template (see the TEMPLATE_* consts; each is
     // load_string()-checked by the `init_templates_are_loadable` unit test).
-    let template_content = match template.as_str() {
-        "minimal" => TEMPLATE_MINIMAL,
-        "atmospheric" => TEMPLATE_ATMOSPHERIC,
-        "ecosystem" => TEMPLATE_ECOSYSTEM,
-        "coupling" => TEMPLATE_COUPLING,
-        _ => reject_unknown(
-            "template",
-            &template,
-            "Use minimal, atmospheric, ecosystem, or coupling.",
-        ),
+    let template_content = match template {
+        InitTemplate::Minimal => TEMPLATE_MINIMAL,
+        InitTemplate::Atmospheric => TEMPLATE_ATMOSPHERIC,
+        InitTemplate::Ecosystem => TEMPLATE_ECOSYSTEM,
+        InitTemplate::Coupling => TEMPLATE_COUPLING,
     };
 
     let final_content = template_content.replace("{name}", &name);
 
     // Defensive self-check: never write a file our own loader rejects.
     if let Err(e) = load_string(&final_content) {
-        eprintln!("internal error: generated template does not load: {e}");
-        std::process::exit(1);
+        return Err(fail(format!(
+            "internal error: generated template does not load: {e}"
+        )));
     }
 
     let esm_file = project_dir.join(format!("{name}.esm"));
     fs::write(&esm_file, final_content)?;
 
-    println!("Created project '{name}' with template '{template}'");
+    println!(
+        "Created project '{name}' with template '{}'",
+        arg_name(&template)
+    );
     println!("Main file: {}", esm_file.display());
     Ok(())
 }
@@ -2598,8 +2672,10 @@ fn run_validate_fixtures(
     println!("Recursive: {recursive}");
 
     if !directory.is_dir() {
-        eprintln!("Directory does not exist: {}", directory.display());
-        std::process::exit(1);
+        return Err(fail(format!(
+            "Directory does not exist: {}",
+            directory.display()
+        )));
     }
 
     let mut files = Vec::new();
@@ -2634,26 +2710,26 @@ fn run_validate_fixtures(
 
     println!("\n{passed} passed, {failed} failed ({} total)", files.len());
     if failed > 0 {
-        std::process::exit(1);
+        return Err(fail_silent());
     }
     Ok(())
 }
 
 fn run_benchmark(
     file: PathBuf,
-    bench_type: String,
+    bench_type: BenchType,
     iterations: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
 
     println!("Benchmarking: {}", file.display());
-    println!("Type: {bench_type}, Iterations: {iterations}");
+    println!("Type: {}, Iterations: {iterations}", arg_name(&bench_type));
 
-    match bench_type.as_str() {
-        "parse" => bench_parse(&content, iterations)?,
-        "validate" => bench_validate(&content, iterations)?,
-        "simulate" => bench_simulate(&content, iterations)?,
-        "all" => {
+    match bench_type {
+        BenchType::Parse => bench_parse(&content, iterations)?,
+        BenchType::Validate => bench_validate(&content, iterations)?,
+        BenchType::Simulate => bench_simulate(&content, iterations)?,
+        BenchType::All => {
             bench_parse(&content, iterations)?;
             bench_validate(&content, iterations)?;
             // A file may be valid but not simulatable (e.g. no ODE
@@ -2662,11 +2738,6 @@ fn run_benchmark(
                 println!("Simulate: skipped ({e})");
             }
         }
-        _ => reject_unknown(
-            "benchmark type",
-            &bench_type,
-            "Use all, parse, validate, or simulate.",
-        ),
     }
     Ok(())
 }
@@ -2687,7 +2758,7 @@ fn run_schema_check(
         Ok(_) => println!("✓ Schema validation passed"),
         Err(e) => {
             println!("✗ Schema validation failed: {e}");
-            std::process::exit(1);
+            return Err(fail_silent());
         }
     }
     Ok(())
@@ -2705,22 +2776,12 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
 
     for round in 1..=rounds {
         // Load
-        let esm_file = match load_string(&content) {
-            Ok(file) => file,
-            Err(e) => {
-                eprintln!("Round {round}: Load failed: {e}");
-                std::process::exit(1);
-            }
-        };
+        let esm_file =
+            load_string(&content).map_err(|e| fail(format!("Round {round}: Load failed: {e}")))?;
 
         // Save
-        content = match to_json(&esm_file) {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("Round {round}: Save failed: {e}");
-                std::process::exit(1);
-            }
-        };
+        content =
+            to_json(&esm_file).map_err(|e| fail(format!("Round {round}: Save failed: {e}")))?;
 
         println!("Round {round}: OK");
     }
@@ -2736,15 +2797,20 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
         println!("✓ Round-trip fidelity maintained");
     } else {
         println!("✗ Round-trip fidelity lost");
-        std::process::exit(1);
+        return Err(fail_silent());
     }
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// The single exit point: every handler returns `Result`, and failure exits 1.
+/// A [`CliFailure`] prints its own message (if any) verbatim to stderr; any
+/// other error is rendered `Error: {:?}` — the same report `std`'s
+/// `Termination` gives a `Result`-returning main. (Clap usage errors exit 2
+/// from `Cli::parse`, as ever.)
+fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Validate { file, verbose } => run_validate(file, verbose),
         Commands::Pretty { file, format } => run_pretty(file, format),
         Commands::Extract {
@@ -2795,6 +2861,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::RoundTrip { file, rounds } => run_round_trip(file, rounds),
         Commands::ConformanceTest { out_dir, manifest } => {
             run_conformance_test(&out_dir, manifest.as_deref())
+        }
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            match e.downcast::<CliFailure>() {
+                Ok(failure) => {
+                    if let Some(message) = failure.message {
+                        eprintln!("{message}");
+                    }
+                }
+                Err(other) => eprintln!("Error: {other:?}"),
+            }
+            std::process::ExitCode::FAILURE
         }
     }
 }
