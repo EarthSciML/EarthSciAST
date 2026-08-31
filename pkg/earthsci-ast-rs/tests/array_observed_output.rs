@@ -47,12 +47,14 @@ fn doc(path: &str) -> EsmFile {
 
 /// Solve the grid fixture, asking for `observed`.
 fn run(observed: &[&str]) -> earthsci_ast::Solution {
-    let prob = esm_problem(ProblemInput::Path(Path::new(GRID)), (0.0, 10.0), {
+    let prob = esm_problem(
+        ProblemInput::Path(Path::new(GRID)),
+        (0.0, 10.0),
         ProblemOptions {
             compile: earthsci_ast::Compile::Always,
             ..Default::default()
-        }
-    })
+        },
+    )
     .expect("the grid fixture builds");
     let opts = SolveOptions {
         output_observed: observed.iter().map(|s| (*s).to_string()).collect(),

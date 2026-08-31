@@ -173,8 +173,7 @@ fn base_opts() -> SolveOptions {
         reltol: 1e-8,
         maxiters: 1_000_000,
         saveat: None,
-        progress: None,
-        callback: None,
+        ..Default::default()
     }
 }
 

@@ -179,8 +179,7 @@ fn fast_opts(final_t: f64) -> SolveOptions {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![final_t]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     }
 }
 

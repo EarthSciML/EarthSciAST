@@ -179,8 +179,7 @@ fn array_pde_heat_matches_analytic() {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![0.1]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let sol = earthsci_ast::esm_problem(
         &file,

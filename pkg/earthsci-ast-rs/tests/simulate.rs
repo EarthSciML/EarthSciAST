@@ -193,8 +193,7 @@ fn test_exponential_decay_matches_analytical() {
         reltol: 1e-8,
         maxiters: 10_000,
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -278,8 +277,7 @@ fn test_reversible_reaction_reaches_steady_state() {
         reltol: 1e-8,
         maxiters: 10_000,
         saveat: Some(vec![10.0, 50.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -363,8 +361,7 @@ fn test_autocatalytic_conserves_mass() {
         reltol: 1e-8,
         maxiters: 10_000,
         saveat: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -484,8 +481,7 @@ fn test_robertson_stiff_problem() {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -604,8 +600,7 @@ fn test_round_trip_simple_ode_fixture() {
         reltol: 1e-8,
         maxiters: 10_000,
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -671,8 +666,7 @@ fn test_round_trip_stiff_vdp_fixture() {
         reltol: 1e-6,
         maxiters: 100_000,
         saveat: None,
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let sol = earthsci_ast::esm_problem(
@@ -718,8 +712,7 @@ fn test_compiled_reuse_for_parameter_sweep() {
         reltol: 1e-8,
         maxiters: 10_000,
         saveat: Some(vec![1.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
 
     let mut ic = HashMap::new();

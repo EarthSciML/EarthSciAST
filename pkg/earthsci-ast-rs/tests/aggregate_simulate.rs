@@ -78,8 +78,7 @@ fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let ics: HashMap<String, f64> =
         HashMap::from([("y[1]".to_string(), 0.0), ("y[2]".to_string(), 0.0)]);
@@ -526,8 +525,7 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
-        progress: None,
-        callback: None,
+        ..Default::default()
     };
     let ics: HashMap<String, f64> = HashMap::from([
         ("y[1]".to_string(), 0.0),

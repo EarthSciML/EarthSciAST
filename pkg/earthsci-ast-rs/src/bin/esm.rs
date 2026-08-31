@@ -2282,8 +2282,7 @@ fn run_simulate(
         };
         // Streamed, and pretty so a 600k-cell field is one value per line and
         // `diff` against a reference dataset reports the cells that moved.
-        let file = fs::File::create(&output_path)?;
-        let mut w = std::io::BufWriter::new(file);
+        let mut w = std::io::BufWriter::new(fs::File::create(&output_path)?);
         serde_json::to_writer_pretty(&mut w, &out)?;
         std::io::Write::write_all(&mut w, b"\n")?;
         std::io::Write::flush(&mut w)?;

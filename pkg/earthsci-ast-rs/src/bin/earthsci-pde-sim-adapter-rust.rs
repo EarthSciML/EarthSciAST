@@ -114,8 +114,7 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
         maxiters: 1_000_000,
         saveat: Some(out_times.clone()),
-        callback: None,
-        progress: None,
+        ..Default::default()
     };
     let prob = esm_problem(
         &file,
@@ -253,8 +252,7 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
         reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
         maxiters: 10_000_000,
         saveat: Some(checkpoints.clone()),
-        callback: None,
-        progress: None,
+        ..Default::default()
     };
     let sol = compiled
         .solve((t0, t1), &params, &HashMap::new(), &opts)

@@ -1495,16 +1495,14 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
     }
 }
 
-/// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
-/// extension-seam progress observer into the one per-step hook `run_solver`
-/// already drives.
 /// Append [`SolveOptions::output_observed`] to a SCALAR-backend solution as
 /// extra rows (the array runner does its own, per cell, inside the driver).
 ///
 /// Every scalar-graph observed is 0-D, so each contributes exactly one
 /// bracket-free row — the cell-key spelling of a scalar, which
 /// [`crate::derive_output_gridding`] reads back as a `shape == []` variable.
-/// Silent about a name it cannot resolve, and about a name already present as a
+///
+/// Silent about a name it cannot resolve, and about one already carried as a
 /// state row: [`crate::derive_output_plan`] is the layer that can see both the
 /// state slots and the request list, so it owns the diagnostic
 /// ([`crate::OutputError::UnknownObserved`]).
@@ -1513,14 +1511,16 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
     if requested.is_empty() {
         return;
     }
+    // Tolerant by contract: a request naming a STATE (which the caller already
+    // has) is omitted from the result rather than failing the whole call.
     let Ok(rows) = observed_trajectories(prob, sol, requested) else {
         return;
     };
     for (asked, values) in rows {
-        // `observed_trajectories` returns the spelling that was ASKED FOR; the
-        // rows must carry the resolved, state-consistent one, and the asked-for
-        // one already resolves to it under the plan's both-ways match.
-        if sol.state_variable_names.iter().any(|n| n == &asked) {
+        // The returned key is the spelling that was ASKED FOR; it is the row
+        // name because it is also what the caller will name in the output
+        // request, and the plan's both-ways match binds the two either way.
+        if sol.state_variable_names.contains(&asked) {
             continue;
         }
         sol.state_variable_names.push(asked);
@@ -1528,6 +1528,9 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
     }
 }
 
+/// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
+/// extension-seam progress observer into the one per-step hook `run_solver`
+/// already drives.
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.

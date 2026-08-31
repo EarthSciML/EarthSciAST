@@ -1264,13 +1264,16 @@ impl ArrayCompiled {
                 &mut RhsStats::default(),
             );
         }
-        // A name the probe did not materialize is, by construction, either
-        // array-valued or outside the cone of anything that could be 0-D, so the
-        // `unwrap_or(false)` verdict is the same one the full materialization
-        // would have produced.
-        // What becomes rows: every 0-D observed the probe reached (as before),
-        // plus every CALLER-REQUESTED array-valued one, one row per cell. The
-        // shape is taken from the probe so the row block cannot shift if a
+        // What becomes rows: every 0-D observed, as before, plus every
+        // CALLER-REQUESTED array-valued one, at one row per cell.
+        //
+        // A name the probe did not materialize at all is skipped, and the
+        // verdict is the same one the full materialization would have produced:
+        // by construction such a name is either array-valued and unrequested —
+        // so not a row either way — or outside the cone of anything that could
+        // be 0-D. A requested array observed IS in the probe cone (see above),
+        // so its rank and shape are known here; taking the shape from the probe
+        // rather than per node is what keeps the row block from shifting if a
         // later node fails to materialize the name.
         let emit: Vec<ObservedRows> = self
             .observed_rules

@@ -501,8 +501,7 @@ fn base_opts() -> SolveOptions {
         reltol: 1e-8,
         maxiters: 100_000,
         saveat: None, // segmented_solve pins each segment's output node
-        progress: None,
-        callback: None,
+        ..Default::default()
     }
 }
 
