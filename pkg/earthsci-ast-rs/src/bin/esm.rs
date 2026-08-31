@@ -14,7 +14,7 @@ use earthsci_ast::{
     expression_graph_with_options, load_string, stoichiometric_matrix, to_json, to_json_compact,
     validate, validate_text,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -242,6 +242,33 @@ enum Commands {
         #[arg(long, default_value = "1")]
         rounds: usize,
     },
+    /// Run the inline §6.6 tests of every named file and report pass/fail
+    #[command(visible_alias = "run-tests")]
+    Test {
+        /// ESM files, and/or directories searched recursively for `.esm` files
+        #[arg(value_name = "PATH", required = true)]
+        paths: Vec<PathBuf>,
+        /// Only run the tests of this model
+        #[arg(long, value_name = "NAME")]
+        model: Option<String>,
+        /// Only run tests whose id contains this substring
+        #[arg(long, value_name = "SUBSTRING")]
+        filter: Option<String>,
+        /// Solver family for the inline-test integrations
+        #[arg(long, default_value = "bdf")]
+        solver: SolverAlg,
+        /// Relative SOLVER tolerance — how accurately each test is integrated,
+        /// NOT the §6.6.4 tolerance its assertions are judged against
+        #[arg(long, default_value_t = TEST_RELTOL)]
+        reltol: f64,
+        /// Absolute SOLVER tolerance — how accurately each test is integrated,
+        /// NOT the §6.6.4 tolerance its assertions are judged against
+        #[arg(long, default_value_t = TEST_ABSTOL)]
+        abstol: f64,
+        /// Report every assertion, not just the summary table
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Run cross-language conformance tests and write results.json to OUT_DIR
     ConformanceTest {
         /// Directory to write results.json into
@@ -348,6 +375,26 @@ enum BenchType {
     Parse,
     Validate,
     Simulate,
+}
+
+/// `test --solver`. [`earthsci_ast::Alg`] is a library type and cannot derive
+/// `clap::ValueEnum` here, so the CLI spelling of the solver family lives in
+/// this shim; `Alg::from_name` remains the mapping for string hosts.
+#[derive(Clone, Copy, ValueEnum)]
+enum SolverAlg {
+    Bdf,
+    Sdirk,
+    Erk,
+}
+
+impl From<SolverAlg> for earthsci_ast::Alg {
+    fn from(value: SolverAlg) -> Self {
+        match value {
+            SolverAlg::Bdf => earthsci_ast::Alg::Bdf,
+            SolverAlg::Sdirk => earthsci_ast::Alg::Sdirk,
+            SolverAlg::Erk => earthsci_ast::Alg::Erk,
+        }
+    }
 }
 
 /// The kebab-case CLI spelling of a `ValueEnum` value, for the commands that
@@ -2948,6 +2995,307 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+// === Inline-test runner (esm-spec §6.6) ====================================
+
+/// The SOLVER tolerances the inline-test integrations run at — deliberately
+/// NOT the library defaults [`earthsci_ast::DEFAULT_RELTOL`] /
+/// [`earthsci_ast::DEFAULT_ABSTOL`], and deliberately not the §6.6.4 assertion
+/// tolerances either. A default is what a document gets when its author
+/// expressed no opinion about accuracy; a test asserting a number to sixteen
+/// digits has very much expressed one, so integrating at the library default
+/// would make the test assert something about the library's default rather
+/// than about the model.
+///
+/// `TEST_ABSTOL` matches the Python binding's `1e-14` rather than the Julia
+/// runner's `1e-12`, for the reason Python records: the shared fixture corpus
+/// this command is pointed at integrates concentrations of order `1e-6` while
+/// asserting a RELATIVE `1e-6`, an absolute gate near `4e-13`. A solver
+/// `abstol` of `1e-12` is looser than the assertion it has to clear, so the
+/// run could not be accurate enough to be worth asserting on. That is a
+/// property of the fixtures, not a divergence between the bindings.
+const TEST_RELTOL: f64 = 1e-10;
+const TEST_ABSTOL: f64 = 1e-14;
+
+/// PASS / FAIL / ERROR — the tri-state verdict the Julia runner reports.
+///
+/// [`earthsci_ast::PdeAssertionResult`] carries a two-state `passed: bool` and
+/// stays that way: it is `Serialize`d verbatim by `examples/pde_conformance.rs`
+/// as a payload an external runner consumes. The third state is RECOVERED from
+/// it instead. `run_pde_tests` sets `actual: Some(_)` exactly on the path that
+/// got as far as comparing a number against the resolved tolerance, and
+/// `actual: None` on every path that failed before then — discretization
+/// injection, the problem build, the solve, the solver retcode, and assertion
+/// evaluation. So a non-passing result with no `actual` never reached the
+/// comparison and is an ERROR; one with an `actual` reached it and lost, and
+/// is a FAIL.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Pass,
+    Fail,
+    Error,
+}
+
+impl Verdict {
+    /// The verdict of one finished assertion, per the `actual`-is-`None`
+    /// invariant documented on [`Verdict`].
+    fn of(passed: bool, actual: Option<f64>) -> Self {
+        match (passed, actual) {
+            (true, _) => Verdict::Pass,
+            (false, None) => Verdict::Error,
+            (false, Some(_)) => Verdict::Fail,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Verdict::Pass => "PASS",
+            Verdict::Fail => "FAIL",
+            Verdict::Error => "ERROR",
+        }
+    }
+
+    /// Column of the summary table's `pass | fail | err` triple.
+    fn column(self) -> usize {
+        match self {
+            Verdict::Pass => 0,
+            Verdict::Fail => 1,
+            Verdict::Error => 2,
+        }
+    }
+}
+
+/// One assertion's outcome, tagged with the file it came from.
+///
+/// The file is not part of [`earthsci_ast::PdeAssertionResult`] (the engine is
+/// handed an already-loaded document), and a file that fails to LOAD produces
+/// a row with no assertion behind it at all — so the runner keeps its own row
+/// type rather than the library's.
+struct TestRow {
+    file: PathBuf,
+    container: String,
+    test_id: String,
+    assertion_idx: usize,
+    variable: String,
+    time: f64,
+    verdict: Verdict,
+    message: String,
+}
+
+/// Render a float the way Julia's `print` does, so the two runners' summaries
+/// read the same: Rust's `{}` prints `100` where Julia prints `100.0`.
+fn julia_float(v: f64) -> String {
+    let rendered = format!("{v}");
+    if v.is_finite() && !rendered.contains(['.', 'e', 'E']) {
+        format!("{rendered}.0")
+    } else {
+        rendered
+    }
+}
+
+/// Every `.esm` file named by `paths`: a path that is a directory is walked
+/// RECURSIVELY (matching the Julia runner's `discover_esm_files`, which has no
+/// non-recursive mode), any other path is taken as named — including one that
+/// does not exist, which then surfaces as a load ERROR naming it rather than
+/// vanishing from the run. Globally sorted and deduplicated, so overlapping
+/// arguments run each file exactly once.
+fn discover_test_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut out = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            collect_esm_files(path, true, &mut out)?;
+        } else {
+            out.push(path.clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// `path` relative to the working directory when it lies under it, else `path`
+/// verbatim — the Julia summary's `rel`, which relativizes against its root
+/// and otherwise prints the path as given.
+fn relative_to_cwd(path: &std::path::Path) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            path.strip_prefix(&cwd)
+                .ok()
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn run_test(
+    paths: Vec<PathBuf>,
+    model: Option<String>,
+    filter: Option<String>,
+    solver: SolverAlg,
+    reltol: f64,
+    abstol: f64,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let files = discover_test_inputs(&paths)?;
+    if files.is_empty() {
+        // A mis-rooted invocation must not silently pass, but nor is finding
+        // nothing a test failure: warn loudly and exit 0, as the Julia runner
+        // does.
+        let named: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        println!("⚠ No .esm files discovered under: {}", named.join(", "));
+        return Ok(());
+    }
+
+    let opts = earthsci_ast::SolveOptions {
+        alg: solver.into(),
+        reltol,
+        abstol,
+        ..Default::default()
+    };
+
+    let mut rows: Vec<TestRow> = Vec::new();
+    for path in &files {
+        let first_row = rows.len();
+        match earthsci_ast::load_path(path) {
+            // A file that will not parse is one ERROR row, not a crash that
+            // abandons the remaining files.
+            Err(e) => rows.push(TestRow {
+                file: path.clone(),
+                container: "<parse>".to_string(),
+                test_id: "<load>".to_string(),
+                assertion_idx: 0,
+                variable: String::new(),
+                time: f64::NAN,
+                verdict: Verdict::Error,
+                message: format!("Parse failed: {e}"),
+            }),
+            Ok(esm_file) => {
+                // `path.parent()` anchors §6.6.5 `from_file` references at the
+                // document's own directory — the pinned cross-binding
+                // convention, and the reason this loads with `load_path`
+                // rather than `load_string` (only `load_path` resolves §4.7
+                // subsystem `ref`s relative to the file).
+                let results = earthsci_ast::run_pde_tests_with_base_dir(
+                    &esm_file,
+                    model.as_deref(),
+                    &opts,
+                    path.parent(),
+                );
+                for r in results {
+                    if filter
+                        .as_ref()
+                        .is_some_and(|needle| !r.test_id.contains(needle))
+                    {
+                        continue;
+                    }
+                    rows.push(TestRow {
+                        file: path.clone(),
+                        container: r.model,
+                        test_id: r.test_id,
+                        assertion_idx: r.assertion_idx,
+                        variable: r.variable,
+                        time: r.time,
+                        verdict: Verdict::of(r.passed, r.actual),
+                        message: r.message,
+                    });
+                }
+            }
+        }
+        if verbose {
+            println!("{}", relative_to_cwd(path));
+            for row in &rows[first_row..] {
+                println!(
+                    "  {:<5} {}/{}[{}] ({}@t={})",
+                    row.verdict.label(),
+                    row.container,
+                    row.test_id,
+                    row.assertion_idx,
+                    row.variable,
+                    julia_float(row.time),
+                );
+                if !row.message.is_empty() {
+                    println!("        {}", row.message);
+                }
+            }
+        }
+    }
+
+    print_test_summary(&files, &rows);
+    if rows.iter().any(|r| r.verdict != Verdict::Pass) {
+        return Err(fail_silent());
+    }
+    Ok(())
+}
+
+/// The per-file `pass | fail | err` table, its `TOTAL` row and the `Failures:`
+/// block — a port of the Julia runner's `_print_summary`, so the two runners'
+/// output can be read side by side.
+fn print_test_summary(files: &[PathBuf], rows: &[TestRow]) {
+    println!();
+    println!("================ ESM inline-test summary ================");
+    println!("Files discovered: {}", files.len());
+    println!("Assertions:       {}", rows.len());
+
+    if rows.is_empty() {
+        println!("(no inline tests found)");
+        println!("=========================================================");
+        return;
+    }
+
+    let mut by_file: BTreeMap<String, [usize; 3]> = BTreeMap::new();
+    let mut totals = [0usize; 3];
+    for row in rows {
+        by_file.entry(relative_to_cwd(&row.file)).or_default()[row.verdict.column()] += 1;
+        totals[row.verdict.column()] += 1;
+    }
+
+    let pad = by_file
+        .keys()
+        .map(|name| name.chars().count())
+        .max()
+        .unwrap_or(20)
+        .max(20);
+    let rule = "-".repeat(pad + 25);
+    println!(
+        "  {:<pad$}  {:>5}  {:>5}  {:>5}",
+        "file", "pass", "fail", "err"
+    );
+    println!("  {rule}");
+    for (name, counts) in &by_file {
+        println!(
+            "  {:<pad$}  {:>5}  {:>5}  {:>5}",
+            name, counts[0], counts[1], counts[2]
+        );
+    }
+    println!("  {rule}");
+    println!(
+        "  {:<pad$}  {:>5}  {:>5}  {:>5}",
+        "TOTAL", totals[0], totals[1], totals[2]
+    );
+
+    if totals[1] + totals[2] > 0 {
+        println!();
+        println!("Failures:");
+        for row in rows.iter().filter(|r| r.verdict != Verdict::Pass) {
+            println!(
+                "  - {} :: {}/{}[{}] ({}@t={}) — {}",
+                relative_to_cwd(&row.file),
+                row.container,
+                row.test_id,
+                row.assertion_idx,
+                row.variable,
+                julia_float(row.time),
+                row.verdict.label(),
+            );
+            if !row.message.is_empty() {
+                println!("      {}", row.message);
+            }
+        }
+    }
+    println!("=========================================================");
+}
+
 /// The single exit point: every handler returns `Result`, and failure exits 1.
 /// A [`CliFailure`] prints its own message (if any) verbatim to stderr; any
 /// other error is rendered `Error: {:?}` — the same report `std`'s
@@ -3011,6 +3359,15 @@ fn main() -> std::process::ExitCode {
             schema_version,
         } => run_schema_check(file, schema_version),
         Commands::RoundTrip { file, rounds } => run_round_trip(file, rounds),
+        Commands::Test {
+            paths,
+            model,
+            filter,
+            solver,
+            reltol,
+            abstol,
+            verbose,
+        } => run_test(paths, model, filter, solver, reltol, abstol, verbose),
         Commands::ConformanceTest { out_dir, manifest } => {
             run_conformance_test(&out_dir, manifest.as_deref())
         }

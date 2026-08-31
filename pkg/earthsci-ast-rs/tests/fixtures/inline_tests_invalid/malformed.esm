@@ -1,0 +1,6 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MalformedFixture"
+  this line is not JSON, so the document cannot be loaded at all
+}

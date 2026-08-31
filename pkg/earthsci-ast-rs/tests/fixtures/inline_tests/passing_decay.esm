@@ -1,0 +1,40 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "PassingDecayFixture",
+    "description": "Inline-test fixture for the `esm test` CLI happy path. Single first-order decay with the closed form x(t) = x0 * exp(-k*t); the three assertions sample x at t=0, 50 and 100 and must all pass. Mirrors pkg/EarthSciAST.jl/test/fixtures/inline_tests/passing_decay.esm so the Julia and Rust runners are exercised on the same numbers.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "created": "2026-08-31T00:00:00Z"
+  },
+  "models": {
+    "PassingDecay": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.01 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [{ "op": "-", "args": ["k"] }, "x"] }
+        }
+      ],
+      "tolerance": { "rel": 1e-06 },
+      "tests": [
+        {
+          "id": "decay_trajectory",
+          "description": "First-order decay with x0=1, k=0.01. Closed form: x(t) = exp(-0.01 t).",
+          "initial_conditions": { "x": 1.0 },
+          "parameter_overrides": { "k": 0.01 },
+          "time_span": { "start": 0.0, "end": 100.0 },
+          "assertions": [
+            { "variable": "x", "time": 0.0, "expected": 1.0 },
+            { "variable": "x", "time": 50.0, "expected": 0.6065306597126334,
+              "tolerance": { "rel": 1e-06 } },
+            { "variable": "x", "time": 100.0, "expected": 0.36787944117144233,
+              "tolerance": { "rel": 1e-06 } }
+          ]
+        }
+      ]
+    }
+  }
+}
