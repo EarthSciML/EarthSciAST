@@ -5,7 +5,7 @@ description: "esm-spec §6.7 specifies the shape of an analysis but not its mean
 
 > **Status:** Draft proposal — **rulings only**. Nothing here is a landed
 > change, and nothing here schedules an implementation. The recommendation in
-> §9 is that no executor be built now; the value of the RFC is that the
+> §10 is that no executor be built now; the value of the RFC is that the
 > fourteen questions below stop being re-derived from scratch every time
 > someone looks at §6.7.
 >
