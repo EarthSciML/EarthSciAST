@@ -1,0 +1,191 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "join_on_data_columns",
+    "description": "M3 cross-binding conformance fixture (CONFORMANCE_SPEC.md §5.5.8; RFC semiring-faq-unified-ir §5.3). A value-equality `join.on` whose key columns are genuine DATA COLUMNS — 1-D variables over the two aggregate ranges — rather than loop symbols or index sets. This is how a relational port (EPA MOVES/NONROAD) spells every join: one table's sourceTypeID column against another's. §5.5.8 requires every binding to resolve such a key to the loop symbol named by the column's single shape index set, and to admit a combination iff the two columns carry equal values. The key columns are document-literal `makearray` observeds so the fixture needs no injected data: src_type = [7,9,7,4] over src_rows, emf_type = [7,9,7] over emf_rows. Key 7 occurs twice left and twice right (2*2 = 4 terms, the defined many-to-many cardinality); key 9 once each (1 term); key 4 is unmatched and contributes the additive identity 0-bar. With the constant body 1 under sum_product the scalar reduction COUNTS the admitted combinations: count(1) = 5 from a zero IC — against 4*3 = 12 for the join-free full product, which is what a binding that ignores or drops the clause computes. §5.5.8 additionally requires the gate to DRIVE enumeration (cost O(|matches|), not O(|src_rows|*|emf_rows|)); that is a cost property this fixture cannot observe, so it is pinned by each binding's own scaling tests — in Rust, pkg/earthsci-ast-rs/tests/join_on_equality_gate.rs.",
+    "authors": [
+      "EarthSciAST/polecats/gastown.nux"
+    ],
+    "tags": [
+      "aggregate",
+      "join",
+      "semiring",
+      "sum_product",
+      "data-columns",
+      "many-to-many",
+      "cardinality",
+      "moves",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "src_rows": {
+      "kind": "interval",
+      "size": 4
+    },
+    "emf_rows": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "DataColumnJoin": {
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "variables": {
+        "src_type": {
+          "type": "unknown",
+          "shape": [
+            "src_rows"
+          ],
+          "description": "Source-table key column (a sourceTypeID analogue): the LEFT `on` key. A 1-D variable over `src_rows`, which is what makes the join key a data column rather than an index symbol."
+        },
+        "emf_type": {
+          "type": "unknown",
+          "shape": [
+            "emf_rows"
+          ],
+          "description": "Emission-factor-table key column: the RIGHT `on` key, over `emf_rows`."
+        },
+        "count": {
+          "type": "unknown",
+          "default": 0.0,
+          "description": "Counts the admitted (src_row, emf_row) combinations, so the trajectory reads the join's cardinality directly."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Document-literal key column src_type = [7, 9, 7, 4].",
+          "lhs": "src_type",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  4,
+                  4
+                ]
+              ]
+            ],
+            "values": [
+              7.0,
+              9.0,
+              7.0,
+              4.0
+            ]
+          }
+        },
+        {
+          "_comment": "Document-literal key column emf_type = [7, 9, 7].",
+          "lhs": "emf_type",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ]
+            ],
+            "values": [
+              7.0,
+              9.0,
+              7.0
+            ]
+          }
+        },
+        {
+          "_comment": "D(count)/dt = sum over (l in src_rows, r in emf_rows : src_type[l] == emf_type[r]) of 1. Key 7: 2x2=4; key 9: 1x1=1; key 4 unmatched. count(1)=5 (full product without the join = 12).",
+          "lhs": {
+            "op": "D",
+            "args": [
+              "count"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [],
+            "semiring": "sum_product",
+            "reduce": "+",
+            "ranges": {
+              "l": {
+                "from": "src_rows"
+              },
+              "r": {
+                "from": "emf_rows"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "src_type",
+                    "emf_type"
+                  ]
+                ]
+              }
+            ],
+            "expr": 1.0
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "data_column_join_t1",
+          "description": "Value-equality join on two data columns: key 7 matches 2x2=4, key 9 matches 1x1=1, key 4 is unmatched. count(1)=5.",
+          "initial_conditions": {
+            "count": 0.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "count",
+              "time": 1.0,
+              "expected": 5.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
