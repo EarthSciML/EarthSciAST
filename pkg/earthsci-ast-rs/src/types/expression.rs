@@ -690,6 +690,33 @@ pub struct ExpressionNode {
     /// semiring-faq-unified-ir §5.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<Box<Expr>>,
+
+    /// Optional AUTHOR assertion on this node's cadence class — one of
+    /// `"const"`, `"discrete"`, `"continuous"` (RFC semiring-faq-unified-ir
+    /// §6.1; CONFORMANCE_SPEC.md §5.7.6 rule 3).
+    ///
+    /// A diagnostic/test hook only: it changes no semantics. The
+    /// dependency-partition pass DERIVES every node's class from the
+    /// data-dependency DAG and, where this is present, errors if the derived
+    /// class disagrees. The pass only READS it — nothing consumes or rewrites
+    /// it — so it is authored content that must survive parse → emit, exactly
+    /// as it already does in the Go and TypeScript bindings. Dropping it
+    /// silently disarmed the assertion guarding the whole §5.7 contract on any
+    /// document this binding re-emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_cadence: Option<String>,
+
+    /// Named scalar attributes for an OPEN rewrite-target op (esm-spec §4.2).
+    ///
+    /// Mirrors the role of the fixed `dim`/`side`/`wrt`/`var` slots core ops
+    /// use, but is open: a custom op (e.g. `godunov_hamiltonian`) carries its
+    /// scheme parameters here, and in a rewrite rule's `match` an
+    /// `attrs.<key>` whose value is a bare param name binds that param to the
+    /// matched literal (esm-spec §9.6.1). Evaluable-core ops MUST NOT use
+    /// `attrs`, so it never appears on a lowered tree — but it is authored
+    /// content on the pre-lowering tree and must round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────

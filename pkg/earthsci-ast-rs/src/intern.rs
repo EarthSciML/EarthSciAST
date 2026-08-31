@@ -291,6 +291,8 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         arg,
         distinct,
         key,
+        expect_cadence,
+        attrs,
     } = a;
     // `internable` refused these; assert the contract rather than compare.
     debug_assert!(value.is_none() && output.is_none() && join.is_none());
@@ -328,6 +330,12 @@ fn node_eq(a: &ExpressionNode, b: &ExpressionNode) -> bool {
         && arg == &b.arg
         && distinct == &b.distinct
         && opt_child_eq(key, &b.key)
+        // Both are author-supplied annotations with no bearing on the value a
+        // node computes, but they are still emitted, so two nodes differing
+        // only in one of them MUST NOT collapse to a single allocation — that
+        // would silently unify (and so drop one of) the two annotations.
+        && expect_cadence == &b.expect_cadence
+        && attrs == &b.attrs
 }
 
 /// Structural hash consistent with [`node_eq`].
@@ -365,6 +373,8 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
         arg,
         distinct,
         key,
+        expect_cadence,
+        attrs,
     } = n;
     op.hash(h);
     args.len().hash(h);
@@ -445,6 +455,17 @@ fn node_hash<H: Hasher>(n: &ExpressionNode, h: &mut H) {
     arg.hash(h);
     distinct.hash(h);
     opt_child_hash(key, h);
+    expect_cadence.hash(h);
+    // `serde_json::Value` is not `Hash`; its canonical text is, and equal
+    // `Value`s that differ only in object key order still hash apart — which
+    // costs a missed intern, never a wrong one (`node_eq` remains the arbiter).
+    match attrs {
+        None => 0u8.hash(h),
+        Some(v) => {
+            1u8.hash(h);
+            v.to_string().hash(h);
+        }
+    }
 }
 
 #[cfg(test)]

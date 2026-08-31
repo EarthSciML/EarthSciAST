@@ -149,6 +149,8 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
         manifold,
         distinct,
         key,
+        expect_cadence,
+        attrs,
     } = n;
 
     // JSON wire name reported where it differs from the Rust field name
@@ -227,6 +229,17 @@ fn first_non_emissible_field(n: &ExpressionNode) -> Option<&'static str> {
     }
     if key.is_some() {
         return Some("key");
+    }
+    // `expect_cadence` (author cadence assertion) and `attrs` (open
+    // rewrite-target op attributes) have no canonical wire slot either.
+    // `tests/conformance/canonical/README.md` names both classes of field as
+    // ones that MUST raise `E_CANONICAL_UNSUPPORTED_FIELD`; until 2026-08-31
+    // neither could reach here, because the typed node dropped them at load.
+    if expect_cadence.is_some() {
+        return Some("expect_cadence");
+    }
+    if attrs.is_some() {
+        return Some("attrs");
     }
     None
 }
