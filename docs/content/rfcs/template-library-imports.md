@@ -11,6 +11,14 @@ priority + bounded fixpoint + `unlowered_operator` gate) being present in a bind
 that binding implements this RFC. Imports only *widen the rule set* handed to that engine;
 nothing here touches the engine itself.
 
+> **Two post-acceptance retractions — see §15.** (a) §5.4's "round-trip emits the expanded,
+> folded form; neither `expression_template_imports` nor `metaparameters` nor top-level
+> `expression_templates` survives `parse → emit`" is **RETRACTED**: the declarations survive,
+> only the import *edge* is consumed (`esm-spec.md` §9.6.4 rule 5). (b) The unconditional
+> fold in §5.3 site 5 / §5.4 is **AMENDED**: a template-library file loaded standalone with
+> no loader-API bindings keeps its metaparameters open and its structural integer sites
+> symbolic. `esm-spec.md` is normative; §5.3 and §5.4 below carry the corrections inline.
+
 ---
 
 ## 1. Motivation
@@ -202,8 +210,13 @@ Bindings flow **down** the reference DAG; open (unbound) metaparameters flow **u
    convergence wrapper binding a problem file to `n = 32`).
 4. **Loader API**: hosts MAY bind the *root* document's open metaparameters at load
    (`load(file, metaparameters = {...})`) — the command-line `-D` of the mechanism.
-5. **Defaults, last**: after API bindings, any still-open metaparameter takes its
-   `default`; one with no default is `metaparameter_unbound`.
+5. **Defaults, last**: at the *root document's* close, after API bindings, any still-open
+   metaparameter takes its `default`; one with no default is `metaparameter_unbound`.
+   *(Amended — see §15.2.)* This site does **not** run when the root document is a
+   template-library file loaded with no loader-API bindings: there the metaparameters stay
+   open by design, and an open one is not `metaparameter_unbound` whether or not it declares
+   a `default`. An edge binding is likewise not required to be total: what an edge leaves
+   unbound re-exports upward by site 2.
 
 Because instantiation happens per import edge, a diamond whose two paths bind the same
 underlying file *differently* produces non-deep-equal templates or index sets and is
@@ -212,11 +225,31 @@ rejected by the existing conflict diagnostics — no new machinery, no ambiguity
 ### 5.4 Ordering within load
 
 For each document, innermost-first: resolve imports (recursively, instantiating at each
-edge) → merge index_sets → close + fold this document's metaparameters → then §4
+edge) → merge index_sets → close + fold this document's metaparameters (*conditionally* —
+see the correction below) → then §4
 body-composition and the §9.6.3 fixpoint on fully-concrete trees. Validators run on the
-folded, expanded form (§9.6.4 unchanged). Round-trip emits the expanded, folded form;
-neither `expression_template_imports` nor `metaparameters` nor top-level
-`expression_templates` survives `parse → emit`; source files remain the source of truth.
+folded form.
+
+*Corrected — see §15. The original text of this subsection continued: "Round-trip emits the
+expanded, folded form; neither `expression_template_imports` nor `metaparameters` nor
+top-level `expression_templates` survives `parse → emit`; source files remain the source of
+truth." Both halves of that sentence are wrong and the corrected rules are:*
+
+- **Declarations survive; only the call site is consumed.** `expression_template_imports` is
+  a call site and does not survive `parse → emit`. A top-level `expression_templates`
+  registry and a top-level `metaparameters` block are *declarations* — peers of `index_sets`
+  — and survive verbatim. (Retraction (a), §15.1.)
+- **The fold is conditional.** When the root document is a template-library file (§3) and the
+  load supplies no loader-API metaparameter bindings, the "close + fold this document's
+  metaparameters" step does not run: the metaparameters stay open, the structural integer
+  sites (`index_sets.<name>.size`, dense `ranges`, `makearray` `regions`) stay symbolic
+  exactly as authored, and an import-free library file round-trips to **itself**. Every other
+  load — through an import edge, through a subsystem edge, with loader-API bindings, or of
+  any file that is not a library — closes and folds as described above. (Amendment (b),
+  §15.2.)
+- Emit is the **reference-preserving** form of `esm-spec.md` §9.6.4 (Option B), not the
+  expanded one; this RFC predates that change. Source files remain the source of truth for
+  the consumed constructs only — import edges and eagerly-expanded call sites.
 
 ## 6. Worked example — the four-file layering
 
@@ -368,7 +401,7 @@ library exports match-less coordinate-transform or overlap-weight templates; a c
 | `template_import_index_set_conflict` | Merged `index_sets` name collides with a non-deep-equal definition. |
 | `apply_expression_template_recursive_body` | *(redefined)* Template-body reference cycle (self or mutual). |
 | `template_body_expansion_too_deep` | Body-reference chain exceeds `MAX_TEMPLATE_EXPANSION_DEPTH` (32). |
-| `metaparameter_unbound` | A metaparameter is still open after edge bindings, API bindings, and defaults. |
+| `metaparameter_unbound` | A metaparameter is still open at the root document's close, after edge bindings, API bindings, and defaults. Not raised on a standalone library load (§15.2), nor at an edge that merely leaves a name unbound (it re-exports, §5.3 site 2). |
 | `metaparameter_type_error` | A binding is not an integer; a fold divides inexactly or overflows; a metaparameter expression uses an op outside `+ - * /`. |
 | `metaparameter_name_conflict` | A metaparameter name collides with a visible variable/parameter/species/index-set name. |
 
@@ -483,3 +516,59 @@ Julia is the reference implementation and generates all goldens.
 - §6.6.5 inline-test `reference` expressions over *unstructured* grids (reference needs
   coordinate variables, not dimension names) — tracked separately; `from_file` references
   cover the gap meanwhile.
+
+## 15. Post-acceptance corrections to §5.4 (round-trip and the fold)
+
+`esm-spec.md` is normative. This section records the two places where §5.4 as originally
+written misled implementers, so a reader of this RFC is not misled the same way a third time.
+Both corrections are carried inline in §5.3 and §5.4 above.
+
+### 15.1 RETRACTED — "nothing §9.7 survives `parse → emit`"
+
+§5.4 asserted that neither `expression_template_imports` nor `metaparameters` nor a top-level
+`expression_templates` registry survives `parse → emit`. That conflated a **declaration**
+with a **call site**. A pure template-library file's *only* payload is its top-level
+registry, so stripping it emitted `{esm, metadata, index_sets}` — a document carrying none of
+the top-level payload keys the schema's top-level `anyOf` requires. A conforming library file
+was legal on disk and illegal the instant it was loaded and re-emitted. All five bindings
+implemented the retracted rule; all five had to be fixed.
+
+Corrected rule (`esm-spec.md` §9.6.4 rule 5, §9.7.6 "Ordering within load"): the import
+**edge** is a call site and is expanded away; the top-level registry and `metaparameters`
+block are **declarations**, peers of `index_sets`, and survive verbatim.
+
+### 15.2 AMENDED — the fold is conditional, not unconditional
+
+The §15.1 patch fixed the declarations but left §5.4's unconditional "close + fold" in place,
+which contradicted the round-trip requirement it had just introduced: a library whose
+`index_sets.<name>.size` is the metaparameter reference `"N"` cannot both fold to `size: 8`
+and round-trip to itself. Two consequences reached the bindings:
+
+1. A conforming library that declares a metaparameter with **no** `default` was unloadable in
+   all five bindings — they applied §5.3 site 5 on the standalone path and raised
+   `metaparameter_unbound`. But nothing requires a library to supply defaults, and site 2
+   (re-export) positively depends on names staying open: that is how binding once at the top
+   of a chain reaches the grid file at the bottom.
+2. Re-emitting a library folded its sizes at their defaults while leaving `metaparameters` in
+   the file, so the emitted file still *looked* generic. Importing it afterwards with
+   `N = 16` silently produced `size: 8`, with no diagnostic.
+
+Corrected rule (`esm-spec.md` §9.6.4 rule 5, "Two load modes"): a **generic load** — root is
+a template-library file, no loader-API bindings — leaves metaparameters open and structural
+integer sites symbolic, does not run site 5, and never raises `metaparameter_unbound`; an
+**instantiating load** — bindings supplied, or the file reached through an import or
+subsystem edge, or the file is not a library — closes, folds, and emits concrete. Both modes
+are idempotent. This mirrors the carve-out `esm-spec.md` §9.6.1 already states for
+`where`/`shape` constraint registration: "Loading or validating a library file standalone
+does not run this check (no component registers its rules)."
+
+**On the counter-argument that index-set sizes are not §9.7 machinery.** Two bindings' authors
+reasoned in writing that the index-set registry should be attached folded because "index sets
+are not §9.7 machinery and their sizes are genuinely resolved by it". That holds for a size
+that is an integer literal, and for any size in a document that has actually been
+instantiated. It does not hold for a size that *is* a metaparameter expression in a library:
+that site's binding site is the **import edge**, not the library's own load, and §5.3 site 1
+already says so — an edge binding value carrying open importer names "folds when the
+importing document closes … the same deferred fold that leaves an open index-set size
+symbolic until its binding site". Folding at a standalone emit resolves the site against a
+binding site that has not happened yet, which is exactly the silent-`size: 8` defect above.
