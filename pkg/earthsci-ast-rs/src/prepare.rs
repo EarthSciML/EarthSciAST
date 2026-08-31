@@ -1433,18 +1433,29 @@ impl<'o> BuildState<'o> {
 
     /// Observed definitions + the join-free partition.
     ///
-    /// Resolve each OVERLAP gate's two range symbols while the ranges still
-    /// carry their `{ "from": <index set> }` linkage (`eval_observed` resolves
-    /// ranges on its own clone, which erases it). Without this the dense
-    /// evaluator cannot tell which loop symbol each envelope side runs over and
-    /// declines to let the gate drive — correct, but back at `O(∏ranges)`.
-    /// Infallible: an unresolvable gate simply stays undriven.
+    /// Resolve every `join` clause while the ranges still carry their
+    /// `{ "from": <index set> }` linkage (`eval_observed` resolves ranges on its
+    /// own clone, which erases it):
+    ///
+    /// * an OVERLAP gate's two range symbols — without this the dense evaluator
+    ///   cannot tell which loop symbol each envelope side runs over and declines
+    ///   to let the gate drive: correct, but back at `O(∏ranges)`. Infallible;
+    ///   an unresolvable gate simply stays undriven.
+    /// * a value-equality `on` clause, into its `filter` predicate plus the
+    ///   drivable [`crate::join::OnGate`] (CONFORMANCE_SPEC §5.5.8). This one is
+    ///   NOT optional: `join.on` is the semantics, not an optimisation, and an
+    ///   unresolved clause reached the evaluator contributing neither the
+    ///   predicate nor the gate — an unfiltered full product, silently. A
+    ///   genuinely unresolvable key column is a build error, as it is on the
+    ///   compiled path.
     fn collect_observed_defs(&mut self) -> Result<(), PrepareError> {
         let mut defs = observed_defs(&self.model);
         {
             let var_shapes = crate::join::declared_var_shapes(&self.model);
             for e in defs.values_mut() {
                 crate::join::resolve_overlap_syms_expr(e, &var_shapes);
+                crate::join::resolve_expr_joins(e, &self.index_sets, &var_shapes)
+                    .map_err(|e| err(format!("resolve join: {e}")))?;
             }
         }
         self.join_free = defs

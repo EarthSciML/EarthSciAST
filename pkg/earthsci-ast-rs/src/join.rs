@@ -280,6 +280,28 @@ pub fn resolve_aggregate_joins(
     Ok(())
 }
 
+/// Resolve every `join` clause in ONE expression tree (the per-expression door
+/// into the same lowering [`resolve_aggregate_joins`] applies model-wide).
+///
+/// The build-time observed pipeline (`crate::prepare`) evaluates each observed's
+/// defining expression directly rather than compiling a model, so it has no
+/// `Model` to hand to [`resolve_aggregate_joins`] — but it needs the identical
+/// resolution, and for the identical reason the overlap pass runs there: the
+/// ranges still carry their `{ "from": <index set> }` linkage here, and
+/// `eval_observed` erases it on its own clone. Without this an observed's
+/// `join.on` reached the evaluator unresolved, contributing NEITHER the
+/// equality `filter` nor the gate — i.e. an unfiltered full product.
+///
+/// Call AFTER [`resolve_overlap_syms_expr`] on the same tree, matching the
+/// order [`resolve_aggregate_joins`] uses.
+pub fn resolve_expr_joins(
+    expr: &mut Expr,
+    index_sets: &HashMap<String, IndexSet>,
+    var_shapes: &HashMap<String, Vec<String>>,
+) -> Result<(), CompileError> {
+    lower_expr_joins(expr, index_sets, var_shapes)
+}
+
 /// `true` iff any node in `e`'s subtree carries a `join` clause. The
 /// sharing-aware gate for [`lower_expr_joins`]: after load-time interning
 /// (`crate::intern`) operator payloads are shared `Arc`s, and a mutable
