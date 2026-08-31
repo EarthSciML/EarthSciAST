@@ -231,6 +231,27 @@ pub struct SolveOptions {
     /// observer cheap: a fast run can accept thousands of steps in well under a
     /// second.
     pub progress: Option<ProgressFn>,
+    /// Observed fields to expose as extra rows of the returned [`Solution`],
+    /// alongside the state (streaming-output-sinks RFC decision 8: output is
+    /// the state PLUS a caller-named subset of observeds, never every observed
+    /// by default).
+    ///
+    /// Empty by default, so a run that does not ask pays nothing and returns
+    /// exactly what it returns today. A named field is appended in the same
+    /// flat cell-key spelling the state uses — a scalar as `name`, an
+    /// array-shaped one as one row per cell, `name[i,j,…]`, 1-based and
+    /// column-major — which is precisely the `slot_names` shape
+    /// [`crate::derive_output_plan`] inverts back into dimension-labeled,
+    /// CF-coordinated output arrays.
+    ///
+    /// Names may be bare or `Model.`-qualified. A name that is not an observed
+    /// of this document is ignored here and diagnosed downstream by
+    /// [`crate::OutputError::UnknownObserved`], which names it.
+    ///
+    /// Honoured by both runners: the scalar runner walks its observed graph
+    /// over the output grid, the array runner materializes the requested
+    /// array-valued observeds it otherwise skips.
+    pub output_observed: Vec<String>,
 }
 
 // Hand-written because `ProgressFn` is a trait object: it cannot derive Debug,
@@ -253,6 +274,7 @@ impl std::fmt::Debug for SolveOptions {
                     .map(|_| "<observer>")
                     .unwrap_or("None"),
             )
+            .field("output_observed", &self.output_observed)
             .finish()
     }
 }
@@ -267,6 +289,7 @@ impl Default for SolveOptions {
             saveat: None,
             callback: None,
             progress: None,
+            output_observed: Vec::new(),
         }
     }
 }

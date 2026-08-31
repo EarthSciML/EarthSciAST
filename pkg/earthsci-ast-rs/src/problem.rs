@@ -1435,6 +1435,11 @@ fn bind_providers(
 /// not append, merge or wrap. To extend rather than replace, read the set back
 /// with [`callbacks`] and [`compose`] explicitly. See §2.5.4 for why
 /// replacement is the safe default.
+///
+/// **`opts.output_observed` adds rows.** A [`Solution`] carries state rows by
+/// default; a name listed there is appended as extra rows in the flat cell-key
+/// spelling the state uses, which is what [`crate::derive_output_plan`] needs
+/// to write that field alongside the state (RFC decision 8).
 #[cfg(feature = "solve")]
 pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
     let effective = effective_options(prob, opts);
@@ -1442,7 +1447,11 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
         Backend::Static(reason) => Err(SimulateError::NotDynamic {
             details: reason.clone(),
         }),
-        Backend::Scalar(compiled) => compiled.solve(prob.tspan, &prob.p, &prob.u0, &effective),
+        Backend::Scalar(compiled) => {
+            let mut sol = compiled.solve(prob.tspan, &prob.p, &prob.u0, &effective)?;
+            append_requested_observeds(prob, &mut sol, &effective.output_observed);
+            Ok(sol)
+        }
         Backend::Array(compiled) => {
             let mut insp = BuildInspection::default();
             let sink = prob.inspect.then_some(&mut insp);
@@ -1489,6 +1498,36 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
 /// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
 /// extension-seam progress observer into the one per-step hook `run_solver`
 /// already drives.
+/// Append [`SolveOptions::output_observed`] to a SCALAR-backend solution as
+/// extra rows (the array runner does its own, per cell, inside the driver).
+///
+/// Every scalar-graph observed is 0-D, so each contributes exactly one
+/// bracket-free row — the cell-key spelling of a scalar, which
+/// [`crate::derive_output_gridding`] reads back as a `shape == []` variable.
+/// Silent about a name it cannot resolve, and about a name already present as a
+/// state row: [`crate::derive_output_plan`] is the layer that can see both the
+/// state slots and the request list, so it owns the diagnostic
+/// ([`crate::OutputError::UnknownObserved`]).
+#[cfg(feature = "solve")]
+fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: &[String]) {
+    if requested.is_empty() {
+        return;
+    }
+    let Ok(rows) = observed_trajectories(prob, sol, requested) else {
+        return;
+    };
+    for (asked, values) in rows {
+        // `observed_trajectories` returns the spelling that was ASKED FOR; the
+        // rows must carry the resolved, state-consistent one, and the asked-for
+        // one already resolves to it under the plan's both-ways match.
+        if sol.state_variable_names.iter().any(|n| n == &asked) {
+            continue;
+        }
+        sol.state_variable_names.push(asked);
+        sol.state.push(values);
+    }
+}
+
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
