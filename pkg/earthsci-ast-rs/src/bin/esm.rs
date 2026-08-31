@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "esm")]
-#[command(about = "A CLI tool for EarthSciML Serialization Format")]
+#[command(about = "A CLI tool for EarthSciML Abstract Syntax Tree Format")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
