@@ -743,20 +743,38 @@ impl ArrayCompiled {
 // extracted verbatim from the former inline implementation.
 // ============================================================================
 
-/// (0) Reject spatial differential operators anywhere in the model's
-/// equations or observed-variable expressions — the canonical pipeline
-/// contract requires `grad`/`div`/`laplacian` to be rewritten by ESD
-/// discretization before reaching the simulator (esm-i7b).
+/// (0) Reject, at BUILD, every operator this runtime cannot evaluate — the
+/// open rewrite-target tier (`grad`/`div`/`laplacian`, a spatial `D`, a user op,
+/// a typo), which the canonical pipeline requires ESD discretization to have
+/// rewritten before the simulator sees it (esm-i7b), AND the evaluable-core ops
+/// that have no rule in this evaluator because an earlier stage was supposed to
+/// eliminate them (`skolem`, `rank`, `distinct`, `argmin`, `argmax`, `ic`,
+/// `enum`, `table_lookup`, `apply_expression_template`).
+///
+/// The second half is [`check_evaluable`]'s `is_evaluable_op` gate, and it is
+/// here because [`eval_op`]'s backstop for an ungated op is `unreachable!` — a
+/// PANIC, which is what an author got (exit 101, no diagnostic) from a document
+/// that `esm validate` had just passed. The public `eval_expression` gated;
+/// this path did not, and `hoist_static_observeds` walked straight into the
+/// backstop. Gating the whole model once, at the single funnel every
+/// array-runtime build passes through, closes the class rather than the one op
+/// that was reported: any of the nine now raises `unevaluable_operator` naming
+/// itself.
+///
+/// Ordering matters and is already right: `materialize_vi_outputs_to_data` and
+/// `strip_value_invention` run BEFORE the staged build, so a legitimate
+/// relational producer has become `const` data by the time this sees the model
+/// — what remains is genuinely unevaluable.
 fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
     for eq in &model.equations {
-        check_no_spatial_ops(&eq.lhs)?;
-        check_no_spatial_ops(&eq.rhs)?;
+        check_evaluable_side(&eq.lhs)?;
+        check_evaluable_side(&eq.rhs)?;
     }
     for var in model.variables.values() {
         let mut failure = None;
         var.for_each_expression(&mut |expr| {
             if failure.is_none()
-                && let Err(e) = check_no_spatial_ops(expr)
+                && let Err(e) = check_evaluable(expr)
             {
                 failure = Some(e);
             }
@@ -766,6 +784,25 @@ fn reject_unlowered_spatial_ops(model: &Model) -> Result<(), CompileError> {
         }
     }
     Ok(())
+}
+
+/// [`check_evaluable`] over one side of an equation, with the ONE structural
+/// wrapper the array path consumes rather than evaluates unwrapped first: an
+/// `ic` LHS (esm-spec §11.4). `ic` is evaluable-core and has no `eval_op` arm —
+/// correctly, since initial-condition assembly reads the equation and the
+/// evaluator never sees the node — so gating it as an ordinary expression would
+/// reject every document that states an initial condition. Its OPERAND is
+/// checked, so nothing inside it escapes the gate.
+fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
+    if let Expr::Operator(node) = expr
+        && node.op == "ic"
+    {
+        for arg in &node.args {
+            check_evaluable(arg)?;
+        }
+        return Ok(());
+    }
+    check_evaluable(expr)
 }
 
 /// (0b) Reject a reference to a variable that is bound in NONE of the model's

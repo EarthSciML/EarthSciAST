@@ -127,7 +127,7 @@ pub(super) fn set_bind(binds: &mut IdxMap, name: &str, val: i64) {
 ///
 /// * build-time query ops (`skolem`, `rank`, `distinct`, `argmin`, `argmax`) —
 ///   resolved by [`crate::value_invention`] before evaluation;
-/// * form / lowering ops (`ic`, `true`, `enum`, `table_lookup`,
+/// * form / lowering ops (`ic`, `enum`, `table_lookup`,
 ///   `apply_expression_template`) — consumed by their lowering passes;
 /// * the open rewrite-target tier (`grad`, `div`, `laplacian`, a typo'd
 ///   `"expp"`, a user op) — must be lowered to a stencil first.
@@ -145,8 +145,13 @@ pub fn is_evaluable_op(op: &str) -> bool {
         // Comparisons and booleans.
         | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "not"
         | "ifelse"
-        // Form ops with a defined runtime meaning here.
-        | "D" | "Pre" | "const"
+        // Form ops with a defined runtime meaning here. `true` is a nullary
+        // boolean LITERAL (esm-spec §4.2: "an always-true join / `filter`
+        // predicate"), not something a lowering pass consumes — the natural body
+        // for a semi-join, and the one op in the §4.2 table this evaluator used
+        // to have no answer for while `value_invention::vi_eval`, Python's
+        // `numpy_interpreter` and Julia's `_geo_compile` all evaluated it.
+        | "D" | "Pre" | "const" | "true"
         // Array / geometry ops.
         | "index" | "aggregate" | "makearray" | "reshape" | "transpose" | "concat"
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
@@ -324,6 +329,17 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
         // observeds compute fuel/table lookups via `fn` evaluates identically
         // here (the fire stack's `FuelModelLookup` is the motivating case).
         "fn" => eval_fn(node, ctx),
+
+        // The nullary boolean literal (esm-spec §4.2). This evaluator's boolean
+        // convention is already 1.0 / 0.0 — every comparison and `and`/`or`/
+        // `not` produces it — so the value is forced, not chosen, and it is
+        // what Python (`numpy_interpreter`: `if op == "true": return 1.0`),
+        // Julia (`geometry_compile.jl`: `_NK_LITERAL, literal=1.0`) and this
+        // crate's own `value_invention::vi_eval` (`Val::Bool(true)`) already
+        // produce. In a `sum_product` contraction it is the multiplicative
+        // identity, so `aggregate{expr: true}` COUNTS the admitted tuples —
+        // which is exactly what a semi-join wants to say.
+        "true" => Value::Scalar(1.0),
 
         // Unreachable by construction: EVERY path into this evaluator is gated.
         // The compiled-model path gates in `from_model` (`check_no_spatial_ops`),
@@ -3674,6 +3690,67 @@ mod evaluability_gate_tests {
                 "{op} is registry-legal and not evaluable, so it must be gated: {err:?}"
             );
         }
+    }
+
+    /// `true` is the one §4.2 core op that nothing downstream consumes — it is
+    /// a boolean LITERAL — so it belongs on the evaluable side of the audit
+    /// above, and its value is fixed by this evaluator's own 0/1 boolean
+    /// convention. Pinned as a number, not merely as "is_evaluable_op", because
+    /// the whole point of the fix is that `aggregate{expr: true}` COUNTS.
+    #[test]
+    fn the_true_literal_evaluates_to_one() {
+        assert!(crate::op_registry::is_core_op("true"), "§4.2 lists `true`");
+        assert!(is_evaluable_op("true"), "and this evaluator answers for it");
+        match eval_it(&node("true", Vec::new())).expect("`true` evaluates") {
+            Value::Scalar(v) => assert_eq!(v, 1.0),
+            other => panic!("`true` must be the scalar 1.0, got {other:?}"),
+        }
+    }
+
+    /// The §4.2 core set minus this evaluator's rules, pinned member by member.
+    /// Nine ops, each eliminated by an earlier stage — and NOTHING else, which
+    /// is what makes the build-time gate in `compile.rs` a complete answer to
+    /// the `unreachable!` backstop rather than a patch for the op that was
+    /// reported. A tenth entry appearing here means a new op reached the
+    /// registry without an evaluation rule and can panic; it must be given a
+    /// rule or added to this list deliberately.
+    #[test]
+    fn the_core_minus_evaluable_gap_is_exactly_nine_ops() {
+        const CORE: &[&str] = &[
+            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
+            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+            "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=",
+            ">", ">=", "and", "or", "not", "D", "ic", "Pre", "const", "true", "fn", "enum",
+            "table_lookup", "apply_expression_template", "aggregate", "makearray", "index",
+            "broadcast", "reshape", "transpose", "concat", "skolem", "rank", "distinct",
+            "argmin", "argmax", "intersect_polygon", "polygon_intersection_area",
+        ];
+        for op in CORE {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} is listed here but the registry does not carry it"
+            );
+        }
+        let mut gap: Vec<&str> = CORE
+            .iter()
+            .copied()
+            .filter(|op| !is_evaluable_op(op))
+            .collect();
+        gap.sort_unstable();
+        assert_eq!(
+            gap,
+            vec![
+                "apply_expression_template",
+                "argmax",
+                "argmin",
+                "distinct",
+                "enum",
+                "ic",
+                "rank",
+                "skolem",
+                "table_lookup",
+            ]
+        );
     }
 
     /// Small helper: `Result::unwrap_err` with the op name in the panic message.
