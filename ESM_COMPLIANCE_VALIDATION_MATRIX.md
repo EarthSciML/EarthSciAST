@@ -357,6 +357,42 @@ Where:
 > no document exercising it could be constructed here (the `integral` op's
 > evaluator ignores its bound fields), so it is recorded rather than widened.
 >
+> **The two Rust-side join defects, checked against Julia (2026-09-01).** Both
+> were reported downstream and fixed in Rust; neither reproduces in Julia, but
+> one leaves a REAL cross-binding divergence that Julia has not closed.
+>
+> * **F1 — a nested subsystem mount dropping a leaf's `join.on` key columns:
+>   NOT PRESENT in Julia.** Rust's `mount_subsystems` rewrote references through
+>   an `Expr::Variable` walker, and a key column is a plain STRING on the
+>   aggregate node, so the array path renamed everything about the leaf EXCEPT
+>   its join and the build then failed. Julia has one namespacing path, not a
+>   separate array one, and `namespacing.jl::_namespace_join` is on it.
+>   Verified on Rust's own fixtures (`subsystem_join/join_leaf.esm`,
+>   `host_mounts_join_leaf.esm`): flattened standalone the variables are
+>   `JoinLeaf.left_key` / `JoinLeaf.right_key` and the clause reads
+>   `("JoinLeaf.left_key", "JoinLeaf.right_key")`; flattened under the mount they
+>   are `Host.Leaf.*` and the clause reads `("Host.Leaf.left_key",
+>   "Host.Leaf.right_key")` — in lockstep, both times. End to end the leaf's join
+>   gives 2.0 with 2 driven visits standalone AND mounted, where pre-fix Rust
+>   failed the mounted build outright.
+> * **F4 — an aggregate binder that shadows `t`: the SYMPTOM is absent in Julia,
+>   the DIVERGENCE is not.** Rust resolved `t` by name BEFORE the loop bindings,
+>   so a binder spelled `t` was dead and the join matched nothing (0, silently);
+>   Rust now rejects such a binder at load with `reserved_index_symbol`. Julia
+>   has the OPPOSITE precedence: the loop binding is substituted into the body
+>   first, so the join is unaffected — measured on the same shape, ranges symbol
+>   `k`, `t` and `_var` all give 5.0 with 5 driven visits (data columns), and `k`
+>   and `t` both give 2.0 with 2 visits (index-set member columns). But the
+>   binder then SHADOWS the independent variable inside the node: with body
+>   `1.0 * t` at t = 7, symbol `k` gives 35.0 (5 terms x 7, correct) while symbol
+>   `t` gives 10.0 — the sum of the loop positions. `validate` reports valid in
+>   every one of these cases. So the same document is accepted by both bindings
+>   and computes DIFFERENT answers, which is the thing §5.5.1 rule 1 exists to
+>   prevent. Julia needs the mirror rejection, and the `reserved_index_symbol`
+>   code value is a cross-binding contract; NOT done here — it is a parse/load
+>   rule, not a `join.on` gate rule, and the Rust commit records it as owed by
+>   Julia, Python, TypeScript and Go alike.
+>
 > Julia has adopted `tests/valid/aggregate/join_on_data_columns.esm` into
 > `test/aggregate_conformance_test.jl`; Python's `test_aggregate_conformance.py`
 > auto-collects it already (it globs every aggregate fixture carrying an inline
