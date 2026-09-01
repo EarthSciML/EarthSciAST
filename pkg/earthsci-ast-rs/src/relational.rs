@@ -238,10 +238,19 @@ impl SemiringOp {
                 SemiringOp::Max => x.max(y),
             }),
             _ => {
-                let (x, y) = (a.as_f64(), b.as_f64());
+                // The float arm is a reduction's ⊕ and therefore one of the
+                // evaluator's operations: under `element_type: "Float32"`
+                // (esm-spec §11.3.1) it rounds per accumulation step, so an
+                // N-row group sums with N roundings rather than in a binary64
+                // accumulator that would be more accurate than the binary32
+                // reference. Identity under Float64, and the INTEGER arm above
+                // is exact and untouched. `round(x op y)` on binary32 operands
+                // is the binary32 operation (binary64 carries 53 ≥ 2·24+2 bits).
+                let prec = crate::precision::active();
+                let (x, y) = (prec.round(a.as_f64()), prec.round(b.as_f64()));
                 Num::Float(match self {
-                    SemiringOp::Sum => x + y,
-                    SemiringOp::Prod => x * y,
+                    SemiringOp::Sum => prec.round(x + y),
+                    SemiringOp::Prod => prec.round(x * y),
                     SemiringOp::Min => x.min(y),
                     SemiringOp::Max => x.max(y),
                 })

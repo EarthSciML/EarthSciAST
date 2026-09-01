@@ -75,6 +75,7 @@
         "extension",
         "intern",
         "performance",
+        "precision",
         "provider",
         "simulate_array",
         "wasm"

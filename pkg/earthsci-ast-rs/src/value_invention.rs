@@ -540,7 +540,9 @@ fn vi_eval(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueI
             if let Some(i) = n.as_i64() {
                 Ok(Val::Int(i))
             } else {
-                Ok(Val::Float(n.as_f64().unwrap()))
+                // Literal ingress rounds to the active precision, as the value
+                // evaluator's `Expr::Number` arm does.
+                Ok(Val::Float(crate::precision::round(n.as_f64().unwrap())))
             }
         }
         Value::String(s) => {
@@ -557,7 +559,9 @@ fn vi_eval(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, ValueI
                 .and_then(|v| v.as_str())
                 == Some("parameter")
             {
-                return Ok(Val::Float(ctx.param(s)?)); // scalar parameter
+                // Scalar parameter, rounded on ingress like every other value
+                // the evaluator did not itself produce.
+                return Ok(Val::Float(crate::precision::round(ctx.param(s)?)));
             }
             Ok(Val::Str(s.clone())) // relation tag ("edge"/"bin"/"pair")
         }
@@ -582,6 +586,7 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
             ))
         })
     };
+    let prec = crate::precision::active();
     match op {
         "index" => vi_index(node, ctx, bindings),
         "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
@@ -593,37 +598,53 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
         "ceil" => Ok(Val::Int(
             vi_eval(arg(0)?, ctx, bindings)?.as_f64()?.ceil() as i64
         )),
-        "/" => Ok(Val::Float(
-            vi_eval(arg(0)?, ctx, bindings)?.as_f64()?
-                / vi_eval(arg(1)?, ctx, bindings)?.as_f64()?,
-        )),
+        // Arithmetic rounds to the active precision (`crate::precision`).
+        //
+        // This evaluator is the RELATIONAL half of the pipeline: what it
+        // computes decides which tuples a distinct set, an arg-witness or a
+        // grouped aggregate contains — which rows the model has at all. Leaving
+        // it in binary64 while the value evaluator rounded would let a
+        // comparison here pick a different witness than the same comparison
+        // picks downstream, which is the worst possible place for a precision
+        // seam. `prec.round(a op b)` for `+ - * /` on binary32 operands IS the
+        // binary32 operation (binary64 carries 53 bits >= 2*24+2, so the double
+        // rounding is innocuous), and it is the identity under Float64, so the
+        // default path is bit-unchanged.
+        "/" => {
+            let a = vi_eval(arg(0)?, ctx, bindings)?.as_f64()?;
+            let b = vi_eval(arg(1)?, ctx, bindings)?.as_f64()?;
+            Ok(Val::Float(prec.round(a / b)))
+        }
         "*" => {
             let mut acc = 1.0;
             for a in args {
-                acc *= vi_eval(a, ctx, bindings)?.as_f64()?;
+                acc = prec.round(acc * vi_eval(a, ctx, bindings)?.as_f64()?);
             }
             Ok(Val::Float(acc))
         }
         "+" => {
             let mut acc = 0.0;
             for a in args {
-                acc += vi_eval(a, ctx, bindings)?.as_f64()?;
+                acc = prec.round(acc + vi_eval(a, ctx, bindings)?.as_f64()?);
             }
             Ok(Val::Float(acc))
         }
         "-" => {
             if args.len() == 1 {
+                // A sign flip is exact in every binary format.
                 Ok(Val::Float(-vi_eval(arg(0)?, ctx, bindings)?.as_f64()?))
             } else {
-                Ok(Val::Float(
-                    vi_eval(arg(0)?, ctx, bindings)?.as_f64()?
-                        - vi_eval(arg(1)?, ctx, bindings)?.as_f64()?,
-                ))
+                let a = vi_eval(arg(0)?, ctx, bindings)?.as_f64()?;
+                let b = vi_eval(arg(1)?, ctx, bindings)?.as_f64()?;
+                Ok(Val::Float(prec.round(a - b)))
             }
         }
         "<" | ">" | "<=" | ">=" | "==" | "!=" => {
-            let a = vi_eval(arg(0)?, ctx, bindings)?.as_f64()?;
-            let b = vi_eval(arg(1)?, ctx, bindings)?.as_f64()?;
+            // Compare at the WORKING precision: two values that round to the
+            // same binary32 number must compare equal, exactly as the value
+            // evaluator's comparison kernels do.
+            let a = prec.round(vi_eval(arg(0)?, ctx, bindings)?.as_f64()?);
+            let b = prec.round(vi_eval(arg(1)?, ctx, bindings)?.as_f64()?);
             Ok(Val::Bool(match op {
                 "<" => a < b,
                 ">" => a > b,
@@ -696,7 +717,9 @@ fn vi_index(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Value
             idx.len()
         ));
     }
-    Ok(Val::Float(arr[IxDyn(&idx)]))
+    // A const-array factor is build-time data the evaluator did not produce,
+    // so it rounds on read (`crate::precision`).
+    Ok(Val::Float(crate::precision::round(arr[IxDyn(&idx)])))
 }
 
 /// Resolve a possibly-out-of-range 1-based index `one_based` in dimension `d`
