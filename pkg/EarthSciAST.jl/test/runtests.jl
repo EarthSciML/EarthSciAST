@@ -44,6 +44,11 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
 
     # ---- Serialization round-trips (src/serialize.jl + conformance adapter) ----
     include("round_trip_regression_test.jl")
+    # `save(load(F))` against **F itself** over the corpus. A different question
+    # from the conformance test below, which compares emit pass 2 against pass
+    # 3: a field lost on the FIRST load is invisible to a fixed-point check,
+    # because passes 2 and 3 agree perfectly about not having it.
+    include("corpus_fidelity_test.jl")
     include("conformance_round_trip_test.jl")
     include("conformance_pushdown_test.jl")
 

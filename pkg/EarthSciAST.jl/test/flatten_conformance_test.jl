@@ -228,16 +228,59 @@ promoting the parameter to a derived variable. The document flattens cleanly in
 both bindings now and every field is compared. The RULING itself no longer has a
 corpus case, so it is pinned locally below on a document built here — losing the
 refusal must not lose the diagnostic.)
+
+- `parameters.update_kinds` / `discrete_parameters` on `minimal_chemistry`,
+  `full_coupled` and `metadata_inheritance_coupled`: a REACTION SYSTEM's
+  parameter that declares an `update` block. Each of these three fixtures has
+  exactly one — `SimpleOzone.T`, `AtmosphericChemistry.T`, `AtmosphericChemistry.T`
+  — declaring `update: {kind: "data", source: …, from: {file_variable: …}}`.
+  esm-spec §5.4 makes that block the only channel binding a parameter to a data
+  source, and §6.3.1 defines `discrete_parameters` as the parameters carrying
+  any non-`wiener` update, so Julia reports `["data"]` and lists the parameter
+  as discrete.
+
+  The corpus records `[]` and omits it, because EVERY binding drops a reaction
+  system's parameter `update` when lowering it to a `ModelVariable` — Rust
+  (`pkg/earthsci-ast-rs/src/reactions.rs`, `update: None`), Go
+  (`pkg/earthsci-ast-go/pkg/esm/reactions.go`) and Python
+  (`pkg/earthsci-ast-py/src/earthsci_ast/reactions.py`) all build the variable
+  from `units`/`default`/`description` alone. Julia did too until the lowering
+  sites (`src/reactions.jl`, `src/namespacing.jl`) were taught to carry the
+  §6.3 value model across.
+
+  So this is NOT "Julia is wrong": the corpus entry encodes the shared lowering
+  drop, and regenerating it from Julia alone would flip the other four bindings
+  red. Six corpus entries would change, and they are the whole of it:
+    tests/conformance/flatten/cases.json
+      minimal_chemistry            parameters[2].update_kinds [] -> ["data"]
+                                   discrete_parameters + "SimpleOzone.T"
+      full_coupled                 parameters[5].update_kinds [] -> ["data"]
+                                   discrete_parameters + "AtmosphericChemistry.T"
+      metadata_inheritance_coupled parameters[2].update_kinds [] -> ["data"]
+                                   discrete_parameters + "AtmosphericChemistry.T"
+  That is a cross-binding change and belongs with the other bindings' lowering
+  fix, not here. Julia's answers are pinned locally below.
+
+  Note the parameter does NOT gain a `loader_fields` entry, and `loader_fields`
+  still matches the corpus exactly: `_collect_loader_fields!` (src/flatten.jl)
+  walks models and their subsystems only, so a reaction system's data binding
+  is classified but never fetched. That half-implemented path predates this and
+  is unchanged by it — the classification is now honest about the declaration
+  while the fetch side is still missing. It is pinned below so it cannot drift
+  unnoticed.
 """
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
-    "full_coupled" => ["equations"],
+    "full_coupled" => ["equations",
+                       "parameters.update_kinds", "discrete_parameters"],
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["state_variables", "observed_variables", "equations"],
     "expression_templates_arrhenius" => ["equations"],
     "autocatalytic_reaction" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
-    "minimal_chemistry" => ["equations"],
-    "metadata_inheritance_coupled" => ["equations"],
+    "minimal_chemistry" => ["equations",
+                            "parameters.update_kinds", "discrete_parameters"],
+    "metadata_inheritance_coupled" => ["equations",
+                                       "parameters.update_kinds", "discrete_parameters"],
     "bare_reference_resolution" => ["discrete_events"],
     "operator_compose_translate" => ["equations", "independent_variables"],
 )
@@ -248,6 +291,10 @@ const _FC_DIVERGENCES = Dict{String,Vector{String}}(
 # belongs in the corpus's own `refusals` array, which the last testset drives.
 
 _fc_skips(id) = get(_FC_DIVERGENCES, id, String[])
+# An entry is either a whole corpus key (`"equations"`) or ONE field of a
+# variable-list key (`"parameters.update_kinds"`). The second form exists so a
+# divergence about a single field does not have to blind the comparison to that
+# key's names, units, defaults and shapes as well.
 _fc_compare(id, key) = !(key in _fc_skips(id))
 
 # ── recording: the Julia flattened system, in the corpus's language-neutral form ──
@@ -374,6 +421,7 @@ _fc_rule_kind(s) = first(split(String(s), '('))
 """Compare one variable record field by field, so a failure names the field."""
 function _fc_check_variable(id, key, i, exp, act, lifted)
     for f in ("name", "units", "update_kinds", "distribution_kind", "source_system")
+        _fc_compare(id, "$(key).$(f)") || continue
         @test (id, key, i, f, act[f]) == (id, key, i, f, exp[f])
     end
     @test (id, key, i, "role", _fc_role(act["role"])) ==
@@ -534,6 +582,45 @@ end
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "full_coupled.esm")))
         @test String[String(iv) for iv in flat.independent_variables] ==
               ["t", "lon", "lat", "lev"]
+    end
+
+    @testset "a reaction system's parameter keeps its `update` through flatten" begin
+        # The corpus records `update_kinds: []` and omits these parameters from
+        # `discrete_parameters`, because every other binding drops a reaction
+        # system's parameter `update` when lowering it to a `ModelVariable`. See
+        # the `_FC_DIVERGENCES` docstring for the six corpus entries that would
+        # have to change and why regenerating them is a cross-binding decision.
+        #
+        # esm-spec §5.4: an `update` block is the ONLY channel binding a
+        # parameter to a data source, so dropping it does not lose annotation —
+        # it turns a data-driven parameter into a constant. §6.3.1 then makes
+        # such a parameter DISCRETE.
+        for (fixture, param) in (("minimal_chemistry", "SimpleOzone.T"),
+                                 ("full_coupled", "AtmosphericChemistry.T"),
+                                 ("metadata_inheritance_coupled",
+                                  "AtmosphericChemistry.T"))
+            flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
+                                              "$(fixture).esm")))
+            v = flat.parameters[param]
+            @test (fixture, param, _fc_update_kinds(v)) == (fixture, param, ["data"])
+            @test (fixture, param, param in keys(flat.discrete_parameters)) ==
+                  (fixture, param, true)
+            # ... and the sibling parameters that declare `update: null` stay
+            # empty, which is what rules out the update being misassigned across
+            # the parameter list.
+            for (n, other) in flat.parameters
+                n == param && continue
+                startswith(n, first(split(param, '.')) * ".") || continue
+                @test (fixture, n, _fc_update_kinds(other)) == (fixture, n, String[])
+            end
+            # The other half of §8.5 is NOT implemented for reaction systems:
+            # `_collect_loader_fields!` walks models only, so this parameter is
+            # classified discrete but nothing fetches it. Pinned so the gap is
+            # visible here rather than only as a runtime surprise.
+            @test (fixture, "loader_fields",
+                   param in String[lf.name for lf in flat.loader_fields]) ==
+                  (fixture, "loader_fields", false)
+        end
     end
 
     @testset "domain element_type / array_type survive flatten" begin

@@ -410,6 +410,7 @@ function _intern_model(model::Model, ctx::_InternCtx)::Model
      nsubs === subs) && return model
     return Model(nvars, eqs, model.discrete_events, model.continuous_events,
                  nsubs; tolerance=model.tolerance, tests=model.tests,
+                 analyses=model.analyses,
                  initialization_equations=ieqs, guesses=ng,
-                 system_kind=model.system_kind)
+                 system_kind=model.system_kind, reference=model.reference)
 end

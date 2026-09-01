@@ -100,13 +100,20 @@ function derive_odes(rxn_sys::ReactionSystem)::Model
         )
     end
 
-    # Add parameter variables for all parameters
+    # Add parameter variables for all parameters. The §6.3 value model
+    # (`shape` / `distribution` / `update`) travels with them: `update` is the
+    # only channel binding a parameter to a data source (esm-spec §5.4), so
+    # dropping it here would lower a data-driven parameter to a constant.
     for param in rxn_sys.parameters
         variables[param.name] = ModelVariable(
             ParameterVariable,
             default=param.default,
             description=param.description,
-            units=param.units
+            units=param.units,
+            default_units=param.default_units,
+            shape=param.shape,
+            distribution=param.distribution,
+            update=param.update
         )
     end
 

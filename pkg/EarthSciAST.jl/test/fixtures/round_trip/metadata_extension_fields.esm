@@ -1,0 +1,34 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MetadataExtensionFields",
+    "description": "The four Metadata properties no corpus fixture exercised: the three discretize() diagnostics and the reserved x_esd extension point. esm-schema.json's description of x_esd is normative about this: core tooling MUST NOT assign meaning to its contents and MUST preserve them across parse -> emit like any other metadata field.",
+    "authors": ["Test Author"],
+    "license": "AGPL-3.0",
+    "tags": ["round-trip"],
+    "system_class": "dae",
+    "dae_info": {
+      "algebraic_equation_count": 1,
+      "per_model": { "Constrained": 1 }
+    },
+    "discretized_from": { "name": "ConstrainedSource" },
+    "x_esd": {
+      "rule_library": "earthscidiscretizations",
+      "rule_id": "upwind1",
+      "nested": { "arbitrary": ["free", "form", 3], "flag": true }
+    }
+  },
+  "models": {
+    "Constrained": {
+      "variables": {
+        "u": { "type": "unknown", "units": "kg", "default": 1.0 },
+        "w": { "type": "unknown", "units": "kg", "default": 0.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": { "op": "*", "args": [{ "op": "-", "args": [0.0, "k"] }, "u"] } },
+        { "lhs": "w", "rhs": { "op": "-", "args": [1.0, "u"] } }
+      ]
+    }
+  }
+}

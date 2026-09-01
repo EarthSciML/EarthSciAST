@@ -1,0 +1,128 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ReactionSystemFullSurface",
+    "description": "Every esm-schema.json ReactionSystem property in one document. The five below the reaction block (constraint_equations, discrete_events, continuous_events, subsystems, analyses) had NO fixture anywhere in the corpus, so Julia's load could — and did — drop them with nothing to notice. `subsystems` is the load-bearing one: the field existed on the struct but was never populated or emitted, so a hierarchy flattened to its root at load."
+  },
+  "reaction_systems": {
+    "Troposphere": {
+      "reference": {
+        "notes": "Root system: two-step decay with a hierarchy, events and a constraint."
+      },
+      "species": {
+        "A": { "units": "mol/L", "default": 1.0 },
+        "B": { "units": "mol/L", "default": 0.0 },
+        "total": { "units": "mol/L", "default": 1.0 }
+      },
+      "parameters": {
+        "k": { "units": "1/s", "default": 0.1, "description": "First-order rate constant" },
+        "boost": { "units": "1", "default": 1.0 }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "A_to_B",
+          "substrates": [{ "species": "A", "stoichiometry": 1 }],
+          "products": [{ "species": "B", "stoichiometry": 1 }],
+          "rate": "k"
+        }
+      ],
+      "constraint_equations": [
+        {
+          "lhs": "total",
+          "rhs": { "op": "+", "args": ["A", "B"] },
+          "_comment": "Algebraic mass-conservation constraint (schema ReactionSystem.constraint_equations)."
+        }
+      ],
+      "discrete_events": [
+        {
+          "name": "periodic_spike",
+          "trigger": { "type": "periodic", "interval": 10.0, "initial_offset": 2.5 },
+          "affects": [
+            { "lhs": "A", "rhs": { "op": "+", "args": [{ "op": "Pre", "args": ["A"] }, 0.5] } }
+          ],
+          "reinitialize": true,
+          "description": "Adds A on a fixed schedule."
+        }
+      ],
+      "continuous_events": [
+        {
+          "name": "depletion_crossing",
+          "conditions": [{ "op": "-", "args": ["A", 0.05] }],
+          "affects": [{ "lhs": "B", "rhs": { "op": "Pre", "args": ["B"] } }],
+          "affect_neg": [{ "lhs": "B", "rhs": { "op": "*", "args": [{ "op": "Pre", "args": ["B"] }, 0.5] } }],
+          "root_find": "all",
+          "reinitialize": true,
+          "description": "Different affects on the two crossing directions."
+        }
+      ],
+      "subsystems": {
+        "Aerosol": {
+          "reference": { "notes": "Depth-1 child." },
+          "species": {
+            "P": { "units": "mol/L", "default": 0.2 },
+            "Q": { "units": "mol/L", "default": 0.0 }
+          },
+          "parameters": {
+            "kp": { "units": "1/s", "default": 0.02 }
+          },
+          "reactions": [
+            {
+              "id": "R2",
+              "substrates": [{ "species": "P", "stoichiometry": 1 }],
+              "products": [{ "species": "Q", "stoichiometry": 1 }],
+              "rate": "kp"
+            }
+          ],
+          "subsystems": {
+            "Nucleation": {
+              "species": {
+                "N": { "units": "mol/L", "default": 0.0 }
+              },
+              "parameters": {
+                "kn": { "units": "1/s", "default": 0.001 }
+              },
+              "reactions": [
+                {
+                  "id": "R3",
+                  "substrates": null,
+                  "products": [{ "species": "N", "stoichiometry": 1 }],
+                  "rate": "kn"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "tolerance": { "rel": 1e-06 },
+      "tests": [
+        {
+          "id": "decay_holds",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [{ "variable": "A", "time": 0.0, "expected": 1.0 }]
+        }
+      ],
+      "analyses": [
+        {
+          "id": "decay_trace",
+          "description": "Inline illustrative analysis, carried verbatim.",
+          "initial_state": { "A": 1.0, "B": 0.0 },
+          "parameters": { "k": 0.1 },
+          "time_span": { "start": 0.0, "end": 50.0 },
+          "plots": [
+            {
+              "id": "ab_vs_time",
+              "type": "line",
+              "x": { "variable": "t", "label": "time (s)" },
+              "y": { "variable": "A", "label": "concentration (mol/L)" },
+              "series": [
+                { "name": "A", "variable": "A" },
+                { "name": "B", "variable": "B" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

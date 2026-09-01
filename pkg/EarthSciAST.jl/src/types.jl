@@ -660,6 +660,17 @@ Event triggered by zero-crossing of condition expressions.
 struct ContinuousEvent <: EventType
     conditions::Vector{ASTExpr}
     affects::Vector{AffectEquation}
+    # The three remaining `ContinuousEvent` properties esm-schema.json defines.
+    # `affect_neg` is the DIFFERENT-DIRECTION affect set (absent ⇒ `affects`
+    # applies to both crossings), `root_find` the crossing direction
+    # ("left" | "right" | "all"), `reinitialize` whether to reinitialize after
+    # the event. All three are `Nothing`-able so PRESENCE round-trips: the
+    # schema gives `root_find` and `reinitialize` defaults, and emitting a
+    # default the author did not write is as much a rewrite as dropping one
+    # they did. `CouplingEvent` already carries this exact trio.
+    affect_neg::Union{Vector{AffectEquation},Nothing}
+    root_find::Union{String,Nothing}
+    reinitialize::Union{Bool,Nothing}
     description::Union{String,Nothing}
     # Human-readable identifier (schema `ContinuousEvent.name`). Carried so an
     # authored event survives parse → emit, and so the
@@ -668,8 +679,10 @@ struct ContinuousEvent <: EventType
 
     # Constructor with optional description / name
     ContinuousEvent(conditions::Vector{ASTExpr}, affects::Vector{AffectEquation};
+                    affect_neg=nothing, root_find=nothing, reinitialize=nothing,
                     description=nothing, name=nothing) =
-        new(conditions, affects, description, name)
+        new(conditions, affects, affect_neg, root_find, reinitialize,
+            description, name)
 end
 
 """
@@ -690,6 +703,10 @@ and a parameter that changes during a run declares its own
 struct DiscreteEvent <: EventType
     trigger::DiscreteEventTrigger
     affects::Vector{AffectEquation}
+    # Whether to reinitialize the system after the event (schema
+    # `DiscreteEvent.reinitialize`). The schema gives it NO default, so its
+    # presence is meaningful and it is `Nothing`-able to carry that.
+    reinitialize::Union{Bool,Nothing}
     description::Union{String,Nothing}
     # Human-readable identifier (schema `DiscreteEvent.name`). Carried so an
     # authored event survives parse → emit, and so the
@@ -698,8 +715,8 @@ struct DiscreteEvent <: EventType
 
     # Constructor with optional description / name
     DiscreteEvent(trigger::DiscreteEventTrigger, affects::Vector{AffectEquation};
-                  description=nothing, name=nothing) =
-        new(trigger, affects, description, name)
+                  reinitialize=nothing, description=nothing, name=nothing) =
+        new(trigger, affects, reinitialize, description, name)
 end
 
 # ========================================
@@ -1314,22 +1331,33 @@ struct Model <: SubsystemNode
     subsystems::OrderedDict{String,SubsystemNode}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
+    # Inline illustrative analyses (schema `Model.analyses`): run configuration
+    # plus derived plots. Kept VERBATIM — nothing in this package runs them, so
+    # their only job is to survive parse → emit; the alternative on offer was
+    # dropping every one of them.
+    analyses::Vector{Any}
     initialization_equations::Vector{Equation}
     guesses::Dict{String,Union{Float64,ASTExpr}}
     system_kind::Union{String,Nothing}
+    # The component's own citation (schema `Model.reference`). It was the
+    # most-dropped field in the corpus — most `tests/valid` fixtures carry one
+    # and every one of them lost it — and nothing could notice, because the
+    # `RECORD_FIELD_TABLES` fieldnames assert pins table rows to the STRUCT: a
+    # field missing from both is missing from both wire directions in silence.
+    reference::Union{Reference,Nothing}
 
     # Primary constructor with separate event arrays
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation},
           discrete_events::Vector{DiscreteEvent}, continuous_events::Vector{ContinuousEvent},
           subsystems::AbstractDict{String};
-          tolerance=nothing, tests=InlineTest[],
+          tolerance=nothing, tests=InlineTest[], analyses=Any[],
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
-          system_kind=nothing) =
+          system_kind=nothing, reference=nothing) =
         new(OrderedDict{String,ModelVariable}(variables), equations,
             discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
-            tolerance, tests,
-            initialization_equations, guesses, system_kind)
+            tolerance, tests, Vector{Any}(analyses),
+            initialization_equations, guesses, system_kind, reference)
 
     # Convenience constructor with optional event arrays and subsystems.
     Model(variables::AbstractDict{String,ModelVariable}, equations::Vector{Equation};
@@ -1338,13 +1366,15 @@ struct Model <: SubsystemNode
           subsystems=OrderedDict{String,SubsystemNode}(),
           tolerance=nothing,
           tests=InlineTest[],
+          analyses=Any[],
           initialization_equations=Equation[],
           guesses=Dict{String,Union{Float64,ASTExpr}}(),
-          system_kind=nothing) =
+          system_kind=nothing,
+          reference=nothing) =
         new(OrderedDict{String,ModelVariable}(variables), equations,
             discrete_events, continuous_events, OrderedDict{String,SubsystemNode}(subsystems),
-            tolerance, tests,
-            initialization_equations, guesses, system_kind)
+            tolerance, tests, Vector{Any}(analyses),
+            initialization_equations, guesses, system_kind, reference)
 end
 
 """
@@ -1368,18 +1398,42 @@ end
 """
     Parameter
 
-Model parameter with name, default value, and optional metadata.
+A reaction system's parameter (`reaction_systems.*.parameters.*`) — the
+reaction-side twin of a [`ModelVariable`](@ref) of `ParameterVariable` type,
+and it carries the SAME value model (esm-spec §5.4, §6.3): a `default`, a
+`distribution`, a `shape`, and an `update` rule set.
+
+`esm-schema.json`'s `Parameter` declares NO required properties, so `default`
+is optional: a parameter valued by a `distribution` — or one whose whole value
+is supplied by an `update` binding to a data source — is a legal document with
+no `default` at all. It is `Union{Float64,Nothing}` for exactly that reason.
+
+`shape` / `distribution` / `update` are here for the same reason they are on
+`ModelVariable`: the schema defines them and a field this struct does not hold
+is a field `load` silently drops. `update` is the load-bearing one — an
+`update` block is the only channel binding a parameter to a data source
+(§5.4), so dropping it does not just lose annotation, it turns a data-driven
+parameter into a constant.
 """
 struct Parameter
     name::String
-    default::Float64
+    default::Union{Float64,Nothing}
     description::Union{String,Nothing}
     units::Union{String,Nothing}
     default_units::Union{String,Nothing}
+    shape::Union{Vector{String},Nothing}
+    distribution::Union{Distribution,Nothing}
+    update::Union{Vector{ParameterUpdate},Nothing}
 
-    # Constructor with optional parameters
-    Parameter(name::String, default::Float64; description=nothing, units=nothing, default_units=nothing) =
-        new(name, default, description, units, default_units)
+    # Constructor with optional parameters. `default` stays POSITIONAL (every
+    # existing caller passes it there) but is now optional and nullable.
+    Parameter(name::String, default::Union{Real,Nothing}=nothing;
+              description=nothing, units=nothing, default_units=nothing,
+              shape=nothing, distribution=nothing, update=nothing) =
+        new(name, default === nothing ? nothing : Float64(default),
+            description, units, default_units,
+            shape === nothing ? nothing : Vector{String}(shape),
+            distribution, _coerce_update_vector(update))
 end
 
 
@@ -1490,6 +1544,10 @@ Cross-system event involving variables from multiple coupled systems.
 """
 struct CouplingEvent <: CouplingEntry
     event_type::String
+    # Human-readable identifier (schema `CouplingEvent.name`), carried for the
+    # same reason `ContinuousEvent`/`DiscreteEvent` carry theirs: an authored
+    # event must survive parse → emit.
+    name::Union{String,Nothing}
     conditions::Union{Vector{ASTExpr},Nothing}
     trigger::Union{DiscreteEventTrigger,Nothing}
     affects::Vector{AffectEquation}
@@ -1499,9 +1557,10 @@ struct CouplingEvent <: CouplingEntry
     description::Union{String,Nothing}
 
     CouplingEvent(event_type::String, affects::Vector{AffectEquation};
-                  conditions=nothing, trigger=nothing, affect_neg=nothing,
+                  name=nothing, conditions=nothing, trigger=nothing, affect_neg=nothing,
                   root_find=nothing, reinitialize=nothing, description=nothing) =
-        new(event_type, conditions, trigger, affects, affect_neg, root_find, reinitialize, description)
+        new(event_type, name, conditions, trigger, affects, affect_neg, root_find,
+            reinitialize, description)
 end
 
 """
@@ -1555,11 +1614,18 @@ struct DataSourceTemporal
     frequency::Union{String,Nothing}
     records_per_file::Union{Int,String,Nothing}  # integer or "auto"
     time_variable::Union{String,Nothing}
+    # How many time records the source returns PER QUERY TIME — 1 (or absent):
+    # the single at-or-before record, time axis dropped; 2: the bracketing pair
+    # with the time axis kept at length 2 so a model can interpolate. Distinct
+    # from `records_per_file`, which counts records IN one file, and the only
+    # `DataSourceTemporal` property this struct did not carry.
+    records_per_sample::Union{Int,Nothing}
 
     DataSourceTemporal(; start=nothing, stop=nothing, file_period=nothing,
                        frequency=nothing, records_per_file=nothing,
-                       time_variable=nothing) =
-        new(start, stop, file_period, frequency, records_per_file, time_variable)
+                       time_variable=nothing, records_per_sample=nothing) =
+        new(start, stop, file_period, frequency, records_per_file, time_variable,
+            records_per_sample)
 end
 
 """
@@ -1600,11 +1666,22 @@ reference. A model consumes one by declaring a PARAMETER whose
 `variables` map is therefore gone from this struct: the binding lives on the
 consumer.
 
+Carries every property esm-schema.json's `DataSource` defines — the schema sets
+`additionalProperties: false`, so the list is closed — for the reason
+[`Domain`](@ref) states: a property this struct does not hold is a property
+`load` silently drops. The four decode/slice/filter blocks are kept VERBATIM
+(raw JSON) because nothing in this package reads them back; their whole job is
+to reach the reader that does.
+
 Fields:
 - `kind`: "grid" | "points" | "static" (structural kind; scientific role goes in `metadata.tags`)
 - `source`: [`DataSourceLocation`](@ref) with url_template + optional mirrors
 - `temporal`: optional [`DataSourceTemporal`](@ref)
 - `determinism`: optional [`DataSourceDeterminism`](@ref)
+- `reader_options`: format-specific DECODE options passed to the reader verbatim (§8)
+- `select`: source-level axis selection (schema `DataSourceSelect`)
+- `record_filter`: which records of a `points` source are DELIVERED (schema `DataSourceRecordFilter`)
+- `extent`: binds the source's delivered record count to a metaparameter (schema `DataSourceExtent`)
 - `reference`: optional academic/data-source citation
 - `metadata`: optional free-form map (conventionally carries a `tags` array)
 """
@@ -1613,15 +1690,24 @@ struct DataSource
     source::DataSourceLocation
     temporal::Union{DataSourceTemporal,Nothing}
     determinism::Union{DataSourceDeterminism,Nothing}
+    reader_options::Union{Dict{String,Any},Nothing}
+    select::Union{Dict{String,Any},Nothing}
+    record_filter::Union{Dict{String,Any},Nothing}
+    extent::Union{Dict{String,Any},Nothing}
     reference::Union{Reference,Nothing}
     metadata::Union{Dict{String,Any},Nothing}
 
     DataSource(kind::String, source::DataSourceLocation;
                temporal=nothing,
                determinism=nothing,
+               reader_options=nothing,
+               select=nothing,
+               record_filter=nothing,
+               extent=nothing,
                reference=nothing,
                metadata=nothing) =
-        new(kind, source, temporal, determinism, reference, metadata)
+        new(kind, source, temporal, determinism, reader_options, select,
+            record_filter, extent, reference, metadata)
 end
 
 # ========================================
@@ -1721,27 +1807,60 @@ end
     ReactionSystem
 
 Collection of chemical reactions with associated species, supporting hierarchical composition.
+
+Carries every property esm-schema.json's `ReactionSystem` defines. Most of
+them used to be absent, and each absence had the same shape: the field existed
+in the schema, fixtures used it, and `load` dropped it with nothing to notice —
+`subsystems` was the worst of them, because the field WAS on this struct but
+`coerce_reaction_system` never populated it and `serialize_reaction_system`
+never emitted it, so a reaction-system hierarchy silently flattened to its root
+on load.
+
+`constraint_equations` (additional algebraic/ODE constraints),
+`continuous_events` / `discrete_events` and `analyses` are the other four.
+`analyses` is kept VERBATIM for the reason [`Model`](@ref)'s is.
 """
 struct ReactionSystem
     species::Vector{Species}
     reactions::Vector{Reaction}
     parameters::Vector{Parameter}
+    constraint_equations::Vector{Equation}
+    discrete_events::Vector{DiscreteEvent}
+    continuous_events::Vector{ContinuousEvent}
     subsystems::OrderedDict{String,ReactionSystem}
     tolerance::Union{Tolerance,Nothing}
     tests::Vector{InlineTest}
+    analyses::Vector{Any}
+    reference::Union{Reference,Nothing}
 
     # Constructor with optional parameters and subsystems
     ReactionSystem(species::Vector{Species}, reactions::Vector{Reaction};
                    parameters=Parameter[], subsystems=OrderedDict{String,ReactionSystem}(),
-                   tolerance=nothing, tests=InlineTest[]) =
-        new(species, reactions, parameters,
-            OrderedDict{String,ReactionSystem}(subsystems), tolerance, tests)
+                   constraint_equations=Equation[],
+                   discrete_events=DiscreteEvent[],
+                   continuous_events=ContinuousEvent[],
+                   tolerance=nothing, tests=InlineTest[], analyses=Any[],
+                   reference=nothing) =
+        new(species, reactions, parameters, constraint_equations,
+            discrete_events, continuous_events,
+            OrderedDict{String,ReactionSystem}(subsystems), tolerance, tests,
+            Vector{Any}(analyses), reference)
 end
 
 """
     Metadata
 
 Authorship, provenance, and description metadata.
+
+Carries every property esm-schema.json's `Metadata` defines — it too sets
+`additionalProperties: false`, so the list is closed. Beyond the authorship
+block that is the three `discretize()` diagnostics (`system_class`, `dae_info`,
+`discretized_from`; RFC §12) and `x_esd`.
+
+`x_esd`'s schema description is NORMATIVE about this struct's job: it is a
+reserved extension point whose contents "core tooling MUST NOT assign meaning
+to" and "MUST preserve … across parse → emit like any other metadata field".
+All four are therefore kept VERBATIM and never interpreted.
 """
 struct Metadata
     name::String
@@ -1752,6 +1871,10 @@ struct Metadata
     modified::Union{String,Nothing} # ISO 8601 timestamp
     tags::Vector{String}
     references::Vector{Reference}
+    system_class::Union{String,Nothing}          # "ode" | "dae"
+    dae_info::Union{Dict{String,Any},Nothing}
+    discretized_from::Union{Dict{String,Any},Nothing}
+    x_esd::Union{Dict{String,Any},Nothing}
 
     # Constructor with optional parameters
     Metadata(name::String;
@@ -1761,8 +1884,13 @@ struct Metadata
              created=nothing,
              modified=nothing,
              tags=String[],
-             references=Reference[]) =
-        new(name, description, authors, license, created, modified, tags, references)
+             references=Reference[],
+             system_class=nothing,
+             dae_info=nothing,
+             discretized_from=nothing,
+             x_esd=nothing) =
+        new(name, description, authors, license, created, modified, tags,
+            references, system_class, dae_info, discretized_from, x_esd)
 end
 
 """
@@ -1893,6 +2021,18 @@ struct EsmFile
     # dimension/auxiliary coordinate emission. `nothing` when the document declares none.
     coordinates::Union{Dict{String,Any},Nothing}
 
+    # Coupling-library formal component roles (esm-spec §10.9), PRESERVED
+    # VERBATIM like `metaparameters` and `coordinates`.
+    #
+    # Presence of this key is the SOLE positive identifier of the
+    # coupling-library file kind (`_is_coupling_library_doc`,
+    # coupling_imports.jl, tests it and nothing else). Dropping it therefore did
+    # not lose an annotation — it destroyed a coupling library's identity on
+    # round trip: the file was a library on disk and an ordinary document the
+    # instant it was loaded and written back. That is the same defect already
+    # fixed for the top-level `expression_templates` registry above.
+    coupling_roles::Union{Dict{String,Any},Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -1906,7 +2046,8 @@ struct EsmFile
             expression_templates=nothing,
             metaparameters=nothing,
             component_templates=nothing,
-            coordinates=nothing) =
+            coordinates=nothing,
+            coupling_roles=nothing) =
         new(esm, metadata,
             models === nothing ? nothing : OrderedDict{String,Model}(models),
             reaction_systems === nothing ? nothing :
@@ -1919,7 +2060,7 @@ struct EsmFile
             expression_templates, metaparameters,
             component_templates === nothing ? nothing :
                 OrderedDict{String,Any}(component_templates),
-            coordinates)
+            coordinates, coupling_roles)
 end
 
 # ========================================
@@ -2358,6 +2499,12 @@ const RECORD_FIELD_TABLES = (
         (f = :tags,        wire = "tags",        kind = :string_vec, mode = :opt_empty, default = :(String[]), emit = :nonempty),
         (f = :references,  wire = "references",  kind = :record_vec, of = :reference, eltype = :Reference,
          mode = :opt_empty, default = :(Reference[]), emit = :nonempty),
+        # `discretize()` diagnostics (RFC §12) and the reserved `x_esd`
+        # extension point — all four kept VERBATIM, never interpreted here.
+        (f = :system_class,      wire = "system_class",      kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :dae_info,          wire = "dae_info",          kind = :raw,    mode = :opt, emit = :nonnothing),
+        (f = :discretized_from,  wire = "discretized_from",  kind = :raw,    mode = :opt, emit = :nonnothing),
+        (f = :x_esd,             wire = "x_esd",             kind = :raw,    mode = :opt, emit = :nonnothing),
     )),
     (T = :Tolerance, fn = :tolerance, rows = (
         (f = :abs, wire = "abs", kind = :float, mode = :opt, emit = :nonnothing),
@@ -2375,10 +2522,25 @@ const RECORD_FIELD_TABLES = (
         (f = :constant,      wire = "constant",      kind = :bool,   mode = :opt, emit = :nonnothing),
     )),
     (T = :Parameter, fn = :parameter, injected = true, rows = (
-        (f = :default,       wire = "default",       kind = :float,  mode = :req, emit = :nonnothing, pos = true),
+        # `default` is OPTIONAL: esm-schema.json's `Parameter` declares no
+        # `required` list, so a parameter valued by a `distribution` (or wholly
+        # by a data-source `update`) legally carries none. `mode = :req` here
+        # made such a document a hard `KeyError` at load — not a drop, a
+        # rejection of a conforming file.
+        (f = :default,       wire = "default",       kind = :float,  mode = :opt, emit = :nonnothing, pos = true),
         (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
         (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
         (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :shape,         wire = "shape",         kind = :string_vec, mode = :opt, emit = :nonnothing),
+        # The §6.3 value model, shared verbatim with `ModelVariable`: both name
+        # the same hand-written hook pairs (per-kind distribution spelling; the
+        # object-or-array `update` union).
+        (f = :distribution, wire = "distribution", kind = :custom,
+         parse_fn = :coerce_distribution, mode = :opt,
+         emit = :custom, emit_fn = :_emit_distribution),
+        (f = :update, wire = "update", kind = :custom,
+         parse_fn = :_coerce_parameter_update_spec, mode = :opt,
+         emit = :custom, emit_fn = :_emit_parameter_update_spec),
     )),
     (T = :Equation, fn = :equation, rows = (
         (f = :lhs,      wire = "lhs",      kind = :expr,   mode = :req, emit = :always, pos = true),
@@ -2407,6 +2569,7 @@ const RECORD_FIELD_TABLES = (
         (f = :frequency,        wire = "frequency",        kind = :string, mode = :opt, emit = :nonnothing),
         (f = :records_per_file, wire = "records_per_file", kind = :number_or_string, mode = :opt, emit = :nonnothing),
         (f = :time_variable,    wire = "time_variable",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :records_per_sample, wire = "records_per_sample", kind = :int, mode = :opt, emit = :nonnothing),
     )),
     (T = :DataSourceDeterminism, fn = :data_source_determinism, rows = (
         (f = :endian,        wire = "endian",        kind = :string, mode = :opt, emit = :nonnothing),
@@ -2423,6 +2586,13 @@ const RECORD_FIELD_TABLES = (
         # doubly-conditional policy, so it names a hand-written hook.
         (f = :determinism, wire = "determinism", kind = :record, of = :data_source_determinism, mode = :opt,
          emit = :custom, emit_fn = :_emit_data_source_determinism),
+        # The decode / slice / filter blocks, kept VERBATIM: nothing in this
+        # package reads them back — their job is to reach the format reader
+        # that does, unchanged (esm-spec §8).
+        (f = :reader_options, wire = "reader_options", kind = :raw, mode = :opt, emit = :nonnothing),
+        (f = :select,         wire = "select",         kind = :raw, mode = :opt, emit = :nonnothing),
+        (f = :record_filter,  wire = "record_filter",  kind = :raw, mode = :opt, emit = :nonnothing),
+        (f = :extent,         wire = "extent",         kind = :raw, mode = :opt, emit = :nonnothing),
         (f = :reference, wire = "reference", kind = :record, of = :reference, mode = :opt, emit = :nonnothing),
         (f = :metadata,  wire = "metadata",  kind = :raw, mode = :opt, emit = :nonnothing),
     )),
@@ -2463,6 +2633,7 @@ const RECORD_FIELD_TABLES = (
     (T = :CouplingEvent, fn = :coupling_event, tag = "event", rows = (
         (f = :event_type, wire = "event_type", kind = :string_strict, mode = :req_err,
          req_err = "event requires 'event_type' field", emit = :always, pos = true),
+        (f = :name,       wire = "name",       kind = :string, mode = :opt, emit = :nonnothing),
         (f = :conditions, wire = "conditions", kind = :expr_vec, mode = :opt, emit = :nonnothing),
         (f = :trigger,    wire = "trigger",    kind = :record, of = :trigger, mode = :opt, emit = :nonnothing),
         (f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
@@ -2548,6 +2719,10 @@ const RECORD_FIELD_TABLES = (
         (f = :affects, wire = "affects", kind = :record_vec, of = :affect_equation,
          eltype = :AffectEquation, mode = :opt_empty, default = :(AffectEquation[]),
          emit = :always, pos = true),
+        (f = :affect_neg, wire = "affect_neg", kind = :record_vec, of = :affect_equation,
+         eltype = :AffectEquation, mode = :opt, emit = :nonnothing),
+        (f = :root_find,    wire = "root_find",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :reinitialize, wire = "reinitialize", kind = :bool,   mode = :opt, emit = :nonnothing),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
     )),
@@ -2567,6 +2742,7 @@ const RECORD_FIELD_TABLES = (
         (f = :affects, wire = "affects", kind = :custom, parse_fn = :_coerce_discrete_affects,
          mode = :opt_empty, default = :(AffectEquation[]),
          emit = :custom, emit_fn = :_emit_discrete_event_affects, pos = true),
+        (f = :reinitialize, wire = "reinitialize", kind = :bool, mode = :opt, emit = :nonnothing),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :name, wire = "name", kind = :string, mode = :opt, emit = :nonnothing),
     )),
@@ -2622,6 +2798,11 @@ const RECORD_FIELD_TABLES = (
         (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
         (f = :tests, wire = "tests", kind = :record_vec, of = :test, eltype = :InlineTest,
          mode = :opt_empty, default = :(InlineTest[]), emit = :nonempty),
+        # Inline analyses, carried VERBATIM (nothing here runs them).
+        (f = :analyses, wire = "analyses", kind = :raw_vec, mode = :opt_empty,
+         default = :(Any[]), emit = :nonempty),
+        (f = :reference, wire = "reference", kind = :record, of = :reference,
+         mode = :opt, emit = :nonnothing),
         # schema §4.7 subsystems: per-entry oneOf [Model, SubsystemRef],
         # sniffed by the hand-written union hooks. A data source is a registry
         # entry from 1.0.0 and can no longer be a subsystem.

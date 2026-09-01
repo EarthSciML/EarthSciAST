@@ -273,16 +273,21 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
     # condition still reading `_var`: one placeholder spelled two ways in one
     # event, which is the partial-rename fingerprint this fixture family was
     # cleaned up to remove.
+    _ns_affects(affects) = AffectEquation[
+        AffectEquation(is_placeholder(a.lhs) || startswith(a.lhs, prefix * ".") ||
+                       occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
+                       _ns(a.rhs))
+        for a in affects
+    ]
     for ev in model.continuous_events
         new_conds = ASTExpr[_ns(c) for c in ev.conditions]
-        new_affects = AffectEquation[
-            AffectEquation(is_placeholder(a.lhs) || startswith(a.lhs, prefix * ".") ||
-                           occursin('.', a.lhs) ? a.lhs : "$(prefix).$(a.lhs)",
-                           _ns(a.rhs))
-            for a in ev.affects
-        ]
         push!(continuous_events,
-              ContinuousEvent(new_conds, new_affects; description=ev.description,
+              ContinuousEvent(new_conds, _ns_affects(ev.affects);
+                              affect_neg=ev.affect_neg === nothing ? nothing :
+                                  _ns_affects(ev.affect_neg),
+                              root_find=ev.root_find,
+                              reinitialize=ev.reinitialize,
+                              description=ev.description,
                               name=ev.name))
     end
 
@@ -300,8 +305,8 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
             ev.trigger
         end
         push!(discrete_events,
-              DiscreteEvent(new_trigger, new_affects; description=ev.description,
-                            name=ev.name))
+              DiscreteEvent(new_trigger, new_affects; reinitialize=ev.reinitialize,
+                            description=ev.description, name=ev.name))
     end
 
     for (sub_name, sub_model) in model.subsystems
@@ -358,8 +363,14 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
     end
     for p in rsys.parameters
         namespaced = "$(prefix).$(p.name)"
+        # The §6.3 value model travels with the parameter. `update` above all:
+        # it is the only channel binding a parameter to a data source
+        # (esm-spec §5.4), so leaving it behind here would flatten a
+        # data-driven parameter into a constant.
         params[namespaced] = ModelVariable(ParameterVariable;
-            default=p.default, description=p.description, units=p.units)
+            default=p.default, description=p.description, units=p.units,
+            default_units=p.default_units, shape=p.shape,
+            distribution=p.distribution, update=p.update)
     end
 
     # v0.8.0: every component shares the document's single `domain`; a system
