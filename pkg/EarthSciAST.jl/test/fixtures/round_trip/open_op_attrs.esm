@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "OpenOpAttrs",
+    "description": "The `ExpressionNode.attrs` property, which NO shared fixture in any binding exercises. An OPEN rewrite-target op (esm-spec §4.2) carries its scheme parameters in `attrs` rather than in dedicated schema slots; the whole configuration of `godunov_hamiltonian` below lives there. This document declares no rewrite rule, so the op is still present after load — §4.2 makes loading permissive about that — and the node must therefore survive save(load(F)) with its `attrs` intact. Companion to open_op_attrs_match.esm, which exercises the match-side binding the same field feeds.",
+    "authors": ["Test Author"],
+    "license": "AGPL-3.0",
+    "tags": ["round-trip", "attrs"]
+  },
+  "models": {
+    "HamiltonJacobi": {
+      "variables": {
+        "phi": { "type": "unknown", "units": "m", "default": 0.0 },
+        "H": { "type": "unknown", "units": "m/s" },
+        "c": { "type": "parameter", "units": "m/s", "default": 1.0 }
+      },
+      "equations": [
+        {
+          "lhs": "H",
+          "rhs": {
+            "op": "godunov_hamiltonian",
+            "args": ["phi"],
+            "attrs": {
+              "gamma": 1.4,
+              "scheme": "lax_friedrichs",
+              "stencil_width": 3,
+              "entropy_fix": true
+            }
+          }
+        },
+        {
+          "lhs": { "op": "D", "args": ["phi"], "wrt": "t" },
+          "rhs": { "op": "*", "args": ["c", "H"] }
+        }
+      ]
+    }
+  }
+}

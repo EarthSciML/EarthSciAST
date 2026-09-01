@@ -20,8 +20,11 @@ needed. The document-scoped index-set registry is passed alongside the model
 (esm-spec v0.8.0: `EsmFile.index_sets`), since a typed `Model` does not carry
 it. The cadence classification the §5.7 guard-2 checks need is derived here
 directly on the typed tree (`_vi_class`); the raw-JSON `Cadence` module remains
-only for the conformance fixtures, whose `expect_cadence` annotation the typed
-IR deliberately does not parse.
+only for the conformance fixtures, whose whole-document surroundings
+(`data_sources`, `index_sets`) never reach a typed expression. The
+`expect_cadence` annotation those fixtures assert against IS carried by the
+typed IR; it is simply not consulted here, because this classifier DERIVES a
+class rather than checking a declaration.
 
 All diagnostics are raised as [`TreeWalkError`](@ref) carrying stable
 `E_TREEWALK_*` codes (`E_TREEWALK_VI_*` for the value-invention-specific
@@ -795,8 +798,10 @@ end
 # The lattice `const ⊏ discrete ⊏ continuous` as integer ranks; `class(node) =
 # max` over its children's classes, seeded from a leaf's declared variable kind
 # (CONFORMANCE_SPEC §5.7.2). This is the value-invention front door's OWN typed
-# classifier — the raw-JSON `Cadence` module is conformance-fixture-only (its
-# `expect_cadence` vocabulary is deliberately not parsed into the typed IR).
+# classifier — the raw-JSON `Cadence` module is conformance-fixture-only. It
+# never consults `expect_cadence` (which the typed IR does carry): an assertion
+# is something to CHECK, and checking it is the conformance pass's job, not a
+# guard's.
 # Only the CONTINUOUS-vs-not distinction is observable here (every check below
 # compares against `continuous`), so the loader-temporal `discrete → const`
 # refinement of the conformance classifier — which never crosses the continuous

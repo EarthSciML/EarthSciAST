@@ -164,6 +164,23 @@ const ESM = EarthSciAST
          json = """{"op":"skolem","args":["a","b"],"label":"edge"}""",
          expected = "edge",
          cop = "skolem", cargs = E(VarExpr("a"), VarExpr("b")), kw = (label = "edge",)),
+        # Author cadence assertion (CONFORMANCE_SPEC.md §5.7.6 rule 3) — a
+        # diagnostic hook that changes no semantics, but IS authored content, so
+        # it must survive the typed round trip or the assertion is disarmed on
+        # every document this binding re-emits.
+        (field = :expect_cadence,
+         json = """{"op":"+","args":["a","b"],"expect_cadence":"continuous"}""",
+         expected = "continuous",
+         cop = "+", cargs = E(VarExpr("a"), VarExpr("b")),
+         kw = (expect_cadence = "continuous",)),
+        # Scheme parameters of an OPEN rewrite-target op (esm-spec §4.2). The
+        # values are ordinary JSON scalars and come back as a native
+        # `Dict{String,Any}` (no JSON3 types leak into the typed IR).
+        (field = :attrs,
+         json = """{"op":"godunov_hamiltonian","args":["u"],"attrs":{"gamma":1.4,"scheme":"lf"}}""",
+         expected = Dict{String,Any}("gamma" => 1.4, "scheme" => "lf"),
+         cop = "godunov_hamiltonian", cargs = E(VarExpr("u")),
+         kw = (attrs = Dict{String,Any}("gamma" => 1.4, "scheme" => "lf"),)),
     ]
 
     # The spec list must cover every field except op/args (structural) and
