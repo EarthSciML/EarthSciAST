@@ -275,49 +275,91 @@ Where:
 > `_overlap_env_array`, with binders tested first — so the shared fixture passes. The
 > driver (-004) is still absent.
 >
-> **Julia: -001 PARTIAL, -004 MISSING. Both: -002 and -003 present in effect,
-> -005/-006 satisfied incidentally.** Julia already resolves an `on` key
-> polymorphically and already has the §5.5.6 driver, so the remaining work is to
-> connect them — the same two halves that were unconnected in Rust. Concretely:
+> **Julia: -001, -002, -003, -004, -005 and -006 DONE (2026-08-31). -004a NOT
+> implemented.** The two halves the handoff described — a polymorphic `on` key
+> resolver and the §5.5.6 driver — were both already in the tree and are now
+> connected.
 >
-> * **-001 (Julia).** `tree_walk/semiring.jl::_join_key_sym_pos_vals` accepts exactly
->   two key kinds: an index-set member column, or a materialised **value-invention map
->   buffer** (`vi_maps.maps`). A MOVES-shaped join names an ordinary declared 1-D
->   variable, which is neither, and raises `E_TREEWALK_JOIN_UNKNOWN_KEY`. The fix is a
->   third branch reading the variable's declared 1-D shape — `var_shapes`, which the
->   function's own file already threads for `_overlap_env_sym` — and its materialised
->   array; the bin-buffer branch then becomes a special case of it, not a separate
->   kind. Python's equivalent branch (landed) is the model to follow: binders are
->   tested FIRST so a variable sharing a name with a range symbol does not shadow the
->   loop symbol, and a float-stored column is admitted only where every value is
->   exactly integral.
-> * **-002.** Both currently emit ONE gate per key PAIR and AND them, which admits the
->   same set as tuple equality, so the semantics are already right. It matters only for
->   -004: gates over the same symbol pair must be grouped into one composite key before
->   driving, or the driver can use only the first pair and must re-test the rest.
-> * **-003.** Both code the two columns against a shared bucket dictionary, which gives
->   the right equality classes. Adding -004 means also EMITTING a pair list, and that
->   list is what rule 5 constrains: sort by canonical key, then left, then right —
->   never dictionary iteration order.
-> * **-004** is the real work, and it is small because the driver already exists:
->   Julia's `_overlap_drive_plan` (`broad_phase.jl`) and Python's driven scalar path
->   (`broad_phase.OverlapIndex` + the `_join_has_overlap` routing in
->   `numpy_interpreter.py`) both take a candidate pair index and are agnostic about
->   where it came from. Build an `OverlapIndex`/`_JoinGate`-shaped pair set from the
->   coded columns and route an `on` gate down the same path — including the routing
->   predicate, which today is spelled `_join_has_overlap` and must widen to "has any
->   drivable gate".
-> * **-006** holds today only because neither binding resolves `on` into a gate at all;
->   it becomes load-bearing the moment -004 lands. Rust's answer is to keep lowering the
->   equality into `filter` as well, so the whole-array/einsum fast paths and the
->   build-time observed evaluator stay correct with no per-path work. Python in
->   particular has several dense fast paths (`_join_admits_mask`, the einsum arm) that
->   would otherwise need individual auditing.
+> * **-001.** `tree_walk/semiring.jl::_join_key_sym_pos_vals` gained the
+>   data-column branch: the key resolves through the variable's declared 1-D
+>   shape (`var_shapes`) and its build-time data comes from, in order, a
+>   value-invention map buffer, the const arrays (host-supplied,
+>   front-door-derived, or a `const`-op array observed), or a document-LITERAL
+>   array observed materialised through the same `_resolve_index_of_makearray`
+>   the body's own `index(col, l)` uses. Anything else is a named build error,
+>   never a silently ungated product. BINDERS ARE NOW TESTED FIRST, as Python
+>   does: the value-invention buffer branch used to run before them and is now
+>   the special case of a data column it always was. A float-STORED column is
+>   admitted only where every value is exactly integral; Julia follows Python
+>   (reject the document) rather than Rust (decline the gate), because it lowers
+>   no equality predicate to fall back on.
+> * **-004.** `_on_gate_match_pairs` builds the admissible pair set once per node
+>   and wraps it in the same `_OverlapIndex` an overlap gate carries, so
+>   `broad_phase.jl::_overlap_drive_plan` and
+>   `tree_walk/resolve.jl::_foreach_aggregate_term_gated` drive an `on` gate
+>   through the identical code path and the identical three binding cases. No
+>   parallel driver. `_overlap_driver` is renamed `_drivable_gate` — it never
+>   inspected which kind of gate produced the index, and now genuinely serves
+>   both.
+> * **-002.** Pairs of one clause over the same two loop symbols are grouped
+>   before indexing: the composite key is the tuple of per-pair bucket codes and
+>   it is the COMPOSITE match set that drives, not the first pair's (a superset).
+>   The first gate of each group carries the index; the rest stay pure code
+>   tests, so admission is unchanged.
+> * **-003.** The match set comes from `Relational.equijoin`, the one canonical
+>   rule-5 primitive — hashing buckets only, output sorted by canonical key then
+>   left then right, never `Dict` iteration order (Julia's `Dict` is not
+>   insertion-ordered, so a naive port would have leaked it). `_OverlapIndex`
+>   derives the position-ascending DRIVE order from that list.
+> * **-005.** `_join_admits` still tests the CODES whenever a gate has them,
+>   index or no index, so every driven leaf is re-checked against the same
+>   predicate the undriven product applies.
+> * **-006** holds as it always did, structurally: Julia's whole-array,
+>   stencil, setup-geometry and PDE-inline fast paths each decline a node
+>   carrying `join`/`join_gates`/`filter` rather than evaluating an ungated
+>   product, so there is no non-consulting path to keep in step.
+> * **-004a (SHOULD) NOT implemented.** With both gated symbols contracted
+>   ALONGSIDE other contracted axes, `_foreach_aggregate_term_gated` still falls
+>   back to the full product: its `:pairs` shape binds the whole tuple and is
+>   taken only when the two gated symbols are the only contracted axes. Driving
+>   the later gated axis in place means replacing the `Iterators.product` unroll
+>   with a nested walk carrying a per-level restriction, in the engine's hottest
+>   loop, and §5.5.8 makes this a SHOULD precisely because falling back is
+>   correct and only slower. The value-invention producer
+>   (`_vi_enumerate_join`) already drives this shape, because it recurses the
+>   remaining ranges rather than producting them.
 >
-> Both bindings should adopt `tests/valid/aggregate/join_on_data_columns.esm` into their
-> aggregate conformance suites (Julia `test/aggregate_conformance_test.jl`, Python
-> `tests/test_roundtrip_serialize_fields.py`'s sibling simulate suite): it fails today
-> for -001 and passes once the third key-column branch lands, independently of -004.
+> Gates: `pkg/EarthSciAST.jl/test/join_on_equality_gate_test.jl`, which pins the
+> driver from both sides (the index-set product grows 200x to 1e8 with the match
+> count fixed and the visit count must not move; the product is held at 1e7 while
+> the matches grow to 10 000 and the visit count must track them) and against
+> BOTH differential arms — the same document with the driver killed
+> (`ESS_JOIN_ON_GATE_DISABLE=1`), and `_foreach_aggregate_term` run driven and
+> undriven with the emitted term SEQUENCES compared element for element. A visit
+> count of 0 means the gate declined, so a silent fallback fails too. Measured
+> (build + one RHS call, on a loaded machine): 5e5 candidate pairs, gate OFF
+> 0.47s / ON 0.009s; 1e7, OFF 10.7s / ON 0.021s; 1e8, ON 0.26s. The driven arm
+> tracks MATCHES — 500 / 1000 / 10 000 at a fixed 1e7 product cost 0.009 /
+> 0.028 / 0.080s — while the undriven arm tracks the product.
+>
+> **Julia had NO analogue of Rust's `prepare.rs` hole** (a build-time observed
+> evaluator carrying an `overlap` resolution hook and no `on` one). Julia's
+> tree-walk build resolves `join` uniformly for every ODE and initialization
+> equation, observed-defining ones included, and its geometry-setup and
+> value-invention resolvers each handle both clause kinds. One ADJACENT gap
+> survives, pre-existing and already documented in-tree: `_expr_has_join`, the
+> predicate that decides whether the resolution pre-pass runs at all, walks
+> `args`/`expr_body`/`values`/`filter` but not `lower`/`upper`/`key`/
+> `table_axes`/range bounds — so a document whose ONLY `join` sits in such a
+> field would skip the pre-pass and reach the evaluator ungated, even though
+> `_resolve_join_in_expr` does recurse those fields once the pre-pass runs. The
+> in-tree comment marks the subset as behaviour-pinned and "flagged for Wave 3";
+> no document exercising it could be constructed here (the `integral` op's
+> evaluator ignores its bound fields), so it is recorded rather than widened.
+>
+> Julia has adopted `tests/valid/aggregate/join_on_data_columns.esm` into
+> `test/aggregate_conformance_test.jl`; Python's sibling simulate suite
+> (`tests/test_roundtrip_serialize_fields.py`) auto-collects it already.
 > **Go** and **TypeScript** validate the join schema and do not evaluate, so no rows
 > apply to them.
 

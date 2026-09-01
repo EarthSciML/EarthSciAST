@@ -157,6 +157,19 @@ end
         @test du[vmap["count"]] ≈ 4.0
     end
 
+    # DATA-COLUMN key columns (CONFORMANCE_SPEC §5.5.8 / BEHAV-10-B-001). The
+    # `on` keys here are neither loop symbols nor index sets but genuine 1-D
+    # variables over the two ranges — how a relational port (EPA MOVES/NONROAD)
+    # spells every join. src_type = [7,9,7,4] against emf_type = [7,9,7]: key 7
+    # matches 2x2, key 9 matches 1x1, key 4 is unmatched and contributes 0̄, so
+    # `count(1)` reads the join's CARDINALITY, 5 — against the 12 a binding that
+    # ignores or drops the clause computes for the full 4x3 product.
+    @testset "join_on_data_columns (1-D variables as key columns)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_data_columns.esm", "DataColumnJoin", ["count"])
+        @test du[vmap["count"]] == 5.0
+    end
+
     # Build-time key-type rejection (RFC §5.3 / §5.7 rule 1). These shared
     # fixtures live in tests/invalid/aggregate/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips
