@@ -315,15 +315,18 @@ function _on_gate_match_pairs(group)
     sym_l, sym_r = group[1][1], group[1][2]
     sym_l == sym_r && return nothing
     pos_l, pos_r = group[1][3], group[1][4]
-    keys_l = [Vector{Int}(undef, length(group)) for _ in pos_l]
-    keys_r = [Vector{Int}(undef, length(group)) for _ in pos_r]
-    for (k, g) in enumerate(group)
-        cl, cr = _encode_join_keys(g[5], g[6])
-        for i in eachindex(pos_l); keys_l[i][k] = cl[i]; end
-        for i in eachindex(pos_r); keys_r[i][k] = cr[i]; end
+    coded = [_encode_join_keys(g[5], g[6]) for g in group]
+    # A SINGLE pair — the overwhelmingly common case, and the one that has to
+    # stay cheap at 1e5 rows — keys on the bucket code itself; a composite key
+    # keys on the per-pair code vector, which orders lexicographically exactly as
+    # the §5.5.1 rule-4 skolem tuple does.
+    kl, kr = if length(coded) == 1
+        (Dict{Int,Int}(p => coded[1][1][i] for (i, p) in enumerate(pos_l)),
+         Dict{Int,Int}(p => coded[1][2][i] for (i, p) in enumerate(pos_r)))
+    else
+        (Dict{Int,Vector{Int}}(p => Int[c[1][i] for c in coded] for (i, p) in enumerate(pos_l)),
+         Dict{Int,Vector{Int}}(p => Int[c[2][i] for c in coded] for (i, p) in enumerate(pos_r)))
     end
-    kl = Dict{Int,Tuple}(p => Tuple(keys_l[i]) for (i, p) in enumerate(pos_l))
-    kr = Dict{Int,Tuple}(p => Tuple(keys_r[i]) for (i, p) in enumerate(pos_r))
     matches = Relational.equijoin(pos_l, pos_r; on_left = p -> kl[p], on_right = p -> kr[p])
     return Tuple{Int,Int}[(Int(m[1]), Int(m[2])) for m in matches]
 end
