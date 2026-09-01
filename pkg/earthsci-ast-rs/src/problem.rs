@@ -41,6 +41,7 @@ use ndarray::ArrayD;
 use serde_json::Value as JsonValue;
 
 use crate::flatten::FlattenedSystem;
+use crate::precision::{self, Precision};
 #[cfg_attr(not(feature = "solve"), allow(unused_imports))]
 use crate::simulate::Solution;
 use crate::simulate::{Compiled, Flow, Progress, ProgressFn, SimulateError, SolveOptions};
@@ -367,6 +368,11 @@ pub struct EsmProblem {
     /// The name of the model this EsmProblem was built from, when one was
     /// selected.
     pub(crate) model_name: Option<String>,
+    /// The working precision the document declared (`domain.element_type`,
+    /// esm-spec §11.3), captured at construction. Every run entry re-arms it
+    /// (`precision::enter`) so a problem carries its own precision rather than
+    /// depending on what the calling thread last evaluated.
+    pub(crate) precision: Precision,
     /// The integration interval.
     pub(crate) tspan: (f64, f64),
     /// Parameter bindings.
@@ -442,6 +448,13 @@ impl EsmProblem {
             Backend::Array(_) => "array",
             Backend::Static(_) => "static",
         }
+    }
+
+    /// The working precision this problem evaluates in — `domain.element_type`
+    /// (esm-spec §11.3), [`Precision::Float64`] unless the document said
+    /// `"Float32"`.
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     /// Whether this EsmProblem has a right-hand side to integrate.
@@ -666,6 +679,9 @@ fn resolve_observed_key<'a>(
 /// the array runtime's materialized setup arrays. One arity, `(prob, name)`,
 /// in every binding.
 pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
     let model = prob.model_name.as_deref().unwrap_or("");
     let components = field_components(prob);
     let single = components.len() == 1;
@@ -754,6 +770,9 @@ pub fn observed_trajectory(
     sol: &Solution,
     name: &str,
 ) -> Result<Vec<f64>, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
     let one = [name.to_string()];
     // The bulk form omits what it cannot resolve; the singular one must not,
     // so an empty result becomes the diagnostic the resolver would have given.
@@ -795,6 +814,9 @@ pub fn observed_trajectories(
     sol: &Solution,
     names: &[String],
 ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
     let compiled = match &*prob.backend {
         Backend::Scalar(c) => c,
         Backend::Array(_) => {
@@ -906,6 +928,9 @@ pub struct Remake {
 /// solver input), and a name that is not a parameter of the compiled system at
 /// all.
 pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
     let known: std::collections::HashSet<String> = prob.parameter_names().into_iter().collect();
     let known_bare: HashMap<String, usize> = {
         let mut counts: HashMap<String, usize> = HashMap::new();
@@ -953,6 +978,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
     Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
         model_name: prob.model_name.clone(),
+        precision: prob.precision,
         tspan,
         p,
         u0,
@@ -1100,6 +1126,32 @@ pub fn esm_problem<'a>(
         ProblemInput::Flattened(f) => flat_only = Some(f),
     }
 
+    // ---- (1b) The working precision, and the guard that arms it. ----------
+    // `domain.element_type` (esm-spec §11.3). This has to be read from the RAW
+    // input and armed BEFORE the build pipeline, not after the typed parse:
+    // value invention, the pushdown rewrite and the build-time field
+    // materialization all evaluate expressions, and a constant folded in
+    // binary64 at build time would disagree with the same subexpression
+    // evaluated in binary32 at run time.
+    let prec = element_type_of(owned_json.as_ref(), owned_file.as_ref(), flat_only)?;
+    let _precision_guard = precision::enter(prec);
+
+    // Host-supplied numbers are the one class of value the evaluator does not
+    // itself produce, so they are rounded ONCE here rather than on each of the
+    // O(N) reads of them. Everything computed downstream is binary32 already,
+    // every operation having rounded.
+    if prec.is_f32() {
+        for v in opts.p.values_mut() {
+            *v = prec.round(*v);
+        }
+        for v in opts.u0.values_mut() {
+            *v = prec.round(*v);
+        }
+        for a in opts.const_arrays.values_mut() {
+            a.mapv_inplace(|x| prec.round(x));
+        }
+    }
+
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
@@ -1186,6 +1238,7 @@ pub fn esm_problem<'a>(
     let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
         model_name,
+        precision: prec,
         tspan,
         p: std::mem::take(&mut opts.p),
         u0: std::mem::take(&mut opts.u0),
@@ -1202,6 +1255,63 @@ pub fn esm_problem<'a>(
         refresh_boundaries,
     };
     Ok(prob)
+}
+
+/// Read `domain.element_type` off whichever form of the input the caller gave
+/// (esm-spec §11.3).
+///
+/// The raw-JSON branch reads the field textually because it runs *before* the
+/// typed parse — the build pipeline needs the precision armed already.
+///
+/// # Errors
+///
+/// [`SimulateError::Compile`] wrapping
+/// [`crate::compile_error::CompileError::UnsupportedElementType`] for a
+/// spelling that is neither `"Float64"` nor `"Float32"`. An unrecognised
+/// element type is not silently binary64.
+fn element_type_of(
+    raw: Option<&JsonValue>,
+    file: Option<&EsmFile>,
+    flat: Option<&FlattenedSystem>,
+) -> Result<Precision, SimulateError> {
+    let named = raw
+        .and_then(|v| v.get("domain"))
+        .and_then(|d| d.get("element_type"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            file.and_then(|f| f.domain.as_ref())
+                .and_then(|d| d.element_type.clone())
+        })
+        .or_else(|| {
+            flat.and_then(|f| f.domain.as_ref())
+                .and_then(|d| d.element_type.clone())
+        });
+    Precision::from_element_type(named.as_deref()).map_err(SimulateError::Compile)
+}
+
+/// Reject integrating a Float32 document.
+///
+/// The ODE/DAE solver (diffsol) is instantiated over `f64` — its step-size
+/// control, error norms and Newton iteration are binary64 and have no binary32
+/// form here. Integrating a Float32 document would therefore produce an answer
+/// whose right-hand side was binary32 and whose time-stepping was binary64,
+/// with nothing in the result to say so. Per esm-spec §11.3 that is an error
+/// naming the construct, not a partial honouring of the declaration.
+///
+/// Algebraic, observed and relational evaluation — everything `observed_field`
+/// and the inline `tests` blocks read — is unaffected and runs in binary32.
+fn reject_f32_integration(prob: &EsmProblem) -> Result<(), SimulateError> {
+    if prob.precision.is_f32() && prob.is_dynamic() {
+        return Err(SimulateError::Compile(
+            crate::compile_error::CompileError::Float32Unsupported {
+                construct: "time integration of a dynamic model".to_string(),
+                reason: "the ODE/DAE solver is instantiated over binary64 (step-size control,                          error norms and the Newton solve), so the trajectory would be                          binary64 even though the right-hand side is binary32"
+                    .to_string(),
+            },
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1442,6 +1552,10 @@ fn bind_providers(
 /// to write that field alongside the state (RFC decision 8).
 #[cfg(feature = "solve")]
 pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
+    reject_f32_integration(prob)?;
     let effective = effective_options(prob, opts);
     match &*prob.backend {
         Backend::Static(reason) => Err(SimulateError::NotDynamic {
@@ -1646,6 +1760,10 @@ pub fn init<'a>(
     prob: &'a EsmProblem,
     opts: &SolveOptions,
 ) -> Result<Integrator<'a>, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = precision::enter(prob.precision);
+    reject_f32_integration(prob)?;
     if let Backend::Static(reason) = &*prob.backend {
         return Err(SimulateError::NotDynamic {
             details: reason.clone(),
@@ -1696,6 +1814,9 @@ impl Integrator<'_> {
     /// Advance to the next grid point. Returns [`StepStatus::Done`] at the end
     /// of `tspan` or when the run stopped early.
     pub fn step(&mut self) -> Result<StepStatus, SimulateError> {
+        // Re-arm the document's working precision (esm-spec §11.3); a stepping
+        // caller reaches the RHS without passing back through `solve`.
+        let _precision_guard = precision::enter(self.prob.precision);
         if !self.retcode.is_success() {
             return Ok(StepStatus::Done);
         }
