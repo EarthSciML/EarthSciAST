@@ -358,8 +358,9 @@ Where:
 > evaluator ignores its bound fields), so it is recorded rather than widened.
 >
 > Julia has adopted `tests/valid/aggregate/join_on_data_columns.esm` into
-> `test/aggregate_conformance_test.jl`; Python's sibling simulate suite
-> (`tests/test_roundtrip_serialize_fields.py`) auto-collects it already.
+> `test/aggregate_conformance_test.jl`; Python's `test_aggregate_conformance.py`
+> auto-collects it already (it globs every aggregate fixture carrying an inline
+> `tests` block).
 > **Go** and **TypeScript** validate the join schema and do not evaluate, so no rows
 > apply to them.
 
