@@ -3154,13 +3154,23 @@ fn cache_root() -> PathBuf {
     }
 }
 
+/// The sources being ingested and the parameters that read them, rendered for a
+/// diagnostic.
+///
+/// Every ingest failure carries this, whatever went wrong underneath: the
+/// reader's own errors name the CONSUMER (`provider Ingest.annual: …`), which
+/// does not tell an author which `data_sources` entry to go and look at.
+fn consumed_summary(consumed: &BTreeMap<String, Vec<String>>) -> String {
+    consumed
+        .iter()
+        .map(|(src, readers)| format!("'{src}' (read by {})", readers.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// The message a build with no reader gives for a document it cannot ingest.
 #[cfg(not(feature = "esio"))]
 fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
-    let sources: Vec<String> = consumed
-        .iter()
-        .map(|(src, readers)| format!("'{src}' (read by {})", readers.join(", ")))
-        .collect();
     format!(
         "this `esm` binary cannot ingest data_sources: it was built WITHOUT the \
          `esio` feature, so it links no data reader, but the document declares \
@@ -3170,7 +3180,7 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
          and report the result as the document's answer.",
         if consumed.len() == 1 { "a source" } else { "sources" },
         if consumed.len() == 1 { "it" } else { "its parameters" },
-        sources.join("; ")
+        consumed_summary(consumed)
     )
 }
 
@@ -3190,6 +3200,7 @@ fn data_source_providers(
     }
     let doc = doc.clone();
     let cache_root = cache_root();
+    let summary = consumed_summary(&consumed);
     let names: Vec<String> = consumed.into_keys().collect();
     Some(Box::new(move || {
         // NAMED, not an unrestricted sweep: `providers_from_document` silently
@@ -3210,7 +3221,7 @@ fn data_source_providers(
                 .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>))
                 .collect()
         })
-        .map_err(|e| format!("data_sources ingest failed: {}", e.0))
+        .map_err(|e| format!("data_sources ingest failed for {summary}: {}", e.0))
     }))
 }
 
