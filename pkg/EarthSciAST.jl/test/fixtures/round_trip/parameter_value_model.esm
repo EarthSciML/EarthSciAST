@@ -1,0 +1,53 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ParameterValueModel",
+    "description": "A reaction-system parameter valued by a `distribution` and carrying NO `default`, plus a source-level `select`. esm-schema.json's `Parameter` declares no required properties, so a distribution-valued parameter with no default is a conforming document; Julia's field table pinned `default` as required and rejected it with a hard KeyError at load. The source-level `select` block (DataSource.select) was the one DataSource property with no fixture anywhere in the corpus."
+  },
+  "data_sources": {
+    "Reanalysis": {
+      "kind": "grid",
+      "source": { "url_template": "file:///data/reanalysis.zarr/" },
+      "select": {
+        "axes": ["all", { "fixed": 0 }, { "range": { "start": 0, "stop": 4 } }]
+      },
+      "metadata": { "esio_format": "zarr" }
+    }
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 4 }
+  },
+  "reaction_systems": {
+    "UncertainDecay": {
+      "species": {
+        "A": { "units": "mol/L", "default": 1.0 },
+        "B": { "units": "mol/L", "default": 0.0 }
+      },
+      "parameters": {
+        "k": {
+          "units": "1/s",
+          "description": "Rate constant sampled once at setup; no `default` at all.",
+          "distribution": { "kind": "lognormal", "mu": -2.3, "sigma": 0.4 }
+        },
+        "T": {
+          "units": "K",
+          "default": 298.0,
+          "shape": ["cells"],
+          "update": {
+            "kind": "data",
+            "source": "Reanalysis",
+            "from": { "file_variable": "t2m" }
+          }
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [{ "species": "A", "stoichiometry": 1 }],
+          "products": [{ "species": "B", "stoichiometry": 1 }],
+          "rate": "k"
+        }
+      ]
+    }
+  }
+}
