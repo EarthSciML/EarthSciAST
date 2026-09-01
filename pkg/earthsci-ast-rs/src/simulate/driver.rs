@@ -206,6 +206,16 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
+    // Arm the document's `domain.element_type` for the build
+    // (`crate::precision`): these are public entries that do not go through
+    // `EsmProblem`, and the compiled artifact records the precision it folded
+    // its constants in. Re-arming the mode `EsmProblem` already set is a no-op.
+    let _precision_guard = crate::precision::enter(
+        crate::precision::Precision::from_element_type(
+            file.domain.as_ref().and_then(|d| d.element_type.as_deref()),
+        )
+        .map_err(SimulateError::Compile)?,
+    );
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
         let flat = flatten(file).map_err(CompileError::from)?;
@@ -249,6 +259,16 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
             },
         ));
     }
+    // Arm the document's `domain.element_type` for the build
+    // (`crate::precision`): these are public entries that do not go through
+    // `EsmProblem`, and the compiled artifact records the precision it folded
+    // its constants in. Re-arming the mode `EsmProblem` already set is a no-op.
+    let _precision_guard = crate::precision::enter(
+        crate::precision::Precision::from_element_type(
+            file.domain.as_ref().and_then(|d| d.element_type.as_deref()),
+        )
+        .map_err(SimulateError::Compile)?,
+    );
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
         let flat = flatten(&file).map_err(CompileError::from)?;

@@ -485,6 +485,14 @@ pub struct ArrayCompiled {
     /// cross-toolkit override-naming parity). `None` on the `from_flattened`
     /// path, whose names are already fully namespaced.
     namespace: Option<String>,
+    /// The working precision this model was COMPILED under
+    /// (`crate::precision`), captured so evaluation reproduces it even when the
+    /// caller reaches an `ArrayCompiled` directly (`compile_array`, the
+    /// `debug_*` entry points) rather than through an `EsmProblem`. Build-time
+    /// folding and run-time evaluation must round identically, and the
+    /// artifact carrying its own precision is what makes that true by
+    /// construction rather than by the caller remembering.
+    precision: crate::precision::Precision,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.

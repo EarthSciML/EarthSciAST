@@ -202,11 +202,18 @@ pub fn is_evaluable_op(op: &str) -> bool {
 /// # Errors
 ///
 /// [`CompileError::UnloweredOperatorError`], [`CompileError::InvalidOperatorArity`],
-/// [`CompileError::MakearrayRegionInvalid`] (from the registry gate), or
-/// [`CompileError::UnevaluableOperatorError`].
+/// [`CompileError::MakearrayRegionInvalid`] (from the registry gate),
+/// [`CompileError::UnevaluableOperatorError`], or — only when the active
+/// precision is `Float32` — [`CompileError::Float32Unsupported`].
 pub fn check_evaluable(expr: &Expr) -> Result<(), CompileError> {
     check_no_spatial_ops(expr)?;
-    check_evaluable_ops(expr)
+    check_evaluable_ops(expr)?;
+    // Layer 3: the constructs that have an evaluation rule here but only a
+    // binary64 one (`intersect_polygon`, `polygon_intersection_area`, the
+    // interpolating closed functions). Under `element_type: "Float32"` those
+    // would quietly compute part of the answer in the wrong precision, so they
+    // are rejected NAMING themselves (esm-spec §11.3). A no-op under Float64.
+    crate::precision::check_f32_supported(expr)
 }
 
 /// The [`is_evaluable_op`] half of [`check_evaluable`], applied over the whole
@@ -520,12 +527,26 @@ pub(crate) fn fold_scalar(op: &str, vs: &[f64]) -> f64 {
     // left-folding `apply_binary` would compare a raw operand against a flag.
     // `apply_binary` agrees with this for the legal arity (>= 2), which is what
     // the equivalence test checks.
+    //
+    // **Precision.** The fold BODY is `apply_binary`, which is already
+    // precision-aware — but two things in this function are not, and both are
+    // rounded here rather than left to the body:
+    //
+    // * the SEED. A one-element fold (`+` with a single operand, which
+    //   `simulate::eval_op` does reach) returns `vs[0]` having applied no
+    //   operator at all, so an unrounded seed would leave a binary64 value in a
+    //   Float32 evaluation.
+    // * the `and`/`or` truth test, which must ask whether the operand is zero
+    //   *at the working precision* — `apply_binary`'s own `And`/`Or` arms
+    //   narrow before comparing, and these two must agree with them.
+    let prec = crate::precision::active();
     match op {
-        "and" => return vs.iter().all(|&v| v != 0.0) as i32 as f64,
-        "or" => return vs.iter().any(|&v| v != 0.0) as i32 as f64,
+        "and" => return vs.iter().all(|&v| prec.round(v) != 0.0) as i32 as f64,
+        "or" => return vs.iter().any(|&v| prec.round(v) != 0.0) as i32 as f64,
         _ => {}
     }
-    rest.iter().fold(*first, |acc, &v| apply_binary(op, acc, v))
+    rest.iter()
+        .fold(prec.round(*first), |acc, &v| apply_binary(op, acc, v))
 }
 
 pub(super) fn negate(v: Value) -> Value {
@@ -1436,12 +1457,23 @@ pub(super) fn eval_const(node: &ExpressionNode) -> Value {
 /// siblings), so a malformed `const` surfaces as the NaN sentinel.
 pub(super) fn json_to_value(v: &serde_json::Value) -> Option<Value> {
     use serde_json::Value as J;
+    // A `const` literal is the one numeric ingress that does NOT arrive as an
+    // `Expr::Number` — it is raw JSON hanging off the node — so it would keep
+    // its binary64 value through a Float32 evaluation, and a const ARRAY would
+    // then serve binary64 elements to every gather on it. Round here, once, at
+    // the point of materialization. Identity under Float64.
+    let prec = crate::precision::active();
     match v {
-        J::Number(n) => Some(Value::Scalar(n.as_f64()?)),
+        J::Number(n) => Some(Value::Scalar(prec.round(n.as_f64()?))),
         J::Array(_) => {
             let mut shape: Vec<usize> = Vec::new();
             let mut flat: Vec<f64> = Vec::new();
             collect_json_array(v, 0, &mut shape, &mut flat)?;
+            if prec.is_f32() {
+                for x in &mut flat {
+                    *x = prec.round(*x);
+                }
+            }
             ArrayD::from_shape_vec(IxDyn(&shape), flat)
                 .ok()
                 .map(|a| Value::Array(Box::new(a)))

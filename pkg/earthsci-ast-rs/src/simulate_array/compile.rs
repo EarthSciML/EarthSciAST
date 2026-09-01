@@ -580,6 +580,20 @@ impl ArrayCompiled {
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
+        // Under `element_type: "Float32"`, reject an index set whose subscripts
+        // binary32 cannot address exactly. Index expressions share the value
+        // kernels — there is no integer type in the expression language — so
+        // `i + 1` above 2^24 would round, and a gather would silently read the
+        // wrong cell. A no-op under Float64, and for every realistic extent.
+        if crate::precision::is_f32() {
+            let mut names: Vec<&String> = index_sets_owned.keys().collect();
+            names.sort();
+            for name in names {
+                if let Some(size) = index_sets_owned[name].size {
+                    crate::precision::check_index_set_extent(name, size)?;
+                }
+            }
+        }
         // Materialize genuine relational OUTPUTS — the arg-witness reducer
         // (`argmin`/`argmax`, RFC §5.7 rule 6) and the grouped/derived SCVT chain
         // (`group_aggregate`) — to CONSTANT DATA at build setup, then rewrite each
@@ -732,6 +746,7 @@ impl ArrayCompiled {
             index_sets: index_sets.clone(),
             namespace: None,
             const_scope,
+            precision: crate::precision::active(),
         })
     }
 }

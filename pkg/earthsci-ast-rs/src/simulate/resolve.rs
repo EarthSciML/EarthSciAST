@@ -131,6 +131,19 @@ pub(super) fn resolve_expr(
                     CompileError::InvalidBroadcastFn { reason }
                 }
             })?;
+            // Under `element_type: "Float32"` (esm-spec §11.3), reject the ops
+            // whose numeric work happens outside the shared scalar kernels and
+            // therefore cannot honour the declared precision. The array path
+            // gates the same set through `check_evaluable`; this is the scalar
+            // path's mirror, so neither can silently evaluate one in binary64.
+            // A no-op under Float64.
+            if let Some((construct, reason)) =
+                crate::precision::is_f32()
+                    .then(|| crate::precision::f32_unsupported_reason(&node.op, node.name.as_deref()))
+                    .flatten()
+            {
+                return Err(CompileError::Float32Unsupported { construct, reason });
+            }
             // Closed-registry function call (esm-spec §9.2): resolve to the
             // dedicated `Fn` variant so the callee `name` and any inline array
             // arguments survive to evaluation (a plain `Op` drops both — the

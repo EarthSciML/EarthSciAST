@@ -39,6 +39,13 @@ pub struct Compiled {
     /// parameters, time, observed variables, or *earlier-listed* algebraic
     /// states. Cycles are rejected at compile time.
     algebraic_topo: Vec<usize>,
+    /// The working precision this model was COMPILED under
+    /// (`crate::precision`), captured so evaluation reproduces it even when the
+    /// caller reaches a `Compiled` directly rather than through an
+    /// `EsmProblem`. Constant folding at build and evaluation at run must round
+    /// the same way, and the only way to guarantee that is for the artifact to
+    /// carry the precision its constants were folded in.
+    precision: crate::precision::Precision,
 }
 
 /// Internal classification of how a state variable is defined.
@@ -144,6 +151,7 @@ impl Compiled {
             state_kinds,
             state_ic_exprs,
             algebraic_topo,
+            precision: crate::precision::active(),
         })
     }
 
@@ -154,7 +162,20 @@ impl Compiled {
     }
 
     /// Convenience: flatten the file first, then build.
+    ///
+    /// Arms the document's `domain.element_type` for the build
+    /// (`crate::precision`), so a `Compiled` reached directly — without an
+    /// `EsmProblem` — folds its constants in the declared precision and
+    /// records it. `EsmProblem` has already armed the same value by the time
+    /// it gets here, and re-arming the same mode is a no-op.
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
+        let _precision_guard = crate::precision::enter(
+            crate::precision::Precision::from_element_type(
+                file.domain
+                    .as_ref()
+                    .and_then(|d| d.element_type.as_deref()),
+            )?,
+        );
         let flat = flatten(file)?;
         Self::from_flattened(&flat)
     }
@@ -192,6 +213,9 @@ impl Compiled {
         initial_conditions: &HashMap<String, f64>,
         opts: &SolveOptions,
     ) -> Result<Solution, SimulateError> {
+        // Re-arm the precision this model was compiled under
+        // (`crate::precision`); a no-op for a Float64 model.
+        let _precision_guard = crate::precision::enter(self.precision);
         let (t0, t_end) = tspan;
 
         let param_vec = self.build_param_vec(params)?;
@@ -316,6 +340,9 @@ impl Compiled {
         params: &HashMap<String, f64>,
         t: f64,
     ) -> Result<Vec<(String, f64)>, SimulateError> {
+        // Re-arm the precision this model was compiled under
+        // (`crate::precision`); a no-op for a Float64 model.
+        let _precision_guard = crate::precision::enter(self.precision);
         debug_assert!(
             self.state_names.is_empty(),
             "evaluate_static_observeds is only defined for a state-free system"
