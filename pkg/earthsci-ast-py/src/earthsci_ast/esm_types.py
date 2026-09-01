@@ -100,6 +100,28 @@ class ExprNode:
     # `intersect_polygon` leaf so its data-dependent clip ring is exposed as a
     # derived index set the `polygon_area` FAQ ranges over (RFC §8.1).
     id: str | None = field(default=None, metadata={"kind": "scalar"})
+    # Optional AUTHOR assertion on this node's cadence class — "const" |
+    # "discrete" | "continuous" (CONFORMANCE_SPEC.md §5.7.6 rule 3). A
+    # test/diagnostic hook that changes NO semantics: the dependency-partition
+    # pass DERIVES every node's class from the data-dependency DAG and merely
+    # errors when a present assertion disagrees. Nothing reads or rewrites it
+    # here, so it is authored content that must round-trip — dropping it on load
+    # disarmed that guard on every document this binding re-emitted, while Go,
+    # TypeScript and Rust carried it. It has NO canonical wire slot, so a node
+    # carrying it raises ``E_CANONICAL_UNSUPPORTED_FIELD`` (canonicalize.py's
+    # derived ``_NON_EMISSIBLE_FIELDS``), which is what
+    # ``tests/conformance/canonical/README.md`` requires.
+    expect_cadence: str | None = field(default=None, metadata={"kind": "scalar"})
+    # Named scalar attributes of an OPEN rewrite-target op (esm-spec §4.2): a
+    # custom op such as ``godunov_hamiltonian`` carries its SCHEME PARAMETERS
+    # here rather than in dedicated schema slots, and in a rewrite rule's
+    # ``match`` an ``attrs.<key>`` whose value is a bare param name binds that
+    # param to the matched literal (§9.6.1) — see
+    # ``lower_expression_templates._match``, which already binds through this
+    # object at the raw-JSON layer. Evaluable-core ops MUST NOT use it.
+    # Dropping it on load lost a custom op's configuration outright. Likewise
+    # non-emissible in canonical form.
+    attrs: dict[str, Any] | None = field(default=None, metadata={"kind": "scalar"})
     # Geometry interpretation for the `intersect_polygon` leaf — "planar" |
     # "spherical" | "geodesic" (RFC §8.1 / Appendix B; CONFORMANCE_SPEC.md
     # §5.8.4). REQUIRED on every intersect_polygon node, no default; matched
@@ -188,6 +210,8 @@ _EXPR_WIRE_ORDER: tuple[str, ...] = (
     "axis",
     "fn",
     "id",
+    "expect_cadence",
+    "attrs",
     "manifold",
     "handler_id",
     "name",

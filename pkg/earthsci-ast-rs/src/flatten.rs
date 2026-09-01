@@ -1622,6 +1622,11 @@ fn build_reaction_block(
         }
     }
 
+    // The §6.3 value model travels with the parameter, exactly as it does out
+    // of [`build_model_block`]. `update` above all: it is the only channel
+    // binding a parameter to a data source (esm-spec §5.4), so dropping it here
+    // would flatten a data-driven parameter into a constant — and it is the
+    // SOLE seed of the DISCRETE cadence class (CONFORMANCE_SPEC §5.7.2).
     for (param_name, param) in &rs.parameters {
         let namespaced = format!("{system_name}.{param_name}");
         parameters.insert(
@@ -1631,6 +1636,10 @@ fn build_reaction_block(
                 units: param.units.clone(),
                 default: param.default,
                 description: param.description.clone(),
+                default_units: param.default_units.clone(),
+                shape: param.shape.clone(),
+                distribution: param.distribution.clone(),
+                update: param.update.clone(),
                 ..Default::default()
             },
         );

@@ -659,6 +659,21 @@ run_property_corpus() {
     # fixing every divergence would have turned the build RED (audit F7). The
     # corpus-quality question that flag answers is real, but it belongs to the
     # corpus generator's own acceptance check, not to the conformance gate.
+    #
+    # The SOURCE fixture is now a sixth participant (2026-09-01), so this stage
+    # is REFERENCE-COMPARING rather than cross-binding-agreeing: five bindings
+    # that dropped the same expression field used to agree perfectly and pass.
+    #
+    # `--fail-on-source-mismatch` is NOT passed yet, for a specific reason
+    # rather than a shrug. Two corpus fixtures (expr_019, expr_020) spell a
+    # `makearray` `values` entry `0.0`; all five bindings emit `0`, which is the
+    # canonical-number rule (CONFORMANCE_SPEC.md §5.5.3.1 rule 1: an integral,
+    # i64-representable value is written as an integer literal). The BINDINGS
+    # are right and the CORPUS is stale — it predates that ruling. Closing it
+    # means regenerating tests/property_corpus/expressions, after which this
+    # flag should be added and the gate becomes total. Until then the runner
+    # PRINTS every source mismatch unconditionally, so the finding shows up in
+    # every run instead of waiting on the flag.
     python3 "$SCRIPT_DIR/run-property-corpus-conformance.py" \
         --corpus "$corpus" \
         --output "$OUTPUT_DIR/property_corpus_report.json" \
@@ -680,6 +695,24 @@ run_property_corpus() {
 # ">= 2 succeeded" clause any more: all five bindings are required.
 declare -a FAILED_STAGES=()
 
+# BEFORE ADDING A STAGE, pick its shape deliberately. Every stage below is one
+# of three, and they are NOT equally strong:
+#
+#   reference-comparing    — output matches an oracle OUTSIDE the bindings (a
+#                            committed golden, an analytic solution, an
+#                            independent reference, or the authored source
+#                            document). The strong shape.
+#   cross-binding-agreeing — all five bindings say the same thing. Cannot see a
+#                            SHARED WRONG ANSWER; `check_agreement` in
+#                            compare-conformance-outputs.py:440 says so itself.
+#   self-comparing         — a binding agrees with ITSELF on a second pass.
+#                            Cannot see anything lost on the FIRST pass. Weakest;
+#                            never the only gate on a property.
+#
+# The round-trip and property-corpus stages were both silently self-comparing /
+# cross-binding-agreeing until 2026-09-01 and are now reference-comparing. The
+# per-stage classification table lives in tests/conformance/README.md
+# ("What shape is a conformance stage?") — keep it current when adding one.
 run_stage() {
     local name="$1"
     shift

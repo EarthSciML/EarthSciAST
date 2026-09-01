@@ -26,3 +26,4 @@ dist/
 # A/B and opt-variant build dirs used by the conformance timing probes
 target-opt/
 target-pkg2/
+target-esio/

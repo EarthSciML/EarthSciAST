@@ -3477,6 +3477,36 @@ special-case older versions to recover Option A matching. Motivation and measure
    "leaves an open index-set size symbolic until its binding site". Folding it at a
    standalone emit resolves it against a binding site that has not happened.
 
+   **Load preservation.** `emit(load(f))` MUST reproduce `f`. Preservation is **full value
+   equality**, not mere key presence: every member `f` authors — every object key, at every
+   depth — MUST be present in the emitted document *with an equal value*, because a field
+   that survives as a key while losing its content is dropped just as surely as one that
+   disappears. The only differences this rule admits are
+
+   1. the **canonical serialization** defined above — object key order and whitespace, and
+      the number spelling of §5.5.3.1;
+   2. the **omission of a field carrying no information the format distinguishes** — an
+      empty collection, or a written-out value identical to the schema default (an absent
+      `discrete_events` and `"discrete_events": []` are the same document, as are an absent
+      `domain.independent_variable` and an explicit `"t"`); and
+   3. the **load-time rewrites this specification REQUIRES**, each of which replaces an
+      authored construct by its defined meaning: `enum` lowering (§9.3), subsystem `ref`
+      resolution (§4.7 "Resolution timing"), metaparameter folding on an *instantiating*
+      load (§9.7.6), eager expansion of a target-bearing reference (rule 3), and the
+      component-level `match`-only registry drop stated above. A rewrite this specification
+      merely **permits** — §6.7.4 states the inline multi-series `y` shorthand and its
+      desugared `y` + `series` spelling are *equivalent*, so a binding may emit either — is
+      not a licence to drop anything else: a binding applying one MUST still preserve every
+      field outside the construct it rewrote.
+
+   Anything else missing from `emit(load(f))` is a **defect, not a normalization**. It is
+   also a defect that idempotence structurally cannot report: the second emit forgets the
+   field exactly as the first did, so the fixed-point equation below holds perfectly over a
+   document that has already lost it. Load preservation and idempotence are therefore both
+   normative and neither implies the other, and a conformance harness MUST assert the
+   round-trip against the **original document** — not against a second emit — for this half
+   of the contract to be tested at all (`tests/conformance/round_trip/`).
+
    **Idempotence.** Both modes MUST be idempotent. `emit ∘ load` MUST be a byte-wise fixed
    point within a mode: `emit(load(emit(load(f)))) == emit(load(f))`, both loads taken in the
    same mode.

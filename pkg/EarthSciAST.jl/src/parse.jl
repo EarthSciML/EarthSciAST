@@ -192,6 +192,8 @@ function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
         :(_coerce_regions(_get_field(data, $w, nothing)))
     elseif spec.parse === :shape
         :(_coerce_shape(_get_field(data, $w, nothing)))
+    elseif spec.parse === :attrs
+        :(_coerce_attrs(_get_field(data, $w, nothing)))
     elseif spec.parse === :int_or_string
         :(let raw = _get_field(data, $w, nothing)
             raw === nothing ? nothing : (raw isa Integer ? Int(raw) : string(raw))
@@ -445,6 +447,21 @@ function _coerce_regions(data)
                              for ax in region])
         for region in data
     ])
+end
+
+# `attrs` — the OPEN rewrite-target op's named scalar attributes (esm-spec
+# §4.2). Distinct from the `:json` recipe only in that the schema pins the top
+# level to an OBJECT: a non-object is a ParseError here rather than a `TypeError`
+# from the struct field's `Union{Dict{String,Any},Nothing}` conversion. Values
+# are converted to native containers so downstream code never sees JSON3 types,
+# exactly as `_to_native_json` does for `value`.
+function _coerce_attrs(data)
+    data === nothing && return nothing
+    # `JSON3.Object <: AbstractDict`, so this covers both dict-like carriers.
+    isa(data, AbstractDict) ||
+        throw(ParseError("`attrs` must be a JSON object of named scalar " *
+                         "attributes (esm-spec §4.2), got $(typeof(data))"))
+    return Dict{String,Any}(string(k) => _to_native_json(v) for (k, v) in pairs(data))
 end
 
 function _coerce_shape(data)

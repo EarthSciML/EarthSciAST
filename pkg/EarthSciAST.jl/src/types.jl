@@ -350,6 +350,35 @@ mutable struct OpExpr <: ASTExpr
     #           pretty-printer (a skolem renders as `skolem(<args>)`).
     label::Union{String,Nothing}
 
+    # ── Author annotations: carried verbatim, never interpreted here ──
+    # `expect_cadence` — an OPTIONAL author assertion on this node's cadence
+    #           class ("const"/"discrete"/"continuous"; CONFORMANCE_SPEC.md
+    #           §5.7.6 rule 3). A test/diagnostic hook that changes NO
+    #           semantics: the dependency-partition pass DERIVES every node's
+    #           class from the data-dependency DAG and merely errors when a
+    #           present assertion disagrees. Nothing in the build path reads or
+    #           rewrites it, so it is authored content that must round-trip —
+    #           dropping it on load disarmed that guard on every re-emitted
+    #           document (Go, TypeScript and Rust all carry it).
+    # `attrs`   — named scalar attributes of an OPEN rewrite-target op
+    #           (esm-spec §4.2): a custom op such as `godunov_hamiltonian`
+    #           carries its SCHEME PARAMETERS here instead of in dedicated
+    #           schema slots, and in a rewrite rule's `match` an `attrs.<key>`
+    #           whose value is a bare param name binds that param to the
+    #           matched literal (§9.6.1). Evaluable-core ops MUST NOT use it.
+    #           Dropping it lost a custom op's configuration outright.
+    #
+    # Both are semantically inert for evaluation but are NOT inert for
+    # identity: they are emitted, so two nodes differing only in one of them
+    # are different documents and MUST NOT be interned together (intern.jl's
+    # generated walkers cover them automatically via their `:scalar` row).
+    # Neither has a slot in the pinned canonical JSON node encoding, so a node
+    # carrying one fails closed with `E_CANONICAL_UNSUPPORTED_FIELD` — see
+    # `_NON_EMISSIBLE_FIELDS` (canonicalize.jl), which derives that from
+    # `fieldnames(OpExpr)` and therefore needs no edit here.
+    expect_cadence::Union{String,Nothing}
+    attrs::Union{Dict{String,Any},Nothing}
+
     OpExpr(op::String, args::Vector{ASTExpr};
            wrt=nothing, dim=nothing,
            int_var=nothing, lower=nothing, upper=nothing,
@@ -363,6 +392,7 @@ mutable struct OpExpr <: ASTExpr
            id=nothing, manifold=nothing,
            distinct=nothing, key=nothing,
            arg=nothing, bindings=nothing, label=nothing,
+           expect_cadence=nothing, attrs=nothing,
            # `handler_id` was the v0.2.x field for the now-removed `call`
            # op (esm-spec §9.2 closure). Accept and ignore on construction
            # so internal helpers that still pass it through don't break
@@ -372,7 +402,8 @@ mutable struct OpExpr <: ASTExpr
             semiring, ranges,
             regions, values, shape, perm, axis, fn, name, value,
             table, table_axes, output, join, filter, join_gates,
-            id, manifold, distinct, key, arg, bindings, label)
+            id, manifold, distinct, key, arg, bindings, label,
+            expect_cadence, attrs)
 
     # Fully-positional inner constructor — the ALLOCATION-FREE reconstruction
     # path. The keyword constructor above builds a ~30-entry `NamedTuple` for its
@@ -436,8 +467,8 @@ Columns:
     - `:internal`  — build-time only; never parsed, serialized or traversed.
 - `parse`: for `:scalar` fields, the parse-recipe tag `_parse_op_optional_fields`
   dispatches on (`:string`, `:int`, `:int_vec`, `:bool`, `:json`,
-  `:output_idx`, `:regions`, `:shape`, `:int_or_string`); `nothing` when the
-  `kind` alone determines parsing.
+  `:output_idx`, `:regions`, `:shape`, `:int_or_string`, `:attrs`); `nothing`
+  when the `kind` alone determines parsing.
 - `binds_scope`: `true` for the one field whose KEYS validate's
   `_bound_index_symbols` credits into reference-check scope (`bindings` —
   template formal-parameter names). A legitimate consumer DIFFERENCE, not a
@@ -481,6 +512,8 @@ const OPEXPR_FIELD_TABLE = (
     arg        = (wire = :arg,        kind = :scalar, parse = :string,          binds_scope = false),
     bindings   = (wire = :bindings,   kind = :expr_map, parse = nothing,        binds_scope = true),
     label      = (wire = :label,      kind = :scalar, parse = :string,          binds_scope = false),
+    expect_cadence = (wire = :expect_cadence, kind = :scalar, parse = :string,  binds_scope = false),
+    attrs      = (wire = :attrs,      kind = :scalar, parse = :attrs,           binds_scope = false),
 )
 
 # The table must cover EXACTLY the struct's fields, in struct-field order —

@@ -5,6 +5,23 @@ Runs every binding's round-trip driver against the shared corpus at
 ``tests/property_corpus/expressions/`` and diffs the re-serialized output across
 bindings.
 
+THE SOURCE IS A PARTICIPANT (2026-09-01)
+----------------------------------------
+This runner used to collect ``serialize(parse(F))`` from each binding and
+compare those outputs TO EACH OTHER. ``F`` itself was never a participant, so
+the stage was *cross-binding-agreeing* (see tests/conformance/README.md, "What
+shape is a conformance stage?"): five bindings that all drop the same
+expression field agree perfectly and the stage passes on a shared wrong answer.
+CONFORMANCE_SPEC.md calls this the strictest gate in the repo, which made the
+blind spot worth closing rather than merely noting.
+
+``F`` is now a sixth participant, under the name ``SOURCE``. The corpus
+fixtures are hypothesis-generated CANONICAL expressions, so
+``serialize(parse(F))`` must reproduce ``F`` exactly — a canonical input has no
+legitimate normalization left to undergo — which is what makes them an oracle
+at zero cost. The stage is now reference-comparing, and a divergence line names
+which SIDE is wrong instead of only that the sides differ.
+
 THE CONTRACT, AND WHY IT CHANGED (audit 2026-07-14, F7)
 ------------------------------------------------------
 This gate used to be invoked with ``--require-divergence``, which exits 1 **iff
@@ -178,6 +195,38 @@ def canonicalize(value) -> str:
     return json.dumps(value, sort_keys=True)
 
 
+# The name under which the SOURCE fixture enters the comparison. Upper-case so
+# it sorts ahead of every binding name and heads each divergence line, where it
+# is the one participant that says which SIDE is wrong rather than merely that
+# the sides differ.
+SOURCE_PARTICIPANT = "SOURCE"
+
+
+def read_sources(fixtures: List[Path]) -> Dict[str, dict]:
+    """The corpus fixtures themselves, shaped like a binding driver's output.
+
+    THE SOURCE IS A PARTICIPANT. Without it this stage was cross-binding-
+    agreeing only (see tests/conformance/README.md, "What shape is a
+    conformance stage?"): five bindings that drop the same expression field
+    agree perfectly, so the stage passes on a shared wrong answer — and
+    CONFORMANCE_SPEC.md calls this the strictest gate in the repo.
+
+    The corpus fixtures are hypothesis-generated CANONICAL expressions, so
+    `serialize(parse(F))` must reproduce `F` exactly: a canonical input has no
+    legitimate normalization left to undergo. That is what makes them usable as
+    an oracle at zero cost, and it is why the source is compared with the same
+    `canonicalize` the bindings get — object key order is free, everything else
+    is not.
+    """
+    out: Dict[str, dict] = {}
+    for path in fixtures:
+        try:
+            out[path.name] = {"ok": True, "value": json.loads(path.read_text())}
+        except Exception as exc:  # pragma: no cover — a corrupt corpus file
+            out[path.name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return out
+
+
 def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
     """For each fixture, record per-binding canonical outputs and divergences."""
     report: List[dict] = []
@@ -199,14 +248,36 @@ def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
                     "ok": False,
                     "error": entry.get("error", "unknown"),
                 }
-        distinct = {
-            e["canonical"] if e["ok"] else f"ERR::{e['error']}" for e in per_binding.values()
-        }
+        # TWO SIGNALS, DELIBERATELY NOT MERGED. `diverged` keeps its exact
+        # pre-SOURCE meaning — THE BINDINGS DISAGREE WITH EACH OTHER — because
+        # folding the source into it would silently change what
+        # `--fail-on-divergence` gates, and this module's own history (the
+        # `--require-divergence` mix-up below) is what a conflated signal costs.
+        def key(e: dict) -> str:
+            return e["canonical"] if e["ok"] else f"ERR::{e['error']}"
+
+        binding_results = {n: e for n, e in per_binding.items() if n != SOURCE_PARTICIPANT}
+        distinct = {key(e) for e in binding_results.values()}
         diverged = len(distinct) > 1
+
+        # `source_mismatch` is the signal adding the source exists to produce:
+        # the bindings AGREE, and are together different from the authored
+        # fixture. Cross-binding agreement cannot see this, and it is the exact
+        # shape of "five bindings can agree on the wrong answer".
+        source = per_binding.get(SOURCE_PARTICIPANT)
+        source_mismatch = (
+            source is not None
+            and source["ok"]
+            and not diverged
+            and bool(binding_results)
+            and key(source) not in distinct
+        )
+
         report.append(
             {
                 "fixture": fixture,
                 "diverged": diverged,
+                "source_mismatch": source_mismatch,
                 "bindings": per_binding,
             }
         )
@@ -216,13 +287,16 @@ def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
 def summarize(report: List[dict], bindings: List[str]) -> dict:
     """Aggregate per-fixture findings into a run summary."""
     diverged = [r for r in report if r["diverged"]]
+    mismatched = [r for r in report if r.get("source_mismatch")]
     any_failures = [r for r in report if any(not b["ok"] for b in r["bindings"].values())]
     return {
         "total_fixtures": len(report),
         "diverged_count": len(diverged),
+        "source_mismatch_count": len(mismatched),
         "any_parse_failure_count": len(any_failures),
         "bindings": bindings,
         "diverged_fixtures": [r["fixture"] for r in diverged][:20],
+        "source_mismatch_fixtures": [r["fixture"] for r in mismatched][:20],
     }
 
 
@@ -238,6 +312,14 @@ def main() -> int:
         "--fail-on-divergence",
         action="store_true",
         help="Exit 1 on ANY cross-binding round-trip divergence (the conformance gate).",
+    )
+    ap.add_argument(
+        "--fail-on-source-mismatch",
+        action="store_true",
+        help="Exit 1 when every binding AGREES and they all differ from the authored "
+        "fixture. A separate question from --fail-on-divergence and never folded into "
+        "it: this one asks whether the agreed answer is RIGHT. Mismatches are printed "
+        "either way; the flag only decides whether they stop the build.",
     )
     ap.add_argument(
         "--require-all-bindings",
@@ -303,6 +385,11 @@ def main() -> int:
         )
         return 1
 
+    # Add the SOURCE fixture as a participant — AFTER the binding-count and
+    # required-binding gates above, which count real bindings: the source is an
+    # oracle, not a stand-in for a binding that did not run.
+    outputs[SOURCE_PARTICIPANT] = read_sources(fixtures)
+
     report = compare(outputs)
     summary = summarize(report, sorted(outputs.keys()))
 
@@ -315,11 +402,35 @@ def main() -> int:
     print(
         f"[done] fixtures={summary['total_fixtures']} "
         f"diverged={summary['diverged_count']} "
+        f"source_mismatch={summary['source_mismatch_count']} "
         f"any_parse_failure={summary['any_parse_failure_count']} "
         f"bindings={summary['bindings']}",
         file=sys.stderr,
     )
     print(f"[done] report written to {out_path}", file=sys.stderr)
+
+    # SOURCE mismatches are printed UNCONDITIONALLY, whatever the gate flags
+    # say. This is the finding adding the source exists to produce, and a
+    # finding nobody sees is not a finding.
+    if summary["source_mismatch_count"]:
+        print(
+            f"[source] {summary['source_mismatch_count']} of "
+            f"{summary['total_fixtures']} expressions: ALL bindings agree with each "
+            "other and DIFFER FROM THE AUTHORED FIXTURE",
+            file=sys.stderr,
+        )
+        for entry in report:
+            if not entry.get("source_mismatch"):
+                continue
+            got = next(
+                r["canonical"]
+                for n, r in sorted(entry["bindings"].items())
+                if n != SOURCE_PARTICIPANT and r["ok"]
+            )
+            print(f"  {entry['fixture']}", file=sys.stderr)
+            print(f"    SOURCE   {entry['bindings'][SOURCE_PARTICIPANT]['canonical']}",
+                  file=sys.stderr)
+            print(f"    bindings {got}", file=sys.stderr)
 
     if args.require_divergence and summary["diverged_count"] == 0:
         print(
@@ -353,6 +464,19 @@ def main() -> int:
         for shape, fixtures in sorted(shapes.items(), key=lambda kv: -len(kv[1])):
             print(f"  [{len(fixtures)}x] {shape}", file=sys.stderr)
             print(f"        e.g. {', '.join(fixtures[:4])}", file=sys.stderr)
+        return 1
+
+    # The SOURCE gate, kept separate from the cross-binding one on purpose: a
+    # unanimous disagreement with the fixture is a different fault from the
+    # bindings disagreeing with each other, and merging them would make the
+    # message lie about which one fired.
+    if args.fail_on_source_mismatch and summary["source_mismatch_count"] > 0:
+        print(
+            f"error: {summary['source_mismatch_count']} of {summary['total_fixtures']} "
+            "corpus expressions do not survive serialize(parse(F)) == F in ANY binding "
+            "(listed above)",
+            file=sys.stderr,
+        )
         return 1
 
     return 0

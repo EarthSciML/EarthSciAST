@@ -324,6 +324,16 @@ _EMISSIBLE_FIELDS: tuple[str, ...] = ("op", "args", "wrt", "dim", "fn", "name", 
 # with the witness dropped from the canonical bytes exactly as in Julia) but not
 # ``bindings``, whose entry stays a forward-compat placeholder; listing both here
 # keeps the derived non-emissible set below matching Julia's contract exactly.
+#
+# ``expect_cadence`` and ``attrs`` are deliberately NOT here. Both are author
+# annotations with no canonical wire slot, and
+# ``tests/conformance/canonical/README.md`` names them among the fields a node
+# may carry that MUST make ``canonical_json`` raise
+# ``E_CANONICAL_UNSUPPORTED_FIELD`` — a requirement that was unreachable until
+# ``ExprNode`` started carrying them, because before that parse dropped both and
+# the emitter never saw one. They fall through to the derived
+# ``_NON_EMISSIBLE_FIELDS`` below, so no edit is needed here; this note records
+# that the omission is a decision, not an oversight.
 _CANONICAL_IGNORED_FIELDS: tuple[str, ...] = ("arg", "bindings")
 
 # ExprNode fields WITHOUT a pinned slot in the cross-binding canonical JSON node

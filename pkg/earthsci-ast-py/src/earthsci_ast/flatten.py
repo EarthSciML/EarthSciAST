@@ -1116,6 +1116,13 @@ def _collect_reaction_system(
         default_value: Any = None
         if isinstance(param.value, (int, float)):
             default_value = param.value
+        # The §6.3 value model travels with the parameter, exactly as it does
+        # out of `_collect_model`. ``update`` above all: it is the only channel
+        # binding a parameter to a data source (esm-spec §5.4), so dropping it
+        # here would flatten a data-driven parameter into a constant — and
+        # `update` is the sole seed of the DISCRETE cadence class
+        # (CONFORMANCE_SPEC §5.7.2). Mirrors the Julia reference
+        # (namespacing.jl `_collect_reaction_system!`).
         component.parameters[namespaced] = FlattenedVariable(
             name=namespaced,
             type="parameter",
@@ -1123,6 +1130,9 @@ def _collect_reaction_system(
             default=default_value,
             description=param.description,
             source_system=full_prefix,
+            shape=param.shape,
+            update=param.update,
+            distribution=param.distribution,
         )
 
     # Declared local names for the §5.5.6 `join` gate: a reaction system's

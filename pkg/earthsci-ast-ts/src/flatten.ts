@@ -1117,15 +1117,21 @@ function collectReactionSystem(rs: ReactionSystem, fullPrefix: string): Componen
 
   for (const [name, param] of Object.entries(rs.parameters ?? {})) {
     const namespaced = `${fullPrefix}.${name}`
-    const flat: FlattenedVariable = {
-      name: namespaced,
-      type: 'parameter',
-      sourceSystem: fullPrefix,
-    }
-    if (param.units !== undefined) flat.units = param.units
-    if (typeof param.default === 'number') flat.default = param.default
-    if (param.description !== undefined) flat.description = param.description
-    component.parameters[namespaced] = flat
+    // Route through the same helper the model path uses, rather than
+    // re-listing the fields here. Listing them twice is what let this lowering
+    // silently drop `update` / `distribution` / `shape`: `update` is the ONLY
+    // channel binding a parameter to a data source (esm-spec §5.4), so losing
+    // it turns a data-driven parameter into a constant rather than merely
+    // dropping an annotation. The cast is a codegen artifact — the schema's
+    // `Parameter` and the hand-written `ModelVariable` describe the same shape,
+    // but json2ts widens nested objects with index signatures.
+    const asVariable = { ...param, type: 'parameter' } as unknown as ModelVariable
+    component.parameters[namespaced] = flattenedVariableOf(
+      namespaced,
+      'parameter',
+      asVariable,
+      fullPrefix,
+    )
   }
 
   const locals = new Set([...Object.keys(rs.species ?? {}), ...Object.keys(rs.parameters ?? {})])

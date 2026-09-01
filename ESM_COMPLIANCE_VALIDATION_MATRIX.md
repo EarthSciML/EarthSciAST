@@ -117,6 +117,79 @@ Where:
 | BEHAV-04-B-001 | URL/remote reference support is an OPTIONAL binding capability; a binding without it MUST reject a URL ref cleanly with the existing unresolved diagnostics (`template_import_unresolved` / subsystem-ref resolution error), never silently skip or misresolve | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
 | BEHAV-04-B-002 | A binding that supports URL refs MUST resolve a URL-loaded document's own relative refs against its URL base (RFC 3986 joining) and canonicalize URL identity for cycle detection (dot segments removed, relative spellings joined) | esm-spec.md §4.7, §9.7.2 | Yes | behavioral |
 
+### BEHAV-04-G: Evaluable-Core Operator Coverage (esm-spec §4.2)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-G-001 | `{"op": "true"}` is a nullary boolean LITERAL, not a form op awaiting a lowering pass: an evaluator MUST produce the true value for it (1.0 under the 0/1 convention every comparison and `and`/`or`/`not` already uses), so `aggregate{expr: true}` — the semi-join spelling — COUNTS the admitted tuples | esm-spec.md §4.2 (op table), CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-04-G-002 | A §4.2 evaluable-core op the evaluator has NO rule for (`skolem`, `rank`, `distinct`, `argmin`, `argmax`, `ic`, `enum`, `table_lookup`, `apply_expression_template`) MUST be refused with a diagnostic naming it — never a panic, never a NaN. The refusal belongs at BUILD, at the funnel every run passes through, not at each evaluator entry point | esm-spec.md §4.2, §9.6.8 | Yes | validation |
+| BEHAV-04-G-003 | The one carve-out: `ic` is legal as an equation LHS (§11.4) — initial-condition assembly reads the equation and the evaluator never sees the node — so the gate MUST unwrap an `ic` LHS and check its operand instead of rejecting it | esm-spec.md §11.4, §4.2 | Yes | validation |
+
+> **Binding status (2026-09-01)**: **Rust** was the only binding that could not evaluate
+> `true`: `eval_op`'s backstop for an ungated op is `unreachable!` (chosen over the silent
+> NaN it replaced), and `hoist_static_observeds` reached the evaluator without calling
+> `check_evaluable`, so a document that `esm validate` had just passed exited 101 with a
+> panic. **Python** (`numpy_interpreter.py`: `if op == "true": return 1.0`) and **Julia**
+> (`tree_walk/geometry_compile.jl`: a 1.0 literal node) already answered, as did Rust's own
+> `value_invention::vi_eval` (`Val::Bool(true)`) — so -001 was a Rust-local divergence from
+> a rule the peers had already settled, and the fix aligns it. -002 is the class the panic
+> text implies: six of the nine ops above reached the same backstop, verified by running
+> them against the un-gated build. Fixed by widening `simulate_array/compile.rs` stage (0)
+> from `check_no_spatial_ops` to the full `check_evaluable`; the remaining three
+> (`skolem`, `argmin`, `argmax`) are refused earlier, in the value-invention stage's own
+> vocabulary. Gates: `earthsci-ast-rs/tests/evaluable_core_gate.rs` plus
+> `eval.rs::the_true_literal_evaluates_to_one` and
+> `the_core_minus_evaluable_gap_is_exactly_nine_ops`, which pins the gap member by member
+> so a tenth op arriving without a rule fails a test instead of panicking at an author.
+>
+> **Cross-binding notes, reported not fixed.** (a) Python and Julia both also evaluate
+> `{"op": "false"}` → 0.0, and Rust's `value_invention` does too, but `false` is in NO
+> binding's core-op ARITY registry and is absent from the §4.2 op table — so a document
+> spelling it is rejected as an unlowered rewrite target by the very bindings that would
+> evaluate it. Either the spec table gains `false` beside `true` or the three evaluators
+> should drop it; it is a spec question, not a binding bug. (b) Peer bindings should audit
+> their own core-set-minus-evaluable gap the way -002 does: the failure mode is a panic or
+> a NaN on a schema-valid document, and only an enumerated gap makes it visible.
+
+### BEHAV-04-F: Aggregate Binders vs Globally-Scoped Names (esm-spec §4.3.1 / §11.3)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-F-001 | An `aggregate` binder — a `ranges` key or an `output_idx` entry — spelled with the document's INDEPENDENT VARIABLE (`domain.independent_variable`, default `"t"`) or with the §6.4 `_var` placeholder MUST be rejected at load with `reserved_index_symbol`. Both names are implicitly declared in every model's expression scope (§4.9.1) and are resolved by name AHEAD of the loop bindings, so such a binder declares a loop its own body can never address | esm-spec.md §4.3.1, §11.3, §4.9.1; CONFORMANCE_SPEC.md §5.5.8 | Yes | validation |
+| BEHAV-04-F-002 | The rule follows `domain.independent_variable`: a document that renames it moves the rejection onto the new name and frees `t` as an ordinary symbol | esm-spec.md §11.3 | Yes | validation |
+| BEHAV-04-F-003 | An `integral`'s `var` is NOT covered: `∫f dt` binds the independent variable because it is integrating over it, which is the authored §4.2 form and not a shadow | esm-spec.md §4.2 | Yes | validation |
+| BEHAV-04-F-004 | The check MUST run on the fully lowered document (after §9.7 import resolution, the §9.6.3 fixpoint and template expansion), so a binder introduced by a template BODY is caught alongside an authored one | esm-spec.md §9.6.4, §9.7.6 | Yes | validation |
+
+> **Binding status (2026-09-01)**: **Rust only**; `reserved_index_symbol` is a NEW
+> cross-binding diagnostic code and Julia, Python, TypeScript and Go all need the mirror
+> before the vocabularies agree again (Rust: `diagnostic.rs` registry +
+> `parse::reject_reserved_index_symbols`; the value is pinned by
+> `the_diagnostic_vocabulary_is_pinned`).
+>
+> **Why a rejection and not a shadowing rule.** Making the binder win means inverting the
+> name-first precedence at nine sites in Rust alone (`simulate_array/eval.rs`
+> `lookup_variable` / `lookup_array_ref`, `vectorized.rs::eval_vec_variable`, two
+> `tape/lower.rs` sites, `units.rs`, `simulate/resolve.rs`, and the scoping walkers
+> `flatten.rs::namespace_expr_scoped` / `scope_template_body`, each spelled
+> `if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name)`) and in every peer
+> binding — and it would still leave the node unable to mention the independent variable
+> at all, since an `aggregate` body reading `t` for a forcing term is ordinary and would
+> silently become an index. Rejecting costs an author nothing: an index symbol is a free
+> choice (§4.3.1). A scan of the whole shared corpus finds no document that binds either
+> name, so no conforming fixture is affected (pinned by
+> `the_shared_corpus_carries_no_reserved_binder`).
+>
+> **What it was before.** SILENT. Two aggregates over the same data differing only in the
+> first loop symbol's name gave 2 for `k` and **0** for `t` — no error, no warning, and
+> `esm validate` passing. With `const` key columns the same collision surfaced instead as
+> `E_TREEWALK_CONSTARRAY_OOB: const array 'left_key' index 0 out of range 1..3`, a
+> diagnostic about the wrong thing, because the lowered `code_lookup` addressed the
+> constant key table with the simulation TIME. §5.5.8 already requires an unresolvable
+> `join.on` key column to be a build error rather than a no-op; this is that rule one step
+> earlier, at the binder. Reported by the downstream EPA MOVES port (finding F4), where a
+> time-key loop symbol spelled `t` made a daytime hour count come out 0 with everything
+> else passing. Gates: `earthsci-ast-rs/tests/reserved_index_symbol.rs` and the three
+> fixtures under `tests/fixtures/reserved_index_symbol/` (the data-column half, the
+> `const`-array half, and the `k`-spelled control that still answers 2).
+
 ### BEHAV-04-E: Subsystem-Mounted Data-Loader Consumption (RFC pure-io-data-loaders §4.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -198,6 +271,7 @@ Where:
 | BEHAV-10-A-004 | A `variable_map` whose transform REMOVES the target parameter (`param_to_var`, `conversion_factor`, absent) MUST rename `to` → `from` inside every `join` clause as well; the expression-substitution walk does not reach these names, and a join left naming the removed parameter fails materialisation with `join references unknown variable` | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §10.4 | Yes | behavioral |
 | BEHAV-10-A-005 | A flattened overlap-gated `distinct` producer MUST materialise the SAME support set as the unflattened one — the set is integer-valued and compared byte-identically (§5.5.1), so namespacing is required to be result-neutral | CONFORMANCE_SPEC.md §5.5.6, §5.5.1 | Yes | behavioral |
 | BEHAV-10-A-006 | The NODE-LOCAL BINDER test MUST precede the declared-local test: a join name that is an `output_idx` entry or a `ranges` key of the node carrying the clause MUST be left unchanged **even when a local variable of the same name is declared**. esm-spec §4.3.1 permits that shadowing, and an `on` column resolves against the node's own ranges, so prefixing a shadowed symbol makes it resolve to nothing. The binder set is the clause-bearing node's own symbols, not an enclosing node's | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §4.3.1 | Yes | behavioral |
+| BEHAV-10-A-007 | A §4.7 subsystem MOUNT is a namespacing event and MUST carry the same plain-string references: after renaming a mounted variable to `<key>.<name>`, every `join.on` key column, `overlap` envelope factor and resolved `on_gate` COLUMN naming it MUST follow. The rule is per NAME (a name the clause-bearing node binds stays bare while its siblings are rewritten), and a clause's SYMBOLS (`sym_src`/`sym_tgt`, the gate's two gated symbols) are binders and MUST NOT be renamed. Applies to the ARRAY-runtime mount as much as to the scalar flatten | CONFORMANCE_SPEC.md §5.5.6, esm-spec.md §4.6, §4.7 | Yes | behavioral |
 
 > **Binding status (2026-08-12)**: **Julia** was already correct and is the reference
 > (`namespacing.jl::_namespace_join` for -001/-002/-003,
@@ -234,6 +308,38 @@ Where:
 > (Python, Julia), `namespaceJoinNames` (Go). Two cases per binding (a shadowed `ranges`
 > key, a shadowed `output_idx` entry with a literal singleton dimension beside it); all
 > four pairs fail with the binder test removed.
+>
+> **-007 (2026-09-01)**: the mount is the THIRD namespacing event in this crate and had
+> none of -001..-006. `simulate_array/compile.rs::mount_subsystems` renames references
+> through `rename_free_symbol`, an `Expr::Variable` walker over `map_children`, so a
+> mounted leaf's variables became `Leaf.left_key` while its `join.on` went on naming the
+> bare `left_key` — and the build died with "join key column 'left_key' does not resolve
+> to a loop index of this aggregate". Every relational leaf joins on data columns
+> (§5.5.8 names MOVES as the motivating case), so under this NO calculator could be
+> mounted as a nested subsystem at all; the downstream EPA MOVES port worked around it by
+> mounting leaves as top-level `models` `{ref}` instead. Fixed in Rust only
+> (`rename_free_symbol` now finishes the node through a new `rename_join_names`, the
+> array twin of `flatten.rs`'s); the existing per-node binder test in that walker gives
+> the -006 shadowing rule for free, because the mount calls it once per sibling NAME.
+> Gates: `earthsci-ast-rs/tests/subsystem_mount_join_names.rs` (end to end through
+> `load_path` + the inline-test runner) and three unit cases in `compile.rs`
+> (`mounting_carries_a_leafs_join_on_key_columns`,
+> `mounting_leaves_a_shadowed_loop_symbol_alone`,
+> `mounting_carries_overlap_envelope_factors`) — all four fail with the join rewrite
+> removed. **Not ported**: Julia, Python, Go and TypeScript each need the audit on their
+> own mount path (whichever renames a mounted subsystem's variables), and until then this
+> row is Rust-only.
+>
+> **Adjacent, found by the -007 audit and NOT fixed** — `flatten.rs::retarget_merged_names`
+> (the `operator_compose` renaming match, `B.x` → `A.y`) is also a pure variable RENAME
+> driven through `crate::substitute`, which walks `Expr` children only, and unlike its
+> `variable_map` sibling twenty lines below it has no `rename_join_names` companion. A
+> `join` naming the folded-away spelling would keep naming it. No fixture exercises an
+> `operator_compose` renaming match over a joined aggregate, so this is reported rather
+> than fixed. Separately, `dae.rs`'s tearing substitution replaces a variable with an
+> EXPRESSION; a `join.on` key column can only be a NAME, so an eliminated variable that is
+> also a key column cannot be rewritten at all — a structural limit worth a diagnostic
+> rather than a rename.
 >
 > **Adjacent, NOT fixed here** — Julia's `namespace_expr` tracks no bound-symbol scope at
 > all, so on the same shadowed document it rewrites the loop symbol inside the node's
