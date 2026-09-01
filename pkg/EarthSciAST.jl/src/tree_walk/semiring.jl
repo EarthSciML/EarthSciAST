@@ -283,6 +283,51 @@ function _encode_join_keys(vals_l::Vector{Any}, vals_r::Vector{Any})
     return (Int[code_of[v] for v in vals_l], Int[code_of[v] for v in vals_r])
 end
 
+# `ESS_JOIN_ON_GATE_DISABLE=1` resolves an `on` clause to the equality CODES
+# only, attaching no match index — the pre-§5.5.8 behaviour, where the gate
+# filtered the full product instead of driving it. It is the differential oracle
+# for the driver (mirroring `ESS_GEOM_OVERLAP_GATE_DISABLE`): the admitted leaf
+# set is identical either way, so any difference in the ANSWER is a driver bug,
+# and the visit counts must differ or the gate never fired.
+_join_on_gate_disabled() = get(ENV, "ESS_JOIN_ON_GATE_DISABLE", "") == "1"
+
+# The DRIVABLE match set of one composite `on` key (CONFORMANCE_SPEC §5.5.8):
+# `{ (pos_l, pos_r) : key_l(pos_l) == key_r(pos_r) }`, built ONCE per node.
+#
+# `group` is every resolved pair of the clause over the SAME two loop symbols —
+# §5.5.8's COMPOSITE KEY, which matches iff every listed pair agrees. The key of
+# a position is therefore the TUPLE of that position's per-pair bucket codes, in
+# the order the pairs are listed (the §5.5.1 rule-4 skolem tuple).
+#
+# The match set comes from `relational.equijoin`, the one canonical rule-5 join
+# primitive: it hashes only to BUCKET and emits sorted by the canonical key, then
+# left, then right — never by `Dict` iteration order — so duplicate, reversed and
+# permuted inputs give a byte-identical pair list, and the cost is
+# `O(|L| + |R| + |matches|)` plus that sort rather than the `O(|L|·|R|)` product.
+# `_OverlapIndex` then derives the POSITION-ascending drive order from it (§5.5.8
+# "a binding that drives in position-ascending order derives that order from this
+# one"); both are pure functions of the input.
+#
+# Returns `nothing` — no index, so the gate filters as it always did — when the
+# two gated symbols are the SAME range symbol. A pair set cannot bind one symbol
+# to two positions, and a self-equality gate admits every position anyway.
+function _on_gate_match_pairs(group)
+    sym_l, sym_r = group[1][1], group[1][2]
+    sym_l == sym_r && return nothing
+    pos_l, pos_r = group[1][3], group[1][4]
+    keys_l = [Vector{Int}(undef, length(group)) for _ in pos_l]
+    keys_r = [Vector{Int}(undef, length(group)) for _ in pos_r]
+    for (k, g) in enumerate(group)
+        cl, cr = _encode_join_keys(g[5], g[6])
+        for i in eachindex(pos_l); keys_l[i][k] = cl[i]; end
+        for i in eachindex(pos_r); keys_r[i][k] = cr[i]; end
+    end
+    kl = Dict{Int,Tuple}(p => Tuple(keys_l[i]) for (i, p) in enumerate(pos_l))
+    kr = Dict{Int,Tuple}(p => Tuple(keys_r[i]) for (i, p) in enumerate(pos_r))
+    matches = Relational.equijoin(pos_l, pos_r; on_left = p -> kl[p], on_right = p -> kr[p])
+    return Tuple{Int,Int}[(Int(m[1]), Int(m[2])) for m in matches]
+end
+
 # The empty value-invention map registry: no materialised buffers. A join over
 # categorical / interval members never consults it, so join resolution stays
 # byte-identical for every non-value-invention document. Read-only sentinel —
@@ -452,15 +497,35 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
             push!(gates, _JoinGate(sym_l, sym_r, Dict{Int,Int}(), Dict{Int,Int}(),
                                    _OverlapIndex(cands)))
         else                           # clause :: Vector{Tuple{String,String}}
+            # Resolve EVERY pair of the clause first. Pairs over the same two
+            # loop symbols are ONE composite key (§5.5.8 / BEHAV-10-B-002), and
+            # it is that composite match set — not the first pair's, which is a
+            # superset — that drives. Pairs over different symbol pairs stay
+            # separate gates, all of them ANDed by `_join_admits`.
+            resolved = Tuple{String,String,Vector{Int},Vector{Int},Vector{Any},Vector{Any}}[]
             for (lkey, rkey) in clause
                 sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets,
                     sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
                 sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets,
                     sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
-                codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
-                push!(gates, _JoinGate(sym_l, sym_r,
-                    Dict{Int,Int}(zip(pos_l, codes_l)),
-                    Dict{Int,Int}(zip(pos_r, codes_r))))
+                push!(resolved, (sym_l, sym_r, pos_l, pos_r, vals_l, vals_r))
+            end
+            indexed = Set{Tuple{String,String}}()
+            for r in resolved
+                codes_l, codes_r = _encode_join_keys(r[5], r[6])
+                # The FIRST gate of each symbol-pair group carries the composite
+                # match index; the rest of the group stay pure code tests, so
+                # admission is unchanged and only the enumeration extent moves.
+                cands = nothing
+                if !((r[1], r[2]) in indexed) && !_join_on_gate_disabled()
+                    push!(indexed, (r[1], r[2]))
+                    prs = _on_gate_match_pairs(
+                        [g for g in resolved if g[1] == r[1] && g[2] == r[2]])
+                    prs === nothing || (cands = _OverlapIndex(Set{Tuple{Int,Int}}(prs)))
+                end
+                push!(gates, _JoinGate(r[1], r[2],
+                    Dict{Int,Int}(zip(r[3], codes_l)),
+                    Dict{Int,Int}(zip(r[4], codes_r)), cands))
             end
         end
     end
@@ -475,8 +540,13 @@ end
 function _join_admits(gates, binding::AbstractDict)
     gates === nothing && return true
     for g in gates
-        if g.candidates === nothing
-            # Bin-equality gate: equal bucket codes at the two range positions.
+        if g.candidates === nothing || !isempty(g.codes_l)
+            # VALUE-EQUALITY gate: equal bucket codes at the two range positions.
+            # Reached whether or not the gate also carries a drivable match index
+            # — the codes ARE the semantics, the index only an enumeration
+            # extent, and re-testing them per leaf keeps the driven walk checked
+            # against the same predicate the undriven product applies. (An
+            # OVERLAP gate has empty `codes_l` and falls through.)
             g.codes_l[binding[g.sym_l]] == g.codes_r[binding[g.sym_r]] || return false
         else
             # OVERLAP gate (Phase 2a): the (pos_l, pos_r) pair must be in the

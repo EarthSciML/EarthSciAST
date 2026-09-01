@@ -607,7 +607,7 @@ end
 function _vi_enumerate_join(ranges, gates::Union{Vector{_ViJoinGate},Nothing},
                             ctx::_ViCtx, cb)
     counted = bindings -> (_VI_ENUM_VISITS[] += 1; cb(bindings))
-    ov = _overlap_driver(gates)
+    ov = _drivable_gate(gates)
     ov === nothing && return _vi_enumerate(ranges, ctx, counted)   # full product
 
     # Every producer range symbol is FREE here (a producer binds nothing up
