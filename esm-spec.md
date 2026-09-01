@@ -4392,8 +4392,36 @@ The `domain` supports the following fields:
 |---|---|---|
 | `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1). |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
-| `element_type` | | Numeric element type (e.g., `"Float32"`, `"Float64"`) |
+| `element_type` | | The precision the document is **evaluated in**: `"Float64"` (default) or `"Float32"`. See §11.3.1 — this is a semantic declaration, not a storage hint. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |
+
+#### 11.3.1 `element_type` is the working precision
+
+`"Float32"` means the evaluator computes in **IEEE binary32, rounding once per
+operation**. It does *not* mean "store as f32 and compute in f64", and the
+difference is not cosmetic — it decides answers:
+
+```
+100 * ((100 - 73.5) / 100) / (100 - 73.5)
+  = 1.0          exactly, in binary64
+  = 0.99999994   in binary32
+```
+
+A model whose output rows are gated on a residual comparison can emit a
+different NUMBER of rows in the two precisions, so a document that declares
+`"Float32"` and is evaluated in binary64 is being given a wrong answer, not a
+more accurate one.
+
+Every arithmetic, comparison and logical operator rounds; so does a reduction's
+⊕, per accumulation step (an N-term sum rounds N times, not once at the end).
+Literals, parameter values, initial conditions and host-supplied arrays round
+where they enter the evaluation, and build-time constant folding rounds
+identically to run-time evaluation. Index expressions keep integer semantics.
+
+A runtime that cannot honour the declaration for some construct MUST **error
+naming that construct** rather than evaluate it in another precision silently.
+The normative clauses, including which constructs are refused, are
+CONFORMANCE_SPEC §5.18.
 
 ### 11.4 Initial conditions (the `ic` op)
 

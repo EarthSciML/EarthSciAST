@@ -813,6 +813,47 @@ Where:
 
 ---
 
+## 9b. WORKING-PRECISION REQUIREMENTS
+
+### PREC-11-A: `domain.element_type` is the evaluation precision (esm-spec §11.3.1, CONFORMANCE_SPEC §5.18)
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| PREC-11-A-001 | `element_type: "Float32"` MUST make the evaluator compute in IEEE binary32, rounding **once per operation** — not store-as-f32/compute-in-f64 | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-002 | A reduction's ⊕ MUST round per accumulation step; an N-term sum rounds N times | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-003 | Literals (including a `const` op's raw JSON value), parameter values, initial conditions and host-supplied arrays MUST round on ingress | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-004 | Build-time constant folding MUST round identically to run-time evaluation | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-005 | Index expressions keep integer semantics; a declared index-set extent above `2^24` MUST be rejected under Float32 rather than let a subscript round | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-006 | `element_type: "Float64"` (and an absent field) MUST be bit-unchanged from a runtime with no precision support at all | CONFORMANCE_SPEC §5.18.1 | Yes | simulation |
+| PREC-11-A-007 | An `element_type` that is neither `"Float64"` nor `"Float32"` MUST error (`unsupported_element_type`), never evaluate in binary64 | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
+| PREC-11-A-008 | Under Float32, a construct whose numerics are binary64-only (`intersect_polygon`, `polygon_intersection_area`, `interp.linear`, `interp.bilinear`, `datetime.julian_day`) MUST error naming it (`float32_unsupported`) | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
+| PREC-11-A-009 | Under Float32, TIME INTEGRATION MUST error naming it (the solver is binary64); algebraic / observed / relational evaluation is unaffected | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
+| PREC-11-A-010 | Conformance assertions on precision MUST be exact (bit) comparisons, not tolerances — a tolerance cannot see the one-ulp difference the contract is about | CONFORMANCE_SPEC §5.18.4 | Yes | simulation |
+
+**Binding status.** Rust implements PREC-11-A-001…010
+(`pkg/earthsci-ast-rs/src/precision.rs`, gated by
+`pkg/earthsci-ast-rs/tests/precision_element_type.rs` and the witness fixtures in
+`pkg/earthsci-ast-rs/tests/fixtures/precision/`). **Julia, Python, Go and
+TypeScript parse and round-trip `element_type` but do not honour it**: a
+`"Float32"` document evaluates in binary64 there, which is the divergence this
+row exists to record. To match, each needs (a) an active-precision mode threaded
+to wherever it evaluates expressions, (b) per-operation rounding at every such
+site — including any monomorphized / vectorized fast path, which in Rust was
+four of the five arithmetic definitions and the one the witness actually
+executed (CONFORMANCE_SPEC §5.18.3) — (c) ingress rounding, and (d) the three
+refusals of §5.18.2. Python can lean on `numpy.float32` for (b) provided it
+narrows at every operation rather than only at storage; Julia's `Float32` and
+Go's `float32` give (b) natively once the values are typed; TypeScript has only
+`Math.fround`, which gives correctly-rounded `+ - * / sqrt` on already-rounded
+operands but not binary32 elementary functions.
+
+**Conformance fixtures:** `pkg/earthsci-ast-rs/tests/fixtures/precision/f32_per_op_rounding.esm`
+and its Float64 twin `f64_per_op_rounding.esm` — the same expression,
+`100 * ((100 - 73.5) / 100) / (100 - 73.5)`, over runtime parameters, asserted at
+zero tolerance to `0.9999999403953552` and `1.0` respectively.
+
+---
+
 ## 10. VERSIONING REQUIREMENTS
 
 ### VERSION-08-A: Schema Version Handling

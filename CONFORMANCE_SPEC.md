@@ -2696,6 +2696,111 @@ a golden diff. Each runner *renders* the production `derive_output_plan` result
 into the golden's shape and compares; neither re-derives anything in the adapter,
 so a derivation bug cannot hide behind the test.
 
+### 5.18 Working Precision — `domain.element_type` (normative)
+
+`domain.element_type` (esm-spec §11.3) declares the precision a document is
+**evaluated in**, and this section says what that obliges a binding to do. It is
+written because the field was, in every binding, *accepted and then ignored*: a
+document declaring `"Float32"` evaluated in binary64 and returned the binary64
+answer, with nothing in the result to say so.
+
+#### 5.18.1 The contract
+
+`"Float32"` means the evaluator computes in **IEEE binary32, rounding once per
+operation**. It does NOT mean "store as f32 and compute in f64", and the
+difference is not a matter of storage or speed — it decides answers:
+
+```
+100 * ((100 - 73.5) / 100) / (100 - 73.5)
+  = 1.0                exactly, in binary64
+  = 0.99999994         in binary32   (0x3F7FFFFF, one ulp below one)
+```
+
+Downstream, a residual that is `0.0` in binary64 and `5.96e-08` in binary32
+propagates through an age-distribution recurrence until a `modfrc <= 0` skip
+changes sides, and a relational model emits **144 rows instead of 140**.
+Per-operation rounding decides which rows exist, so this is a correctness
+contract, not a performance one.
+
+What must round:
+
+| Site | Rule |
+|------|------|
+| every arithmetic, comparison and logical operator | operands narrowed to binary32, the binary32 operation applied, the binary32 result returned |
+| a reduction's ⊕ (`sum`, `product`, `min`, `max`) | rounds per accumulation step — an N-term sum rounds N times, NOT once at the end |
+| numeric literals, including a `const` op's raw JSON value | rounded where they enter the evaluation |
+| parameter values, initial conditions, host-supplied factor arrays | rounded once on ingress |
+| build-time constant folding | rounds identically to run-time evaluation, or a folded subexpression and an evaluated one disagree |
+
+What must NOT round: **index expressions' integer semantics**. Loop-index
+bindings and axis ramps are exact integers used as subscripts. Because the
+expression language has no integer type they share the value kernels, so index
+*arithmetic* is exact only while every index stays below `2^24`; a binding MUST
+reject a declared index-set extent above that rather than let a subscript round
+silently.
+
+Elementary functions (`exp`, `log`, `sqrt`, `sin`, …) are evaluated by the
+**binary32** entry points, not by the binary64 function rounded afterwards. The
+two differ in the last ulp, and the binary32 form is what a `real*4` reference
+implementation does. This is the one clause where a binding's platform libm can
+legitimately differ from another's by one ulp; `+ - * /` and `sqrt` are
+correctly rounded and therefore bit-identical everywhere.
+
+#### 5.18.2 No silent fallback
+
+Three refusals, each naming what it refused:
+
+1. An `element_type` that is neither `"Float64"` nor `"Float32"` is an error
+   (`unsupported_element_type`), never a quiet binary64 evaluation.
+2. A construct whose numeric work is hand-written binary64 — polygon clipping
+   and area (`intersect_polygon`, `polygon_intersection_area`), the
+   interpolating closed functions (`interp.linear`, `interp.bilinear`), and
+   `datetime.julian_day`, whose value exceeds binary32's exact-integer range —
+   is an error under `"Float32"` (`float32_unsupported`) naming the construct.
+   The closed functions that return small exact integers (`interp.searchsorted`,
+   `datetime.year`, `datetime.day_of_year`, `datetime.is_leap_year`) stay
+   evaluable.
+3. **Time integration** of a `"Float32"` document is an error naming it. An
+   ODE/DAE solver's step-size control, error norms and Newton solve are binary64
+   in every binding here, so integrating would give a binary64 trajectory around
+   a binary32 right-hand side. Algebraic, observed and relational evaluation —
+   which is what an inline `tests` block and `observed_field` read — is
+   unaffected and runs in binary32.
+
+A binding that cannot honour a clause MUST refuse it. Evaluating part of a
+document in a precision it did not ask for, and saying nothing, is the defect
+this section exists to prevent.
+
+#### 5.18.3 Implementation note: the fast paths
+
+The clause "every operation rounds" is easy to state and easy to implement
+incompletely, because a mature evaluator has more than one definition of the
+arithmetic. In the Rust binding the audit found **five** places that compute
+`x + y` and friends, only one of which was the nominal kernel table:
+
+| Site | Status |
+|------|--------|
+| `apply_binary` / `apply_unary`, `binary_kernel_of` / `unary_kernel_of` | the shared tables — precision-aware |
+| `vectorized::vec_combine`'s monomorphized arms | hand-copied f64 closures; **this is the one the witness document actually executed** |
+| `tape::exec::fused`'s `dispatch_bin_kernel!` / `dispatch_un_kernel!` | hand-copied f64 closures |
+| `tape::exec::fused`'s `MicroOp::Bin2` / `Bin3` compositions | hand-copied f64 closures |
+| `vectorized::eval_vec_contracted`'s sum-of-products fusion | hand-written `*o += x * s` |
+
+Each was there for a good reason (removing an indirect call from an element
+loop) and each was documented as bit-identical to the shared kernel — which it
+was, *in binary64*. A binding implementing this section should enumerate its own
+such sites explicitly; passing the witness document is the check that it found
+them all, because the witness routes through the vectorized overlay.
+
+#### 5.18.4 Gate
+
+The witness document and its Float64 twin live in
+`pkg/earthsci-ast-rs/tests/fixtures/precision/`. Both carry an inline `tests`
+block asserting at **zero tolerance** (`rel: 0, abs: 0`), because a tolerance
+cannot see the one-ulp difference that is the entire point. `bindings_required`
+is `["rust"]` today; Julia, Python, Go and TypeScript ignore `element_type` and
+are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md` §Precision.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

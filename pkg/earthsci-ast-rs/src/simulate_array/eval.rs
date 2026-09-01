@@ -1083,7 +1083,7 @@ pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
 /// the binary64 function rounded afterwards, and the two differ in the last
 /// ulp. That choice is the one a `real*4` reference implementation makes, and
 /// it is the cross-binding contract this mode has to state explicitly — see
-/// CONFORMANCE_SPEC §5.10.
+/// CONFORMANCE_SPEC §5.18.1.
 pub(crate) fn unary_kernel_f32_of(op: UnCode) -> fn(f64) -> f64 {
     match op {
         UnCode::Exp => |x: f64| (x as f32).exp() as f64,
