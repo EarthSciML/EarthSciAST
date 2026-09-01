@@ -1193,6 +1193,223 @@ mod kernel_equivalence_tests {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // `domain.element_type: "Float32"` (esm-spec §11.3).
+    //
+    // The pins above hold the two Float64 tables together. These hold the
+    // binary32 tables to NATIVE `f32` arithmetic — the property the mode
+    // claims — and hold the Float64 tables to plain `f64`, which is what makes
+    // "Float64 is bit-unchanged" a checked statement rather than an assurance.
+    // -----------------------------------------------------------------------
+
+    /// Bit equality, with NaN counted equal to NaN (the tables produce NaN in
+    /// several arms and `NaN != NaN` would make every such arm vacuous).
+    fn same_bits(a: f64, b: f64) -> bool {
+        (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+    }
+
+    /// A spread that exercises what binary32 does and binary64 does not:
+    /// binary64 subnormals (flush to zero in f32), binary32 subnormals, a value
+    /// that overflows f32's range, and the witness operands themselves.
+    #[rustfmt::skip]
+    const F32_XS: &[f64] = &[
+        0.0, -0.0, 1.0, -1.0, 0.1, 0.5, -3.25, 2.0, 3.0, 26.5, 73.5, 100.0,
+        1e-45, 5e-324, f64::MIN_POSITIVE, 1e38, 1e39, -1e39,
+        f64::INFINITY, f64::NEG_INFINITY, f64::NAN,
+    ];
+
+    /// Under Float32 every binary kernel is the `f32` operation on `f32`
+    /// operands — not the `f64` operation with a cast bolted on the end.
+    #[test]
+    fn binary_kernels_f32_are_binary32() {
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        for &x in F32_XS {
+            for &y in F32_XS {
+                let (xf, yf) = (x as f32, y as f32);
+                #[rustfmt::skip]
+                let cases: &[(&str, f64)] = &[
+                    ("+", (xf + yf) as f64),
+                    ("-", (xf - yf) as f64),
+                    ("*", (xf * yf) as f64),
+                    ("/", (xf / yf) as f64),
+                    ("^", xf.powf(yf) as f64),
+                    ("atan2", xf.atan2(yf) as f64),
+                    ("min", xf.min(yf) as f64),
+                    ("max", xf.max(yf) as f64),
+                    ("==", (xf == yf) as i32 as f64),
+                    ("!=", (xf != yf) as i32 as f64),
+                    ("<", (xf < yf) as i32 as f64),
+                    ("<=", (xf <= yf) as i32 as f64),
+                    (">", (xf > yf) as i32 as f64),
+                    (">=", (xf >= yf) as i32 as f64),
+                    ("and", (xf != 0.0 && yf != 0.0) as i32 as f64),
+                    ("or", (xf != 0.0 || yf != 0.0) as i32 as f64),
+                ];
+                for &(op, want) in cases {
+                    let got = apply_binary(op, x, y);
+                    assert!(
+                        same_bits(got, want),
+                        "apply_binary(\"{op}\", {x:?}, {y:?}) = {got:?}, want f32 {want:?}"
+                    );
+                    // The hoisted table the vectorized / taped paths resolve
+                    // through must agree with the per-cell oracle.
+                    let hoisted = binary_kernel_f32_of(BinCode::of(op))(x, y);
+                    assert!(
+                        same_bits(hoisted, want),
+                        "binary_kernel_f32_of({op}) disagrees with apply_binary"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The unary counterpart. `exp`/`log`/`sin`/… call the `f32` libm entry
+    /// points, which is what an evaluator working in binary32 does — the
+    /// binary64 function rounded afterwards is a DIFFERENT number in the last
+    /// ulp, and this pins which of the two the mode means.
+    #[test]
+    fn unary_kernels_f32_are_binary32() {
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        for &x in F32_XS {
+            let xf = x as f32;
+            #[rustfmt::skip]
+            let cases: &[(&str, f64)] = &[
+                ("exp", xf.exp() as f64),
+                ("log", xf.ln() as f64),
+                ("ln", xf.ln() as f64),
+                ("log10", xf.log10() as f64),
+                ("sqrt", xf.sqrt() as f64),
+                ("abs", xf.abs() as f64),
+                ("floor", xf.floor() as f64),
+                ("ceil", xf.ceil() as f64),
+                ("sin", xf.sin() as f64),
+                ("cos", xf.cos() as f64),
+                ("tan", xf.tan() as f64),
+                ("asin", xf.asin() as f64),
+                ("acos", xf.acos() as f64),
+                ("atan", xf.atan() as f64),
+                ("sinh", xf.sinh() as f64),
+                ("cosh", xf.cosh() as f64),
+                ("tanh", xf.tanh() as f64),
+                ("asinh", xf.asinh() as f64),
+                ("acosh", xf.acosh() as f64),
+                ("atanh", xf.atanh() as f64),
+                ("not", (xf == 0.0) as i32 as f64),
+            ];
+            for &(op, want) in cases {
+                let got = apply_unary(op, x);
+                assert!(
+                    same_bits(got, want),
+                    "apply_unary(\"{op}\", {x:?}) = {got:?}, want f32 {want:?}"
+                );
+                let hoisted = unary_kernel_f32_of(UnCode::of(op))(x);
+                assert!(
+                    same_bits(hoisted, want),
+                    "unary_kernel_f32_of({op}) disagrees with apply_unary"
+                );
+            }
+        }
+    }
+
+    /// **Float64 is bit-unchanged.** With no guard armed, every kernel is the
+    /// plain `f64` expression it always was — so the precision branch added to
+    /// `apply_binary` / `apply_unary` / the two `*_kernel_of` tables cannot have
+    /// perturbed the default path.
+    #[test]
+    fn float64_kernels_are_bit_identical_to_plain_f64() {
+        assert_eq!(
+            crate::precision::active(),
+            crate::precision::Precision::Float64,
+            "Float64 is the default and must need no guard"
+        );
+        for &x in F32_XS {
+            for &y in F32_XS {
+                #[rustfmt::skip]
+                let cases: &[(&str, f64)] = &[
+                    ("+", x + y), ("-", x - y), ("*", x * y), ("/", x / y),
+                    ("^", x.powf(y)), ("atan2", x.atan2(y)),
+                    ("min", x.min(y)), ("max", x.max(y)),
+                    ("==", (x == y) as i32 as f64), ("!=", (x != y) as i32 as f64),
+                    ("<", (x < y) as i32 as f64), ("<=", (x <= y) as i32 as f64),
+                    (">", (x > y) as i32 as f64), (">=", (x >= y) as i32 as f64),
+                    ("and", (x != 0.0 && y != 0.0) as i32 as f64),
+                    ("or", (x != 0.0 || y != 0.0) as i32 as f64),
+                ];
+                for &(op, want) in cases {
+                    assert!(
+                        same_bits(apply_binary(op, x, y), want),
+                        "apply_binary(\"{op}\", {x:?}, {y:?}) drifted from plain f64"
+                    );
+                }
+            }
+            #[rustfmt::skip]
+            let un: &[(&str, f64)] = &[
+                ("exp", x.exp()), ("log", x.ln()), ("log10", x.log10()),
+                ("sqrt", x.sqrt()), ("abs", x.abs()), ("floor", x.floor()),
+                ("ceil", x.ceil()), ("sin", x.sin()), ("cos", x.cos()),
+                ("tan", x.tan()), ("tanh", x.tanh()),
+            ];
+            for &(op, want) in un {
+                assert!(
+                    same_bits(apply_unary(op, x), want),
+                    "apply_unary(\"{op}\", {x:?}) drifted from plain f64"
+                );
+            }
+        }
+    }
+
+    /// The witness expression, evaluated through the kernels the whole
+    /// evaluator shares. `1.0` here would mean the mode is not reaching them.
+    #[test]
+    fn the_witness_expression_rounds_per_operation() {
+        let expr = |h: f64, s: f64| {
+            let num = apply_binary("*", h, apply_binary("/", apply_binary("-", h, s), h));
+            apply_binary("/", num, apply_binary("-", h, s))
+        };
+        assert_eq!(expr(100.0, 73.5).to_bits(), 1.0_f64.to_bits());
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        assert_eq!(
+            expr(100.0, 73.5).to_bits(),
+            (0.99999994_f32 as f64).to_bits(),
+            "the Float32 kernels must reproduce the binary32 answer"
+        );
+    }
+
+    /// `fold_scalar`'s SEED rounds too: a one-operand fold applies no operator,
+    /// so an unrounded seed would leave a binary64 value in a Float32 result.
+    #[test]
+    fn fold_scalar_rounds_its_seed() {
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        assert_eq!(
+            fold_scalar("+", &[0.1]).to_bits(),
+            (0.1_f32 as f64).to_bits()
+        );
+        // And the n-ary fold is the repeated binary32 apply.
+        let want = ((0.1_f32 + 0.2_f32) + 0.3_f32) as f64;
+        assert_eq!(fold_scalar("+", &[0.1, 0.2, 0.3]).to_bits(), want.to_bits());
+    }
+
+    /// A `const` literal is raw JSON, not an `Expr::Number`, so it is the one
+    /// numeric ingress the literal rule does not reach — and a const ARRAY
+    /// would then serve binary64 elements to every gather on it.
+    #[test]
+    fn const_literals_round_on_materialization() {
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        let scalar = json_to_value(&serde_json::json!(0.1)).expect("scalar const");
+        match scalar {
+            Value::Scalar(s) => assert_eq!(s.to_bits(), (0.1_f32 as f64).to_bits()),
+            other => panic!("expected a scalar, got {other:?}"),
+        }
+        let arr = json_to_value(&serde_json::json!([0.1, 0.2])).expect("array const");
+        match arr {
+            Value::Array(a) => {
+                assert_eq!(a[[0]].to_bits(), (0.1_f32 as f64).to_bits());
+                assert_eq!(a[[1]].to_bits(), (0.2_f32 as f64).to_bits());
+            }
+            other => panic!("expected an array, got {other:?}"),
+        }
+    }
 }
 
 /// Evaluate a strictly-binary op (`atan2`, the comparisons).

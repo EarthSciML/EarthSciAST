@@ -35,6 +35,18 @@ impl ArrayCompiled {
         Rc::clone(&self.forcing)
     }
 
+    /// Whether this model has anything for the ODE solver to integrate — at
+    /// least one `D(var, t) = …` rule.
+    ///
+    /// An array model whose every equation is ALGEBRAIC compiles to observed
+    /// rules and no `RhsRule`, so it evaluates without the integrator ever
+    /// touching a value. That distinction is what
+    /// `problem::reject_f32_integration` needs: a Float32 declaration is
+    /// honourable for such a model and not for one with real dynamics.
+    pub fn has_differential_equations(&self) -> bool {
+        !self.rhs_rules.is_empty()
+    }
+
     pub fn state_variable_names(&self) -> &[String] {
         &self.scalar_state_names
     }

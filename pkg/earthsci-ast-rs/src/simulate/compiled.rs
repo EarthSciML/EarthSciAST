@@ -180,6 +180,15 @@ impl Compiled {
         Self::from_flattened(&flat)
     }
 
+    /// Whether this model has anything for the ODE solver to integrate — at
+    /// least one `D(state, t) = rhs` equation. A system of purely ALGEBRAIC
+    /// states is reconstructed from its expressions and never integrated.
+    pub fn has_differential_equations(&self) -> bool {
+        self.state_kinds
+            .iter()
+            .any(|k| matches!(k, StateKind::Differential(_)))
+    }
+
     /// State variable names in fixed order. Index `i` corresponds to row `i`
     /// of [`Solution::state`].
     pub fn state_variable_names(&self) -> &[String] {

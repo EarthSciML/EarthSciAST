@@ -1,0 +1,64 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "Float32PerOperationRounding",
+    "description": "100 * ((100 - 73.5) / 100) / (100 - 73.5) is exactly 1.0 in binary64 and 0.99999994 in binary32. Every operand is a runtime parameter, so a build-time constant fold cannot account for the difference."
+  },
+  "domain": { "element_type": "Float32" },
+  "index_sets": { "one": { "kind": "interval", "size": 1 } },
+  "models": {
+    "P": {
+      "variables": {
+        "hundred": { "type": "parameter", "units": "1", "default": 100.0 },
+        "scrap": { "type": "parameter", "units": "1", "default": 73.5 },
+        "y": { "type": "unknown", "units": "1", "shape": ["one"] }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "hundred",
+                    {
+                      "op": "/",
+                      "args": [
+                        { "op": "-", "args": ["hundred", "scrap"] },
+                        "hundred"
+                      ]
+                    }
+                  ]
+                },
+                { "op": "-", "args": ["hundred", "scrap"] }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "f32_per_op_rounding",
+          "description": "The binary32 answer, asserted at zero tolerance.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "tolerance": { "rel": 0.0, "abs": 0.0 },
+          "assertions": [
+            {
+              "variable": "y",
+              "time": 0.0,
+              "expected": 0.9999999403953552,
+              "coords": { "one": 1 }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

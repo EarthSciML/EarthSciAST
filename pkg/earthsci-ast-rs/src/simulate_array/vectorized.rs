@@ -1315,6 +1315,17 @@ pub(super) fn vec_combine<'a>(
     // model has few `^` NODES even though they cover many elements, so the
     // per-node call overhead it removes is not where the time goes. Kept for
     // the models where `^` is a hot operator, not because it pays on this one.
+    //
+    // Under `element_type: "Float32"` the monomorphized arms are skipped
+    // entirely: their closure bodies are a hand-copied SECOND definition of the
+    // arithmetic that never sees the precision, so keeping them would leave the
+    // hottest path in the evaluator computing in binary64 while everything
+    // around it rounded — the silent-wrong-answer shape this mode exists to
+    // remove. The fn-pointer arm below is precision-aware, so Float32 takes it
+    // for every op and pays one indirect call per element; Float64 is untouched.
+    if crate::precision::is_f32() {
+        return vec_combine_with(binary_kernel_of(op), a, b, pool);
+    }
     match op {
         BinCode::Add => vec_combine_with(|x, y| x + y, a, b, pool),
         BinCode::Sub => vec_combine_with(|x, y| x - y, a, b, pool),

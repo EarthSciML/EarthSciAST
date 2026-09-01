@@ -1326,7 +1326,17 @@ fn element_type_of(
 /// Algebraic, observed and relational evaluation — everything `observed_field`
 /// and the inline `tests` blocks read — is unaffected and runs in binary32.
 fn reject_f32_integration(prob: &EsmProblem) -> Result<(), SimulateError> {
-    if prob.precision.is_f32() && prob.is_dynamic() {
+    // Only a system that actually INTEGRATES is affected. A model whose every
+    // equation is algebraic — the relational / lookup-table shape this mode
+    // exists for — is evaluated entirely by the (binary32) expression
+    // evaluator, and `Compile::Always` giving it a non-static backend does not
+    // make it dynamic.
+    let integrates = match &*prob.backend {
+        Backend::Static(_) => false,
+        Backend::Scalar(c) => c.has_differential_equations(),
+        Backend::Array(c) => c.has_differential_equations(),
+    };
+    if prob.precision.is_f32() && integrates {
         return Err(SimulateError::Compile(
             crate::compile_error::CompileError::Float32Unsupported {
                 construct: "time integration of a dynamic model".to_string(),

@@ -927,6 +927,97 @@ mod tests {
         assert_eq!(ReduceKind::And.combine(0.0, 0.0), 0.0);
     }
 
+    /// A reduction's ⊕ is one of the evaluator's operations, so under
+    /// `element_type: "Float32"` (esm-spec §11.3) an N-term sum accumulates in
+    /// binary32 with N roundings — NOT in a binary64 accumulator, which would
+    /// silently make a long sum *more* accurate than the binary32 reference it
+    /// is meant to reproduce.
+    #[test]
+    fn float32_reductions_accumulate_in_binary32() {
+        let _g = crate::precision::enter(crate::precision::Precision::Float32);
+        // 0.1 has no binary32 (or binary64) representation, so a ten-term sum
+        // separates the two accumulators by several ulp.
+        let terms = [0.1_f64; 10];
+        let mut acc = ReduceKind::Sum.identity();
+        for &t in &terms {
+            acc = ReduceKind::Sum.combine(acc, crate::precision::round(t));
+        }
+        let mut want = 0.0_f32;
+        for _ in 0..10 {
+            want += 0.1_f32;
+        }
+        assert_eq!(
+            acc.to_bits(),
+            (want as f64).to_bits(),
+            "the accumulator must be binary32: got {acc:?}, want {:?}",
+            want as f64
+        );
+        // The binary64 accumulation of the same terms is a DIFFERENT number, so
+        // the assertion above is not vacuous.
+        let f64_sum: f64 = terms.iter().sum();
+        assert_ne!(acc.to_bits(), f64_sum.to_bits());
+
+        // Product folds too.
+        let mut p = ReduceKind::Product.identity();
+        for _ in 0..5 {
+            p = ReduceKind::Product.combine(p, crate::precision::round(1.1));
+        }
+        let mut wp = 1.0_f32;
+        for _ in 0..5 {
+            wp *= 1.1_f32;
+        }
+        assert_eq!(p.to_bits(), (wp as f64).to_bits());
+    }
+
+    /// The identities are exact in binary32, which is why `identity()` needs no
+    /// rounding of its own. `f32::NEG_INFINITY as f64` IS `f64::NEG_INFINITY`.
+    #[test]
+    fn semiring_identities_are_exact_in_binary32() {
+        for k in [
+            ReduceKind::Sum,
+            ReduceKind::Product,
+            ReduceKind::Max,
+            ReduceKind::Min,
+            ReduceKind::Or,
+            ReduceKind::And,
+        ] {
+            let id = k.identity();
+            assert_eq!(
+                id.to_bits(),
+                crate::precision::Precision::Float32.round(id).to_bits(),
+                "{k:?}'s identity {id:?} is not exactly representable in binary32"
+            );
+        }
+    }
+
+    /// Under Float64 `combine` is bit-identical to the plain `f64` fold — the
+    /// precision branch cannot have perturbed the default path.
+    #[test]
+    fn float64_reductions_are_bit_unchanged() {
+        assert_eq!(
+            crate::precision::active(),
+            crate::precision::Precision::Float64
+        );
+        let xs = [0.1_f64, -3.25, 1e300, f64::INFINITY, 0.0, -0.0];
+        for &a in &xs {
+            for &b in &xs {
+                assert_eq!(ReduceKind::Sum.combine(a, b).to_bits(), (a + b).to_bits());
+                assert_eq!(
+                    ReduceKind::Product.combine(a, b).to_bits(),
+                    (a * b).to_bits()
+                );
+                assert_eq!(
+                    ReduceKind::Max.combine(a, b).to_bits(),
+                    f64::max(a, b).to_bits()
+                );
+                assert_eq!(
+                    ReduceKind::Min.combine(a, b).to_bits(),
+                    f64::min(a, b).to_bits()
+                );
+            }
+        }
+    }
+
     #[test]
     fn aggregate_op_alias() {
         assert!(is_aggregate_op("aggregate"));

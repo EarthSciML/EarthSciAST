@@ -581,6 +581,22 @@ unsafe fn exec_fused_runs(
                     } => {
                         let (av, bv, cv) = (msrc(a), msrc(b), msrc(c3));
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        // Under `element_type: "Float32"` the monomorphized
+                        // closures below are hand-copied f64 arithmetic that
+                        // never sees the precision, so compose the SAME two
+                        // kernels in the SAME order out of the shared,
+                        // precision-aware table instead. Float64 falls through
+                        // to the untouched match.
+                        if crate::precision::is_f32() {
+                            let f1 = binary_kernel_of(*op1);
+                            let f2 = binary_kernel_of(*op2);
+                            if *swap {
+                                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(z, f1(x, y))) };
+                            } else {
+                                unsafe { fch3(dst, c, av, bv, cv, |x, y, z| f2(f1(x, y), z)) };
+                            }
+                            continue;
+                        }
                         use BinCode::{Add, Div, Ge, Gt, Le, Lt, Max, Min, Mul, Sub};
                         // Monomorphized composition of the same two kernel
                         // bodies, applied in the same order (t = op1(a, b);
@@ -651,6 +667,36 @@ unsafe fn exec_fused_runs(
                     } => {
                         let (pa, pb, pc, pd) = (msrc_p(a), msrc_p(b), msrc_p(c3), msrc_p(d4));
                         let dst = unsafe { rp.add(*out as usize * FCHUNK) };
+                        // See `Bin2`: Float32 composes the three shared kernels
+                        // in the same order rather than the f64-only closures.
+                        if crate::precision::is_f32() {
+                            let f1 = binary_kernel_of(*op1);
+                            let f2 = binary_kernel_of(*op2);
+                            let f3 = binary_kernel_of(*op3);
+                            match (*swap2, *swap3) {
+                                (false, false) => unsafe {
+                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                        f3(f2(f1(x, y), z), w)
+                                    })
+                                },
+                                (true, false) => unsafe {
+                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                        f3(f2(z, f1(x, y)), w)
+                                    })
+                                },
+                                (false, true) => unsafe {
+                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                        f3(w, f2(f1(x, y), z))
+                                    })
+                                },
+                                (true, true) => unsafe {
+                                    fch4(dst, c, pa, pb, pc, pd, |x, y, z, w| {
+                                        f3(w, f2(z, f1(x, y)))
+                                    })
+                                },
+                            }
+                            continue;
+                        }
                         use BinCode::{Add, Div, Mul, Sub};
                         // Monomorphized composition of the same three kernel
                         // bodies applied in order:
