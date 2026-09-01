@@ -645,6 +645,12 @@ function coerce_esm_file(data::Any)::EsmFile
         end
         isempty(ct) || (component_templates = ct)
     end
+    # Coupling-library formal roles (esm-spec §10.9), kept VERBATIM. Read here
+    # rather than snapshotted in `_lower_and_coerce` like `metaparameters`
+    # because no lowering pass rewrites it — and reading it at the coercion
+    # boundary means the direct `coerce_esm_file` entry point keeps it too.
+    coupling_roles = _maybe(_to_native_json, _get_field(data, :coupling_roles, nothing))
+
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
@@ -654,7 +660,8 @@ function coerce_esm_file(data::Any)::EsmFile
                   enums=enums,
                   function_tables=function_tables,
                   index_sets=index_sets,
-                  component_templates=component_templates)
+                  component_templates=component_templates,
+                  coupling_roles=coupling_roles)
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
@@ -858,8 +865,57 @@ function coerce_reaction_system(data::Any)::ReactionSystem
         EarthSciAST.InlineTest[coerce_test(t) for t in tests_raw] :
         EarthSciAST.InlineTest[]
 
+    # The rest of the schema's `ReactionSystem` — every one of these used to be
+    # read by nobody, so `load` dropped it. `analyses` stays raw (nothing here
+    # runs one); the events and constraint equations get the same typed forms
+    # they have on a `Model`.
+    _raw_vec(key) = something(_get_field(data, key, nothing), ())
+    constraint_equations = Equation[coerce_equation(x) for x in _raw_vec(:constraint_equations)]
+    discrete_events = DiscreteEvent[coerce_discrete_event(x) for x in _raw_vec(:discrete_events)]
+    continuous_events = ContinuousEvent[coerce_continuous_event(x) for x in _raw_vec(:continuous_events)]
+    analyses = Any[_to_native_json(x) for x in _raw_vec(:analyses)]
+    reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
+    subsystems = _coerce_reaction_system_subsystems(_get_field(data, :subsystems, nothing))
+
     return ReactionSystem(species, reactions; parameters=parameters,
-                          tolerance=tolerance, tests=tests)
+                          constraint_equations=constraint_equations,
+                          discrete_events=discrete_events,
+                          continuous_events=continuous_events,
+                          subsystems=subsystems,
+                          tolerance=tolerance, tests=tests,
+                          analyses=analyses, reference=reference)
+end
+
+"""
+    _coerce_reaction_system_subsystems(raw) -> OrderedDict{String,ReactionSystem}
+
+Coerce a reaction system's `subsystems` block (schema §4.7: each entry is
+`oneOf [ReactionSystem, SubsystemRef]`). Recurses through
+[`coerce_reaction_system`](@ref), so a hierarchy of any depth survives — it used
+to be dropped wholesale, silently flattening every reaction-system tree to its
+root at load.
+
+The `{"ref": …}` arm is REJECTED rather than skipped. `ReactionSystem.subsystems`
+is typed `OrderedDict{String,ReactionSystem}` and has no unresolved-ref arm the
+way `Model.subsystems` does (`SubsystemNode`), and `resolve_subsystem_refs!`
+walks models only — so accepting one could only mean dropping it again, which
+is the defect this function exists to close. An explicit rejection says so.
+"""
+function _coerce_reaction_system_subsystems(raw)::OrderedDict{String,ReactionSystem}
+    out = OrderedDict{String,ReactionSystem}()
+    raw === nothing && return out
+    for (k, v) in pairs(raw)
+        name = string(k)
+        if v isa AbstractDict && _has_field(v, :ref)
+            throw(ParseError(
+                "reaction system subsystem '$(name)' is a `{ref}` include, which " *
+                "is not supported: a reaction-system subsystem must be inline " *
+                "(esm-schema.json ReactionSystem.subsystems oneOf arm 1)";
+                path = "/subsystems/$(name)/ref"))
+        end
+        out[name] = coerce_reaction_system(v)
+    end
+    return out
 end
 
 

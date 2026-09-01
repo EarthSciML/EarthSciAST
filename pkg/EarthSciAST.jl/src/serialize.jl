@@ -280,12 +280,34 @@ function serialize_reaction_system(rs::ReactionSystem)::Dict{String,Any}
         "reactions" => [serialize_reaction(r) for r in rs.reactions]
     )
 
+    if !isempty(rs.constraint_equations)
+        result["constraint_equations"] = [serialize_equation(e) for e in rs.constraint_equations]
+    end
+    if !isempty(rs.discrete_events)
+        result["discrete_events"] = [serialize_discrete_event(e) for e in rs.discrete_events]
+    end
+    if !isempty(rs.continuous_events)
+        result["continuous_events"] = [serialize_continuous_event(e) for e in rs.continuous_events]
+    end
+    # Hierarchy. `coerce_reaction_system` recurses, so this must too — emitting
+    # only the root is how the hierarchy used to disappear.
+    if !isempty(rs.subsystems)
+        result["subsystems"] = Dict{String,Any}(
+            k => serialize_reaction_system(v) for (k, v) in rs.subsystems)
+    end
+
     if rs.tolerance !== nothing
         result["tolerance"] = serialize_tolerance(rs.tolerance)
     end
 
     if !isempty(rs.tests)
         result["tests"] = [serialize_test(t) for t in rs.tests]
+    end
+    if !isempty(rs.analyses)
+        result["analyses"] = [_to_native_json(a) for a in rs.analyses]
+    end
+    if rs.reference !== nothing
+        result["reference"] = serialize_reference(rs.reference)
     end
 
     return result
@@ -427,6 +449,12 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     # back VERBATIM (same round-trip contract as the two above).
     if file.coordinates !== nothing && !isempty(file.coordinates)
         result["coordinates"] = file.coordinates
+    end
+    # esm-spec §10.9 `coupling_roles`, written back VERBATIM. Presence of this
+    # key is the sole positive identifier of the coupling-library file kind, so
+    # dropping it re-emitted a library as an ordinary document.
+    if file.coupling_roles !== nothing && !isempty(file.coupling_roles)
+        result["coupling_roles"] = file.coupling_roles
     end
 
     # esm-spec §9.6.4 rule 5 (Option B): re-inject each component's MATERIALIZED
@@ -633,18 +661,19 @@ function serialize_distribution(d::Distribution)::Dict{String,Any}
     return out
 end
 
-# ModelVariable.distribution: a plain optional record through the hand-written
-# per-kind serializer.
-_emit_distribution(v::ModelVariable) =
+# `distribution`: a plain optional record through the hand-written per-kind
+# serializer. Shared by `ModelVariable` and a reaction system's `Parameter` —
+# esm-spec §6.3's value model is ONE model, spelled identically on both.
+_emit_distribution(v::Union{ModelVariable,Parameter}) =
     v.distribution === nothing ? nothing : serialize_distribution(v.distribution)
 
-# ModelVariable.update: the object-or-array union of esm-spec §5.4. One rule
-# emits as the OBJECT form and two or more as the array form — a one-element
-# array is invalid, so the length alone recovers the wire spelling and the
-# round trip is stable. `_update_is_scalar_form` (types.jl) is that decision,
+# `update`: the object-or-array union of esm-spec §5.4. One rule emits as the
+# OBJECT form and two or more as the array form — a one-element array is
+# invalid, so the length alone recovers the wire spelling and the round trip
+# is stable. `_update_is_scalar_form` (types.jl) is that decision,
 # shared with `_update_rule_path` so an emitted document and a diagnostic
 # pointer into it can never disagree about which form this update has.
-function _emit_parameter_update_spec(v::ModelVariable)
+function _emit_parameter_update_spec(v::Union{ModelVariable,Parameter})
     v.update === nothing && return nothing
     rules = v.update
     isempty(rules) && return nothing

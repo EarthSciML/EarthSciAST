@@ -19,8 +19,8 @@ its scalar `species.default`, and a non-constant / spatial IC is declared with a
 scoped-reference `ic` equation in a MODEL (`ic(Chemistry.O3) ~ <field>`), never
 inside the reaction system. Throws `ParseError` (diagnostic code
 `ic_in_reaction_system`) on the first offending constraint equation. Operates on
-the raw JSON document because Julia does not parse a reaction system's
-`constraint_equations` into its typed form.
+the raw JSON document, ahead of coercion, so the rejection can carry the
+offending document path.
 """
 function _reject_ic_in_reaction_system(raw_data)
     rss = _get_field(raw_data, :reaction_systems, nothing)
@@ -244,10 +244,10 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     end
 
     # v0.8.0 §11.4.1: reject an `ic`-op equation placed inside a reaction
-    # system's `constraint_equations`. Julia does not parse a reaction
-    # system's `constraint_equations` into its typed form, so this is a raw
-    # JSON structural check run here (schema has already passed — the file
-    # is schema-valid, `constraint_equations` is an array of Equation and
+    # system's `constraint_equations`. A raw JSON structural check run HERE,
+    # ahead of coercion, so the rejection carries a document path rather than
+    # surfacing from inside the typed tree (schema has already passed — the
+    # file is schema-valid, `constraint_equations` is an array of Equation and
     # `ic` is a legal op, so nothing in JSON Schema forbids it). Diagnostic
     # code: `ic_in_reaction_system`.
     _reject_ic_in_reaction_system(raw_data)
@@ -410,7 +410,11 @@ _with_declarations(file::EsmFile, templates, metaparams;
             expression_templates=templates,
             metaparameters=metaparams,
             component_templates=component_templates,
-            coordinates=coordinates)
+            coordinates=coordinates,
+            # `coupling_roles` is read at the coercion boundary (no lowering
+            # pass rewrites it), so carry the already-coerced value across
+            # this rebuild rather than re-snapshotting it.
+            coupling_roles=file.coupling_roles)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])
