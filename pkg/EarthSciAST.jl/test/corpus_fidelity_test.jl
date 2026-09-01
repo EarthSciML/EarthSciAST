@@ -20,8 +20,8 @@
 # and one must not be able to satisfy the other.
 #
 # ── What "differs" means here ────────────────────────────────────────────────
-# Exact JSON equality, with three documented relaxations, all applied to BOTH
-# sides so none of them can hide a drop:
+# Exact JSON equality, with two documented relaxations, both applied to BOTH
+# sides so neither can hide a drop:
 #
 #   1. Empty containers. `[]` / `{}` are stripped, because the emitters' uniform
 #      `:nonempty` policy omits an empty collection — `"discrete_events": []`
@@ -30,10 +30,11 @@
 #      when it is `"t"`, and a periodic trigger's `initial_offset` when it is `0`.
 #      Emitting these unconditionally instead would not fix anything, it would
 #      just move the difference onto every document that omits them.
-#   3. `expect_cadence`, the one field the typed IR is DESIGNED not to carry
-#      (see `_relaxed_key` below for why). Stripped per-key rather than by
-#      exempting the `tests/valid/cadence/` tier, so everything else in those
-#      fixtures is still held to exact fidelity.
+#
+# There was a third — `expect_cadence` was stripped from both sides — and it
+# was this gate's own blind spot: the `tests/valid/cadence/` tier exists to pin
+# the §5.7 partition contract, and its 41 assertions were being compared
+# against nothing. The typed IR carries the field now; see `_relaxed_key`.
 #
 # Everything else must match, and int-vs-float spelling is the only scalar
 # latitude (Julia's `==` gives `1 == 1.0`).
@@ -83,20 +84,29 @@ include("testutils.jl")
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",
         "tests/valid/subsystem_index_set_merge.esm" =>
             "esm-spec §4.7 + §9.7: a `{ref}` subsystem is inlined and its index sets merged",
+        "pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm" =>
+            "esm-spec §9.6.3 + §9.6.4 rule 5: the `attrs.gamma` match rule fires at load and its match-only registry is dropped",
     )
     # ---- the relaxations ---------------------------------------------------
     _is_empty_container(v) = (v isa AbstractVector || v isa AbstractDict) && isempty(v)
 
-    # `expect_cadence` (schema `ExpressionNode.expect_cadence`) is a
-    # CONFORMANCE-ONLY author assertion the typed IR deliberately does not
-    # parse: `src/cadence.jl` walks raw JSON precisely because of it, and
-    # `reconstruct` copies every `OpExpr` field by default, so parsing it would
-    # let `simplify` / `canonicalize` / `flatten` carry an assertion made about
-    # the ORIGINAL node onto the rewritten one. It is therefore stripped from
-    # both sides HERE rather than by exempting `tests/valid/cadence/` as a
-    # tier: everything else in those fixtures still has to survive exactly.
+    # `expect_cadence` USED to be relaxed away here, on the theory that the
+    # typed IR deliberately did not parse it and that `reconstruct`'s
+    # copy-every-field default would otherwise let a rewrite carry an assertion
+    # made about the ORIGINAL node onto the rewritten one. Both halves were
+    # wrong. The rewrite worry does not arise: the §5.7 partition pass is a
+    # COMPILE-TIME classification (CONFORMANCE_SPEC.md §5.7) while the §9.6.3
+    # rewrite fixpoint runs at LOAD, so an assertion is only ever checked
+    # against the post-rewrite tree — and cadence class is a pure function of
+    # the data-dependency DAG, which a semantics-preserving rewrite preserves.
+    # Dropping the field across a rewrite would disarm the tripwire in exactly
+    # the case it exists for. And the relaxation disarmed THIS gate too: the 41
+    # `expect_cadence` occurrences across `tests/valid/cadence/**` were stripped
+    # from BOTH sides, so the one corpus tier that pins the §5.7 partition
+    # contract round-tripped vacuously. `OpExpr` now carries the field like any
+    # other wire field (`OPEXPR_FIELD_TABLE`, types.jl), so it is held to exact
+    # fidelity here with everything else.
     _relaxed_key(ks, key, y) =
-        ks == "expect_cadence" ||
         # `Domain.independent_variable` defaults to "t"; a periodic trigger's
         # `initial_offset` defaults to 0. Both are omitted on emit.
         (ks == "independent_variable" && key == "domain" && y == "t") ||
@@ -278,6 +288,36 @@ include("testutils.jl")
         # ... and `CouplingEvent.name`, found by the same sweep.
         @test any(e -> get(e, "type", nothing) == "event" && haskey(e, "name"),
                   lib["coupling"])
+
+        # `ExpressionNode.attrs` — the scheme parameters of an OPEN
+        # rewrite-target op (esm-spec §4.2). NO fixture in ANY binding
+        # exercised it, which is why nothing caught Julia dropping it: a custom
+        # op's entire configuration went missing on load, and the document
+        # re-emitted as a bare `godunov_hamiltonian(phi)`.
+        oa = emit_of("pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs.esm")
+        rhs = oa["models"]["HamiltonJacobi"]["equations"][1]["rhs"]
+        @test rhs["attrs"]["gamma"] == 1.4
+        @test rhs["attrs"]["scheme"] == "lax_friedrichs"
+        @test rhs["attrs"]["stencil_width"] == 3
+        @test rhs["attrs"]["entropy_fix"] === true
+
+        # `ExpressionNode.expect_cadence` — an author assertion on a node's
+        # cadence class (CONFORMANCE_SPEC.md §5.7.6 rule 3). The corpus sweep
+        # above now holds all 41 occurrences in `tests/valid/cadence/**` to
+        # exact fidelity; this pins one by name so a regression reads as the
+        # field rather than as one line of a corpus-wide diff.
+        # Counted over the emitted BYTES against the SOURCE bytes, rather than
+        # at one path: the assertion's whole point is that it sits on every
+        # meaningful node, and reading the expected count off the fixture keeps
+        # the pin from rotting when a fixture gains a node.
+        for rel in ("tests/valid/cadence/pure_pointwise.esm",
+                    "tests/valid/cadence/mixed_stencil.esm",
+                    "tests/valid/cadence/discrete_remesh_stencil.esm")
+            path = joinpath(TESTUTILS_REPO_ROOT, rel)
+            n = count("\"expect_cadence\"", read(path, String))
+            @test n > 0
+            @test count("\"expect_cadence\"", to_json_compact(load_path(path))) == n
+        end
     end
 
     # `esm-schema.json`'s `Parameter` has NO `required` list, so a parameter

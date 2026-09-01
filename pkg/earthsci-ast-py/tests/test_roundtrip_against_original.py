@@ -62,13 +62,14 @@ _EMPTY_EVENT_ARRAY = (
     "re-emit — explicitly allowed (tests/conformance/README.md: 'Optional / "
     "default-valued fields may be omitted on re-emit')"
 )
-_EXPECT_CADENCE = (
-    "`expect_cadence` node annotations are not carried by the typed IR. This "
-    "matches the Julia reference (whose OpExpr deliberately omits it and runs "
-    "the cadence classifier over raw JSON) and Rust; GO DOES round-trip it, so "
-    "the three-way split is a cross-binding divergence awaiting a ruling, not a "
-    "Python-local defect"
-)
+# The seven `cadence/**` fixtures were excused here as `_EXPECT_CADENCE`, on the
+# reading that Julia and Rust dropped the annotation too and only Go carried it,
+# making the split a cross-binding question rather than a Python defect. That
+# reading has been settled the other way: `expect_cadence` is AUTHORED content
+# that all five bindings must round-trip, and Julia, Rust and Python now carry
+# it. The excuse is gone, and those seven documents — the tier that exists to
+# pin the §5.7 partition contract, with an assertion on every meaningful node —
+# are held to full equality with everything else.
 
 TRANSFORMING_FIXTURES: dict[str, str] = {
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
@@ -78,13 +79,6 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`expression_template_imports` is consumed at load and the imported "
         "bodies are expanded into their call sites (esm-spec §9.7.6)"
     ),
-    "cadence/discrete_remesh_stencil.esm": _EXPECT_CADENCE,
-    "cadence/loader_const_seed.esm": _EXPECT_CADENCE,
-    "cadence/loader_temporal_seed.esm": _EXPECT_CADENCE,
-    "cadence/mixed_stencil.esm": _EXPECT_CADENCE,
-    "cadence/observed_leaf_seeds.esm": _EXPECT_CADENCE,
-    "cadence/pure_pointwise.esm": _EXPECT_CADENCE,
-    "cadence/pure_topology.esm": _EXPECT_CADENCE,
     "data_sources_ingest_and_select.esm": _METAPARAMETER_FOLDING,
     "makearray_empty_region_min_extent.esm": _METAPARAMETER_FOLDING,
     "enums_categorical_lookup.esm": (
@@ -127,6 +121,14 @@ RESTORED_KEYS: frozenset[str] = frozenset(
         "coordinates",  # top-level registry
         "lifting",  # coupling[] (variable_map / couple / operator_compose)
         "arg",  # ExpressionNode (argmin / argmax witness)
+        # ExpressionNode author annotations. `expect_cadence` guards the whole
+        # §5.7 partition contract (CONFORMANCE_SPEC.md §5.7.6 rule 3) and is
+        # corpus-covered by `cadence/**`; `attrs` carries an OPEN
+        # rewrite-target op's scheme parameters (esm-spec §4.2) and has NO
+        # corpus coverage in any binding, so the package-local documents below
+        # are what exercise it.
+        "expect_cadence",
+        "attrs",
         "x_esd",  # Metadata — normatively preserve-verbatim
         "system_class",  # Metadata
         "dae_info",  # Metadata
@@ -275,15 +277,172 @@ _PARAMETER_VALUE_MACHINERY = {
 }
 
 
+# An OPEN rewrite-target op (esm-spec §4.2) carries its SCHEME PARAMETERS in
+# `attrs` rather than in dedicated schema slots — the whole configuration of
+# `godunov_hamiltonian` below lives there. Nothing in `tests/valid` uses the
+# field, in any binding, which is exactly why nothing caught Python and Julia
+# dropping it on load: the op re-emitted as a bare `godunov_hamiltonian(phi)`
+# with its configuration gone. This document declares no rewrite rule, so the op
+# survives load (§4.2 makes loading permissive about an unlowered rewrite-target
+# op) and the node must come back with `attrs` intact.
+_OPEN_OP_ATTRS = {
+    "esm": "1.0.0",
+    "metadata": {"name": "OpenOpAttrs"},
+    "models": {
+        "HamiltonJacobi": {
+            "variables": {
+                "phi": {"type": "unknown", "units": "m", "default": 0.0},
+                "H": {"type": "unknown", "units": "m/s"},
+                "c": {"type": "parameter", "units": "m/s", "default": 1.0},
+            },
+            "equations": [
+                {
+                    "lhs": "H",
+                    "rhs": {
+                        "op": "godunov_hamiltonian",
+                        "args": ["phi"],
+                        # Heterogeneous on purpose: `attrs` values are named
+                        # JSON scalars, not a string map.
+                        "attrs": {
+                            "gamma": 1.4,
+                            "scheme": "lax_friedrichs",
+                            "stencil_width": 3,
+                            "entropy_fix": True,
+                        },
+                    },
+                },
+                {
+                    "lhs": {"op": "D", "args": ["phi"], "wrt": "t"},
+                    "rhs": {"op": "*", "args": ["c", "H"]},
+                },
+            ],
+        }
+    },
+}
+
+# The author cadence assertion (CONFORMANCE_SPEC.md §5.7.6 rule 3) on a node
+# shape the `cadence/**` corpus tier does not reach: a nested arithmetic tree
+# whose inner and outer nodes assert DIFFERENT classes. Corpus coverage proves
+# the field survives where it is authored; this proves two annotations on one
+# path do not collapse into each other.
+_NESTED_EXPECT_CADENCE = {
+    "esm": "1.0.0",
+    "metadata": {"name": "NestedExpectCadence"},
+    "models": {
+        "Forced": {
+            "variables": {
+                "u": {"type": "unknown", "units": "1", "default": 0.0},
+                "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+            },
+            "equations": [
+                {
+                    "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                    "rhs": {
+                        "op": "*",
+                        "args": [
+                            {"op": "-", "args": [0.0, "k"], "expect_cadence": "const"},
+                            "u",
+                        ],
+                        "expect_cadence": "continuous",
+                    },
+                }
+            ],
+        }
+    },
+}
+
+
 @pytest.mark.parametrize(
     "document",
-    [_METADATA_ONLY_FIELDS, _PARAMETER_VALUE_MACHINERY],
-    ids=["metadata_and_reference_fields", "parameter_value_machinery"],
+    [
+        _METADATA_ONLY_FIELDS,
+        _PARAMETER_VALUE_MACHINERY,
+        _OPEN_OP_ATTRS,
+        _NESTED_EXPECT_CADENCE,
+    ],
+    ids=[
+        "metadata_and_reference_fields",
+        "parameter_value_machinery",
+        "open_op_attrs",
+        "nested_expect_cadence",
+    ],
 )
 def test_uncovered_schema_fields_survive_a_round_trip(document: dict) -> None:
     """Fields no corpus fixture exercises still survive ``load -> save``."""
     reemitted = json.loads(ea.to_json(ea.load_document(document)))
     assert reemitted == document
+
+
+def test_an_attrs_key_binds_a_match_rule_param_to_the_matched_literal() -> None:
+    """esm-spec §9.6.1: in a rewrite rule's ``match``, an ``attrs.<key>`` whose
+    value is a BARE PARAM NAME binds that param to the matched literal.
+
+    This is the half of ``attrs`` most likely to break silently — a rule that
+    stops binding does not raise, it just stops firing, and the document then
+    reaches evaluation with an unlowered op. Here ``g`` binds to ``1.4`` and
+    ``f`` to the operand, so the custom op lowers to ``1.4 * phi``.
+    """
+    document = {
+        "esm": "1.0.0",
+        "metadata": {"name": "AttrsMatchBinding"},
+        "models": {
+            "HamiltonJacobi": {
+                "variables": {
+                    "phi": {"type": "unknown", "units": "m", "default": 0.0},
+                    "H": {"type": "unknown", "units": "m/s"},
+                },
+                "equations": [
+                    {
+                        "lhs": "H",
+                        "rhs": {
+                            "op": "godunov_hamiltonian",
+                            "args": ["phi"],
+                            "attrs": {"gamma": 1.4},
+                        },
+                    },
+                    {"lhs": {"op": "D", "args": ["phi"], "wrt": "t"}, "rhs": "H"},
+                ],
+                "expression_templates": {
+                    "lower_godunov": {
+                        "params": ["f", "g"],
+                        "match": {
+                            "op": "godunov_hamiltonian",
+                            "args": ["f"],
+                            "attrs": {"gamma": "g"},
+                        },
+                        "body": {"op": "*", "args": ["g", "f"]},
+                    }
+                },
+            }
+        },
+    }
+    model = json.loads(ea.to_json(ea.load_document(document)))["models"]["HamiltonJacobi"]
+    rhs = next(eq["rhs"] for eq in model["equations"] if eq["lhs"] == "H")
+    assert rhs == {"op": "*", "args": [1.4, "phi"]}
+    # §9.6.4 rule 5: the match-only registry is dropped once its rules fire.
+    assert "expression_templates" not in model
+
+
+def test_a_node_carrying_an_annotation_has_no_canonical_form() -> None:
+    """``tests/conformance/canonical/README.md``: a node carrying any field
+    outside ``{op, args, wrt, dim, fn, name, value}`` must make
+    ``canonical_json`` raise ``E_CANONICAL_UNSUPPORTED_FIELD``, and it names
+    ``expect_cadence`` explicitly. The requirement was unreachable while
+    ``ExprNode`` dropped both annotations at parse — the emitter never saw one.
+    """
+    from earthsci_ast.canonicalize import UnsupportedFieldError, canonical_json
+    from earthsci_ast.esm_types import ExprNode
+
+    for kwargs in ({"expect_cadence": "const"}, {"attrs": {"gamma": 1.4}}):
+        with pytest.raises(UnsupportedFieldError) as excinfo:
+            canonical_json(ExprNode(op="sin", args=["a"], **kwargs))
+        assert excinfo.value.code == "E_CANONICAL_UNSUPPORTED_FIELD"
+        assert excinfo.value.field == next(iter(kwargs))
+
+    # The positive control: the same node without them still canonicalizes, so
+    # the two additions cannot have shifted the canonical bytes of any node
+    # that does not carry one.
+    assert canonical_json(ExprNode(op="sin", args=["a"])) == '{"args":["a"],"op":"sin"}'
 
 
 def test_a_reaction_without_a_name_does_not_gain_one() -> None:

@@ -62,13 +62,20 @@ func DeriveODEs(system *ReactionSystem) (*Model, error) {
 			Description: sp.Description,
 		}
 	}
+	// The §6.3 value model travels with the parameter. Update above all: it is
+	// the only channel binding a parameter to a data source (esm-spec §5.4), so
+	// dropping it here would lower a data-driven parameter to a constant.
 	for _, name := range sortedKeys(system.Parameters) {
 		p := system.Parameters[name]
 		variables[name] = ModelVariable{
-			Type:        VarTypeParameter,
-			Units:       p.Units,
-			Default:     p.Default,
-			Description: p.Description,
+			Type:         VarTypeParameter,
+			Units:        p.Units,
+			Default:      p.Default,
+			Description:  p.Description,
+			DefaultUnits: p.DefaultUnits,
+			Shape:        p.Shape,
+			Distribution: p.Distribution,
+			Update:       p.Update,
 		}
 	}
 

@@ -1128,9 +1128,17 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 		if _, isNum := exprNumber(p.Default); isNum {
 			defaultValue = p.Default
 		}
+		// The §6.3 value model travels with the parameter, exactly as it does out
+		// of collectModel. Update above all: it is the only channel binding a
+		// parameter to a data source (esm-spec §5.4), so dropping it here would
+		// flatten a data-driven parameter into a constant — and it is the SOLE
+		// seed of the DISCRETE cadence class (CONFORMANCE_SPEC §5.7.2).
 		component.parameters.set(FlattenedVariable{
 			Name: fullPrefix + "." + name, Role: "parameter", SourceSystem: fullPrefix,
 			Units: p.Units, Default: defaultValue, Description: p.Description,
+			Shape:        append([]string(nil), p.Dims()...),
+			Update:       p.Update,
+			Distribution: p.Distribution,
 		})
 	}
 

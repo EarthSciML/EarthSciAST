@@ -229,58 +229,27 @@ both bindings now and every field is compared. The RULING itself no longer has a
 corpus case, so it is pinned locally below on a document built here — losing the
 refusal must not lose the diagnostic.)
 
-- `parameters.update_kinds` / `discrete_parameters` on `minimal_chemistry`,
-  `full_coupled` and `metadata_inheritance_coupled`: a REACTION SYSTEM's
-  parameter that declares an `update` block. Each of these three fixtures has
-  exactly one — `SimpleOzone.T`, `AtmosphericChemistry.T`, `AtmosphericChemistry.T`
-  — declaring `update: {kind: "data", source: …, from: {file_variable: …}}`.
-  esm-spec §5.4 makes that block the only channel binding a parameter to a data
-  source, and §6.3.1 defines `discrete_parameters` as the parameters carrying
-  any non-`wiener` update, so Julia reports `["data"]` and lists the parameter
-  as discrete.
+- `loader_fields` on a REACTION SYSTEM's data-bound parameter: classified, never
+  fetched. `_collect_loader_fields!` (src/flatten.jl) walks models and their
+  subsystems only, so a reaction system's parameter declaring
+  `update: {kind: "data", ...}` is reported in `discrete_parameters` — correctly,
+  per esm-spec §6.3.1 — while nothing emits a `LoaderField` to actually load it.
+  Rust does not share this gap: `collect_loader_fields` walks the flattened
+  parameter map, so it fetches these bindings and is the binding that is right.
+  Julia, Python and Go all need the same treatment before the corpus can record
+  it; until then Julia matches the corpus on `loader_fields` and the pin below
+  keeps the half-implemented path from drifting unnoticed.
 
-  The corpus records `[]` and omits it, because EVERY binding drops a reaction
-  system's parameter `update` when lowering it to a `ModelVariable` — Rust
-  (`pkg/earthsci-ast-rs/src/reactions.rs`, `update: None`), Go
-  (`pkg/earthsci-ast-go/pkg/esm/reactions.go`) and Python
-  (`pkg/earthsci-ast-py/src/earthsci_ast/reactions.py`) all build the variable
-  from `units`/`default`/`description` alone. Julia did too until the lowering
-  sites (`src/reactions.jl`, `src/namespacing.jl`) were taught to carry the
-  §6.3 value model across.
-
-  So this is NOT "Julia is wrong": the corpus entry encodes the shared lowering
-  drop, and regenerating it from Julia alone would flip the other four bindings
-  red. Six corpus entries would change, and they are the whole of it:
-    tests/conformance/flatten/cases.json
-      minimal_chemistry            parameters[2].update_kinds [] -> ["data"]
-                                   discrete_parameters + "SimpleOzone.T"
-      full_coupled                 parameters[5].update_kinds [] -> ["data"]
-                                   discrete_parameters + "AtmosphericChemistry.T"
-      metadata_inheritance_coupled parameters[2].update_kinds [] -> ["data"]
-                                   discrete_parameters + "AtmosphericChemistry.T"
-  That is a cross-binding change and belongs with the other bindings' lowering
-  fix, not here. Julia's answers are pinned locally below.
-
-  Note the parameter does NOT gain a `loader_fields` entry, and `loader_fields`
-  still matches the corpus exactly: `_collect_loader_fields!` (src/flatten.jl)
-  walks models and their subsystems only, so a reaction system's data binding
-  is classified but never fetched. That half-implemented path predates this and
-  is unchanged by it — the classification is now honest about the declaration
-  while the fetch side is still missing. It is pinned below so it cannot drift
-  unnoticed.
 """
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
-    "full_coupled" => ["equations",
-                       "parameters.update_kinds", "discrete_parameters"],
+    "full_coupled" => ["equations"],
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["state_variables", "observed_variables", "equations"],
     "expression_templates_arrhenius" => ["equations"],
     "autocatalytic_reaction" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
-    "minimal_chemistry" => ["equations",
-                            "parameters.update_kinds", "discrete_parameters"],
-    "metadata_inheritance_coupled" => ["equations",
-                                       "parameters.update_kinds", "discrete_parameters"],
+    "minimal_chemistry" => ["equations"],
+    "metadata_inheritance_coupled" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
     "operator_compose_translate" => ["equations", "independent_variables"],
 )
@@ -585,11 +554,11 @@ end
     end
 
     @testset "a reaction system's parameter keeps its `update` through flatten" begin
-        # The corpus records `update_kinds: []` and omits these parameters from
-        # `discrete_parameters`, because every other binding drops a reaction
-        # system's parameter `update` when lowering it to a `ModelVariable`. See
-        # the `_FC_DIVERGENCES` docstring for the six corpus entries that would
-        # have to change and why regenerating them is a cross-binding decision.
+        # All four bindings now carry the `update` across reaction-system
+        # lowering, and the corpus records `update_kinds: ["data"]` with the
+        # parameter listed in `discrete_parameters`. This testset is the
+        # corpus-independent pin: it fails if any future change re-drops the
+        # block, without waiting for the shared golden to disagree.
         #
         # esm-spec §5.4: an `update` block is the ONLY channel binding a
         # parameter to a data source, so dropping it does not lose annotation —

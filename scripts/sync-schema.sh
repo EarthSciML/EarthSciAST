@@ -125,6 +125,60 @@ else
   node "$TS_VGEN" >/dev/null && echo "Synced:  $TS_VALIDATOR (recompiled from esm-schema.json)"
 fi
 
+# ---------------------------------------------------------------------------
+# pkg/earthsci-ast-ts/src/generated.ts
+# ---------------------------------------------------------------------------
+# The THIRD generated copy of the schema in the TypeScript binding, and until
+# now the only one this gate did not cover. `embedded-schema.ts` and
+# `generated-validator.js` were both checked above; the TypeScript TYPES that
+# every consumer of `@earthsciml/ast` compiles against were not — and they had
+# silently drifted, still declaring a component kind the format removed at
+# 1.0.0. A generated artifact nothing compares against is a copy of the schema
+# as it was on the day someone last remembered to run the generator.
+#
+# The generator is `npm run generate-types`: json2ts, then
+# scripts/fix-generated-expression.mjs, which repairs json2ts's degenerate
+# inlining of `Expression` IN PLACE. Because that repair rewrites the real file,
+# a byte-exact check regenerates over the working copy and RESTORES it, whatever
+# the outcome — the snapshot is taken first and put back by an EXIT trap, so an
+# interrupted run cannot leave a regenerated file behind.
+#
+# Like the validator above, this needs node_modules (json2ts is a dev
+# dependency), so it SKIPS loudly rather than passing quietly when absent.
+TS_TYPES="pkg/earthsci-ast-ts/src/generated.ts"
+TS_DIR="${REPO_ROOT}/pkg/earthsci-ast-ts"
+if [[ ! -f "${REPO_ROOT}/${TS_TYPES}" ]]; then
+  echo "MISSING: $TS_TYPES"
+  drifted=1
+elif [[ ! -x "${TS_DIR}/node_modules/.bin/json2ts" ]]; then
+  echo "SKIP:    $TS_TYPES (needs pkg/earthsci-ast-ts npm install: json2ts is a dev dependency)"
+elif [[ "$check_mode" == true ]]; then
+  ts_types_snapshot="$(mktemp)"
+  cp "${REPO_ROOT}/${TS_TYPES}" "$ts_types_snapshot"
+  # Restore unconditionally: the generator writes over the working copy, and a
+  # --check must never be the reason a file changed.
+  trap 'cp "$ts_types_snapshot" "${REPO_ROOT}/${TS_TYPES}"; rm -f "$ts_types_snapshot"' EXIT
+  if types_result=$( (cd "$TS_DIR" && npm run --silent generate-types) 2>&1 ); then
+    if diff -q "$ts_types_snapshot" "${REPO_ROOT}/${TS_TYPES}" > /dev/null 2>&1; then
+      echo "OK:      $TS_TYPES (generated from esm-schema.json)"
+    else
+      echo "DRIFT:   $TS_TYPES"
+      echo "         Regenerate with: cd pkg/earthsci-ast-ts && npm run generate-types"
+      drifted=1
+    fi
+  else
+    echo "DRIFT:   $TS_TYPES (generator failed)"
+    echo "         ${types_result}"
+    drifted=1
+  fi
+  cp "$ts_types_snapshot" "${REPO_ROOT}/${TS_TYPES}"
+  rm -f "$ts_types_snapshot"
+  trap - EXIT
+else
+  (cd "$TS_DIR" && npm run --silent generate-types >/dev/null) \
+    && echo "Synced:  $TS_TYPES (regenerated from esm-schema.json)"
+fi
+
 # Extract the version field from a binding manifest.
 # Emits "<file>: <version>" to stdout.
 read_version() {

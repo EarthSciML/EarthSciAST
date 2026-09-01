@@ -26,7 +26,15 @@
 #      the same single source of truth the parse/serialize/traversal walkers
 #      derive from, so a newly added field is covered automatically (an
 #      unknown-kind or unknown-typed field falls to the `===`-only fallback:
-#      MISSED sharing, never a wrong merge).
+#      MISSED sharing, never a wrong merge). "Semantic" here means *emitted*,
+#      not merely *evaluated*: `expect_cadence` (an author cadence assertion)
+#      and `attrs` (an open rewrite-target op's scheme parameters) change no
+#      evaluation result, but they DO round-trip to the wire, so two nodes
+#      differing only in one of them are different documents and must not
+#      collapse to a single allocation — which would silently unify, and so
+#      drop, one of the two annotations. Their `:scalar` rows put them on the
+#      `_plain_eq`/`_plain_hash` path automatically; Rust's `node_eq`/
+#      `node_hash` make the same call.
 #   2. Children are interned bottom-up, so `===` on an already-interned child
 #      IS structural equality — shallow comparisons/hashes over child slots
 #      use pointer identity (`===` / `objectid`), making one intern pass

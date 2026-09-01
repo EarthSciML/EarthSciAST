@@ -394,6 +394,24 @@ end
         expr = _normj(_et_defrhs(out["models"]["m"], "y"))
         @test expr == Dict{String,Any}("op" => "*", "args" => Any[1.4, "u"])
     end
+
+    @testset "the same binding from a DOCUMENT, not a string literal" begin
+        # `pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm`
+        # is the fixture half of the case above — `attrs` had NO fixture in any
+        # binding, which is why nothing noticed Julia and Python dropping the
+        # field on load. Reading it off disk exercises the whole path (file →
+        # raw JSON → rewrite fixpoint) rather than a hand-built dict, and its
+        # companion `open_op_attrs.esm` gates the typed round trip from
+        # corpus_fidelity_test.jl.
+        fixture = joinpath(@__DIR__, "fixtures", "round_trip",
+                           "open_op_attrs_match.esm")
+        out = _lowerx(JSON3.read(read(fixture, String)))
+        m = out["models"]["HamiltonJacobi"]
+        @test _normj(_et_defrhs(m, "H")) ==
+              Dict{String,Any}("op" => "*", "args" => Any[1.4, "phi"])
+        # §9.6.4 rule 5: a match-only registry is dropped once its rules fire.
+        @test !haskey(_normj(m), "expression_templates")
+    end
 end
 
 @testset "scalar-field template-parameter substitution (esm-spec §9.6.1 / §9.6.3 constraint 5)" begin

@@ -228,6 +228,10 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
     // parameters") all do it; this binding alone did not. Order matches
     // Python and TypeScript: species in declaration order, then parameters in
     // declaration order.
+    //
+    // The §6.3 value model travels with them. `update` above all: it is the
+    // only channel binding a parameter to a data source (esm-spec §5.4), so
+    // dropping it here would lower a data-driven parameter to a constant.
     for (param_name, param) in &system.parameters {
         variables.insert(
             param_name.clone(),
@@ -236,6 +240,10 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
                 units: param.units.clone(),
                 default: param.default,
                 description: param.description.clone(),
+                default_units: param.default_units.clone(),
+                shape: param.shape.clone(),
+                distribution: param.distribution.clone(),
+                update: param.update.clone(),
                 ..Default::default()
             },
         );

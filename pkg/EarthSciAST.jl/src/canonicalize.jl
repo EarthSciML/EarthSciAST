@@ -333,6 +333,15 @@ const _EMISSIBLE_FIELDS = (:op, :args, :wrt, :dim, :fn, :name, :value)
 # apply_expression_template parameter map, normally lowered away before typed
 # parsing), and both were absent from the historical hand-maintained
 # non-emissible tuple — that tolerance is pinned by op_registry_test.jl.
+#
+# `expect_cadence` and `attrs` are deliberately NOT here. Both are author
+# annotations with no canonical wire slot, and
+# `tests/conformance/canonical/README.md` names them among the fields a node may
+# carry that MUST make `canonical_json` raise `E_CANONICAL_UNSUPPORTED_FIELD` —
+# a requirement that was unreachable until the typed IR started carrying them
+# (before that, parse dropped both and the emitter never saw one). They fall
+# through to the derived `_NON_EMISSIBLE_FIELDS` below, so no edit is needed
+# here; this note records that the omission is a decision, not an oversight.
 const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings)
 
 # OpExpr fields WITHOUT a pinned slot in the cross-binding canonical JSON node

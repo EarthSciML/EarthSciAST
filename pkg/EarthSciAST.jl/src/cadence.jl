@@ -26,16 +26,19 @@ over its inputs' classes, derived bottom-up, never declared.
 # CONFORMANCE-ONLY: why raw JSON, not the typed IR
 
 This module walks the **raw parsed JSON** of a model (`AbstractDict` /
-`JSON3.Object` → native dicts) because the conformance fixtures carry the
-`expect_cadence` assertion — an annotation the typed IR deliberately does not
-parse. It is consumed ONLY by the conformance surface: the cadence adapter
-(`scripts/cadence_adapter.jl`, which also hosts the §5.7 `partition_model`
-pass and the CONST-fold kernels) and `test/cadence_test.jl`. The PRODUCTION
-build path no longer touches it: the value-invention front door
+`JSON3.Object` → native dicts) because it must classify documents in the shape
+the conformance harness hands them, including the whole-document surroundings
+(`data_sources`, `index_sets`) that never reach a typed expression. The typed
+IR is no longer the obstacle it once was: `OpExpr` now carries
+`expect_cadence` like any other wire field (`OPEXPR_FIELD_TABLE`, types.jl), so
+this classifier's raw-JSON reads and a typed walk would see the same
+annotation. The pass is consumed ONLY by the conformance surface: the cadence
+adapter (`scripts/cadence_adapter.jl`, which also hosts the §5.7
+`partition_model` pass and the CONST-fold kernels) and `test/cadence_test.jl`.
+The PRODUCTION build path does not run it: the value-invention front door
 (`value_invention.jl`) derives the §5.7 guard-2 classification directly on the
-typed `OpExpr` IR, which now preserves every wire field
-(`OPEXPR_FIELD_TABLE`, types.jl). `reference_graph.jl` walks raw JSON for the
-same conformance reason.
+typed `OpExpr` IR. `reference_graph.jl` walks raw JSON for the same conformance
+reason.
 
 # The gather rule (the design's load-bearing rule)
 
@@ -105,7 +108,11 @@ to_native(x) = x
     load_model_json(path, model_name) -> Dict{String,Any}
 
 Load one model from an `.esm` document as a native JSON dict (no typed coercion:
-this classifier needs the `expect_cadence` field the typed IR does not parse).
+this classifier reads the model's whole-document surroundings — `data_sources`,
+`index_sets`, the parameter/variable declarations — none of which live inside a
+typed expression. The `expect_cadence` annotation it asserts against IS carried
+by the typed IR (`OPEXPR_FIELD_TABLE`, types.jl); the raw form is about scope,
+not about that field).
 """
 function load_model_json(path::AbstractString, model_name::AbstractString)
     doc = to_native(JSON3.read(read(path, String)))

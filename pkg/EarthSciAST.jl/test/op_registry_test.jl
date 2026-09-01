@@ -265,13 +265,25 @@ end
     # this pins that the derivation reproduces the old literal exactly
     # (membership AND order — order feeds the E_CANONICAL_UNSUPPORTED_FIELD
     # message text).
+    #
+    # `expect_cadence` / `attrs` join the tail: `tests/conformance/canonical/
+    # README.md` requires a node carrying either to raise
+    # E_CANONICAL_UNSUPPORTED_FIELD, which only became reachable once the typed
+    # IR stopped dropping them at parse.
     @test ESM._NON_EMISSIBLE_FIELDS == (
         :int_var, :lower, :upper, :output_idx, :expr_body, :reduce, :semiring,
         :ranges, :regions, :values, :shape, :perm, :axis,
         :table, :table_axes, :output,
         :join, :filter, :join_gates,
         :id, :manifold, :distinct, :key, :label,
+        :expect_cadence, :attrs,
     )
+    # The two annotations fail CLOSED rather than being silently dropped.
+    for kw in (:expect_cadence => "const", :attrs => Dict{String,Any}("gamma" => 1.4))
+        @test_throws CanonicalizeError ESM._emit_node_json(
+            OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"), VarExpr("b")];
+                   NamedTuple{(kw[1],)}((kw[2],))...))
+    end
     @test ESM._EMISSIBLE_FIELDS == (:op, :args, :wrt, :dim, :fn, :name, :value)
     # `arg`/`bindings` were historically tolerated-and-ignored (absent from the
     # non-emissible literal): a node carrying them still canonicalizes.
