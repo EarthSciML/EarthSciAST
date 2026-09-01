@@ -173,6 +173,44 @@ function _validated_key_member(m, set_name::String)
     end
 end
 
+# Validate one DATA-COLUMN value used as a join key (CONFORMANCE_SPEC §5.5.8's
+# float-key paragraph). Same exact-equality contract as `_validated_key_member`,
+# with one addition forced by the storage: a data column reaches the build as
+# `Float64` (a dense const array, a `makearray` literal, a value-invention map
+# buffer), so an integer ID column is INDISTINGUISHABLE from a float one by type
+# alone. Admit it exactly where every value is integral — then it IS an integer
+# ID column — and reject anything else as the non-portable float key it is.
+# Rejecting the document is the RECOMMENDED behaviour of §5.5.8 and what the
+# Python reference does; Julia follows Python here rather than Rust (which
+# declines the gate and lets the lowered predicate compute float equality),
+# because Julia has no lowered predicate to fall back on.
+function _validated_key_datum(v, col_name::String)
+    v === nothing && throw(TreeWalkError("E_TREEWALK_JOIN_NULL_KEY",
+        "null value in join key column '$col_name': emitting null into a key " *
+        "column is a build-time error (CONFORMANCE_SPEC §5.5.8)"))
+    if v isa Bool
+        throw(TreeWalkError("E_TREEWALK_JOIN_KEY_TYPE",
+            "boolean value $(repr(v)) in join key column '$col_name' is not an " *
+            "exact-equality key type (CONFORMANCE_SPEC §5.5.8)"))
+    elseif v isa Integer
+        return Int(v)
+    elseif v isa AbstractString
+        return String(v)
+    elseif v isa AbstractFloat
+        (isfinite(v) && v == round(v)) || throw(TreeWalkError("E_TREEWALK_JOIN_FLOAT_KEY",
+            "non-integral value $(repr(v)) in join key column '$col_name': a " *
+            "float-stored key column is admissible ONLY where every value is " *
+            "exactly integral (an integer ID column) — float equality is not " *
+            "portable across bindings (CONFORMANCE_SPEC §5.5.8 / §5.5.1 rule 1)"))
+        return Int(v)
+    else
+        throw(TreeWalkError("E_TREEWALK_JOIN_KEY_TYPE",
+            "unsupported join key value type $(typeof(v)) in column " *
+            "'$col_name'; keys must be integer IDs or categorical members " *
+            "(CONFORMANCE_SPEC §5.5.8)"))
+    end
+end
+
 # The 1-based range positions iterated for a join-key symbol — the loop-variable
 # values the expansion will see (categorical / interval `{from}` resolve to
 # `1:size`; a dense `[lo,hi]` tuple expands to `lo:hi`). Runs on the ORIGINAL
@@ -251,34 +289,119 @@ end
 # see the `_EMPTY_*` invariant block next to `_EMPTY_DERIVED_EXTENTS`.
 const _EMPTY_VI_MAPS = (maps=Dict{String,Any}(), map_sets=Dict{String,String}())
 
+# The aggregate range symbol a 1-D DATA COLUMN runs over (CONFORMANCE_SPEC
+# §5.5.8 case 2): the column's single declared shape index set names one of the
+# node's ranges. `vi_maps.map_sets` records the same fact for a materialised
+# value-invention buffer, which has no `variables` entry to read a shape from.
+# `_overlap_env_sym` below spells the identical rule for an envelope factor;
+# the two are kept apart only because their error contracts differ (an
+# unresolvable envelope factor is an OVERLAP diagnostic, an unresolvable key
+# column an UNKNOWN_KEY one).
+function _join_key_column_sym(col::String, ranges::AbstractDict,
+                              sym_to_set::AbstractDict, var_shapes::AbstractDict,
+                              vi_maps)
+    setn = get(vi_maps.map_sets, col, nothing)
+    if setn === nothing
+        shape = get(var_shapes, col, nothing)
+        (shape === nothing || length(shape) != 1) && throw(TreeWalkError(
+            "E_TREEWALK_JOIN_UNKNOWN_KEY",
+            "join key '$col' is neither a loop symbol / index set of this " *
+            "aggregate's ranges nor a declared 1-D data column (its shape is " *
+            "$(shape === nothing ? "<undeclared>" : shape); §5.5.8 requires a " *
+            "single shape index set naming one of the node's ranges)"))
+        setn = String(shape[1])
+    end
+    return _join_sym_for_key(setn, ranges, sym_to_set)
+end
+
+# The build-time VALUES of a data-column key at each of `positions`. §5.5.8
+# requires the column to be build-time constant by the time the gate is built,
+# and there are three storages it can already be constant in:
+#   * a value-invention MAP buffer (`vi_maps.maps`) — the data-derived bin key;
+#   * a const array (`const_arrays`) — host-supplied, derived at the front door,
+#     or a `const`-op array observed registered there;
+#   * a document-LITERAL array observed still carrying its defining expression
+#     (`const` / `makearray`), materialised here through the SAME
+#     `_resolve_index_of_makearray` the body's own `index(col, l)` would use, so
+#     the gate and the lowered body cannot disagree about the column.
+# Anything else (a live state, a runtime-materialised observed) is a build error
+# rather than a silently ungated product.
+function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
+                                 const_arrays::AbstractDict, obs_defs::AbstractDict)
+    if haskey(vi_maps.maps, col)
+        # Deliberately UNVALIDATED: a skolem bin id is whatever the value-
+        # invention front door minted (an integer, a tuple), it is only ever
+        # compared against another buffer minted the same way, and validating it
+        # here would reject documents that work today.
+        buf = vi_maps.maps[col]
+        return Any[buf[p] for p in positions]
+    end
+    arr = get(const_arrays, col, nothing)
+    if arr === nothing
+        defn = get(obs_defs, col, nothing)
+        if defn isa OpExpr && (defn::OpExpr).op == "const"
+            arr = _const_op_to_array((defn::OpExpr).value)
+        elseif defn isa OpExpr && (defn::OpExpr).op == "makearray"
+            return Any[_join_literal_at(defn::OpExpr, p, const_arrays) for p in positions]
+        end
+    end
+    arr === nothing && throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
+        "join key column '$col' has no build-time data: §5.5.8 requires a key " *
+        "column to be build-time constant by the time the gate is built (a " *
+        "const array, a document-literal array observed, or a value-invention " *
+        "map buffer) — it is none of those"))
+    ndims(arr) == 1 || throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
+        "join key column '$col' is $(ndims(arr))-D; §5.5.8 admits a 1-D column"))
+    for p in positions
+        checkbounds(Bool, arr, p) || throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
+            "join key column '$col' has $(length(arr)) rows but its range runs " *
+            "to position $(maximum(positions))"))
+    end
+    return Any[arr[p] for p in positions]
+end
+
+# One cell of a document-literal `makearray` key column, as a raw value.
+function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)
+    r = _resolve_index_of_makearray(mk, ASTExpr[IntExpr(Int64(p))],
+                                    Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                    Dict{String,Int}(), const_arrays)
+    r isa NumExpr && return (r::NumExpr).value
+    r isa IntExpr && return (r::IntExpr).value
+    throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
+        "join key column cell $p of a `makearray` observed did not reduce to a " *
+        "build-time literal (got a $(typeof(r))); §5.5.8 requires the key column " *
+        "to be build-time constant"))
+end
+
 # Resolve one join-key name to `(sym, positions, values)` — the range symbol it
 # denotes, the 1-based positions iterated for it, and the key VALUE at each
-# position. Two cases (RFC §5.3):
-#  - the key names a value-invention MAP buffer (e.g. `src_bin`, materialised by
-#    the front-door): the broad-phase bin key is DATA-DERIVED, so it is not a
-#    categorical index-set member — read the key value per position from the
-#    buffer `vi_maps.maps[key]`, and find the range symbol via the buffer's
-#    declared 1-D shape index set (`vi_maps.map_sets[key]`);
-#  - otherwise the key is a range symbol / index-set name whose key column is the
-#    categorical member (or interval integer index) from the document registry.
+# position. Two cases, in the §5.5.8 precedence order (which is §5.5.6's
+# "binders shadow declarations" order):
+#  1. a BINDER: a loop symbol of this node, or the index set one of its ranges
+#     draws `{from}`. The key values are that set's declared members (a
+#     categorical set) or its integer IDs (an interval), known from the
+#     document registry. Tested FIRST, so a variable that happens to share a
+#     name with one of the node's range symbols cannot shadow the loop symbol.
+#  2. otherwise a DATA COLUMN: a declared 1-D variable — or the materialised
+#     value-invention map buffer that is the special case of one — whose single
+#     shape index set names one of this node's ranges. Its values ARE the key
+#     values, read as data. This is how a relational port (EPA MOVES/NONROAD)
+#     spells every join: one table's `sourceTypeID` column against another's.
 function _join_key_sym_pos_vals(key::String, ranges::AbstractDict,
                                 index_sets::AbstractDict, sym_to_set::AbstractDict,
-                                vi_maps)
-    if haskey(vi_maps.maps, key)
-        setn = get(vi_maps.map_sets, key, nothing)
-        setn === nothing && throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
-            "value-invention join key '$key' has no recorded 1-D shape index set " *
-            "(RFC semiring-faq-unified-ir §5.3)"))
-        sym = _join_sym_for_key(setn, ranges, sym_to_set)
+                                vi_maps, const_arrays::AbstractDict=Dict{String,Any}(),
+                                var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                                obs_defs::AbstractDict=Dict{String,ASTExpr}())
+    if haskey(ranges, key) || any(==(key), values(sym_to_set))
+        sym = _join_sym_for_key(key, ranges, sym_to_set)
         positions = _join_key_positions(sym, ranges, index_sets)
-        buf = vi_maps.maps[key]
-        vals = Any[buf[p] for p in positions]
-        return (sym, positions, vals)
+        return (sym, positions, _key_member_values(sym, ranges, positions, index_sets))
     end
-    sym = _join_sym_for_key(key, ranges, sym_to_set)
+    sym = _join_key_column_sym(key, ranges, sym_to_set, var_shapes, vi_maps)
     positions = _join_key_positions(sym, ranges, index_sets)
-    vals = _key_member_values(sym, ranges, positions, index_sets)
-    return (sym, positions, vals)
+    raw = _join_key_column_values(key, positions, vi_maps, const_arrays, obs_defs)
+    haskey(vi_maps.maps, key) && return (sym, positions, raw)
+    return (sym, positions, Any[_validated_key_datum(v, key) for v in raw])
 end
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
@@ -308,7 +431,8 @@ end
 function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
                                  vi_maps=_EMPTY_VI_MAPS,
                                  const_arrays::AbstractDict=Dict{String,Any}(),
-                                 var_shapes::AbstractDict=Dict{String,Vector{String}}())
+                                 var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                                 obs_defs::AbstractDict=Dict{String,ASTExpr}())
     node.join === nothing && return nothing
     ranges = node.ranges === nothing ? Dict{String,Any}() : node.ranges
     sym_to_set = Dict{String,String}(
@@ -329,8 +453,10 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
                                    _OverlapIndex(cands)))
         else                           # clause :: Vector{Tuple{String,String}}
             for (lkey, rkey) in clause
-                sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets, sym_to_set, vi_maps)
-                sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets, sym_to_set, vi_maps)
+                sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets,
+                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
+                sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets,
+                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
                 codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
                 push!(gates, _JoinGate(sym_l, sym_r,
                     Dict{Int,Int}(zip(pos_l, codes_l)),
@@ -399,40 +525,47 @@ _eq_has_join(eq::Equation) = _expr_has_join(eq.lhs) || _expr_has_join(eq.rhs)
 # populated.
 function _resolve_join_in_expr(expr::OpExpr, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
                                const_arrays::AbstractDict=Dict{String,Any}(),
-                               var_shapes::AbstractDict=Dict{String,Vector{String}}())
-    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps, const_arrays, var_shapes) for a in expr.args]
-    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps, const_arrays, var_shapes)
+                               var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                               obs_defs::AbstractDict=Dict{String,ASTExpr}())
+    new_args = ASTExpr[_resolve_join_in_expr(a, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for a in expr.args]
+    new_body = expr.expr_body === nothing ? nothing : _resolve_join_in_expr(expr.expr_body, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
     new_values = expr.values === nothing ? nothing :
-                 ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps, const_arrays, var_shapes) for v in expr.values]
-    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes)
-    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes)
-    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes)
+                 ASTExpr[_resolve_join_in_expr(v, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for v in expr.values]
+    new_lower = expr.lower === nothing ? nothing : _resolve_join_in_expr(expr.lower, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
+    new_upper = expr.upper === nothing ? nothing : _resolve_join_in_expr(expr.upper, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
+    new_filter = expr.filter === nothing ? nothing : _resolve_join_in_expr(expr.filter, index_sets, vi_maps, const_arrays, var_shapes, obs_defs)
     gates = (_is_aggregate_op(expr.op) && expr.join !== nothing) ?
-            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes) : expr.join_gates
+            _resolve_join_gates_for(expr, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) : expr.join_gates
     return reconstruct(expr; args=new_args, expr_body=new_body,
                        values=new_values, lower=new_lower, upper=new_upper,
                        filter=new_filter, join_gates=gates)
 end
 _resolve_join_in_expr(expr::ASTExpr, ::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
                       const_arrays::AbstractDict=Dict{String,Any}(),
-                      var_shapes::AbstractDict=Dict{String,Vector{String}}()) = expr
+                      var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                      obs_defs::AbstractDict=Dict{String,ASTExpr}()) = expr
 
 _resolve_join_in_eq(eq::Equation, index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
                     const_arrays::AbstractDict=Dict{String,Any}(),
-                    var_shapes::AbstractDict=Dict{String,Vector{String}}()) =
-    Equation(_resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes),
-             _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes);
+                    var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                    obs_defs::AbstractDict=Dict{String,ASTExpr}()) =
+    Equation(_resolve_join_in_expr(eq.lhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs),
+             _resolve_join_in_expr(eq.rhs, index_sets, vi_maps, const_arrays, var_shapes, obs_defs);
              _comment=eq._comment)
 
 # Resolve join gates across a vector of equations. Returns the input unchanged
 # when no equation uses a `join` clause (byte-identical for join-free files).
 # `vi_maps` carries any value-invention map buffers a `join.on` gates on (RFC
 # §5.3); `const_arrays` + `var_shapes` supply the envelope factor arrays and
-# their 1-D shapes a Phase-2a `join.overlap` gate resolves against.
+# their 1-D shapes a Phase-2a `join.overlap` gate resolves against, and — since
+# §5.5.8 — the DATA COLUMNS an `on` key may name and the shapes that map each to
+# its range symbol. `obs_defs` carries the remaining observed definitions, from
+# which a document-literal key column is materialised on demand.
 function _resolve_join_gates(eqs::Vector{Equation}, index_sets::AbstractDict,
                              vi_maps=_EMPTY_VI_MAPS,
                              const_arrays::AbstractDict=Dict{String,Any}(),
-                             var_shapes::AbstractDict=Dict{String,Vector{String}}())
+                             var_shapes::AbstractDict=Dict{String,Vector{String}}(),
+                             obs_defs::AbstractDict=Dict{String,ASTExpr}())
     any(_eq_has_join, eqs) || return eqs
-    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes) for eq in eqs]
+    return Equation[_resolve_join_in_eq(eq, index_sets, vi_maps, const_arrays, var_shapes, obs_defs) for eq in eqs]
 end
