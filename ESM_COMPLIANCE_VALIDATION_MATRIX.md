@@ -164,6 +164,22 @@ Where:
 > `parse::reject_reserved_index_symbols`; the value is pinned by
 > `the_diagnostic_vocabulary_is_pinned`).
 >
+> **Julia measured against this row (2026-09-01): the rule is MISSING, and the
+> symptom is DIFFERENT.** Julia's precedence is the opposite of Rust's — the dense
+> aggregate expansion substitutes the loop binding into the body first
+> (`_foreach_aggregate_product` -> `_sub_preserving`), so the binder is not dead
+> and the JOIN is unaffected: on the same shape, ranges symbol `k`, `t` and
+> `_var` all give 5.0 with 5 driven visits over data columns, and `k` and `t`
+> both give 2.0 with 2 visits over index-set member columns. There is therefore
+> no `0`-instead-of-2 in Julia. The cost lands on the other side of the same
+> collision: the binder SHADOWS the independent variable inside the node, so with
+> a body of `1.0 * t` at t = 7, symbol `k` gives 35.0 (5 terms x 7, correct) and
+> symbol `t` gives 10.0 — the sum of the loop positions. `validate` reports valid
+> in every one of those cases. So the document is accepted by both bindings and
+> computes different answers, which is what this row exists to stop; Julia still
+> needs the load-time rejection, and adopting it costs Julia nothing it currently
+> relies on.
+>
 > **Why a rejection and not a shadowing rule.** Making the binder win means inverting the
 > name-first precedence at nine sites in Rust alone (`simulate_array/eval.rs`
 > `lookup_variable` / `lookup_array_ref`, `vectorized.rs::eval_vec_variable`, two
