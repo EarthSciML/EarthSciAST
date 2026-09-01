@@ -128,11 +128,20 @@ enum Commands {
         /// Observed field to write alongside the state; repeat for several.
         /// Output is the state PLUS the fields named here, never every
         /// observed by default (streaming-output-sinks RFC decision 8).
+        ///
+        /// On a document with nothing to integrate this selects the COLUMNS of
+        /// the single evaluation; omitted, every field the build materialized
+        /// is written.
         #[arg(long = "observed", value_name = "NAME")]
         observed: Vec<String>,
+        /// Build this model when the document holds several.
+        #[arg(long = "model", value_name = "NAME")]
+        model: Option<String>,
         /// Shape of --output: `flat` is the flat state rows keyed by cell key;
         /// `grid` is the derived output plan — dimension-labeled, row-major
-        /// [time, …spatial] arrays with CF coordinates and attributes.
+        /// [time, …spatial] arrays with CF coordinates and attributes; `csv`
+        /// is one row per index tuple over the shape the written fields share
+        /// — a RELATIONAL document's rows, for a row-by-row comparator.
         #[arg(long, default_value = "flat")]
         format: SimulateFormat,
     },
@@ -310,6 +319,12 @@ enum SimulateFormat {
     /// The `derive_output_plan` result: one entry per emergent grid, each with
     /// its dimensions, CF dimension coordinates and row-major variable arrays.
     Grid,
+    /// One row per index tuple: the index columns `i1…in`, then one column per
+    /// field, over the shape every written field shares. This is the shape of a
+    /// RELATIONAL document — rows computed from rows — and the shape a
+    /// row-by-row comparator reads. Only for a document evaluated once; a
+    /// trajectory is not a row set.
+    Csv,
 }
 
 /// `convert --to`.
@@ -2268,6 +2283,7 @@ fn run_simulate(
     time: f64,
     output: Option<PathBuf>,
     observed: Vec<String>,
+    model: Option<String>,
     format: SimulateFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
@@ -2287,28 +2303,66 @@ fn run_simulate(
     // is evaluated. A document that declares data and cannot read it must stop
     // here: running on with every data-fed parameter at its `default` produces
     // a trajectory that looks like an answer and is not one.
-    let mut popts = earthsci_ast::ProblemOptions {
-        compile: earthsci_ast::Compile::Always,
-        ..Default::default()
-    };
-    if let Some(make) = serde_json::to_value(&esm_file)
+    //
+    // A FACTORY, because the build below may happen twice (`ProblemOptions`
+    // consumes its providers by value).
+    let providers = serde_json::to_value(&esm_file)
         .ok()
-        .and_then(|doc| data_source_providers(&doc))
-    {
-        popts.build_providers = make()?;
-        popts.build_pipeline = true;
-        popts.compile = earthsci_ast::Compile::Auto;
-    }
-    let prob = earthsci_ast::esm_problem(&esm_file, (0.0, time), popts)
-        .map_err(|e| format!("problem build failed: {e}"))?;
-    let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
+        .and_then(|doc| data_source_providers(&doc));
+    let ingesting = providers.is_some();
+    let build = |pipeline: bool| -> Result<earthsci_ast::EsmProblem, Box<dyn std::error::Error>> {
+        let mut popts = earthsci_ast::ProblemOptions {
+            // `Auto`, not `Always`. A document with no differential equations
+            // has nothing to integrate, and compiling a right-hand side for it
+            // anyway is what made this command die INSIDE THE SOLVER
+            // ("Exceeded maximum number of nonlinear solver failures at
+            // time = 0") on a document that evaluates perfectly well. `Auto`
+            // gives it the static backend and the single evaluation below.
+            compile: earthsci_ast::Compile::Auto,
+            model_name: model.clone(),
+            build_pipeline: pipeline,
+            ..Default::default()
+        };
+        if let Some(make) = &providers {
+            popts.build_providers = make()?;
+            popts.build_pipeline = true;
+        }
+        earthsci_ast::esm_problem(&esm_file, (0.0, time), popts)
+            .map_err(|e| fail(format!("problem build failed: {e}")))
+    };
 
-    println!(
-        "✓ Simulation complete: {} output points, alg {}, retcode {}",
-        sol.time.len(),
-        sol.metadata.alg,
-        sol.retcode
-    );
+    let prob = build(false)?;
+    // Filled only on the static path: `--format csv` writes from the FIELDS,
+    // not from flattened cell keys.
+    let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
+    let sol = if prob.is_dynamic() {
+        let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
+        println!(
+            "✓ Simulation complete: {} output points, alg {}, retcode {}",
+            sol.time.len(),
+            sol.metadata.alg,
+            sol.retcode
+        );
+        sol
+    } else {
+        // A RELATIONAL document: it computes rows from rows and integrates
+        // nothing. Its answers are the fields the build materialized, so it is
+        // EVALUATED ONCE rather than solved.
+        //
+        // The rebuild turns the build pipeline on, which is what materializes
+        // an ARRAY observed: the scalar fallback cannot lower one, and a
+        // command that wrote an empty file would be the silent-empty twin of
+        // the silent zero. Skipped when the first build already ran the
+        // pipeline, which it does whenever the document ingests data.
+        let prob = if ingesting { prob } else { build(true)? };
+        evaluated = static_fields(&prob, &observed)?;
+        println!(
+            "✓ Static evaluation complete: {} field(s). The document declares no \
+             differential equations, so it was evaluated once rather than integrated.",
+            evaluated.len()
+        );
+        static_solution(&evaluated)
+    };
     if !sol.retcode.is_success() {
         println!(
             "⚠ The run did NOT reach t = {time}: it stopped at t = {} with retcode {}",
@@ -2335,6 +2389,17 @@ fn run_simulate(
                 "retcode": sol.retcode.name(),
             }),
             SimulateFormat::Grid => gridded_results(&esm_file, &sol, &observed)?,
+            SimulateFormat::Csv => {
+                if evaluated.is_empty() {
+                    return Err(fail(
+                        "--format csv writes ONE row set, and this document integrates: \
+                         its result is a trajectory. Use --format flat or --format grid.",
+                    ));
+                }
+                write_csv_rows(&evaluated, &output_path)?;
+                println!("Results written to: {}", output_path.display());
+                return Ok(());
+            }
         };
         // Streamed, and pretty so a 600k-cell field is one value per line and
         // `diff` against a reference dataset reports the cells that moved.
@@ -2345,6 +2410,169 @@ fn run_simulate(
         println!("Results written to: {}", output_path.display());
     }
     Ok(())
+}
+
+
+// =============================================================================
+// Single evaluation of a document with nothing to integrate
+// =============================================================================
+//
+// A MOVES-shaped calculator is a RELATIONAL document: every equation computes
+// rows from rows and none of them is a `D(x)/dt`. Such a document evaluates
+// correctly — `esm test` asserts on it — but until now there was no route from
+// its computed rows to a file: `simulate --output` was the only subcommand that
+// writes values, and it compiled a right-hand side for a system with nothing to
+// integrate and then failed inside the solver. `analyze` and `info` report
+// structure, not values.
+//
+// These three functions are that route. They do not add a mode to the solver;
+// they add a SINK to the evaluation the build pipeline already performs.
+
+/// The build-time fields to write, in the order they will be columns.
+///
+/// `observed` names them explicitly (the `--observed` flag); empty means every
+/// field the build materialized. A named field that the build did not produce
+/// is an ERROR that says so — never an omitted column, which a comparator would
+/// read as a schema change rather than as a failure.
+fn static_fields(
+    prob: &earthsci_ast::EsmProblem,
+    observed: &[String],
+) -> Result<Vec<(String, ndarray::ArrayD<f64>)>, Box<dyn std::error::Error>> {
+    let names: Vec<String> = if observed.is_empty() {
+        prob.observed_field_names()
+    } else {
+        observed.to_vec()
+    };
+    if names.is_empty() {
+        return Err(fail(
+            "the document declares no differential equations and its build \
+             materialized no fields, so there is nothing to write. Check that the \
+             values you want are OBSERVED variables (an equation whose LHS is the \
+             bare name), and that any `data_sources` they read were ingested.",
+        ));
+    }
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let arr = earthsci_ast::observed_field(prob, &name)
+            .map_err(|e| fail(format!("evaluating '{name}': {e}")))?;
+        out.push((name, arr));
+    }
+    Ok(out)
+}
+
+/// The single-record [`earthsci_ast::Solution`] the `flat` and `grid` writers
+/// render, built from `fields`.
+///
+/// Cell keys are `name[i,j,…]`, 1-based and COLUMN-MAJOR — the identical
+/// spelling the array runtime's own slot table gives a state variable, so
+/// `derive_output_plan` grids these fields exactly as it grids a trajectory's.
+fn static_solution(fields: &[(String, ndarray::ArrayD<f64>)]) -> earthsci_ast::Solution {
+    let mut state_variable_names = Vec::new();
+    let mut state = Vec::new();
+    for (name, arr) in fields {
+        let shape = arr.shape();
+        if shape.is_empty() {
+            state_variable_names.push(name.clone());
+            state.push(vec![arr[ndarray::IxDyn(&[])]]);
+            continue;
+        }
+        for flat in 0..arr.len() {
+            let mut rem = flat;
+            let mut idx = vec![0usize; shape.len()];
+            for (d, dim) in shape.iter().enumerate() {
+                idx[d] = rem % dim;
+                rem /= dim;
+            }
+            let label = idx
+                .iter()
+                .map(|i| (i + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            state_variable_names.push(format!("{name}[{label}]"));
+            state.push(vec![arr[ndarray::IxDyn(&idx)]]);
+        }
+    }
+    earthsci_ast::Solution {
+        time: vec![0.0],
+        state,
+        state_variable_names,
+        retcode: earthsci_ast::ReturnCode::Success,
+        metadata: earthsci_ast::SolutionMetadata {
+            alg: "static".to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+/// Write `fields` as one row per index tuple: `i1…in`, then one column per
+/// field, in natural (row-major) reading order.
+///
+/// Every field must share one shape, because a row is one index tuple across
+/// all of them — that is what makes the table a row set rather than several
+/// unrelated arrays side by side. A mismatch names the shapes rather than
+/// truncating or padding, and a rank-0 field is refused for the same reason: it
+/// is one value, not a column. Select a consistent set with `--observed`.
+fn write_csv_rows(
+    fields: &[(String, ndarray::ArrayD<f64>)],
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let shape = fields[0].1.shape().to_vec();
+    if shape.is_empty() {
+        return Err(fail(format!(
+            "--format csv writes a ROW SET, and '{}' is a single value, not a column. \
+             Name the row-shaped fields with --observed.",
+            fields[0].0
+        )));
+    }
+    if let Some((name, arr)) = fields.iter().find(|(_, a)| a.shape() != shape.as_slice()) {
+        return Err(fail(format!(
+            "--format csv writes ONE row set, so every written field must share a \
+             shape: '{}' is {:?} but '{}' is {:?}. Name a consistent set with \
+             --observed.",
+            fields[0].0,
+            shape,
+            name,
+            arr.shape()
+        )));
+    }
+
+    let mut w = std::io::BufWriter::new(fs::File::create(path)?);
+    let mut header: Vec<String> = (1..=shape.len()).map(|d| format!("i{d}")).collect();
+    header.extend(fields.iter().map(|(n, _)| n.clone()));
+    writeln!(w, "{}", header.join(","))?;
+
+    let total: usize = shape.iter().product();
+    let mut idx = vec![0usize; shape.len()];
+    for _ in 0..total {
+        let mut row: Vec<String> = idx.iter().map(|i| (i + 1).to_string()).collect();
+        row.extend(
+            fields
+                .iter()
+                .map(|(_, a)| format_csv_float(a[ndarray::IxDyn(&idx)])),
+        );
+        writeln!(w, "{}", row.join(","))?;
+        // Row-major odometer: last axis fastest, so the file reads in the same
+        // order as the nested arrays `--format grid` writes.
+        for d in (0..shape.len()).rev() {
+            idx[d] += 1;
+            if idx[d] < shape[d] {
+                break;
+            }
+            idx[d] = 0;
+        }
+    }
+    w.flush()?;
+    Ok(())
+}
+
+/// A float rendered for CSV without losing a bit: `{}` on an f64 is Rust's
+/// shortest round-tripping form, which is what a comparator reading with
+/// `float()` needs. Non-finite values are written as-is (`NaN`, `inf`) rather
+/// than blanked, so a wrong answer stays visible instead of reading as missing.
+fn format_csv_float(v: f64) -> String {
+    format!("{v}")
 }
 
 /// The `simulate --format grid` document: [`earthsci_ast::derive_output_plan`]
@@ -3511,8 +3739,9 @@ fn main() -> std::process::ExitCode {
             time,
             output,
             observed,
+            model,
             format,
-        } => run_simulate(file, time, output, observed, format),
+        } => run_simulate(file, time, output, observed, model, format),
         Commands::Info { file } => run_info(file),
         Commands::Units { file, check } => run_units(file, check),
         Commands::CouplingAnalysis { file, depth } => run_coupling_analysis(file, depth),
