@@ -39,7 +39,7 @@ description: "Identity and provenance for the document."
 | `references` | array | Citations; each entry may carry `doi`, `url`, `title`, `notes`. |
 | `system_class` | string | Coarse classification of the system. |
 | `dae_info` | object | Set when the document has been through DAE analysis. |
-| `discretized_from` | string | Provenance: the continuous document this was discretized from. |
+| `discretized_from` | object | Provenance: the continuous document this was discretized from, as `{"name": ...}`. |
 
 `name` is the document's name, and is independent of the keys under `models` —
 a component's name is the key it is stored under, not a field on the component.

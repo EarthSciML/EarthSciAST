@@ -89,17 +89,17 @@
     }
   },
   "counts": {
-    "symbols": 848,
+    "symbols": 849,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 298,
       "typescript": 231,
       "python": 243,
-      "rust": 324,
+      "rust": 325,
       "go": 384
     },
     "by_tier": {
-      "extension": 585,
+      "extension": 586,
       "stable": 263
     }
   },
@@ -2330,6 +2330,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "DiscretizeOptions"
+      }
+    },
+    {
+      "name": "discretized_from",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "DiscretizedFrom"
       }
     },
     {
