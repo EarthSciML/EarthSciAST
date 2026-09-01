@@ -11,7 +11,9 @@ use crate::aggregate::{
 use crate::flatten::FlattenedSystem;
 use crate::op_registry::{OpError, is_builtin_function_name};
 use crate::simulate::{CompileError, SimulateError};
-use crate::types::{EsmFile, ExpressionNode, Model, ModelVariable, VariableType};
+use crate::types::{
+    EsmFile, ExpressionNode, JoinClause, Model, ModelVariable, OverlapClause, VariableType,
+};
 use crate::value_invention::{
     ValueInventionResult, materialize_value_invention, rewrite_derived_index_sets,
 };
@@ -2451,6 +2453,13 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
 /// Capture-aware rename of a free loop symbol: every free `Variable(from)`
 /// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
 /// or `ranges` declare it) shadows the outer symbol and is left untouched.
+///
+/// Renames the plain-string names a `join` clause carries as well — see
+/// [`rename_join_names`]. That is not an extra: `map_children` is an
+/// `Expr`-CHILD walker, and a `join.on` key column or an `overlap` envelope
+/// factor is a variable reference that happens to be encoded as a string on the
+/// node (CONFORMANCE_SPEC §5.5.6), so a walker that skipped them would rename
+/// half of what one node says about the same variable.
 pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
     match expr {
         Expr::Variable(v) if v == from => Expr::Variable(to.to_string()),
@@ -2468,10 +2477,54 @@ pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
             if binds {
                 return expr.clone();
             }
-            Expr::operator(node.map_children(&mut |a| rename_free_symbol(a, from, to)))
+            let mut out = node.map_children(&mut |a| rename_free_symbol(a, from, to));
+            // `map_children` preserves `join` verbatim, so this is where the
+            // node's string-encoded references catch up with its child ones.
+            // The binder test above has already returned for a node that binds
+            // `from`, which is the shadowing rule an `on` key column needs: a
+            // column naming one of THIS node's own loop symbols resolves against
+            // its `ranges` (`join.rs::resolve_side`), never against the variable
+            // registry, so renaming it would make it resolve to nothing.
+            if let Some(join) = &out.join {
+                out.join = Some(rename_join_names(join, from, to));
+            }
+            Expr::operator(out)
         }
         _ => expr.clone(),
     }
+}
+
+/// Rename `from` → `to` in every plain-string VARIABLE REFERENCE a node's
+/// `join` clauses carry (CONFORMANCE_SPEC §5.5.6): each `on` key column, each
+/// `overlap` envelope factor, and the data-column names of an already-resolved
+/// `on_gate`. The array-runtime twin of `flatten.rs::rename_join_names`, which
+/// does the same job for a `variable_map` that removes a parameter.
+///
+/// A clause's LOOP SYMBOLS are left alone — `OverlapClause::sym_src` /
+/// `sym_tgt` and the `on_gate`'s two gated symbols are binders of the node, not
+/// references into the variable registry. (`map_column_names` renames the gate's
+/// COLUMNS only, for exactly that reason.)
+fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
+    let ren = |n: &String| -> String {
+        if n == from {
+            to.to_string()
+        } else {
+            n.clone()
+        }
+    };
+    join.iter()
+        .map(|c| JoinClause {
+            on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
+            overlap: c.overlap.as_ref().map(|ov| OverlapClause {
+                src_env: ov.src_env.iter().map(&ren).collect(),
+                tgt_env: ov.tgt_env.iter().map(&ren).collect(),
+                eps: ov.eps,
+                sym_src: ov.sym_src.clone(),
+                sym_tgt: ov.sym_tgt.clone(),
+            }),
+            on_gate: c.on_gate.as_ref().map(|g| g.map_column_names(ren)),
+        })
+        .collect()
 }
 
 /// Inline a `makearray`'s ARRAY-VALUED aggregate region values into the
@@ -3227,6 +3280,148 @@ mod subsystem_ragged_and_inspection_tests {
             },
         )
         .expect("builds")
+    }
+
+    /// One `Model`, from the post-resolution JSON shape the loader hands the
+    /// simulator (a `subsystems` entry already inlined).
+    fn model(doc: serde_json::Value) -> Model {
+        serde_json::from_value(doc).expect("test model deserializes")
+    }
+
+    /// The aggregate RHS of the mounted equation defining `lhs`.
+    fn agg_defining<'a>(m: &'a Model, lhs: &str) -> &'a ExpressionNode {
+        let eq = m
+            .equations
+            .iter()
+            .find(|e| matches!(&e.lhs, Expr::Variable(v) if v == lhs))
+            .unwrap_or_else(|| panic!("no equation defines {lhs}"));
+        match &eq.rhs {
+            Expr::Operator(n) => n,
+            other => panic!("{lhs} is not defined by an operator node: {other:?}"),
+        }
+    }
+
+    /// A leaf with a `join` on two DATA COLUMNS, mounted under `Leaf`.
+    /// `join_on` is the clause's `on` list, so a test can shadow a name.
+    fn host_mounting_a_join_leaf(join_on: serde_json::Value) -> Model {
+        model(json!({
+            "variables": { "doubled": { "type": "unknown" } },
+            "equations": [
+                { "lhs": "doubled", "rhs": { "op": "*", "args": [2.0, "Leaf.matched"] } }
+            ],
+            "subsystems": { "Leaf": {
+                "variables": {
+                    "left_key": { "type": "unknown", "shape": ["leaf_left"] },
+                    "right_key": { "type": "unknown", "shape": ["leaf_right"] },
+                    "matched": { "type": "unknown" }
+                },
+                "equations": [
+                    { "lhs": "left_key", "rhs": { "op": "const", "args": [], "value": [7, 9, 4] } },
+                    { "lhs": "right_key", "rhs": { "op": "const", "args": [], "value": [7, 9] } },
+                    { "lhs": "matched",
+                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                               "output_idx": [],
+                               "ranges": { "l": { "from": "leaf_left" },
+                                           "r": { "from": "leaf_right" } },
+                               "join": [ { "on": join_on } ],
+                               "expr": 1.0 } }
+                ]
+            }}
+        }))
+    }
+
+    /// A `join.on` key column is a variable reference encoded as a STRING on
+    /// the aggregate node (CONFORMANCE_SPEC §5.5.6), not an `Expr` child, so
+    /// the mount's `map_children` walker never saw it: the leaf's variables
+    /// became `Leaf.left_key` / `Leaf.right_key` while the join went on naming
+    /// the bare originals, and the build died with "join key column 'left_key'
+    /// does not resolve to a loop index of this aggregate". The names a node
+    /// spells two ways must agree after the mount.
+    #[test]
+    fn mounting_carries_a_leafs_join_on_key_columns() {
+        let mut m = host_mounting_a_join_leaf(json!([["left_key", "right_key"]]));
+        let mut sets: HashMap<String, IndexSet> = HashMap::new();
+        mount_subsystems(&mut m, &mut sets).expect("mounts");
+
+        let node = agg_defining(&m, "Leaf.matched");
+        let on = &node.join.as_ref().expect("join survives the mount")[0].on;
+        assert_eq!(
+            on,
+            &vec![["Leaf.left_key".to_string(), "Leaf.right_key".to_string()]],
+            "both key columns follow the variables they name"
+        );
+        assert!(
+            m.variables.contains_key("Leaf.left_key"),
+            "the variables the join now names are the mounted ones"
+        );
+    }
+
+    /// The binder gate, per NAME. A leaf that declares a variable named like
+    /// one of its own loop symbols is legal (esm-spec §4.3.1), and an `on`
+    /// column naming that symbol resolves against the node's `ranges`
+    /// (`join.rs::resolve_side`) — so prefixing it would make it resolve to
+    /// nothing. The shadowed name stays bare while its SIBLING in the same
+    /// clause is still rewritten, which is what makes this a per-name rule and
+    /// not a per-node one.
+    #[test]
+    fn mounting_leaves_a_shadowed_loop_symbol_alone() {
+        let mut m = host_mounting_a_join_leaf(json!([["l", "right_key"]]));
+        m.subsystems.as_mut().expect("subsystems")["Leaf"]["variables"]["l"] =
+            json!({ "type": "unknown", "shape": ["leaf_left"] });
+        m.subsystems.as_mut().expect("subsystems")["Leaf"]["equations"]
+            .as_array_mut()
+            .expect("equations")
+            .push(json!({ "lhs": "l", "rhs": { "op": "const", "args": [], "value": [1, 2, 3] } }));
+        let mut sets: HashMap<String, IndexSet> = HashMap::new();
+        mount_subsystems(&mut m, &mut sets).expect("mounts");
+
+        let node = agg_defining(&m, "Leaf.matched");
+        let on = &node.join.as_ref().expect("join survives the mount")[0].on;
+        assert_eq!(
+            on,
+            &vec![["l".to_string(), "Leaf.right_key".to_string()]],
+            "the shadowed loop symbol stays bare; its sibling still follows the registry"
+        );
+    }
+
+    /// The same rule for the SPATIAL gate: an `overlap` clause's
+    /// `src_env`/`tgt_env` name const-array envelope factors, which the
+    /// broad phase resolves against the same registry the mount rewrote
+    /// (`broad_phase::envelope_vectors`). Its `sym_src`/`sym_tgt` are range
+    /// symbols the node binds and are left alone — they are not references.
+    #[test]
+    fn mounting_carries_overlap_envelope_factors() {
+        let mut m = model(json!({
+            "variables": { "out": { "type": "unknown" } },
+            "equations": [ { "lhs": "out", "rhs": "Geo.hits" } ],
+            "subsystems": { "Geo": {
+                "variables": {
+                    "X": { "type": "unknown", "shape": ["pts"] },
+                    "W": { "type": "unknown", "shape": ["cells"] },
+                    "hits": { "type": "unknown" }
+                },
+                "equations": [
+                    { "lhs": "X", "rhs": { "op": "const", "args": [], "value": [1.0, 3.0] } },
+                    { "lhs": "W", "rhs": { "op": "const", "args": [], "value": [0.0, 2.0] } },
+                    { "lhs": "hits",
+                      "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product",
+                               "output_idx": [],
+                               "ranges": { "p": { "from": "pts" }, "c": { "from": "cells" } },
+                               "join": [ { "overlap": { "src_env": ["X"], "tgt_env": ["W"] } } ],
+                               "expr": 1.0 } }
+                ]
+            }}
+        }));
+        let mut sets: HashMap<String, IndexSet> = HashMap::new();
+        mount_subsystems(&mut m, &mut sets).expect("mounts");
+
+        let node = agg_defining(&m, "Geo.hits");
+        let ov = node.join.as_ref().expect("join survives")[0]
+            .overlap
+            .as_ref()
+            .expect("overlap survives");
+        assert_eq!(ov.src_env, vec!["Geo.X".to_string()]);
+        assert_eq!(ov.tgt_env, vec!["Geo.W".to_string()]);
     }
 
     fn erk_opts() -> SolveOptions {
