@@ -2305,10 +2305,21 @@ fn run_simulate(
     // a trajectory that looks like an answer and is not one.
     //
     // A FACTORY, because the build below may happen twice (`ProblemOptions`
-    // consumes its providers by value).
-    let providers = serde_json::to_value(&esm_file)
-        .ok()
-        .and_then(|doc| data_source_providers(&doc));
+    // consumes its providers by value). `close_declared_extents` also re-loads
+    // the document with every metaparameter its sources measure closed, so an
+    // index set sized by one is sized by the data rather than by the
+    // declaration's placeholder default.
+    let (esm_file, providers) = close_declared_extents(esm_file, |mp| {
+        earthsci_ast::load_string_with_options(
+            &content,
+            &earthsci_ast::LoadOptions {
+                base_path: file.parent().map(std::path::Path::to_path_buf),
+                metaparameters: mp.clone(),
+            },
+        )
+        .map_err(|e| format!("re-loading with the discovered source extents: {e}"))
+    })
+    .map_err(fail)?;
     let ingesting = providers.is_some();
     let build = |pipeline: bool| -> Result<earthsci_ast::EsmProblem, Box<dyn std::error::Error>> {
         let mut popts = earthsci_ast::ProblemOptions {
@@ -3412,6 +3423,84 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
     )
 }
 
+
+/// Close every metaparameter a `data_sources` `extent` binds, by SAMPLING the
+/// sources that measure themselves, and re-load the document with the sizes the
+/// data gave.
+///
+/// esm-spec §8.9.4 puts this sampling BEFORE the document's metaparameters are
+/// closed (§9.7.6 site 4), and it has to be there. An index set declared
+/// `size: "N_REC"` is folded to an integer AT LOAD, so a runner that loads
+/// first has already frozen the row count at the declaration's default — which,
+/// for a source whose count is not knowable until the table is read, is zero.
+/// Every shape downstream is then zero-length, and the two ways that surfaces
+/// are both bad: the array runtime panics building a rank-1 array of length 0,
+/// and an aggregate over the empty range returns a sum over no rows — 0, from a
+/// document that validates, which is this toolchain's characteristic failure.
+/// The alternative, a hardcoded row count in the document, is exactly what
+/// `extent` exists to avoid: the next snapshot has a different number of rows.
+///
+/// **Best effort by construction.** Anything that goes wrong in the sampling —
+/// a source that cannot be constructed, a file that is not there, a build with
+/// no reader linked — is left to the RUN to report, because the run reports it
+/// against the assertion or the command that needed the data, with the source
+/// named. Reporting it here as well would only make it arrive twice, and the
+/// first time in a worse place. Only a re-load that fails with the discovered
+/// extents in hand is an error of this pass's own.
+fn close_declared_extents(
+    esm_file: earthsci_ast::EsmFile,
+    reload: impl FnOnce(&BTreeMap<String, i64>) -> Result<earthsci_ast::EsmFile, String>,
+) -> Result<
+    (
+        earthsci_ast::EsmFile,
+        Option<Box<earthsci_ast::BuildProviderFactory<'static>>>,
+    ),
+    String,
+> {
+    let factory = |file: &earthsci_ast::EsmFile| {
+        serde_json::to_value(file)
+            .ok()
+            .and_then(|doc| data_source_providers(&doc))
+    };
+    let Some(make) = factory(&esm_file) else {
+        return Ok((esm_file, None));
+    };
+    let Ok(provs) = make() else {
+        return Ok((esm_file, Some(make)));
+    };
+
+    let mut extents: BTreeMap<String, i64> = BTreeMap::new();
+    for (key, mut prov) in provs {
+        let Some(mp) = earthsci_ast::PrepareProvider::extent_metaparameter(&*prov) else {
+            continue;
+        };
+        let Ok(arr) = prov.sample() else {
+            return Ok((esm_file, Some(make)));
+        };
+        // The LEADING axis is the record count: a record-table provider serves
+        // one column, rank-1 over its rows.
+        let n = arr.shape().first().copied().unwrap_or(0) as i64;
+        if let Some(prev) = extents.insert(mp.clone(), n)
+            && prev != n
+        {
+            return Err(format!(
+                "the data sources binding metaparameter '{mp}' disagree on its extent: \
+                 one measures {prev} records and '{key}' measures {n}. Every source \
+                 declaring the same `extent` metaparameter must measure the same number \
+                 of records — that agreement is what keeps a table's columns aligned."
+            ));
+        }
+    }
+    if extents.is_empty() {
+        return Ok((esm_file, Some(make)));
+    }
+    let reloaded = reload(&extents)?;
+    // Rebuilt from the RELOADED document, so the providers the run ingests
+    // through and the shapes it fills come from one and the same document.
+    let make = factory(&reloaded);
+    Ok((reloaded, make))
+}
+
 /// The build-time provider factory for `doc`'s consumed `data_sources`, or
 /// `None` when the document consumes none (the overwhelmingly common case,
 /// which must stay free of every cost above).
@@ -3572,13 +3661,35 @@ fn run_test(
                 message: format!("Parse failed: {e}"),
             }),
             Ok(esm_file) => {
-                // The document's own `data_sources`, bound to real readers.
-                // Re-serialized from the LOADED file rather than re-read from
-                // disk so a §4.7 subsystem `ref` has already been resolved and
-                // a mounted component's data bindings are visible here.
-                let providers = serde_json::to_value(&esm_file)
-                    .ok()
-                    .and_then(|doc| data_source_providers(&doc));
+                // The document's own `data_sources`, bound to real readers, and
+                // every metaparameter one of them measures closed to the value
+                // the DATA gave before any shape is taken from it.
+                //
+                // The providers are derived from the LOADED file rather than
+                // from the file on disk so a §4.7 subsystem `ref` has already
+                // been resolved and a mounted component's data bindings are
+                // visible here.
+                let ready = close_declared_extents(esm_file, |mp| {
+                    earthsci_ast::load_path_with_options(path, mp).map_err(|e| {
+                        format!("re-loading with the discovered source extents: {e}")
+                    })
+                });
+                let (esm_file, providers) = match ready {
+                    Ok(pair) => pair,
+                    Err(message) => {
+                        rows.push(TestRow {
+                            file: path.clone(),
+                            container: "<data_sources>".to_string(),
+                            test_id: "<extent>".to_string(),
+                            assertion_idx: 0,
+                            variable: String::new(),
+                            time: f64::NAN,
+                            verdict: Verdict::Error,
+                            message,
+                        });
+                        continue;
+                    }
+                };
                 // `path.parent()` anchors §6.6.5 `from_file` references at the
                 // document's own directory — the pinned cross-binding
                 // convention, and the reason this loads with `load_path`

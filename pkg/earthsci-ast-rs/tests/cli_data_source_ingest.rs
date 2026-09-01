@@ -19,7 +19,15 @@
 //!   * the no-reader build must produce that DIAGNOSTIC — naming the source and
 //!     the missing feature — and a non-zero exit. Silence is the defect;
 //!   * an unrecognised `reader_options` key must be an ERROR (esm-spec §8.9.1),
-//!     surfaced through the CLI rather than decoded as something else.
+//!     surfaced through the CLI rather than decoded as something else;
+//!   * and the row count comes from the DATA. A fixture must not hardcode its
+//!     own extent — the next snapshot has a different number of rows — so
+//!     esm-spec §8.9.4 lets a source measure itself and bind a metaparameter an
+//!     index set is sized by. That only works if the source is sampled BEFORE
+//!     the document's metaparameters are closed (§9.7.6 site 4); a runner that
+//!     loads first freezes every such index set at the declaration's
+//!     placeholder default, and a zero-length shape is a panic on one path and
+//!     a sum over no rows — a plausible, silent 0 — on the other.
 //!
 //! Gated on the features the `esm` target itself requires: with `cli` or
 //! `solve` off cargo skips the binary and `CARGO_BIN_EXE_esm` does not exist.
@@ -116,7 +124,17 @@ fn write_ff10_zip(dir: &Path) -> String {
 /// The model declares NO differential equation on purpose: a data document's
 /// whole content is its build-time observed graph, and that is exactly the
 /// shape the CLI could not run.
-fn document(url: &str, extra_reader_options: Option<(&str, Value)>) -> Value {
+/// How the record index set gets its length.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sizing {
+    /// `size: 3` — the count written into the document by hand.
+    Literal,
+    /// `size: "N_REC"`, bound by the source's own `extent` (esm-spec §8.9.4):
+    /// nothing in the document knows the row count, and nothing should.
+    Extent,
+}
+
+fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizing) -> Value {
     let mut reader_options = json!({"member_glob": "*egu*", "skip_header_row": true});
     if let Some((k, v)) = extra_reader_options {
         reader_options[k] = v;
@@ -128,16 +146,23 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>) -> Value {
             "description": "One data source, one bound parameter, one inline test on its column mean."
         },
         "metaparameters": {
-            "N_REC": {"type": "integer", "default": ANN.len(), "description": "Records in the selected members."}
+            "N_REC": {
+                // Under `Sizing::Extent` this default is a PLACEHOLDER the
+                // source overrides, and it is 0 on purpose: a default that
+                // happened to be right would hide the very defect under test.
+                "type": "integer",
+                "default": if sizing == Sizing::Extent { 0 } else { ANN.len() },
+                "description": "Records in the selected members."
+            }
         },
         "index_sets": {"records": {"kind": "interval", "size": "N_REC"}},
         "data_sources": {
-            "EGU_Emis": {
+            "EGU_Emis": merge_extent(json!({
                 "kind": "points",
                 "source": {"url_template": url},
                 "reader_options": reader_options,
                 "metadata": {"esio_format": "ff10"}
-            }
+            }), sizing)
         },
         "models": {
             "Ingest": {
@@ -189,10 +214,22 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>) -> Value {
     })
 }
 
+/// Attach the `extent` declaration under [`Sizing::Extent`].
+fn merge_extent(mut source: Value, sizing: Sizing) -> Value {
+    if sizing == Sizing::Extent {
+        source["extent"] = json!({"metaparameter": "N_REC"});
+    }
+    source
+}
+
 /// Write the fixture zip and the document into `dir`, returning the .esm path.
-fn fixture(dir: &Path, extra_reader_options: Option<(&str, Value)>) -> std::path::PathBuf {
+fn fixture(
+    dir: &Path,
+    extra_reader_options: Option<(&str, Value)>,
+    sizing: Sizing,
+) -> std::path::PathBuf {
     let url = write_ff10_zip(dir);
-    let doc = document(&url, extra_reader_options);
+    let doc = document(&url, extra_reader_options, sizing);
     let path = dir.join("ingest.esm");
     fs::write(&path, serde_json::to_string_pretty(&doc).expect("doc renders"))
         .expect("write document");
@@ -238,7 +275,7 @@ fn total_row(stdout: &str) -> (usize, usize, usize) {
 #[test]
 fn esm_test_reads_the_declared_data_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let doc = fixture(tmp.path(), None);
+    let doc = fixture(tmp.path(), None, Sizing::Literal);
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
     assert!(
         ok,
@@ -253,7 +290,7 @@ fn esm_test_reads_the_declared_data_source() {
 #[test]
 fn an_unrecognised_reader_option_is_an_error_naming_the_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let doc = fixture(tmp.path(), Some(("skip_headr_row", json!(true))));
+    let doc = fixture(tmp.path(), Some(("skip_headr_row", json!(true))), Sizing::Literal);
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
     assert!(!ok, "an unknown reader option must not exit 0; got:\n{out}");
     assert_eq!(total_row(&out), (0, 0, 1), "in:\n{out}");
@@ -273,7 +310,7 @@ fn an_unrecognised_reader_option_is_an_error_naming_the_source() {
 #[test]
 fn a_missing_source_file_is_an_error_naming_the_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let doc_path = fixture(tmp.path(), None);
+    let doc_path = fixture(tmp.path(), None, Sizing::Literal);
     fs::remove_file(tmp.path().join("2016fd_inputs_point.zip")).expect("remove the fixture");
     let (ok, out) = esm(tmp.path(), &["test", doc_path.to_str().expect("utf-8 path")]);
     assert!(!ok, "a missing source file must not exit 0; got:\n{out}");
@@ -281,6 +318,62 @@ fn a_missing_source_file_is_an_error_naming_the_source() {
     assert!(
         out.contains("EGU_Emis") || out.contains("Ingest.annual"),
         "the diagnostic must name the source or its consumer:\n{out}"
+    );
+}
+
+
+/// The row count comes from the DATA (esm-spec §8.9.4), not from the document.
+///
+/// The index set is sized by a metaparameter whose only declared value is the
+/// placeholder 0, and the source's `extent` binds it. A runner that closes
+/// metaparameters before it samples gets a 3-record table sized 0, and the
+/// assertion then reduces an empty field or sums no rows. The expected value is
+/// the same as the literal-sized case on purpose: the only thing that differs
+/// is who decides the length.
+#[cfg(feature = "esio")]
+#[test]
+fn esm_test_reads_a_source_that_measures_its_own_extent() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture(tmp.path(), None, Sizing::Extent);
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(
+        ok,
+        "an index set sized by the source's own extent must still assert the real \
+         column mean; got:\n{out}"
+    );
+    assert_eq!(total_row(&out), (1, 0, 0), "in:\n{out}");
+}
+
+/// ...and the emit path agrees: one row per discovered record, carrying the
+/// values that were on disk. This is the shape a row-by-row comparator reads,
+/// and it is the path that PANICKED on a zero-length shape rather than
+/// returning a wrong number, so it needs its own case.
+#[cfg(feature = "esio")]
+#[test]
+fn csv_emit_sizes_its_rows_by_the_discovered_extent() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture(tmp.path(), None, Sizing::Extent);
+    let out_csv = tmp.path().join("rows.csv");
+    let (ok, out) = esm(
+        tmp.path(),
+        &[
+            "simulate",
+            doc.to_str().expect("utf-8 path"),
+            "--time",
+            "0",
+            "--format",
+            "csv",
+            "--observed",
+            "annual_obs",
+            "--output",
+            out_csv.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(ok, "csv emit over a discovered extent must succeed:\n{out}");
+    assert_eq!(
+        fs::read_to_string(&out_csv).expect("read csv"),
+        "i1,annual_obs\n1,100\n2,50\n3,30\n",
+        "one row per record the source measured, carrying what was on disk"
     );
 }
 
@@ -295,7 +388,7 @@ fn a_missing_source_file_is_an_error_naming_the_source() {
 #[test]
 fn a_build_without_the_reader_refuses_and_names_the_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let doc = fixture(tmp.path(), None);
+    let doc = fixture(tmp.path(), None, Sizing::Literal);
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
     assert!(
         !ok,
