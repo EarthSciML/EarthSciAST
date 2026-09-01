@@ -63,6 +63,18 @@ use serde::Serialize;
 use crate::problem::{ProblemOptions, esm_problem, solve};
 use crate::simulate::{Solution, SolveOptions};
 
+/// The build-time data providers one inline test consumes, produced on demand.
+///
+/// A factory rather than a set because [`crate::problem::ProblemOptions`] takes
+/// its `build_providers` BY VALUE and each inline test builds its own problem:
+/// one shared vector would be moved out by the first test and missing from the
+/// second. `Err` carries a message naming what could not be constructed; it is
+/// recorded as an assertion ERROR, never ignored.
+///
+/// See [`run_pde_tests_with_providers`].
+pub type BuildProviderFactory<'a> =
+    dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
+
 /// Qualify a test's override keys with the component that OWNS the test.
 ///
 /// esm-spec §6.6.2 keys `parameter_overrides` / `initial_conditions` by LOCAL
@@ -817,6 +829,64 @@ pub fn ephemeral_injected_file(
     crate::parse::load_string_with_options(&text, &options)
 }
 
+/// Record `message` as an ERROR verdict for EVERY assertion of `t`.
+///
+/// A failure that happens BEFORE any assertion can be evaluated — the per-test
+/// discretization injection, or the document's data ingest — belongs to the
+/// whole test, and reporting it once per assertion is what keeps the summary's
+/// assertion count equal to the number of assertions the document declares
+/// however the test failed.
+fn push_test_error(
+    results: &mut Vec<PdeAssertionResult>,
+    model_name: &str,
+    t: &crate::types::ModelTest,
+    model: &Model,
+    message: &str,
+) {
+    for (i, a) in t.assertions.iter().enumerate() {
+        let (rtol, atol) = resolve_tolerance(
+            model.tolerance.as_ref(),
+            t.tolerance.as_ref(),
+            a.tolerance.as_ref(),
+        );
+        results.push(PdeAssertionResult {
+            model: model_name.to_string(),
+            test_id: t.id.clone(),
+            assertion_idx: i + 1,
+            variable: a.variable.clone(),
+            time: a.time,
+            reduce: a.reduce.clone(),
+            expected: a.expected,
+            actual: None,
+            rtol,
+            atol,
+            passed: false,
+            message: message.to_string(),
+        });
+    }
+}
+
+/// The empty trajectory a BUILD-ONLY document is asserted against: the asserted
+/// times, no state rows, and a successful retcode.
+///
+/// A document with no differential equations has nothing to integrate, so
+/// `solve` correctly refuses it. Its answers are the build pipeline's
+/// materialized fields, which `eval_assertion` reaches through the no-ODE-slot
+/// branch — that branch needs a `Solution` only for the time index, which is
+/// exactly what this carries.
+fn build_only_solution(times: Vec<f64>) -> Solution {
+    Solution {
+        time: times,
+        state: Vec::new(),
+        state_variable_names: Vec::new(),
+        retcode: crate::simulate::ReturnCode::Success,
+        metadata: crate::simulate::SolutionMetadata {
+            alg: "build".to_string(),
+            ..Default::default()
+        },
+    }
+}
+
 /// Run every inline test of one model, appending per-assertion results.
 fn run_model_tests(
     file: &EsmFile,
@@ -825,6 +895,7 @@ fn run_model_tests(
     index_sets: &HashMap<String, IndexSet>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
     results: &mut Vec<PdeAssertionResult>,
 ) {
     let Some(tests) = &model.tests else {
@@ -860,27 +931,13 @@ fn run_model_tests(
                     }
                     Err(e) => {
                         // Record the build failure for every assertion and skip.
-                        for (i, a) in t.assertions.iter().enumerate() {
-                            let (rtol, atol) = resolve_tolerance(
-                                model.tolerance.as_ref(),
-                                t.tolerance.as_ref(),
-                                a.tolerance.as_ref(),
-                            );
-                            results.push(PdeAssertionResult {
-                                model: model_name.to_string(),
-                                test_id: t.id.clone(),
-                                assertion_idx: i + 1,
-                                variable: a.variable.clone(),
-                                time: a.time,
-                                reduce: a.reduce.clone(),
-                                expected: a.expected,
-                                actual: None,
-                                rtol,
-                                atol,
-                                passed: false,
-                                message: format!("per-test discretization injection failed: {e}"),
-                            });
-                        }
+                        push_test_error(
+                            results,
+                            model_name,
+                            t,
+                            model,
+                            &format!("per-test discretization injection failed: {e}"),
+                        );
                         continue;
                     }
                 }
@@ -904,23 +961,70 @@ fn run_model_tests(
         // through the run — the same move that gave `observed_field` one arity
         // in every binding.
         let mut insp = BuildInspection::default();
-        let sim = esm_problem(
-            run_file,
-            (t.time_span.start, t.time_span.end),
-            ProblemOptions {
-                p: params,
-                u0: ics,
-                inspect: true,
-                compile: crate::problem::Compile::Always,
-                ..Default::default()
-            },
-        )
-        .and_then(|prob| {
-            let sol = solve(&prob, &run_opts)?;
-            insp = prob.take_inspection();
-            Ok(sol)
-        })
-        .map_err(|e| format!("simulate failed: {e}"))
+        // The document's own `data_sources`, ingested (esm-spec §8.9). A
+        // failure here is NOT a solve failure and must not be reported as one:
+        // it means the numbers the test asserts on were never read, so every
+        // assertion of this test is an ERROR naming the source.
+        let mut popts = ProblemOptions {
+            p: params,
+            u0: ics,
+            inspect: true,
+            compile: crate::problem::Compile::Always,
+            ..Default::default()
+        };
+        let mut ingest_error: Option<String> = None;
+        if let Some(make) = build_providers {
+            match make() {
+                Ok(provs) => {
+                    popts.build_providers = provs;
+                    popts.build_pipeline = true;
+                    // `Always` on a document with no differential equations
+                    // compiles a right-hand side that has nothing to integrate.
+                    // With the build pipeline bound, that document's whole
+                    // content IS its build-time observed graph, so let the
+                    // backend fall out of the document (`Auto`) and read the
+                    // fields the build materialized.
+                    popts.compile = crate::problem::Compile::Auto;
+                }
+                Err(e) => ingest_error = Some(e),
+            }
+        }
+        if let Some(msg) = ingest_error {
+            push_test_error(results, model_name, t, model, &msg);
+            continue;
+        }
+        let ingesting = build_providers.is_some();
+        let sim = esm_problem(run_file, (t.time_span.start, t.time_span.end), popts)
+            .and_then(|prob| {
+                // The build pipeline's own products, which `observed_field`
+                // reads back for a §6.6.5 array assertion. Taken BEFORE the
+                // solve so a state-free document — whose `solve` is a legitimate
+                // `NotDynamic` — still answers its assertions.
+                let fields: Vec<(String, ndarray::ArrayD<f64>)> = if ingesting {
+                    prob.observed_fields()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let sol = match solve(&prob, &run_opts) {
+                    Ok(sol) => sol,
+                    // A document with no ODEs never integrates; with providers
+                    // bound its answers are the build's, evaluated at the
+                    // asserted times.
+                    Err(crate::simulate::SimulateError::NotDynamic { .. }) if ingesting => {
+                        build_only_solution(run_opts.saveat.clone().unwrap_or_default())
+                    }
+                    Err(e) => return Err(e),
+                };
+                insp = prob.take_inspection();
+                for (k, v) in fields {
+                    insp.setup_arrays.entry(k).or_insert(v);
+                }
+                Ok(sol)
+            })
+            .map_err(|e| format!("simulate failed: {e}"))
         // A truncated or unstable run is a solve failure, not an assertion
         // failure: without this the trajectory simply stops short and every
         // assertion past the stop reports `no saved state at t=…`, naming the
@@ -1027,6 +1131,39 @@ pub fn run_pde_tests_with_base_dir(
     opts: &SolveOptions,
     base_dir: Option<&Path>,
 ) -> Vec<PdeAssertionResult> {
+    run_pde_tests_with_providers(file, model_name, opts, base_dir, None)
+}
+
+/// [`run_pde_tests_with_base_dir`] with the document's `data_sources` actually
+/// INGESTED (esm-spec §8.9).
+///
+/// A document whose parameters carry `update: {kind: "data", …}` reads its
+/// numbers off disk. Nothing in this crate opens a file on its own — the
+/// build-time provider contract [`crate::prepare::PrepareProvider`] is supplied
+/// by the CALLER, and a runner that supplies none evaluates the document
+/// against every data-fed parameter's `default`. That is a silent wrong answer,
+/// not a missing feature, which is why this entry point exists and why
+/// `build_providers` returning `Err` is recorded as an assertion ERROR naming
+/// the source rather than swallowed.
+///
+/// `build_providers` is a FACTORY, not a set: [`crate::problem::ProblemOptions`]
+/// takes its providers by value and every inline test builds its own problem,
+/// so the runner needs a fresh set per test. It is called once per test, and
+/// only for a model that actually declares tests.
+///
+/// With providers bound, construction runs the deterministic build pipeline and
+/// its materialized fields answer §6.6.5 array assertions directly. A document
+/// with no differential equations therefore no longer has to integrate to be
+/// testable: `solve` reports [`crate::SimulateError::NotDynamic`], and the
+/// assertions are evaluated against the build's own products at the asserted
+/// times.
+pub fn run_pde_tests_with_providers(
+    file: &EsmFile,
+    model_name: Option<&str>,
+    opts: &SolveOptions,
+    base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
     let Some(models) = &file.models else {
         return results;
@@ -1052,6 +1189,7 @@ pub fn run_pde_tests_with_base_dir(
             &index_sets,
             opts,
             base_dir,
+            build_providers,
             &mut results,
         );
     }
