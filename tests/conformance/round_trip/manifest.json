@@ -1,7 +1,104 @@
 {
   "category": "round_trip",
-  "version": "1.0",
-  "description": "Canonical fixtures that every binding MUST round-trip losslessly under the idempotent-re-save contract (see ../README.md). Paths are relative to tests/.",
+  "version": "2.0",
+  "description": "Canonical fixtures every binding MUST round-trip under the LOAD-PRESERVATION contract of esm-spec.md 9.6.4 rule 5: save(load(F)) is compared against the ORIGINAL F, not against a second emit. See ../README.md for the adapter contract. Paths are relative to tests/.",
+
+  "normalizations": [
+    "Object key order and whitespace are free — comparison is on parsed JSON values (esm-spec 9.6.4 rule 5 admission 1, 'Canonical serialization').",
+    "Numbers compare by MATHEMATICAL VALUE, not by spelling. This is a TOLERANCE for where the bindings stand today, not a rule the format grants: CONFORMANCE_SPEC.md 5.5.3.1 rule 1 says an integral, i64-representable value must be written as an integer literal, and the ruling is to extend that to the whole save() path in all five bindings. Until it lands everywhere, `time_span` / `default` / `factor` and friends still diverge on `.0` retention and exponent form. Tighten to a spelling comparison once it lands.",
+    "An empty container ([] or {}) on either side is dropped before comparison (esm-spec 9.6.4 rule 5 admission 2): the emitters' uniform nonempty policy omits an empty collection, and neither the schema nor any consumer distinguishes `\"discrete_events\": []` from an absent key.",
+    "Two written-out schema defaults the emitters omit are dropped from both sides (admission 2): `domain.independent_variable` when it is \"t\", and a periodic DiscreteEvent trigger's `initial_offset` when it is 0.",
+    "`expect_cadence` is dropped from both sides. It is a conformance-only author assertion that Julia's, Python's and Rust's typed IRs deliberately do not carry (carrying it would let simplify/canonicalize/flatten move an assertion made about the ORIGINAL node onto a rewritten one); Go does round-trip it. The three-way split is a cross-binding divergence awaiting a ruling, recorded here rather than hidden. NOTE 2026-09-01: a sibling work-stream is changing `expect_cadence`/`attrs` handling in Julia and Python, so this relaxation may become unnecessary."
+  ],
+
+  "preserved_keys": [
+    "reference",
+    "license",
+    "notes",
+    "update",
+    "distribution",
+    "reinitialize",
+    "initial_offset",
+    "coordinates",
+    "lifting",
+    "arg",
+    "x_esd",
+    "system_class",
+    "dae_info",
+    "discretized_from",
+    "coupling_roles",
+    "_comment",
+    "reader_options",
+    "record_filter",
+    "extent",
+    "analyses",
+    "affect_neg",
+    "root_find",
+    "constraint_equations",
+    "subsystems"
+  ],
+  "preserved_keys_note": "Wire keys that MUST survive load -> save wherever they appear, INCLUDING inside a fixture excused from full equality by `load_transforms` or `known_divergences`. This is the half of the contract that still gates an excused fixture: a transform rewrites a construct, it does not licence dropping the document around it (esm-spec 9.6.4 rule 5, 'Load preservation'). Each key here was a measured drop that has since been FIXED IN EVERY BINDING — see pkg/EarthSciAST.jl/test/corpus_fidelity_test.jl, pkg/earthsci-ast-py/tests/test_roundtrip_against_original.py, pkg/earthsci-ast-go/pkg/esm/round_trip_fidelity_test.go. That is the entry bar: this list is the ratchet's FLOOR, so adding a key no binding carries yet would assert a fix that has not happened. A key still dropped somewhere belongs in `known_divergences` until it is carried everywhere, and then moves here so it can never regress — `at_time` is the open case (see the plot_at_time_dropped entry). `shape` is deliberately NOT here for a different reason: an expression node also carries a `shape`, and eager template expansion legitimately replaces whole nodes, so a document-wide rule would fire on a sanctioned rewrite; Parameter `shape` is covered by the full-equality half instead.",
+
+  "known_divergences_note": "A `load_transforms` tag says the SPEC REQUIRES this rewrite, so every binding performs it and none is at fault. `known_divergences` says the opposite: the bindings do NOT agree, and the ones listed under `nonconformant` are WRONG — each entry names the clause they violate. This is a defect ledger, not a licence. It is a RATCHET, and that is what keeps it honest: a binding listed as `conformant` is held to FULL EQUALITY on that fixture, so a defect can only ever shrink; a binding named in neither list is also held to full equality, so a new binding cannot inherit the excuse. Do NOT move a fixture from here into `load_transforms` to get green — that is exactly the move this gate exists to prevent. Measured 2026-09-01 at commit 1ca25283a; two sibling work-streams were changing binding behaviour at the time (reaction-system lowering in Python/Go/Rust, expect_cadence/attrs in Julia/Python), so re-measure before citing an entry as settled.",
+  "known_divergences": [
+    {
+      "id": "generic_load_folds_a_library_root",
+      "fixtures": ["valid/template_import_lib", "valid/template_import_rename_lib"],
+      "rule": "esm-spec 9.6.4 rule 5, 'Two load modes' -> 'Generic load'",
+      "requirement": "An import-free template-library file loaded as the ROOT with an empty (or absent) loader-API binding set takes the GENERIC load mode: its metaparameters stay open, every structural site stays symbolic exactly as authored, and the file 'round-trips to ITSELF: emit(load(f)) MUST parse deep-equal to f'. Both fixtures' own metadata.description says so in as many words.",
+      "conformant": ["python"],
+      "nonconformant": ["julia", "rust", "go", "typescript"],
+      "detail": "The four non-conformant bindings select the INSTANTIATING mode for a library root and fold the metaparameter default into the index-set size (cells.size 'N' -> 8; edges.size 'M' -> 3). Rule 5 states exactly why that is not a harmless normalization: 'the emitted file still carries metaparameters and so still LOOKS generic, while its index-set sizes have been frozen at their defaults, and a later import binding N = 16 is then ignored with no diagnostic.' Closing it needs the generic/instantiating mode split at each binding's library-root load entry point."
+    },
+    {
+      "id": "match_less_registry_entry_expanded",
+      "fixtures": ["valid/expression_templates_arrhenius"],
+      "rule": "esm-spec 9.6.4 rule 5",
+      "requirement": "A component-level authored MATCH-LESS expression_templates entry 'survives verbatim (it remains referenceable)'. Only a component-level `match` RULE is required to be dropped.",
+      "conformant": ["julia"],
+      "nonconformant": ["python", "rust", "go", "typescript"],
+      "detail": "The four non-conformant bindings expand the apply_expression_template call sites and drop the registry — Option A (always-expanded) emit, which 9.6.4's preamble names as the HISTORICAL model. Rust already records its own instance in the header of pkg/earthsci-ast-rs/tests/round_trip.rs: its typed IR is Expand-at-build, so the structs never see an apply_expression_template node, and closing it needs the reference-preserving emit path rather than a type change. Julia shows the target state is reachable."
+    },
+    {
+      "id": "plot_y_array_desugared_on_emit",
+      "fixtures": ["valid/tests_analyses_comprehensive"],
+      "rule": "esm-spec 6.7.4 ('Inline multi-series shorthand for y')",
+      "requirement": "6.7.4 states the two spellings ARE EQUIVALENT — `y: [a, b]` is equivalent to `y: a` plus `series: [...]`. It does NOT require load to rewrite one into the other, so this is a PERMITTED normalization, not a mandated transform, and the bindings have simply chosen differently.",
+      "conformant": ["julia", "rust", "typescript"],
+      "nonconformant": ["python", "go"],
+      "detail": "Python and Go desugar the array form on emit; Julia, Rust and TypeScript emit it as authored. Listed here rather than under load_transforms precisely because it is NOT spec-mandated: tagging it as a transform would assert the format requires a rewrite it only permits. This entry needs a RULING on which spelling emit should produce, after which one side becomes a defect. It is not a drop today — 6.7.4 makes the two documents mean the same thing — which is why the two sides are labelled by the ruling that is missing rather than by fault."
+    },
+    {
+      "id": "coupling_entry_name_dropped",
+      "fixtures": ["end_to_end/ocean_atmosphere_biogeochemistry", "end_to_end/land_atmosphere_hydrology"],
+      "rule": "esm-spec 9.6.4 rule 5, 'Load preservation'",
+      "requirement": "A coupling[] entry's authored `name` must survive load -> save. This is a straight DROP, not a transform: no clause licences it.",
+      "conformant": ["julia", "rust", "go", "typescript"],
+      "nonconformant": ["python"],
+      "detail": "GENUINE DEFECT, recorded here so the gate can run at all — NOT excused. Python's coupling parse does not model the entry-level `name` on the affected coupling kinds, so coupling[4].name / coupling[5].name vanish. The same field was found and fixed on the Julia side (see the CouplingEvent.name assertion at the end of pkg/EarthSciAST.jl/test/corpus_fidelity_test.jl). Fixing it is Python src/ work, which this gate's author does not own."
+    },
+    {
+      "id": "inlined_subsystem_default_emitted_as_string",
+      "fixtures": ["valid/lib_calendar_subsystem_inclusion", "valid/lib_solar_subsystem_inclusion", "valid/subsystem_index_set_merge"],
+      "rule": "esm-schema.json Variable.default (type: number); esm-spec 4.7 'Resolution timing'",
+      "requirement": "4.7: 'After resolution, the in-memory representation is identical to a file with all subsystems defined inline.' An inlined subsystem's variables are therefore ordinary variables, and a numeric `default` MUST emit as a JSON number.",
+      "severity": "load_breaking",
+      "conformant": ["julia", "python", "rust", "typescript"],
+      "nonconformant": ["go"],
+      "detail": "GENUINE DEFECT, found by the idempotence leg of this gate on 2026-09-01 — NOT excused. Go emits an inlined subsystem's parameter defaults as QUOTED STRINGS: `\"s_per_hour\": {\"default\": \"3600.0\"}` where the authored library file and every other binding emit `3600.0`. The schema types Variable.default as a number, so Go's save(load(F)) is a SCHEMA-INVALID document that Go's own LoadString then rejects ('Invalid type. Expected: number, given: string'), taking the enclosing model's subsystems oneOf down with it. The load-preservation leg could not see this: the affected variables live inside the subtree that subsystem_ref_resolution legitimately ADDS, so equality is not asserted there — it took re-loading the emit to surface it. That complementarity is the point of asserting both halves. Ordinary (non-inlined) variables are unaffected: Go passes full equality on every other fixture in this manifest."
+    },
+    {
+      "id": "plot_at_time_dropped",
+      "fixtures": ["spatial/pde_tests_analyses"],
+      "rule": "esm-spec 9.6.4 rule 5, 'Load preservation'",
+      "requirement": "A field plot's authored `at_time` must survive load -> save. A straight DROP: no clause licences it.",
+      "severity": "load_breaking",
+      "conformant": ["julia", "rust", "typescript"],
+      "nonconformant": ["python", "go"],
+      "detail": "THE MOST SERIOUS ENTRY IN THIS LEDGER, and the one the tightened gate found. `at_time` selects WHICH SNAPSHOT a field_slice / field_snapshot plot renders, so dropping it does not merely lose an annotation — and it is worse than a lost field: esm-schema.json makes `at_time` REQUIRED on those plot kinds, so save(load(F)) emits a SCHEMA-INVALID document that the emitting binding then REFUSES TO RE-LOAD ('at_time is a required property'). The round trip does not degrade here, it BREAKS. It went unseen because the shared manifest had only a Julia adapter (Julia carries the field), and because Python's and Go's own fidelity sweeps walk tests/valid/** only, while this fixture lives under tests/spatial/. `at_time` is deliberately NOT in preserved_keys yet — that list is the ratchet's floor and holds only keys every binding already carries — but Julia, Rust and TypeScript are pinned to FULL EQUALITY on this fixture here, so none of them can start dropping it. Once Python and Go carry it, delete this entry and add `at_time` to preserved_keys, where a regression becomes impossible."
+    }
+  ],
+
   "fixtures": [
     { "id": "valid/minimal_chemistry",              "path": "valid/minimal_chemistry.esm",              "tags": ["core", "reactions"] },
     { "id": "valid/reaction_system_only",           "path": "valid/reaction_system_only.esm",           "tags": ["core", "reactions"] },
@@ -34,7 +131,7 @@
     { "id": "valid/coupling_transform_expression",  "path": "valid/coupling_transform_expression.esm",  "tags": ["coupling", "expression-transform", "esm-spec-10.4"] },
 
     { "id": "valid/expr_graphs_variable_deps",      "path": "valid/expr_graphs_variable_deps.esm",      "tags": ["expressions"] },
-    { "id": "valid/tests_analyses_comprehensive",   "path": "valid/tests_analyses_comprehensive.esm",   "tags": ["tests_blocks"] },
+    { "id": "valid/tests_analyses_comprehensive",   "path": "valid/tests_analyses_comprehensive.esm",   "tags": ["tests_blocks", "divergent"] },
     { "id": "valid/wildfire_atmosphere_ocean",      "path": "valid/wildfire_atmosphere_ocean.esm",      "tags": ["coupling", "end_to_end"] },
     { "id": "valid/structural_issues",              "path": "valid/structural_issues.esm",              "tags": ["core"] },
     { "id": "valid/full_coupled",                   "path": "valid/full_coupled.esm",                   "tags": ["coupling", "comprehensive", "esm-umm"] },
@@ -46,8 +143,8 @@
     { "id": "coupling/multi_step_coupling_chains_fixtures", "path": "coupling/multi_step_coupling_chains_fixtures.esm", "tags": ["coupling", "multi-step", "esm-umm"] },
 
     { "id": "end_to_end/coupled_atmospheric_system",        "path": "end_to_end/coupled_atmospheric_system.esm",        "tags": ["end_to_end", "coupling", "esm-umm"] },
-    { "id": "end_to_end/ocean_atmosphere_biogeochemistry",  "path": "end_to_end/ocean_atmosphere_biogeochemistry.esm",  "tags": ["end_to_end", "coupling", "esm-umm"] },
-    { "id": "end_to_end/land_atmosphere_hydrology",         "path": "end_to_end/land_atmosphere_hydrology.esm",         "tags": ["end_to_end", "coupling", "esm-umm"] },
+    { "id": "end_to_end/ocean_atmosphere_biogeochemistry",  "path": "end_to_end/ocean_atmosphere_biogeochemistry.esm",  "tags": ["end_to_end", "coupling", "esm-umm", "divergent"] },
+    { "id": "end_to_end/land_atmosphere_hydrology",         "path": "end_to_end/land_atmosphere_hydrology.esm",         "tags": ["end_to_end", "coupling", "esm-umm", "divergent"] },
 
     { "id": "fixtures/arrayop/01_pure_ode_analytical",      "path": "fixtures/arrayop/01_pure_ode_analytical.esm",      "tags": ["arrayop"] },
     { "id": "fixtures/arrayop/02_mixed_ode_algebraic",      "path": "fixtures/arrayop/02_mixed_ode_algebraic.esm",      "tags": ["arrayop"] },
@@ -66,7 +163,13 @@
 
     { "id": "fixtures/sde/ornstein_uhlenbeck",       "path": "fixtures/sde/ornstein_uhlenbeck.esm",       "tags": ["sde", "brownian"] },
     { "id": "fixtures/sde/correlated_noise",         "path": "fixtures/sde/correlated_noise.esm",         "tags": ["sde", "brownian", "correlated"] },
-    { "id": "valid/enums_categorical_lookup",        "path": "valid/enums_categorical_lookup.esm",        "tags": ["enums", "categorical-lookup", "closed-function-registry", "esm-tzp"] },
+
+    { "id": "valid/enums_categorical_lookup",        "path": "valid/enums_categorical_lookup.esm",        "tags": ["enums", "categorical-lookup", "closed-function-registry", "esm-tzp", "transforming"],
+      "load_transforms": [
+        { "transform": "enum_lowering", "spec": "esm-spec 9.3",
+          "detail": "`enum` op nodes resolve against the document's top-level `enums` block and lower to `const` integers. 9.3: 'The enum op MUST resolve at load time, before any expression evaluation. After lowering, no enum-op nodes remain in the in-memory representation.' All five bindings perform it." }
+      ] },
+
     { "id": "closed_functions/datetime/year",        "path": "closed_functions/datetime/year/canonical.esm",        "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/datetime/month",       "path": "closed_functions/datetime/month/canonical.esm",       "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/datetime/day",         "path": "closed_functions/datetime/day/canonical.esm",         "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
@@ -78,7 +181,7 @@
     { "id": "closed_functions/datetime/is_leap_year","path": "closed_functions/datetime/is_leap_year/canonical.esm","tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/interp/searchsorted",  "path": "closed_functions/interp/searchsorted/canonical.esm",  "tags": ["closed-function-registry", "interp", "esm-tzp", "esm-4aw"] },
 
-    { "id": "spatial/pde_tests_analyses",            "path": "spatial/pde_tests_analyses.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk"] },
+    { "id": "spatial/pde_tests_analyses",            "path": "spatial/pde_tests_analyses.esm",            "tags": ["pde", "spatial-assertions", "expression-ic", "field-plots", "gt-vzwk", "divergent"] },
 
     { "id": "valid/nonlinear_isorropia_shape",       "path": "valid/nonlinear_isorropia_shape.esm",       "tags": ["nonlinear", "initialization", "guesses", "gt-ebuq"] },
     { "id": "valid/nonlinear_mogi_shape",            "path": "valid/nonlinear_mogi_shape.esm",            "tags": ["nonlinear", "geodynamics", "gt-ebuq"] },
@@ -88,8 +191,53 @@
 
     { "id": "valid/integral_operator_pide",          "path": "valid/integral_operator_pide.esm",          "tags": ["expressions", "integral", "pide", "ess-886"] },
     { "id": "valid/aggregate/cumulative_prefix_reduction", "path": "valid/aggregate/cumulative_prefix_reduction.esm", "tags": ["aggregate", "filter", "cumulative", "prefix-sum", "scan", "measure"] },
+    { "id": "valid/aggregate/coordinate_int_ratio_spacing", "path": "valid/aggregate/coordinate_int_ratio_spacing.esm", "tags": ["aggregate", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] },
 
+    { "id": "valid/advection_reaction_loaded_ic_bc", "path": "valid/advection_reaction_loaded_ic_bc.esm", "tags": ["expression_templates", "transforming"],
+      "load_transforms": [
+        { "transform": "eager_template_expansion", "spec": "esm-spec 9.6.4 rule 3",
+          "detail": "the `grad` templates are TARGET-BEARING, so their call sites expand before emit. All five bindings perform it." },
+        { "transform": "match_only_registry_drop", "spec": "esm-spec 9.6.4 rule 5",
+          "detail": "the component's `match`-only expression_templates block — consumed by the 9.6.3 fixpoint, invocable by nothing — is REQUIRED to be dropped from the emitted component." }
+      ] },
+    { "id": "valid/derivative_trailing_boundary_operands", "path": "valid/derivative_trailing_boundary_operands.esm", "tags": ["expression_templates", "transforming"],
+      "load_transforms": [
+        { "transform": "eager_template_expansion", "spec": "esm-spec 9.6.4 rule 3", "detail": "the target-bearing D-lowering template expands at its call site. All five bindings." },
+        { "transform": "match_only_registry_drop", "spec": "esm-spec 9.6.4 rule 5", "detail": "the component's `match`-only registry is REQUIRED to be dropped." }
+      ] },
+    { "id": "valid/template_import_minimal", "path": "valid/template_import_minimal.esm", "tags": ["expression_templates", "template-imports", "transforming"],
+      "load_transforms": [
+        { "transform": "template_import_consumption", "spec": "esm-spec 9.7.6",
+          "detail": "expression_template_imports is consumed at load and the imported declarations merge in; the scale_by_n match rule then fires. The document carries a model, so it is never a library file and takes the INSTANTIATING mode — its imported `cells` index set folds. All five bindings." }
+      ] },
+    { "id": "valid/data_sources_ingest_and_select", "path": "valid/data_sources_ingest_and_select.esm", "tags": ["data_sources", "metaparameters", "transforming"],
+      "load_transforms": [
+        { "transform": "metaparameter_folding", "spec": "esm-spec 9.7.6 / 9.6.4 rule 5 'Instantiating load'",
+          "detail": "the document carries models, so it is never a library file and every load instantiates: N_SRC / N_REC / N_POP fold to integers at every structural site. All five bindings." }
+      ] },
+    { "id": "valid/makearray_empty_region_min_extent", "path": "valid/makearray_empty_region_min_extent.esm", "tags": ["makearray", "metaparameters", "transforming"],
+      "load_transforms": [
+        { "transform": "metaparameter_folding", "spec": "esm-spec 9.7.6 / 9.6.4 rule 5 'Instantiating load'",
+          "detail": "N folds into the aggregate ranges and the makearray region bounds — the fold this fixture exists to pin, since [2, N-1] at N = 2 must produce the legal EMPTY bound [2, 1] (4.3.2). All five bindings." }
+      ] },
+    { "id": "valid/lib_calendar_subsystem_inclusion", "path": "valid/lib_calendar_subsystem_inclusion.esm", "tags": ["subsystems", "transforming"],
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'",
+          "detail": "'Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.' Julia, Python, Rust and Go resolve inside load. TypeScript's loadString leaves the {ref} stub and resolves through a SEPARATE entry point, so it round-trips this fixture unchanged — an API-seam difference rather than a missing capability, but it does mean TS's load alone does not meet 4.7's timing requirement." }
+      ] },
+    { "id": "valid/lib_solar_subsystem_inclusion", "path": "valid/lib_solar_subsystem_inclusion.esm", "tags": ["subsystems", "transforming"],
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "as for lib_calendar_subsystem_inclusion, including the TypeScript seam note." }
+      ] },
+    { "id": "valid/subsystem_index_set_merge", "path": "valid/subsystem_index_set_merge.esm", "tags": ["subsystems", "index_sets", "transforming"],
+      "load_transforms": [
+        { "transform": "subsystem_ref_resolution", "spec": "esm-spec 4.7, 'Resolution timing'", "detail": "the {ref} mount is inlined; same TypeScript seam note." },
+        { "transform": "index_set_merge", "spec": "esm-spec 4.7, 'Index-set merge'",
+          "detail": "'A referenced subsystem file's top-level index_sets merge into the importing document's document-scoped registry at resolution time.'" }
+      ] },
 
-    { "id": "valid/aggregate/coordinate_int_ratio_spacing", "path": "valid/aggregate/coordinate_int_ratio_spacing.esm", "tags": ["aggregate", "int-division", "canonical-number", "5.5.3.1", "ess-aggregate-intdiv"] }
+    { "id": "valid/expression_templates_arrhenius", "path": "valid/expression_templates_arrhenius.esm", "tags": ["expression_templates", "divergent"] },
+    { "id": "valid/template_import_lib", "path": "valid/template_import_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] },
+    { "id": "valid/template_import_rename_lib", "path": "valid/template_import_rename_lib.esm", "tags": ["expression_templates", "template-library", "divergent"] }
   ]
 }
