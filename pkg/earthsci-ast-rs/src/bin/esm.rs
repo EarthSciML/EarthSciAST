@@ -3171,7 +3171,7 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
         if consumed.len() == 1 { "a source" } else { "sources" },
         if consumed.len() == 1 { "it" } else { "its parameters" },
         sources.join("; ")
-    );
+    )
 }
 
 /// The build-time provider factory for `doc`'s consumed `data_sources`, or
@@ -3180,6 +3180,7 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
 ///
 /// A factory rather than a set because `ProblemOptions` takes providers by
 /// value and `esm test` builds one problem per inline test.
+#[cfg(feature = "esio")]
 fn data_source_providers(
     doc: &serde_json::Value,
 ) -> Option<Box<earthsci_ast::BuildProviderFactory<'static>>> {
@@ -3187,40 +3188,42 @@ fn data_source_providers(
     if consumed.is_empty() {
         return None;
     }
-    #[cfg(feature = "esio")]
-    {
-        let doc = doc.clone();
-        let cache_root = cache_root();
-        let names: Vec<String> = consumed.keys().cloned().collect();
-        Some(Box::new(move || {
-            // NAMED, not an unrestricted sweep: `providers_from_document`
-            // silently SKIPS a source with no `metadata.esio_format` when it is
-            // sweeping, and a silently skipped source is the defect this whole
-            // module exists to close. Naming them makes a source that cannot be
-            // constructed an error that names it.
-            let selected: Vec<&str> = names.iter().map(String::as_str).collect();
-            earthsci_ast::esio_provider::providers_from_document(
-                &doc,
-                &cache_root,
-                Some(&selected),
-                &HashMap::new(),
-            )
-            .map(|provs| {
-                provs
-                    .into_iter()
-                    .map(|(k, p)| {
-                        (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>)
-                    })
-                    .collect()
-            })
-            .map_err(|e| format!("data_sources ingest failed: {}", e.0))
-        }))
+    let doc = doc.clone();
+    let cache_root = cache_root();
+    let names: Vec<String> = consumed.into_keys().collect();
+    Some(Box::new(move || {
+        // NAMED, not an unrestricted sweep: `providers_from_document` silently
+        // SKIPS a source with no `metadata.esio_format` when it is sweeping,
+        // and a silently skipped source is the defect this whole module exists
+        // to close. Naming them makes a source that cannot be constructed an
+        // error that names it.
+        let selected: Vec<&str> = names.iter().map(String::as_str).collect();
+        earthsci_ast::esio_provider::providers_from_document(
+            &doc,
+            &cache_root,
+            Some(&selected),
+            &HashMap::new(),
+        )
+        .map(|provs| {
+            provs
+                .into_iter()
+                .map(|(k, p)| (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>))
+                .collect()
+        })
+        .map_err(|e| format!("data_sources ingest failed: {}", e.0))
+    }))
+}
+
+#[cfg(not(feature = "esio"))]
+fn data_source_providers(
+    doc: &serde_json::Value,
+) -> Option<Box<earthsci_ast::BuildProviderFactory<'static>>> {
+    let consumed = consumed_data_sources(doc);
+    if consumed.is_empty() {
+        return None;
     }
-    #[cfg(not(feature = "esio"))]
-    {
-        let msg = no_reader_diagnostic(&consumed);
-        Some(Box::new(move || Err(msg.clone())))
-    }
+    let msg = no_reader_diagnostic(&consumed);
+    Some(Box::new(move || Err(msg.clone())))
 }
 
 /// One assertion's outcome, tagged with the file it came from.
