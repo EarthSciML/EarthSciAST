@@ -215,12 +215,16 @@ end
     # would have missed a canonical-key regression, and vice versa.
     @test prs != sort(want)
 
-    # DUPLICATE / REVERSED / PERMUTED inputs give a byte-identical pair list
-    # once expressed over the same positions: rebuilding from the reversed
-    # position vectors yields the same set, and the same canonical order after
-    # the canonical sort. (Rebuilding is a pure function of the input.)
+    # PERMUTED input gives a BYTE-IDENTICAL pair list. Present the same rows in
+    # the reverse order — positions travelling with their values, so the
+    # position→key mapping is unchanged and only the INPUT ORDER differs. An
+    # implementation that emitted in input order, or in bucket-walk order, gives
+    # a different list here; this one must not.
+    reversed_group = [("l", "r", reverse(pos_l), reverse(pos_r),
+                       reverse(vals_l), reverse(vals_r))]
+    @test ESS._on_gate_match_pairs(reversed_group) == prs
+    # …and rebuilding is a pure function of the input (no cached state leaking).
     @test ESS._on_gate_match_pairs(group) == prs
-    @test ESS._on_gate_match_pairs(deepcopy(group)) == prs
 
     # The DRIVE order is position-ascending and is DERIVED from the canonical
     # list (§5.5.8), so it too is a pure function of the input.
