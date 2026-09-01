@@ -695,6 +695,24 @@ run_property_corpus() {
 # ">= 2 succeeded" clause any more: all five bindings are required.
 declare -a FAILED_STAGES=()
 
+# BEFORE ADDING A STAGE, pick its shape deliberately. Every stage below is one
+# of three, and they are NOT equally strong:
+#
+#   reference-comparing    — output matches an oracle OUTSIDE the bindings (a
+#                            committed golden, an analytic solution, an
+#                            independent reference, or the authored source
+#                            document). The strong shape.
+#   cross-binding-agreeing — all five bindings say the same thing. Cannot see a
+#                            SHARED WRONG ANSWER; `check_agreement` in
+#                            compare-conformance-outputs.py:440 says so itself.
+#   self-comparing         — a binding agrees with ITSELF on a second pass.
+#                            Cannot see anything lost on the FIRST pass. Weakest;
+#                            never the only gate on a property.
+#
+# The round-trip and property-corpus stages were both silently self-comparing /
+# cross-binding-agreeing until 2026-09-01 and are now reference-comparing. The
+# per-stage classification table lives in tests/conformance/README.md
+# ("What shape is a conformance stage?") — keep it current when adding one.
 run_stage() {
     local name="$1"
     shift
