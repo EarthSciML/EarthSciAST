@@ -171,17 +171,30 @@ def derive_odes(system: ReactionSystem) -> Model:
     derived_equations: list[Equation] = []
     for param in system.parameters:
         if isinstance(param.value, (int, float)) and not isinstance(param.value, bool):
+            # The §6.3 value model travels with the parameter. ``update`` above
+            # all: it is the only channel binding a parameter to a data source
+            # (esm-spec §5.4), so dropping it here would lower a data-driven
+            # parameter to a constant. Mirrors the Julia reference
+            # (reactions.jl `derive_odes`).
             variables[param.name] = ModelVariable(
                 type="parameter",
                 units=param.units,
                 description=param.description,
                 default=param.value,
+                default_units=param.default_units,
+                shape=param.shape,
+                distribution=param.distribution,
+                update=param.update,
             )
             continue
+        # `shape` is the one §6.3 field an unknown can carry; `default_units` /
+        # `distribution` / `update` are parameter-only and have no meaning on an
+        # observed defined by the equation appended below.
         variables[param.name] = ModelVariable(
             type="unknown",
             units=param.units,
             description=param.description,
+            shape=param.shape,
         )
         if param.value is not None:
             derived_equations.append(Equation(lhs=param.name, rhs=param.value))
