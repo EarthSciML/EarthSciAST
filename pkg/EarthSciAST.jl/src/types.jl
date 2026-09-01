@@ -1607,11 +1607,18 @@ struct DataSourceTemporal
     frequency::Union{String,Nothing}
     records_per_file::Union{Int,String,Nothing}  # integer or "auto"
     time_variable::Union{String,Nothing}
+    # How many time records the source returns PER QUERY TIME — 1 (or absent):
+    # the single at-or-before record, time axis dropped; 2: the bracketing pair
+    # with the time axis kept at length 2 so a model can interpolate. Distinct
+    # from `records_per_file`, which counts records IN one file, and the only
+    # `DataSourceTemporal` property this struct did not carry.
+    records_per_sample::Union{Int,Nothing}
 
     DataSourceTemporal(; start=nothing, stop=nothing, file_period=nothing,
                        frequency=nothing, records_per_file=nothing,
-                       time_variable=nothing) =
-        new(start, stop, file_period, frequency, records_per_file, time_variable)
+                       time_variable=nothing, records_per_sample=nothing) =
+        new(start, stop, file_period, frequency, records_per_file, time_variable,
+            records_per_sample)
 end
 
 """
@@ -2555,6 +2562,7 @@ const RECORD_FIELD_TABLES = (
         (f = :frequency,        wire = "frequency",        kind = :string, mode = :opt, emit = :nonnothing),
         (f = :records_per_file, wire = "records_per_file", kind = :number_or_string, mode = :opt, emit = :nonnothing),
         (f = :time_variable,    wire = "time_variable",    kind = :string, mode = :opt, emit = :nonnothing),
+        (f = :records_per_sample, wire = "records_per_sample", kind = :int, mode = :opt, emit = :nonnothing),
     )),
     (T = :DataSourceDeterminism, fn = :data_source_determinism, rows = (
         (f = :endian,        wire = "endian",        kind = :string, mode = :opt, emit = :nonnothing),

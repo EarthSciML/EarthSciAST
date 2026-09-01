@@ -20,8 +20,8 @@
 # and one must not be able to satisfy the other.
 #
 # ── What "differs" means here ────────────────────────────────────────────────
-# Exact JSON equality, with exactly two documented relaxations, both LOSSLESS
-# and both applied to BOTH sides so neither can hide a drop:
+# Exact JSON equality, with three documented relaxations, all applied to BOTH
+# sides so none of them can hide a drop:
 #
 #   1. Empty containers. `[]` / `{}` are stripped, because the emitters' uniform
 #      `:nonempty` policy omits an empty collection — `"discrete_events": []`
@@ -30,6 +30,10 @@
 #      when it is `"t"`, and a periodic trigger's `initial_offset` when it is `0`.
 #      Emitting these unconditionally instead would not fix anything, it would
 #      just move the difference onto every document that omits them.
+#   3. `expect_cadence`, the one field the typed IR is DESIGNED not to carry
+#      (see `_relaxed_key` below for why). Stripped per-key rather than by
+#      exempting the `tests/valid/cadence/` tier, so everything else in those
+#      fixtures is still held to exact fidelity.
 #
 # Everything else must match, and int-vs-float spelling is the only scalar
 # latitude (Julia's `==` gives `1 == 1.0`).
@@ -80,43 +84,48 @@ include("testutils.jl")
         "tests/valid/subsystem_index_set_merge.esm" =>
             "esm-spec §4.7 + §9.7: a `{ref}` subsystem is inlined and its index sets merged",
     )
-    # `expect_cadence` (schema `ExpressionNode.expect_cadence`) is a
-    # CONFORMANCE-ONLY author assertion that the typed IR deliberately does not
-    # parse — `src/cadence.jl` walks raw JSON precisely because of it, and a
-    # rewrite (`simplify` / `canonicalize` / `flatten`) would otherwise carry an
-    # assertion made about the ORIGINAL node onto the rewritten one. So it is
-    # dropped on emit, and the whole `tests/valid/cadence/` tier is exempt.
-    is_cadence_tier(rel) = startswith(rel, "tests/valid/cadence/")
-
-    # ---- the two lossless relaxations -------------------------------------
+    # ---- the relaxations ---------------------------------------------------
     _is_empty_container(v) = (v isa AbstractVector || v isa AbstractDict) && isempty(v)
 
+    # `expect_cadence` (schema `ExpressionNode.expect_cadence`) is a
+    # CONFORMANCE-ONLY author assertion the typed IR deliberately does not
+    # parse: `src/cadence.jl` walks raw JSON precisely because of it, and
+    # `reconstruct` copies every `OpExpr` field by default, so parsing it would
+    # let `simplify` / `canonicalize` / `flatten` carry an assertion made about
+    # the ORIGINAL node onto the rewritten one. It is therefore stripped from
+    # both sides HERE rather than by exempting `tests/valid/cadence/` as a
+    # tier: everything else in those fixtures still has to survive exactly.
+    _relaxed_key(ks, key, y) =
+        ks == "expect_cadence" ||
+        # `Domain.independent_variable` defaults to "t"; a periodic trigger's
+        # `initial_offset` defaults to 0. Both are omitted on emit.
+        (ks == "independent_variable" && key == "domain" && y == "t") ||
+        (ks == "initial_offset" && y == 0)
+
     """
-    Strip empty containers, and the written-out schema defaults the emitters
-    omit. `key` is the wire key `v` was reached under, so the two default rules
-    can be spelled precisely instead of as a blanket value match.
+    Apply the three relaxations to a whole document. `key` is the wire key `v`
+    itself was reached under, so `_relaxed_key`'s rules can be spelled
+    precisely rather than as blanket value matches — `independent_variable` is
+    relaxed only under `domain`.
     """
-    function relax(v, key::String, parent::String)
+    function relax(v, key::String)
         if v isa AbstractDict
             out = OrderedDict{String,Any}()
             for (k, x) in v
                 ks = String(k)
-                y = relax(x, ks, key)
-                _is_empty_container(y) && continue
-                # `Domain.independent_variable` defaults to "t"; a periodic
-                # trigger's `initial_offset` defaults to 0.
-                ks == "independent_variable" && key == "domain" && y == "t" && continue
-                ks == "initial_offset" && y == 0 && continue
+                y = relax(x, ks)
+                (_is_empty_container(y) || _relaxed_key(ks, key, y)) && continue
                 out[ks] = y
             end
             return out
         elseif v isa AbstractVector
-            return Any[relax(x, key, parent) for x in v]
+            # An array element is reached under its array's key.
+            return Any[relax(x, key) for x in v]
         else
             return v
         end
     end
-    relax(doc) = relax(doc, "", "")
+    relax(doc) = relax(doc, "")
 
     "Every `/a/b[0]/c` path at which `a` and `b` differ."
     function json_diff(a, b, path = "")
@@ -165,7 +174,6 @@ include("testutils.jl")
     exercised = Set{String}()
     for path in fixtures
         rel = replace(relpath(path, TESTUTILS_REPO_ROOT), '\\' => '/')
-        is_cadence_tier(rel) && continue
         original = relax(JSON3.read(read(path, String), OrderedDict{String,Any}))
         emitted = relax(JSON3.read(to_json_compact(load_path(path)),
                                    OrderedDict{String,Any}))
@@ -229,6 +237,15 @@ include("testutils.jl")
         @test haskey(ds, "reader_options")
         @test haskey(ds, "record_filter")
         @test haskey(ds, "extent")
+
+        # ... and the two DataSource properties no shared fixture exercised:
+        # source-level `select`, and `temporal.records_per_sample` (how many
+        # records the source returns per QUERY TIME, as against
+        # `records_per_file`, which counts records IN one file).
+        rean = emit_of("pkg/EarthSciAST.jl/test/fixtures/round_trip/parameter_value_model.esm"
+                       )["data_sources"]["Reanalysis"]
+        @test length(rean["select"]["axes"]) == 3
+        @test rean["temporal"]["records_per_sample"] == 2
 
         # Model.analyses and ReactionSystem.analyses.
         ta = emit_of("tests/valid/tests_analyses_comprehensive.esm")

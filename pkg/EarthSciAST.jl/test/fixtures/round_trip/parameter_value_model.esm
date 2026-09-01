@@ -2,12 +2,21 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "ParameterValueModel",
-    "description": "A reaction-system parameter valued by a `distribution` and carrying NO `default`, plus a source-level `select`. esm-schema.json's `Parameter` declares no required properties, so a distribution-valued parameter with no default is a conforming document; Julia's field table pinned `default` as required and rejected it with a hard KeyError at load. The source-level `select` block (DataSource.select) was the one DataSource property with no fixture anywhere in the corpus."
+    "description": "A reaction-system parameter valued by a `distribution` and carrying NO `default`, plus the two data-source properties no corpus fixture exercised. esm-schema.json's `Parameter` declares no required properties, so a distribution-valued parameter with no default is a conforming document; Julia's field table pinned `default` as required and rejected it with a hard KeyError at load. `DataSource.select` and `DataSourceTemporal.records_per_sample` were the only two properties of those two objects with no fixture anywhere in the corpus."
   },
   "data_sources": {
     "Reanalysis": {
       "kind": "grid",
-      "source": { "url_template": "file:///data/reanalysis.zarr/" },
+      "source": { "url_template": "file:///data/reanalysis_{date:%Y%m%d}.zarr/" },
+      "temporal": {
+        "start": "2016-01-01T00:00:00Z",
+        "end": "2016-01-02T00:00:00Z",
+        "file_period": "1d",
+        "frequency": "1h",
+        "records_per_file": 24,
+        "records_per_sample": 2,
+        "time_variable": "time"
+      },
       "select": {
         "axes": ["all", { "fixed": 0 }, { "range": { "start": 0, "stop": 4 } }]
       },
