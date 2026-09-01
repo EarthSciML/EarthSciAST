@@ -2283,15 +2283,24 @@ fn run_simulate(
         output_observed: observed.clone(),
         ..Default::default()
     };
-    let prob = earthsci_ast::esm_problem(
-        &esm_file,
-        (0.0, time),
-        earthsci_ast::ProblemOptions {
-            compile: earthsci_ast::Compile::Always,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| format!("problem build failed: {e}"))?;
+    // The document's own `data_sources`, bound to real readers before anything
+    // is evaluated. A document that declares data and cannot read it must stop
+    // here: running on with every data-fed parameter at its `default` produces
+    // a trajectory that looks like an answer and is not one.
+    let mut popts = earthsci_ast::ProblemOptions {
+        compile: earthsci_ast::Compile::Always,
+        ..Default::default()
+    };
+    if let Some(make) = serde_json::to_value(&esm_file)
+        .ok()
+        .and_then(|doc| data_source_providers(&doc))
+    {
+        popts.build_providers = make()?;
+        popts.build_pipeline = true;
+        popts.compile = earthsci_ast::Compile::Auto;
+    }
+    let prob = earthsci_ast::esm_problem(&esm_file, (0.0, time), popts)
+        .map_err(|e| format!("problem build failed: {e}"))?;
     let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
 
     println!(
@@ -3064,6 +3073,156 @@ impl Verdict {
     }
 }
 
+// =============================================================================
+// data_sources ingest
+// =============================================================================
+//
+// A document whose parameters declare `update: {kind: "data", …}` reads its
+// numbers off disk (esm-spec §8.9). Nothing in the library opens a file on its
+// own: the build-time provider contract `earthsci_ast::PrepareProvider` is
+// supplied by the CALLER, and until this module existed the `esm` binary
+// supplied none — so `esm test` and `esm simulate` evaluated every data-fed
+// parameter at its `default` and reported the result as if it were the
+// document's answer. A declared source that is never read is a WRONG ANSWER,
+// not a missing feature, so every path below either ingests or says why it
+// cannot, naming the source.
+//
+// The reader itself is EarthSciIO, behind the crate's opt-in `esio` feature
+// (it pulls netcdf/hdf5 C libraries no other consumer should have to build).
+// A binary built without it still detects a consumed source and refuses,
+// which is the whole point: the two builds differ in what they can read, never
+// in whether they tell you.
+
+/// The `data_sources` entries some parameter actually READS, mapped to the
+/// flattened names of the parameters that read them.
+///
+/// A source no parameter consumes is inert — a document may carry sources only
+/// some of its models use — so it raises nothing. Subsystems are walked because
+/// a mounted component's parameters consume the document's sources exactly as a
+/// top-level model's do.
+fn consumed_data_sources(doc: &serde_json::Value) -> BTreeMap<String, Vec<String>> {
+    fn visit(node: &serde_json::Value, prefix: &str, out: &mut BTreeMap<String, Vec<String>>) {
+        if let Some(vars) = node.get("variables").and_then(|v| v.as_object()) {
+            for (vname, var) in vars {
+                let Some(update) = var.get("update") else {
+                    continue;
+                };
+                if update.get("kind").and_then(|k| k.as_str()) != Some("data") {
+                    continue;
+                }
+                let Some(src) = update.get("source").and_then(|s| s.as_str()) else {
+                    continue;
+                };
+                out.entry(src.to_string())
+                    .or_default()
+                    .push(format!("{prefix}.{vname}"));
+            }
+        }
+        if let Some(subs) = node.get("subsystems").and_then(|v| v.as_object()) {
+            for (sname, sub) in subs {
+                visit(sub, &format!("{prefix}.{sname}"), out);
+            }
+        }
+    }
+
+    let declared: Vec<&String> = match doc.get("data_sources").and_then(|v| v.as_object()) {
+        Some(m) => m.keys().collect(),
+        None => return BTreeMap::new(),
+    };
+    let mut out = BTreeMap::new();
+    if let Some(models) = doc.get("models").and_then(|v| v.as_object()) {
+        for (mname, model) in models {
+            visit(model, mname, &mut out);
+        }
+    }
+    // A binding naming a source the document does not declare is a validation
+    // error, not an ingest one — leave it to `validate` and ignore it here.
+    out.retain(|src, _| declared.iter().any(|d| *d == src));
+    out
+}
+
+/// Where EarthSciIO's content-addressed cache lives for a CLI run.
+///
+/// Overridable so a batch runner can point it at fast local scratch; the
+/// default is a stable per-user directory rather than a fresh temporary one, so
+/// re-running `esm test` over the same sources re-reads bytes it already has.
+#[cfg(feature = "esio")]
+fn cache_root() -> PathBuf {
+    match std::env::var_os("ESM_CACHE_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::temp_dir().join("earthsci-esm-cache"),
+    }
+}
+
+/// The message a build with no reader gives for a document it cannot ingest.
+#[cfg(not(feature = "esio"))]
+fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
+    let sources: Vec<String> = consumed
+        .iter()
+        .map(|(src, readers)| format!("'{src}' (read by {})", readers.join(", ")))
+        .collect();
+    format!(
+        "this `esm` binary cannot ingest data_sources: it was built WITHOUT the \
+         `esio` feature, so it links no data reader, but the document declares \
+         {} that {} read: {}. Rebuild the binary with \
+         `cargo build --release --features esio` (see pkg/earthsci-ast-rs/Cargo.toml). \
+         Running anyway would evaluate every data-fed parameter at its `default` \
+         and report the result as the document's answer.",
+        if consumed.len() == 1 { "a source" } else { "sources" },
+        if consumed.len() == 1 { "it" } else { "its parameters" },
+        sources.join("; ")
+    );
+}
+
+/// The build-time provider factory for `doc`'s consumed `data_sources`, or
+/// `None` when the document consumes none (the overwhelmingly common case,
+/// which must stay free of every cost above).
+///
+/// A factory rather than a set because `ProblemOptions` takes providers by
+/// value and `esm test` builds one problem per inline test.
+fn data_source_providers(
+    doc: &serde_json::Value,
+) -> Option<Box<earthsci_ast::BuildProviderFactory<'static>>> {
+    let consumed = consumed_data_sources(doc);
+    if consumed.is_empty() {
+        return None;
+    }
+    #[cfg(feature = "esio")]
+    {
+        let doc = doc.clone();
+        let cache_root = cache_root();
+        let names: Vec<String> = consumed.keys().cloned().collect();
+        Some(Box::new(move || {
+            // NAMED, not an unrestricted sweep: `providers_from_document`
+            // silently SKIPS a source with no `metadata.esio_format` when it is
+            // sweeping, and a silently skipped source is the defect this whole
+            // module exists to close. Naming them makes a source that cannot be
+            // constructed an error that names it.
+            let selected: Vec<&str> = names.iter().map(String::as_str).collect();
+            earthsci_ast::esio_provider::providers_from_document(
+                &doc,
+                &cache_root,
+                Some(&selected),
+                &HashMap::new(),
+            )
+            .map(|provs| {
+                provs
+                    .into_iter()
+                    .map(|(k, p)| {
+                        (k, Box::new(p) as Box<dyn earthsci_ast::PrepareProvider>)
+                    })
+                    .collect()
+            })
+            .map_err(|e| format!("data_sources ingest failed: {}", e.0))
+        }))
+    }
+    #[cfg(not(feature = "esio"))]
+    {
+        let msg = no_reader_diagnostic(&consumed);
+        Some(Box::new(move || Err(msg.clone())))
+    }
+}
+
 /// One assertion's outcome, tagged with the file it came from.
 ///
 /// The file is not part of [`earthsci_ast::PdeAssertionResult`] (the engine is
@@ -3171,16 +3330,24 @@ fn run_test(
                 message: format!("Parse failed: {e}"),
             }),
             Ok(esm_file) => {
+                // The document's own `data_sources`, bound to real readers.
+                // Re-serialized from the LOADED file rather than re-read from
+                // disk so a §4.7 subsystem `ref` has already been resolved and
+                // a mounted component's data bindings are visible here.
+                let providers = serde_json::to_value(&esm_file)
+                    .ok()
+                    .and_then(|doc| data_source_providers(&doc));
                 // `path.parent()` anchors §6.6.5 `from_file` references at the
                 // document's own directory — the pinned cross-binding
                 // convention, and the reason this loads with `load_path`
                 // rather than `load_string` (only `load_path` resolves §4.7
                 // subsystem `ref`s relative to the file).
-                let results = earthsci_ast::run_pde_tests_with_base_dir(
+                let results = earthsci_ast::run_pde_tests_with_providers(
                     &esm_file,
                     model.as_deref(),
                     &opts,
                     path.parent(),
+                    providers.as_deref(),
                 );
                 for r in results {
                     if filter
