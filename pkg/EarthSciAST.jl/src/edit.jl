@@ -43,9 +43,11 @@ function _rebuild(model::Model;
         variables, equations, discrete_events, continuous_events, subsystems;
         tolerance = model.tolerance,
         tests = model.tests,
+        analyses = model.analyses,
         initialization_equations = model.initialization_equations,
         guesses = model.guesses,
         system_kind = model.system_kind,
+        reference = model.reference,
     )
 end
 
@@ -55,9 +57,14 @@ function _rebuild(system::ReactionSystem;
     return ReactionSystem(
         species, reactions;
         parameters = system.parameters,
+        constraint_equations = system.constraint_equations,
+        discrete_events = system.discrete_events,
+        continuous_events = system.continuous_events,
         subsystems = system.subsystems,
         tolerance = system.tolerance,
         tests = system.tests,
+        analyses = system.analyses,
+        reference = system.reference,
     )
 end
 
@@ -79,6 +86,15 @@ function _rebuild(file::EsmFile;
         enums = file.enums,
         function_tables = file.function_tables,
         index_sets = file.index_sets,
+        # The verbatim top-level declaration blocks. This helper's whole
+        # premise is that a rebuild carries every field it does not replace,
+        # and these five were being reset to `nothing` — so an edit turned a
+        # template library, or a coupling library, into an ordinary document.
+        expression_templates = file.expression_templates,
+        metaparameters = file.metaparameters,
+        component_templates = file.component_templates,
+        coordinates = file.coordinates,
+        coupling_roles = file.coupling_roles,
     )
 end
 

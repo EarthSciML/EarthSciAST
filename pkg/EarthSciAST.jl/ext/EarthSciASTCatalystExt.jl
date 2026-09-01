@@ -234,11 +234,12 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
         if Catalyst.isconstant(p)
             push!(species, Species(pname; default=default, constant=true))
         else
-            # The ESM `Parameter` struct requires a concrete Float64 default
-            # (types.jl), so absence cannot be represented here; 1.0 is the
-            # documented placeholder until the core type grows an optional
-            # default. (Species above CAN omit theirs, and do.)
-            push!(parameters, Parameter(pname, default === nothing ? 1.0 : default))
+            # `Parameter.default` is optional (esm-schema.json's `Parameter`
+            # declares no `required` list), so absence travels as absence —
+            # the way it already did for `Species` just above. This used to
+            # invent a `1.0` for a parameter Catalyst gave no default,
+            # because the ESM struct could not represent the absence.
+            push!(parameters, Parameter(pname, default))
         end
     end
 

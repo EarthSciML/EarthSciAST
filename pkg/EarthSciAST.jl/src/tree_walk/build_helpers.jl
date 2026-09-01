@@ -342,8 +342,9 @@ function _lower_broadcast_model(model::Model)::Model
      nsubs === subs) && return model
     return Model(nvars, eqs, model.discrete_events, model.continuous_events,
                  nsubs; tolerance=model.tolerance, tests=model.tests,
+                 analyses=model.analyses,
                  initialization_equations=ieqs, guesses=ng,
-                 system_kind=model.system_kind)
+                 system_kind=model.system_kind, reference=model.reference)
 end
 
 # ---- Whole-array declared-shape derivative lift -------------------------------

@@ -1457,7 +1457,10 @@ function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
 
     println(io, "  Parameters ($(length(reaction_system.parameters))):")
     for param in reaction_system.parameters
-        print(io, "    $(param.name) = $(param.default)")
+        # `default` is optional (a parameter may be valued by a `distribution`
+        # instead), so it prints as "unset" — the spelling `show(ModelVariable)`
+        # already uses for the same absence.
+        print(io, "    $(param.name) = $(isnothing(param.default) ? "unset" : param.default)")
         if !isnothing(param.units)
             print(io, " [$(param.units)]")
         end
