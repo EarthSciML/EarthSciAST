@@ -283,6 +283,12 @@ diagnostic_code_registry! {
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
+    /// An `aggregate` binder (a `ranges` key or an `output_idx` entry) spelled
+    /// with a globally-scoped name — the document's independent variable
+    /// (esm-spec §11.3) or the §6.4 `_var` placeholder — which every consumer
+    /// resolves by name before the loop bindings, so the symbol would never
+    /// address the loop it declares.
+    RESERVED_INDEX_SYMBOL = "reserved_index_symbol";
     /// A provable dimensional inconsistency, promoted from a unit finding.
     UNIT_INCONSISTENCY = "unit_inconsistency";
     /// A declared unit string that denotes no real unit, promoted from a
@@ -448,6 +454,7 @@ mod error_code_tests {
             "null_reaction",
             "operator_variable_missing",
             "relational_node_in_continuous",
+            "reserved_index_symbol",
             "rewrite_rule_nonterminating",
             "searchsorted_nan_in_table",
             "searchsorted_non_monotonic",

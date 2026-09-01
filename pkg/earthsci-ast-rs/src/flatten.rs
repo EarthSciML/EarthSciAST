@@ -1953,7 +1953,11 @@ fn namespace_discrete_event(
 /// ODE state of the TARGET system, so prefixing it with the operator model's
 /// own namespace destroys the very name the substitution looks for. Treated
 /// exactly like the independent variable `t` everywhere namespacing happens.
-const VAR_PLACEHOLDER: &str = "_var";
+///
+/// `pub(crate)` because the load-time gate that REJECTS a binder shadowing it
+/// (`parse::reject_reserved_index_symbols`) must name the same sentinel: the
+/// scoping rule here and the rejection there are two halves of one contract.
+pub(crate) const VAR_PLACEHOLDER: &str = "_var";
 
 fn namespace_plain(name: &str, system_name: &str) -> String {
     if name.contains('.') || name == VAR_PLACEHOLDER {
