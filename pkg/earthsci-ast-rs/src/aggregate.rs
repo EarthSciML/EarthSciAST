@@ -68,7 +68,19 @@ impl ReduceKind {
 
     /// Fold one term into the accumulator. The Boolean ops treat any non-zero
     /// value as true and return a crisp `0.0`/`1.0`.
+    ///
+    /// **Precision.** This is a reduction's ⊕ and is therefore one of the
+    /// evaluator's operations: under `element_type: "Float32"` it rounds like
+    /// any other, so an N-term sum accumulates in binary32 with N roundings
+    /// rather than in binary64 with one. That is the whole point of the mode —
+    /// a binary64 accumulator would silently make long sums *more* accurate
+    /// than the binary32 reference they are meant to reproduce. The identities
+    /// (`0`, `1`, `±inf`) are exact in binary32, so [`Self::identity`] needs no
+    /// rounding.
     pub fn combine(self, acc: f64, term: f64) -> f64 {
+        if crate::precision::is_f32() {
+            return self.combine_f32(acc, term);
+        }
         match self {
             ReduceKind::Sum => acc + term,
             ReduceKind::Product => acc * term,
@@ -83,6 +95,38 @@ impl ReduceKind {
             }
             ReduceKind::And => {
                 if acc != 0.0 && term != 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    /// [`Self::combine`] in binary32 — the arms of `combine`, narrowed.
+    ///
+    /// The arithmetic arms mirror the `Sum`/`Product`/`Max`/`Min` entries of
+    /// `simulate_array::eval::binary_kernel_f32_of`
+    /// (`Add`/`Mul`/`Max`/`Min`), which is what
+    /// `vectorized::reduce_combine_op` maps them to on the whole-array path;
+    /// `reduce_combine_f32_matches_binary_kernels` pins the two together so the
+    /// per-cell fold and the vectorized fold cannot disagree.
+    fn combine_f32(self, acc: f64, term: f64) -> f64 {
+        let (a, t) = (acc as f32, term as f32);
+        match self {
+            ReduceKind::Sum => (a + t) as f64,
+            ReduceKind::Product => (a * t) as f64,
+            ReduceKind::Max => f32::max(a, t) as f64,
+            ReduceKind::Min => f32::min(a, t) as f64,
+            ReduceKind::Or => {
+                if a != 0.0 || t != 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            ReduceKind::And => {
+                if a != 0.0 && t != 0.0 {
                     1.0
                 } else {
                     0.0

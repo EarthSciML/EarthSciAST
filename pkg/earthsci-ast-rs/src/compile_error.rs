@@ -135,6 +135,39 @@ pub enum CompileError {
         op: String,
     },
 
+    /// `domain.element_type` names a precision this evaluator does not have.
+    ///
+    /// Reported rather than defaulted to binary64: a document that asks for a
+    /// precision and silently gets a different one is the same class of defect
+    /// as an `element_type` that is accepted and then ignored.
+    #[error(
+        "unsupported_element_type: domain.element_type '{element_type}' is not a precision this \
+         evaluator implements — use \"Float64\" (the default) or \"Float32\" (esm-spec §11.3)"
+    )]
+    UnsupportedElementType {
+        /// The offending `element_type` spelling.
+        element_type: String,
+    },
+
+    /// A construct that cannot be evaluated in binary32 appears in a document
+    /// declaring `domain.element_type: "Float32"`.
+    ///
+    /// The alternative — evaluating just that construct in binary64 — is a
+    /// silent fallback: the document asked for one precision and part of the
+    /// answer would be computed in another, with nothing in the result to say
+    /// which part. So it is an error naming the construct.
+    #[error(
+        "float32_unsupported: {construct} cannot be evaluated under \
+         `domain.element_type: \"Float32\"` — {reason}. Remove the construct, or evaluate the \
+         document in Float64 (esm-spec §11.3)"
+    )]
+    Float32Unsupported {
+        /// The offending construct, named (e.g. ``operator `intersect_polygon` ``).
+        construct: String,
+        /// Why binary32 cannot carry it.
+        reason: String,
+    },
+
     /// A BARE array-level expression whose operand is declared over an index
     /// set the result does not have (esm-spec §4.3.4).
     ///

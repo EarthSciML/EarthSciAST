@@ -247,7 +247,7 @@ fn check_f32_supported_tree(expr: &Expr) -> Result<(), CompileError> {
     let Expr::Operator(node) = expr else {
         return Ok(());
     };
-    let fn_name = node.function.as_deref();
+    let fn_name = node.name.as_deref();
     if let Some((construct, reason)) = f32_unsupported_reason(&node.op, fn_name) {
         return Err(CompileError::Float32Unsupported { construct, reason });
     }

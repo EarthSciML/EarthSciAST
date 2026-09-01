@@ -286,7 +286,17 @@ unsafe fn fch_sel(dst: *mut f64, c: usize, cond: MSrc, a: MSrc, b: MSrc) {
 /// source either way.
 macro_rules! dispatch_bin_kernel {
     ($op:expr, $apply:ident) => {
-        match $op {
+        // Under `element_type: "Float32"` the monomorphized closures below are
+        // a SECOND, hand-copied definition of the arithmetic that never sees
+        // the precision — the archetypal fast path that quietly stays f64. So
+        // in that mode dispatch through the shared table instead, which returns
+        // the binary32 kernel. The element loop then makes one indirect call
+        // per element as it did before the monomorphization; correctness over
+        // throughput is the only defensible trade when the answer differs.
+        if $crate::precision::is_f32() {
+            $apply!(binary_kernel_of(*$op))
+        } else {
+            match $op {
             BinCode::Add => $apply!(|x, y| x + y),
             BinCode::Sub => $apply!(|x, y| x - y),
             BinCode::Mul => $apply!(|x, y| x * y),
@@ -301,6 +311,7 @@ macro_rules! dispatch_bin_kernel {
             BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
             BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
             other => $apply!(binary_kernel_of(*other)),
+            }
         }
     };
 }
@@ -312,7 +323,12 @@ pub(super) use dispatch_bin_kernel;
 /// the remaining ops fall through to the fn-pointer table.
 macro_rules! dispatch_un_kernel {
     ($op:expr, $apply:ident) => {
-        match $op {
+        // See `dispatch_bin_kernel`: the monomorphized arms are f64-only, so
+        // Float32 routes through the shared (precision-aware) table.
+        if $crate::precision::is_f32() {
+            $apply!(unary_kernel_of(*$op))
+        } else {
+            match $op {
             UnCode::Abs => $apply!(|x: f64| x.abs()),
             UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
             UnCode::Exp => $apply!(|x: f64| x.exp()),
@@ -333,6 +349,7 @@ macro_rules! dispatch_un_kernel {
                 }
             }),
             other => $apply!(unary_kernel_of(*other)),
+            }
         }
     };
 }

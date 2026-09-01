@@ -14,12 +14,18 @@ pub fn interpret(
     observed: &[f64],
     t: f64,
 ) -> f64 {
+    // Leaf ingress rounds to the active precision, mirroring the array oracle's
+    // `Expr::Number` / `lookup_variable` arms (`crate::precision`): under
+    // `element_type: "Float32"` a literal or a bound value that reaches the
+    // result through no operator must still be the binary32 value. Identity
+    // under Float64, where `round` is `|v| v`.
+    let prec = crate::precision::active();
     match expr {
-        ResolvedExpr::Number(n) => *n,
-        ResolvedExpr::State(i) => state[*i],
-        ResolvedExpr::Param(i) => params[*i],
-        ResolvedExpr::Observed(i) => observed[*i],
-        ResolvedExpr::Time => t,
+        ResolvedExpr::Number(n) => prec.round(*n),
+        ResolvedExpr::State(i) => prec.round(state[*i]),
+        ResolvedExpr::Param(i) => prec.round(params[*i]),
+        ResolvedExpr::Observed(i) => prec.round(observed[*i]),
+        ResolvedExpr::Time => prec.round(t),
         ResolvedExpr::Op { op, args } => eval_op(op, args, state, params, observed, t),
         ResolvedExpr::Fn { name, args } => eval_fn(name, args, state, params, observed, t),
     }
@@ -159,6 +165,8 @@ fn eval_op(
         // `-` is unary negate (arity 1) or binary subtract (arity 2). Only the
         // binary case has a leaf-kernel entry; unary negation is trivial and has
         // no shared `f64` kernel (the array path negates at the `Value` level).
+        // Unary negation is a sign flip: exact in every binary format, so it
+        // needs no rounding under Float32 (its operand already is binary32).
         "-" => match args.len() {
             1 => -v(0),
             2 => apply_binary("-", v(0), v(1)),

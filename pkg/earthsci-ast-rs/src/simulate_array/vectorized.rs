@@ -548,7 +548,19 @@ pub(super) fn eval_vec_contracted<'a>(
     // argument order as `vec_combine(Mul, …)` followed by `vec_combine(Add,
     // …)` (no FMA is emitted from `x + y * z` source form), so the result is
     // bit-identical; only the intermediate buffer traffic is gone.
-    let fuse_mul: Option<(&Expr, &Expr)> = if filter.is_none() && reduce == ReduceKind::Sum {
+    //
+    // The fusion is DISABLED under `element_type: "Float32"`: its inner loop is
+    // hand-written `*o += x * s` in `f64`, not a `binary_kernel_of` call, so it
+    // is exactly the kind of fast path that would keep computing in binary64
+    // while every other path rounded. Falling back to the generic
+    // materialize-then-`vec_combine` route costs a buffer sweep per tuple and
+    // gets the arithmetic from the precision-aware kernel table; the fusion's
+    // own contract is that it is bit-identical to that route, so nothing but
+    // the buffer traffic changes.
+    let fuse_mul: Option<(&Expr, &Expr)> = if filter.is_none()
+        && reduce == ReduceKind::Sum
+        && !crate::precision::is_f32()
+    {
         as_op(body, "*", 2).map(|n| (&n.args[0], &n.args[1]))
     } else {
         None

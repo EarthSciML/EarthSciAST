@@ -50,36 +50,59 @@ pub(super) fn derived_extent(from_faq: &str, ctx: &EvalCtx) -> i64 {
 
 pub(super) fn eval(expr: &Expr, ctx: &mut EvalCtx) -> Value {
     match expr {
-        Expr::Number(n) => Value::Scalar(*n),
-        Expr::Integer(n) => Value::Scalar(*n as f64),
+        // Literals round on ingress (§ `crate::precision`): under Float32 a
+        // literal that reaches an output through no operator at all must still
+        // be the binary32 value, and `0.1` is not a binary32 number. Identity
+        // under Float64.
+        Expr::Number(n) => Value::Scalar(crate::precision::round(*n)),
+        Expr::Integer(n) => Value::Scalar(crate::precision::round(*n as f64)),
         Expr::Variable(name) => lookup_variable(name, ctx),
         Expr::Operator(node) => eval_op(node, ctx),
     }
 }
 
+/// Resolve a bare variable name to a [`Value`].
+///
+/// **Precision.** The SCALAR arms round to the active precision
+/// (`crate::precision`) — the ingress rule that keeps every live value
+/// binary32 under `element_type: "Float32"`, so a variable copied straight to
+/// an output is the binary32 value even though no operator ran. Identity under
+/// Float64.
+///
+/// Two deliberate exceptions:
+///
+/// * **Loop index bindings are NOT rounded.** They are exact integers used as
+///   array subscripts; narrowing them would be wrong, not more faithful.
+///   (`precision::check_index_set_extent` rejects the extents where index
+///   *arithmetic* through the f32 kernels would stop being exact.)
+/// * **Array arms are not rounded here.** An array is either produced by this
+///   evaluator (already binary32, every operation having rounded) or supplied
+///   by the host, in which case it is rounded ONCE where it enters the problem
+///   rather than on every one of the O(N) reads of it.
 pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
+    let prec = crate::precision::active();
     if name == "t" {
-        return Value::Scalar(ctx.t);
+        return Value::Scalar(prec.round(ctx.t));
     }
     if let Some(v) = ctx.loop_binds.get(name) {
         return Value::Scalar(*v as f64);
     }
     if let Some(a) = ctx.state_arrays.get(name) {
         return if a.ndim() == 0 {
-            Value::Scalar(a[IxDyn(&[])])
+            Value::Scalar(prec.round(a[IxDyn(&[])]))
         } else {
             Value::Array(Box::new(a.clone()))
         };
     }
     if let Some(a) = ctx.observed_arrays.get(name) {
         return if a.ndim() == 0 {
-            Value::Scalar(a[IxDyn(&[])])
+            Value::Scalar(prec.round(a[IxDyn(&[])]))
         } else {
             Value::Array(Box::new(a.clone()))
         };
     }
     if let Some(i) = ctx.param_names.iter().position(|p| p == name) {
-        return Value::Scalar(ctx.params[i]);
+        return Value::Scalar(prec.round(ctx.params[i]));
     }
     // External forcing channel (PR-1, ess-14f.7): a loader-fed field a driver
     // refreshed into the buffer. Checked *last* — after t, loop binds, state,
@@ -91,7 +114,7 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     // with a state, promote this lookup for those names — the seam is here.)
     if let Some(a) = ctx.forcing.borrow().get(name) {
         return if a.ndim() == 0 {
-            Value::Scalar(a[IxDyn(&[])])
+            Value::Scalar(prec.round(a[IxDyn(&[])]))
         } else {
             Value::Array(Box::new(a.clone()))
         };
@@ -599,6 +622,12 @@ pub(super) fn combine(op: &str, a: Value, b: Value) -> Value {
 }
 
 pub(crate) fn apply_binary(op: &str, x: f64, y: f64) -> f64 {
+    // Under `element_type: "Float32"` the whole table is the binary32 one. The
+    // Float64 arms below are untouched, so Float64 keeps the exact instruction
+    // sequence it had — the branch is the only addition, and it is not taken.
+    if crate::precision::is_f32() {
+        return binary_kernel_f32_of(BinCode::of(op))(x, y);
+    }
     match op {
         "+" => x + y,
         "-" => x - y,
@@ -705,7 +734,18 @@ impl BinCode {
 /// { 0.0 }`. `binary_kernel` delegates here, so
 /// `binary_kernels_match_apply_binary` pins this table to `apply_binary` bit for
 /// bit over every op name and a spread of operands.
+///
+/// Under [`crate::precision::Precision::Float32`] it returns the binary32
+/// table ([`binary_kernel_f32_of`]) instead. Resolution happens ONCE per AST
+/// node on the vectorized and taped paths (and once per cell on the oracle,
+/// where the operator name is being matched anyway), so the mode read costs a
+/// thread-local load where a string compare already lived — and the Float64
+/// arms below are the identical closures they were before, so Float64 is
+/// bit-unchanged by construction.
 pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
+    if crate::precision::is_f32() {
+        return binary_kernel_f32_of(op);
+    }
     match op {
         BinCode::Add => |x, y| x + y,
         BinCode::Sub => |x, y| x - y,
@@ -723,6 +763,51 @@ pub(crate) fn binary_kernel_of(op: BinCode) -> fn(f64, f64) -> f64 {
         BinCode::Ge => |x: f64, y: f64| (x >= y) as i32 as f64,
         BinCode::And => |x: f64, y: f64| (x != 0.0 && y != 0.0) as i32 as f64,
         BinCode::Or => |x: f64, y: f64| (x != 0.0 || y != 0.0) as i32 as f64,
+        BinCode::Unknown => |_, _| f64::NAN,
+    }
+}
+
+/// [`binary_kernel_of`]'s table in **binary32**: each kernel narrows both
+/// operands to `f32`, applies the `f32` operation, and widens the `f32` result.
+///
+/// The arms are [`binary_kernel_of`]'s arms with `f32` operands, in the same
+/// order — `binary_kernels_f32_are_binary32` pins each one to the value the
+/// same expression produces when it is written directly in `f32`.
+///
+/// Narrowing the operands is not redundant with the ingress rounding: it is
+/// what makes the kernel *total*. Every value the evaluator produces in this
+/// mode is already binary32-representable (so the narrowing is exact and the
+/// widening is exact), and a value that somehow was not — a host-supplied array
+/// this pass has not reached — is rounded here rather than computed in the
+/// wrong precision.
+///
+/// Widening the result to `f64` is exact, so the `f64` carrier stores the
+/// binary32 answer, bit for bit. For `+ - * /` this is also, by the
+/// double-rounding-is-innocuous theorem (binary64 carries 53 bits ≥ 2·24 + 2),
+/// identical to computing in `f64` and rounding once at the end; the elementary
+/// functions are the reason the operands are narrowed explicitly rather than
+/// relying on that — `expf` is not `exp` rounded.
+pub(crate) fn binary_kernel_f32_of(op: BinCode) -> fn(f64, f64) -> f64 {
+    match op {
+        BinCode::Add => |x: f64, y: f64| ((x as f32) + (y as f32)) as f64,
+        BinCode::Sub => |x: f64, y: f64| ((x as f32) - (y as f32)) as f64,
+        BinCode::Mul => |x: f64, y: f64| ((x as f32) * (y as f32)) as f64,
+        BinCode::Div => |x: f64, y: f64| ((x as f32) / (y as f32)) as f64,
+        BinCode::Pow => |x: f64, y: f64| (x as f32).powf(y as f32) as f64,
+        BinCode::Atan2 => |x: f64, y: f64| (x as f32).atan2(y as f32) as f64,
+        BinCode::Min => |x: f64, y: f64| (x as f32).min(y as f32) as f64,
+        BinCode::Max => |x: f64, y: f64| (x as f32).max(y as f32) as f64,
+        // Comparisons and the logical flags are exact on binary32 operands and
+        // return the same 1.0 / 0.0 flags, but they still narrow: comparing the
+        // f64 carriers of two values that round to the SAME f32 must say equal.
+        BinCode::Eq => |x: f64, y: f64| ((x as f32) == (y as f32)) as i32 as f64,
+        BinCode::Ne => |x: f64, y: f64| ((x as f32) != (y as f32)) as i32 as f64,
+        BinCode::Lt => |x: f64, y: f64| ((x as f32) < (y as f32)) as i32 as f64,
+        BinCode::Le => |x: f64, y: f64| ((x as f32) <= (y as f32)) as i32 as f64,
+        BinCode::Gt => |x: f64, y: f64| ((x as f32) > (y as f32)) as i32 as f64,
+        BinCode::Ge => |x: f64, y: f64| ((x as f32) >= (y as f32)) as i32 as f64,
+        BinCode::And => |x: f64, y: f64| ((x as f32) != 0.0 && (y as f32) != 0.0) as i32 as f64,
+        BinCode::Or => |x: f64, y: f64| ((x as f32) != 0.0 || (y as f32) != 0.0) as i32 as f64,
         BinCode::Unknown => |_, _| f64::NAN,
     }
 }
@@ -816,6 +901,11 @@ pub(super) fn eval_unary(op: &str, args: &[Expr], ctx: &mut EvalCtx) -> Value {
 }
 
 pub(crate) fn apply_unary(op: &str, x: f64) -> f64 {
+    // See `apply_binary`: Float32 routes to the binary32 table, Float64 falls
+    // through to the untouched arms below.
+    if crate::precision::is_f32() {
+        return unary_kernel_f32_of(UnCode::of(op))(x);
+    }
     match op {
         "exp" => x.exp(),
         "log" | "ln" => x.ln(),
@@ -921,7 +1011,14 @@ impl UnCode {
 /// [`unary_kernel`] with the name already resolved to a [`UnCode`]. Arms mirror
 /// [`apply_unary`] exactly; `unary_kernels_match_apply_unary` pins them to bit
 /// equality through [`unary_kernel`], which delegates here.
+///
+/// Under [`crate::precision::Precision::Float32`] it returns the binary32 table
+/// ([`unary_kernel_f32_of`]) — see [`binary_kernel_of`] for why the mode read
+/// sits here.
 pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
+    if crate::precision::is_f32() {
+        return unary_kernel_f32_of(op);
+    }
     match op {
         UnCode::Exp => |x: f64| x.exp(),
         UnCode::Ln => |x: f64| x.ln(),
@@ -952,6 +1049,52 @@ pub(crate) fn unary_kernel_of(op: UnCode) -> fn(f64) -> f64 {
         UnCode::Acosh => |x: f64| x.acosh(),
         UnCode::Atanh => |x: f64| x.atanh(),
         UnCode::Not => |x: f64| (x == 0.0) as i32 as f64,
+        UnCode::Unknown => |_| f64::NAN,
+    }
+}
+
+/// [`unary_kernel_of`]'s table in **binary32** — the unary counterpart of
+/// [`binary_kernel_f32_of`], narrowing the operand and widening the result for
+/// the same reasons.
+///
+/// The elementary functions call the `f32` libm entry points (`expf`, `logf`,
+/// `sinf`, …), which is what an evaluator working in binary32 does; it is NOT
+/// the binary64 function rounded afterwards, and the two differ in the last
+/// ulp. That choice is the one a `real*4` reference implementation makes, and
+/// it is the cross-binding contract this mode has to state explicitly — see
+/// CONFORMANCE_SPEC §5.10.
+pub(crate) fn unary_kernel_f32_of(op: UnCode) -> fn(f64) -> f64 {
+    match op {
+        UnCode::Exp => |x: f64| (x as f32).exp() as f64,
+        UnCode::Ln => |x: f64| (x as f32).ln() as f64,
+        UnCode::Log10 => |x: f64| (x as f32).log10() as f64,
+        UnCode::Sqrt => |x: f64| (x as f32).sqrt() as f64,
+        UnCode::Abs => |x: f64| (x as f32).abs() as f64,
+        UnCode::Sign => |x: f64| {
+            let x = x as f32;
+            if x > 0.0 {
+                1.0
+            } else if x < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        },
+        UnCode::Floor => |x: f64| (x as f32).floor() as f64,
+        UnCode::Ceil => |x: f64| (x as f32).ceil() as f64,
+        UnCode::Sin => |x: f64| (x as f32).sin() as f64,
+        UnCode::Cos => |x: f64| (x as f32).cos() as f64,
+        UnCode::Tan => |x: f64| (x as f32).tan() as f64,
+        UnCode::Asin => |x: f64| (x as f32).asin() as f64,
+        UnCode::Acos => |x: f64| (x as f32).acos() as f64,
+        UnCode::Atan => |x: f64| (x as f32).atan() as f64,
+        UnCode::Sinh => |x: f64| (x as f32).sinh() as f64,
+        UnCode::Cosh => |x: f64| (x as f32).cosh() as f64,
+        UnCode::Tanh => |x: f64| (x as f32).tanh() as f64,
+        UnCode::Asinh => |x: f64| (x as f32).asinh() as f64,
+        UnCode::Acosh => |x: f64| (x as f32).acosh() as f64,
+        UnCode::Atanh => |x: f64| (x as f32).atanh() as f64,
+        UnCode::Not => |x: f64| ((x as f32) == 0.0) as i32 as f64,
         UnCode::Unknown => |_| f64::NAN,
     }
 }

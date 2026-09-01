@@ -478,8 +478,11 @@ impl<'m> TapeBuilder<'m> {
 
     fn lower_expr(&mut self, e: &Expr, bx: &LBox) -> LResult<LV> {
         match e {
-            Expr::Number(n) => Ok(LV::Lit(*n)),
-            Expr::Integer(n) => Ok(LV::Lit(*n as f64)),
+            // Literals round on ingress, exactly as the oracle's `eval` arm
+            // does (`crate::precision`) — a tape literal and an interpreted
+            // literal must be the same number under Float32.
+            Expr::Number(n) => Ok(LV::Lit(crate::precision::round(*n))),
+            Expr::Integer(n) => Ok(LV::Lit(crate::precision::round(*n as f64))),
             Expr::Variable(name) => self.resolve_var(name, bx),
             Expr::Operator(node) => {
                 let key = VnKey::Node(Arc::as_ptr(node) as usize);
@@ -1355,8 +1358,8 @@ impl<'m> TapeBuilder<'m> {
     //     `lookup_variable` serves stored arrays (origin-blind).
     fn lower_wholesale(&mut self, e: &Expr) -> LResult<LV> {
         match e {
-            Expr::Number(n) => Ok(LV::Lit(*n)),
-            Expr::Integer(n) => Ok(LV::Lit(*n as f64)),
+            Expr::Number(n) => Ok(LV::Lit(crate::precision::round(*n))),
+            Expr::Integer(n) => Ok(LV::Lit(crate::precision::round(*n as f64))),
             Expr::Variable(name) => self.resolve_wholesale_var(name),
             Expr::Operator(node) => self.lower_wholesale_op(node),
         }
