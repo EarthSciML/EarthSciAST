@@ -1,0 +1,39 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "LoopSymbolNamedKControl",
+    "description": "The CONTROL for the two `reserved_index_symbol` fixtures beside it: the identical aggregate with its first range symbol spelled `k` instead of `t`. It loads, and the `sum_product` reduction is 2 — the answer the `t` spelling silently turned into 0 before the collision was rejected at load. Only the name differs, which is what makes the rejection specific to the independent-variable collision and not to the join.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": {
+    "f4_left": { "kind": "interval", "size": 3 },
+    "f4_right": { "kind": "interval", "size": 2 }
+  },
+  "models": {
+    "SymbolControl": {
+      "variables": {
+        "left_key": { "type": "unknown", "shape": ["f4_left"] },
+        "right_key": { "type": "unknown", "shape": ["f4_right"] },
+        "matchedWithSymbolK": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": "left_key",
+          "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "f4_left" } }, "expr": "i" } },
+        { "lhs": "right_key",
+          "rhs": { "op": "aggregate", "args": [], "output_idx": ["j"],
+            "ranges": { "j": { "from": "f4_right" } }, "expr": "j" } },
+        { "lhs": "matchedWithSymbolK",
+          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": { "k": { "from": "f4_left" }, "r": { "from": "f4_right" } },
+            "join": [ { "on": [["left_key", "right_key"]] } ],
+            "expr": 1.0 } }
+      ],
+      "tests": [
+        { "id": "the_control_spelling_matches_two_pairs",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "assertions": [ { "variable": "matchedWithSymbolK", "time": 0.0, "expected": 2.0 } ] }
+      ]
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "LoopSymbolNamedTConstArray",
+    "description": "Regression fixture: the CONST-ARRAY half of `reserved_index_symbol` (finding F4).\n\nIdentical in shape to `loop_symbol_named_t_data_column.esm`, but the key columns are `const` literals rather than aggregate-defined data columns. The same `t` collision surfaced here not as a silent zero but as a misleading build error —\n\n  E_TREEWALK_CONSTARRAY_OOB: const array 'left_key' index 0 out of range 1..3\n\n— because the lowered `code_lookup` addresses the constant key table with `t`, which evaluates to the simulation TIME (0.0) instead of the loop index. Both halves are now the one load-time `reserved_index_symbol` rejection, so neither the zero nor the out-of-range diagnostic can be reached.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": {
+    "leaf_left": { "kind": "interval", "size": 3 },
+    "leaf_right": { "kind": "interval", "size": 2 }
+  },
+  "models": {
+    "ConstKeyCollision": {
+      "variables": {
+        "left_key": { "type": "unknown", "shape": ["leaf_left"] },
+        "right_key": { "type": "unknown", "shape": ["leaf_right"] },
+        "matchedPairCount": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": "left_key", "rhs": { "op": "const", "args": [], "value": [7, 9, 4] } },
+        { "lhs": "right_key", "rhs": { "op": "const", "args": [], "value": [7, 9] } },
+        { "lhs": "matchedPairCount",
+          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": { "t": { "from": "leaf_left" }, "r": { "from": "leaf_right" } },
+            "join": [ { "on": [["left_key", "right_key"]] } ],
+            "expr": 1.0 } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "SemiJoinTrueBody",
+    "description": "Regression fixture: `{\"op\": \"true\"}` is a nullary boolean LITERAL (esm-spec §4.2 — \"an always-true join / `filter` predicate\") and the array evaluator produces 1.0 for it, so it is usable as an aggregate body.\n\nThat body is the natural spelling of a semi-join — \"this row has a partner\" — and under `sum_product` it makes the reduction COUNT the admitted tuples: `matchedPairs` is the two pairs the join admits, `allRows` the three rows of the unjoined range.\n\nBefore the rule existed the dense evaluator had no arm for `true` and hit `eval_op`'s `unreachable!` backstop: `esm validate` passed and `esm test` then exited 101 with a panic and no diagnostic. Every peer evaluator already answered — Python's `numpy_interpreter` (`if op == \"true\": return 1.0`), Julia's `geometry_compile.jl` (a 1.0 literal node) and this crate's own `value_invention::vi_eval` (`Val::Bool(true)`) — so Rust's dense path was the only one that could not evaluate a document the schema accepts.\n\nReported by the downstream EPA MOVES port as finding F10, hit while writing semi-joins; the author worked around it by spelling the semi-join numerically.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": {
+    "sj_left": { "kind": "interval", "size": 3 },
+    "sj_right": { "kind": "interval", "size": 2 }
+  },
+  "models": {
+    "SemiJoin": {
+      "variables": {
+        "left_key": { "type": "unknown", "shape": ["sj_left"] },
+        "right_key": { "type": "unknown", "shape": ["sj_right"] },
+        "matchedPairs": { "type": "unknown" },
+        "allRows": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": "left_key", "rhs": { "op": "const", "args": [], "value": [7, 9, 4] } },
+        { "lhs": "right_key", "rhs": { "op": "const", "args": [], "value": [7, 9] } },
+        { "_comment": "A semi-join body: `true` per admitted pair.",
+          "lhs": "matchedPairs",
+          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": { "l": { "from": "sj_left" }, "r": { "from": "sj_right" } },
+            "join": [ { "on": [["left_key", "right_key"]] } ],
+            "expr": { "op": "true", "args": [] } } },
+        { "_comment": "The same literal with no gate: one per row of the range.",
+          "lhs": "allRows",
+          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": { "l": { "from": "sj_left" } },
+            "expr": { "op": "true", "args": [] } } }
+      ],
+      "tests": [
+        { "id": "a_true_body_counts",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "assertions": [
+            { "variable": "matchedPairs", "time": 0.0, "expected": 2.0 },
+            { "variable": "allRows", "time": 0.0, "expected": 3.0 }
+          ] }
+      ]
+    }
+  }
+}

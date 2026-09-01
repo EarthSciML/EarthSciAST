@@ -1,6 +1,10 @@
 //! JSON parsing and schema validation for ESM files
 
 use crate::{EsmFile, error::EsmError};
+// The §6.4 operator-model placeholder, taken from the scoping walker that
+// treats it as a global sentinel rather than re-spelled here, so the scoping
+// rule and the load-time rejection of a binder that shadows it cannot drift.
+use crate::flatten::VAR_PLACEHOLDER;
 use jsonschema::error::ValidationErrorKind;
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
@@ -232,6 +236,14 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // pass so that downstream consumers never see enum strings.
     crate::lower_enums::lower_enums_raw(&mut json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
+    // Reject an `aggregate` binder that shadows a globally-scoped name (the
+    // independent variable, `_var`). Runs HERE, on the fully lowered form, so a
+    // binder a §9.6/§9.7 template body introduced is caught with the authored
+    // ones. See `reject_reserved_index_symbols` for why this is a rejection
+    // rather than a shadowing rule.
+    reject_reserved_index_symbols(&json_value)
+        .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is
@@ -623,6 +635,124 @@ fn compile_branch<'c>(
 // were constructed or edited in memory and never passed through `load_string()`.
 // If you change a shared rule, change it in both layers (and the sibling
 // bindings).
+
+/// Reject any `aggregate` binder that SHADOWS the document's independent
+/// variable (esm-spec §11.3: `domain.independent_variable`, default `"t"`) or
+/// the §6.4 operator placeholder `_var` — diagnostic `reserved_index_symbol`.
+///
+/// Both names are IMPLICITLY DECLARED in every model's expression scope
+/// (§4.9.1), and every consumer in this crate resolves them by name BEFORE it
+/// consults the loop bindings: `simulate_array/eval.rs::lookup_variable` and
+/// `lookup_array_ref`, `vectorized.rs::eval_vec_variable`, the two `tape/lower.rs`
+/// sites, `units.rs`, `simulate/resolve.rs`, and the scoping walkers
+/// `flatten.rs::namespace_expr_scoped` / `scope_template_body`
+/// (`if name == "t" || name == VAR_PLACEHOLDER || bound.contains(name)`). A
+/// `ranges` key or `output_idx` entry spelled with one of those names therefore
+/// declares a loop the body can never address: every read of the symbol inside
+/// the node evaluates to the simulation TIME (or to the operand placeholder)
+/// instead of the loop index.
+///
+/// **Why this is a rejection and not a shadowing rule.** Making the binder win
+/// would mean inverting that precedence at all nine sites here and in every
+/// peer binding, and it would still leave the node unable to mention the
+/// independent variable at all — an `aggregate` body that reads `t` for a
+/// forcing term is ordinary, and inside such a node `t` would silently become
+/// an index. Rejecting costs nothing an author wants: an index symbol is the
+/// author's free choice (§4.3.1), so the fix is to spell it anything else.
+///
+/// What the shadowing did before this check existed is exactly what
+/// CONFORMANCE_SPEC §5.5.8 forbids for the same reason it forbids an
+/// unresolvable key column — a SILENT no-op. A `join.on` key column resolves
+/// against the node's own `ranges` (`join.rs::resolve_side`), so the shadowed
+/// symbol resolved fine at BUILD time and then addressed the wrong thing at
+/// EVAL time: with a data-column key the gate admitted nothing and the
+/// `sum_product` reduction returned 0 with no error and no warning, and with a
+/// `const`-array key the lowered `code_lookup` indexed the constant key table
+/// with the time value and raised the misleading
+/// `E_TREEWALK_CONSTARRAY_OOB: const array 'left_key' index 0 out of range 1..3`.
+/// Regression fixtures: `tests/fixtures/reserved_index_symbol/`.
+///
+/// An `integral`'s `var` (`int_var`) is deliberately NOT checked: `∫f dt` binds
+/// the independent variable because it IS integrating over it, which is the
+/// authored form §4.2 documents, not a shadow of it.
+///
+/// Runs on the fully-lowered raw JSON (after §9.7 import resolution, the §9.6.3
+/// fixpoint and template expansion), so a binder introduced by a template BODY
+/// is caught alongside an authored one.
+pub(crate) fn reject_reserved_index_symbols(
+    json_value: &Value,
+) -> Result<(), crate::diagnostic::DiagnosticError> {
+    let independent = json_value
+        .get("domain")
+        .and_then(|d| d.get("independent_variable"))
+        .and_then(Value::as_str)
+        .unwrap_or("t");
+    let reserved = |name: &str| -> Option<&'static str> {
+        if name == independent {
+            Some("the document's independent variable")
+        } else if name == VAR_PLACEHOLDER {
+            Some("the §6.4 operator placeholder")
+        } else {
+            None
+        }
+    };
+
+    // `(path, field, symbol, role)` for every offending binder, in document
+    // order. A symbol that is BOTH an `output_idx` entry and a `ranges` key of
+    // the same node is one mistake, so it is reported once, under `ranges`.
+    let mut offenders: Vec<String> = Vec::new();
+    crate::json_visit::visit_values(json_value, &mut |path, value| {
+        let Some(obj) = value.as_object() else {
+            return;
+        };
+        // An Expression NODE: the only place these two fields carry meaning.
+        let Some(op) = obj.get("op").and_then(Value::as_str) else {
+            return;
+        };
+        let mut seen: Vec<&str> = Vec::new();
+        let mut record = |field: &str, sym: &str, role: &str| {
+            offenders.push(format!(
+                "`{op}` node at {path} binds '{sym}' as an index symbol ({field}), \
+                 but '{sym}' is {role}"
+            ));
+        };
+        if let Some(ranges) = obj.get("ranges").and_then(Value::as_object) {
+            for key in ranges.keys() {
+                if let Some(role) = reserved(key) {
+                    seen.push(key);
+                    record("a `ranges` key", key, role);
+                }
+            }
+        }
+        if let Some(output_idx) = obj.get("output_idx").and_then(Value::as_array) {
+            for entry in output_idx.iter().filter_map(Value::as_str) {
+                if let Some(role) = reserved(entry)
+                    && !seen.contains(&entry)
+                {
+                    record("an `output_idx` entry", entry, role);
+                }
+            }
+        }
+    });
+
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(crate::diagnostic::err(
+        crate::diagnostic::codes::RESERVED_INDEX_SYMBOL,
+        format!(
+            "{}. Both '{independent}' (esm-spec §11.3) and '{VAR_PLACEHOLDER}' (§6.4) are \
+             implicitly declared in every model's expression scope (§4.9.1) and are resolved \
+             by name before the loop bindings, so a binder spelled with one of them declares \
+             a loop its body can never address — the reads inside the node see the \
+             independent variable's value instead of the index, silently (CONFORMANCE_SPEC \
+             §5.5.8 forbids the same silence for an unresolvable `join.on` key column). \
+             Rename the index symbol: an index symbol is the author's free choice \
+             (esm-spec §4.3.1)",
+            offenders.join("; ")
+        ),
+    ))
+}
 
 /// Run every post-schema structural check, collecting errors and returning
 /// `EsmError::StructuralValidation` if any check fires.

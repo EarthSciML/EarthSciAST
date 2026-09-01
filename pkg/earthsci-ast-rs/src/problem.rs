@@ -1107,6 +1107,30 @@ pub fn esm_problem<'a>(
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut model_name = opts.model_name.clone();
 
+    // A TYPED document is a legitimate input to the build pipeline, and it used
+    // to be the one input shape that silently was not: the pipeline reads raw
+    // JSON, so `ProblemInput::File` skipped it entirely — `build_providers`,
+    // `const_arrays` and `pushdown_rewrite` were accepted and then DROPPED,
+    // with no error, and the caller got a document evaluated against every
+    // data-fed parameter's `default`. Re-serializing here routes it through the
+    // same path `Json` takes; the typed form is dropped so step (3) re-parses
+    // the PREPARED document rather than the authored one, exactly as the JSON
+    // input does.
+    //
+    // `ProblemInput::Flattened` still cannot: a flattened system has no
+    // document to rewrite. It is reachable only from inside this crate.
+    #[cfg(not(target_arch = "wasm32"))]
+    if owned_json.is_none()
+        && let Some(file) = owned_file.as_ref().filter(|_| wants_build_pipeline(&opts))
+    {
+        owned_json = Some(serde_json::to_value(file).map_err(|e| {
+            SimulateError::Compile(crate::compile_error::CompileError::build_err(format!(
+                "re-serializing the typed document for the build pipeline: {e}"
+            )))
+        })?);
+        owned_file = None;
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(raw) = owned_json.as_mut().filter(|_| wants_build_pipeline(&opts)) {
         {

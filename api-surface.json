@@ -89,17 +89,17 @@
     }
   },
   "counts": {
-    "symbols": 849,
+    "symbols": 851,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 298,
       "typescript": 231,
       "python": 243,
-      "rust": 325,
+      "rust": 327,
       "go": 384
     },
     "by_tier": {
-      "extension": 586,
+      "extension": 588,
       "stable": 263
     }
   },
@@ -583,6 +583,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "build_output_callback"
+      }
+    },
+    {
+      "name": "build_provider_factory",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "BuildProviderFactory"
       }
     },
     {
@@ -5960,6 +5968,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "run_pde_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "run_pde_tests_with_providers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_pde_tests_with_providers"
       }
     },
     {

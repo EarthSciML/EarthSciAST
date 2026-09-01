@@ -1,0 +1,34 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "LoopSymbolNamedTDataColumn",
+    "description": "Regression fixture: an `aggregate` range symbol named `t` is REJECTED AT LOAD with `reserved_index_symbol`.\n\n`t` is the independent variable (esm-spec §11.3: `domain.independent_variable`, default `\"t\"`, implicitly declared in every model's expression scope), and every evaluator resolves it as time BEFORE consulting the loop binds (`simulate_array/eval.rs::lookup_variable`, `vectorized.rs::eval_vec_variable`, `tape/lower.rs`), while the namespacing/scoping walkers special-case it by name (`flatten.rs::namespace_expr_scoped`, `scope_template_body`). A range symbol named `t` therefore never resolves to the loop index it declares.\n\nWith a DATA-COLUMN key column the failure used to be SILENT: this document validated, and the `sum_product` reduction returned 0 instead of 2 — the same aggregate with the symbol spelled `k` (see `loop_symbol_named_k_control.esm`) returns 2. Renaming a bound index changed a result, with no error and no warning. CONFORMANCE_SPEC §5.5.8 already requires an unresolvable key column to be a build error rather than a no-op; this is that rule applied one step earlier, at the binder.\n\nReported by the downstream EPA MOVES port as finding F4, where a time-key loop symbol spelled `t` made a daytime hour count come out 0 with everything else passing.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": {
+    "f4_left": { "kind": "interval", "size": 3 },
+    "f4_right": { "kind": "interval", "size": 2 }
+  },
+  "models": {
+    "SymbolCollision": {
+      "variables": {
+        "left_key": { "type": "unknown", "shape": ["f4_left"] },
+        "right_key": { "type": "unknown", "shape": ["f4_right"] },
+        "matchedWithSymbolT": { "type": "unknown" }
+      },
+      "equations": [
+        { "lhs": "left_key",
+          "rhs": { "op": "aggregate", "args": [], "output_idx": ["i"],
+            "ranges": { "i": { "from": "f4_left" } }, "expr": "i" } },
+        { "lhs": "right_key",
+          "rhs": { "op": "aggregate", "args": [], "output_idx": ["j"],
+            "ranges": { "j": { "from": "f4_right" } }, "expr": "j" } },
+        { "lhs": "matchedWithSymbolT",
+          "rhs": { "op": "aggregate", "args": [], "semiring": "sum_product", "output_idx": [],
+            "ranges": { "t": { "from": "f4_left" }, "r": { "from": "f4_right" } },
+            "join": [ { "on": [["left_key", "right_key"]] } ],
+            "expr": 1.0 } }
+      ]
+    }
+  }
+}

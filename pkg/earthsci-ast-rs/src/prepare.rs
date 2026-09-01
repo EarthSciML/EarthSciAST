@@ -1408,11 +1408,23 @@ impl<'o> BuildState<'o> {
         Ok(gated)
     }
 
-    /// Pushdown-path name aliasing.
+    /// Provider-key name aliasing.
+    ///
+    /// Runs for EVERY build, not only the pushdown one. A provider key is
+    /// `"<ModelPath>.<param>"` in every binding — that is the `providers`
+    /// contract — while the authored expressions of the selected model spell
+    /// the same parameter by its model-LOCAL name. Without the alias the
+    /// observed graph looks up `hp`, finds no `hp` (only `Probe.hp`), and
+    /// evaluates to NaN: a document that read its data correctly, then reported
+    /// nothing of it. Gating this on `pushdown_rewrite` made the ingest work
+    /// only for callers who also wanted the projection desugar, which is an
+    /// unrelated question.
+    ///
+    /// `pd_coupling` is empty off the pushdown path, so that half is unchanged;
+    /// the generic dotted-key → unique-shallowest-bare-tail pass is the one
+    /// that now always runs, and it never overwrites an existing key.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
-        if self.opts.pushdown_rewrite {
-            inject_aliases(&mut self.arrays, pd_coupling);
-        }
+        inject_aliases(&mut self.arrays, pd_coupling);
     }
 
     /// The CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5).
