@@ -296,10 +296,11 @@ _join_on_gate_disabled() = get(ENV, "ESS_JOIN_ON_GATE_DISABLE", "") == "1"
 #
 # `group` is every resolved pair of the clause over the SAME two loop symbols —
 # §5.5.8's COMPOSITE KEY, which matches iff every listed pair agrees. The key of
-# a position is therefore the TUPLE of that position's per-pair bucket codes, in
-# the order the pairs are listed (the §5.5.1 rule-4 skolem tuple).
+# a position is therefore the §5.5.1 rule-4 skolem TUPLE of that position's
+# per-pair bucket codes, in the order the pairs are listed (spelled below as a
+# code vector, which orders lexicographically exactly as the tuple does).
 #
-# The match set comes from `relational.equijoin`, the one canonical rule-5 join
+# The match set comes from `Relational.equijoin`, the one canonical rule-5 join
 # primitive: it hashes only to BUCKET and emits sorted by the canonical key, then
 # left, then right — never by `Dict` iteration order — so duplicate, reversed and
 # permuted inputs give a byte-identical pair list, and the cost is
