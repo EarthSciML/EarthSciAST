@@ -369,7 +369,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "1.0.0";
+pub const SCHEMA_VERSION: &str = "1.1.0";
 
 #[cfg(test)]
 mod version_tests {

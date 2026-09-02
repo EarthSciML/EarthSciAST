@@ -967,8 +967,7 @@ impl Parser {
                     self.next();
                     clauses.push(JoinClause {
                         on: std::mem::take(&mut cur),
-                        overlap: None,
-                        on_gate: None,
+                        ..Default::default()
                     });
                     continue;
                 }
@@ -977,8 +976,7 @@ impl Parser {
         }
         clauses.push(JoinClause {
             on: cur,
-            overlap: None,
-            on_gate: None,
+            ..Default::default()
         });
         self.expect(Kind::RParen, "')' to close join(…)")?;
         Ok(clauses)

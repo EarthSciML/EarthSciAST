@@ -1758,6 +1758,10 @@ fn namespace_join_names(
         .iter()
         .map(|c| JoinClause {
             on: c.on.iter().map(|[l, r]| [ns(l), ns(r)]).collect(),
+            // Range symbols the node itself binds, not variable references —
+            // namespacing must leave them alone, exactly as for an overlap
+            // clause's `sym_src` / `sym_tgt`.
+            syms: c.syms.clone(),
             overlap: c.overlap.as_ref().map(|ov| OverlapClause {
                 src_env: ov.src_env.iter().map(&ns).collect(),
                 tgt_env: ov.tgt_env.iter().map(&ns).collect(),
@@ -2779,6 +2783,8 @@ fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
             join.iter()
                 .map(|c| JoinClause {
                     on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
+                    // Binders, not references — renaming leaves them alone.
+                    syms: c.syms.clone(),
                     overlap: c.overlap.as_ref().map(|ov| OverlapClause {
                         src_env: ov.src_env.iter().map(&ren).collect(),
                         tgt_env: ov.tgt_env.iter().map(&ren).collect(),
