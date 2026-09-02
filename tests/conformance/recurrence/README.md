@@ -31,6 +31,7 @@ covers a shape a cheaper implementation cannot express at all.
 | `06_recurrence_float32_state` | the carried value is rounded to the variable's `element_type` **at every cell**: the binary32 fold reaches `s[10] = 1.0000001192092896` | a binding that carries binary64 partials and narrows once at the end, reaching `0.9999999999999999` — a *better* answer than the `real*4` reference, and the hardest kind of wrong to notice |
 | `07_recurrence_thirty_eight_lags` | the real lag scale: **38 distinct lags with 38 distinct weights in one node**, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Expected values from an independent ascending fold, not from running the document | a literal-lag-only primitive (would need 38 authored terms); any single carried accumulator (the weights all differ); any linear closed form (the clamp) |
 | `08_recurrence_parameter_valued_lag` | a lag **nothing static can bound** (`s[k] = 3·s[k−n]`, `n` a parameter) is ADMITTED | a validator that treats "unproven" as "illegal" — it would reject a document its own evaluator accepts |
+| `09_recurrence_through_expression_template` | a self-read reached through an `apply_expression_template` **binding** is still recognized — template applications expand at load (§9.6.4), so the construct composes with templates rather than being evaded by them | a binding that defers template expansion past recognition, where the self-read would be evaluated as a gather on a name nothing binds |
 
 Every assertion in every fixture is at **zero tolerance** (`rel: 0.0, abs: 0.0`).
 That is not strictness for its own sake: §5.19.1 argues the value is a fully
@@ -48,7 +49,15 @@ cycle detector or trivial-DAE factoring treats a self-read as a cycle *rejects a
 legal document*, which is the same defect as admitting an illegal one.
 
 `skip_bindings` in `manifest.json` records, per fixture, which ports do not
-evaluate it and why. A skip is a documented gap, not a pass.
+evaluate it and why. A skip is a documented gap, not a pass. As of this
+writing: Rust and Python execute all nine; Julia validates them and drives
+`rejections.json` but does not evaluate (its array backend class-merges per-cell
+kernels and the merge reorders cells, which §5.19.2 forbids — tracked as binding
+debt); TypeScript and Go have no array numeric executor at all and validate only.
+
+`rejections.json` beside this file is the negative half: eight malformed
+self-references, each pinned on its `(code, path)` pair and driven by **all
+five** bindings. It pins no message prose, deliberately — see its `pinned` block.
 
 ## What a binding must NOT do
 
