@@ -122,10 +122,23 @@ pub fn apply_unit_conversion(
     conversion: &UnitConversion,
     variable_name: &str,
 ) -> Result<(), UnitConversionError> {
+    // The multiply is an operation on model values, so it rounds to the active
+    // precision (`crate::precision`, esm-spec §11.3.1): loaded data entering a
+    // Float32 document must arrive in binary32, converted the way binary32
+    // would convert it. Identity under Float64, where `round` is `|v| v` and
+    // the loop is the multiply it always was.
     if let Some(scale) = scale_factor(conversion, variable_name)? {
+        let prec = crate::precision::active();
+        let scale = prec.round(scale);
         if scale != 1.0 {
             for v in values.iter_mut() {
-                *v *= scale;
+                *v = prec.round(prec.round(*v) * scale);
+            }
+        } else if prec.is_f32() {
+            // A unit-neutral conversion still has to land the loaded values in
+            // the declared precision.
+            for v in values.iter_mut() {
+                *v = prec.round(*v);
             }
         }
         return Ok(());

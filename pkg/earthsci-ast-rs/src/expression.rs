@@ -92,11 +92,21 @@ pub(crate) fn collect_variables(expr: &Expr, vars: &mut HashSet<String>) {
 /// Algebraic identities over a node whose children are already simplified.
 /// Returns the node unchanged (all fields intact) when no rule applies.
 fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
+    // The three numeric folds below are constant folding, so they round to the
+    // active precision (`crate::precision`, esm-spec §11.3.1): a Float32
+    // document in which `a + b` was folded in binary64 would disagree with the
+    // same subexpression evaluated at run time. Identity under Float64, where
+    // `round` is `|v| v` and each arm is the expression it always was. The
+    // identity/annihilator arms (`0 + x`, `1 * x`, `x^0`, `x^1`, `0 * x`) fold
+    // to an operand or to an exactly-representable constant, so they need none.
+    let prec = crate::precision::active();
     let folded = match (node.op.as_str(), node.args.as_slice()) {
         // 0 + x = x ; x + 0 = x
         ("+", [Expr::Number(z), x]) | ("+", [x, Expr::Number(z)]) if *z == 0.0 => Some(x.clone()),
         // a + b for numbers
-        ("+", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a + b)),
+        ("+", [Expr::Number(a), Expr::Number(b)]) => {
+            Some(Expr::Number(prec.round(prec.round(*a) + prec.round(*b))))
+        }
         // 0 * x = 0 ; x * 0 = 0
         ("*", [Expr::Number(z), _]) | ("*", [_, Expr::Number(z)]) if *z == 0.0 => {
             Some(Expr::Number(0.0))
@@ -106,13 +116,17 @@ fn simplify_node(node: crate::types::ExpressionNode) -> Expr {
             Some(x.clone())
         }
         // a * b for numbers
-        ("*", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a * b)),
+        ("*", [Expr::Number(a), Expr::Number(b)]) => {
+            Some(Expr::Number(prec.round(prec.round(*a) * prec.round(*b))))
+        }
         // x^0 = 1
         ("^", [_, Expr::Number(z)]) if *z == 0.0 => Some(Expr::Number(1.0)),
         // x^1 = x
         ("^", [x, Expr::Number(one)]) if *one == 1.0 => Some(x.clone()),
         // a^b for numbers
-        ("^", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(a.powf(*b))),
+        ("^", [Expr::Number(a), Expr::Number(b)]) => Some(Expr::Number(
+            crate::simulate_array::apply_binary("^", *a, *b),
+        )),
         _ => None,
     };
     folded.unwrap_or(Expr::operator(node))
