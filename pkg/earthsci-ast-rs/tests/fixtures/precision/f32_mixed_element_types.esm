@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "MixedElementTypesAreRefused",
+    "description": "`quant` follows the document (Float32) and `key` declares Float64. Their product is refused, naming both: widening it would make a quantity declared binary32 come out binary64 with nothing in the result to say so, and narrowing it would destroy the binary64 key — which is the very corruption per-variable element types exist to prevent. The author says which was meant by computing the step into a variable whose own element_type states it."
+  },
+  "domain": { "element_type": "Float32" },
+  "index_sets": { "one": { "kind": "interval", "size": 1 } },
+  "models": {
+    "M": {
+      "variables": {
+        "quant": { "type": "parameter", "units": "1", "default": 2.5 },
+        "key": { "type": "parameter", "units": "1", "default": 2260007005.0, "element_type": "Float64" },
+        "y": { "type": "unknown", "units": "1", "shape": ["one"] }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": { "op": "*", "args": ["quant", "key"] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "the_document_must_not_build",
+          "description": "Asserted through the failure, not the value: this document has no defensible answer.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "assertions": [{ "variable": "y", "time": 0.0, "expected": 0.0, "coords": { "one": 1 } }]
+        }
+      ]
+    }
+  }
+}

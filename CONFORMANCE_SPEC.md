@@ -2771,6 +2771,67 @@ A binding that cannot honour a clause MUST refuse it. Evaluating part of a
 document in a precision it did not ask for, and saying nothing, is the defect
 this section exists to prevent.
 
+#### 5.18.2a Per-variable overrides — `ModelVariable.element_type`
+
+A variable MAY declare its own `element_type`, which overrides the document's
+for that variable and for the arithmetic over it. Absent, it is the document's,
+and a document in which no variable declares one MUST behave exactly as §5.18.1
+describes — bit for bit, on the same code path.
+
+**Why the field exists.** One document-wide float precision cannot express the
+split every relational port of a `real*4` reference needs. Binary32 represents
+every integer only to 2²⁴ = 16 777 216, while such a model's join keys are
+routinely far above it: a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× beyond. Under
+a document-wide `"Float32"`, reading one real 1 183-row key column gives **48**
+distinct codes where binary64 gives **214**; `2265007010` and `2265007015` both
+become `2265007104`, so a `join.on` over them merges two unrelated equipment
+categories. The reference is `real*4` in its floating-point QUANTITIES and
+`INTEGER` in its keys; this field is how a document says that.
+
+**Propagation (static).** Precision is inferred from the leaves of each
+expression, once, at build time:
+
+| Position | Precision |
+|---|---|
+| numeric literal | none of its own — adopts its context, as an unsuffixed constant does in C |
+| model variable | its declared `element_type`, else the document's |
+| a name that is not a model variable (loop symbol, `t`, metaparameter, relation tag) | context-adopting |
+| any other operator | its operands' |
+| comparison / logical operator (`== != < <= > >= and or not`) | its operands must agree with EACH OTHER; the 0/1 flag it returns is exact in every precision, so the operator is context-adopting to its parent |
+| equation | stores at its left-hand side's |
+
+The comparison rule is load-bearing, not a convenience: it is what makes
+`sum(quant[i] * (key[i] == k))` legal with `quant` binary32 and `key` binary64.
+The predicate is evaluated in binary64 — otherwise both sides narrow and two
+distinct keys test equal — and hands the arithmetic a flag, not a key.
+
+**Refusal.** An operator whose operands carry different declared element types,
+or an equation whose right-hand side disagrees with its left-hand side, MUST be
+an error naming BOTH variables and both types (`mixed_element_type`). A binding
+MUST NOT resolve the mix by a usual-arithmetic-conversions rule: widening makes
+a quantity declared binary32 come out binary64 with nothing in the result to say
+so, and narrowing destroys the binary64 operand, which is the corruption the
+field exists to prevent. The author states the intent by computing the mixed
+step into a variable whose own `element_type` says which precision it lands in.
+
+**Ingress is not enough.** A binding MUST NOT implement this field by exempting
+a variable only where its data enters. The first expression over the value undoes
+that: `floor(scc/1000)*1000`, the fallback ladder that widens a key to its
+category, is `2260007000` in binary64 and `2260006912` in binary32. An
+implementation that exempts ingress alone will pass a round-trip test and fail
+every model that computes on a key.
+
+**Where the precision lives at run time.** Two granularities, and a binding
+needs both. An equation's precision belongs to the RULE it compiles to (the
+variable it defines) rather than to a wrapper node around its right-hand side —
+a wrapper there is invisible to the evaluator and very visible to every pass
+that pattern-matches that root. A subtree INSIDE an expression whose precision
+differs from its equation's (the predicate case) needs its own marker. A
+compiled artifact MUST carry the per-variable table and re-arm it at each run
+entry, not only at build: a solve happens after the build's guard is gone, and
+an artifact that remembered only the document precision evaluates its binary64
+columns in binary32 at run time.
+
 #### 5.18.3 Implementation note: the fast paths
 
 The clause "every operation rounds" is easy to state and easy to implement
@@ -2797,9 +2858,21 @@ them all, because the witness routes through the vectorized overlay.
 The witness document and its Float64 twin live in
 `pkg/earthsci-ast-rs/tests/fixtures/precision/`. Both carry an inline `tests`
 block asserting at **zero tolerance** (`rel: 0, abs: 0`), because a tolerance
-cannot see the one-ulp difference that is the entire point. `bindings_required`
-is `["rust"]` today; Julia, Python, Go and TypeScript ignore `element_type` and
-are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md` §Precision.
+cannot see the one-ulp difference that is the entire point.
+
+The per-variable gate is `f32_per_variable_element_type.esm` in the same
+directory — one document whose quantities round per operation in binary32 while
+its keys stay exact through ingress, through `floor(scc/1000)*1000`, and through
+an equality that binary32 would make two codes ten apart pass — and
+`f32_mixed_element_types.esm`, which MUST NOT build. Both are asserted at zero
+tolerance for a sharper reason than the one-ulp case:
+`|2260006912 − 2260007005| / 2.26e9` is 4.1 × 10⁻⁸, **two orders of magnitude
+inside** the default 1 × 10⁻⁶ relative tolerance, so a tolerance-based assertion
+cannot see this class of corruption at all. A key set must be compared exactly.
+
+`bindings_required` is `["rust"]` today; Julia, Python, Go and TypeScript ignore
+`element_type` and are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`
+§Precision.
 
 ## 6. CI Integration
 

@@ -924,28 +924,69 @@ Where:
 | PREC-11-A-008 | Under Float32, a construct whose numerics are binary64-only (`intersect_polygon`, `polygon_intersection_area`, `interp.linear`, `interp.bilinear`, `datetime.julian_day`) MUST error naming it (`float32_unsupported`) | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
 | PREC-11-A-009 | Under Float32, TIME INTEGRATION MUST error naming it (the solver is binary64); algebraic / observed / relational evaluation is unaffected | CONFORMANCE_SPEC §5.18.2 | Yes | validation |
 | PREC-11-A-010 | Conformance assertions on precision MUST be exact (bit) comparisons, not tolerances — a tolerance cannot see the one-ulp difference the contract is about | CONFORMANCE_SPEC §5.18.4 | Yes | simulation |
+| PREC-11-A-011 | `ModelVariable.element_type` MUST override `domain.element_type` for that variable AND for the arithmetic over it; absent, it is the document's | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-012 | Precision MUST propagate statically from an expression's leaves: a numeric literal adopts its context, a variable carries its declaration, an operator evaluates at its operands' | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-013 | A comparison / logical operator's operands MUST agree with each other and be evaluated at THEIR precision; the 0/1 flag it returns is exact, so the operator is context-adopting to its parent | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-014 | An operator mixing two declared element types, or an equation whose right-hand side disagrees with its left-hand side, MUST error naming both variables (`mixed_element_type`) — never a widest-operand resolution | CONFORMANCE_SPEC §5.18.2a | Yes | validation |
+| PREC-11-A-015 | An exempt variable MUST stay exempt through ARITHMETIC, not only through ingress: `floor(scc/1000)*1000` is `2260007000` in binary64 and `2260006912` in binary32 | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-016 | A compiled artifact MUST carry the per-variable table and re-arm it at every run entry, not only at build | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
+| PREC-11-A-017 | A document in which no variable declares an `element_type` MUST be bit-unchanged, on the same code path, from PREC-11-A-001…010 alone | CONFORMANCE_SPEC §5.18.2a | Yes | simulation |
 
-**Binding status.** Rust implements PREC-11-A-001…010
+**Binding status.** Rust implements PREC-11-A-001…017
 (`pkg/earthsci-ast-rs/src/precision.rs`, gated by
 `pkg/earthsci-ast-rs/tests/precision_element_type.rs` and the witness fixtures in
-`pkg/earthsci-ast-rs/tests/fixtures/precision/`). **Julia, Python, Go and
-TypeScript parse and round-trip `element_type` but do not honour it**: a
+`pkg/earthsci-ast-rs/tests/fixtures/precision/`; the per-variable half in
+`pkg/earthsci-ast-rs/src/precision_infer.rs`). **Julia, Python, Go and
+TypeScript parse and round-trip `domain.element_type` but do not honour it**: a
 `"Float32"` document evaluates in binary64 there, which is the divergence this
-row exists to record. To match, each needs (a) an active-precision mode threaded
-to wherever it evaluates expressions, (b) per-operation rounding at every such
-site — including any monomorphized / vectorized fast path, which in Rust was
-four of the five arithmetic definitions and the one the witness actually
-executed (CONFORMANCE_SPEC §5.18.3) — (c) ingress rounding, and (d) the three
-refusals of §5.18.2. Python can lean on `numpy.float32` for (b) provided it
-narrows at every operation rather than only at storage; Julia's `Float32` and
-Go's `float32` give (b) natively once the values are typed; TypeScript has only
-`Math.fround`, which gives correctly-rounded `+ - * / sqrt` on already-rounded
-operands but not binary32 elementary functions.
+row exists to record. To match PREC-11-A-001…010, each needs (a) an
+active-precision mode threaded to wherever it evaluates expressions, (b)
+per-operation rounding at every such site — including any monomorphized /
+vectorized fast path, which in Rust was four of the five arithmetic definitions
+and the one the witness actually executed (CONFORMANCE_SPEC §5.18.3) — (c)
+ingress rounding, and (d) the three refusals of §5.18.2. Python can lean on
+`numpy.float32` for (b) provided it narrows at every operation rather than only
+at storage; Julia's `Float32` and Go's `float32` give (b) natively once the
+values are typed; TypeScript has only `Math.fround`, which gives correctly-rounded
+`+ - * / sqrt` on already-rounded operands but not binary32 elementary functions.
+
+For PREC-11-A-011…017 on top of that, each of the four needs, in order:
+
+1. **The field on the variable type.** `element_type` alongside `type` on
+   `ModelVariable` — a separate field, never an overload of `type`, which is the
+   semantic role (`unknown` / `parameter`). The JSON Schema already carries it,
+   so a binding that models variables loosely (Python's dict, TypeScript's
+   generated interface) gets parsing and round-trip for free and needs only the
+   two steps below.
+2. **The inference pass**, run after template expansion and `$ref` resolution
+   and before anything lowers or evaluates an equation: one bottom-up walk per
+   equation returning "this subtree's precision, or none (context-adopting)",
+   raising `mixed_element_type` on a clash, and marking each subtree whose
+   precision differs from its equation's. Rust's is ~150 lines
+   (`precision_infer.rs`) and is the whole of PREC-11-A-012…014.
+3. **Two arming points, not one.** The equation's precision on the RULE it
+   compiles to (Rust: `precision::of_variable(rule.var)` at each site that
+   evaluates one equation — the build-time observed materialization, the array
+   runtime's observed pass, value invention, the scalar interpreter), and the
+   marked subtrees by a guard around that subtree's evaluation. A binding whose
+   evaluator fuses instructions across rules (Rust's tape) cannot carry a
+   per-rule precision and must fall back to a per-rule path for such documents.
+4. **The table on the compiled artifact** (PREC-11-A-016), re-armed at each run
+   entry beside the document precision that is already recorded there.
+
+Julia and Python, whose evaluators are per-node interpreters, need (3) at one
+site each. Go and TypeScript are the same shape. None of the four needs a typed
+integer path: binary64's 53-bit mantissa is exact for every integer below
+9.0 × 10¹⁵, which covers every key these documents carry.
 
 **Conformance fixtures:** `pkg/earthsci-ast-rs/tests/fixtures/precision/f32_per_op_rounding.esm`
 and its Float64 twin `f64_per_op_rounding.esm` — the same expression,
 `100 * ((100 - 73.5) / 100) / (100 - 73.5)`, over runtime parameters, asserted at
-zero tolerance to `0.9999999403953552` and `1.0` respectively.
+zero tolerance to `0.9999999403953552` and `1.0` respectively. For the
+per-variable rows, `f32_per_variable_element_type.esm` (four assertions at zero
+tolerance: the binary32 quantity, a binary64 key through ingress, the same key
+through `floor(scc/1000)*1000`, and two codes ten apart that binary32 would make
+equal) and `f32_mixed_element_types.esm`, which must not build.
 
 ---
 

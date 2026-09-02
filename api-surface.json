@@ -76,6 +76,7 @@
         "intern",
         "performance",
         "precision",
+        "precision_infer",
         "provider",
         "simulate_array",
         "wasm"

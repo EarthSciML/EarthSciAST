@@ -1615,6 +1615,12 @@ Optional arrayed-variable fields:
 | `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
 
+Precision:
+
+| Field | Description |
+|---|---|
+| `element_type` | The floating-point precision of **this variable and of the arithmetic over it** — `"Float32"` or `"Float64"` — overriding the document's `domain.element_type`. Not to be confused with `type`, which is the variable's semantic role. It exists for the split one document-wide precision cannot express: a model whose floating-point *quantities* are binary32 still has join keys binary32 cannot represent (a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× above binary32's exact-integer limit of 2²⁴), so the keys declare `"Float64"` while the quantities follow the document. Precision propagates from an expression's leaves and an operator mixing two declared element types is an error naming both. Omitted means the document's. See §11.3.1. |
+
 #### 6.3.1 Classification: what the solver needs, derived
 
 Because the format declares two types, every binding MUST expose the same
@@ -4422,6 +4428,48 @@ A runtime that cannot honour the declaration for some construct MUST **error
 naming that construct** rather than evaluate it in another precision silently.
 The normative clauses, including which constructs are refused, are
 CONFORMANCE_SPEC §5.18.
+
+**A variable MAY override it.** `ModelVariable.element_type` (§6.3) declares the
+precision of THAT variable and of the arithmetic over it, overriding
+`domain.element_type`; absent, it is the document's. It exists for the split one
+document-wide precision cannot express. Binary32 represents every integer only
+up to 2²⁴ = 16 777 216, and a relational model's keys are routinely far above
+it: a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× beyond, so under a document-wide
+`"Float32"` `2265007010` and `2265007015` both become `2265007104` and a
+`join.on` over them merges two unrelated rows. The reference implementations
+such models port are `real*4` in their floating-point QUANTITIES while their
+keys stay `INTEGER` — declaring the key columns `"Float64"` while the quantities
+follow the document is how a document says that.
+
+Precision then propagates from the leaves of an expression, statically:
+
+* a **numeric literal** has no precision of its own and adopts its context, as
+  an unsuffixed constant does in C;
+* a **variable** carries its declared `element_type`, or the document's;
+* a name that is not a model variable — a loop symbol, `t`, a metaparameter —
+  is likewise context-adopting;
+* an **operator** evaluates at its operands' precision;
+* a **comparison or logical operator** returns an exact 0/1 flag, representable
+  in every precision, so it is context-adopting *to its parent* while its own
+  operands must still agree with each other — which is what lets
+  `sum(quant[i] * (key[i] == k))` be legal with `quant` binary32 and `key`
+  binary64: the predicate is evaluated in binary64 and hands the arithmetic a
+  flag, not a key;
+* an **equation** stores at its left-hand side's precision.
+
+An operator whose operands carry **different** declared element types, or an
+equation whose right-hand side disagrees with its left-hand side, MUST be an
+error naming both variables (`mixed_element_type`). Neither resolution is
+available to a runtime: widening makes a quantity declared binary32 come out
+binary64 with nothing in the result to say so, and narrowing destroys the
+binary64 operand — which is the corruption the field exists to prevent. The
+author states the intent by computing the mixed step into a variable whose own
+`element_type` says which precision it lands in.
+
+Exempting a variable only where its data ENTERS is not sufficient and MUST NOT
+be offered as an implementation of this field: the first expression over the
+value undoes it. `floor(scc/1000)*1000` — the fallback ladder that widens a key
+to its category — is `2260007000` in binary64 and `2260006912` in binary32.
 
 ### 11.4 Initial conditions (the `ic` op)
 

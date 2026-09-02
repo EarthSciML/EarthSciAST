@@ -28,6 +28,9 @@
 //! 3. Literals round on ingress, and the mode guard restores what it replaced.
 //! 4. An unknown `element_type`, and a construct binary32 cannot carry, are
 //!    ERRORS naming themselves — never a quiet fall back to binary64.
+//! 5. A **per-variable** `element_type` (esm-spec §11.3.1) overrides the
+//!    document's for that variable and for the arithmetic over it, and an
+//!    operator that mixes two of them is an error naming both variables.
 //!
 //! The kernel tables and the reduction accumulator are pinned inside the crate,
 //! next to their definitions (`simulate_array::eval::kernel_equivalence_tests`,
@@ -206,4 +209,98 @@ fn an_unaddressable_index_set_is_named() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("float32_unsupported") && err.contains("rows"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// 3. Per-variable element types (esm-spec §11.3.1).
+//
+// A document-wide binary32 rounds every value, including a relational model's
+// KEYS. Binary32 represents every integer only to 2^24 = 16 777 216, and a
+// ten-digit SCC code is ~2.26e9 — 135x beyond — so under one document-wide
+// precision two distinct codes collapse onto one and a `join.on` over them
+// merges unrelated rows. The reference implementations these models port are
+// `real*4` in their QUANTITIES while their keys stay `INTEGER`; per-variable
+// element types are what expresses that split.
+//
+// Asserted on BITS, and through the inline tests at ZERO tolerance, for the
+// reason F18 records: |2260006912 - 2260007005| / 2.26e9 is 4.1e-08, two
+// orders INSIDE the default 1e-6 relative tolerance, so a tolerance-based
+// assertion cannot see this class of corruption at all.
+// ---------------------------------------------------------------------------
+
+/// One document, two element types: the quantities round per operation in
+/// binary32 while the keys stay exact through ingress, through
+/// `floor(scc/1000)*1000`, and through an equality that binary32 would make two
+/// codes ten apart pass.
+#[test]
+fn a_binary64_variable_in_a_float32_document_stays_exact() {
+    let results = run("f32_per_variable_element_type.esm");
+    assert_eq!(results.len(), 4, "four assertions: {results:?}");
+    for r in &results {
+        assert!(r.passed, "{}: {}", r.variable, r.message);
+    }
+    let by_var = |v: &str| -> f64 {
+        results
+            .iter()
+            .find(|r| r.variable == v)
+            .and_then(|r| r.actual)
+            .unwrap_or_else(|| panic!("no actual for {v}: {results:?}"))
+    };
+    // Bits, not tolerances. 2260007005 and 2260007000 are exactly
+    // representable in binary64 and in NEITHER case in binary32, whose nearest
+    // value to both is 2260006912.
+    assert_eq!(by_var("keyEcho").to_bits(), 2_260_007_005.0_f64.to_bits());
+    assert_eq!(by_var("keyBucket").to_bits(), 2_260_007_000.0_f64.to_bits());
+    // Sanity, so the two assertions above cannot pass by accident: binary32
+    // holds NEITHER key, and rounds both to the same value — which is what
+    // makes a document-wide Float32 merge them.
+    assert_eq!(2_260_007_005.0_f64 as f32 as f64, 2_260_006_912.0);
+    assert_eq!(2_260_007_000.0_f64 as f32 as f64, 2_260_006_912.0);
+    // The binary32 quantity in the same document is untouched by the presence
+    // of binary64 variables beside it.
+    assert_eq!(
+        by_var("quant").to_bits(),
+        (0.99999994_f32 as f64).to_bits(),
+        "declaring some variables Float64 must not make the Float32 ones more accurate"
+    );
+}
+
+/// The guard. An operator whose operands carry different declared element types
+/// is refused, naming BOTH variables — never resolved by a widest-operand rule,
+/// because every resolution is a silent answer to a question only the author
+/// can settle. (The unit test next to the pass covers the shape of the walk;
+/// this one pins that a DOCUMENT carrying the mix does not build.)
+#[test]
+fn mixing_element_types_under_one_operator_is_refused() {
+    let results = run("f32_mixed_element_types.esm");
+    assert!(!results.is_empty(), "the document must report a failure");
+    let msg = results
+        .iter()
+        .map(|r| r.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(msg.contains("mixed_element_type"), "{msg}");
+    assert!(msg.contains("quant") && msg.contains("key"), "both operands: {msg}");
+    assert!(msg.contains("Float64") && msg.contains("Float32"), "both types: {msg}");
+}
+
+/// A document that declares NO per-variable element type is untouched: the
+/// inference pass does not run, no boundary marker is inserted, and the
+/// per-variable table is empty (which is what every ingress site and the tape
+/// gate branch on).
+#[test]
+fn a_document_without_overrides_is_inert() {
+    use earthsci_ast::precision_infer::{annotated, env_of_file};
+    for name in ["f32_per_op_rounding.esm", "f64_per_op_rounding.esm"] {
+        let file = load_path(fixture(name)).expect("fixture parses");
+        let env = env_of_file(&file).expect("env");
+        assert!(
+            env.variables.is_empty(),
+            "{name} declares no per-variable element_type"
+        );
+        assert!(
+            annotated(&file).expect("annotate").is_none(),
+            "{name} must not even be cloned, let alone rewritten"
+        );
+    }
 }
