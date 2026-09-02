@@ -211,6 +211,27 @@ fn a_parameter_valued_lag_is_admitted_and_evaluates() {
     );
 }
 
+/// A self-read reached through an `apply_expression_template` **binding**.
+///
+/// This test exists to close a hole rather than to show off composition. The
+/// cell-restriction blocking list deliberately omits
+/// `apply_expression_template`, and every binding's self-read walk visits
+/// `args` and the expression sidecars but NOT `bindings`. Read on its own that
+/// is alarming: it sounds as though a self-read could hide inside a template
+/// binding, be seen by neither the validator nor the recurrence lowering, and
+/// be evaluated as an ordinary gather on a name nothing binds — the
+/// plausible-wrong-number failure this whole construct exists to eliminate.
+///
+/// It cannot, and this is the proof rather than the argument: a template
+/// application is expanded AT LOAD (esm-spec §9.6.4), so by the time anything
+/// looks at the document the application is gone and the self-read is an
+/// ordinary one in the expanded body. If a binding ever defers template
+/// expansion past recognition, this test is what fails.
+#[test]
+fn a_self_read_through_a_template_binding_is_still_recognized() {
+    assert_fixture_passes("09_recurrence_through_expression_template.esm");
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fail-closed reads
 // ---------------------------------------------------------------------------
@@ -329,6 +350,40 @@ fn constant_self_index_is_rejected() {
     );
 }
 
+/// An UNPROVABLE lag still counts as an offset on its axis, so two of them is
+/// still two axes. Admitting an unprovable lag identifies the recurrence axis;
+/// it does not stop counting them. This is the one place an unprovable lag
+/// still rejects, and it is easy to lose in a refactor — the Go binding's
+/// author pinned the same boundary independently.
+#[test]
+fn two_unprovable_lags_are_still_two_axes() {
+    let doc = json!({
+      "esm": "1.0.0",
+      "metadata": { "name": "R2", "description": "probe", "authors": ["t"] },
+      "index_sets": { "rows": { "kind": "interval", "size": 3 },
+                      "cols": { "kind": "interval", "size": 3 } },
+      "models": { "R2": {
+        "tolerance": { "rel": 1e-9 },
+        "variables": {
+          "n": { "type": "parameter", "units": "1", "default": 1 },
+          "m": { "type": "unknown", "shape": ["rows", "cols"], "units": "1" }
+        },
+        "equations": [ { "lhs": "m", "rhs": {
+          "op": "aggregate", "args": [], "output_idx": ["i", "j"],
+          "ranges": { "i": { "from": "rows" }, "j": { "from": "cols" } },
+          "expr": { "op": "index", "args": ["m",
+                      { "op": "-", "args": ["i", "n"] },
+                      { "op": "-", "args": ["j", "n"] } ] } } } ]
+      } }
+    })
+    .to_string();
+    let codes = validation_codes(&doc);
+    assert!(
+        codes.iter().any(|(c, _)| c == "recurrence_not_wellfounded"),
+        "expected `recurrence_not_wellfounded`, got {codes:?}"
+    );
+}
+
 /// A self-read on TWO axes at once. `m[i,j]` reading `m[i−1, j−1]` has no
 /// single axis to fold along: the sweep would have to advance both at once.
 #[test]
@@ -402,6 +457,63 @@ fn makearray_region_self_read_is_refused_as_unsupported_form() {
         msg.contains("recurrence_unsupported_form"),
         "expected `recurrence_unsupported_form`, got: {msg}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 3a. The SHARED rejection corpus
+// ---------------------------------------------------------------------------
+//
+// `tests/conformance/recurrence/rejections.json` is the cross-binding pin: the
+// same eight malformed documents, driven by every binding, each asserted on its
+// (code, path) pair. The per-binding tests above and below are the readable
+// ones; this is the one that keeps five bindings from drifting apart, which is
+// why the boundary case `unprovable_offset_on_two_axes` lives there rather than
+// only in a unit test.
+//
+// What it pins is deliberately narrow — the code and the JSON pointer, never the
+// prose. The same defect legitimately reads differently depending on which check
+// reached it first (an unbound parameter used as a whole index is reported by the
+// coefficient test in some bindings and the affinity test in others, and both are
+// correct), so pinning wording would make the first reworded message a
+// conformance failure.
+
+#[test]
+fn the_shared_rejection_corpus_agrees_on_code_and_path() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/recurrence/rejections.json");
+    let raw = std::fs::read_to_string(&path).expect("rejections.json is readable");
+    let corpus: Value = serde_json::from_str(&raw).expect("rejections.json parses");
+
+    // The prose exclusion is part of the contract, so assert the manifest still
+    // says so: a later edit flipping `message` to true would silently start
+    // requiring five bindings to agree on wording.
+    assert_eq!(
+        corpus["pinned"]["message"],
+        Value::Bool(false),
+        "this category pins (code, path) and NOT message prose"
+    );
+
+    let cases = corpus["cases"].as_array().expect("cases is an array");
+    assert_eq!(cases.len(), 8, "the corpus size is itself a pin");
+    for case in cases {
+        let id = case["id"].as_str().expect("id");
+        let want_code = case["expected_code"].as_str().expect("expected_code");
+        let want_path = case["expected_path"].as_str().expect("expected_path");
+        let doc = case["document"].to_string();
+        let file = load_string(&doc).unwrap_or_else(|e| panic!("{id}: document must parse: {e}"));
+        let got = earthsci_ast::validate(&file)
+            .structural_errors
+            .into_iter()
+            .map(|e| (e.code.to_string(), e.path))
+            .collect::<Vec<_>>();
+        assert!(
+            got.iter()
+                .any(|(c, p)| c == want_code && p == want_path),
+            "{id}: expected ({want_code}, {want_path}); got {got:?}. \
+             Why this case is illegal: {}",
+            case["why"].as_str().unwrap_or("")
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -2986,6 +2986,25 @@ well-founded causal read, with the codes esm-spec §4.3.1.1 *Rejections* lists
 non-executing bindings carry the same rejection duty as the three executing ones;
 it is the only part of this construct they implement.
 
+The rejections are pinned **across bindings**, not per binding, in
+`tests/conformance/recurrence/rejections.json`: eight malformed documents, each
+driven by every binding. A per-binding unit test is not sufficient for this and
+the corpus records why — the boundary case `unprovable_offset_on_two_axes` (an
+unprovable lag is admitted, but admitting it identifies the recurrence axis
+without stopping the axis *count*, so two of them is still two axes) was found by
+one binding's author and held by one binding's unit test, which is precisely how
+five bindings drift apart on a single `if`.
+
+**What is pinned is the `(code, path)` pair, and NOT the diagnostic prose.** A
+binding MUST NOT be tested against another binding's wording. This is a
+deliberate line rather than an omission: the same defect legitimately reads
+differently depending on which check reached it first — an unbound parameter used
+as a *whole* index is reported by the coefficient test in some bindings and by the
+affinity test in others, and both are correct descriptions of the same
+rejection — so pinning prose would turn the first reworded error message into a
+cross-binding conformance failure. Message text is required to be *useful*
+(§7.2), not identical.
+
 Conversely, admitting a well-founded recurrence MUST NOT weaken any cycle
 handling. The distinction is precisely the self-edge: `V → V` through a strictly
 earlier position is an **ordering within one variable** and is dropped from the

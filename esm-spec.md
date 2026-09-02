@@ -386,7 +386,7 @@ by this spec.
 
 | Op | Required extra fields | Meaning |
 |---|---|---|
-| `aggregate` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring aggregate of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. See Section 4.3.1. |
+| `aggregate` | `output_idx`, `expr` | Functional Aggregate Query node: a semiring aggregate of a product of factors over named index sets. Specializes to Einstein-notation tensor contraction with implicit reductions over non-output indices; its full surface (`semiring`, `from`/`of` ranges, `join`, `distinct`, `key`, `filter`) is specified in RFC semiring-faq-unified-ir. Its `expr` is also the one place a causal SELF-REFERENCE is admitted — the format's only spelling for a recurrence over an index axis (§4.3.1.1). See Section 4.3.1. |
 | `makearray` | `regions`, `values` | Block assembly of an array from overlapping sub-region assignments. Later regions overwrite earlier ones. See Section 4.3.2. |
 | `index` | — | Element or sub-array access. `args[0]` is the array; `args[1..]` are the index expressions. See Section 4.3.3. |
 | `broadcast` | `fn` | Element-wise application of scalar operator `fn` to one or more broadcast-compatible operands; means what `{op: fn, args}` means, applied element-wise (so a ONE-operand `broadcast` applies `fn` unarily). `fn` MUST name a scalar operator, applied at an arity that operator admits, else `invalid_broadcast_fn`. See Section 4.3.4. |
