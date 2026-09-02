@@ -1924,6 +1924,18 @@ An assertion passes when the computed value `actual` satisfies
 
 for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention. An implementation-defined small `ε` (e.g., `1e-300`) protects the relative check when `expected` is zero.
 
+**Finiteness is judged before tolerance.** The full pass predicate is
+
+```
+actual == expected    OR    (actual and expected are both finite AND the tolerance test above holds)
+```
+
+so an `actual` of `+∞`, `−∞`, or `NaN` **FAILS** against every finite `expected`, at every tolerance. This clause is not a corollary of the tolerance test — it contradicts it. With `actual = ±∞` both sides of the relative bound are infinite (`|∞ − expected| = ∞ ≤ rel · max(|∞|, |expected|) = ∞`), so a runtime applying the bound alone reports a **PASS for every expected value**: an overflowed product, a division by a zero denominator, a `log(0)` — the ordinary ways a model produces an infinity — each turn a document that computes nothing meaningful into a green test run, and the assertion written to catch them says `ok`. `NaN` fails under the bound alone (every IEEE-754 comparison with `NaN` is false), so only the infinite case needs the guard; a conforming runtime MUST apply it, and MUST NOT let any `abs` or `rel` bound admit a non-finite `actual`.
+
+The `actual == expected` clause preserves the one case a non-finite value legitimately matches: the **same** infinity, with the same sign. A `.esm` document cannot spell one — JSON has no infinite literal — so *within a document* the rule reduces to "a non-finite actual always fails"; the equality clause governs a host that supplies `expected` through an API. `−0.0 == 0.0` under IEEE-754, so a signed zero is unaffected either way.
+
+The rule is pinned by the `assertion_nonfinite` conformance category (CONFORMANCE_SPEC §5.19), which compares **verdicts** rather than actuals: `±∞` and `NaN` are not JSON-representable, so a numeric golden cannot state them.
+
 #### 6.6.4 Tolerance Resolution Order
 
 Tolerance is resolved most-specific first:

@@ -227,6 +227,19 @@ function _resolve_tolerance(model_tol, test_tol, assertion_tol)
 end
 
 # The §6.6.3 pass predicate (exact when no tolerance is declared anywhere).
+#
+# `isapprox` is LOAD-BEARING and must not be inlined into the bare tolerance
+# bound. Its definition is
+#   x == y || (isfinite(x) && isfinite(y) && norm(x-y) <= max(atol, rtol*max(norm(x), norm(y))))
+# and the FINITENESS clause is what makes a non-finite `actual` fail: with
+# `actual = ±Inf` both sides of the bound alone are `Inf`, so the comparison
+# holds for EVERY expected value and an assertion on an overflowed product, an
+# x/0 or a log(0) reports PASS whatever it expected. The Rust and Python
+# re-implementations of "Julia isapprox semantics" dropped the clause and had
+# exactly that hole; Julia is the reference binding for the
+# `assertion_nonfinite` conformance category (CONFORMANCE_SPEC §5.19) because
+# it never did. NaN fails under the bound alone, so only the infinite case
+# depends on this.
 function _check_assertion(actual::Real, expected::Float64,
                           rtol::Float64, atol::Float64)
     if rtol == 0.0 && atol == 0.0

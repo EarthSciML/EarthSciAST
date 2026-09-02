@@ -376,12 +376,39 @@ pub fn resolve_tolerance(
     }
 }
 
-/// Julia `isapprox` semantics: `|a − e| ≤ max(atol, rtol·max(|a|, |e|))`
-/// (exact equality when both tolerances are zero) — the same pass predicate
-/// the Julia / Python `run_pde_tests` use.
+/// Julia `isapprox` semantics: `actual == expected`, or both values FINITE and
+/// `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same pass predicate the
+/// Julia / Python `run_pde_tests` use (esm-spec §6.6.3, CONFORMANCE_SPEC §5.19).
+///
+/// **Finiteness is judged BEFORE tolerance**, and that clause is not a
+/// corollary of the bound — it contradicts it. With `actual = ±inf` both sides
+/// of `|actual − expected| ≤ max(atol, rtol·max(|actual|, |expected|))` are
+/// `inf`, so the comparison held for EVERY finite `expected`: an assertion on
+/// an overflowed product, a division by a zero denominator or a `log(0)`
+/// reported PASS whatever it expected, and a document that computed nothing
+/// meaningful went green. NaN never had the problem (every IEEE-754 comparison
+/// with NaN is false), which is why the hole was specific to an infinity. This
+/// is what Julia's `isapprox` has always done —
+/// `x == y || (isfinite(x) && isfinite(y) && …)` — and what this
+/// re-implementation of it dropped.
+///
+/// `actual == expected` keeps the one case a non-finite value legitimately
+/// matches: the SAME infinity, with the same sign. A `.esm` document cannot
+/// spell an infinite `expected` (JSON has no infinite literal), so within a
+/// document the rule reduces to "a non-finite actual always fails"; the
+/// equality clause governs an API caller. It also keeps the zero-tolerance
+/// exact-equality mode, and `-0.0 == 0.0` under IEEE-754, so a signed zero is
+/// unaffected.
 pub fn check_assertion(actual: f64, expected: f64, rtol: f64, atol: f64) -> bool {
+    if actual == expected {
+        return true;
+    }
+    if !actual.is_finite() || !expected.is_finite() {
+        return false;
+    }
     if rtol == 0.0 && atol == 0.0 {
-        return actual == expected;
+        // Exact-equality mode; the equality above already answered it.
+        return false;
     }
     (actual - expected).abs() <= f64::max(atol, rtol * f64::max(actual.abs(), expected.abs()))
 }
@@ -1437,6 +1464,34 @@ mod tests {
         assert!(check_assertion(0.0, 1e-10, 0.0, 1e-9));
         assert!(check_assertion(2.0, 2.0, 0.0, 0.0)); // exact-equality mode
         assert!(!check_assertion(2.0, 2.0000001, 0.0, 0.0));
+    }
+
+    /// esm-spec §6.6.3: finiteness is judged BEFORE tolerance. Without the
+    /// guard `|inf − e| ≤ max(atol, rtol·max(inf, |e|))` is `inf ≤ inf`, and an
+    /// infinite actual passed against every expected value.
+    #[test]
+    fn check_assertion_judges_finiteness_before_tolerance() {
+        let inf = f64::INFINITY;
+        let nan = f64::NAN;
+        for (rtol, atol) in [(1e-9, 0.0), (0.0, 1e300), (1e-9, 1e300), (0.0, 0.0)] {
+            assert!(!check_assertion(inf, 42.0, rtol, atol));
+            assert!(!check_assertion(inf, -5.0, rtol, atol));
+            assert!(!check_assertion(inf, 0.0, rtol, atol));
+            assert!(!check_assertion(inf, f64::MAX, rtol, atol));
+            assert!(!check_assertion(-inf, -42.0, rtol, atol));
+            assert!(!check_assertion(nan, 0.0, rtol, atol));
+            assert!(!check_assertion(nan, nan, rtol, atol));
+            // A finite actual against an infinite expectation fails too.
+            assert!(!check_assertion(1e300, inf, rtol, atol));
+            // The one legitimate non-finite match: the same infinity.
+            assert!(check_assertion(inf, inf, rtol, atol));
+            assert!(check_assertion(-inf, -inf, rtol, atol));
+            assert!(!check_assertion(inf, -inf, rtol, atol));
+            assert!(!check_assertion(-inf, inf, rtol, atol));
+        }
+        // Signed zero is IEEE-equal, at every tolerance.
+        assert!(check_assertion(-0.0, 0.0, 0.0, 0.0));
+        assert!(check_assertion(-0.0, 0.0, 1e-9, 0.0));
     }
 
     #[test]
