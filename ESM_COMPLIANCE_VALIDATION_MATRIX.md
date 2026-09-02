@@ -150,6 +150,23 @@ Where:
 > their own core-set-minus-evaluable gap the way -002 does: the failure mode is a panic or
 > a NaN on a schema-valid document, and only an enumerated gap makes it visible.
 
+### BEHAV-04-G: Causal Self-Reference (Recurrence) Along One Index Axis (esm-spec §4.3.1.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-G-001 | An equation defining an array-shaped unknown `V` whose RHS `aggregate` body reads `index(V, …)` at a strictly earlier position along ONE of that aggregate's output axes is a RECURRENCE DEFINITION of `V`, and MUST be materialized cell by cell with that axis as the outermost loop, ascending, each cell published before the axis advances. No `scan` / `fold` / `recur` operator exists and a binding MUST NOT add one | esm-spec.md §4.3.1.1; CONFORMANCE_SPEC.md §5.19 | Yes | behavioral |
+| BEHAV-04-G-002 | The recurrence axis, its direction and the maximum lag are all DERIVED from the read, never declared. An index argument at the recurrence axis MUST be affine in that axis's frame symbol with coefficient 1; the lag is `k_d − <argument>`; a lag provably `≤ 0` for every value MUST be rejected, a lag provably `≥ 1` is admitted, and a lag STRADDLING zero is admitted because a self-read of an unpublished cell cannot return a value | esm-spec.md §4.3.1.1 | Yes | validation |
+| BEHAV-04-G-003 | A recurrence definition MUST NOT be evaluated through any whole-array, vectorized, fused, tiled, kernel-merged or otherwise reordered path. Its cells are not independent, so a reordering computes something else and a reassociation of the body is a different number | CONFORMANCE_SPEC.md §5.19.2 | Yes | behavioral |
+| BEHAV-04-G-004 | A self-read of a position outside the recurrence axis, or of a cell the sweep has not published, MUST be a fail-closed fault (`E_TREEWALK_RECUR_UNAVAILABLE`) and MUST NOT resolve to a number. The §5.5.5 zero ghost is never applied to a causal self-read, and a NaN sentinel is not sufficient on its own because a `max(x, 0)` in the body launders one | esm-spec.md §4.3.1.1; CONFORMANCE_SPEC.md §5.19.4 | Yes | behavioral |
+| BEHAV-04-G-005 | The carried value is a cell of the variable being defined, so it takes that variable's `element_type` and MUST be rounded to it at EVERY cell, not only when the finished array is read back | esm-spec.md §4.3.1.1, §11.3.1; CONFORMANCE_SPEC.md §5.19.3a | Yes | behavioral |
+| BEHAV-04-G-006 | A self-read that is not a well-founded causal read MUST be rejected with `recurrence_not_wellfounded`, and one the runtime cannot restrict to a single cell (a `makearray` region value, a `reshape`/`transpose`/`concat`/`broadcast` operand, or an RHS that is not an `aggregate` over the variable's frame) with `recurrence_unsupported_form`. Both apply in EVERY binding, executing or not | esm-spec.md §4.3.1.1; CONFORMANCE_SPEC.md §5.19.5 | Yes | validation |
+| BEHAV-04-G-007 | The self-edge `V → V` MUST be dropped from the observed dependency graph, so a well-founded recurrence is not reported as a cycle; a cycle through two DISTINCT variables MUST keep whatever handling it had, and MUST NOT be diagnosed as a recurrence | CONFORMANCE_SPEC.md §5.19.5 | Yes | validation |
+| BEHAV-04-G-008 | A conformance fixture in this category MUST pin the arithmetic ORDER, not an answer within a tolerance: a catastrophic-cancellation ladder that separates the left fold from every reassociation, a lag greater than 1, and a symbol-valued lag — the last so a binding implementing only `acc[i] = f(acc[i−1], …)` fails rather than passing on the subset it covers | CONFORMANCE_SPEC.md §5.19.3 | Yes | behavioral |
+
+> **Binding status (2026-09-02)**: see `tests/conformance/recurrence/manifest.json` for the
+> per-binding execution and skip status. `recurrence_not_wellfounded` and
+> `recurrence_unsupported_form` are NEW cross-binding diagnostic codes; -003 through -005 are
+> requirements on an EXECUTING binding only, while -002, -006 and -007 bind all five.
+
 ### BEHAV-04-F: Aggregate Binders vs Globally-Scoped Names (esm-spec §4.3.1 / §11.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
