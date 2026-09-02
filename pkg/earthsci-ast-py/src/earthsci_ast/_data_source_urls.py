@@ -109,29 +109,58 @@ def _abs_base(base_dir: str) -> str:
 
 
 def resolve_data_source_urls(data: Any, base_dir: str) -> None:
-    """Rewrite every ``data_sources[*].source`` location in ``data`` in place."""
+    """Resolve every ``data_sources[*].source`` location in ``data``.
+
+    COPY-ON-WRITE, not in-place. ``load_document`` shallow-copies the caller's
+    dict (so its own ``data.pop`` cannot be felt outside), which means
+    ``data["data_sources"]`` is still the caller's object and its nested
+    ``source`` dicts are shared. Rewriting one in place would resolve a
+    location in a dict the caller still holds -- a side effect on an argument,
+    and one that would make a second ``load_document`` of the same dict resolve
+    an already-resolved URL against a different base. So a changed entry is
+    rebuilt and only the top-level key -- which belongs to the copy -- is
+    reassigned. Untouched when no location needs rewriting, which is every
+    document whose templates are already absolute URLs.
+    """
     if not isinstance(data, dict):
         return
     sources = data.get("data_sources")
     if not isinstance(sources, dict):
         return
+
+    rebuilt: dict[str, Any] = {}
+    changed = False
     for name, entry in sources.items():
+        rebuilt[name] = entry
         if not isinstance(entry, dict):
             continue
         src = entry.get("source")
         if not isinstance(src, dict):
             continue
+
+        new_src = dict(src)
         template = src.get("url_template")
         if isinstance(template, str):
-            src["url_template"] = _resolved(template, base_dir, f"data_sources.{name}.source.url_template")
+            new_src["url_template"] = _resolved(
+                template, base_dir, f"data_sources.{name}.source.url_template"
+            )
         mirrors = src.get("mirrors")
         if isinstance(mirrors, list):
-            src["mirrors"] = [
+            new_src["mirrors"] = [
                 _resolved(m, base_dir, f"data_sources.{name}.source.mirrors[{i}]")
                 if isinstance(m, str)
                 else m
                 for i, m in enumerate(mirrors)
             ]
+        if new_src == src:
+            continue
+        new_entry = dict(entry)
+        new_entry["source"] = new_src
+        rebuilt[name] = new_entry
+        changed = True
+
+    if changed:
+        data["data_sources"] = rebuilt
 
 
 def _resolved(template: str, base_dir: str, where: str) -> str:

@@ -115,18 +115,40 @@ function resolvedAt(template: string, baseDir: string, where: string): string {
   }
 }
 
-/** Rewrite every `data_sources[*].source` location in `doc`, in place. */
-export function resolveDataSourceUrls(doc: unknown, baseDir: string): void {
-  if (doc === null || typeof doc !== 'object') return
-  const sources = (doc as Record<string, unknown>)['data_sources']
-  if (sources === null || typeof sources !== 'object' || Array.isArray(sources)) return
+/**
+ * Resolve every `data_sources[*].source` location in `doc`.
+ *
+ * Returns a rewritten ROOT when something changed, and `null` when nothing did
+ * — the same shape (and for the same reason) as `applyScopeInjections`, whose
+ * `injectedRoot ?? data` idiom this mirrors.
+ *
+ * Copy-on-write rather than in-place because `loadDocument(obj)` hands its
+ * caller's object straight to `loadInput` with no copy at any level. Rewriting
+ * a `source` in place would resolve a location inside a dict the caller still
+ * holds — a side effect on an argument, and one that would make a second
+ * `loadDocument` of the same object resolve an already-resolved URL against a
+ * different base. Only the containers on the path to a changed value are
+ * copied, so a document whose templates are already absolute URLs allocates
+ * nothing.
+ */
+export function resolveDataSourceUrls(doc: unknown, baseDir: string): object | null {
+  if (doc === null || typeof doc !== 'object') return null
+  const root = doc as Record<string, unknown>
+  const sources = root['data_sources']
+  if (sources === null || typeof sources !== 'object' || Array.isArray(sources)) return null
+
+  const rebuilt: Record<string, unknown> = {}
+  let changed = false
   for (const [name, entry] of Object.entries(sources as Record<string, unknown>)) {
+    rebuilt[name] = entry
     if (entry === null || typeof entry !== 'object') continue
     const src = (entry as Record<string, unknown>)['source']
     if (src === null || typeof src !== 'object' || Array.isArray(src)) continue
+
     const loc = src as Record<string, unknown>
+    const newLoc: Record<string, unknown> = { ...loc }
     if (typeof loc['url_template'] === 'string') {
-      loc['url_template'] = resolvedAt(
+      newLoc['url_template'] = resolvedAt(
         loc['url_template'],
         baseDir,
         `data_sources.${name}.source.url_template`,
@@ -134,11 +156,22 @@ export function resolveDataSourceUrls(doc: unknown, baseDir: string): void {
     }
     const mirrors = loc['mirrors']
     if (Array.isArray(mirrors)) {
-      loc['mirrors'] = mirrors.map((m, i) =>
+      newLoc['mirrors'] = mirrors.map((m, i) =>
         typeof m === 'string'
           ? resolvedAt(m, baseDir, `data_sources.${name}.source.mirrors[${i}]`)
           : m,
       )
     }
+    if (
+      newLoc['url_template'] === loc['url_template'] &&
+      JSON.stringify(newLoc['mirrors']) === JSON.stringify(loc['mirrors'])
+    ) {
+      continue
+    }
+    rebuilt[name] = { ...(entry as Record<string, unknown>), source: newLoc }
+    changed = true
   }
+
+  if (!changed) return null
+  return { ...root, data_sources: rebuilt }
 }

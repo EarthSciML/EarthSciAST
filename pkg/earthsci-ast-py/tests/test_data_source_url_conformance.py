@@ -96,3 +96,33 @@ def test_an_unresolvable_template_is_refused_by_a_diagnostic_that_names_it(
     )
     for needle in fixture["message_contains"]:
         assert needle in str(err), f"the diagnostic must name {needle!r}; got: {err}"
+
+
+def test_loading_a_dict_does_not_resolve_urls_inside_the_callers_own_dict() -> None:
+    """§8.2.1 resolution must not be a side effect on a caller's argument.
+
+    ``load_document`` shallow-copies, so ``data["data_sources"]`` and every
+    nested ``source`` dict are still the caller's objects. An in-place rewrite
+    there would (a) mutate an argument, and (b) make a SECOND load of the same
+    dict resolve an already-resolved URL -- which, against a different base,
+    silently reads a different file. That is the silent-wrong-value shape, so it
+    is pinned rather than left to review.
+    """
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "M", "description": "d", "authors": ["a"], "license": "MIT"},
+        "data_sources": {
+            "t": {"kind": "static", "source": {"url_template": "./tables/probe.parquet"}}
+        },
+    }
+    source = doc["data_sources"]["t"]["source"]
+
+    first = earthsci_ast.load_document(doc, base_path="/base/one")
+    assert first.data_sources["t"].source.url_template == "file:///base/one/tables/probe.parquet"
+    assert source["url_template"] == "./tables/probe.parquet", (
+        "the caller's own dict must still hold the AUTHORED template"
+    )
+
+    # The same dict, a different base: it must resolve afresh, not compound.
+    second = earthsci_ast.load_document(doc, base_path="/base/two")
+    assert second.data_sources["t"].source.url_template == "file:///base/two/tables/probe.parquet"

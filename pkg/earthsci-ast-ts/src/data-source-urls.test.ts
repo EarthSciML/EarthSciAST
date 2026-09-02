@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadPath, toJson } from './index.js'
+import { loadDocument, loadPath, toJson } from './index.js'
 import { ERROR_CODES } from './errors.js'
 import { resolveSourceUrl } from './data-source-urls.js'
 import { REPO_ROOT } from './test-helpers.js'
@@ -98,6 +98,37 @@ describe('esm-spec §8.2.1 data-source location resolution', () => {
       }
     })
   }
+
+  it('does not resolve urls inside the callers own object', () => {
+    // §8.2.1 resolution must not be a side effect on an argument.
+    // `loadDocument(obj)` hands the caller's object straight through with no
+    // copy at any level. An in-place rewrite would (a) mutate that argument,
+    // and (b) make a SECOND load of the same object resolve an
+    // already-resolved URL -- which, against a different base, silently reads a
+    // different file. That is the silent-wrong-value shape, so it is pinned.
+    const doc = {
+      esm: '1.0.0',
+      metadata: { name: 'M', description: 'd', authors: ['a'], license: 'MIT' },
+      data_sources: {
+        t: { kind: 'static', source: { url_template: './tables/probe.parquet' } },
+      },
+    }
+    const source = doc.data_sources.t.source
+
+    const first = loadDocument(doc, { basePath: '/base/one' })
+    expect(first.data_sources?.['t']?.source.url_template).toBe(
+      'file:///base/one/tables/probe.parquet',
+    )
+    expect(source.url_template, "the caller's object must keep the AUTHORED template").toBe(
+      './tables/probe.parquet',
+    )
+
+    // The same object, a different base: it must resolve afresh, not compound.
+    const second = loadDocument(doc, { basePath: '/base/two' })
+    expect(second.data_sources?.['t']?.source.url_template).toBe(
+      'file:///base/two/tables/probe.parquet',
+    )
+  })
 
   it('leaves a substitution-led template alone, per §8.2 pass-through', () => {
     expect(resolveSourceUrl('{archive_root}/x.nc', '/a/b')).toBe('{archive_root}/x.nc')

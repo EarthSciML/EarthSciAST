@@ -436,8 +436,15 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   const dataSourceBase =
     options?.basePath ??
     (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.')
-  resolveDataSourceUrls(data, dataSourceBase)
-  if (validationView !== data) resolveDataSourceUrls(validationView, dataSourceBase)
+  const dsResolved = resolveDataSourceUrls(data, dataSourceBase)
+  if (dsResolved !== null) {
+    data = dsResolved
+    // In canonical mode `validationView` is a SEPARATE stripped copy, so it
+    // needs its own pass; otherwise it is the same object and just follows.
+    validationView = canonical
+      ? (resolveDataSourceUrls(validationView, dataSourceBase) ?? validationView)
+      : data
+  }
 
   // Step 2: Version compatibility check (before schema validation)
   checkVersionCompatibility(validationView, options?.onVersionWarning)
