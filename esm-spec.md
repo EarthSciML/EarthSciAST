@@ -593,6 +593,152 @@ and the measure, checked by the ordinary rules of §4.8.3. Nothing infers or sup
 omitting it silently yields an unweighted sum, which is the correct behaviour for a genuine
 prefix sum and an authoring error for an integral.
 
+##### 4.3.1.1 Causal self-reference (recurrence) along one axis — normative
+
+The prefix reduction above covers every fold whose *terms* are independent of the
+result. A fold whose next term is a function of the previous **answer** — a
+recurrence — is expressed by letting the defining `aggregate`'s body read the array
+being defined, at a strictly earlier position along one of the aggregate's own
+output axes:
+
+```json
+{
+  "lhs": "s",
+  "rhs": {
+    "op": "aggregate", "args": [], "output_idx": ["k"],
+    "ranges": { "k": { "from": "steps" } },
+    "expr": { "op": "ifelse", "args": [
+      { "op": "<=", "args": ["k", 1] },
+      1.0,
+      { "op": "*", "args": [
+        { "op": "index", "args": ["s", { "op": "-", "args": ["k", 1] }] },
+        2.0
+      ] }
+    ] }
+  }
+}
+```
+
+which is `s[1] = 1`, `s[k] = 2·s[k−1]`, i.e. `[1, 2, 4, 8]` over a 4-element `steps`.
+This is the **canonical spelling**; as with the prefix reduction, the format ships no
+separate `scan` / `fold` / `recur` operator and a binding MUST NOT introduce one
+under a private op name. The rationale and the alternatives considered are in
+`docs/content/rfcs/causal-self-reference-recurrence.md`.
+
+**Recognition.** An equation is a **recurrence definition** of the unknown `V` when
+its LHS names `V` — bare (`V ~ …`) or through the §4.3 indexed-aggregate LHS form
+(`aggregate{expr: V[k…]} ~ …`) — and its RHS contains at least one `index(V, …)`
+read. Each such read is a **causal self-read**. The aggregate's `output_idx` symbols
+and their `ranges` are the **cell frame** `(k₁ … k_r)` with bounds `R₁ … R_r`.
+Nothing is declared: the recurrence, its axis and its lag are all read off the
+document, and a binding MUST reject a self-read it cannot justify rather than
+guessing at one (see *Rejections* below).
+
+**Admitted lag.** A causal self-read must be strictly earlier along exactly one
+axis. Write `lag = k_d − <index argument at axis d>`. Every index argument must be
+**affine in its own frame symbol with coefficient 1** — `k_d`, `k_d − 1`,
+`k_d − a`, `k_d − a − 2` — because that is what makes *which* axis the recurrence
+folds along, and in *which direction*, decidable at all. The bounds of `lag` are
+then computed from integer literals and the resolved ranges of the index symbols
+in scope, and:
+
+| `lag` bounds | Meaning | Outcome |
+|---|---|---|
+| exactly `[0, 0]` | the read stays on this axis's own cell | this axis is not the recurrence axis |
+| `hi(lag) ≤ 0` | provably the same cell, or a later one, for every value | **rejected**: `recurrence_not_wellfounded` |
+| `lo(lag) ≥ 1` | provably strictly earlier for every value | admitted; this is the recurrence axis |
+| straddling (`lo(lag) ≤ 0 < hi(lag)`) | earlier for some values of an index symbol, not for others | admitted; the cells where it is not earlier **fault** at evaluation (below) |
+
+An index argument that is not affine in the frame symbol with coefficient 1 — a
+bare constant, `2·k_d`, another axis's symbol — is `recurrence_not_wellfounded`.
+
+The **straddling** row is not a loophole; it is what lets a bounded-lag fold be
+written without enumerating its terms. The natural spelling of a fold with an
+additive non-recurrent term is one aggregate whose contracted index runs from `0`,
+the `0` term carrying the non-recurrent part and the rest carrying
+`f(V[k−a])` under a guard:
+
+```json
+"ranges": { "y": { "from": "years" }, "a": [0, 50] },
+"expr": { "op": "ifelse", "args": [ {"op": "==", "args": ["a", 0]},
+                                    <the non-recurrent term>,
+                                    <a term reading index(V, y − a)> ] }
+```
+
+Here `lag = a` straddles zero, and the `a = 0` cell is never evaluated because the
+guard selects the other branch — which is sound *without* the static proof, because
+a self-read of a cell the sweep has not published cannot return a value at all
+(point 5 below). Requiring `lo(lag) ≥ 1` statically would have rejected this and
+forced the terms to be written out one per lag. The derived maximum lag is reported
+by a binding's build inspection, together with whether it was *proved* or is
+runtime-guarded; **no evaluation rule depends on either**, so neither is authored.
+
+**Evaluation order.** The order is the point of the construct, so it is fixed:
+
+1. Cells of `V` are visited with axis `d` as the **outermost loop, ascending** over
+   `R_d`; the remaining axes iterate inside it, ascending, in `output_idx` order.
+2. At each cell the RHS is evaluated **restricted to that cell**: the frame symbols
+   are bound to the cell's coordinates and the aggregate's own contraction, `filter`
+   and `reduce` apply at that cell exactly as §4.3.1 specifies for a non-recurrent
+   aggregate — including §4.3.1's ascending accumulation order. The body's
+   arithmetic is not special-cased, which is what lets a recurrence compose with a
+   contraction, a banded `filter`, or a `reduce: "*"` fold.
+3. The cell's value is **published before the sweep advances**, so a later cell's
+   self-read observes it.
+4. A recurrence definition MUST NOT be evaluated through any whole-array,
+   vectorized, fused, tiled, kernel-merged or otherwise reordered path. The cells
+   are not independent, so there is no equivalence to appeal to: a reordering is a
+   different computation, and a reassociation of the body is a different number.
+5. A self-read of a position outside `R_d`, or of a cell not yet published, is a
+   **fault** (`E_TREEWALK_RECUR_UNAVAILABLE`) and is never resolved to a value. In
+   particular the homogeneous-Dirichlet **zero ghost** that §4.3.3 gives an
+   out-of-range state/observed gather is **never** applied to a causal self-read,
+   for the reason CONFORMANCE_SPEC §5.5.5 gives for const-array gathers, only
+   sharper: a recurrence feeds itself, so one substituted zero propagates along the
+   whole axis, and a clamp such as `max(x, 0)` in the body would launder even a NaN
+   sentinel into a plausible number.
+
+Because of (5) a base case is written as a **guard inside the body**, as in the
+example above, and not left to fall off the end of the axis. Within a recurrence
+body an `ifelse` whose condition evaluates to a scalar selects its branch **before**
+evaluating it, and only the selected branch is evaluated; this is required, not
+incidental, since it is what keeps the guarded self-read from being evaluated at the
+first cell.
+
+Points 1–3 make the result a fully determined function of the document, which is
+what licenses the **bit-identical** cross-binding requirement (CONFORMANCE_SPEC
+§5.2, §5.19) — the same argument §4.3.1 makes for the forward prefix scan, applied
+to a fold whose terms read the fold's own output.
+
+**Rejections.** A self-read that is not a well-founded causal read is a structural
+error, not a boundary case, and every binding MUST reject it:
+
+| Situation | Code |
+|---|---|
+| A self-read provably at the same cell or a later one on its axis (`k`, `k+c`) | `recurrence_not_wellfounded` |
+| An index argument not affine in its frame symbol with coefficient 1 (a bare constant, `2·k`, another axis's symbol) | `recurrence_not_wellfounded` |
+| Self-reads on two different axes, or two self-reads that disagree on the axis | `recurrence_not_wellfounded` |
+| A non-identity index at a non-recurrence axis (`index(V, k−1, j+1)`) | `recurrence_not_wellfounded` |
+| Bare `V` (not through `index`) anywhere in `V`'s own RHS | `recurrence_not_wellfounded` |
+| Recurrence axis whose range is ragged, derived, or not a unit-step ascending interval | `recurrence_not_wellfounded` |
+| A self-read reachable only through a construct that cannot be restricted to one cell — a `makearray` region value, a `reshape` / `transpose` / `concat` operand | `recurrence_unsupported_form` |
+| RHS that is not an `aggregate` over `V`'s frame, or whose output ranges are not statically resolvable | `recurrence_unsupported_form` |
+
+The `makearray` row is worth stating explicitly, because §4.3.2's overlap rule
+("later entries overwrite earlier ones") reads like a licence to define position `k`
+from position `k−1`. It is not one: the region order fixes which **write wins**, not
+the order in which cells are **evaluated**, and a region's value expression is
+evaluated once for the whole region. Write the recurrence as one `aggregate` with the
+base case as a guard instead.
+
+A recurrence definition is **not** a cyclic algebraic system and does not relax the
+rule that cycles are rejected. The self-edge `V → V` is dropped from the observed
+dependency graph — every binding already drops it — precisely because a well-founded
+causal self-read is an *ordering* within one variable rather than a dependency
+between two. An edge between two **distinct** variables still closes a cycle and is
+still rejected, and a self-read that fails the table above is rejected too, so the
+`tests/conformance/simulate_cycles` fail-fast contract is untouched.
+
 #### 4.3.2 `makearray`
 
 A `makearray` node assembles an output array from a sequence of sub-region assignments. It corresponds to `SymbolicUtils.ArrayMaker` / `@makearray`.

@@ -1480,6 +1480,15 @@ impl ArrayCompiled {
         for rule in &self.observed_rules {
             let mut refs = HashSet::new();
             collect_expr_var_refs(observed_rule_body(rule), &mut refs);
+            // A recurrence rule's body reads the variable the rule DEFINES
+            // (esm-spec §4.3.1.1). That self-edge is not a dependency on
+            // another observed — it is an ordering within this one — so it is
+            // dropped here exactly as `dependency_order_observed` drops it.
+            // Leaving it in made the rule classify as non-static and never be
+            // hoisted, which is why a state-free recurrence materialized
+            // nowhere at all before this feature landed.
+            let self_name = observed_rule_var(rule);
+            refs.retain(|r| r != self_name);
             let ok = refs.iter().all(|r| {
                 r != "t"
                     && !self.var_shapes.contains_key(r)
@@ -1520,6 +1529,24 @@ impl ArrayCompiled {
                 observed_rule_var(rule).clone(),
                 observed_rule_body(rule).clone(),
             );
+            // esm-spec §4.3.1.1 / RFC §2.1: the recurrence a document's
+            // self-read was interpreted as, reported rather than authored.
+            if let AlgebraicRule::Recurrence {
+                var,
+                output_idx_names,
+                axis,
+                max_lag,
+                lag_proven,
+                ..
+            } = rule
+            {
+                insp.recurrences.push(crate::simulate_array::RecurrenceInfo {
+                    var: var.clone(),
+                    axis: output_idx_names[*axis].clone(),
+                    max_lag: *max_lag,
+                    lag_proven: *lag_proven,
+                });
+            }
         }
         for name in static_names {
             if let Some(a) = static_obs.get(name) {
@@ -1611,7 +1638,10 @@ fn outobs_prune_disabled() -> bool {
 /// with no free index — is "unknown" and gets probed.
 pub(super) fn observed_rule_is_array_valued(rule: &AlgebraicRule) -> bool {
     match rule {
-        AlgebraicRule::ArrayLoop { output_ranges, .. } => !output_ranges.is_empty(),
+        // A recurrence materializes the same padded box its frame declares
+        // (esm-spec §4.3.1.1), so it is array-valued exactly when it has axes.
+        AlgebraicRule::ArrayLoop { output_ranges, .. }
+        | AlgebraicRule::Recurrence { output_ranges, .. } => !output_ranges.is_empty(),
         AlgebraicRule::Scalar { body, .. } => match &**body {
             Expr::Operator(node) => {
                 node.op == "aggregate"

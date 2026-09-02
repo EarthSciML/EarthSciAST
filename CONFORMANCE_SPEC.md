@@ -493,6 +493,7 @@ The categories a divergence can be scored against, and what "agree" means in eac
 | **Simulation** | Numeric tolerance (§5.9) | The ONE category where a tolerance is legitimate, because the quantity being compared is a floating-point trajectory, not a serialization. Governed by §5.9's explicit rel/abs tolerances — a stated numeric tolerance on a numeric quantity, which is a different thing from a percentage of fixtures allowed to disagree. |
 | **Relational index sets / dense IDs** | Byte-identical | Outputs of the value-invention primitives (`distinct`, `skolem`, `rank`) and group-by / value-equality joins. Governed by the **§5.5 cross-binding determinism contract** — these outputs are consumed by other nodes, so a divergence is a different *model*, not different formatting. |
 | **Forward cumulative (prefix) reductions** | Bit-identical | An `aggregate` whose `filter` is a forward monotone comparison against an output index (`<=` / `<`, esm-spec §4.3.1). The admitted window is folded ascending, lowest `j` first, so the value is a fully determined left fold and not an "irreducibly floating-point" quantity — which is exactly what licenses a binding to evaluate it with an `O(N)` running accumulator instead of the `O(N²)` triangle. All three executing bindings do — Rust and Python with a running accumulator inside the array evaluator, Julia by splitting the equation into an elementwise term pass plus a post-pass fold (`tree_walk/scan.jl`) so its per-cell kernel model stays intact. All three are pinned against an independent triangular oracle at catastrophic-cancellation magnitudes (`pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`, `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py`, `pkg/EarthSciAST.jl/test/scan_prefix_test.jl`). The mirrored spellings `i >= j` / `i > j` are the same forward scan and are recognized as such. **Reverse** scans (`>=` / `>`) are explicitly NOT in this category: they fall through to each binding's general contraction machinery, whose summation order already differs (Python's dense reduce sums pairwise), so they are governed by the §5.9 simulation tolerance like any other contraction. |
+| **Causal self-reference (recurrence) along an index axis** | Bit-identical | An equation whose defining `aggregate` body reads the array being defined at a strictly earlier position on one output axis (esm-spec §4.3.1.1). The sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is — there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact. Governed by the **§5.19 recurrence contract**, which also forbids every reordering implementation strategy and requires fixtures that pin the arithmetic ORDER (a cancellation ladder, a lag > 1, a symbol-valued lag) rather than an exactly-representable answer a wrong order would also reach. |
 | **Conservative-regridding geometry (areas / weights)** | Invariants exact; areas within rel + abs tol | The M4 geometry kernel (`intersect_polygon`, the `polygon_area` FAQ, the weights `W_ij`) is **tolerance-based** — FP polygon clipping cannot be made bit-identical. Gated primarily on the physical invariants (conservation + partition-of-unity), with a combined rel + abs area tolerance and a sliver floor; the integer **candidate overlap-pair index set** stays byte-identical (§5.5). Governed by the **§5.8 geometry tolerance contract**. |
 
 > **Note.** The only two places a tolerance is legitimate are the ones where the
@@ -2874,6 +2875,111 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 `element_type` and are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`
 §Precision.
 
+### 5.19 Causal Self-Reference (Recurrence) Along One Index Axis (normative)
+
+> Normative definition of the construct: **esm-spec §4.3.1.1**. Rationale and
+> alternatives: `docs/content/rfcs/causal-self-reference-recurrence.md`. This
+> section is the cross-binding *conformance* contract.
+
+A **recurrence definition** is an equation defining an array-shaped unknown `V`
+whose RHS `aggregate` body reads `index(V, …)` at a strictly earlier position along
+exactly one of the aggregate's output axes. It is the one construct in the format
+whose output cells are **not independent**, so its conformance contract is stated
+in terms of order, not only of value.
+
+#### 5.19.1 Bit-identity, and why it is available
+
+A recurrence's value is **bit-identical across executing bindings** and belongs in
+the §5.2 *Forward cumulative (prefix) reductions* company rather than under the
+§5.9 simulation tolerance. The argument is §4.3.1's, one step further:
+
+* the sweep order is fixed (recurrence axis outermost, ascending; remaining axes
+  inside it in `output_idx` order);
+* each cell's value is published before the axis advances, so the value read at a
+  lag is the value the sweep already wrote — not a converged approximation to it;
+* the body at each cell is an ordinary cell-restricted `aggregate`, evaluated by
+  §4.3.1's own ascending accumulation order.
+
+Together these make the result a **fully determined** function of the document, in
+the same sense a left fold is. There is no reassociation left for a binding to
+choose, so a divergence is a defect, not a floating-point fact. A conformance
+fixture for this category MUST therefore pin the arithmetic **order**, not merely
+the answer to a loose tolerance — see §5.19.3.
+
+#### 5.19.2 Forbidden implementation strategies
+
+A binding MUST NOT evaluate a recurrence definition through any path that
+reorders or batches its cells: whole-array / vectorized overlays, fused or tiled
+kernels, per-cell kernel class merging, parallel-prefix or blocked accumulation,
+or any tape whose scheduler is free to reorder. These are not "different but
+equivalent" — the cells are not independent, so a reordering computes something
+else. A binding whose default array path does any of the above MUST detect a
+recurrence definition and decline that path for it specifically, and SHOULD make
+the decline observable (a bail log, a cascade tally, a build-inspection entry) so
+a silent promotion back onto a reordering path is detectable in test rather than
+in a wrong number.
+
+`O(N)` running accumulation, which §4.3.1 licenses for a forward prefix scan, is
+**not** available here as a rewrite: a recurrence's per-lag weights differ, so no
+single carried value summarizes the history. The sequential sweep *is* the
+`O(N · cost(body))` implementation.
+
+#### 5.19.3 The order pin (required fixture shape)
+
+A conformance fixture in this category MUST include at least one assertion whose
+value distinguishes the normative order from every other order or association.
+Pinning `[1, 2, 4, 8]` alone does not: it is exactly representable and every
+plausible wrong order still terminates on some power of two.
+
+The required shapes are:
+
+1. **A catastrophic-cancellation ladder.** A recurrence over magnitudes that do
+   not survive reassociation — the same device the prefix-scan fixtures use
+   (`1e16, 1, −1e16, 1`) — asserted to the bit. A reassociating or reordered
+   evaluation lands on a different, *nameable* wrong value, which the fixture's
+   description states, so a failure diagnoses itself.
+2. **A multi-lag fixture.** At least one self-read at a lag `> 1`, and at least one
+   whose lag comes from an index **symbol** rather than a literal, so a binding
+   that implements only `acc[i] = f(acc[i−1], …)` fails rather than passes on a
+   subset.
+3. **An order-inside-the-body assertion.** A recurrence whose cell body is itself a
+   `reduce` fold over several terms, one of which is the self-read, asserted to the
+   bit — so §4.3.1's ascending in-body order and the recurrence's cross-cell order
+   are pinned together rather than only in combination.
+
+Assertions in this category are pinned to **specific values**, never to a bound
+and never to "it ran". A recurrence that silently resolves an unavailable self-read
+to `0` reproduces plausible-looking numbers for a whole axis, so a tolerance-shaped
+assertion here is worse than no assertion.
+
+#### 5.19.4 Fail-closed reads
+
+An out-of-range or not-yet-published self-read is `E_TREEWALK_RECUR_UNAVAILABLE`
+and MUST NOT resolve to a number. §5.5.5's zero-ghost convention for
+state/observed gathers is **never** applied to a causal self-read, and neither is
+a NaN sentinel sufficient on its own: a body containing `max(x, 0)` (or `min`,
+or a comparison) turns a NaN into a plausible number in most IEEE-754 min/max
+formulations, and the recurrence then feeds that number to every later cell. A
+binding MUST surface the fault through whatever channel makes the run fail — a
+raise, or a latched diagnostic drained at every exit of the solve — and MUST NOT
+report a solution built on one.
+
+#### 5.19.5 Rejection parity
+
+Every binding — executing or not — MUST reject a self-read that is not a
+well-founded causal read, with the codes esm-spec §4.3.1.1 *Rejections* lists
+(`recurrence_not_wellfounded`, `recurrence_unsupported_form`). This is a
+*validation* category (§5.2 row **Validation**, exact agreement), so the two
+non-executing bindings carry the same rejection duty as the three executing ones;
+it is the only part of this construct they implement.
+
+Conversely, admitting a well-founded recurrence MUST NOT weaken any cycle
+rejection. The self-edge `V → V` is dropped from the observed dependency graph
+(every binding already dropped it), but a cycle through two or more **distinct**
+variables is still rejected, and `tests/conformance/simulate_cycles`' fail-fast
+contract is unchanged. A binding that admits a recurrence by disabling its
+observed-cycle detector has not implemented this section.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
@@ -2940,6 +3046,9 @@ ever emitted it, and the code had zero real coverage.
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
+
+| `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a forward or same-cell read, an offset not provably `>= 1`, self-reads disagreeing on the axis, a non-identity index at a non-recurrence axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / non-unit-step. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
+| `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not an `aggregate` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 
 #### 7.1.0 List-valued diagnostic details are sorted
 
@@ -3064,6 +3173,7 @@ a claim about *why* the file is invalid, not merely *that* it is:
 A conforming harness MUST compare emitted `(code, path)` pairs against these pins. Asserting
 only "some error was produced" is what let 42 pins drift undetected (audit 2026-07-14, F4).
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
+| `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 ### 7.2 Error Message Format
