@@ -182,6 +182,62 @@ func isWellFoundedRecurrence(eq Equation, file *ESMFile, arrayShaped map[string]
 	return isRecurrence && finding == nil
 }
 
+// isRecurrenceCandidate reports whether eq is a recurrence CANDIDATE: it defines
+// an array-shaped unknown and reads that array through `index` somewhere in its
+// own RHS — well founded or NOT.
+//
+// This, and not the well-foundedness verdict, is the gate for every exemption a
+// PRE-EXISTING check needs in order to admit the construct (CONFORMANCE_SPEC
+// §5.19.5 "The exemption is gated on CANDIDACY, not on well-foundedness").
+// Gating on the verdict is the intuitive choice and it is wrong: an ill-founded
+// self-read is by definition not well founded, so the exemption would not apply
+// to it, so the pre-existing cycle check fires and collapses the document to one
+// cycle error — and the `recurrence_not_wellfounded` / `recurrence_unsupported_form`
+// diagnosis is never reached. That moves the original masking defect from the
+// legal case to the illegal one, giving up the named diagnosis this construct
+// exists to provide.
+//
+// Candidacy asks the right question instead: does the recurrence check OWN the
+// diagnosis for this equation? If it does, hand the equation over and let it
+// decide. If it does not — a scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an
+// array, neither of which has an `index` read — leave every existing check
+// exactly as it was.
+//
+// It shares analyzeRecurrenceEquation with the validator deliberately, so the
+// candidacy predicate and the well-foundedness check cannot drift apart.
+func isRecurrenceCandidate(eq Equation, file *ESMFile, arrayShaped map[string]bool) bool {
+	candidate, _ := analyzeRecurrenceEquation(eq, file, arrayShaped)
+	return candidate
+}
+
+// recurrenceCandidateVars is the set of variables a model defines by a
+// recurrence candidate — the names whose self-edge `V -> V` an existing check
+// must drop.
+func recurrenceCandidateVars(model *Model, file *ESMFile) map[string]bool {
+	if model == nil {
+		return nil
+	}
+	arrayShaped := arrayShapedUnknowns(model)
+	if len(arrayShaped) == 0 {
+		return nil
+	}
+	var out map[string]bool
+	for _, eq := range model.Equations {
+		if !isRecurrenceCandidate(eq, file, arrayShaped) {
+			continue
+		}
+		name, _, _, ok := recurrenceLHSTarget(eq.LHS)
+		if !ok {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool)
+		}
+		out[name] = true
+	}
+	return out
+}
+
 // analyzeRecurrenceEquation decides whether eq is a recurrence definition and,
 // if so, whether it is well founded.
 //

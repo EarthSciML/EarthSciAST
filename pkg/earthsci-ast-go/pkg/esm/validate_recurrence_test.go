@@ -681,3 +681,172 @@ func TestDAEContractStillRejectsMalformedRecurrence(t *testing.T) {
 		t.Fatalf("expected RuleEngineError(%s), got %v", codeNontrivialDAE, err)
 	}
 }
+
+// --- the cadence self-edge drop ---------------------------------------------
+
+// TestCadenceAdmitsRecurrenceSelfEdge is the second half of the §5.19.5
+// "cuts both ways" duty, for Go's OTHER cycle detector.
+//
+// CadenceClassifier.seedLeaf resolves an observed unknown to the class of its
+// defining RHS, transitively, with a cycle guard — and a recurrence's RHS reads
+// the very name being resolved, so before the self-edge drop every LEGAL
+// recurrence document reported `cadence_observed_cycle`. That is the same defect
+// as the trivial-DAE blocker, on a different path: the classifier is public API,
+// so a consumer calling LeafSeeds / CheckExpectCadence reached it even though
+// validate() does not.
+func TestCadenceAdmitsRecurrenceSelfEdge(t *testing.T) {
+	for _, rel := range []string{
+		filepath.Join("valid", "recurrence_causal_self_reference.esm"),
+		filepath.Join("fixtures", "recurrence", "01_recurrence_doubling.esm"),
+		filepath.Join("fixtures", "recurrence", "08_recurrence_parameter_valued_lag.esm"),
+	} {
+		t.Run(filepath.Base(rel), func(t *testing.T) {
+			file, err := LoadPath(filepath.Join(repoTestsDir(t), rel))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			for _, name := range sortedKeys(file.Models) {
+				model := file.Models[name]
+				c := NewCadenceClassifier(file, &model)
+				seeds, err := c.LeafSeeds()
+				if err != nil {
+					t.Fatalf("a LEGAL recurrence was reported as a cadence cycle: %v", err)
+				}
+				if len(seeds) == 0 {
+					t.Errorf("LeafSeeds returned no seeds, so nothing was classified")
+				}
+			}
+		})
+	}
+}
+
+// TestCadenceStillReportsNonRecurrenceCycles guards the gate from the other
+// side. The drop is on CANDIDACY — an array-shaped unknown reading itself
+// through `index` — so three neighbouring shapes must still be cycles:
+// a two-variable cycle, a bare array self-mention, and a scalar self-mention.
+// A gate that dropped any of these would be suppressing real cycle detection,
+// which §5.19.5 says is not implementing the section.
+func TestCadenceStillReportsNonRecurrenceCycles(t *testing.T) {
+	steps := 4
+	cases := map[string][]Equation{
+		// r -> z -> r. The walk meets `r` while resolving `z`, so the direct-self
+		// -edge test does not apply even though `r` IS a recurrence candidate.
+		"cycle through two distinct variables": {
+			{LHS: "r", RHS: ExprNode{Op: "+", Args: []any{
+				stepsAggregate(selfReadOf("r", ExprNode{Op: "-", Args: []any{"k", int64(1)}})),
+				"z",
+			}}},
+			{LHS: "z", RHS: "r"},
+		},
+		// No `index` read anywhere, so not a candidate.
+		"bare array self-mention": {
+			{LHS: "r", RHS: ExprNode{Op: "+", Args: []any{"r", 1.0}}},
+		},
+	}
+	for name, eqs := range cases {
+		t.Run(name, func(t *testing.T) {
+			file := recurrenceTestFileWithSets(
+				map[string]IndexSet{"steps": {Kind: "interval", Size: &steps}},
+				map[string]ModelVariable{
+					"r": {Type: VarTypeUnknown, Units: strPtr("1"), Shape: dims("steps")},
+					"z": {Type: VarTypeUnknown, Units: strPtr("1"), Shape: dims("steps")},
+				},
+				eqs,
+			)
+			model := file.Models["M"]
+			c := NewCadenceClassifier(file, &model)
+			_, err := c.LeafSeeds()
+			if err == nil {
+				t.Fatalf("expected %s, got nil: the self-edge drop must not suppress real "+
+					"cycle detection", CodeCadenceObservedCycle)
+			}
+			var ce *CadenceError
+			if !errorAsCadence(err, &ce) || ce.Code != CodeCadenceObservedCycle {
+				t.Errorf("got %v, want a CadenceError(%s)", err, CodeCadenceObservedCycle)
+			}
+		})
+	}
+
+	// A SCALAR self-mention: no shape, so no axis to fold along and never a
+	// candidate however it is spelled.
+	t.Run("scalar self-mention", func(t *testing.T) {
+		file := recurrenceTestFileWithSets(
+			map[string]IndexSet{"steps": {Kind: "interval", Size: &steps}},
+			map[string]ModelVariable{
+				"y": {Type: VarTypeUnknown, Units: strPtr("1")},
+			},
+			[]Equation{{LHS: "y", RHS: ExprNode{Op: "+", Args: []any{"y", 1.0}}}},
+		)
+		model := file.Models["M"]
+		c := NewCadenceClassifier(file, &model)
+		if _, err := c.LeafSeeds(); err == nil {
+			t.Fatalf("expected %s for a scalar self-mention, got nil", CodeCadenceObservedCycle)
+		}
+	})
+}
+
+// selfReadOf is selfRead for an array other than the default `s`.
+func selfReadOf(array string, args ...any) ExprNode {
+	return ExprNode{Op: opIndex, Args: append([]any{array}, args...)}
+}
+
+// errorAsCadence is errors.As specialized to *CadenceError, kept local so this
+// file needs no import for one call.
+func errorAsCadence(err error, target **CadenceError) bool {
+	if ce, ok := err.(*CadenceError); ok {
+		*target = ce
+		return true
+	}
+	return false
+}
+
+// TestCadenceExemptionIsGatedOnCandidacyNotVerdict is the test that tells the
+// two gates apart, and the only one that would catch the flip.
+//
+// An ILL-FOUNDED candidate — a forward self-read — must still receive the
+// self-edge exemption, because candidacy is the gate. Had the exemption been
+// gated on the well-foundedness VERDICT it would not apply here (an ill-founded
+// read is by definition not well founded), the cycle guard would fire, and the
+// document would be diagnosed as a cadence cycle instead of as
+// `recurrence_not_wellfounded`. Both halves are asserted together, since the
+// point is that the recurrence check OWNS the diagnosis for this equation:
+// cadence stays quiet and validate names the real defect.
+//
+// Every gate-flip regression fails HERE rather than in the shared corpus, which
+// on Go's layering would not notice: ApplyDAEContract and CadenceClassifier are
+// both off the validate path, so a cycle error from either cannot pre-empt the
+// corpus's (code, path) pair.
+func TestCadenceExemptionIsGatedOnCandidacyNotVerdict(t *testing.T) {
+	steps := 4
+	file := recurrenceTestFileWithSets(
+		map[string]IndexSet{"steps": {Kind: "interval", Size: &steps}},
+		map[string]ModelVariable{
+			"s": {Type: VarTypeUnknown, Units: strPtr("1"), Shape: dims("steps")},
+		},
+		[]Equation{{LHS: "s", RHS: stepsAggregate(guarded(
+			selfRead(ExprNode{Op: "+", Args: []any{"k", int64(1)}}),
+		))}},
+	)
+
+	model := file.Models["M"]
+	if _, err := NewCadenceClassifier(file, &model).LeafSeeds(); err != nil {
+		t.Errorf("an ill-founded CANDIDATE was denied the self-edge exemption: %v\n"+
+			"the exemption is gated on candidacy, not on the well-foundedness verdict "+
+			"(CONFORMANCE_SPEC §5.19.5)", err)
+	}
+
+	res := ValidateStructuralWithCodes(file)
+	found := false
+	for _, e := range res.StructuralErrors {
+		if e.Code == codeRecurrenceNotWellfounded && e.Path == "/models/M/equations/0/rhs" {
+			found = true
+		}
+		if e.Code == CodeCadenceObservedCycle {
+			t.Errorf("the recurrence diagnosis was pre-empted by %s", CodeCadenceObservedCycle)
+		}
+	}
+	if !found {
+		t.Errorf("no %s at /models/M/equations/0/rhs: %+v",
+			codeRecurrenceNotWellfounded, res.StructuralErrors)
+	}
+}
