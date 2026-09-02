@@ -455,6 +455,16 @@ class ModelVariable:
     # Staggered-grid location tag (e.g. "cell_center", "edge_normal",
     # "vertex"). None means no explicit staggering. See RFC §10.2.
     location: str | None = None
+    # Floating-point precision of THIS variable and of the arithmetic over it,
+    # overriding the document-wide ``domain.element_type`` (esm-spec §11.3.1).
+    # ``"Float32"`` | ``"Float64"``; None means the document's. Carried because a
+    # recurrence's CARRIED value is a cell of the variable being defined, so it
+    # must be rounded to this precision at every cell of the fold rather than
+    # once when the finished array is read (CONFORMANCE_SPEC §5.19.3a) -- and a
+    # binding that dropped the declaration folded a `real*4` document in binary64
+    # and produced a BETTER answer than the reference it was checked against,
+    # which is the failure mode hardest to notice.
+    element_type: str | None = None
     # Parameter-only. Mutually exclusive with `default`.
     distribution: Distribution | None = None
     # Parameter-only: EITHER one rule, OR an ordered list of >= 2 applied in

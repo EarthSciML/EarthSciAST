@@ -510,6 +510,7 @@ def _parse_model_variable(var_data: dict[str, Any]) -> ModelVariable:
         description=var_data.get("description"),
         shape=shape,
         location=var_data.get("location"),
+        element_type=var_data.get("element_type"),
         distribution=_parse_distribution(distribution) if distribution is not None else None,
         update=_parse_parameter_update_spec(update) if update is not None else None,
     )

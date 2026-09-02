@@ -252,6 +252,20 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
         if kind == "unknown":
             definitions = derived["observed_defs"]
             if leaf in definitions:
+                if _resolving and _resolving[-1] == leaf:
+                    # The SELF-EDGE of a causal self-reference (esm-spec
+                    # §4.3.1.1): `V` read inside `V`'s own defining equation.
+                    # Dropped from the observed dependency graph, because a
+                    # well-founded causal self-read is an ORDERING within one
+                    # variable — the sweep publishes each cell before the axis
+                    # advances — rather than a dependency between two. Its
+                    # cadence contributes the lattice's bottom, which is the
+                    # identity of the join: the class of a cell the sweep
+                    # already wrote is the class of this very body, so the
+                    # remaining leaves decide it and the self-read adds nothing.
+                    # An edge between two DISTINCT variables still closes a
+                    # cycle below and is still rejected.
+                    return "const"
                 if leaf in _resolving:
                     raise CadenceError(
                         f"observed definition cycle through {leaf!r}: "

@@ -44,7 +44,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import index_alignment, op_registry
+from . import index_alignment, op_registry, recurrence
 from .classification import (
     algebraic_unknowns,
     observed_definitions,
@@ -507,6 +507,130 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                                 "semiring": agg.get("semiring"),
                             },
                         )
+
+
+# ---------------------------------------------------------------------------
+# Causal self-reference (recurrence) well-foundedness — esm-spec §4.3.1.1
+# ---------------------------------------------------------------------------
+#
+# The STATIC half of the construct, and the half every binding implements
+# whether or not it evaluates anything (CONFORMANCE_SPEC §5.19.5). The analysis
+# itself lives in :mod:`earthsci_ast.recurrence`, shared verbatim with the
+# evaluator, so a document cannot validate here and then be refused (or, worse,
+# quietly mis-swept) there.
+#
+# The rule is deliberately CONSERVATIVE about a lag it cannot prove: a lag that
+# straddles zero, and one nothing static can bound at all (a parameter-valued
+# offset), are both ADMITTED, because the runtime is fail-closed — a cell the
+# sweep has not published cannot be read at all. So the static check's job is
+# only to reject what is PROVABLY wrong and to identify the axis, never to
+# certify what is right. A VALIDATOR necessarily proves less than an EVALUATOR,
+# which has resolved every range against the registry first, and one that
+# treated "unproven" as "illegal" would reject documents its own evaluator
+# accepts.
+
+
+def _recurrence_symbol_bounds(spec: Any, index_sets: dict[str, Any]) -> tuple[int, int] | None:
+    """Bounds of an index symbol as the VALIDATOR can resolve them.
+
+    A dense literal interval, a strided range's endpoints, an ``interval`` index
+    set's ``1..size``, or a ``categorical`` set's ``1..len(members)``. Anything
+    else is unknown — and an unknown symbol makes a lag UNPROVABLE rather than
+    illegal, which is why this returns ``None`` instead of raising."""
+    if isinstance(spec, (list, tuple)):
+        if len(spec) == 2:
+            lo, hi = spec
+        elif len(spec) == 3:
+            lo, _step, hi = spec
+        else:
+            return None
+        if isinstance(lo, bool) or isinstance(hi, bool):
+            return None
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            return (int(lo), int(hi))
+        return None
+    if isinstance(spec, dict) and spec.get("of") is None:
+        name = spec.get("from")
+        entry = index_sets.get(name) if isinstance(name, str) else None
+        if not isinstance(entry, dict):
+            return None
+        # `interval` by declared size, `categorical` by member count. Both are
+        # 1-origin dense ranges at evaluation and the EVALUATOR resolves both
+        # before it sweeps, so leaving `categorical` out here would make the
+        # validator prove less than the evaluator and reject a document the
+        # evaluator accepts.
+        if entry.get("kind") == "interval":
+            size = entry.get("size")
+            return (1, int(size)) if isinstance(size, int) else None
+        if entry.get("kind") == "categorical":
+            members = entry.get("members")
+            return (1, len(members)) if isinstance(members, list) else None
+    return None
+
+
+def _recurrence_lhs_target(lhs: Any) -> str | None:
+    """The variable an equation DEFINES, if its LHS names one.
+
+    A bare variable, or the §4.3 indexed-aggregate LHS form
+    ``aggregate{expr: index(V, k…)}``. A derivative LHS (``D(u)``) defines no
+    array algebraically — a stencil read of ``u`` at ``i−1`` there is a gather on
+    the SOLVER's state vector, not a self-reference — so it deliberately yields
+    ``None``."""
+    if isinstance(lhs, str):
+        return lhs
+    if isinstance(lhs, dict) and lhs.get("op") == "aggregate":
+        inner = lhs.get("expr")
+        if isinstance(inner, dict) and inner.get("op") == "index":
+            args = inner.get("args") or []
+            if args and isinstance(args[0], str):
+                return args[0]
+    return None
+
+
+def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> None:
+    """Reject a causal self-read that is not a well-founded causal read.
+
+    Emitted as ``(code, json_pointer, message, details)`` 4-tuples at the
+    containing equation's ``rhs`` — the pointer convention the rest of this
+    module's equation-level findings use — with the esm-spec §4.3.1.1 code
+    (``recurrence_not_wellfounded`` / ``recurrence_unsupported_form``).
+
+    Emits nothing for an equation whose RHS contains no self-read, which is every
+    equation of every document that does not use the construct."""
+    index_sets = data.get("index_sets") or {}
+
+    def bounds(spec: Any) -> tuple[int, int] | None:
+        return _recurrence_symbol_bounds(spec, index_sets)
+
+    for mname, m in (data.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        variables = m.get("variables") or {}
+        for i, eq in enumerate(m.get("equations") or []):
+            if not isinstance(eq, dict):
+                continue
+            var = _recurrence_lhs_target(eq.get("lhs"))
+            if var is None:
+                continue
+            decl = variables.get(var)
+            # Only an ARRAY-shaped unknown can carry a recurrence: a scalar has
+            # no axis to fold along, and a self-read of a parameter is not a
+            # definition at all.
+            if not (isinstance(decl, dict) and decl.get("shape")):
+                continue
+            try:
+                recurrence.analyze_recurrence(
+                    var, eq.get("lhs"), eq.get("rhs"), symbol_bounds=bounds
+                )
+            except recurrence.RecurrenceError as err:
+                errors.append(
+                    (
+                        err.code,
+                        _pointer(f"models/{mname}/equations[{i}]/rhs"),
+                        err.message,
+                        {"variable": var},
+                    )
+                )
 
 
 def _check_expression_arity(expr, errors: list[str], path: str) -> None:
@@ -2529,6 +2653,15 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     # its own explicit code via a 4-tuple, so the collect-level code is only a
     # fallback label. F-6 (five static validate() checks).
     collect("aggregate_semantics", lambda sub: _check_aggregate_semantics(data, sub))
+    # A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along
+    # exactly one axis. Each finding carries its own code via a 4-tuple; the
+    # collect-level label is a fallback only. Rejection parity is a duty of every
+    # binding, executing or not (CONFORMANCE_SPEC §5.19.5) -- the pre-1.0
+    # behaviour for these shapes was a plausible wrong number.
+    collect(
+        "recurrence_not_wellfounded",
+        lambda sub: _check_recurrence_wellfoundedness(data, sub),
+    )
     # A coupling edge's `from` is a FULLY-QUALIFIED scoped reference (§4.6), so an
     # unresolvable one is an `unresolved_scoped_ref`, not a bare
     # `undefined_variable` (CONFORMANCE_SPEC §7.1; TypeScript reference).

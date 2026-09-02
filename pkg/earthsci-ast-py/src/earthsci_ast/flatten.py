@@ -188,6 +188,11 @@ class FlattenedVariable:
     # ``distribution`` is the sampling law. Both are None for an unknown.
     update: Any = None
     distribution: Any = None
+    # The variable's declared ``element_type`` (esm-spec §11.3.1), carried
+    # verbatim so the flattened form stays self-describing: an evaluator must be
+    # able to fold a `real*4` recurrence at the declared precision from the
+    # FlattenedSystem alone, without re-reading the source document.
+    element_type: str | None = None
 
 
 @dataclass
@@ -1016,6 +1021,7 @@ def _collect_model(
             shape=list(var.shape) if var.shape else None,
             update=var.update,
             distribution=var.distribution,
+            element_type=var.element_type,
         )
         if role == "state":
             component.state_vars[namespaced] = flat_var
