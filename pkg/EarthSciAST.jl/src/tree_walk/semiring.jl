@@ -162,8 +162,20 @@ end
 #     canonical range order, defined only for TWO candidates. Three or more is an
 #     error naming them, because taking two of three would be a guess and a guess
 #     here reads as a plausible number rather than as a failure.
+#
+# `via` says WHICH resolution step is asking, and only one of the two has a gap
+# the default can fill:
+#   * `:binder` — the key names an INDEX SET (§5.5.8 precedence step 1). An
+#     author who meant a particular side can already name the RANGE SYMBOL
+#     instead, which is what the historic diagnostic advises, so an ambiguous set
+#     stays an error and only an explicit `syms` resolves it.
+#   * `:column_axis` — the symbol came from a DATA COLUMN's declared 1-D axis
+#     (step 2). Here there is nothing else the author can write: the pair holds
+#     column names and the axis is a property of the column, not of the clause.
+#     This is the self-join case, and the one the default exists for.
 function _join_sym_for_key(key::String, ranges::AbstractDict, sym_to_set::AbstractDict,
-                           pick=:left, order::Union{Nothing,Vector{String}}=nothing)
+                           pick=:left, order::Union{Nothing,Vector{String}}=nothing,
+                           via::Symbol=:binder)
     if haskey(ranges, key)
         # A key naming a range symbol OUTRIGHT is already unambiguous; `syms`
         # may not contradict it.
@@ -192,6 +204,13 @@ function _join_sym_for_key(key::String, ranges::AbstractDict, sym_to_set::Abstra
         throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
             "join key '$key' is neither a declared range symbol nor an index set " *
             "bound by a range of this aggregate (RFC semiring-faq-unified-ir §5.3)"))
+    elseif via === :binder
+        # A key that NAMES the index set can already say which side it means by
+        # naming the range symbol instead, so the historic rejection stands.
+        throw(TreeWalkError("E_TREEWALK_JOIN_AMBIGUOUS_KEY",
+            "join key '$key' names an index set bound by multiple range symbols " *
+            "$(candidates); reference the range symbol directly, or name this " *
+            "clause's two sides with `join.syms` (RFC §5.3 / CONFORMANCE_SPEC §5.5.8)"))
     elseif length(candidates) == 2
         return candidates[pick === :right ? 2 : 1]
     else
@@ -419,7 +438,7 @@ function _join_key_column_sym(col::String, ranges::AbstractDict,
             "single shape index set naming one of the node's ranges)"))
         setn = String(shape[1])
     end
-    return _join_sym_for_key(setn, ranges, sym_to_set, pick, order)
+    return _join_sym_for_key(setn, ranges, sym_to_set, pick, order, :column_axis)
 end
 
 # The build-time VALUES of a data-column key at each of `positions`. §5.5.8
@@ -530,7 +549,8 @@ function _overlap_env_sym(env_names::AbstractVector, ranges::AbstractDict,
         "E_TREEWALK_JOIN_OVERLAP",
         "overlap join env factor '$fname' must be a 1-D buffer whose shape index " *
         "set names the join range; shape=$(shape === nothing ? "<unknown>" : shape)"))
-    return _join_sym_for_key(String(shape[1]), ranges, sym_to_set, pick, order)
+    return _join_sym_for_key(String(shape[1]), ranges, sym_to_set, pick, order,
+                             :column_axis)
 end
 
 # Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3 /

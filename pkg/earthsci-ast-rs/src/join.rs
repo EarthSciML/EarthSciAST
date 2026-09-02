@@ -562,7 +562,7 @@ struct ResolvedSide {
 /// of the node's ranges — the SELF-JOIN disambiguation of CONFORMANCE_SPEC
 /// §5.5.8. Irrelevant when the axis has a single candidate, which is every
 /// join between two distinct relations.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Pick<'a> {
     /// The clause said so, in `join.syms`.
     Named(&'a str),
@@ -570,6 +570,30 @@ enum Pick<'a> {
     Left,
     /// The RIGHT key of a pair: the LATER candidate.
     Right,
+}
+
+/// WHICH resolution step is asking, which decides whether the DEFAULT side
+/// assignment ([`Pick::Left`] / [`Pick::Right`]) applies at all.
+///
+/// The two steps face different ambiguities, and only one of them is a gap in
+/// the format:
+///
+/// * [`Via::Binder`] — the key names an INDEX SET (§5.5.8 precedence step 1).
+///   An author who meant a particular side can already say so by naming the
+///   RANGE SYMBOL instead, which is exactly what the historic diagnostic
+///   advises, so an ambiguous set stays an error however many candidates it
+///   has. Only an explicit `join.syms` resolves it.
+/// * [`Via::ColumnAxis`] — the key names a DATA COLUMN and the symbol comes
+///   from the column's declared axis (step 2). Here there is nothing else the
+///   author can write: the pair holds column names and the axis is a property
+///   of the column, not of the clause. This is the self-join case, and the one
+///   the default assignment exists for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Via {
+    /// The key named a range symbol or an index set.
+    Binder,
+    /// The symbol came from a data column's (or envelope factor's) 1-D axis.
+    ColumnAxis,
 }
 
 /// A node's canonical range order: the `output_idx` symbols that are ranges, in
@@ -648,7 +672,7 @@ fn resolve_side(
     var_shapes: &HashMap<String, Vec<String>>,
     pick: Pick,
 ) -> Result<Option<ResolvedSide>, CompileError> {
-    if let Some(sym) = resolve_key(key, declared, set_to_syms, pick)? {
+    if let Some(sym) = resolve_key(key, declared, set_to_syms, pick, Via::Binder)? {
         let (positions, values) = key_column(&sym, ranges, index_sets)?;
         return Ok(Some(ResolvedSide {
             sym,
@@ -657,7 +681,7 @@ fn resolve_side(
     }
     if let Some(shape) = var_shapes.get(key)
         && shape.len() == 1
-        && let Some(sym) = resolve_key(&shape[0], declared, set_to_syms, pick)?
+        && let Some(sym) = resolve_key(&shape[0], declared, set_to_syms, pick, Via::ColumnAxis)?
     {
         return Ok(Some(ResolvedSide {
             sym,
@@ -805,7 +829,7 @@ pub fn resolve_overlap_syms_expr(expr: &mut Expr, var_shapes: &HashMap<String, V
             // unresolvable side leaves the symbol `None` and the driver simply
             // declines the gate, which is safe because an overlap broad phase
             // sits behind the author's own narrow-phase `filter`.
-            resolve_key(&shape[0], &declared, &set_to_syms, pick).unwrap_or(None)
+            resolve_key(&shape[0], &declared, &set_to_syms, pick, Via::ColumnAxis).unwrap_or(None)
         };
         if let Some(joins) = &mut node.join {
             for clause in joins.iter_mut() {
@@ -841,6 +865,7 @@ fn resolve_key(
     declared: &HashSet<&str>,
     set_to_syms: &HashMap<&str, Vec<&str>>,
     pick: Pick,
+    via: Via,
 ) -> Result<Option<String>, CompileError> {
     if declared.contains(key) {
         // A key naming a range symbol OUTRIGHT is already unambiguous; `syms`
@@ -876,6 +901,15 @@ fn resolve_key(
             // The ordinary join of two distinct relations: one candidate, and
             // both sides of a pair resolve to it independently of `pick`.
             1 => Ok(Some(syms[0].to_string())),
+            // A key that NAMES the index set can already say which side it
+            // means by naming the range symbol instead, so the default
+            // assignment does not apply and the historic rejection stands.
+            _ if via == Via::Binder => Err(CompileError::build_err(format!(
+                "join key '{key}' names an index set bound by multiple range symbols \
+                 {syms:?}; reference the range symbol directly, or name this clause's two \
+                 sides with `join.syms` (RFC semiring-faq-unified-ir §5.3 / \
+                 CONFORMANCE_SPEC §5.5.8)"
+            ))),
             2 => Ok(Some(
                 syms[usize::from(matches!(pick, Pick::Right))].to_string(),
             )),
