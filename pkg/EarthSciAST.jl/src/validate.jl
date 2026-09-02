@@ -551,6 +551,13 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     #     align (esm-spec §4.3.4 "Broadcast compatibility").
     append!(errors, validate_broadcast_semantics(file))
 
+    # 5c''. Causal-self-reference well-foundedness (esm-spec §4.3.1.1). A
+    # recurrence is recognized STRUCTURALLY — no new op, no new schema field —
+    # so nothing but this pass stands between an ill-founded self-read and a
+    # plausible wrong number. Both codes are owed by every binding, executing or
+    # not (CONFORMANCE_SPEC §5.19.5 rejection parity).
+    append!(errors, validate_recurrence_semantics(file))
+
     # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
     # The flatten path already rejects this via `_check_variable_map_units`
     # (`DomainUnitMismatchError`); mirror it as a `domain_unit_mismatch` structural
