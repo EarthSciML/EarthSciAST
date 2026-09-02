@@ -58,6 +58,16 @@ include("testutils.jl")
 
     # Spec-mandated load-time rewrites. Key: path relative to the repo root.
     TRANSFORMED_AT_LOAD = Dict{String,String}(
+        # esm-spec §8.2.1: a scheme-less `source.url_template` is a filesystem
+        # path, and a relative one resolves at load against the directory of the
+        # file that declared it — the same base and the same timing rule §4.7
+        # fixes for a `ref`. So the emitted template is the resolved absolute
+        # `file://` URL, which is machine-specific; the resolved values are
+        # pinned as repo-relative paths in
+        # tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC
+        # §5.19) rather than as a golden here.
+        "tests/valid/data_source_relative_url.esm" =>
+            "esm-spec §8.2.1: a relative `source.url_template` resolves against the declaring file's directory",
         # §9.6.4 rule 3 eager template expansion / rule 5 `match`-only registry drop.
         "tests/valid/advection_reaction_loaded_ic_bc.esm" =>
             "esm-spec §9.6.4 rule 3: eager expansion of the derivative templates",
