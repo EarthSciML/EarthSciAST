@@ -127,6 +127,50 @@ inspects the head of a dotted name.
   `equijoin` match set and the same `reduce_contraction_gated` plans as any
   other `on` gate, so it is `O(|L| + |R| + |matches|)` and never the product.
 
+## 2.5 Two resolution steps, one of which has the gap
+
+§2.2's default applies to the DATA-COLUMN step only, and the distinction is
+load-bearing. §5.5.8 resolves a key in two steps:
+
+1. the key names a **loop symbol or an index set**;
+2. otherwise it names a **data column**, and the symbol comes from the column's
+   declared 1-D axis.
+
+An ambiguity in step 1 is one the author can already fix without any new
+syntax: name the range symbol instead of the index set, which is exactly what
+the pre-existing diagnostic advises. So an index-set key drawn by several
+symbols stays an **error**, however many candidates it has, and only `syms`
+resolves it. An ambiguity in step 2 is one the author cannot fix at all — the
+pair holds column names, and the axis is a property of the column rather than
+of the clause. That is where the default belongs, and only there.
+
+Without the split, `on: [["county", "i"]]` with `i` and `j` both drawing
+`county` would resolve its left key to `i` by default, find the right key
+already naming `i`, and drop the pair as a tautology: a build error traded for
+an ungated full product. Adding a capability must not remove a diagnostic.
+
+## 2.6 Why this lands without a schema version bump
+
+`SCHEMA_CHANGE_PROCEDURE.md` calls for a MINOR bump on a new optional field,
+and this note deliberately does not take one. `syms` is purely additive: every
+document written before it validates and evaluates unchanged, and a document
+using it needs no version declaration to be accepted (the version gate rejects
+only a MAJOR mismatch).
+
+What a bump would cost is not in this feature. `1.0.0` is the floor AND the
+current ceiling of the migration additive line, and the shared, cross-binding
+fixture set `tests/version_compatibility/` exists to pin what happens on either
+side of it — `version_1_1_0_minor_upgrade.esm` asserts that a MINOR above
+current has no migration target, `version_1_0_5_patch_upgrade.esm` and
+`version_1_0_100_large_patch.esm` likewise. Moving current to `1.1.0` inverts
+all three expectations, plus `compatibility_matrix.json`'s `library_version`
+and its README, in a fixture set all five bindings read. Measured: the bump
+alone turned 12 green Python tests red, none of them about joins.
+
+That is a release decision about the migration contract, not a consequence of
+adding a field, and it belongs in its own change. The schema `description`
+records the new field so it is not undocumented in the meantime.
+
 ## 3. Determinism
 
 Both parts of §2 are pure functions of the document. The default consults only

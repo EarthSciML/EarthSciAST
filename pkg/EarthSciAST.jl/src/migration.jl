@@ -109,7 +109,7 @@ carries; the behaviour is identical.
 
 # Examples
 ```julia
-supported_migration_targets("1.0.0")   # ["1.1.0"]
+supported_migration_targets("1.0.0")   # ["1.0.0"]
 supported_migration_targets("0.9.0")   # String[]  — the clean break
 supported_migration_targets("2.0.0")   # String[]
 supported_migration_targets("1.0")     # String[]  — malformed

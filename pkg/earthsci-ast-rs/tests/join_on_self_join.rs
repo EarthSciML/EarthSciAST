@@ -170,7 +170,7 @@ fn doc(t: &Table, key_col: &str, spelling: Spelling) -> Value {
         }
     }
     json!({
-        "esm": "1.1.0",
+        "esm": "1.0.0",
         "metadata": {"name": "self_join"},
         "index_sets": {"rows": {"kind": "interval", "size": t.n}},
         "models": {"S": {

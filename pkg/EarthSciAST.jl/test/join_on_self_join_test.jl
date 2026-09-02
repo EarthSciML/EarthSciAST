@@ -45,7 +45,7 @@ function _self_join_doc(n::Int; key_col = "row_prior", syms = nothing,
                         range_syms = ["a", "b"], out_sym = "a")
     clause = Dict{String,Any}("on" => [[key_col, "row_id"]])
     syms === nothing || (clause["syms"] = syms)
-    Dict("esm" => "1.1.0",
+    Dict("esm" => "1.0.0",
          "metadata" => Dict("name" => "self_join"),
          "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => n)),
          "models" => Dict("S" => Dict(
