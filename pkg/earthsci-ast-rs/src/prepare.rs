@@ -599,6 +599,26 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
 // namespaced model names, and every dotted key additionally surfaces under its
 // unique shallowest bare tail — the spelling the authored expressions use).
 // --------------------------------------------------------------------------- //
+/// Round an array of EXTERNAL data to the active working precision
+/// (`crate::precision`, esm-spec §11.3.1).
+///
+/// Loaded data is the one class of value the evaluator does not itself produce,
+/// so under `element_type: "Float32"` it is rounded ONCE here rather than on
+/// each of the O(N) reads of it; every value computed downstream is already
+/// binary32 because every operation rounds. Identity under Float64.
+///
+/// Applied only to genuinely external arrays — a caller's `const_arrays`, a
+/// provider sample, a gated fetch. NOT to a member-id factor (invented integer
+/// ids, which binary32 would corrupt above 2^24) and not to an
+/// evaluator-produced field (already binary32, so it would be a no-op sweep).
+fn round_external(mut a: ArrayD<f64>) -> ArrayD<f64> {
+    let prec = crate::precision::active();
+    if prec.is_f32() {
+        a.mapv_inplace(|x| prec.round(x));
+    }
+    a
+}
+
 fn inject_aliases(arrays: &mut ArrMap, coupling: &[(String, String)]) {
     // The coupling routing is AUTHORITATIVE: a `variable_map` explicitly binds
     // the loader field to the model variable, so surface the array under both
@@ -1359,7 +1379,10 @@ impl<'o> BuildState<'o> {
         mut discovered: HashMap<String, ArrayD<f64>>,
         pd_gates: &HashMap<String, ProviderGate>,
     ) -> Result<Vec<GatedProvider>, PrepareError> {
-        self.arrays = const_arrays.into_iter().collect();
+        self.arrays = const_arrays
+            .into_iter()
+            .map(|(k, a)| (k, round_external(a)))
+            .collect();
         let mut gated: Vec<GatedProvider> = Vec::new();
         let n_providers = providers.len();
         for (i, (k, mut prov)) in providers.into_iter().enumerate() {
@@ -1372,7 +1395,7 @@ impl<'o> BuildState<'o> {
             if let Some(a) = discovered.remove(&k) {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
-                self.arrays.insert(k, a);
+                self.arrays.insert(k, round_external(a));
             } else if let Some(gate) = pd_gates.get(&k) {
                 // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
                 // defer — value-invention must derive the gating set's members
@@ -1394,7 +1417,7 @@ impl<'o> BuildState<'o> {
                     "  [prepare] const provider {k} -> {:?}",
                     a.shape()
                 ));
-                self.arrays.insert(k, a);
+                self.arrays.insert(k, round_external(a));
             }
         }
         self.report(
@@ -1694,7 +1717,7 @@ impl<'o> BuildState<'o> {
                 "  [prepare] gated fetch {key} -> {target} {:?}",
                 arr.shape()
             ));
-            self.arrays.insert(target, arr);
+            self.arrays.insert(target, round_external(arr));
         }
         self.report(
             PreparePhase::GatedFetch,
