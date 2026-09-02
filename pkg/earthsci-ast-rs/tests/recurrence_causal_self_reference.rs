@@ -162,6 +162,26 @@ fn float32_recurrence_carries_binary32_state_at_every_step() {
     );
 }
 
+/// **The real lag scale.** Thirty-eight distinct lags with thirty-eight
+/// distinct weights, in ONE node, with a clamp inside the fold that fires at 19
+/// of the 40 cells and alters 38 of the 40 values.
+///
+/// This is the fixture that answers the three design questions at once. The lag
+/// is symbol-valued, so thirty-eight lags are one `index(r, y − a)` rather than
+/// thirty-eight authored terms. The per-lag weights all differ, so no single
+/// carried value summarizes the history — which is exactly why §4.3.1's prefix
+/// scan, whose entire optimization is one accumulator, declines a body that
+/// reads its own output, and why widening it would not have been enough. And
+/// the clamp makes the recurrence non-linear, so no linear closed form
+/// reproduces these numbers.
+///
+/// The expected values come from an independent ascending fold in Python, not
+/// from running the document.
+#[test]
+fn thirty_eight_distinct_lags_in_one_node_evaluate() {
+    assert_fixture_passes("07_recurrence_thirty_eight_lags.esm");
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fail-closed reads
 // ---------------------------------------------------------------------------
