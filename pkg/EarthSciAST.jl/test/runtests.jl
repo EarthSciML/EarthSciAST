@@ -317,9 +317,21 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                             EarthSciAST.load_path(filepath))
                         !result.is_valid
                     catch e
+                        # `ExpressionTemplateError` is the carrier for the
+                        # LOWERING-pass diagnostics -- esm-spec §9.6/§9.7
+                        # template + metaparameter codes, §10.9-§10.11 coupling
+                        # codes, and §8.2.1 `data_source_url_unresolved`. It
+                        # belongs on this list for the same reason the other
+                        # three do; it was absent only because this sweep is
+                        # NON-RECURSIVE (`readdir`, not `walkdir`), so the
+                        # §9.7 fixtures that raise it live one directory down
+                        # in tests/invalid/template_imports/ and never reached
+                        # here. tests/invalid/data_source_url_env_var.esm is
+                        # the first top-level fixture that raises it.
                         (e isa EarthSciAST.ParseError ||
                          e isa EarthSciAST.SchemaValidationError ||
-                         e isa EarthSciAST.SubsystemRefError) || rethrow()
+                         e isa EarthSciAST.SubsystemRefError ||
+                         e isa EarthSciAST.ExpressionTemplateError) || rethrow()
                         true
                     end
                     if rejected
