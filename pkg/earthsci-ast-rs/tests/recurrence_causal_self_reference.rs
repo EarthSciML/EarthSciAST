@@ -182,6 +182,35 @@ fn thirty_eight_distinct_lags_in_one_node_evaluate() {
     assert_fixture_passes("07_recurrence_thirty_eight_lags.esm");
 }
 
+/// A lag no static analysis can bound: `s[k] = 3·s[k−n]` with `n` a parameter.
+///
+/// Admitted, not rejected — and the reason is the design's load-bearing
+/// observation. The COEFFICIENT of the frame symbol must be provable, or the
+/// read names no position relative to the cell being written. The lag's SIGN
+/// need not be, because a self-read resolves only against published cells, so
+/// an ill-founded read faults rather than returning a number.
+///
+/// This also keeps the validator and the evaluator from disagreeing. The
+/// validator necessarily proves less — it sees ranges before they are resolved
+/// against the registry — so a validator that treated "unproven" as "illegal"
+/// would reject documents its own evaluator accepts.
+#[test]
+fn a_parameter_valued_lag_is_admitted_and_evaluates() {
+    assert_fixture_passes("08_recurrence_parameter_valued_lag.esm");
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/recurrence/08_recurrence_parameter_valued_lag.esm");
+    let file = load_path(&path).expect("fixture parses");
+    let recurrence: Vec<_> = earthsci_ast::validate(&file)
+        .structural_errors
+        .into_iter()
+        .filter(|e| e.code.to_string().starts_with("recurrence_"))
+        .collect();
+    assert!(
+        recurrence.is_empty(),
+        "the validator must admit what the evaluator accepts, got {recurrence:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fail-closed reads
 // ---------------------------------------------------------------------------

@@ -1343,43 +1343,77 @@ fn recur_err(code: &str, detail: String) -> CompileError {
 }
 
 /// The affine form of an index expression with respect to the frame symbol
-/// `sym`: `(coefficient of sym, [lo, hi] of the constant part)`. `None` when the
-/// expression is not affine in `sym` over provable integer bounds.
+/// `sym`: the coefficient of `sym`, plus the integer bounds of the symbol-free
+/// part — `None` when those bounds cannot be proved.
 ///
-/// Deliberately small — integer literals, index symbols with a resolved range,
-/// `+`, `-`, and multiplication by an integer literal. Anything else is
-/// unprovable and is REJECTED rather than assumed well-founded.
-fn affine_in_sym(
-    e: &Expr,
-    sym: &str,
-    env: &HashMap<String, (i64, i64)>,
-) -> Option<(i64, i64, i64)> {
+/// The two halves carry different weight. The **coefficient** must be provable:
+/// unless the expression carries `sym` exactly once with coefficient 1 it does
+/// not name a position relative to the cell being written, and there is nothing
+/// to interpret. The **constant part** need not be: an unprovable offset is a
+/// lag whose sign is unknown, which esm-spec §4.3.1.1 admits and leaves to the
+/// runtime's fail-closed read — a cell the sweep has not published cannot be
+/// read, so an unprovable lag cannot produce a wrong number, only a fault.
+///
+/// Treating an unresolvable symbol as fatal instead would make the VALIDATOR
+/// reject documents the evaluator accepts (it resolves ranges against the
+/// registry first and so proves more), which is the one disagreement between
+/// the two that is never defensible.
+struct Affine {
+    coef: i64,
+    konst: Option<(i64, i64)>,
+}
+
+fn affine_in_sym(e: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> Option<Affine> {
+    let konst = |lo: i64, hi: i64| {
+        Some(Affine {
+            coef: 0,
+            konst: Some((lo, hi)),
+        })
+    };
     match e {
-        Expr::Integer(n) => Some((0, *n, *n)),
+        Expr::Integer(n) => konst(*n, *n),
         Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
             let n = *f as i64;
-            Some((0, n, n))
+            konst(n, n)
         }
-        Expr::Variable(v) if v == sym => Some((1, 0, 0)),
-        Expr::Variable(v) => env.get(v).map(|(lo, hi)| (0, *lo, *hi)),
+        Expr::Variable(v) if v == sym => Some(Affine {
+            coef: 1,
+            konst: Some((0, 0)),
+        }),
+        Expr::Variable(v) => Some(Affine {
+            coef: 0,
+            konst: env.get(v).copied(),
+        }),
         Expr::Operator(node) if node.args.len() == 2 => {
-            let (ca, la, ha) = affine_in_sym(&node.args[0], sym, env)?;
-            let (cb, lb, hb) = affine_in_sym(&node.args[1], sym, env)?;
+            let a = affine_in_sym(&node.args[0], sym, env)?;
+            let b = affine_in_sym(&node.args[1], sym, env)?;
+            let both = a.konst.zip(b.konst);
             match node.op.as_str() {
-                "+" => Some((ca + cb, la + lb, ha + hb)),
-                "-" => Some((ca - cb, la - hb, ha - lb)),
-                // Scaling only by a symbol-free integer, and only when its
-                // value is pinned (lo == hi) — otherwise the product is not
-                // affine with a known coefficient.
-                "*" if cb == 0 && lb == hb => {
-                    let k = lb;
-                    let (p, q) = (la * k, ha * k);
-                    Some((ca * k, p.min(q), p.max(q)))
-                }
-                "*" if ca == 0 && la == ha => {
-                    let k = la;
-                    let (p, q) = (lb * k, hb * k);
-                    Some((cb * k, p.min(q), p.max(q)))
+                "+" => Some(Affine {
+                    coef: a.coef + b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
+                }),
+                "-" => Some(Affine {
+                    coef: a.coef - b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
+                }),
+                // Scaling only by a symbol-free integer whose value is PINNED
+                // (`lo == hi`): otherwise the product is not affine with a known
+                // coefficient, and the coefficient is the half that must be
+                // provable.
+                "*" => {
+                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
+                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
+                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
+                        _ => return None,
+                    };
+                    Some(Affine {
+                        coef: other.coef * k,
+                        konst: other.konst.map(|(lo, hi)| {
+                            let (p, q) = (lo * k, hi * k);
+                            (p.min(q), p.max(q))
+                        }),
+                    })
                 }
                 _ => None,
             }
@@ -1413,12 +1447,22 @@ enum SelfIdx {
 fn classify_self_index(arg: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> SelfIdx {
     // lag = sym - arg. `arg` must carry `sym` with coefficient exactly 1, or
     // "the previous position along this axis" is not what it names.
-    let Some((coef, clo, chi)) = affine_in_sym(arg, sym, env) else {
+    let Some(Affine { coef, konst }) = affine_in_sym(arg, sym, env) else {
         return SelfIdx::Bad;
     };
     if coef != 1 {
         return SelfIdx::Bad;
     }
+    let Some((clo, chi)) = konst else {
+        // A lag whose sign could not be proved. Admitted as the recurrence
+        // axis: it is not provably wrong, and the cells where it would be
+        // ill-founded cannot be read (they are not published), so the runtime
+        // faults there instead of returning a number.
+        return SelfIdx::Offset {
+            proven: false,
+            max_lag: 0,
+        };
+    };
     let (lag_lo, lag_hi) = (-chi, -clo);
     if lag_lo == 0 && lag_hi == 0 {
         return SelfIdx::Identity;

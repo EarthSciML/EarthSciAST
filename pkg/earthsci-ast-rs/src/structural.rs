@@ -920,48 +920,92 @@ fn validator_symbol_bounds(
         crate::types::RangeSpec::Strided([lo, _, hi]) => Some((*lo, *hi)),
         crate::types::RangeSpec::IndexSetRef { from, of: None } => {
             let set = esm_file.index_sets.as_ref()?.get(from)?;
-            if set.kind != "interval" {
-                return None;
+            // `interval` by declared size, `categorical` by member count. Both
+            // are 1-origin dense ranges at evaluation, and the evaluator
+            // resolves BOTH before rule building — so leaving `categorical` out
+            // here would make the validator prove less than the evaluator and
+            // reject a document the evaluator accepts.
+            match set.kind.as_str() {
+                "interval" => Some((1, set.size?)),
+                "categorical" => Some((1, set.members.as_ref()?.len() as i64)),
+                _ => None,
             }
-            Some((1, set.size?))
         }
         _ => None,
     }
 }
 
-/// `(coefficient of `sym`, bounds of the symbol-free part)`, or `None` when the
-/// expression is not affine in `sym` over provable integer bounds. Mirrors the
-/// runtime's `affine_in_sym` exactly — the two must agree on which shapes are
-/// decidable, or the validator and the evaluator would disagree about which
-/// documents are legal.
+/// The affine form of an index expression with respect to the frame symbol
+/// `sym`: the coefficient of `sym`, plus the bounds of the symbol-free part —
+/// `None` for those bounds when they cannot be proved.
+///
+/// Mirrors the runtime's `affine_in_sym` exactly, and for the same reason the
+/// runtime splits the two halves: the **coefficient** must be provable (without
+/// it the read names no position relative to the cell being written), while an
+/// unprovable **constant part** is a lag of unknown sign, which esm-spec
+/// §4.3.1.1 admits and the runtime's fail-closed read guards.
+///
+/// The validator necessarily proves LESS than the evaluator — it sees ranges
+/// before they are resolved against the registry — so a validator that treated
+/// "unproven" as "illegal" would reject documents the evaluator accepts. That
+/// is the one disagreement between the two which is never defensible, so the
+/// unknown case is admitted here too.
+struct StructuralAffine {
+    coef: i64,
+    konst: Option<(i64, i64)>,
+}
+
 fn structural_affine_in_sym(
     e: &crate::Expr,
     sym: &str,
     env: &HashMap<String, (i64, i64)>,
-) -> Option<(i64, i64, i64)> {
+) -> Option<StructuralAffine> {
+    let konst = |lo: i64, hi: i64| {
+        Some(StructuralAffine {
+            coef: 0,
+            konst: Some((lo, hi)),
+        })
+    };
     match e {
-        crate::Expr::Integer(n) => Some((0, *n, *n)),
+        crate::Expr::Integer(n) => konst(*n, *n),
         crate::Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
             let n = *f as i64;
-            Some((0, n, n))
+            konst(n, n)
         }
-        crate::Expr::Variable(v) if v == sym => Some((1, 0, 0)),
-        crate::Expr::Variable(v) => env.get(v).map(|(lo, hi)| (0, *lo, *hi)),
+        crate::Expr::Variable(v) if v == sym => Some(StructuralAffine {
+            coef: 1,
+            konst: Some((0, 0)),
+        }),
+        crate::Expr::Variable(v) => Some(StructuralAffine {
+            coef: 0,
+            konst: env.get(v).copied(),
+        }),
         crate::Expr::Operator(node) if node.args.len() == 2 => {
-            let (ca, la, ha) = structural_affine_in_sym(&node.args[0], sym, env)?;
-            let (cb, lb, hb) = structural_affine_in_sym(&node.args[1], sym, env)?;
+            let a = structural_affine_in_sym(&node.args[0], sym, env)?;
+            let b = structural_affine_in_sym(&node.args[1], sym, env)?;
+            let both = a.konst.zip(b.konst);
             match node.op.as_str() {
-                "+" => Some((ca + cb, la + lb, ha + hb)),
-                "-" => Some((ca - cb, la - hb, ha - lb)),
-                "*" if cb == 0 && lb == hb => {
-                    let k = lb;
-                    let (p, q) = (la * k, ha * k);
-                    Some((ca * k, p.min(q), p.max(q)))
-                }
-                "*" if ca == 0 && la == ha => {
-                    let k = la;
-                    let (p, q) = (lb * k, hb * k);
-                    Some((cb * k, p.min(q), p.max(q)))
+                "+" => Some(StructuralAffine {
+                    coef: a.coef + b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
+                }),
+                "-" => Some(StructuralAffine {
+                    coef: a.coef - b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
+                }),
+                "*" => {
+                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
+                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
+                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
+                        _ => return None,
+                    };
+                    Some(StructuralAffine {
+                        coef: other.coef * k,
+                        konst: other.konst.map(|(lo, hi)| {
+                            let (p, q) = (lo * k, hi * k);
+                            (p.min(q), p.max(q))
+                        }),
+                    })
                 }
                 _ => None,
             }
@@ -983,10 +1027,15 @@ struct StructuralSelfRead<'a> {
 /// names a cell of an array that has to exist in full before the op can run, so
 /// no cell-by-cell sweep can supply it (esm-spec §4.3.1.1 `recurrence_unsupported_form`).
 fn op_blocks_cell_restriction(op: &str) -> bool {
-    matches!(
-        op,
-        "reshape" | "transpose" | "concat" | "broadcast" | "apply_expression_template"
-    )
+    // `apply_expression_template` is deliberately NOT here. Its operands ride
+    // the `bindings` field, which this walk does not visit (and must not start
+    // visiting unilaterally — five bindings mirror this field set, and §5.19.5
+    // is exact agreement), so listing it would have been a rule that barely
+    // reached what it named. It is also unreachable in practice: a template
+    // application surviving into an evaluation position is already an
+    // `unlowered_operator` error (esm-spec §9.6.4), so this list names only the
+    // ops that legitimately reach evaluation and consume an operand whole.
+    matches!(op, "reshape" | "transpose" | "concat" | "broadcast")
 }
 
 fn collect_structural_self_reads<'a>(
@@ -1235,7 +1284,8 @@ fn check_recurrence_equation(
         let mut lagged: Option<usize> = None;
         for (d, arg) in read.args.iter().enumerate() {
             let sym = &idx_names[d];
-            let Some((coef, clo, chi)) = structural_affine_in_sym(arg, sym, &env) else {
+            let Some(StructuralAffine { coef, konst }) = structural_affine_in_sym(arg, sym, &env)
+            else {
                 push(
                     errors,
                     StructuralErrorCode::RecurrenceNotWellfounded,
@@ -1262,7 +1312,27 @@ fn check_recurrence_equation(
                 );
                 return;
             }
-            // lag = sym - arg
+            // lag = sym - arg. An unprovable constant part is a lag of
+            // unknown sign: this axis IS the recurrence axis (it is not the
+            // identity), and the cells where the lag would be non-causal cannot
+            // be read because the sweep has not published them.
+            let Some((clo, chi)) = konst else {
+                if lagged.is_some() {
+                    push(
+                        errors,
+                        StructuralErrorCode::RecurrenceNotWellfounded,
+                        format!(
+                            "a causal self-read of '{var}' is offset on more than one axis. A \
+                             recurrence folds along exactly ONE axis; every other index must be \
+                             the bare frame symbol (esm-spec §4.3.1.1)."
+                        ),
+                        Some(sym),
+                    );
+                    return;
+                }
+                lagged = Some(d);
+                continue;
+            };
             let (lag_lo, lag_hi) = (-chi, -clo);
             if lag_lo == 0 && lag_hi == 0 {
                 continue;

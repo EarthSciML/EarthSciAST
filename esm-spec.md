@@ -648,9 +648,25 @@ in scope, and:
 | `hi(lag) ≤ 0` | provably the same cell, or a later one, for every value | **rejected**: `recurrence_not_wellfounded` |
 | `lo(lag) ≥ 1` | provably strictly earlier for every value | admitted; this is the recurrence axis |
 | straddling (`lo(lag) ≤ 0 < hi(lag)`) | earlier for some values of an index symbol, not for others | admitted; the cells where it is not earlier **fault** at evaluation (below) |
+| **not provable at all** | the offset involves a parameter, or a symbol whose range the checker cannot resolve | admitted, on the same footing as straddling |
 
-An index argument that is not affine in the frame symbol with coefficient 1 — a
-bare constant, `2·k_d`, another axis's symbol — is `recurrence_not_wellfounded`.
+The proof obligation is therefore split, and the split is normative. The
+**coefficient** of the frame symbol MUST be provably 1: without it the read names
+no position relative to the cell being written, and which axis the recurrence
+folds along — and in which direction — is undecidable. So an index argument that
+is not affine in its frame symbol with coefficient 1 (a bare constant, `2·k_d`,
+another axis's symbol) is `recurrence_not_wellfounded`. The **sign of the lag**
+need NOT be provable, and a checker MUST NOT reject a lag merely because it could
+not bound it: a self-read resolves only against cells the sweep has already
+published, so an ill-founded read cannot return a number — it faults (point 5
+below).
+
+That asymmetry is what keeps a binding's validator and its evaluator from
+disagreeing. A validator sees `ranges` before they are resolved against the
+`index_sets` registry and so proves strictly less than the evaluator does; a
+validator that treated "unproven" as "illegal" would reject documents its own
+evaluator accepts, which is the one divergence between the two that is never
+defensible.
 
 The **straddling** row is not a loophole; it is what lets a bounded-lag fold be
 written without enumerating its terms. The natural spelling of a fold with an

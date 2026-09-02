@@ -109,6 +109,15 @@ resolved ranges of the symbols in scope:
 | `hi(lag) ≤ 0` | **rejected** — provably same-cell or forward |
 | `lo(lag) ≥ 1` | admitted, proved strictly earlier |
 | straddling zero | admitted, **runtime-guarded** |
+| not provable at all (a parameter, an unresolvable symbol) | admitted, **runtime-guarded** |
+
+The coefficient is the half that must be proved; the lag's sign is not. A
+validator proves strictly less than an evaluator — it sees `ranges` before they
+are resolved against the registry — so treating "unproven" as "illegal" would
+make a binding reject documents its own evaluator accepts. That was in fact the
+first implementation's behaviour: the code failed the whole analysis on an
+unresolvable symbol while its own comment claimed the opposite, and a sibling
+binding's author caught the discrepancy by reading both.
 
 `max_lag` is the maximum `hi(lag)` over every self-read. It is reported — Rust's
 `BuildInspection::recurrences` carries `(var, axis, max_lag, lag_proven)` — because

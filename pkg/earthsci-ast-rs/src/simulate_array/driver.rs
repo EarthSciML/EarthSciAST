@@ -1480,15 +1480,23 @@ impl ArrayCompiled {
         for rule in &self.observed_rules {
             let mut refs = HashSet::new();
             collect_expr_var_refs(observed_rule_body(rule), &mut refs);
-            // A recurrence rule's body reads the variable the rule DEFINES
+            // A RECURRENCE rule's body reads the variable the rule DEFINES
             // (esm-spec §4.3.1.1). That self-edge is not a dependency on
             // another observed — it is an ordering within this one — so it is
-            // dropped here exactly as `dependency_order_observed` drops it.
-            // Leaving it in made the rule classify as non-static and never be
-            // hoisted, which is why a state-free recurrence materialized
-            // nowhere at all before this feature landed.
-            let self_name = observed_rule_var(rule);
-            refs.retain(|r| r != self_name);
+            // dropped, exactly as `dependency_order_observed` drops it. Leaving
+            // it in made the rule classify as non-static and never be hoisted,
+            // which is why a state-free recurrence materialized nowhere at all
+            // before this feature landed.
+            //
+            // Conditioned on the rule KIND, not applied to every rule: a
+            // self-reference the recurrence lowering did not recognize is not
+            // an ordering, it is a rule that reads a name nothing binds, and
+            // hoisting it as a build-once constant would freeze that. The
+            // exemption belongs to the construct that earns it.
+            if matches!(rule, AlgebraicRule::Recurrence { .. }) {
+                let self_name = observed_rule_var(rule);
+                refs.retain(|r| r != self_name);
+            }
             let ok = refs.iter().all(|r| {
                 r != "t"
                     && !self.var_shapes.contains_key(r)
