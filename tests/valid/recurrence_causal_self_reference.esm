@@ -1,0 +1,216 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceCausalSelfReference",
+    "description": "VALID. A well-founded causal self-reference along one index axis (esm-spec 4.3.1.1): r[y] reads r at every lag in a contracted symbol's range, under a banded filter, with a clamp inside the fold. Every binding must ACCEPT this -- including the two that evaluate no array numerics, since rejection parity (CONFORMANCE_SPEC 5.19.5) cuts both ways: a binding whose observed-cycle detector or trivial-DAE factoring treats a self-read as a cycle would reject a legal document, which is the same defect as admitting an illegal one. The self-edge V -> V is dropped from the observed dependency graph; a cycle through two DISTINCT variables is still rejected.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "causal-self-reference",
+      "valid"
+    ]
+  },
+  "index_sets": {
+    "years": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "RecurrenceCausalSelfReference": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "r": {
+          "type": "unknown",
+          "shape": [
+            "years"
+          ],
+          "units": "1",
+          "description": "Residual sequence: the non-recurrent term less the clamped, weighted sum of its own three previous values."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "y"
+            ],
+            "ranges": {
+              "y": {
+                "from": "years"
+              },
+              "a": [
+                0,
+                3
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "a",
+                    0
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        1e-16,
+                        1.0,
+                        1e-16,
+                        100000000.0,
+                        3.0,
+                        -1e+16
+                      ]
+                    },
+                    "y"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    -1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "max",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "r",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "y",
+                                    "a"
+                                  ]
+                                }
+                              ]
+                            },
+                            0.0
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                0.0,
+                                1.0,
+                                3.0,
+                                3.0
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                "a",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "reduce": "+",
+            "filter": {
+              "op": "<=",
+              "args": [
+                "a",
+                {
+                  "op": "-",
+                  "args": [
+                    "y",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "banded_lag_fold_is_the_ascending_left_fold",
+          "description": "Ascending-in-a fold. r[3] = -1.0 exactly; a high-end fold of the same window gives -1.0000000000000002.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 1e-16,
+              "coords": {
+                "years": 1
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.9999999999999999,
+              "coords": {
+                "years": 2
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -1.0,
+              "coords": {
+                "years": 3
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 99999997.0,
+              "coords": {
+                "years": 4
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -99999997.0,
+              "coords": {
+                "years": 5
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -1.0000000299999992e+16,
+              "coords": {
+                "years": 6
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
