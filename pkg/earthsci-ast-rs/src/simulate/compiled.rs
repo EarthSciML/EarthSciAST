@@ -360,6 +360,13 @@ impl Compiled {
         let no_state: [f64; 0] = [];
         let mut obs = vec![0.0f64; self.observed_exprs.len()];
         for (i, e) in self.observed_exprs.iter().enumerate() {
+            // Each observed is evaluated at the element type of the variable it
+            // defines (esm-spec §11.3.1) — the document's unless that variable
+            // declared its own, which is why this is a thread-local read and a
+            // no-op swap for every document that declares none.
+            let _rule_precision = crate::precision::has_variable_overrides().then(|| {
+                crate::precision::enter(crate::precision::of_variable(&self.observed_names[i]))
+            });
             obs[i] = interpret(e, &no_state, &param_vec, &obs, t);
         }
         Ok(self.observed_names.iter().cloned().zip(obs).collect())

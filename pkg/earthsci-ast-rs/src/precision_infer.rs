@@ -49,10 +49,18 @@
 //!   the store either — the author says which precision a mixed step lands in
 //!   by declaring the variable it lands in.
 //!
-//! Wherever an inferred precision differs from its context's, the subtree is
-//! wrapped in a [`MARKER_OP`] node, which every evaluator honours by arming a
-//! [`crate::precision::PrecisionGuard`] for the subtree. Nothing else in the
-//! evaluators needs to know that per-variable element types exist.
+//! Precision is then carried in two places, at the two granularities it
+//! actually varies at:
+//!
+//! * **Per equation** — by the rule the equation compiles to, read back at
+//!   evaluation as `precision::of_variable(rule.var)`. Nothing is added to the
+//!   tree, so every pass that pattern-matches an equation's right-hand side
+//!   (the `aggregate` an `AlgebraicRule::ArrayLoop` is built from, the
+//!   relational lowering, the value-invention detector) still sees what it saw.
+//! * **Per subtree** — by a [`MARKER_OP`] node wrapping any subtree INSIDE an
+//!   expression whose precision differs from the equation's, which is exactly
+//!   the predicate case above. Every evaluator honours it by arming a
+//!   [`crate::precision::PrecisionGuard`] for the subtree.
 //!
 //! # Inertness
 //!
@@ -207,14 +215,18 @@ fn annotate_equation(
             rhs_type: src.prec.element_type().to_string(),
         });
     }
-    // The right-hand side is evaluated at the target precision. It needs a
-    // marker only when that is not the precision already in force, which for a
-    // top-level equation is the document's.
-    eq.rhs = if target == document {
-        rhs
-    } else {
-        mark(rhs, target)
-    };
+    // NO marker at the equation root. An equation's precision is its left-hand
+    // side's, and it is carried by the RULE the equation compiles to
+    // (`precision::of_variable(rule.var)`), not by a wrapper node — because a
+    // wrapper at the root is invisible to the evaluator but very visible to
+    // every pass that pattern-matches an equation's right-hand side. Wrapping
+    // `out_SCC ~ aggregate(…)` in one turned the equation from an
+    // `AlgebraicRule::ArrayLoop` over an aggregate into a scalar rule over an
+    // unrecognised op, and the key came out corrupted for a second reason
+    // entirely. Markers therefore appear only INSIDE an expression, where a
+    // subtree's precision genuinely differs from the equation's.
+    let _ = document;
+    eq.rhs = rhs;
     Ok(eq)
 }
 
@@ -406,8 +418,10 @@ mod tests {
         annotate_model(&mut m, Precision::Float32).unwrap();
         assert_eq!(
             shape(&m.equations[0].rhs),
-            "__precision:Float64(*(floor(/(scc,1000)),1000))",
-            "one marker at the equation boundary, none inside"
+            "*(floor(/(scc,1000)),1000)",
+            "no marker: the equation is uniformly binary64 and the RULE carries \
+             that, so every pass that matches on the right-hand side's root \
+             still sees the operator it did"
         );
     }
 
@@ -467,8 +481,8 @@ mod tests {
         annotate_model(&mut m, Precision::Float64).unwrap();
         assert_eq!(
             shape(&m.equations[0].rhs),
-            "__precision:Float32(*(r,0.1))",
-            "the narrowing is explicit and marked, not implied by the document"
+            "*(r,0.1)",
+            "uniformly binary32 inside a binary64 document; the rule carries it"
         );
     }
 

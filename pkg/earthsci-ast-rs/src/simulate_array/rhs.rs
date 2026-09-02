@@ -370,6 +370,22 @@ pub(super) struct ObsPass<'a> {
 /// `stats` records how each array observed was materialized (vectorized vs
 /// per-cell), mirroring the `vectorized_rules`/`scalar_rules` split for state
 /// rules.
+/// Arm the working precision of one algebraic rule for as long as the returned
+/// guard lives (esm-spec §11.3.1).
+///
+/// `None` — no guard at all — unless the document declares a per-variable
+/// `element_type`, so the overwhelmingly common document pays one thread-local
+/// read per rule and changes nothing.
+fn precision_of_rule(rule: &AlgebraicRule) -> Option<crate::precision::PrecisionGuard> {
+    if !crate::precision::has_variable_overrides() {
+        return None;
+    }
+    let var = match rule {
+        AlgebraicRule::Scalar { var, .. } | AlgebraicRule::ArrayLoop { var, .. } => var,
+    };
+    Some(crate::precision::enter(crate::precision::of_variable(var)))
+}
+
 pub(super) fn materialize_observeds_pass(
     dst: &mut ArrMap,
     observed_rules: &[AlgebraicRule],
@@ -379,6 +395,14 @@ pub(super) fn materialize_observeds_pass(
     let ObsPass { env, force_scalar } = pass;
     let force_scalar = *force_scalar;
     for rule in observed_rules {
+        // The rule's own working precision (esm-spec §11.3.1). An equation is
+        // evaluated at the element type of the variable it defines, which is
+        // the document's unless that variable declared its own — so this is a
+        // thread-local read and a no-op swap for every document that declares
+        // none. Held for the whole rule, which is the scope its expression is
+        // evaluated in; any subtree inside that differs carries its own
+        // `precision_infer::MARKER_OP` and re-arms.
+        let _rule_precision = precision_of_rule(rule);
         match rule {
             AlgebraicRule::Scalar { var, body } => {
                 if vec_trace_on() {

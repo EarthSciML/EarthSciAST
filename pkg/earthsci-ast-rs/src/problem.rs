@@ -1169,6 +1169,31 @@ pub fn esm_problem<'a>(
         }
     }
 
+    // ---- (1c) Static precision inference, on the TYPED document. ---------
+    // Propagate every `ModelVariable.element_type` over the equations and mark
+    // the precision boundaries (esm-spec §11.3.1, `crate::precision_infer`).
+    //
+    // It runs on the TYPED form and BEFORE the build pipeline, which is the
+    // only point that satisfies both constraints. Typed, because that is what
+    // has `expression_templates` expanded and `$ref` imports resolved, so no
+    // template body escapes the pass. Before the pipeline, because the pipeline
+    // MATERIALIZES a relational document's whole observed graph — for a
+    // state-free document that is the entire evaluation — and a marker
+    // inserted after it would arrive too late to decide anything.
+    //
+    // Skipped entirely, not merely a no-op walk, for a document that declares
+    // no per-variable element type.
+    let mut inferred = false;
+    if precision::has_variable_overrides()
+        && let Some(f) = owned_file.as_mut()
+        && let Some(models) = f.models.as_mut()
+    {
+        for model in models.values_mut() {
+            crate::precision_infer::annotate_model(model, prec).map_err(SimulateError::Compile)?;
+        }
+        inferred = true;
+    }
+
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
@@ -1244,15 +1269,12 @@ pub fn esm_problem<'a>(
         }
     }
 
-    // ---- (3b) Static precision inference. ---------------------------------
-    // Propagate every `ModelVariable.element_type` over the equations and mark
-    // the precision boundaries (esm-spec §11.3.1). It runs HERE — after the
-    // typed parse, which is what expands `expression_templates` and resolves
-    // `$ref` imports, and before the compile that lowers the equations — so the
-    // pass sees the same tree the evaluator will and no template body escapes
-    // it. Skipped entirely, not merely a no-op walk, for a document that
-    // declares no per-variable element type.
-    if precision::has_variable_overrides()
+    // ---- (3b) Static precision inference, for a RAW-JSON input. -----------
+    // Stage (1c) already ran when the caller handed in a typed document. A raw
+    // JSON input has no typed form until stage (3) — this is its first chance,
+    // and the pass has to happen before stage (4) lowers the equations.
+    if !inferred
+        && precision::has_variable_overrides()
         && let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
     {

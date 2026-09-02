@@ -1750,6 +1750,20 @@ fn vi_classification_model(
 ///
 /// A no-op (empty result) for a model with no skolem/distinct/rank node — the
 /// evaluator front-door then behaves byte-identically to before.
+/// Arm the working precision of the variable a value-invention buffer fills
+/// (esm-spec §11.3.1), for as long as the returned guard lives.
+///
+/// `None` — no guard at all — unless the document declares a per-variable
+/// `element_type`.
+fn vi_variable_precision(vname: &str) -> Option<crate::precision::PrecisionGuard> {
+    if !crate::precision::has_variable_overrides() {
+        return None;
+    }
+    Some(crate::precision::enter(crate::precision::of_variable(
+        vname,
+    )))
+}
+
 pub fn materialize_value_invention(
     model_json: &Value,
     const_arrays: &HashMap<String, ArrayD<f64>>,
@@ -1811,6 +1825,12 @@ pub fn materialize_value_invention(
 
     // Maps first (a producer's join / key — or an arg-witness `join` — may reference them).
     for (vname, node) in &det.maps {
+        // Each buffer is materialized at the element type of the variable it
+        // fills (esm-spec §11.3.1): a build-time relational output is an
+        // equation's value, and an equation is evaluated at its left-hand
+        // side's precision like any other. `None` unless the document declares
+        // a per-variable `element_type`.
+        let _prec = vi_variable_precision(vname);
         vi_materialize_map(&mut ctx, vname, node)?;
     }
 
@@ -1844,6 +1864,7 @@ pub fn materialize_value_invention(
     // (guard 2). All are surfaced dense in output-index order.
     for (vname, node, kind) in &det.chain {
         vi_assert_buildtime(&ctx, vname, node, &det.vi_var_names)?;
+        let _prec = vi_variable_precision(vname);
         match kind {
             ChainKind::Grouped => vi_materialize_grouped(&mut ctx, vname, node)?,
             ChainKind::Derived => vi_materialize_derived(&mut ctx, vname, node)?,

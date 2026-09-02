@@ -722,6 +722,16 @@ fn eval_observed(
     extents: &HashMap<String, i64>,
     const_arrays: &ConstArrayScope,
 ) -> Result<ArrayD<f64>, PrepareError> {
+    // The observed is evaluated at the element type of the variable it defines
+    // (esm-spec §11.3.1) — the document's unless that variable declared its
+    // own. This is where the build pipeline materializes a relational
+    // document's whole observed graph, so it is where an equation over
+    // binary64 keys has to be evaluated in binary64: a `sum_product` over one
+    // exact key still rounds its accumulator, which is enough to turn
+    // `2260007005` back into `2260006912`. A no-op swap for every document
+    // that declares no per-variable element type.
+    let _rule_precision = crate::precision::has_variable_overrides()
+        .then(|| crate::precision::enter(crate::precision::of_variable(name)));
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
         .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;

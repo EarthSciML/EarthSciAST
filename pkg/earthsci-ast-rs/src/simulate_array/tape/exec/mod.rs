@@ -86,6 +86,19 @@ use resolve::{cm_strides, rm_strides};
 pub(crate) fn tape_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
+    // A document with per-variable element types (esm-spec §11.3.1) does not
+    // run on the tape. The tape resolves its kernels at EXECUTION from the
+    // thread-local precision, and it fuses instructions ACROSS rules, so the
+    // one thing a per-variable precision needs — a rule (or a subtree)
+    // evaluated in a precision its neighbours are not — is the one thing a
+    // fused tape cannot express. The vectorized overlay and the per-cell
+    // oracle both re-enter per rule and per node, where the guard still
+    // stands. Correctness over throughput, and only for the documents that
+    // ask for it: every other document is unaffected, this being a
+    // thread-local read on a path that already reads one.
+    if crate::precision::has_variable_overrides() {
+        return true;
+    }
     *OFF.get_or_init(|| {
         std::env::var("ESS_TAPE_DISABLE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
