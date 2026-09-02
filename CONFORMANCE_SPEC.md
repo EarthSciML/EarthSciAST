@@ -2957,6 +2957,21 @@ infinity matches and an opposite one does not. `bindings_required` is
 `["julia", "python", "rust"]`; Go and TypeScript are rewrite-only ports with no
 simulator and no assertion comparison, and are `scope_excluded` in the manifest.
 
+**All five bindings READ this manifest**, including the two that cannot execute
+it: `pkg/earthsci-ast-go/pkg/esm/assertion_nonfinite_scope_test.go` and
+`pkg/earthsci-ast-ts/src/assertion-nonfinite-scope.test.ts` each assert their own
+exclusion — that their binding is named in `scope_excluded` with a reason and is
+absent from `bindings_required` — that the fixture still LOADS in their parser (a
+category whose document one binding cannot parse would be a format divergence
+hiding behind a scope exclusion), and that the case list stays non-vacuous (at
+least one must-fail non-finite case and one must-pass finite one). This is
+deliberate, and it is the lesson of the shared rejection corpus that was being
+consumed by two of five bindings while reading as though it covered all five: an
+exclusion is invisible by construction, so it has to be asserted somewhere that
+goes red when it stops being true. Giving Go or TypeScript a simulator will fail
+that binding's scope test until it is moved into `bindings_required` with a real
+runner.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
