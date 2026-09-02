@@ -355,7 +355,6 @@ fn annotate_equation(
     // unrecognised op, and the key came out corrupted for a second reason
     // entirely. Markers therefore appear only INSIDE an expression, where a
     // subtree's precision genuinely differs from the equation's.
-    let _ = document;
     eq.rhs = rhs;
     Ok(eq)
 }
