@@ -71,6 +71,7 @@ fn state(name: &str, default: f64) -> (String, ModelVariable) {
     (
         name.to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Unknown,
             units: None,
@@ -88,6 +89,7 @@ fn param(name: &str, default: f64) -> (String, ModelVariable) {
     (
         name.to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Parameter,
             units: None,
@@ -854,6 +856,7 @@ fn test_error_invalid_parameter_name() {
 fn test_error_missing_initial_condition() {
     // State variable with NO default → must be supplied via IC.
     let mut state_x = ModelVariable {
+        element_type: None,
         default_units: None,
         var_type: VariableType::Unknown,
         units: None,
@@ -913,6 +916,7 @@ fn flat_with_one_state_rhs(rhs: Expr) -> FlattenedSystem {
     state_variables.insert(
         "u".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Unknown,
             units: None,

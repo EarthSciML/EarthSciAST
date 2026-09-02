@@ -24,6 +24,7 @@ fn test_analysis_features_integration() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Unknown,
             units: None,
@@ -38,6 +39,7 @@ fn test_analysis_features_integration() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Parameter,
             units: None,
@@ -250,6 +252,7 @@ fn test_editing_operations() {
 
     // Test adding variables
     let new_var = ModelVariable {
+        element_type: None,
         default_units: None,
         var_type: VariableType::Parameter,
         units: Some("s^-1".to_string()),

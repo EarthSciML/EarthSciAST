@@ -351,6 +351,7 @@ fn test_editing() {
 
     // Test adding variables
     let new_var = ModelVariable {
+        element_type: None,
         default_units: None,
         var_type: VariableType::Parameter,
         units: Some("s^-1".to_string()),

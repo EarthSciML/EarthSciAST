@@ -32,6 +32,7 @@ fn test_component_graph_generation() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Unknown,
             units: None,
@@ -238,6 +239,7 @@ fn test_model_expression_graph() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Unknown,
             units: None,
@@ -252,6 +254,7 @@ fn test_model_expression_graph() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: None,
             var_type: VariableType::Parameter,
             units: None,

@@ -1188,9 +1188,7 @@ pub fn esm_problem<'a>(
         && let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
     {
-        for model in models.values_mut() {
-            crate::precision_infer::annotate_model(model, prec).map_err(SimulateError::Compile)?;
-        }
+        crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
         inferred = true;
     }
 
@@ -1278,9 +1276,7 @@ pub fn esm_problem<'a>(
         && let Some(f) = owned_file.as_mut()
         && let Some(models) = f.models.as_mut()
     {
-        for model in models.values_mut() {
-            crate::precision_infer::annotate_model(model, prec).map_err(SimulateError::Compile)?;
-        }
+        crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
     }
 
     // ---- (4) Compile the right-hand side. ---------------------------------

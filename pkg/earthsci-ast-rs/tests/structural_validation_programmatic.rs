@@ -18,6 +18,7 @@ fn test_undefined_variable_in_model() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: Default::default(),
             var_type: VariableType::Unknown,
             units: None,
@@ -109,6 +110,7 @@ fn test_equation_count_mismatch() {
     variables.insert(
         "x".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: Default::default(),
             var_type: VariableType::Unknown,
             units: None,
@@ -123,6 +125,7 @@ fn test_equation_count_mismatch() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: Default::default(),
             var_type: VariableType::Parameter,
             units: None,
@@ -353,6 +356,7 @@ fn test_valid_file_passes() {
     variables.insert(
         "k".to_string(),
         ModelVariable {
+            element_type: None,
             default_units: Default::default(),
             var_type: VariableType::Parameter,
             units: None,

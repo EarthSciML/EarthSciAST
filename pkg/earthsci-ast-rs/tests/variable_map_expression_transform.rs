@@ -62,7 +62,9 @@ fn empty_file() -> EsmFile {
 }
 
 fn model_variable(var_type: VariableType, default: Option<f64>) -> ModelVariable {
+    element_type: None,
     ModelVariable {
+        element_type: None,
         default_units: None,
         var_type,
         units: None,

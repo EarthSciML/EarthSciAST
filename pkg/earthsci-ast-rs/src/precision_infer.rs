@@ -62,6 +62,25 @@
 //!   the predicate case above. Every evaluator honours it by arming a
 //!   [`crate::precision::PrecisionGuard`] for the subtree.
 //!
+//! # Two things this pass quietly guarantees
+//!
+//! **A shared subtree cannot span two precisions.** Load-time interning
+//! ([`crate::intern`]) collapses structurally identical `Expr::Operator` nodes
+//! onto one `Arc`, and the evaluator's CSE memo is keyed on that ADDRESS — so a
+//! subtree shared between two rules of different precision would be memoized at
+//! one and served at the other. It cannot happen twice over: a shared subtree
+//! that mentions any variable carries that variable's precision, so both rules
+//! carry it too (a rule that did not would be `MixedElementType`); and this
+//! pass rebuilds every operator node of every equation of a model that declares
+//! an `element_type`, so those equations share no `Arc` with anything. The
+//! rebuild is therefore load-bearing, not incidental — do not turn it into an
+//! in-place edit that preserves node identity.
+//!
+//! **`join.on` needs nothing from this pass.** A join clause names its key
+//! COLUMNS as strings and the relational engine compares the array values
+//! directly; it applies no kernel and so does no rounding. An exempt column
+//! that arrives unrounded therefore joins exactly, which is the whole point.
+//!
 //! # Inertness
 //!
 //! The whole pass is skipped for a model in which no variable declares an
@@ -156,20 +175,73 @@ type Inferred<'a> = Option<Source<'a>>;
 /// [`CompileError::MixedElementType`] for an operator or an equation whose
 /// operands carry different ones.
 pub fn annotate_model(model: &mut Model, document: Precision) -> Result<(), CompileError> {
+    annotate_model_with(model, document, &HashMap::new())
+}
+
+/// The precision a variable carries: its declaration, or the document's.
+fn variable_precision(
+    var: &crate::types::ModelVariable,
+    document: Precision,
+) -> Result<Precision, CompileError> {
+    match var.element_type.as_deref() {
+        None => Ok(document),
+        some => Precision::from_element_type(some),
+    }
+}
+
+/// Annotate every model of a document, sharing one QUALIFIED table across them.
+///
+/// A scoped reference (`Other.x`, esm-spec §4.6) reaches out of the model that
+/// writes it, so a per-model table would read it as an unknown name and treat
+/// it as context-adopting — silently widening or narrowing whatever it names.
+/// The qualified table is what keeps a cross-model reference subject to the
+/// same rules as a local one.
+///
+/// # Errors
+///
+/// As [`annotate_model`].
+pub fn annotate_models(
+    models: &mut indexmap::IndexMap<String, Model>,
+    document: Precision,
+) -> Result<(), CompileError> {
+    if !models
+        .values()
+        .any(|m| m.variables.values().any(|v| v.element_type.is_some()))
+    {
+        return Ok(());
+    }
+    let mut qualified: HashMap<String, Precision> = HashMap::new();
+    for (mname, model) in models.iter() {
+        for (vname, var) in &model.variables {
+            qualified.insert(
+                format!("{mname}.{vname}"),
+                variable_precision(var, document)?,
+            );
+        }
+    }
+    for (_, model) in models.iter_mut() {
+        annotate_model_with(model, document, &qualified)?;
+    }
+    Ok(())
+}
+
+fn annotate_model_with(
+    model: &mut Model,
+    document: Precision,
+    qualified: &HashMap<String, Precision>,
+) -> Result<(), CompileError> {
     if !model
         .variables
         .values()
         .any(|v| v.element_type.is_some())
+        && !qualified.values().any(|p| *p != document)
     {
         return Ok(());
     }
-    let mut env: HashMap<String, Precision> = HashMap::with_capacity(model.variables.len());
+    let mut env: HashMap<String, Precision> = qualified.clone();
+    env.reserve(model.variables.len());
     for (name, var) in &model.variables {
-        let p = match var.element_type.as_deref() {
-            None => document,
-            some => Precision::from_element_type(some)?,
-        };
-        env.insert(name.clone(), p);
+        env.insert(name.clone(), variable_precision(var, document)?);
     }
     // Clone the names out of the map so the equation walk can borrow `model`
     // mutably. The map is one entry per variable, built once per model.
@@ -232,8 +304,8 @@ pub fn annotated(file: &crate::types::EsmFile) -> Result<Option<crate::types::Es
     }
     let document = env_of_file(file)?.document;
     let mut out = file.clone();
-    for model in out.models.iter_mut().flatten().map(|(_, m)| m) {
-        annotate_model(model, document)?;
+    if let Some(models) = out.models.as_mut() {
+        annotate_models(models, document)?;
     }
     Ok(Some(out))
 }
@@ -542,6 +614,27 @@ mod tests {
             "*(r,0.1)",
             "uniformly binary32 inside a binary64 document; the rule carries it"
         );
+    }
+
+    #[test]
+    fn a_scoped_reference_to_another_model_carries_that_model_s_element_type() {
+        // `B.q` is binary32 (the document's) and `key` is binary64: the mix is
+        // refused across the model boundary exactly as it is within one. A
+        // per-model table would have read `B.q` as an unknown name, treated it
+        // as context-adopting, and silently widened it.
+        let mut models: indexmap::IndexMap<String, Model> = indexmap::IndexMap::new();
+        models.insert(
+            "A".to_string(),
+            model(
+                &[("out", Some("Float64")), ("key", Some("Float64"))],
+                vec![eq("out", op("*", vec![v("key"), v("B.q")]))],
+            ),
+        );
+        models.insert("B".to_string(), model(&[("q", None)], vec![]));
+        let err = annotate_models(&mut models, Precision::Float32).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("B.q"), "{msg}");
+        assert!(msg.contains("key"), "{msg}");
     }
 
     #[test]

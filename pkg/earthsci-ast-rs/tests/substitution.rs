@@ -95,6 +95,7 @@ fn test_model_substitution() {
         "x".to_string(),
         ModelVariable {
             default_units: None,
+            element_type: None,
             var_type: VariableType::Unknown,
             units: None,
             default: Some(1.0),
@@ -109,6 +110,7 @@ fn test_model_substitution() {
         "k".to_string(),
         ModelVariable {
             default_units: None,
+            element_type: None,
             var_type: VariableType::Parameter,
             units: None,
             default: Some(0.1),
@@ -123,6 +125,7 @@ fn test_model_substitution() {
         "y".to_string(),
         ModelVariable {
             default_units: None,
+            element_type: None,
             var_type: VariableType::Unknown,
             units: None,
             default: Some(0.0),
