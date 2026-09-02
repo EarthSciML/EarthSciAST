@@ -70,6 +70,9 @@ pub(crate) mod dae;
 /// §7–§9): the Rust mirror of `EarthSciAST.jl`'s `src/data_output.jl`. Pure and
 /// wasm32-clean — it plans a dataset, it never writes one.
 pub(crate) mod data_output;
+/// esm-spec §8.2.1: load-time resolution of a data source's
+/// `source.url_template` against the referencing document's own directory.
+pub(crate) mod data_source_urls;
 pub(crate) mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod edit;

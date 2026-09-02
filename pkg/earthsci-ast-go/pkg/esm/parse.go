@@ -195,6 +195,17 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// otherwise it is an integer.
 	normalizeNumericLiterals(&esmFile)
 
+	// esm-spec §8.2.1: resolve every data source's location against this
+	// document's own directory. On the typed struct rather than on the JSON
+	// text because this pipeline is text-based and has already recorded the
+	// AUTHORED key order off that text (extractTemplateOrders); decoding to a
+	// map and re-encoding to substitute two strings would destroy the order
+	// every FlattenedSystem depends on. The typed field is what the serializer
+	// emits, so the resolved form still reaches emit.
+	if err := resolveDataSourceURLs(&esmFile, o.basePath); err != nil {
+		return nil, err
+	}
+
 	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
 	esmFile.ExpressionTemplates = authoredTemplates
 	esmFile.Metaparameters = authoredMetaparams

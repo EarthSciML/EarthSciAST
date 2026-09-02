@@ -47,6 +47,13 @@ const ERROR_CODES = (
     CIRCULAR_DEPENDENCY = "circular_dependency",
     CONFLICTING_DERIVATIVE = "conflicting_derivative",
     DATA_SOURCE_UNDEFINED = "data_source_undefined",
+    # esm-spec §8.2.1: a `data_sources[*].source.url_template` (or a `mirrors`
+    # entry) that cannot be resolved to a URL at load time -- an unexpanded
+    # `${VAR}` (§8.2 does not expand environment variables into a source's
+    # location at all), or a resolved path carrying a `?` or `#`. Raised as an
+    # `ExpressionTemplateError` from `data_source_urls.jl`; the message names
+    # the offending data source and template.
+    DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved",
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch",
     EMPTY_CALLBACK_ID = "empty_callback_id",
     EQUATION_COUNT_MISMATCH = "equation_count_mismatch",

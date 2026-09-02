@@ -1,0 +1,25 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceUrlEnvVarDocument",
+    "description": "esm-spec §8.2.1 negative: a data source whose url_template needs an environment variable. §4.7 permits ${VAR} in a `ref` as an OPTIONAL binding capability; §8.2 does not permit it in a data source's location at all, and the difference is deliberate. A document that reads ${...} from the ambient environment does not say what it reads, so it is not reproducible; the expanded value is spliced into a URL that is then fetched, where a ://, @, ?, # or .. arriving from the environment redirects the fetch without changing a byte of the document; and an OPTIONAL expansion capability would make this very document resolve under one binding and not another, which is the non-portability §8.2.1 exists to remove. The document is SCHEMA-VALID -- url_template is a bare string -- so the rejection is the resolver's, and every binding must make it at load time with the diagnostic data_source_url_unresolved naming this entry and this template. Pinned as `resolver_only` in expected_errors.json. The portable spelling is tests/valid/data_source_relative_url.esm.",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "data-sources",
+      "url-template",
+      "conformance",
+      "negative"
+    ]
+  },
+  "data_sources": {
+    "needs_an_environment_variable": {
+      "kind": "static",
+      "source": {
+        "url_template": "file://${ESM_DATA_ROOT}/tables/probe.parquet"
+      }
+    }
+  }
+}

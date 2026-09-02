@@ -175,6 +175,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # record_filter / extent / select), over local FF10-zip + Zarr-v2 fixtures.
     # The Rust mirror is pkg/earthsci-ast-rs/tests/loader_ingest_and_select.rs.
     include("loader_ingest_and_select_test.jl")
+    # esm-spec §8.2.1: WHERE a data source points -- the shared
+    # cross-binding pin in tests/conformance/data_source_url/manifest.json.
+    include("data_source_url_conformance_test.jl")
     # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
     # manifest-driven cross-binding conformance adapter.
     include("loader_unit_conversion_conformance_test.jl")

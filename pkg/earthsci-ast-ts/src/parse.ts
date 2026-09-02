@@ -25,6 +25,7 @@ import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import { resolveDataSourceUrls } from './data-source-urls.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
@@ -424,6 +425,20 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
     validationView = canonical ? stripNumericLiterals(input) : input
   }
 
+  // Step 1a: esm-spec §8.2.1 — resolve every `data_sources[*].source` location
+  // against this document's own directory, before schema validation and before
+  // anything downstream reads the field, so the typed `DataSourceLocation`,
+  // `flatten`'s `LoaderField` and `emit` all see one resolved form and none of
+  // them needs a base directory. Idempotent (the output is scheme-led), so
+  // `parse → emit → parse` is stable. Both views are rewritten because in
+  // canonical mode `validationView` is a separate stripped copy; applying the
+  // pass twice to the same object is harmless for the same reason.
+  const dataSourceBase =
+    options?.basePath ??
+    (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.')
+  resolveDataSourceUrls(data, dataSourceBase)
+  if (validationView !== data) resolveDataSourceUrls(validationView, dataSourceBase)
+
   // Step 2: Version compatibility check (before schema validation)
   checkVersionCompatibility(validationView, options?.onVersionWarning)
 
@@ -462,9 +477,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // apply_expression_template nodes, no `expression_templates` blocks, no
   // imports, and no metaparameters — downstream consumers see only normal
   // Expression ASTs (Option A round-trip).
-  const basePath =
-    options?.basePath ??
-    (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '.')
+  const basePath = dataSourceBase
   // esm-spec §9.7.10 forms A/B: fold any scope-directed injection — a
   // subsystem-ref edge's `injectedImports` (form A) or a coupling entry's
   // injection map (form B) — into the target components' own

@@ -1,0 +1,28 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceUrlEnvVarMirrorCatalog",
+    "description": "esm-spec §8.2.1 refusal, reached through a MIRROR rather than the primary. A mirror is an optional fallback, which makes it the tempting place to be lenient — and being lenient there is how a catalog acquires an entry nobody can resolve without anyone noticing, since the primary keeps working until the day it does not. §8.2.1 applies the same rule to url_template and to every mirrors entry, so this document is refused with data_source_url_unresolved naming the mirror by index.",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "data-sources",
+      "url-template",
+      "conformance",
+      "negative"
+    ]
+  },
+  "data_sources": {
+    "mirror_needs_a_variable": {
+      "kind": "static",
+      "source": {
+        "url_template": "https://example.org/data/probe.parquet",
+        "mirrors": [
+          "file://${LOCAL_MIRROR}/probe.parquet"
+        ]
+      }
+    }
+  }
+}

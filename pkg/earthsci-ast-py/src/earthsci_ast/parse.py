@@ -2315,6 +2315,7 @@ def _load_data(
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
+    from ._data_source_urls import resolve_data_source_urls
     from .template_imports import (
         apply_scope_injections,
         reject_template_imports_pre_v08,
@@ -2327,6 +2328,13 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+
+    # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
+    # this document's own directory, BEFORE schema validation and before typed
+    # coercion, so the typed `DataSourceLocation`, the ingest providers and
+    # `emit` all see one resolved form and none of them needs a base directory.
+    # Idempotent (the output is scheme-led), so parse -> emit -> parse is stable.
+    resolve_data_source_urls(data, base_path)
 
     # Load and validate against schema. Collect EVERY schema violation (not just
     # the first) and carry them on the raised error, so `validation.validate` can

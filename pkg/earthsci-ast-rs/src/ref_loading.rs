@@ -444,6 +444,13 @@ fn inline_toplevel_model_refs(
             .and_then(|v| v.as_object_mut())
             .expect("models map present")
             .insert(name, model);
+        // esm-spec §8.2.1: a hoisted `data_sources` block's locations anchor on
+        // the directory of the file they were READ from, not on the importer's.
+        // Resolved here, before the merge below, because afterwards the entry is
+        // indistinguishable from one the importer declared. A no-op when the leaf
+        // declares no sources, which is almost every leaf.
+        crate::data_source_urls::resolve_data_source_urls(&mut comp, &leaf_dir)
+            .map_err(|e| err(e.code, e.message))?;
         for blk in ["function_tables", "data_sources", "enums"] {
             let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
                 continue;

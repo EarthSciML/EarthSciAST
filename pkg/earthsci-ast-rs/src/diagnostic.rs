@@ -261,6 +261,12 @@ diagnostic_code_registry! {
     CIRCULAR_DEPENDENCY = "circular_dependency";
     /// A parameter `update` naming no declared data source.
     DATA_SOURCE_UNDEFINED = "data_source_undefined";
+    /// A `data_sources[*].source.url_template` (or `mirrors` entry) that
+    /// cannot be resolved to a URL at load time (esm-spec §8.2.1): an
+    /// unexpanded `${VAR}` — §8.2 does not expand environment variables
+    /// into a source's location at all — or a resolved path carrying a `?`
+    /// or `#`. The message names the offending data source and template.
+    DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved";
     /// A domain axis whose units disagree with the coordinate's.
     DOMAIN_UNIT_MISMATCH = "domain_unit_mismatch";
     /// A model whose equation count cannot match its unknown count.
@@ -430,6 +436,7 @@ mod error_code_tests {
             "coupling_library_nested_import",
             "coupling_role_unused",
             "data_source_undefined",
+            "data_source_url_unresolved",
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "enum_invalid_args",

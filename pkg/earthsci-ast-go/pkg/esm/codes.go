@@ -249,6 +249,15 @@ const (
 	// required there.
 	CodeMissingDataSourceKind        = "missing_data_source_kind"
 	CodeMissingDataSourceURLTemplate = "missing_data_source_url_template"
+
+	// codeDataSourceURLUnresolved is raised at LOAD time when a
+	// `data_sources[*].source.url_template` (or a `mirrors` entry) cannot be
+	// resolved to a URL (esm-spec §8.2.1): an unexpanded `${VAR}` -- §8.2 does
+	// not expand environment variables into a source's location at all -- or a
+	// resolved path carrying a `?` or `#`. Unlike the code above it is not a
+	// StructuralError: the document is schema-valid and the failure is the
+	// resolver's. The message names the offending data source and template.
+	codeDataSourceURLUnresolved = "data_source_url_unresolved"
 )
 
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from

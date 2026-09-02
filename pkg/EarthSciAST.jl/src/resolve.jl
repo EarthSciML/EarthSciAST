@@ -130,6 +130,15 @@ function _load_document(raw_data, base_path::String;
     # tree the parse boundary produces, so there is no re-serialize
     # type-launder between them and the typed pipeline.
     doc = inlined === nothing ? raw_data : inlined
+    # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
+    # this document's own directory, before the typed pipeline sees the field,
+    # so the typed `DataSourceLocation`, the EarthSciIO provider extension
+    # (which re-serializes the loaded file) and `emit` all see one resolved form
+    # and none of them needs a base directory. Idempotent (the output is
+    # scheme-led), so parse -> emit -> parse is stable. Returns `nothing` when
+    # there was nothing to resolve, which is the overwhelmingly common case.
+    resolved_ds = _resolve_data_source_urls(doc, base_path)
+    doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters,
                         injected_imports=injected_imports)
     # Resolve nested subsystem references relative to the document's directory.

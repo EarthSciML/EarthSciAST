@@ -1,0 +1,25 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceUrlEnvVarCatalog",
+    "description": "esm-spec §8.2.1 REFUSAL conformance fixture: a source-catalog document whose url_template needs an environment variable. §4.7 permits ${VAR} in a `ref` as an optional capability; §8.2 does not permit it in a data source's location at all, because a document that reads one does not say what it reads and the value is spliced into a URL that is then fetched. The document is SCHEMA-VALID (url_template is a bare string), so the rejection is the resolver's and every binding must make it at load time, with the diagnostic data_source_url_unresolved naming this entry and this template. The direction that matters: silently treating ${MOVES_SNAPSHOTS} as a directory name yields an I/O error about a path nobody wrote, one step away from a source that delivers a consuming parameter's default and compares nothing.",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "data-sources",
+      "url-template",
+      "conformance",
+      "negative"
+    ]
+  },
+  "data_sources": {
+    "needs_an_environment_variable": {
+      "kind": "static",
+      "source": {
+        "url_template": "file://${MOVES_SNAPSHOTS}/tables/probe.parquet"
+      }
+    }
+  }
+}

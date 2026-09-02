@@ -193,11 +193,42 @@ deleted.
 
 ## Conformance
 
-`tests/conformance/data_source_url/` pins the rule: a manifest of cases whose
-expected resolution is expressed as a `file://`-prefixed **suffix** (an
-absolute expectation would be machine-specific), driven by
-`scripts/run-data-source-url-conformance.py` against all five bindings. Two
-fixtures also enter the ordinary corpus sweep, so every binding's validator is
-held to the rule without any new machinery: `tests/valid/data_source_relative_url.esm`
-must be accepted, and `tests/invalid/data_source_url_env_var.esm` — a
-`url_template` carrying `${VAR}` — must be **rejected**, by all five.
+`tests/conformance/data_source_url/` pins the rule: fixtures covering one
+`url_template` per row of the §8.2.1 table, and a `manifest.json` giving each
+one's expected resolution as a path relative to the **repository root** (an
+absolute expectation would only pass on the machine that wrote it).
+
+There is **no sixth conformance stage and no per-binding adapter**: each
+binding's own suite reads that manifest and asserts against it, and
+`./scripts/test-conformance.sh` already runs all five suites. What makes that
+sufficient is the decision above — §8.2.1 is a *document normalization*
+observable through `parse` alone, so even a validate-only binding (Go has no
+ingest at all) can be held to it. Had the rule been specified at fetch time
+instead, Go could not have conformed and there would have been nothing to pin.
+
+Two fixtures also enter the ordinary `tests/valid` / `tests/invalid` corpus
+sweep, so every binding's validator is held to the rule with no new machinery
+at all: `tests/valid/data_source_relative_url.esm` must be accepted, and
+`tests/invalid/data_source_url_env_var.esm` — a `url_template` carrying
+`${VAR}` — must be **rejected**, by all five.
+
+## Two corrections to the above, from the implementation
+
+**Two Julia-local fixtures had to change.**
+`pkg/EarthSciAST.jl/test/fixtures/data_sources/wrf.esm` and `era5.esm` spelled a
+local mirror as `file://${WRF_MIRROR}/…` / `file://${ERA5_LOCAL}/…` — exactly
+the pattern this note refuses, and the only two places in the repository that
+used it. They now spell it the portable way, a path relative to the fixture,
+which is what they were reaching for. Nothing in the shared `tests/` corpus used
+`${…}` in a `url_template`, so the refusal invalidates nothing that was being
+tested; those two fixtures now *exercise* the new rule in Julia's own suite
+instead of documenting the old workaround.
+
+**Go resolves on the typed struct, not on the JSON text.** Every other binding
+rewrites the raw document. Go's load pipeline is text-based and records the
+AUTHORED key order off that text (`extractTemplateOrders`), which
+esm-libraries-spec §4.7.5 step 4 makes normative for every `FlattenedSystem`;
+decoding to a `map[string]any` and re-encoding it to substitute two strings
+would destroy that order. The typed field is the same value the serializer
+emits, so the resolved form still reaches `emit` and the observable rule is
+identical.

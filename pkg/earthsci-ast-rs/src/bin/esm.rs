@@ -3215,10 +3215,31 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     let original_content = read_input(&file)?;
     let mut content = original_content.clone();
 
+    // esm-spec §4.7 / §8.2.1 both anchor on the directory of the REFERENCING
+    // FILE. This command used to `load_string` with no base, so every relative
+    // `ref` resolved against the process working directory instead — a document
+    // that `validate` and `test` loaded fine failed to round-trip unless you
+    // happened to `cd` into its directory first (downstream finding F7). With
+    // §8.2.1 in place that would have been worse than cosmetic: a relative
+    // `url_template` would have meant one thing under `validate` and another
+    // here, which is the bug class §8.2.1 exists to close. Every round uses the
+    // file's own directory, including the rounds that load EMITTED text — that
+    // text stands in for the same file, so it must resolve against the same
+    // base.
+    let opts = earthsci_ast::LoadOptions {
+        base_path: Some(
+            file.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+        ),
+        ..Default::default()
+    };
+
     for round in 1..=rounds {
         // Load
-        let esm_file =
-            load_string(&content).map_err(|e| fail(format!("Round {round}: Load failed: {e}")))?;
+        let esm_file = earthsci_ast::load_string_with_options(&content, &opts)
+            .map_err(|e| fail(format!("Round {round}: Load failed: {e}")))?;
 
         // Save
         content =
@@ -3228,8 +3249,8 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     }
 
     // Check if final content matches original (semantically)
-    let original_esm = load_string(&original_content)?;
-    let final_esm = load_string(&content)?;
+    let original_esm = earthsci_ast::load_string_with_options(&original_content, &opts)?;
+    let final_esm = earthsci_ast::load_string_with_options(&content, &opts)?;
 
     let original_json = serde_json::to_value(&original_esm)?;
     let final_json = serde_json::to_value(&final_esm)?;
