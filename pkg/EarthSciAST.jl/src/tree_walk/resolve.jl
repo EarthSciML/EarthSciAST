@@ -213,10 +213,12 @@ function _foreach_aggregate_term(emit!::F, body::ASTExpr,
     k_exprs = Dict{String,ASTExpr}()
     binding = gates === nothing ? nothing :
               (out_env === nothing ? Dict{String,Int}() : Dict{String,Int}(out_env))
-    # An OVERLAP gate can DRIVE this expansion instead of merely filtering it
-    # (§5.5.6 / Wall #1) — routed to `_foreach_aggregate_term_gated`. Everything
-    # else (no join, a bin-equality join) takes the untouched product below.
-    ov = gates === nothing ? nothing : _overlap_driver(gates)
+    # A gate carrying a prebuilt pair index can DRIVE this expansion instead
+    # of merely filtering it — a `join.overlap` broad phase (§5.5.6 / Wall #1) or
+    # a `join.on` value-equality match set (§5.5.8) alike — routed to
+    # `_foreach_aggregate_term_gated`. Everything else (no join, a gate that
+    # materialised no index) takes the untouched product below.
+    ov = gates === nothing ? nothing : _drivable_gate(gates)
     ov === nothing || return _foreach_aggregate_term_gated(emit!, body,
         contract_names, contract_iters, gates, filt, zerobar, binding, ov, k_exprs)
     return _foreach_aggregate_product(emit!, body, contract_names, contract_iters,

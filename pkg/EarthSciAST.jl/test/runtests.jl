@@ -239,6 +239,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("broad_phase_conformance_test.jl")   # projection-pushdown Phase 3a
     include("overlap_gate_conformance_test.jl")   # projection-pushdown Phase 2a
     include("join_namespacing_test.jl")           # §5.5.6 join names under flattening
+    include("join_on_equality_gate_test.jl")      # §5.5.8 value-equality gate: data columns + DRIVING
     include("vi_overlap_scaling_test.jl")         # projection-pushdown Wall #1 (candidate-driven)
     include("pushdown_edge_test.jl")              # projection-pushdown Phase 2b (L1 milestone)
     include("auto_pushdown_rewrite_test.jl")      # projection-pushdown Phase 4 (auto desugar)

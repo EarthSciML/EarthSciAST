@@ -137,14 +137,21 @@ Base.isempty(oi::_OverlapIndex) = isempty(oi.pairs)
 # element type; it is BUILT and CONSUMED in tree_walk/semiring.jl
 # (`_resolve_join_gates_for` / `_join_admits`), never parsed or serialized.
 #
-# `candidates` distinguishes the two gate flavours (Phase 2a). When it is
-# `nothing` this is the classic bin-equality gate (compare `codes_l`/`codes_r`).
-# When it is an `_OverlapIndex` this is an OVERLAP gate: the broad-phase
-# candidate set built ONCE (`_overlap_candidate_set`) from two envelope factor
-# arrays via the Phase-3a primitive, and a combination is admitted iff
-# `(pos_l, pos_r) ∈ candidates` (envelope candidacy, NOT key equality). The
-# `codes_*` maps are empty for an overlap gate. The same index also DRIVES
-# enumeration (§5.5.6) — see `_overlap_drive_plan` in broad_phase.jl.
+# The two fields answer two DIFFERENT questions, and a gate may carry both.
+#
+# `codes_l`/`codes_r` are ADMISSION: a value-equality (`on`) gate admits iff
+# `codes_l[pos_l] == codes_r[pos_r]`. They are empty for an OVERLAP gate, whose
+# admission is envelope candidacy rather than key equality.
+#
+# `candidates` is the prebuilt `(pos_l, pos_r)` index, and it is an ENUMERATION
+# EXTENT: the gate that carries one can DRIVE enumeration instead of being
+# tested per tuple (`_overlap_drive_plan` / `_drivable_gate`, broad_phase.jl).
+# An OVERLAP gate's index is the Phase-3a broad-phase candidate set
+# (`_overlap_candidate_set`), and for it the index IS also the admission test.
+# An `on` gate's index is the §5.5.8 match set (`_on_gate_match_pairs`), and
+# there it is purely an extent — `_join_admits` still tests the codes, so the
+# driven walk is re-checked against the same predicate the full product applies.
+# `nothing` means the gate materialised no index and filters only.
 struct _JoinGate
     sym_l::String
     sym_r::String

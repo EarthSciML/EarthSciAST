@@ -2227,11 +2227,24 @@ function _build_partition_and_materialize(model::Model, cls;
     join_var_shapes = Dict{String,Vector{String}}(
         String(n) => (v.shape === nothing ? String[] : Vector{String}(v.shape))
         for (n, v) in model.variables)
+    # A §5.5.8 `on` key column is a declared 1-D VARIABLE, so the resolver also
+    # needs its build-time data. Three storages reach it: the const arrays
+    # (host-supplied / front-door-derived) merged with the const-op array
+    # observeds this build already materialized (`cls.const_obs_arrays`, whose
+    # equations were dropped from the ODE partition above), and — for a
+    # document-literal column that is still an equation — the observed
+    # definitions, which `_join_key_column_values` materializes on demand.
+    join_key_arrays = Dict{String,Any}(const_arrays)
+    for (n, a) in cls.const_obs_arrays
+        haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
+    end
+    join_obs_defs = observed_definitions(model)
     equations = _resolve_join_gates(ode_equations, index_sets, vi_maps,
-                                    const_arrays, join_var_shapes)
+                                    join_key_arrays, join_var_shapes, join_obs_defs)
     _translate_equation_sites!(template_sites, ode_equations, equations)
     init_equations = _resolve_join_gates(model.initialization_equations,
-                                         index_sets, vi_maps, const_arrays, join_var_shapes)
+                                         index_sets, vi_maps, join_key_arrays,
+                                         join_var_shapes, join_obs_defs)
 
     # ---- Resolve index-set references in ranges (RFC §5.2) ----
     # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's

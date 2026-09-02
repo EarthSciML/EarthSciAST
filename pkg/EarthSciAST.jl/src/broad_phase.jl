@@ -198,10 +198,13 @@ end
 # CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
 # driver policy behind BOTH overlap-gated enumeration paths.
 #
-# An overlap gate resolves its ENTIRE admissible pair set once. Enumerating the
-# full cartesian product and membership-testing each tuple therefore does
-# O(∏ranges) work to reach O(|candidates|) surviving tuples. Driving from the
-# candidate set instead collapses the cost to O(|candidates|·∏ungated).
+# A gate that resolves its ENTIRE admissible pair set once — a `join.overlap`
+# broad phase (§5.5.6) or a `join.on` value-equality match set (§5.5.8) — makes
+# the full cartesian product wasteful: enumerating it and membership-testing each
+# tuple does O(∏ranges) work to reach O(|candidates|) surviving tuples. Driving
+# from the candidate set instead collapses the cost to O(|candidates|·∏ungated).
+# §5.5.8 asks for ONE driver serving both gate kinds; everything below is written
+# against the pair index alone and never asks which kind produced it.
 #
 # The two consumers differ ONLY in loop shape, never in policy:
 #
@@ -266,11 +269,23 @@ end
 _overlap_partners(oi::_OverlapIndex, side::Symbol, pos::Int) =
     get(_overlap_adjacency(oi, side), pos, _NO_PARTNERS)
 
-# The first OVERLAP gate (the one carrying a prebuilt candidate index) among a
-# resolved gate vector, or `nothing`. Shared by both enumeration paths: this is
-# the gate whose candidates DRIVE enumeration. A bin-equality gate cannot drive
-# (its admissible pair set is never materialised) and is left as a filter.
-function _overlap_driver(gates)
+# The first DRIVABLE gate — the first carrying a prebuilt candidate `(pos_l,
+# pos_r)` index — among a resolved gate vector, or `nothing`. Shared by every
+# enumeration path: this is the gate whose candidates DRIVE enumeration.
+#
+# TWO gate kinds now qualify, and the driver deliberately cannot tell them apart:
+# a `join.overlap` broad phase (§5.5.6, envelope candidacy) and a `join.on`
+# value-equality match set (§5.5.8, exact key equality). §5.5.8 asks for ONE
+# driver for both, and this is where that is spelled: the pair index is the whole
+# interface. A gate that materialised no index (an `on` gate whose two symbols
+# are the same range symbol, or one built under `ESS_JOIN_ON_GATE_DISABLE`) is
+# left as a pure filter.
+#
+# When a node carries SEVERAL drivable gates, only the FIRST in document order
+# drives; the others stay membership tests on the driven leaves (§5.5.8 "every
+# gate still restricts the admitted set, but only ONE need DRIVE"). Which one
+# drives cannot change the result, because `_join_admits` re-tests them all.
+function _drivable_gate(gates)
     gates === nothing && return nothing
     for g in gates
         g.candidates === nothing || return g
@@ -326,6 +341,11 @@ function _overlap_drive_plan(gate, free_syms, bound, valuesof)
     oi = gate.candidates
     oi === nothing && return (:none,)
     l = gate.sym_l; r = gate.sym_r
+    # A gate whose two sides are the SAME range symbol cannot drive: the pair
+    # list would bind one symbol to two positions at once. Gate construction
+    # already declines to build an index for that shape; this is the second
+    # line, so no future index builder can reintroduce the mis-binding.
+    l == r && return (:none,)
     lf = l in free_syms; rf = r in free_syms
     if lf && rf
         return (:pairs, l, r, _overlap_sorted_pairs(oi))
