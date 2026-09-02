@@ -760,6 +760,14 @@ the order in which cells are **evaluated**, and a region's value expression is
 evaluated once for the whole region. Write the recurrence as one `aggregate` with the
 base case as a guard instead.
 
+A binding that has to exempt the self-edge from an existing cycle check MUST gate
+that exemption on the equation being a **candidate** — an array-shaped unknown
+with at least one `index` self-read in its own RHS — and NOT on the
+well-foundedness verdict. Gating on the verdict means an ill-founded read is not
+exempt, so the cycle check fires and the `recurrence_*` diagnosis above is never
+reached; the construct exists to replace a silent failure with a named one, and
+that gives the name back. See CONFORMANCE_SPEC §5.19.5.
+
 A recurrence definition is **not** a cyclic algebraic system and does not relax the
 rule that cycles are rejected. The self-edge `V → V` is dropped from the observed
 dependency graph — every binding already drops it — precisely because a well-founded

@@ -2995,6 +2995,46 @@ without stopping the axis *count*, so two of them is still two axes) was found b
 one binding's author and held by one binding's unit test, which is precisely how
 five bindings drift apart on a single `if`.
 
+##### The exemption is gated on CANDIDACY, not on well-foundedness
+
+A binding admitting this construct has to stop some existing check from firing on
+the self-edge — a cadence seeder, an observed-cycle detector, a trivial-DAE
+factoring. **That exemption MUST be gated on whether the equation is a
+*candidate* — an array-shaped unknown with at least one `index` self-read in its
+own RHS, well founded or not — and MUST NOT be gated on the well-foundedness
+verdict.**
+
+Gating on the verdict is the intuitive choice and it is wrong, in a way that
+destroys exactly what this section requires. An ill-founded self-read is by
+definition not well founded, so the exemption would not apply to it, so the
+pre-existing cycle check fires and collapses the document to one cycle error —
+and the `recurrence_not_wellfounded` / `recurrence_unsupported_form` diagnosis is
+never reached. That is the original masking defect moved from the legal case to
+the illegal one: the construct's whole purpose is to replace a silent or
+mis-attributed failure with a named one, and this gives the name back up.
+
+Candidacy answers the right question: *does the recurrence check own the
+diagnosis for this equation?* If it does, hand the equation to that check and let
+it decide; if it does not, leave every existing check exactly as it was. A scalar
+`x ~ x + 1` has no `index` read and so is not a candidate — it keeps whatever
+diagnosis it had, because a scalar self-reference has no axis to fold along and
+can never be a recurrence. So does a bare `s ~ s + 1` over an array.
+
+The distinction only *bites* where a cycle check runs inside validation. Rust's
+self-edge drop lives on the simulate path, so its validator never had a cycle to
+suppress and either gate reads the same; TypeScript's `CadenceSeeder` runs inside
+`validate()`, where the difference is six negative cases. A binding MUST
+determine which shape it has rather than copy another binding's placement — and
+that is why the negative cases are pinned in a shared corpus every binding reads
+rather than in each binding's own tests, where this flip fails nothing.
+
+Where the candidacy predicate and the recurrence validator LIVE is incidental:
+TypeScript keeps both at core level (`src/recurrence.ts`) because its `validate/`
+layer already imports its cadence module, Rust splits them across
+`structural.rs` and `simulate_array/compile.rs`. Nothing in this contract depends
+on the layering, only on the two predicates agreeing — which is best assured by
+sharing one implementation of the check between them.
+
 **What is pinned is the `(code, path)` pair, and NOT the diagnostic prose.** A
 binding MUST NOT be tested against another binding's wording. This is a
 deliberate line rather than an omission: the same defect legitimately reads
