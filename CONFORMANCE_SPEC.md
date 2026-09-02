@@ -1371,6 +1371,59 @@ exception preserved from §5.3: a RIGHT key resolving to nothing, where the pair
 is the degenerate positional case and the factors already combine on the shared
 symbol.
 
+**Two ranges over one index set — a relation joined to ITSELF (normative).**
+Case 2 resolves a data column to a loop symbol through the column's declared
+AXIS, and that map is one-to-many the moment two of the node's ranges draw
+`{from}` the same index set. Two ranges over one index set is an ordinary shape
+— it is how §4.3.1 of `esm-spec.md` spells a prefix reduction — and the same
+shape with a value-equality gate instead of an inequality `filter` is a
+**self-join**, which a relational port needs (a row paired with its predecessor;
+NONROAD's `nrstatesurrogate` county row paired with the state row of the same
+table). The pair `[l, r]` names two columns and cannot say which symbol each is
+read at, so the side assignment is fixed here.
+
+Define a node's **canonical range order**: the `output_idx` symbols that are
+ranges, in the order `output_idx` lists them, then the contracted symbols in
+ascending Unicode code-point order of their names. This is not a new order — it
+is the enumeration order a binding already walks, and the order the
+partner-restricted drive shape below means by "the LATER of the two gated axes".
+
+For one key, let `C` be the node's range symbols drawing that key's axis, in
+canonical range order. Then:
+
+* `|C| = 1` — unambiguous; both sides of a pair resolve to it. This is every
+  join between two distinct relations, so nothing about such a join changes.
+* `|C| = 2` — the **LEFT** key is read at `C[0]` and the **RIGHT** key at
+  `C[1]`. Left-to-earlier is the reading the construct's grammar suggests: in a
+  one-output self-join the output symbol is `C[0]`, so `[[prior_id, id]]` reads
+  "for each output row, match the row whose `id` equals my `prior_id`".
+* `|C| >= 3` — a binding MUST **reject** the document, naming the candidates.
+  Taking two of three would be a guess, and a guess here yields a plausible
+  wrong number (the wrong neighbour's value) rather than a failure.
+
+A clause MAY carry **`syms`**, a 2-element `[left, right]` array naming the two
+range symbols its pairs are read at. Both entries MUST name ranges of the node.
+When present it overrides the default for every pair in the clause; a key whose
+axis the named symbol does not draw, or which names a different range symbol
+outright, is a build error. `syms` is REQUIRED for the `|C| >= 3` case and is
+how an author selects the other orientation. Being names the node BINDS,
+`syms` is invisible to §5.5.6's dot-namespacing of join names and to
+`variable_map` renaming — a binding MUST carry it through both unchanged.
+
+**The default applies to case 2 only.** A key naming an INDEX SET (case 1) whose
+name is drawn by several range symbols stays a build error, because the author
+can already say which side is meant by naming the RANGE SYMBOL instead; only an
+explicit `syms` resolves that one. The asymmetry is deliberate: adding the
+capability must not remove a diagnostic. A binding that applied the default at
+case 1 would silently turn `on: [["county", "i"]]`, with `i` and `j` both
+drawing `county`, into a tautological pair and an ungated full product.
+
+A self-join introduces no new relational semantics and no new order: inner-only,
+many-to-many, identity fill for an unmatched row, the rule-5 match set sorted by
+canonical key, and the driven walk as an order-preserving subsequence of the
+full product all hold unchanged. Cross-binding conformance: the shared fixture
+`tests/valid/aggregate/join_on_self_join.esm`.
+
 A **composite key** is a clause listing several pairs over the same two loop
 symbols. It matches iff **every** pair agrees, which is tuple equality; the
 canonical composite key is the §5.5.1 rule-4 `skolem` tuple of the per-pair

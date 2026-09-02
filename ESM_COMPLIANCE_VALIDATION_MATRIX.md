@@ -376,6 +376,9 @@ Where:
 | BEHAV-10-B-004a | SHOULD: both gated symbols contracted ALONGSIDE other contracted axes (a rollup that also reduces over an unrelated axis) is driven by letting the LATER gated axis enumerate only the partners of the earlier one's current binding — still an order-preserving subsequence, and it removes the whole `N_later` factor | CONFORMANCE_SPEC.md §5.5.8 | Yes | performance |
 | BEHAV-10-B-005 | Driving MUST be a pure optimisation of the enumeration EXTENT: the driven and undriven results MUST be identical (bit-identical for a floating ⊕, since the driven walk is an order-preserving subsequence of the filtered full product) | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-006 | Because an `on` gate is EXACT rather than a conservative broad phase, a binding MUST keep every evaluation path that does not consult the gate — a vectorised/whole-array overlay, a compiled tape, a build-time observed evaluator — applying the equality. Resolving the clause into a gate ALONE, and leaving such a path evaluating an ungated product, is silently wrong rather than merely slow | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-007 | A relation MUST be joinable to ITSELF: two of the node's ranges drawing ONE index set. A key column's axis then names several candidate range symbols, and the SIDE ASSIGNMENT is normative — with exactly two candidates the LEFT key is read at the earlier in canonical range order (`output_idx` order, then the contracted symbols ascending) and the RIGHT at the later; with three or more the document MUST be rejected, naming the candidates | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-008 | A `join` clause MAY carry `syms`, a 2-element `[left, right]` array of range symbols overriding the default for every pair in the clause. Both MUST name ranges of the node; a key whose axis the named symbol does not draw is a build error. `syms` names BINDERS, so a binding MUST carry it unchanged through §5.5.6 namespacing and `variable_map` renaming, and MUST NOT rewrite it as a variable reference | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-009 | The default assignment applies to a DATA COLUMN's axis only. A key NAMING an index set that several range symbols draw MUST stay a build error advising the range symbol (or `syms`) — adding the self-join capability must not remove that diagnostic, or `on: [["county", "i"]]` with two ranges over `county` becomes a tautological pair and an ungated product | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 
 > **Binding status (2026-08-31)**: **Rust** implements all six plus the -004a SHOULD.
 > `join.rs::resolve_aggregate_joins` resolves each pair to `(loop symbol, KeyColumn)` —
@@ -391,6 +394,22 @@ Where:
 > the shared fixture `tests/valid/aggregate/join_on_data_columns.esm`, whose inline
 > `count(1) = 5` reads the join's cardinality directly (a binding that drops the clause
 > computes the full product's 12).
+>
+> **-007 / -008 / -009 (self-join) status (2026-09-02): Rust, Julia and Python all
+> three.** The resolution is the same in each: a node's canonical range order orders an
+> ambiguous axis's candidates, the left/right default applies at the DATA-COLUMN step
+> only, and a clause's `syms` overrides it (Rust `join.rs::Pick` / `Via`; Julia
+> `_join_sym_for_key(…, pick, order, via)`; Python the same signature). TypeScript and
+> Go carry `syms` through unchanged with no code change — a join clause is an open bag
+> in both (`{[k: string]: unknown}` / `[]any`) — and validate it from the synced
+> schema. Gates: the shared fixture `tests/valid/aggregate/join_on_self_join.esm`
+> (`priorSum = 1111`, NOT the transposed 11110 nor the ungated 55555; `pairCount = 4`,
+> NOT 25), plus `earthsci-ast-rs/tests/join_on_self_join.rs`,
+> `EarthSciAST.jl/test/join_on_self_join_test.jl` and
+> `earthsci-ast-py/tests/test_numpy_interpreter_self_join.py`, each asserting the
+> transposed answer as what the default must NOT produce and each pinning driven work
+> at the match count rather than at N². Rationale:
+> `docs/content/rfcs/self-join-two-ranges-over-one-index-set.md`.
 >
 > **Python: -001 DONE (2026-08-31), -004 MISSING.** `_resolve_join_key_column` gained
 > the data-column branch below — resolved through `ctx.var_index_sets` and read with

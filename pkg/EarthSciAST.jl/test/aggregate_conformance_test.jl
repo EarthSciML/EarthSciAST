@@ -170,6 +170,19 @@ end
         @test du[vmap["count"]] == 5.0
     end
 
+    # §5.5.8 "Two ranges over one index set" — a relation joined to ITSELF, the
+    # shared fixture. ONE 5-row table contracted over BOTH of its own ranges on
+    # a shifted key column, which resolved to no loop symbol at all before the
+    # side assignment was fixed (the column's axis named two candidate symbols
+    # and the pair could not say which). Two assertions, because a count alone
+    # would not pin WHICH pairs were admitted.
+    @testset "join_on_self_join (a relation joined to itself)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 1111.0   # NOT 11110 (transposed) or 55555 (ungated)
+        @test du[vmap["pairCount"]] == 4.0     # NOT 25 (the full product)
+    end
+
     # Build-time key-type rejection (RFC §5.3 / §5.7 rule 1). These shared
     # fixtures live in tests/invalid/aggregate/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips

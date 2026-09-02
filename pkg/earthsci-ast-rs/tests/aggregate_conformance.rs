@@ -270,6 +270,19 @@ fn join_on_data_columns_cardinality() {
     run_named("join_on_data_columns.esm");
 }
 
+/// §5.5.8 "Two ranges over one index set" — a relation joined to ITSELF, the
+/// shared fixture. ONE 5-row table contracted over BOTH of its own ranges on a
+/// shifted key column, which resolved to no loop symbol at all before the side
+/// assignment was fixed (the column's axis named two candidate symbols and the
+/// pair could not say which). Two assertions, because a count alone would not
+/// pin WHICH pairs were admitted: `priorSum` = 1111 (against 11110 for the
+/// TRANSPOSED assignment and 55555 for the ungated product) and `pairCount` = 4
+/// (against 25).
+#[test]
+fn join_on_self_join_pairs_and_cardinality() {
+    run_named("join_on_self_join.esm");
+}
+
 /// §7.3 DOWNSTREAM geometric FAQ — the second half of the value-invention
 /// end-to-end chain (bead ess-my4.3.10). The first half (mesh-edge enumeration:
 /// bool_and_or + distinct + skolem, then rank) MINTS the `edges` index set as a
