@@ -174,6 +174,17 @@ var transformingFixtures = map[string]string{
 	// normalized at load into a canonical single `y` plus a `series` list
 	// (Plot.UnmarshalJSON).
 	"tests_analyses_comprehensive.esm": "array-form plots[].y normalized to y + series",
+
+	// Data-source location resolution (esm-spec §8.2.1): a scheme-less
+	// `source.url_template` is a filesystem path, and a relative one resolves
+	// at load against the directory of the file that declared it -- the same
+	// base and the same timing rule §4.7 fixes for a `ref`. So the emitted
+	// template is the resolved absolute `file://` URL, and it is
+	// machine-specific, which is why the resolved values are pinned as
+	// repo-relative paths in tests/conformance/data_source_url/manifest.json
+	// rather than as a golden here. Same category as the four transforms above:
+	// designed, spec-mandated, and applied by every binding.
+	"data_source_relative_url.esm": "data-source location resolution (esm-spec 8.2.1)",
 }
 
 // emptyEventListExempt reports whether a diff is the one drop this test
