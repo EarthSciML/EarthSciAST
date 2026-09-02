@@ -283,6 +283,17 @@ fn join_on_self_join_pairs_and_cardinality() {
     run_named("join_on_self_join.esm");
 }
 
+/// The EXPLICIT `syms` spelling of the same self-join, with the sides swapped:
+/// each row reads its SUCCESSOR. The answer differs from the default
+/// spelling's, which is what makes this a test of `syms` rather than of the
+/// join — a binding that parses `syms` and ignores it computes the sibling
+/// fixture's 1111, and one that drops the clause computes 55555, against the
+/// correct 11110.
+#[test]
+fn join_on_self_join_syms_transposes_the_sides() {
+    run_named("join_on_self_join_syms.esm");
+}
+
 /// §7.3 DOWNSTREAM geometric FAQ — the second half of the value-invention
 /// end-to-end chain (bead ess-my4.3.10). The first half (mesh-edge enumeration:
 /// bool_and_or + distinct + skolem, then rank) MINTS the `edges` index set as a

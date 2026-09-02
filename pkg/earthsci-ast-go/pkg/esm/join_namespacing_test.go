@@ -163,3 +163,64 @@ func TestNamespaceJoin_ShadowedOutputIndexStaysABinder(t *testing.T) {
 		t.Errorf("on = %#v, want %#v (an output_idx binder must not be prefixed)", got, want)
 	}
 }
+
+// A clause's `syms` names the two RANGE SYMBOLS its `on` pairs are read at
+// (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set") — the self-join
+// disambiguation. Those are symbols the node BINDS, exactly like an `overlap`
+// clause's resolved side symbols, so this pass must carry them through
+// unchanged even when a declared variable happens to share the name.
+//
+// Getting this wrong is not a cosmetic loss: a namespaced `syms` entry names no
+// range of the node, so an executing binding would reject the document — or, if
+// it resolved leniently, read the key at the wrong side and return the wrong
+// neighbour's value.
+func TestNamespaceJoin_SymsAreBindersAndSurviveUntouched(t *testing.T) {
+	// `src` is BOTH a range symbol of the node and (adversarially) a declared
+	// variable, so a pass that namespaced `syms` by the registry would rewrite
+	// it and a pass that leaves binders alone will not.
+	varNames := map[string]bool{"row_prior": true, "row_id": true, "src": true, "c": true}
+	expr := aggregateWithJoin([]any{
+		map[string]any{
+			"on":   []any{[]any{"row_prior", "row_id"}},
+			"syms": []any{"src", "c"},
+		},
+	})
+
+	clause := joinOf(t, namespaceExprTree(expr, "M", nil, nil, varNames))[0].(map[string]any)
+	// The key COLUMNS are references and follow the registry.
+	if got, want := clause["on"], []any{[]any{"M.row_prior", "M.row_id"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("on = %#v, want %#v", got, want)
+	}
+	// The `syms` are binders and do not.
+	if got, want := clause["syms"], []any{"src", "c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("syms = %#v, want it untouched %#v", got, want)
+	}
+}
+
+// …and the same for the `variable_map` renaming pass, which rewrites the same
+// join names for a different reason.
+func TestRenameJoin_SymsAreBindersAndSurviveUntouched(t *testing.T) {
+	expr := aggregateWithJoin([]any{
+		map[string]any{
+			"on":   []any{[]any{"row_prior", "row_id"}},
+			"syms": []any{"src", "c"},
+		},
+	})
+
+	out := renameJoinNames(expr, "row_prior", "shifted_key")
+	clause := joinOf(t, out)[0].(map[string]any)
+	if got, want := clause["on"], []any{[]any{"shifted_key", "row_id"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("on = %#v, want %#v", got, want)
+	}
+	if got, want := clause["syms"], []any{"src", "c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("syms = %#v, want it untouched %#v", got, want)
+	}
+
+	// A rename whose TARGET is a range symbol must still leave `syms` alone —
+	// the pass renames variable references, and a binder is not one.
+	out2 := renameJoinNames(expr, "src", "renamed_src")
+	clause2 := joinOf(t, out2)[0].(map[string]any)
+	if got, want := clause2["syms"], []any{"src", "c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("syms = %#v, want it untouched %#v", got, want)
+	}
+}

@@ -183,6 +183,17 @@ end
         @test du[vmap["pairCount"]] == 4.0     # NOT 25 (the full product)
     end
 
+    # The EXPLICIT `syms` spelling of the same self-join, sides swapped: each row
+    # reads its SUCCESSOR. The answer DIFFERS from the default spelling's, which
+    # is what makes this a test of `syms` and not of the join — parse-and-ignore
+    # computes 1111, dropping the clause computes 55555, correct is 11110.
+    @testset "join_on_self_join_syms (explicit sides)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join_syms.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 11110.0
+        @test du[vmap["pairCount"]] == 4.0
+    end
+
     # Build-time key-type rejection (RFC §5.3 / §5.7 rule 1). These shared
     # fixtures live in tests/invalid/aggregate/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips
