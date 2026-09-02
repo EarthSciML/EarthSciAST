@@ -41,12 +41,33 @@
 //! taped paths and once per cell on the oracle — the same place the operator
 //! name is already being matched.
 //!
+//! # Per-variable overrides
+//!
+//! A variable may declare its own [`ModelVariable::element_type`], overriding
+//! the document's, and precision then propagates from the leaves of an
+//! expression rather than being one global mode
+//! ([`crate::precision_infer`]). Two thread-locals therefore exist, not one:
+//!
+//! * [`document()`] — what the document declared. The build-time GATES read
+//!   this (the index-set extent check, the unsupported-operator set): they ask
+//!   what the document is, not what the node under the cursor is.
+//! * [`active()`] — the precision of the expression node being evaluated. The
+//!   KERNELS read this. It starts at the document's and is re-armed by
+//!   [`enter`] wherever the inference pass marked a precision boundary.
+//!
+//! With no `element_type` anywhere on a variable the two are always equal and
+//! nothing is marked, so the machinery is inert.
+//!
+//! [`ModelVariable::element_type`]: crate::types::ModelVariable::element_type
+//!
 //! [`Precision::Float64`] is the default and takes the identical code path it
 //! took before this module existed: `active()` returns `Float64`, every
 //! `is_f32()` branch is not taken, and the f64 kernel tables are the same
 //! tables. Float64 results are bit-unchanged by construction, not by testing.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::compile_error::CompileError;
 use crate::types::Expr;
@@ -116,6 +137,62 @@ thread_local! {
     /// [`PrecisionGuard`], which restores the previous value on drop, so a
     /// nested build/solve cannot leak a mode to its caller.
     static ACTIVE: Cell<Precision> = const { Cell::new(Precision::Float64) };
+    /// The precision the current DOCUMENT declared, which [`ACTIVE`] starts at
+    /// and which the build-time gates ask about. Written only through
+    /// [`EnvGuard`].
+    static DOCUMENT: Cell<Precision> = const { Cell::new(Precision::Float64) };
+    /// Per-variable element-type overrides for the current document, keyed by
+    /// every spelling a consumer may use (bare and namespaced). Empty — and
+    /// therefore inert — for every document that declares none. Written only
+    /// through [`EnvGuard`].
+    static VARS: RefCell<Rc<VarPrecisions>> = RefCell::new(Rc::new(VarPrecisions::default()));
+}
+
+/// The per-variable element types a document declared.
+///
+/// Keyed by variable name under EVERY spelling a later stage may use: the bare
+/// authored name and, once flattening has namespaced it, `Model.name`. Lookup
+/// additionally falls back to the last dotted segment, so a consumer holding a
+/// namespaced name still resolves a bare registration.
+#[derive(Debug, Default, Clone)]
+pub struct VarPrecisions {
+    by_name: HashMap<String, Precision>,
+}
+
+impl VarPrecisions {
+    /// Record `name`'s declared precision (also under `Model.name` when
+    /// `model` is given).
+    pub fn insert(&mut self, model: Option<&str>, name: &str, p: Precision) {
+        self.by_name.insert(name.to_string(), p);
+        if let Some(m) = model {
+            self.by_name.insert(format!("{m}.{name}"), p);
+        }
+    }
+
+    /// The declared precision of `name`, or `None` if it declared none.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<Precision> {
+        if let Some(p) = self.by_name.get(name) {
+            return Some(*p);
+        }
+        // A consumer may hold a namespaced spelling of a bare registration
+        // (flattening prefixes) or the reverse.
+        let tail = name.rsplit('.').next()?;
+        if tail == name {
+            return None;
+        }
+        self.by_name.get(tail).copied()
+    }
+
+    /// Does this document declare any per-variable element type at all?
+    ///
+    /// False is the fast path every existing document takes: no inference pass
+    /// runs, no boundary marker is inserted, and every ingress site rounds
+    /// exactly as it did before.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
 }
 
 /// The precision the current thread is evaluating in.
@@ -137,6 +214,75 @@ pub fn is_f32() -> bool {
 #[must_use]
 pub fn round(v: f64) -> f64 {
     active().round(v)
+}
+
+/// The precision the current DOCUMENT declared.
+///
+/// This is what the build-time gates ask (index-set extents, the operators with
+/// no binary32 form): they are properties of the document, not of the node
+/// under the cursor. Use [`active()`] for anything that computes a value.
+#[inline(always)]
+#[must_use]
+pub fn document() -> Precision {
+    DOCUMENT.with(Cell::get)
+}
+
+/// The element type declared for `name`, or the document's if it declared none.
+///
+/// The ingress sites — a host-supplied parameter, a provider-fetched column, a
+/// caller `const_array` — round to THIS rather than to [`active()`]: they fill
+/// a named variable, and an exempt variable's data must arrive unrounded or the
+/// first read of it is already wrong. Expression evaluation does not need it:
+/// the inference pass has already marked the boundaries and [`active()`] is
+/// correct at every node.
+#[inline]
+#[must_use]
+pub fn of_variable(name: &str) -> Precision {
+    VARS.with(|v| v.borrow().get(name)).unwrap_or_else(document)
+}
+
+/// Does the current document declare any per-variable element type?
+#[inline]
+#[must_use]
+pub fn has_variable_overrides() -> bool {
+    VARS.with(|v| !v.borrow().is_empty())
+}
+
+/// The current document's per-variable element types.
+#[must_use]
+pub fn variable_precisions() -> Rc<VarPrecisions> {
+    VARS.with(|v| Rc::clone(&v.borrow()))
+}
+
+/// Restores the enclosing document precision and per-variable table when
+/// dropped. Held for the lifetime of one build/solve.
+#[must_use = "the precision environment is restored as soon as the guard is dropped"]
+pub struct EnvGuard {
+    prev_doc: Precision,
+    prev_active: Precision,
+    prev_vars: Rc<VarPrecisions>,
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        DOCUMENT.with(|c| c.set(self.prev_doc));
+        ACTIVE.with(|c| c.set(self.prev_active));
+        VARS.with(|v| *v.borrow_mut() = Rc::clone(&self.prev_vars));
+    }
+}
+
+/// Arm the whole precision environment for one document: its declared
+/// precision (which [`active()`] also starts at) and its per-variable
+/// overrides.
+pub fn enter_env(doc: Precision, vars: Rc<VarPrecisions>) -> EnvGuard {
+    let prev_doc = DOCUMENT.with(|c| c.replace(doc));
+    let prev_active = ACTIVE.with(|c| c.replace(doc));
+    let prev_vars = VARS.with(|v| std::mem::replace(&mut *v.borrow_mut(), vars));
+    EnvGuard {
+        prev_doc,
+        prev_active,
+        prev_vars,
+    }
 }
 
 /// Restores the enclosing [`Precision`] when dropped.

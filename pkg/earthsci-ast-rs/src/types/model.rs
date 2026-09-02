@@ -207,6 +207,27 @@ pub struct ModelVariable {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_units: Option<String>,
 
+    /// Floating-point precision of THIS variable and of the arithmetic over it,
+    /// overriding the document-wide `domain.element_type` (esm-spec §11.3.1).
+    ///
+    /// This is NOT [`ModelVariable::var_type`]. That field is the variable's
+    /// semantic role (`unknown` / `parameter`); this one is its element type.
+    ///
+    /// It exists for the split a single document-wide precision cannot express.
+    /// A relational model may be binary32 in its floating-point *quantities* —
+    /// reproducing a `real*4` reference — while its join keys are integers
+    /// binary32 cannot represent: a ten-digit SCC code is ~2.26e9, 135× above
+    /// binary32's exact-integer limit of 2^24, so under a document-wide
+    /// `Float32` two distinct codes collapse onto one and a `join.on` over them
+    /// merges unrelated rows. Declaring the key columns `Float64` keeps them
+    /// exact while the quantities follow the document.
+    ///
+    /// `None` means the document's `domain.element_type`. See
+    /// [`crate::precision_infer`] for how the declaration propagates through an
+    /// expression and what it refuses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_type: Option<String>,
+
     /// Brief description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -257,6 +278,7 @@ impl Default for ModelVariable {
             units: None,
             default: None,
             default_units: None,
+            element_type: None,
             description: None,
             shape: None,
             location: None,

@@ -180,6 +180,10 @@ pub fn is_evaluable_op(op: &str) -> bool {
         | "broadcast" | "intersect_polygon" | "polygon_intersection_area"
         // Closed function registry.
         | "fn"
+        // The engine-internal precision-boundary marker
+        // (`crate::precision_infer::MARKER_OP`): a transparent wrapper that
+        // evaluates its one operand at a stated element type. Never authored.
+        | crate::precision_infer::MARKER_OP
     )
 }
 
@@ -275,6 +279,24 @@ fn eval_op_named(op: &str, node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
                 return Value::Scalar(f64::NAN);
             }
             negate(eval(&node.args[0], ctx))
+        }
+
+        // The precision-boundary marker inserted by
+        // `crate::precision_infer`: evaluate the one operand at the element
+        // type it names, then hand the value back unchanged. Widening
+        // binary32 → binary64 is exact, so the carrier stays invisible; the
+        // marker only decides which kernel table the subtree resolves.
+        crate::precision_infer::MARKER_OP => {
+            if node.args.len() != 1 {
+                return Value::Scalar(f64::NAN);
+            }
+            match crate::precision_infer::marker_precision(node) {
+                Some(p) => {
+                    let _guard = crate::precision::enter(p);
+                    eval(&node.args[0], ctx)
+                }
+                None => eval(&node.args[0], ctx),
+            }
         }
 
         // Unary / scalar transcendentals.

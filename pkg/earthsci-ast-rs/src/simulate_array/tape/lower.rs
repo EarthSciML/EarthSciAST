@@ -562,6 +562,18 @@ impl<'m> TapeBuilder<'m> {
     /// `eval_op_named` — the tape's half of the issue-#101 fix).
     fn lower_op_code(&mut self, code: VecOp, node: &Arc<ExpressionNode>, bx: &LBox) -> LResult<LV> {
         match code {
+            // The precision-boundary marker (`crate::precision_infer`). The
+            // tape resolves its kernels at EXECUTION, from the thread-local
+            // precision, so a boundary cannot be honoured by a guard held only
+            // while lowering: the instruction it emitted would run later, in
+            // whatever precision was then in force. Bail to the vectorized
+            // overlay / per-cell oracle, both of which evaluate the marker
+            // where its guard is still standing. Reachable only in a document
+            // that declares a per-variable `element_type`.
+            VecOp::Precision => bail_tape!(
+                "op: `{}` precision boundary (the tape resolves kernels at execution)",
+                node.op
+            ),
             VecOp::Arith(code) => {
                 let Some((first, rest)) = node.args.split_first() else {
                     bail_tape!("op: `{}` with no arguments", node.op);

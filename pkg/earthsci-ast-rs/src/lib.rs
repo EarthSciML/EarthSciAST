@@ -100,6 +100,7 @@ pub mod provider;
 /// per-operation binary32 rounding) is observable, and a host embedding the
 /// evaluator needs to be able to name it.
 pub mod precision;
+pub mod precision_infer;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
 pub(crate) mod reference_resolution;

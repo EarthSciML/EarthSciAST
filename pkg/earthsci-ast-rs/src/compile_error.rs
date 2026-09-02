@@ -168,6 +168,40 @@ pub enum CompileError {
         reason: String,
     },
 
+    /// One operator's operands carry DIFFERENT declared element types
+    /// (`ModelVariable.element_type`, esm-spec §11.3.1).
+    ///
+    /// Refused rather than resolved by a usual-arithmetic-conversions rule,
+    /// because every resolution is a silent answer to a question only the
+    /// author can settle. Widening to the wider operand makes a quantity
+    /// declared binary32 come out binary64 — the declaration ignored, with
+    /// nothing in the result to say so. Narrowing to the narrower destroys the
+    /// binary64 operand, which is the very corruption per-variable element
+    /// types exist to prevent (a ten-digit key rounded to binary32 collides
+    /// with its neighbours). So the mix is an error naming both variables, and
+    /// the author states the intent by computing the mixed step into a variable
+    /// whose own `element_type` says which precision it is in.
+    #[error(
+        "mixed_element_type: operator '{op}' mixes operands of different element types — \
+         {lhs_name} is {lhs_type} and {rhs_name} is {rhs_type}. One operator cannot be both; \
+         neither widening nor narrowing is silently applied. Compute one side into a variable \
+         whose own `element_type` states which precision that step lands in, then combine the \
+         declared variables (esm-spec §11.3.1)"
+    )]
+    MixedElementType {
+        /// The operator whose operands disagree (or `"equation"` for an
+        /// equation whose right-hand side disagrees with its left-hand side).
+        op: String,
+        /// A variable supplying the first element type.
+        lhs_name: String,
+        /// That variable's element type.
+        lhs_type: String,
+        /// A variable supplying the conflicting element type.
+        rhs_name: String,
+        /// That variable's element type.
+        rhs_type: String,
+    },
+
     /// A BARE array-level expression whose operand is declared over an index
     /// set the result does not have (esm-spec §4.3.4).
     ///

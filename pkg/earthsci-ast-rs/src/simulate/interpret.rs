@@ -26,6 +26,10 @@ pub fn interpret(
         ResolvedExpr::Param(i) => prec.round(params[*i]),
         ResolvedExpr::Observed(i) => prec.round(observed[*i]),
         ResolvedExpr::Time => prec.round(t),
+        ResolvedExpr::Precision { prec, arg } => {
+            let _guard = crate::precision::enter(*prec);
+            interpret(arg, state, params, observed, t)
+        }
         ResolvedExpr::Op { op, args } => eval_op(op, args, state, params, observed, t),
         ResolvedExpr::Fn { name, args } => eval_fn(name, args, state, params, observed, t),
     }

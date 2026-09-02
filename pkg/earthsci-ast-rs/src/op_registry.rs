@@ -220,6 +220,11 @@ pub fn arity_of(op: &str) -> Option<Arity> {
         "/" | "^" => Arity::Exact(2),
         // `neg` is the canonical unary negation `canonicalize.rs` emits.
         "neg" => Arity::Exact(1),
+        // The engine-internal precision-boundary marker
+        // (`crate::precision_infer::MARKER_OP`), inserted after the typed
+        // parse and never authored: a transparent unary wrapper naming the
+        // element type its operand is evaluated at.
+        crate::precision_infer::MARKER_OP => Arity::Exact(1),
 
         // --- Elementary functions (§4.2). All unary except `atan2` and
         // `min`/`max`.

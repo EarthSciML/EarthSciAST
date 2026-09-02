@@ -855,6 +855,8 @@ pub(super) enum VecOp {
     Const,
     Ifelse,
     Broadcast,
+    /// The precision-boundary marker (`crate::precision_infer::MARKER_OP`).
+    Precision,
     /// Everything the overlay does not vectorize (→ per-cell oracle).
     Unsupported,
 }
@@ -863,6 +865,7 @@ pub(super) enum VecOp {
 /// node; every dispatch below it is on the returned code.
 pub(super) fn vec_op_code(op: &str) -> VecOp {
     match op {
+        crate::precision_infer::MARKER_OP => VecOp::Precision,
         "+" => VecOp::Arith(BinCode::Add),
         "-" => VecOp::Arith(BinCode::Sub),
         "*" => VecOp::Arith(BinCode::Mul),
@@ -937,6 +940,18 @@ fn eval_vec_op_code<'a>(
     ops: &mut usize,
 ) -> Option<VecValue<'a>> {
     match code {
+        // The precision-boundary marker inserted by `crate::precision_infer`:
+        // evaluate the one operand at the element type it names. Handled here
+        // rather than left to `Unsupported` so a binary64 key subexpression
+        // inside an otherwise binary32 model does not drag the whole rule down
+        // to the per-cell oracle.
+        VecOp::Precision => {
+            let arg = node.args.first()?;
+            let p = crate::precision_infer::marker_precision(node)?;
+            let _guard = crate::precision::enter(p);
+            eval_vec(arg, bx, ctx, pool, ops)
+        }
+
         // Elementwise / n-ary arithmetic, plus `atan2` (binary) and the logical
         // connectives `and`/`or` (n-ary). All fold left-to-right through
         // `vec_combine` → `apply_binary` — the SAME kernel and order the per-cell

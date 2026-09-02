@@ -18,6 +18,17 @@ pub enum ResolvedExpr {
     Observed(usize),
     /// The independent variable `t`.
     Time,
+    /// A precision boundary — the `crate::precision_infer::MARKER_OP` node.
+    /// Its operand is evaluated at the element type it names, whatever the
+    /// enclosing precision is (esm-spec §11.3.1). Held as its own variant
+    /// because a plain [`ResolvedExpr::Op`] drops the node's `name`, which is
+    /// where the element type lives.
+    Precision {
+        /// The element type the operand is evaluated at.
+        prec: crate::precision::Precision,
+        /// The single operand.
+        arg: Box<ResolvedExpr>,
+    },
     /// Operator node.
     Op {
         /// Operator name (string-tagged for v1; cheap to dispatch on).
@@ -143,6 +154,28 @@ pub(super) fn resolve_expr(
                     .flatten()
             {
                 return Err(CompileError::Float32Unsupported { construct, reason });
+            }
+            // The precision-boundary marker, resolved to its own variant so
+            // the element type in `name` survives to evaluation.
+            if let Some(prec) = crate::precision_infer::marker_precision(node) {
+                let arg = node.args.first().ok_or_else(|| {
+                    CompileError::InterpreterBuildError {
+                        details: format!(
+                            "`{}` op is missing its operand",
+                            crate::precision_infer::MARKER_OP
+                        ),
+                    }
+                })?;
+                return Ok(ResolvedExpr::Precision {
+                    prec,
+                    arg: Box::new(resolve_expr(
+                        arg,
+                        state_index,
+                        param_index,
+                        observed_index,
+                        obs_limit,
+                    )?),
+                });
             }
             // Closed-registry function call (esm-spec §9.2): resolve to the
             // dedicated `Fn` variant so the callee `name` and any inline array

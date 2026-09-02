@@ -1134,21 +1134,38 @@ pub fn esm_problem<'a>(
     // binary64 at build time would disagree with the same subexpression
     // evaluated in binary32 at run time.
     let prec = element_type_of(owned_json.as_ref(), owned_file.as_ref(), flat_only)?;
-    let _precision_guard = precision::enter(prec);
+    // Per-variable overrides (`ModelVariable.element_type`, esm-spec §11.3.1)
+    // are read from the same raw input and armed alongside the document's
+    // precision, because the ingress sites below — and the provider fetches in
+    // `prepare` — fill NAMED variables and must round each to ITS declared
+    // precision, not to the document's. Empty for every document that declares
+    // none, which is the inert path.
+    let var_precisions = variable_element_types_of(
+        owned_json.as_ref(),
+        owned_file.as_ref(),
+        flat_only,
+        prec,
+    )?;
+    let _precision_guard = precision::enter_env(prec, std::rc::Rc::new(var_precisions));
 
     // Host-supplied numbers are the one class of value the evaluator does not
     // itself produce, so they are rounded ONCE here rather than on each of the
     // O(N) reads of them. Everything computed downstream is binary32 already,
-    // every operation having rounded.
-    if prec.is_f32() {
-        for v in opts.p.values_mut() {
-            *v = prec.round(*v);
+    // every operation having rounded. Each is rounded to the precision of the
+    // variable it binds: an override that spared a key column on the provider
+    // path but not on the host-supplied one would be no exemption at all.
+    if prec.is_f32() || precision::has_variable_overrides() {
+        for (k, v) in opts.p.iter_mut() {
+            *v = precision::of_variable(k).round(*v);
         }
-        for v in opts.u0.values_mut() {
-            *v = prec.round(*v);
+        for (k, v) in opts.u0.iter_mut() {
+            *v = precision::of_variable(k).round(*v);
         }
-        for a in opts.const_arrays.values_mut() {
-            a.mapv_inplace(|x| prec.round(x));
+        for (k, a) in opts.const_arrays.iter_mut() {
+            let kp = precision::of_variable(k);
+            if kp.is_f32() {
+                a.mapv_inplace(|x| kp.round(x));
+            }
         }
     }
 
@@ -1224,6 +1241,23 @@ pub fn esm_problem<'a>(
                     }
                 }
             }
+        }
+    }
+
+    // ---- (3b) Static precision inference. ---------------------------------
+    // Propagate every `ModelVariable.element_type` over the equations and mark
+    // the precision boundaries (esm-spec §11.3.1). It runs HERE — after the
+    // typed parse, which is what expands `expression_templates` and resolves
+    // `$ref` imports, and before the compile that lowers the equations — so the
+    // pass sees the same tree the evaluator will and no template body escapes
+    // it. Skipped entirely, not merely a no-op walk, for a document that
+    // declares no per-variable element type.
+    if precision::has_variable_overrides()
+        && let Some(f) = owned_file.as_mut()
+        && let Some(models) = f.models.as_mut()
+    {
+        for model in models.values_mut() {
+            crate::precision_infer::annotate_model(model, prec).map_err(SimulateError::Compile)?;
         }
     }
 
@@ -1312,6 +1346,69 @@ fn element_type_of(
                 .and_then(|d| d.element_type.clone())
         });
     Precision::from_element_type(named.as_deref()).map_err(SimulateError::Compile)
+}
+
+/// Collect every `ModelVariable.element_type` the document declares
+/// (esm-spec §11.3.1), keyed by both the bare and the `Model.name` spelling.
+///
+/// Read off whichever form of the input the caller gave, and — like
+/// [`element_type_of`] — off the RAW JSON textually where there is one,
+/// because it has to be armed before the build pipeline runs.
+///
+/// Returns an EMPTY table for the overwhelmingly common document that declares
+/// none, which is what keeps the whole per-variable path inert.
+///
+/// # Errors
+///
+/// [`SimulateError::Compile`] wrapping
+/// [`crate::compile_error::CompileError::UnsupportedElementType`] for a
+/// spelling that is neither `"Float64"` nor `"Float32"`.
+fn variable_element_types_of(
+    raw: Option<&JsonValue>,
+    file: Option<&EsmFile>,
+    flat: Option<&FlattenedSystem>,
+    document: Precision,
+) -> Result<precision::VarPrecisions, SimulateError> {
+    let mut out = precision::VarPrecisions::default();
+    let mut record = |model: Option<&str>, name: &str, spelling: Option<&str>| {
+        match Precision::from_element_type(spelling) {
+            Ok(p) => {
+                out.insert(model, name, p);
+                Ok(())
+            }
+            Err(e) => Err(SimulateError::Compile(e)),
+        }
+    };
+    if let Some(models) = raw.and_then(|v| v.get("models")).and_then(JsonValue::as_object) {
+        for (mname, model) in models {
+            let Some(vars) = model.get("variables").and_then(JsonValue::as_object) else {
+                continue;
+            };
+            for (vname, var) in vars {
+                let Some(et) = var.get("element_type").and_then(JsonValue::as_str) else {
+                    continue;
+                };
+                record(Some(mname), vname, Some(et))?;
+            }
+        }
+        return Ok(out);
+    }
+    if let Some(models) = file.and_then(|f| f.models.as_ref()) {
+        for (mname, model) in models {
+            for (vname, var) in &model.variables {
+                let Some(et) = var.element_type.as_deref() else {
+                    continue;
+                };
+                record(Some(mname), vname, Some(et))?;
+            }
+        }
+        return Ok(out);
+    }
+    // A flattened system carries namespaced names and no per-variable element
+    // types of its own; nothing to collect. `document` stays the answer for
+    // every name.
+    let _ = (flat, document);
+    Ok(out)
 }
 
 /// Reject integrating a Float32 document.

@@ -588,6 +588,21 @@ fn vi_eval_op(node: &Value, ctx: &ViCtx, bindings: &Bindings) -> Result<Val, Val
     };
     let prec = crate::precision::active();
     match op {
+        // The precision-boundary marker inserted by
+        // `crate::precision_infer`: evaluate the one operand at the element
+        // type it names. `Val::Int` and `Val::Key` are exact and unaffected;
+        // what the guard changes is the float arms below and the ingress
+        // rounding of literals, parameters and gathered array cells.
+        crate::precision_infer::MARKER_OP => {
+            let inner = arg(0)?;
+            match crate::precision_infer::marker_precision_json(node) {
+                Some(p) => {
+                    let _guard = crate::precision::enter(p);
+                    vi_eval(inner, ctx, bindings)
+                }
+                None => vi_eval(inner, ctx, bindings),
+            }
+        }
         "index" => vi_index(node, ctx, bindings),
         "skolem" => Ok(Val::Key(vi_skolem(node, ctx, bindings)?)),
         "true" => Ok(Val::Bool(true)),

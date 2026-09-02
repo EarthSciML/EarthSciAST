@@ -599,20 +599,29 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
 // namespaced model names, and every dotted key additionally surfaces under its
 // unique shallowest bare tail — the spelling the authored expressions use).
 // --------------------------------------------------------------------------- //
-/// Round an array of EXTERNAL data to the active working precision
-/// (`crate::precision`, esm-spec §11.3.1).
+/// Round an array of EXTERNAL data to the working precision of the variable
+/// `key` fills (`crate::precision`, esm-spec §11.3.1).
 ///
 /// Loaded data is the one class of value the evaluator does not itself produce,
 /// so under `element_type: "Float32"` it is rounded ONCE here rather than on
 /// each of the O(N) reads of it; every value computed downstream is already
 /// binary32 because every operation rounds. Identity under Float64.
 ///
+/// The precision is the TARGET VARIABLE's, not the document's, because a data
+/// column is exactly where a per-variable `element_type` has to bite: a
+/// document-wide binary32 rounding applied to an ingested ten-digit key
+/// collapses distinct codes onto one another before a single expression has
+/// run (`2265007010` and `2265007015` both become `2265007104`), so a key
+/// column declared `Float64` must arrive unrounded. The provider key IS the
+/// variable name it fills (`esio_provider`'s `ParamBinding::key`), bare or
+/// `Model.var`, which is the spelling `precision::of_variable` resolves.
+///
 /// Applied only to genuinely external arrays — a caller's `const_arrays`, a
 /// provider sample, a gated fetch. NOT to a member-id factor (invented integer
 /// ids, which binary32 would corrupt above 2^24) and not to an
 /// evaluator-produced field (already binary32, so it would be a no-op sweep).
-fn round_external(mut a: ArrayD<f64>) -> ArrayD<f64> {
-    let prec = crate::precision::active();
+fn round_external(key: &str, mut a: ArrayD<f64>) -> ArrayD<f64> {
+    let prec = crate::precision::of_variable(key);
     if prec.is_f32() {
         a.mapv_inplace(|x| prec.round(x));
     }
@@ -1381,7 +1390,10 @@ impl<'o> BuildState<'o> {
     ) -> Result<Vec<GatedProvider>, PrepareError> {
         self.arrays = const_arrays
             .into_iter()
-            .map(|(k, a)| (k, round_external(a)))
+            .map(|(k, a)| {
+                let rounded = round_external(&k, a);
+                (k, rounded)
+            })
             .collect();
         let mut gated: Vec<GatedProvider> = Vec::new();
         let n_providers = providers.len();
@@ -1395,7 +1407,7 @@ impl<'o> BuildState<'o> {
             if let Some(a) = discovered.remove(&k) {
                 // Already materialized by the extent-discovery pre-pass; never
                 // sampled twice.
-                self.arrays.insert(k, round_external(a));
+                self.arrays.insert(k.clone(), round_external(&k, a));
             } else if let Some(gate) = pd_gates.get(&k) {
                 // Record-derived gate (the rewrite's own metadata.x_esd.pushdown):
                 // defer — value-invention must derive the gating set's members
@@ -1417,7 +1429,7 @@ impl<'o> BuildState<'o> {
                     "  [prepare] const provider {k} -> {:?}",
                     a.shape()
                 ));
-                self.arrays.insert(k, round_external(a));
+                self.arrays.insert(k.clone(), round_external(&k, a));
             }
         }
         self.report(
@@ -1717,7 +1729,7 @@ impl<'o> BuildState<'o> {
                 "  [prepare] gated fetch {key} -> {target} {:?}",
                 arr.shape()
             ));
-            self.arrays.insert(target, round_external(arr));
+            self.arrays.insert(target.clone(), round_external(&target, arr));
         }
         self.report(
             PreparePhase::GatedFetch,
