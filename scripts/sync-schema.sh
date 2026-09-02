@@ -93,6 +93,24 @@ fi
 
 # ---------------------------------------------------------------------------
 # pkg/earthsci-ast-ts/src/generated-validator.js
+#
+# NOTE (why a SKIP is a FAILURE in --check mode). Both TS artifacts below need
+# `npm install` to verify. This gate used to SKIP them when node_modules was
+# absent WITHOUT setting `drifted`, so `--check` exited 0 on a tree where they
+# had drifted -- and that is exactly how the `element_type` schema change
+# (0bbe8957b) shipped with a stale `generated-validator.js` AND a stale
+# `generated.ts`: whoever ran this script ran it without node_modules, saw the
+# four JSON copies and `embedded-schema.ts` reported OK (that one needs no
+# dependencies), and got exit 0.
+#
+# `scripts/test-conformance.sh` already learned this lesson -- see
+# `check_language_availability`, audit F10: "There is no way to express 'I
+# could not check this' in an exit code, so the only honest answer is failure."
+# A missing toolchain there is a broken environment, not a smaller test run.
+# Same here: a check that did not run has not passed.
+#
+# Non-check mode still just skips, because regenerating what you cannot
+# regenerate is not a thing to fail over.
 # ---------------------------------------------------------------------------
 # The schema, precompiled by Ajv into a standalone validator so that validating
 # a document needs no runtime code generation (and therefore no 'unsafe-eval' in
@@ -111,7 +129,12 @@ if [[ ! -f "$TS_VGEN" ]]; then
   echo "MISSING: $TS_VALIDATOR generator"
   drifted=1
 elif [[ ! -d "${REPO_ROOT}/pkg/earthsci-ast-ts/node_modules/ajv" ]]; then
-  echo "SKIP:    $TS_VALIDATOR (needs pkg/earthsci-ast-ts npm install; covered by its test suite)"
+  echo "SKIP:    $TS_VALIDATOR (needs pkg/earthsci-ast-ts npm install)"
+  if [[ "$check_mode" == true ]]; then
+    echo "         --check cannot verify this artifact without node_modules, and a"
+    echo "         check that did not run has not passed. Run: (cd pkg/earthsci-ast-ts && npm install)"
+    drifted=1
+  fi
 elif [[ "$check_mode" == true ]]; then
   if v_result=$(node "$TS_VGEN" --check 2>&1); then
     echo "OK:      $TS_VALIDATOR (precompiled from esm-schema.json)"
@@ -152,6 +175,11 @@ if [[ ! -f "${REPO_ROOT}/${TS_TYPES}" ]]; then
   drifted=1
 elif [[ ! -x "${TS_DIR}/node_modules/.bin/json2ts" ]]; then
   echo "SKIP:    $TS_TYPES (needs pkg/earthsci-ast-ts npm install: json2ts is a dev dependency)"
+  if [[ "$check_mode" == true ]]; then
+    echo "         --check cannot verify this artifact without node_modules, and a"
+    echo "         check that did not run has not passed. Run: (cd pkg/earthsci-ast-ts && npm install)"
+    drifted=1
+  fi
 elif [[ "$check_mode" == true ]]; then
   ts_types_snapshot="$(mktemp)"
   cp "${REPO_ROOT}/${TS_TYPES}" "$ts_types_snapshot"

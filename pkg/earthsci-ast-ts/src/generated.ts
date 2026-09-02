@@ -29,6 +29,10 @@ export type ModelVariable = ModelVariable1 & {
    * Units of the default value, if different from the declared units field. When present, validators flag a unit_inconsistency error if these do not match the declared units (including dimensionally incompatible cases like K vs kg, and same-dimension mismatches like K vs degC). Default is the same as `units`.
    */
   default_units?: string;
+  /**
+   * Floating-point precision of THIS variable and of the arithmetic over it, overriding the document-wide `domain.element_type` (esm-spec §11.3.1). It exists for the key/quantity split one document-wide precision cannot express: a relational model whose floating-point QUANTITIES are binary32 still has join keys and integer identifiers binary32 cannot represent (an SCC code is ~2.26e9, 135x binary32's exact-integer limit of 2^24), so the keys declare `Float64` while the quantities follow the document. Precision propagates from the leaves: an operator evaluates at its operands' precision, a numeric literal adopts its context's, and an operator whose operands carry DIFFERENT precisions is an error naming both variables — never a silent widening. Omitted means the document's `domain.element_type`.
+   */
+  element_type?: "Float32" | "Float64";
   description?: string;
   /**
    * Arrayed-variable shape: ordered list of index-set names drawn from the document-scoped `index_sets` registry. Omitted or null indicates a scalar. REQUIRED for a parameter whose `update` is `schedule`, `data`, or `remesh` — such a parameter is a buffer whose extent is fixed at setup and refilled on a discrete cadence, so its extent must be known ahead of time (RFC semiring-faq-unified-ir §6.1); an empty array is a valid (scalar) shape.
