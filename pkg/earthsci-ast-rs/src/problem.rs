@@ -372,7 +372,7 @@ pub struct EsmProblem {
     /// esm-spec §11.3), captured at construction. Every run entry re-arms it
     /// (`precision::enter`) so a problem carries its own precision rather than
     /// depending on what the calling thread last evaluated.
-    pub(crate) precision: Precision,
+    pub(crate) precision: precision::Env,
     /// The integration interval.
     pub(crate) tspan: (f64, f64),
     /// Parameter bindings.
@@ -454,7 +454,7 @@ impl EsmProblem {
     /// (esm-spec §11.3), [`Precision::Float64`] unless the document said
     /// `"Float32"`.
     pub fn precision(&self) -> Precision {
-        self.precision
+        self.precision.document
     }
 
     /// Whether this EsmProblem has a right-hand side to integrate.
@@ -681,7 +681,7 @@ fn resolve_observed_key<'a>(
 pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     let model = prob.model_name.as_deref().unwrap_or("");
     let components = field_components(prob);
     let single = components.len() == 1;
@@ -772,7 +772,7 @@ pub fn observed_trajectory(
 ) -> Result<Vec<f64>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     let one = [name.to_string()];
     // The bulk form omits what it cannot resolve; the singular one must not,
     // so an empty result becomes the diagnostic the resolver would have given.
@@ -816,7 +816,7 @@ pub fn observed_trajectories(
 ) -> Result<Vec<(String, Vec<f64>)>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     let compiled = match &*prob.backend {
         Backend::Scalar(c) => c,
         Backend::Array(_) => {
@@ -930,7 +930,7 @@ pub struct Remake {
 pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     let known: std::collections::HashSet<String> = prob.parameter_names().into_iter().collect();
     let known_bare: HashMap<String, usize> = {
         let mut counts: HashMap<String, usize> = HashMap::new();
@@ -978,7 +978,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
     Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
         model_name: prob.model_name.clone(),
-        precision: prob.precision,
+        precision: prob.precision.clone(),
         tspan,
         p,
         u0,
@@ -1318,7 +1318,7 @@ pub fn esm_problem<'a>(
     let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
         model_name,
-        precision: prec,
+        precision: precision::Env::capture(),
         tspan,
         p: std::mem::take(&mut opts.p),
         u0: std::mem::take(&mut opts.u0),
@@ -1707,7 +1707,7 @@ fn bind_providers(
 pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     reject_f32_integration(prob)?;
     let effective = effective_options(prob, opts);
     match &*prob.backend {
@@ -1915,7 +1915,7 @@ pub fn init<'a>(
 ) -> Result<Integrator<'a>, SimulateError> {
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
-    let _precision_guard = precision::enter(prob.precision);
+    let _precision_guard = prob.precision.enter();
     reject_f32_integration(prob)?;
     if let Backend::Static(reason) = &*prob.backend {
         return Err(SimulateError::NotDynamic {
@@ -1969,7 +1969,7 @@ impl Integrator<'_> {
     pub fn step(&mut self) -> Result<StepStatus, SimulateError> {
         // Re-arm the document's working precision (esm-spec §11.3); a stepping
         // caller reaches the RHS without passing back through `solve`.
-        let _precision_guard = precision::enter(self.prob.precision);
+        let _precision_guard = self.prob.precision.enter();
         if !self.retcode.is_success() {
             return Ok(StepStatus::Done);
         }

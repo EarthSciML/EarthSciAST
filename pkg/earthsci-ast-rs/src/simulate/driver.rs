@@ -206,16 +206,19 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
-    // Arm the document's `domain.element_type` for the build
-    // (`crate::precision`): these are public entries that do not go through
-    // `EsmProblem`, and the compiled artifact records the precision it folded
-    // its constants in. Re-arming the mode `EsmProblem` already set is a no-op.
-    let _precision_guard = crate::precision::enter(
-        crate::precision::Precision::from_element_type(
-            file.domain.as_ref().and_then(|d| d.element_type.as_deref()),
-        )
-        .map_err(SimulateError::Compile)?,
-    );
+    // Arm the document's whole precision environment for the build
+    // (`crate::precision`) — its `domain.element_type` AND the per-variable
+    // `element_type` overrides under it (esm-spec §11.3.1). These are public
+    // entries that do not go through `EsmProblem`, and the compiled artifact
+    // records the environment it folded its constants in. Re-arming what
+    // `EsmProblem` already set is a no-op.
+    let env = crate::precision_infer::env_of_file(file).map_err(SimulateError::Compile)?;
+    let _precision_guard = env.enter();
+    // Under a per-variable element type the equations need their precision
+    // boundaries marked before they are lowered, which means working from an
+    // annotated COPY (`None`, and no copy at all, for every other document).
+    let annotated = crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
+    let file = annotated.as_ref().unwrap_or(file);
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
         let flat = flatten(file).map_err(CompileError::from)?;
@@ -259,16 +262,15 @@ pub fn compile_array(file: EsmFile) -> Result<crate::simulate_array::ArrayCompil
             },
         ));
     }
-    // Arm the document's `domain.element_type` for the build
-    // (`crate::precision`): these are public entries that do not go through
-    // `EsmProblem`, and the compiled artifact records the precision it folded
-    // its constants in. Re-arming the mode `EsmProblem` already set is a no-op.
-    let _precision_guard = crate::precision::enter(
-        crate::precision::Precision::from_element_type(
-            file.domain.as_ref().and_then(|d| d.element_type.as_deref()),
-        )
-        .map_err(SimulateError::Compile)?,
-    );
+    // As `build_array_compiled`: the document's whole precision environment,
+    // and an annotated copy when (and only when) a variable declares its own
+    // `element_type` (esm-spec §11.3.1).
+    let env = crate::precision_infer::env_of_file(&file).map_err(SimulateError::Compile)?;
+    let _precision_guard = env.enter();
+    let file = match crate::precision_infer::annotated(&file).map_err(SimulateError::Compile)? {
+        Some(annotated) => annotated,
+        None => file,
+    };
     let model_count = file.models.as_ref().map_or(0, |m| m.len());
     if model_count > 1 {
         let flat = flatten(&file).map_err(CompileError::from)?;

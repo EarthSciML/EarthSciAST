@@ -492,7 +492,7 @@ pub struct ArrayCompiled {
     /// folding and run-time evaluation must round identically, and the
     /// artifact carrying its own precision is what makes that true by
     /// construction rather than by the caller remembering.
-    precision: crate::precision::Precision,
+    precision: crate::precision::Env,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.

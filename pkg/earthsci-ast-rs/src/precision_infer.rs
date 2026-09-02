@@ -73,7 +73,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::compile_error::CompileError;
-use crate::precision::Precision;
+use std::rc::Rc;
+
+use crate::precision::{Env, Precision, VarPrecisions};
 use crate::types::{Equation, Expr, ExpressionNode, Model};
 
 /// The engine-internal operator that marks a precision boundary.
@@ -178,6 +180,62 @@ pub fn annotate_model(model: &mut Model, document: Precision) -> Result<(), Comp
     model.equations = annotated?;
     model.initialization_equations = annotated_init.transpose()?;
     Ok(())
+}
+
+/// The precision environment `file` declares: its `domain.element_type`, and
+/// every `ModelVariable.element_type` under it, keyed by both the bare and the
+/// `Model.name` spelling.
+///
+/// # Errors
+///
+/// [`CompileError::UnsupportedElementType`] for any spelling that is neither
+/// `"Float64"` nor `"Float32"`.
+pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
+    let document = Precision::from_element_type(
+        file.domain
+            .as_ref()
+            .and_then(|d| d.element_type.as_deref()),
+    )?;
+    let mut vars = VarPrecisions::default();
+    for (mname, model) in file.models.iter().flatten() {
+        for (vname, var) in &model.variables {
+            let Some(et) = var.element_type.as_deref() else {
+                continue;
+            };
+            vars.insert(Some(mname), vname, Precision::from_element_type(Some(et))?);
+        }
+    }
+    Ok(Env {
+        document,
+        variables: Rc::new(vars),
+    })
+}
+
+/// `file` with every equation annotated, or `None` when it declares no
+/// per-variable `element_type` and is therefore already what the evaluator
+/// should see.
+///
+/// The `None` arm is what keeps the public build entries free of a
+/// whole-document clone: only a document that uses the feature pays for one.
+///
+/// # Errors
+///
+/// As [`annotate_model`].
+pub fn annotated(file: &crate::types::EsmFile) -> Result<Option<crate::types::EsmFile>, CompileError> {
+    let declares = file
+        .models
+        .iter()
+        .flatten()
+        .any(|(_, m)| m.variables.values().any(|v| v.element_type.is_some()));
+    if !declares {
+        return Ok(None);
+    }
+    let document = env_of_file(file)?.document;
+    let mut out = file.clone();
+    for model in out.models.iter_mut().flatten().map(|(_, m)| m) {
+        annotate_model(model, document)?;
+    }
+    Ok(Some(out))
 }
 
 fn annotate_equations(

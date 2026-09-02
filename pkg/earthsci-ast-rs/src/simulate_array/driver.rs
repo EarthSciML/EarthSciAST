@@ -355,7 +355,7 @@ impl ArrayCompiled {
     ) -> Result<Solution, SimulateError> {
         // Re-arm the precision this model was compiled under
         // (`crate::precision`); a no-op for a Float64 model.
-        let _precision_guard = crate::precision::enter(self.precision);
+        let _precision_guard = self.precision.enter();
         // CONST / single-segment: no discrete forcing, no refresh boundaries.
         self.solve_core(
             tspan,

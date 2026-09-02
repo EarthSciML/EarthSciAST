@@ -746,7 +746,7 @@ impl ArrayCompiled {
             index_sets: index_sets.clone(),
             namespace: None,
             const_scope,
-            precision: crate::precision::active(),
+            precision: crate::precision::Env::capture(),
         })
     }
 }

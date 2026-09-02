@@ -254,6 +254,47 @@ pub fn variable_precisions() -> Rc<VarPrecisions> {
     VARS.with(|v| Rc::clone(&v.borrow()))
 }
 
+/// A document's whole precision environment: what it declared, and the
+/// per-variable overrides that refine it.
+///
+/// Carried on the compiled artifacts ([`crate::problem::EsmProblem`] and the two
+/// backends) and re-armed at every run entry, for the same reason the document
+/// precision alone already was: a solve happens long after the build's guard has
+/// been dropped, so an artifact that remembered only "Float32" would evaluate
+/// its binary64 key columns in binary32 at run time — and get exactly the
+/// corruption the declaration exists to prevent. Cheap to clone: the table is
+/// behind an [`Rc`] and is shared, never copied.
+#[derive(Clone, Debug, Default)]
+pub struct Env {
+    /// The document's `domain.element_type`.
+    pub document: Precision,
+    /// The per-variable `element_type` overrides it declared.
+    pub variables: Rc<VarPrecisions>,
+}
+
+impl Env {
+    /// Snapshot the environment currently armed on this thread.
+    #[must_use]
+    pub fn capture() -> Env {
+        Env {
+            document: document(),
+            variables: variable_precisions(),
+        }
+    }
+
+    /// Arm this environment until the returned guard is dropped.
+    pub fn enter(&self) -> EnvGuard {
+        enter_env(self.document, Rc::clone(&self.variables))
+    }
+
+    /// Is the DOCUMENT's declared precision binary32?
+    #[inline(always)]
+    #[must_use]
+    pub fn is_f32(&self) -> bool {
+        self.document.is_f32()
+    }
+}
+
 /// Restores the enclosing document precision and per-variable table when
 /// dropped. Held for the lifetime of one build/solve.
 #[must_use = "the precision environment is restored as soon as the guard is dropped"]

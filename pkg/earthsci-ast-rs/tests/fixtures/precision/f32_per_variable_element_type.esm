@@ -1,0 +1,140 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "Float32DocumentWithBinary64Keys",
+    "description": "One document, two element types. The quantities follow domain.element_type: \"Float32\" and round per operation; the KEYS declare `element_type: \"Float64\"` and stay exact. A ten-digit SCC code is ~2.26e9, 135x above binary32's exact-integer limit of 2^24, so under one document-wide precision 2260007005 reads back as 2260006912, floor(scc/1000)*1000 gives 2260006912 instead of 2260007000, and 2260007005 and 2260007015 test EQUAL — three different ways for a relational model to merge rows that are not the same row."
+  },
+  "domain": { "element_type": "Float32" },
+  "index_sets": { "one": { "kind": "interval", "size": 1 } },
+  "models": {
+    "K": {
+      "variables": {
+        "hundred": { "type": "parameter", "units": "1", "default": 100.0 },
+        "scrap": { "type": "parameter", "units": "1", "default": 73.5 },
+        "sccExact": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2260007005.0,
+          "element_type": "Float64",
+          "description": "A ten-digit SCC code. Binary32's nearest value is 2260006912."
+        },
+        "sccNeighbour": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2260007015.0,
+          "element_type": "Float64",
+          "description": "Ten codes away, and the SAME binary32 value as sccExact."
+        },
+        "quant": { "type": "unknown", "units": "1", "shape": ["one"] },
+        "keyEcho": { "type": "unknown", "units": "1", "shape": ["one"], "element_type": "Float64" },
+        "keyBucket": { "type": "unknown", "units": "1", "shape": ["one"], "element_type": "Float64" },
+        "neighboursCollide": { "type": "unknown", "units": "1", "shape": ["one"] }
+      },
+      "equations": [
+        {
+          "_comment": "The binary32 witness, unchanged by the presence of binary64 variables elsewhere in the same document.",
+          "lhs": "quant",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "hundred",
+                    { "op": "/", "args": [{ "op": "-", "args": ["hundred", "scrap"] }, "hundred"] }
+                  ]
+                },
+                { "op": "-", "args": ["hundred", "scrap"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Ingress: a binary64 parameter reaches a binary64 unknown unrounded.",
+          "lhs": "keyEcho",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": "sccExact"
+          }
+        },
+        {
+          "_comment": "ARITHMETIC, which an ingress-only exemption would not survive: the SCC fallback ladder that widens a code to its category.",
+          "lhs": "keyBucket",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "floor", "args": [{ "op": "/", "args": ["sccExact", 1000] }] },
+                1000
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "A PREDICATE over binary64 keys inside a binary32 quantity's equation: the comparison is evaluated in binary64 and hands the arithmetic an exact flag, so two codes ten apart do not merge.",
+          "lhs": "neighboursCollide",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "one" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [{ "op": "==", "args": ["sccExact", "sccNeighbour"] }, 1.0, 0.0]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "quantities_still_round_per_operation_in_binary32",
+          "description": "The witness expression, at zero tolerance. Declaring some variables Float64 must not make the Float32 ones any more accurate.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "tolerance": { "rel": 0.0, "abs": 0.0 },
+          "assertions": [
+            { "variable": "quant", "time": 0.0, "expected": 0.9999999403953552, "coords": { "one": 1 } }
+          ]
+        },
+        {
+          "id": "a_binary64_key_survives_ingress",
+          "description": "2260007005, not binary32's 2260006912. Zero tolerance deliberately: |2260006912 - 2260007005| / 2.26e9 is 4.1e-08, two orders INSIDE the default 1e-6 relative tolerance, so a tolerance-based assertion cannot see this class of corruption at all.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "tolerance": { "rel": 0.0, "abs": 0.0 },
+          "assertions": [
+            { "variable": "keyEcho", "time": 0.0, "expected": 2260007005.0, "coords": { "one": 1 } }
+          ]
+        },
+        {
+          "id": "arithmetic_on_a_binary64_key_stays_binary64",
+          "description": "floor(scc/1000)*1000 is 2260007000 in binary64 and 2260006912 in binary32. Exempting the column only where its data ENTERS would not survive this: the first expression node over it would undo the exemption.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "tolerance": { "rel": 0.0, "abs": 0.0 },
+          "assertions": [
+            { "variable": "keyBucket", "time": 0.0, "expected": 2260007000.0, "coords": { "one": 1 } }
+          ]
+        },
+        {
+          "id": "two_codes_ten_apart_do_not_test_equal",
+          "description": "2260007005 and 2260007015 are the same binary32 number. Compared in binary64 they are not equal, so a join.on over them keeps two equipment categories apart.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "tolerance": { "rel": 0.0, "abs": 0.0 },
+          "assertions": [
+            { "variable": "neighboursCollide", "time": 0.0, "expected": 0.0, "coords": { "one": 1 } }
+          ]
+        }
+      ]
+    }
+  }
+}
