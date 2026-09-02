@@ -2987,11 +2987,21 @@ non-executing bindings carry the same rejection duty as the three executing ones
 it is the only part of this construct they implement.
 
 Conversely, admitting a well-founded recurrence MUST NOT weaken any cycle
-rejection. The self-edge `V → V` is dropped from the observed dependency graph
-(every binding already dropped it), but a cycle through two or more **distinct**
-variables is still rejected, and `tests/conformance/simulate_cycles`' fail-fast
-contract is unchanged. A binding that admits a recurrence by disabling its
-observed-cycle detector has not implemented this section.
+handling. The distinction is precisely the self-edge: `V → V` through a strictly
+earlier position is an **ordering within one variable** and is dropped from the
+observed dependency graph, while `a → b → a` is a genuine cycle that no order
+satisfies. So whatever a binding did with a two-variable algebraic cycle before,
+it must keep doing — `tests/conformance/simulate_cycles`' fail-fast contract is
+unchanged — and it must not diagnose one as a recurrence on the way. A binding
+that admits a recurrence by disabling its observed-cycle detector has not
+implemented this section.
+
+(Rust's own two-variable cycle handling is uneven and this section does not
+pretend otherwise: `circular_dependency` is a model-to-model coupling code, the
+scalar path fails fast, and the array path's two-variable algebraic cycle fails
+to materialize rather than being diagnosed. That gap predates this construct and
+is out of its scope; what this section requires is that a recurrence not be
+confused with it in either direction.)
 
 ## 6. CI Integration
 
