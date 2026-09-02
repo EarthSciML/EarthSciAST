@@ -193,6 +193,12 @@ deleted.
 
 ## Conformance
 
+Normatively: `esm-spec.md` §8.2.1 states the rule, `CONFORMANCE_SPEC.md` §5.19
+states what is compared and why `bindings_required` is all five, and
+`ESM_COMPLIANCE_VALIDATION_MATRIX.md` carries it as FORMAT-08-A-002a/b and
+BEHAV-08-B.
+
+
 `tests/conformance/data_source_url/` pins the rule: fixtures covering one
 `url_template` per row of the §8.2.1 table, and a `manifest.json` giving each
 one's expected resolution as a path relative to the **repository root** (an
@@ -232,3 +238,14 @@ decoding to a `map[string]any` and re-encoding it to substitute two strings
 would destroy that order. The typed field is the same value the serializer
 emits, so the resolved form still reaches `emit` and the observable rule is
 identical.
+
+**A third correction: the pass had to become copy-on-write.** As first written it
+rewrote `data_sources[*].source` in place. Harmless in Rust, Go and Julia, whose
+load paths already copy; a defect in Python (`load_document` only
+*shallow*-copies) and TypeScript (`loadDocument` does not copy at all), where the
+nested `source` dicts still belong to the caller. The visible symptom would not
+have been a crash: a second load of the same in-memory document would resolve an
+ALREADY-RESOLVED template, and against a different base that succeeds and reads a
+different file. That is the silent-wrong-value failure this note's refusal
+argument is about, arriving through the success path instead — so both bindings
+now pin it with a test that loads one dict twice against two different bases.
