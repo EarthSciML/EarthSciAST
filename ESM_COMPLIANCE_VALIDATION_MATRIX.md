@@ -575,11 +575,35 @@ Where:
 | FORMAT-07-B-003 | products field MUST be present | esm-spec.md:877 | Yes | format |
 | FORMAT-07-B-004 | rate field MUST be present | esm-spec.md:878 | Yes | format |
 
+### BEHAV-08-B: Data-Source Location Resolution (esm-spec §8.2.1)
+
+Unlike BEHAV-04-B (remote refs) and §4.7's `${VAR}` expansion in a `ref`, this is
+**not** an optional capability with a per-binding matrix. §8.2.1 decides where a
+document's data comes from, so a binding that resolved differently — or not at
+all — would make the same checked-in document mean two different things. That is
+the non-portability the rule exists to remove, so there is no coherent reduced
+capability and no binding is exempt.
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-08-B-001 | All five bindings implement §8.2.1 resolution identically, pinned by the shared `tests/conformance/data_source_url/manifest.json` (CONFORMANCE_SPEC §5.19); `bindings_required` is all five | esm-spec.md §8.2.1 | Yes | behavioral |
+| BEHAV-08-B-002 | The conformance pin compares the RESOLVED PATH, not merely that a read succeeded — a rule that resolves to a different file and reads it successfully is a silent-wrong-value defect no error-only assertion can catch | CONFORMANCE_SPEC §5.19.2 | Yes | behavioral |
+| BEHAV-08-B-003 | Resolution is idempotent (its output is scheme-led), so `parse → emit → parse` is stable; the resolved form is what `emit` carries, which is what makes the rule observable in a validate-only binding (Go, TypeScript have no ingest) | esm-spec.md §8.2.1 | Yes | behavioral |
+
+**Status: all five bindings conform.** Julia
+`pkg/EarthSciAST.jl/test/data_source_url_conformance_test.jl`, TypeScript
+`pkg/earthsci-ast-ts/src/data-source-urls.test.ts`, Python
+`pkg/earthsci-ast-py/tests/test_data_source_url_conformance.py`, Rust
+`pkg/earthsci-ast-rs/tests/data_source_url_conformance.rs`, Go
+`pkg/earthsci-ast-go/pkg/esm/data_source_url_conformance_test.go`.
+
 ### FORMAT-08-A: Data Loader Fields
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | FORMAT-08-A-001 | kind field MUST be present (`grid`, `points`, or `static`) | esm-spec.md §8.1 | Yes | format |
 | FORMAT-08-A-002 | source field MUST be present with url_template | esm-spec.md §8.2 | Yes | format |
+| FORMAT-08-A-002a | `source.url_template` and every `source.mirrors` entry MUST be resolved at load: scheme-led used unchanged, `{`-led used unchanged, absolute path dot-segment-removed then `file://`-prefixed, RELATIVE path joined onto the directory of the file that declared it (§4.7's base) then dot-segment-removed and `file://`-prefixed. Dot-segment removal is LEXICAL (RFC 3986 §5.2.4), never `realpath`. REQUIRED of every binding — not optional, because it decides which bytes a document reads | esm-spec.md §8.2.1 | Yes | behavioral |
+| FORMAT-08-A-002b | Environment variables MUST NOT be expanded in a `url_template` or mirror; a template containing `${` MUST be REFUSED at load with `data_source_url_unresolved`, whose message MUST name both the document site and the offending template. A resolved path containing `?` or `#` MUST be refused the same way. It MUST NOT be skipped, and MUST NOT be allowed to deliver an empty read or a consuming parameter's `default` | esm-spec.md §8.2.1 | Yes | behavioral |
 | FORMAT-08-A-003 | variables field MUST be present and non-empty | esm-spec.md §8.5 | Yes | format |
 | FORMAT-08-A-004 | each variable MUST have file_variable and units | esm-spec.md §8.5 | Yes | format |
 | FORMAT-08-A-005 | if spatial is present, crs and grid_type MUST be present | esm-spec.md §8.4 | Yes | format |

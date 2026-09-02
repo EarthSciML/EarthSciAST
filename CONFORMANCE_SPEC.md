@@ -2874,6 +2874,96 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 `element_type` and are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`
 §Precision.
 
+### 5.19 Data-Source Location Resolution (normative)
+
+esm-spec §8.2.1 fixes WHERE a `data_sources[*].source.url_template` points. All
+**five** bindings are in scope and `bindings_required` is
+`["julia", "typescript", "python", "rust", "go"]` — the only suite in §5 with no
+optional binding, and deliberately so. Resolution decides which bytes a document
+reads; a binding that resolved differently, or not at all, would make the same
+checked-in document mean two different things, which is precisely the
+non-portability §8.2.1 exists to remove. There is no coherent "reduced
+capability" here, so a binding that does not resolve is non-conforming.
+
+The shared fixtures and the pin live in `tests/conformance/data_source_url/`.
+
+#### 5.19.1 What is compared
+
+Two claims, and the second matters as much as the first.
+
+**Resolution.** For each `data_sources` entry of `fixtures/relative_catalog.esm`
+a binding loads the document and compares the delivered location against
+`manifest.json`. The fixture carries one entry per row of the §8.2.1 table:
+`./`-relative, bare relative, `../`-climbing, dot-segment-collapsing, absolute
+path, `file://` URL, `https://` URL, a non-file scheme, substitution-led, a
+relative template carrying a `{date:…}` substitution, and a primary with two
+mirrors.
+
+**Refusal.** `fixtures/env_var_catalog.esm` and
+`fixtures/env_var_mirror_catalog.esm` MUST be rejected at load with the
+diagnostic `data_source_url_unresolved`, and the message MUST contain **both**
+the offending document site (`data_sources.<name>.source.url_template`, or
+`…mirrors[<i>]`) and the offending template text. Asserting only "it was
+rejected" is insufficient: the failure this replaces was `io error at
+/${MOVES_SNAPSHOTS}/…`, which named neither, and left the reader unable to tell
+a mis-resolution from a missing file.
+
+#### 5.19.2 ⛔ The pin is the resolved path, not a successful read
+
+Expectations are `{"repo_path": …}` — a path relative to the **repository
+root** — and a binding asserts `resolved == "file://" + abspath(<repo
+root>/<repo_path>)`, dot segments already removed. A `{"verbatim": …}`
+expectation is literal, for a template §8.2.1 leaves unchanged.
+
+Two properties of this suite are load-bearing:
+
+- **The resolved path is compared, not merely the fact that a read
+  succeeded.** A rule that resolves to a *different* file and reads it
+  successfully is a silent-wrong-value defect, indistinguishable from correct
+  behaviour by any assertion that only checks for an error. Comparing the path
+  itself is the only thing that catches it.
+- **No golden holds an absolute path.** A resolved location is
+  machine-specific, so a committed golden would pass only on the machine that
+  wrote it; repo-relative expectations are portable, which is the same property
+  the rule under test is about.
+
+Nothing in the suite exists on disk. §8.2.1 resolution is lexical (RFC 3986
+§5.2.4, never `realpath`) precisely so a template naming one file per timestep
+resolves like any other, and a fixture pointing at a real file would hide a
+binding that had reached for the filesystem.
+
+#### 5.19.3 Gate
+
+There is **no sixth producer and no per-binding adapter**. Each binding's own
+suite reads `manifest.json` and asserts against it, and
+`./scripts/test-conformance.sh` already runs all five suites:
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/data_source_url_conformance_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/data-source-urls.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_data_source_url_conformance.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/data_source_url_conformance.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/data_source_url_conformance_test.go` |
+
+What makes that sufficient is that §8.2.1 is a **document normalization**
+observable through `parse` alone. Had the rule been specified at fetch time
+instead, Go and TypeScript — neither of which has ingest — could not have
+conformed at all, and the cross-language claim would have been vacuous. This is
+the reason the rule is specified at load time and the resolved form reaches
+`emit`; Go records it in `transformingFixtures` alongside subsystem-`ref`
+resolution, metaparameter folding and enum lowering, which are the same class of
+designed load-time transform.
+
+Two further fixtures enter the ordinary §2.2.1 corpus sweep, so every binding's
+validator is held to the rule with no new machinery:
+`tests/valid/data_source_relative_url.esm` MUST be accepted and
+`tests/invalid/data_source_url_env_var.esm` MUST be rejected, by all five. The
+latter is pinned `resolver_only` in `tests/invalid/expected_errors.json`: the
+document is schema-valid — a `${VAR}` inside a string is legal JSON Schema — so
+the rejection is the resolver's, and unlike every other `resolver_only` entry
+`is_valid` is false for *all five* bindings rather than only the resolving ones.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
