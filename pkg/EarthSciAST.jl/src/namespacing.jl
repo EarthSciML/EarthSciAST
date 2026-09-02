@@ -101,7 +101,10 @@ function _namespace_join(join, binders::Set{String}, prefix::String,
     nsclause(clause::_OverlapJoinSpec) = _OverlapJoinSpec(
         String[nsname(n) for n in clause.src_env],
         String[nsname(n) for n in clause.tgt_env], clause.eps)
-    nsclause(clause) = Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause]
+    # Key COLUMNS are references and are namespaced; a clause's `syms` name
+    # range symbols the node BINDS and must be carried through untouched.
+    nsclause(clause) = _with_pairs(clause,
+        Tuple{String,String}[(nsname(l), nsname(r)) for (l, r) in clause])
     return Any[nsclause(clause) for clause in join]
 end
 

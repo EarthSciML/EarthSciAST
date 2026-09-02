@@ -775,7 +775,11 @@ function _display_join_clause(clause::_OverlapJoinSpec)
     slack = clause.eps == 0.0 ? "" : "; eps=$(clause.eps)"
     return "overlap([$(join(clause.src_env, ","))]~[$(join(clause.tgt_env, ","))]$slack)"
 end
-_display_join_clause(clause) = join(["$(p[1])=$(p[2])" for p in clause], ", ")
+function _display_join_clause(clause)
+    body = join(["$(p[1])=$(p[2])" for p in clause], ", ")
+    syms = _clause_syms(clause)
+    return syms === nothing ? body : "$body @ $(syms[1]),$(syms[2])"
+end
 
 """Render an `aggregate` node per the rendering contract."""
 function format_aggregate(node::OpExpr, format::Symbol)

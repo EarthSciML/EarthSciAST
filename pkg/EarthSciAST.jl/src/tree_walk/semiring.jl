@@ -126,23 +126,81 @@ end
 # `_join_admits`). A combination is admitted iff `codes_l[pos_l] ==
 # codes_r[pos_r]` for every gate.
 
+# A node's CANONICAL RANGE ORDER: the `output_idx` symbols that are ranges, in
+# the order `output_idx` lists them, then the contracted symbols ascending by
+# name (CONFORMANCE_SPEC §5.5.8).
+#
+# Not a new order — it is the enumeration order the expansion already walks, and
+# the order §5.5.8's partner-restricted drive shape means by "the LATER of the
+# two gated axes". Reusing it is what makes the default side assignment below a
+# pure function of the document rather than of a `Dict` iteration.
+function _canonical_range_order(output_idx, ranges::AbstractDict)
+    outs = String[]
+    if output_idx !== nothing
+        for o in output_idx
+            o isa AbstractString || continue        # a literal singleton `1`
+            so = String(o)
+            (haskey(ranges, so) && !(so in outs)) && push!(outs, so)
+        end
+    end
+    rest = sort!(String[String(s) for s in keys(ranges) if !(String(s) in outs)])
+    return vcat(outs, rest)
+end
+
 # Resolve a join-key name to the range symbol it denotes (RFC §5.3): either a
-# declared range symbol directly, or the name of an index set bound by exactly
-# one range symbol via `{from: <name>}` (naming the dimension instead of the loop
-# symbol). Zero or multiple bindings are build-time errors.
-function _join_sym_for_key(key::String, ranges::AbstractDict, sym_to_set::AbstractDict)
-    haskey(ranges, key) && return key
-    candidates = sort!(String[s for (s, setn) in sym_to_set if setn == key])
+# declared range symbol directly, or the name of an index set bound by a range
+# symbol via `{from: <name>}` (naming the dimension instead of the loop symbol).
+# Naming nothing at all is a build-time error.
+#
+# `pick` settles the case an axis lookup cannot — an index set drawn by SEVERAL
+# of this node's ranges, i.e. a relation joined to ITSELF (CONFORMANCE_SPEC
+# §5.5.8 "Two ranges over one index set"):
+#
+#   * `sym::String` — the clause's own `syms` named this side's symbol. It must
+#     draw the axis.
+#   * `:left` / `:right` — the DEFAULT: the first / second candidate in
+#     canonical range order, defined only for TWO candidates. Three or more is an
+#     error naming them, because taking two of three would be a guess and a guess
+#     here reads as a plausible number rather than as a failure.
+function _join_sym_for_key(key::String, ranges::AbstractDict, sym_to_set::AbstractDict,
+                           pick=:left, order::Union{Nothing,Vector{String}}=nothing)
+    if haskey(ranges, key)
+        # A key naming a range symbol OUTRIGHT is already unambiguous; `syms`
+        # may not contradict it.
+        (pick isa AbstractString && String(pick) != key) && throw(TreeWalkError(
+            "E_TREEWALK_JOIN_SYMS_CONFLICT",
+            "join key '$key' names a range symbol of this aggregate, but this " *
+            "clause's `syms` puts that side on '$(pick)'; a key naming a range " *
+            "symbol must name its own side's (CONFORMANCE_SPEC §5.5.8)"))
+        return key
+    end
+    ord = order === nothing ? _canonical_range_order(nothing, ranges) : order
+    rank(s) = something(findfirst(==(s), ord), length(ord) + 1)
+    candidates = sort(String[s for (s, setn) in sym_to_set if setn == key]; by=rank)
+    if pick isa AbstractString
+        want = String(pick)
+        want in candidates && return want
+        throw(TreeWalkError("E_TREEWALK_JOIN_SYMS_CONFLICT",
+            "this clause's `syms` puts a side on range symbol '$want', but the " *
+            "key resolving through index set '$key' is read at one of " *
+            "$(candidates) — '$want' does not draw that index set " *
+            "(CONFORMANCE_SPEC §5.5.8)"))
+    end
     if length(candidates) == 1
         return candidates[1]
     elseif isempty(candidates)
         throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
             "join key '$key' is neither a declared range symbol nor an index set " *
             "bound by a range of this aggregate (RFC semiring-faq-unified-ir §5.3)"))
+    elseif length(candidates) == 2
+        return candidates[pick === :right ? 2 : 1]
     else
         throw(TreeWalkError("E_TREEWALK_JOIN_AMBIGUOUS_KEY",
-            "join key '$key' names an index set bound by multiple range symbols " *
-            "$(candidates); reference the range symbol directly (RFC §5.3)"))
+            "index set '$key' is drawn by $(length(candidates)) range symbols of " *
+            "this aggregate ($(candidates)), so which one a key column over it is " *
+            "read at is not determined; name the two sides explicitly with this " *
+            "clause's `join.syms` (CONFORMANCE_SPEC §5.5.8 \"Two ranges over one " *
+            "index set\")"))
     end
 end
 
@@ -348,7 +406,8 @@ const _EMPTY_VI_MAPS = (maps=Dict{String,Any}(), map_sets=Dict{String,String}())
 # column an UNKNOWN_KEY one).
 function _join_key_column_sym(col::String, ranges::AbstractDict,
                               sym_to_set::AbstractDict, var_shapes::AbstractDict,
-                              vi_maps)
+                              vi_maps, pick=:left,
+                              order::Union{Nothing,Vector{String}}=nothing)
     setn = get(vi_maps.map_sets, col, nothing)
     if setn === nothing
         shape = get(var_shapes, col, nothing)
@@ -360,7 +419,7 @@ function _join_key_column_sym(col::String, ranges::AbstractDict,
             "single shape index set naming one of the node's ranges)"))
         setn = String(shape[1])
     end
-    return _join_sym_for_key(setn, ranges, sym_to_set)
+    return _join_sym_for_key(setn, ranges, sym_to_set, pick, order)
 end
 
 # The build-time VALUES of a data-column key at each of `positions`. §5.5.8
@@ -440,13 +499,15 @@ function _join_key_sym_pos_vals(key::String, ranges::AbstractDict,
                                 index_sets::AbstractDict, sym_to_set::AbstractDict,
                                 vi_maps, const_arrays::AbstractDict=Dict{String,Any}(),
                                 var_shapes::AbstractDict=Dict{String,Vector{String}}(),
-                                obs_defs::AbstractDict=Dict{String,ASTExpr}())
+                                obs_defs::AbstractDict=Dict{String,ASTExpr}(),
+                                pick=:left,
+                                order::Union{Nothing,Vector{String}}=nothing)
     if haskey(ranges, key) || any(==(key), values(sym_to_set))
-        sym = _join_sym_for_key(key, ranges, sym_to_set)
+        sym = _join_sym_for_key(key, ranges, sym_to_set, pick, order)
         positions = _join_key_positions(sym, ranges, index_sets)
         return (sym, positions, _key_member_values(sym, ranges, positions, index_sets))
     end
-    sym = _join_key_column_sym(key, ranges, sym_to_set, var_shapes, vi_maps)
+    sym = _join_key_column_sym(key, ranges, sym_to_set, var_shapes, vi_maps, pick, order)
     positions = _join_key_positions(sym, ranges, index_sets)
     raw = _join_key_column_values(key, positions, vi_maps, const_arrays, obs_defs)
     haskey(vi_maps.maps, key) && return (sym, positions, raw)
@@ -458,7 +519,9 @@ end
 # like an `on` key column — the first factor's 1-D shape index set names the
 # range. `var_shapes` maps a factor name to its declared shape (index-set names).
 function _overlap_env_sym(env_names::AbstractVector, ranges::AbstractDict,
-                          sym_to_set::AbstractDict, var_shapes::AbstractDict)
+                          sym_to_set::AbstractDict, var_shapes::AbstractDict,
+                          pick=:left,
+                          order::Union{Nothing,Vector{String}}=nothing)
     isempty(env_names) && throw(TreeWalkError("E_TREEWALK_JOIN_OVERLAP",
         "overlap join gate has an empty env-factor list"))
     fname = String(env_names[1])
@@ -467,7 +530,7 @@ function _overlap_env_sym(env_names::AbstractVector, ranges::AbstractDict,
         "E_TREEWALK_JOIN_OVERLAP",
         "overlap join env factor '$fname' must be a 1-D buffer whose shape index " *
         "set names the join range; shape=$(shape === nothing ? "<unknown>" : shape)"))
-    return _join_sym_for_key(String(shape[1]), ranges, sym_to_set)
+    return _join_sym_for_key(String(shape[1]), ranges, sym_to_set, pick, order)
 end
 
 # Resolve every join clause of an aggregate node into `_JoinGate`s (RFC §5.3 /
@@ -486,6 +549,9 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
     ranges = node.ranges === nothing ? Dict{String,Any}() : node.ranges
     sym_to_set = Dict{String,String}(
         s => spec.from for (s, spec) in ranges if spec isa IndexSetRef)
+    # The node's canonical range order, which is what orders the candidates of an
+    # index set drawn by SEVERAL ranges (§5.5.8 "Two ranges over one index set").
+    order = _canonical_range_order(node.output_idx, ranges)
     # `OpExpr.join_gates` is typed `Union{Vector{_JoinGate},Nothing}` (types.jl
     # defines `_JoinGate` ahead of `OpExpr`), so build the concrete vector here.
     gates = _JoinGate[]
@@ -494,13 +560,32 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
             # OVERLAP gate: envelope candidacy, NOT key equality. `src_env` axis →
             # sym_l, `tgt_env` axis → sym_r; the candidate `(pos_l,pos_r)` set is
             # keyed to match, built once here from the const-array envelope factors.
-            sym_l = _overlap_env_sym(clause.src_env, ranges, sym_to_set, var_shapes)
-            sym_r = _overlap_env_sym(clause.tgt_env, ranges, sym_to_set, var_shapes)
+            sym_l = _overlap_env_sym(clause.src_env, ranges, sym_to_set, var_shapes,
+                                     :left, order)
+            sym_r = _overlap_env_sym(clause.tgt_env, ranges, sym_to_set, var_shapes,
+                                     :right, order)
             cands = _overlap_candidate_set(clause.src_env, clause.tgt_env, const_arrays;
                                            eps=clause.eps)
             push!(gates, _JoinGate(sym_l, sym_r, Dict{Int,Int}(), Dict{Int,Int}(),
                                    _OverlapIndex(cands)))
-        else                           # clause :: Vector{Tuple{String,String}}
+        else                           # clause :: an `on` pair list (`_OnJoinSpec`)
+            # A clause's `syms` names the two range symbols its pairs are read
+            # at; without it the DEFAULT side assignment applies, which is inert
+            # unless one index set is drawn by several of the node's ranges
+            # (§5.5.8 "Two ranges over one index set").
+            csyms = _clause_syms(clause)
+            if csyms !== nothing
+                for cs in csyms
+                    haskey(ranges, cs) || throw(TreeWalkError(
+                        "E_TREEWALK_JOIN_SYMS_UNKNOWN",
+                        "`join.syms` names '$cs', which is not a range symbol of " *
+                        "this aggregate ($(sort!(String[String(k) for k in keys(ranges)]))); " *
+                        "both entries must name one of its `ranges` " *
+                        "(CONFORMANCE_SPEC §5.5.8)"))
+                end
+            end
+            pick_l = csyms === nothing ? :left : csyms[1]
+            pick_r = csyms === nothing ? :right : csyms[2]
             # Resolve EVERY pair of the clause first. Pairs over the same two
             # loop symbols are ONE composite key (§5.5.8 / BEHAV-10-B-002), and
             # it is that composite match set — not the first pair's, which is a
@@ -509,9 +594,9 @@ function _resolve_join_gates_for(node::OpExpr, index_sets::AbstractDict,
             resolved = Tuple{String,String,Vector{Int},Vector{Int},Vector{Any},Vector{Any}}[]
             for (lkey, rkey) in clause
                 sym_l, pos_l, vals_l = _join_key_sym_pos_vals(lkey, ranges, index_sets,
-                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
+                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs, pick_l, order)
                 sym_r, pos_r, vals_r = _join_key_sym_pos_vals(rkey, ranges, index_sets,
-                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs)
+                    sym_to_set, vi_maps, const_arrays, var_shapes, obs_defs, pick_r, order)
                 push!(resolved, (sym_l, sym_r, pos_l, pos_r, vals_l, vals_r))
             end
             indexed = Set{Tuple{String,String}}()

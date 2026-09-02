@@ -424,7 +424,20 @@ function _coerce_join(data)
         end
         isempty(pairs_vec) && throw(ParseError(
             "join clause `on` requires at least one key-column pair (RFC §5.3)"))
-        push!(clauses, pairs_vec)
+        # `syms` names the two RANGE SYMBOLS the clause's pairs are read at
+        # (CONFORMANCE_SPEC §5.5.8) — the self-join disambiguation. Only its
+        # SHAPE is checked here; whether the names are ranges of the node is a
+        # build-time question, resolved with the rest of the clause.
+        syms_raw = _get_field(clause, :syms, nothing)
+        syms = nothing
+        if syms_raw !== nothing
+            length(syms_raw) == 2 || throw(ParseError(
+                "join `syms` must be a 2-element [left, right] pair of range " *
+                "symbols, got \$(length(syms_raw)) element(s) " *
+                "(CONFORMANCE_SPEC §5.5.8)"))
+            syms = (string(syms_raw[1]), string(syms_raw[2]))
+        end
+        push!(clauses, _OnJoinSpec(pairs_vec, syms))
     end
     return clauses
 end
