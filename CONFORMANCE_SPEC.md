@@ -2952,6 +2952,19 @@ and never to "it ran". A recurrence that silently resolves an unavailable self-r
 to `0` reproduces plausible-looking numbers for a whole axis, so a tolerance-shaped
 assertion here is worse than no assertion.
 
+#### 5.19.3a Working precision of the carried value
+
+The recurrence has no accumulator distinct from the array it writes, so the value
+read at a lag carries the defined variable's `element_type` (§5.18, esm-spec
+§11.3.1) — and it MUST be rounded to that precision **at every cell**, not only
+when the finished array is handed back. A binding that carries binary64 partials
+through a `Float32` recurrence and narrows at the end produces a *better* answer
+than the `real*4` reference it is being compared against, which is the failure mode
+hardest to notice: the numbers look right and the low bits are wrong in the
+direction of plausibility. A fixture in this category that declares `Float32` MUST
+therefore be pinned to the binary32 fold with **zero** tolerance, and its
+description MUST name the binary64 value the un-rounded implementation would give.
+
 #### 5.19.4 Fail-closed reads
 
 An out-of-range or not-yet-published self-read is `E_TREEWALK_RECUR_UNAVAILABLE`

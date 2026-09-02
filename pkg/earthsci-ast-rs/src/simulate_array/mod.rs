@@ -429,11 +429,20 @@ impl<'a> RecurScope<'a> {
     }
 
     /// Publish one cell (its 1-based multi-index) so later cells may read it.
+    ///
+    /// Rounded to the ACTIVE working precision (esm-spec §11.3.1) before it is
+    /// stored, not only when it is read back. The recurrence's carried state is
+    /// a cell of the variable being defined, so it carries that variable's
+    /// `element_type` — and for a `Float32` document that has to hold at every
+    /// step of the fold, exactly as it does in a `real*4` reference
+    /// implementation. Storing a binary64 partial and rounding only on the way
+    /// out would run the fold at a precision the document did not declare and
+    /// silently beat the reference it is being checked against.
     pub(super) fn publish(&self, tuple: &[i64], v: f64) {
         let flat = layout::multi_to_flat_col_major(tuple, &self.shape, &self.origin);
         let mut cells = self.cells.borrow_mut();
         if flat < cells.len() {
-            cells[flat] = v;
+            cells[flat] = crate::precision::active().round(v);
             self.written.borrow_mut()[flat] = true;
         }
     }

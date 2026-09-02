@@ -710,6 +710,19 @@ what licenses the **bit-identical** cross-binding requirement (CONFORMANCE_SPEC
 §5.2, §5.19) — the same argument §4.3.1 makes for the forward prefix scan, applied
 to a fold whose terms read the fold's own output.
 
+**Working precision.** The recurrence introduces no accumulator of its own: the
+value a later cell reads at a lag is a **cell of the variable being defined**, so
+it carries that variable's `element_type` (§11.3.1) and nothing new has to be said
+about mixing. Two consequences a `Float32` document depends on. The carried value is
+rounded to the working precision **at every step of the fold**, not only when the
+finished array is read — a binding that folds in binary64 and narrows at the end is
+running a different computation from the `real*4` reference it is being checked
+against, and §11.3.1's "an equation stores at its left-hand side's precision" is
+per store, of which a recurrence performs one per cell. And a self-read is a read of
+the variable itself, so it can never be the *source* of a `mixed_element_type`
+error: any mixing in a recurrence body comes from the other operands, and is
+diagnosed by §11.3.1's ordinary rules with no special case.
+
 **Rejections.** A self-read that is not a well-founded causal read is a structural
 error, not a boundary case, and every binding MUST reject it:
 
