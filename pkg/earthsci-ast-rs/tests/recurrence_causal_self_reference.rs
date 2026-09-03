@@ -693,3 +693,155 @@ fn a_two_variable_cycle_is_not_a_recurrence_and_still_produces_nothing() {
         results[0].actual
     );
 }
+
+// ---------------------------------------------------------------------------
+// 5. THE SECOND EVALUATION PATH — the build pipeline
+// ---------------------------------------------------------------------------
+//
+// A recurrence has two evaluation routes, and for a while it worked on one and
+// was silently dead on the other. Everything above this point drives the
+// per-step observed materialization, which is what `esm test` uses. That is
+// exactly the gap that let the defect through: nine fixtures and a whole
+// conformance tier, all verified on one of two paths.
+//
+// The build pipeline is the other route, and it is not an edge case — it is
+// taken by ANY document that ingests data (one column the recurrence never
+// reads is enough) and by EVERY document under `esm simulate`, whose static
+// branch rebuilds with `build_pipeline = true` in order to materialize array
+// observeds at all. Before the fix, the self-read there fell through to an
+// unbound-name NaN, and `max(NaN, 0.0)` returned `0.0` because IEEE-754 `max`
+// yields the non-NaN operand — so a body containing a clamp, which the
+// motivating fold's body is, produced a finite, plausible, monotone, wrong
+// answer with nothing logged.
+//
+// These tests take that path with NO providers, which is what makes them
+// runnable in any environment: `build_pipeline: true` is set directly, so no
+// data reader has to be linked. Ingestion reaches the same
+// `prepare::eval_observed`.
+
+/// Materialize a fixture through the BUILD PIPELINE and return its fields.
+fn pipeline_fields(name: &str) -> std::collections::HashMap<String, ndarray::ArrayD<f64>> {
+    let file = load_path(fixture(name)).expect("fixture parses");
+    let opts = earthsci_ast::ProblemOptions {
+        // The two settings that make this the pipeline path rather than the
+        // per-step one. `Auto` because these documents integrate nothing, so
+        // asking for a compiled right-hand side would compile one with nothing
+        // to integrate.
+        build_pipeline: true,
+        compile: earthsci_ast::Compile::Auto,
+        ..Default::default()
+    };
+    let prob = earthsci_ast::esm_problem(&file, (0.0, 0.0), opts)
+        .unwrap_or_else(|e| panic!("{name}: build pipeline failed: {e}"));
+    prob.observed_fields().clone()
+}
+
+/// Every inline assertion of a fixture, re-checked against the field the BUILD
+/// PIPELINE materialized rather than the one the per-step path produced. The
+/// two paths must agree to the bit: they are the same construct, and §5.19.1
+/// says its value is fully determined.
+fn assert_pipeline_matches_assertions(name: &str) {
+    let file = load_path(fixture(name)).expect("fixture parses");
+    let fields = pipeline_fields(name);
+    let models = file.models.as_ref().expect("fixture has models");
+    let (model_name, model) = models.iter().next().expect("one model");
+    let mut checked = 0usize;
+    for test in model.tests.as_deref().unwrap_or_default() {
+        for (i, a) in test.assertions.iter().enumerate() {
+            let Some(coords) = a.coords.as_ref() else {
+                continue;
+            };
+            // Fields are keyed bare or model-qualified depending on the path.
+            let field = fields
+                .get(&a.variable)
+                .or_else(|| fields.get(&format!("{model_name}.{}", a.variable)))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{name}: the build pipeline materialized NO field for '{}' — \
+                         keys were {:?}. An absent field is how this defect first \
+                         looked, so it is a failure, not a skip.",
+                        a.variable,
+                        fields.keys().collect::<Vec<_>>()
+                    )
+                });
+            // Coordinates are 1-based in document order.
+            let idx: Vec<usize> = model
+                .variables
+                .get(&a.variable)
+                .and_then(|v| v.shape.as_ref())
+                .expect("asserted variable is array-shaped")
+                .iter()
+                .map(|ax| (coords[ax] as usize) - 1)
+                .collect();
+            let actual = *field
+                .get(ndarray::IxDyn(&idx))
+                .unwrap_or_else(|| panic!("{name}: cell {idx:?} outside the materialized field"));
+            assert_eq!(
+                actual.to_bits(),
+                a.expected.to_bits(),
+                "{name}: {}[{}] on '{}' at {coords:?} — the BUILD PIPELINE gave {actual:?} \
+                 where the document pins {:?}. The per-step path agrees with the pin, so a \
+                 mismatch here means the two evaluation routes disagree about the same \
+                 construct.",
+                test.id,
+                i + 1,
+                a.variable,
+                a.expected,
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 0,
+        "{name}: no coords assertion was checked — this test would pass vacuously"
+    );
+}
+
+macro_rules! pipeline_test {
+    ($fn_name:ident, $fixture:literal) => {
+        #[test]
+        fn $fn_name() {
+            assert_pipeline_matches_assertions($fixture);
+        }
+    };
+}
+
+pipeline_test!(pipeline_doubling, "01_recurrence_doubling.esm");
+pipeline_test!(pipeline_cancellation_ladder, "02_recurrence_cancellation_ladder.esm");
+pipeline_test!(pipeline_multi_lag, "03_recurrence_multi_lag.esm");
+pipeline_test!(pipeline_banded_lag_fold, "04_recurrence_banded_lag_fold.esm");
+pipeline_test!(pipeline_two_axes, "05_recurrence_two_axes.esm");
+pipeline_test!(pipeline_float32_state, "06_recurrence_float32_state.esm");
+pipeline_test!(pipeline_thirty_eight_lags, "07_recurrence_thirty_eight_lags.esm");
+pipeline_test!(pipeline_parameter_valued_lag, "08_recurrence_parameter_valued_lag.esm");
+pipeline_test!(pipeline_through_expression_template, "09_recurrence_through_expression_template.esm");
+
+/// The regression itself, stated as a value that must NOT come back.
+///
+/// `04`'s body is `−max(r[y−a], 0) · P[a+1]`. With the self-read resolving to
+/// NaN and the clamp laundering it to zero, every recurrence term contributes
+/// nothing and the field comes back as the non-recurrent `b[y]` const verbatim.
+/// That is what the pipeline path returned before the fix, and it is finite,
+/// plausible and monotone — so the only way to catch it is to name it.
+#[test]
+fn the_pipeline_does_not_return_the_non_recurrent_term_verbatim() {
+    let fields = pipeline_fields("04_recurrence_banded_lag_fold.esm");
+    let field = fields
+        .get("r")
+        .or_else(|| fields.get("RecurrenceBandedLagFold.r"))
+        .expect("the pipeline materialized 'r'");
+    let laundered = [1e-16, 1.0, 1e-16, 100000000.0, 3.0, -1e16];
+    let got: Vec<f64> = field.iter().copied().collect();
+    assert_ne!(
+        got, laundered,
+        "the build pipeline returned the b[y] const verbatim — every recurrence term \
+         contributed zero, which is the NaN-laundered-by-max signature (esm-spec §4.3.1.1, \
+         CONFORMANCE_SPEC §5.19.4)"
+    );
+    assert_eq!(
+        got[2].to_bits(),
+        (-1.0f64).to_bits(),
+        "r[3] must be exactly -1.0 on this path too; got {:?}",
+        got[2]
+    );
+}
