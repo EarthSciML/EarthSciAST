@@ -1,0 +1,182 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "self_join_syms_unknown_symbol",
+    "description": "INVALID: a `join` clause's `syms` names something that is not a range symbol of the node (CONFORMANCE_SPEC.md §5.5.8).\n\n`syms` is the author's answer to the one question a pair of column names cannot settle -- which range symbol each side is read at -- so both entries MUST be keys of this aggregate's `ranges`. Here the right entry is `zzz`, which the node does not bind. Left unchecked, the right key would resolve to no symbol at all, and §5.3's degenerate-positional rule would then silently DROP the pair: an ungated full product, reported as a number rather than as a failure.\n\nThe defect is decidable STATICALLY from this ONE document -- the node's `ranges`, the document `index_sets`, the declared variable shapes and the clause itself are all here; no evaluation, no solver, no runtime data, no other file. `validate()` MUST reject it, in every binding, which is why it is pinned as a STRUCTURAL finding in tests/invalid/expected_errors.json rather than left to whichever pass a given implementation happens to run. The document is SCHEMA-VALID: the schema cannot express \"this key's axis is drawn by more than one range\".",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "aggregate",
+      "join",
+      "self-join",
+      "invalid",
+      "build-time",
+      "syms"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "SymsUnknownSymbol": {
+      "variables": {
+        "row_id": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ],
+          "description": "The relation's key column."
+        },
+        "row_prior": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ],
+          "description": "A shifted copy of `row_id` -- an ordinary 1-D data column over the SAME index set, which is what makes the clause a self-join."
+        },
+        "count": {
+          "type": "unknown",
+          "default": 0.0,
+          "description": "Counts the admitted pairs. Never reached: the document is rejected."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "row_id",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  4,
+                  4
+                ]
+              ],
+              [
+                [
+                  5,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              5.0
+            ]
+          }
+        },
+        {
+          "lhs": "row_prior",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  4,
+                  4
+                ]
+              ],
+              [
+                [
+                  5,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              0.0,
+              1.0,
+              2.0,
+              3.0,
+              4.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "count"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [],
+            "semiring": "sum_product",
+            "reduce": "+",
+            "ranges": {
+              "a": {
+                "from": "rows"
+              },
+              "b": {
+                "from": "rows"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "row_prior",
+                    "row_id"
+                  ]
+                ],
+                "syms": [
+                  "a",
+                  "zzz"
+                ]
+              }
+            ],
+            "expr": 1.0
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "self_join_index_set_key_ambiguous",
+    "description": "INVALID: an `on` key NAMES an index set that more than one of the node's ranges draws, and the clause carries no `syms` (CONFORMANCE_SPEC.md §5.5.8).\n\n`a` and `b` both draw `{from: rows}`, and the left key is the literal string `rows` -- the index set itself. Unlike a DATA COLUMN, whose axis is a property of the column and not of the clause, a key naming an index set can already say which side it means by naming the RANGE SYMBOL instead: `[\"a\", \"row_id\"]`. So the default side assignment deliberately does NOT apply here, at two candidates or at any number, and this stays a rejection. Adding the self-join capability must not remove a diagnostic: were the default applied, the left key would silently resolve to `a`, the pair would compare `a`'s key with itself, and the clause would drop as a tautology -- an ungated 25-term product reported as a number.\n\nThe defect is decidable STATICALLY from this ONE document -- the node's `ranges`, the document `index_sets`, the declared variable shapes and the clause itself are all here; no evaluation, no solver, no runtime data, no other file. `validate()` MUST reject it, in every binding, which is why it is pinned as a STRUCTURAL finding in tests/invalid/expected_errors.json rather than left to whichever pass a given implementation happens to run. The document is SCHEMA-VALID: the schema cannot express \"this key's axis is drawn by more than one range\".",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "aggregate",
+      "join",
+      "self-join",
+      "invalid",
+      "build-time",
+      "ambiguous-side"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "IndexSetKeyAmbiguous": {
+      "variables": {
+        "row_id": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ],
+          "description": "The relation's key column."
+        },
+        "row_prior": {
+          "type": "unknown",
+          "shape": [
+            "rows"
+          ],
+          "description": "A shifted copy of `row_id` -- an ordinary 1-D data column over the SAME index set, which is what makes the clause a self-join."
+        },
+        "count": {
+          "type": "unknown",
+          "default": 0.0,
+          "description": "Counts the admitted pairs. Never reached: the document is rejected."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "row_id",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  4,
+                  4
+                ]
+              ],
+              [
+                [
+                  5,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              5.0
+            ]
+          }
+        },
+        {
+          "lhs": "row_prior",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ],
+              [
+                [
+                  4,
+                  4
+                ]
+              ],
+              [
+                [
+                  5,
+                  5
+                ]
+              ]
+            ],
+            "values": [
+              0.0,
+              1.0,
+              2.0,
+              3.0,
+              4.0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "count"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [],
+            "semiring": "sum_product",
+            "reduce": "+",
+            "ranges": {
+              "a": {
+                "from": "rows"
+              },
+              "b": {
+                "from": "rows"
+              }
+            },
+            "join": [
+              {
+                "on": [
+                  [
+                    "rows",
+                    "row_id"
+                  ]
+                ]
+              }
+            ],
+            "expr": 1.0
+          }
+        }
+      ]
+    }
+  }
+}

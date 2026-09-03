@@ -58,8 +58,12 @@ _serialize_join_clause(clause::_OverlapJoinSpec) = Dict{String,Any}(
         "src_env" => copy(clause.src_env),
         "tgt_env" => copy(clause.tgt_env),
         "eps" => clause.eps))
-_serialize_join_clause(clause) =
-    Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
+function _serialize_join_clause(clause)
+    out = Dict{String,Any}("on" => [[p[1], p[2]] for p in clause])
+    syms = _clause_syms(clause)
+    syms === nothing || (out["syms"] = [syms[1], syms[2]])
+    return out
+end
 
 function _serialize_opexpr_field(field::Symbol, v)
     # `regions` is a `:scalar` field whose bounds are USUALLY plain integers but

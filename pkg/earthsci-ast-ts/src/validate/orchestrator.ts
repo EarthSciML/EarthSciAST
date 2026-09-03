@@ -38,6 +38,7 @@ import {
   validateConversionFactorConsistency,
   validateDefaultUnits,
   validateAggregateJoinKeys,
+  validateAggregateJoinSides,
   validateAggregateIndexSets,
   validateRelationalNodesInContinuous,
 } from './model-checks.js'
@@ -189,6 +190,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // naming an undeclared set, and a relational (value-invention) node that
       // reads continuous state. Independent of coupling, so run on every model.
       errors.push(...validateAggregateJoinKeys(model, modelPath, esmFile))
+      errors.push(...validateAggregateJoinSides(model, modelPath, esmFile))
       errors.push(...validateAggregateIndexSets(model, modelPath, esmFile))
       errors.push(...validateRelationalNodesInContinuous(model, modelPath))
 
@@ -233,6 +235,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
+          errors.push(...validateAggregateJoinSides(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))

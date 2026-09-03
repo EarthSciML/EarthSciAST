@@ -1191,6 +1191,22 @@
       }
     },
     {
+      "name": "code_join_side_ambiguous",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeJoinSideAmbiguous"
+      }
+    },
+    {
+      "name": "code_join_syms_unknown_symbol",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeJoinSymsUnknownSymbol"
+      }
+    },
+    {
       "name": "code_makearray_region_inverted",
       "kind": "constant",
       "tier": "extension",

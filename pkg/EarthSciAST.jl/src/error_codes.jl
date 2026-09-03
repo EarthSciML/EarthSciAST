@@ -63,6 +63,8 @@ const ERROR_CODES = (
     INVALID_REFERENCE_SYNTAX = "invalid_reference_syntax",
     INVALID_STOICHIOMETRY = "invalid_stoichiometry",
     JOIN_KEY_INVALID_TYPE = "join_key_invalid_type",
+    JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous",
+    JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol",
     NULL_REACTION = "null_reaction",
     # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
     # A VALIDATION category, so both codes are owed by every binding whether or

@@ -3148,6 +3148,8 @@ fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClaus
     join.iter()
         .map(|c| JoinClause {
             on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),
+            // Binders of the node, not references — renaming leaves them alone.
+            syms: c.syms.clone(),
             overlap: c.overlap.as_ref().map(|ov| OverlapClause {
                 src_env: ov.src_env.iter().map(&ren).collect(),
                 tgt_env: ov.tgt_env.iter().map(&ren).collect(),

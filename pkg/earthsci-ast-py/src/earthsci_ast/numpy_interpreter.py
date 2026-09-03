@@ -2675,17 +2675,90 @@ def _reduce_step_box(op: str, acc: np.ndarray | None, val: np.ndarray) -> np.nda
 # ---------------------------------------------------------------------------
 
 
-def _join_sym_for_key(key: str, raw_ranges: dict[str, Any], sym_to_set: dict[str, str]) -> str:
+def _canonical_range_order(output_idx: Any, raw_ranges: dict[str, Any]) -> list[str]:
+    """A node's CANONICAL RANGE ORDER (CONFORMANCE_SPEC §5.5.8).
+
+    The ``output_idx`` symbols that are ranges, in the order ``output_idx``
+    lists them, then the contracted symbols ascending by name.
+
+    Not a new order — it is the enumeration order the expansion already walks,
+    and the order §5.5.8's partner-restricted drive shape means by "the LATER of
+    the two gated axes". Reusing it is what makes the default side assignment
+    below a pure function of the document rather than of a dict iteration.
+    """
+    outs: list[str] = []
+    for o in output_idx or []:
+        if not isinstance(o, str):  # a literal singleton `1`
+            continue
+        if o in raw_ranges and o not in outs:
+            outs.append(o)
+    rest = sorted(s for s in raw_ranges if s not in outs)
+    return outs + rest
+
+
+def _join_sym_for_key(
+    key: str,
+    raw_ranges: dict[str, Any],
+    sym_to_set: dict[str, str],
+    pick: str = "left",
+    order: list[str] | None = None,
+    via: str = "binder",
+) -> str:
     """Resolve a join-key name to the range symbol it denotes.
 
     A key is either a declared range symbol directly, or the name of an index
-    set bound by exactly one range symbol (``{"from": <name>}``) — the latter
-    lets a clause name the dimension instead of the loop symbol. Anything else
+    set bound by a range symbol (``{"from": <name>}``) — the latter lets a
+    clause name the dimension instead of the loop symbol. Naming nothing at all
     is a build-time error (RFC §5.3).
+
+    ``pick`` settles the case an axis lookup cannot: an index set drawn by
+    SEVERAL of this node's ranges, i.e. a relation joined to ITSELF
+    (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set").
+
+    * a range symbol name — the clause's own ``syms`` named this side's symbol,
+      which must draw the key's axis;
+    * ``"left"`` / ``"right"`` — the DEFAULT: the first / second candidate in
+      canonical range order, defined only for TWO candidates. Three or more is
+      an error naming them, because taking two of three would be a guess, and a
+      guess here reads as a plausible number rather than as a failure.
+
+    ``via`` says WHICH resolution step is asking, and only one of the two has a
+    gap the default can fill:
+
+    * ``"binder"`` — the key names an INDEX SET (§5.5.8 precedence step 1). An
+      author who meant a particular side can already name the RANGE SYMBOL
+      instead, which is what the historic diagnostic advises, so an ambiguous
+      set stays an error and only an explicit ``syms`` resolves it.
+    * ``"column_axis"`` — the symbol came from a DATA COLUMN's declared 1-D
+      axis (step 2). Here there is nothing else the author can write: the pair
+      holds column names and the axis is a property of the column, not of the
+      clause. This is the self-join case, and the one the default exists for.
     """
+    named = pick not in ("left", "right")
     if key in raw_ranges:
+        # A key naming a range symbol OUTRIGHT is already unambiguous; ``syms``
+        # may not contradict it.
+        if named and pick != key:
+            raise NumpyInterpreterError(
+                f"join key {key!r} names a range symbol of this aggregate, but this "
+                f"clause's 'syms' puts that side on {pick!r}; a key naming a range "
+                f"symbol must name its own side's (CONFORMANCE_SPEC §5.5.8)"
+            )
         return key
-    candidates = sorted(s for s, setn in sym_to_set.items() if setn == key)
+    ordered = order if order is not None else _canonical_range_order(None, raw_ranges)
+    rank = {s: i for i, s in enumerate(ordered)}
+    candidates = sorted(
+        (s for s, setn in sym_to_set.items() if setn == key),
+        key=lambda s: (rank.get(s, len(ordered)), s),
+    )
+    if named:
+        if pick in candidates:
+            return pick
+        raise NumpyInterpreterError(
+            f"this clause's 'syms' puts a side on range symbol {pick!r}, but the key "
+            f"resolving through index set {key!r} is read at one of {candidates} — "
+            f"{pick!r} does not draw that index set (CONFORMANCE_SPEC §5.5.8)"
+        )
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
@@ -2693,9 +2766,21 @@ def _join_sym_for_key(key: str, raw_ranges: dict[str, Any], sym_to_set: dict[str
             f"join key {key!r} is neither a declared range symbol nor an index "
             f"set bound by a range of this aggregate (RFC semiring-faq-unified-ir §5.3)"
         )
+    if via == "binder":
+        # A key that NAMES the index set can already say which side it means by
+        # naming the range symbol instead, so the historic rejection stands.
+        raise NumpyInterpreterError(
+            f"join key {key!r} names an index set bound by multiple range symbols "
+            f"{candidates}; reference the range symbol directly, or name this "
+            f"clause's two sides with 'syms' (RFC §5.3 / CONFORMANCE_SPEC §5.5.8)"
+        )
+    if len(candidates) == 2:
+        return candidates[1 if pick == "right" else 0]
     raise NumpyInterpreterError(
-        f"join key {key!r} names an index set bound by multiple range symbols "
-        f"{candidates}; reference the range symbol directly (RFC §5.3)"
+        f"index set {key!r} is drawn by {len(candidates)} range symbols of this "
+        f"aggregate ({candidates}), so which one a key column over it is read at is "
+        f"not determined; name the two sides explicitly with this clause's "
+        f'\'syms\' (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set")'
     )
 
 
@@ -2908,6 +2993,8 @@ def _overlap_env_sym(
     raw_ranges: dict[str, Any],
     sym_to_set: dict[str, str],
     ctx: EvalContext,
+    pick: str = "left",
+    order: list[str] | None = None,
 ) -> str:
     """The range symbol an overlap gate's envelope side binds (§5.5.6).
 
@@ -2929,7 +3016,9 @@ def _overlap_env_sym(
             f"FIRST index-set axis names the join range; none is known for it "
             f"(CONFORMANCE_SPEC §5.5.6)"
         )
-    return _join_sym_for_key(ctx.var_index_sets[key], raw_ranges, sym_to_set)
+    return _join_sym_for_key(
+        ctx.var_index_sets[key], raw_ranges, sym_to_set, pick, order, "column_axis"
+    )
 
 
 def _overlap_spec(clause: Any) -> dict | None:
@@ -2975,6 +3064,10 @@ def _resolve_join(
         for s, spec in raw_ranges.items()
         if isinstance(spec, dict) and "from" in spec
     }
+    # The node's canonical range order, which is what orders the candidates of
+    # an index set drawn by SEVERAL ranges (§5.5.8 "Two ranges over one index
+    # set").
+    order = _canonical_range_order(getattr(expr, "output_idx", None), raw_ranges)
     gates: list[_JoinGate] = []
     for clause in clauses:
         ov = _overlap_spec(clause)
@@ -2992,8 +3085,8 @@ def _resolve_join(
                     f"join 'overlap' eps must be >= 0 (it inflates both envelopes "
                     f"OUTWARD and so grows the candidate set monotonically); got {eps}"
                 )
-            sym_l = _overlap_env_sym(src_env, raw_ranges, sym_to_set, ctx)
-            sym_r = _overlap_env_sym(tgt_env, raw_ranges, sym_to_set, ctx)
+            sym_l = _overlap_env_sym(src_env, raw_ranges, sym_to_set, ctx, "left", order)
+            sym_r = _overlap_env_sym(tgt_env, raw_ranges, sym_to_set, ctx, "right", order)
             cands = broad_phase.overlap_candidate_set(
                 broad_phase.envelope_vectors_from_cols(
                     src_env, [_overlap_env_array(f, ctx) for f in src_env]
@@ -3011,16 +3104,36 @@ def _resolve_join(
                 "join clause requires at least one key-column pair in 'on' "
                 "(RFC semiring-faq-unified-ir §5.3)"
             )
+        # A clause's `syms` names the two range symbols its pairs are read at
+        # (§5.5.8) — the self-join disambiguation. Without it the DEFAULT side
+        # assignment applies, which is inert unless one index set is drawn by
+        # several of the node's ranges.
+        csyms = (clause or {}).get("syms")
+        if csyms is not None:
+            if not (isinstance(csyms, (list, tuple)) and len(csyms) == 2):
+                raise NumpyInterpreterError(
+                    f"join 'syms' must be a 2-element [left, right] pair of range "
+                    f"symbols; got {csyms!r} (CONFORMANCE_SPEC §5.5.8)"
+                )
+            for cs in csyms:
+                if cs not in raw_ranges:
+                    raise NumpyInterpreterError(
+                        f"join 'syms' names {cs!r}, which is not a range symbol of "
+                        f"this aggregate ({sorted(raw_ranges)}); both entries must "
+                        f"name one of its 'ranges' (CONFORMANCE_SPEC §5.5.8)"
+                    )
+        pick_l = "left" if csyms is None else str(csyms[0])
+        pick_r = "right" if csyms is None else str(csyms[1])
         for pair in on:
             if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
                 raise NumpyInterpreterError(
                     f"join 'on' entry {pair!r} must be a [left, right] key-column pair (RFC §5.3)"
                 )
             sym_l, vals_l = _resolve_join_key_column(
-                pair[0], raw_ranges, sym_to_set, sym_positions, ctx
+                pair[0], raw_ranges, sym_to_set, sym_positions, ctx, pick_l, order
             )
             sym_r, vals_r = _resolve_join_key_column(
-                pair[1], raw_ranges, sym_to_set, sym_positions, ctx
+                pair[1], raw_ranges, sym_to_set, sym_positions, ctx, pick_r, order
             )
             codes_l, codes_r = _encode_join_keys(vals_l, vals_r)
             gates.append(
@@ -3040,6 +3153,8 @@ def _resolve_join_key_column(
     sym_to_set: dict[str, str],
     sym_positions: dict[str, list[int]],
     ctx: EvalContext,
+    pick: str = "left",
+    order: list[str] | None = None,
 ) -> tuple[str, list[Any]]:
     """Resolve one join key column to ``(range_symbol, key_values)`` (RFC §5.3).
 
@@ -3096,7 +3211,7 @@ def _resolve_join_key_column(
     # symbols, or the index set one of them draws {from}, is the iterated-index
     # spelling and takes precedence over any same-named declared variable.
     if key in raw_ranges or key in set(sym_to_set.values()):
-        sym = _join_sym_for_key(key, raw_ranges, sym_to_set)
+        sym = _join_sym_for_key(key, raw_ranges, sym_to_set, pick, order)
         if sym not in sym_positions:
             raise NumpyInterpreterError(
                 f"join key symbol {sym!r} is not an output or contracted range of "
@@ -3110,7 +3225,9 @@ def _resolve_join_key_column(
     # and its materialised array supplies the key values.
     set_key = _scoped_array_name(key, ctx.var_index_sets)
     if set_key is not None:
-        sym = _join_sym_for_key(ctx.var_index_sets[set_key], raw_ranges, sym_to_set)
+        sym = _join_sym_for_key(
+            ctx.var_index_sets[set_key], raw_ranges, sym_to_set, pick, order, "column_axis"
+        )
         if sym not in sym_positions:
             raise NumpyInterpreterError(
                 f"join key column {key!r} resolves to range symbol {sym!r}, which is "
@@ -3133,7 +3250,7 @@ def _resolve_join_key_column(
         return sym, vals
 
     # Neither: let the existing resolver raise its named diagnostic.
-    sym = _join_sym_for_key(key, raw_ranges, sym_to_set)
+    sym = _join_sym_for_key(key, raw_ranges, sym_to_set, pick, order)
     if sym not in sym_positions:
         raise NumpyInterpreterError(
             f"join key symbol {sym!r} is not an output or contracted range of "

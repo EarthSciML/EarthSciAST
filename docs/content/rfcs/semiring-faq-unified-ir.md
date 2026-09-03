@@ -252,6 +252,19 @@ multiplicity changes the aggregate's *value*, not just its performance:
   compare equal (not even to each other). Emitting `null` into a key column is a
   front-end error, surfaced at build time, not silently dropped.
 
+- **A relation joined to ITSELF is a join whose two ranges draw ONE index set.**
+  Nothing about `on` restricts the two sides to different relations, and the
+  shape is wanted: a row paired with its predecessor, or a table's county row
+  paired with the state row of the same table. What it costs is a resolution
+  question rather than a semantic one — a key column resolves to a loop symbol
+  through its declared axis, and that axis names two symbols here, so the pair
+  of column names does not say which side is which. The side assignment (by the
+  node's canonical range order), the explicit `syms` spelling that overrides it,
+  and the refusal when three ranges draw one index set are normative in
+  CONFORMANCE_SPEC.md §5.5.8. The two sides' key EXPRESSIONS may differ — that
+  is the whole content of a predecessor lookup — so no lag / offset / shift
+  feature is added: the offset lives in a key column, which is ordinary data.
+
 ### 5.4 Keyed factors
 Unify "const array", "state array", and "ESI table" as one concept: a **keyed
 factor** mapping an index tuple to a value. `const_arrays` (mesh metrics, coords)

@@ -170,6 +170,30 @@ end
         @test du[vmap["count"]] == 5.0
     end
 
+    # §5.5.8 "Two ranges over one index set" — a relation joined to ITSELF, the
+    # shared fixture. ONE 5-row table contracted over BOTH of its own ranges on
+    # a shifted key column, which resolved to no loop symbol at all before the
+    # side assignment was fixed (the column's axis named two candidate symbols
+    # and the pair could not say which). Two assertions, because a count alone
+    # would not pin WHICH pairs were admitted.
+    @testset "join_on_self_join (a relation joined to itself)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 1111.0   # NOT 11110 (transposed) or 55555 (ungated)
+        @test du[vmap["pairCount"]] == 4.0     # NOT 25 (the full product)
+    end
+
+    # The EXPLICIT `syms` spelling of the same self-join, sides swapped: each row
+    # reads its SUCCESSOR. The answer DIFFERS from the default spelling's, which
+    # is what makes this a test of `syms` and not of the join — parse-and-ignore
+    # computes 1111, dropping the clause computes 55555, correct is 11110.
+    @testset "join_on_self_join_syms (explicit sides)" begin
+        du, vmap = _eval_aggregate_fixture(
+            "join_on_self_join_syms.esm", "SelfJoin", ["priorSum", "pairCount"])
+        @test du[vmap["priorSum"]] == 11110.0
+        @test du[vmap["pairCount"]] == 4.0
+    end
+
     # Build-time key-type rejection (RFC §5.3 / §5.7 rule 1). These shared
     # fixtures live in tests/invalid/aggregate/build_time/ — schema-valid (so the
     # Go/TS schema harness, which globs the parent dir non-recursively, skips
@@ -198,5 +222,33 @@ end
         msg_null = _build_error_msg("null_in_key_column.esm", "NullInKeyColumn")
         @test msg_null !== nothing             # rejected, not silently evaluated
         @test occursin("null", lowercase(msg_null))
+    end
+
+    # The SIDE rejections of the same directory (CONFORMANCE_SPEC §5.5.8), which
+    # are structural rather than evaluator-only: each is decidable from the ONE
+    # document, so `validate` must reject it in every binding, and the expected
+    # `(code, path)` is read from the SHARED pin rather than restated here. A
+    # per-binding copy of the expected code is how five bindings drift apart one
+    # fixture at a time.
+    @testset "build-time self-join SIDE rejection (shared pin)" begin
+        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        for name in ("self_join_three_ranges_ambiguous.esm",
+                     "self_join_index_set_key_ambiguous.esm",
+                     "self_join_syms_unknown_symbol.esm")
+            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "aggregate",
+                            "build_time", name)
+            @test isfile(path)
+            pin = pins[Symbol(name)]
+            @test pin["is_valid"] == false
+            @test isempty(pin["schema_errors"])       # the schema cannot express it
+            want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+            @test !isempty(want)
+
+            r = EarthSciAST.validate_path(path)
+            @test r.is_valid == false
+            got = Set((e.error_type, e.path) for e in r.structural_errors)
+            @test issubset(want, got)
+        end
     end
 end

@@ -3,6 +3,7 @@ package esm
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -31,6 +32,15 @@ const (
 	// equality-comparable across bindings) or a null (unmatchable as a key).
 	// RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1; CONFORMANCE_SPEC §5.5.1.
 	CodeJoinKeyInvalidType = "join_key_invalid_type"
+
+	// CodeJoinSideAmbiguous: an `on` key for which the DOCUMENT does not
+	// determine a range symbol -- its index set is drawn by more than one of the
+	// node's ranges and the clause names no `syms` (CONFORMANCE_SPEC §5.5.8).
+	CodeJoinSideAmbiguous = "join_side_ambiguous"
+
+	// CodeJoinSymsUnknownSymbol: a `join.syms` entry that is not a range symbol
+	// of the node (CONFORMANCE_SPEC §5.5.8).
+	CodeJoinSymsUnknownSymbol = "join_syms_unknown_symbol"
 	// CodeDomainUnitMismatch: an `identity`-transform `variable_map` coupling
 	// whose `from` and `to` variables carry declared, non-empty, and DIFFERENT
 	// units (esm-spec §4.7.6). Mirrors the flatten-time DomainUnitMismatch the
@@ -76,12 +86,21 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 	// referenced from more than one range/aggregate in the same field is reported
 	// once.
 	seen := make(map[string]bool)
+	// A join key may name a DATA COLUMN, whose range symbol comes from its
+	// declared 1-D shape -- so the join-side checks need the model's shapes.
+	varShapes := make(map[string][]string)
+	for varName, v := range model.Variables {
+		if v.Shape != nil && len(*v.Shape) == 1 {
+			varShapes[varName] = *v.Shape
+		}
+	}
 	checkField := func(fieldPath string, expr Expression) {
 		walkOperatorNodes(expr, func(node ExprNode) {
 			if node.Op != opAggregate {
 				return
 			}
 			s.checkAggregateJoinKeys(node, fieldPath, modelName, seen)
+			s.checkAggregateJoinSides(node, varShapes, fieldPath, modelName, seen)
 			s.checkAggregateUndefinedIndexSet(node, fieldPath, modelName, seen)
 			s.checkAggregateRelationalInContinuous(node, stateVars, fieldPath, modelName, seen)
 		})
@@ -169,6 +188,140 @@ func (s *structuralScan) checkAggregateJoinKeys(node ExprNode, fieldPath, modelN
 				"model":        modelName,
 			},
 		})
+	}
+}
+
+// checkAggregateJoinSides reports the two static `join` SIDE findings of
+// CONFORMANCE_SPEC §5.5.8, both decidable from this ONE document -- the node's
+// `ranges`, the declared variable shapes and the clause itself are all here, so
+// no evaluation, no runtime data and no other file are needed. Both are stated
+// about the DOCUMENT rather than about where any one implementation happens to
+// resolve a join, which is what lets all five bindings pin the same fixtures
+// (tests/invalid/expected_errors.json).
+//
+//   - join_syms_unknown_symbol: a clause's `syms` entry that is not a key of the
+//     node's `ranges`. Unchecked, that side resolves to no symbol at all and RFC
+//     §5.3's degenerate-positional rule silently DROPS the pair -- an ungated
+//     full product, reported as a number rather than as a failure.
+//   - join_side_ambiguous: an `on` key for which the document does not determine
+//     a range symbol. The symbol comes from an index set -- named outright, or
+//     the sole shape axis of the declared 1-D variable that names it -- and if
+//     that set is drawn by MORE THAN ONE of the node's ranges with no `syms` on
+//     the clause, the key does not say which. TWO candidates resolve by the
+//     default side assignment only for a DATA COLUMN: a key naming the index set
+//     can already say which side it means by naming the range symbol instead.
+func (s *structuralScan) checkAggregateJoinSides(node ExprNode, varShapes map[string][]string, fieldPath, modelName string, seen map[string]bool) {
+	if len(node.Join) == 0 || len(node.Ranges) == 0 {
+		return
+	}
+	setToSyms := make(map[string][]string)
+	for rangeKey := range node.Ranges {
+		if name := rangeFromName(node.Ranges[rangeKey]); name != "" {
+			setToSyms[name] = append(setToSyms[name], rangeKey)
+		}
+	}
+	for _, syms := range setToSyms {
+		sort.Strings(syms)
+	}
+	declared := sortedKeys(node.Ranges)
+
+	for _, clause := range node.Join {
+		cm, ok := clause.(map[string]any)
+		if !ok {
+			continue
+		}
+		if raw, present := cm["syms"]; present {
+			list, _ := raw.([]any)
+			for _, el := range list {
+				name, _ := el.(string)
+				if _, isRange := node.Ranges[name]; isRange {
+					continue
+				}
+				dedup := "join_syms_unknown_symbol|" + fieldPath
+				if seen[dedup] {
+					return
+				}
+				seen[dedup] = true
+				s.addErr(StructuralError{
+					Path: fieldPath,
+					Code: CodeJoinSymsUnknownSymbol,
+					Message: fmt.Sprintf(
+						"Aggregate join `syms` names '%s', which is not a range symbol of this aggregate; "+
+							"both entries must name one of its `ranges`", name),
+					Details: map[string]any{
+						"join_syms_entry": name,
+						"declared_ranges": declared,
+						"model":           modelName,
+					},
+				})
+				return
+			}
+			// An explicit `syms` answers every pair of this clause.
+			continue
+		}
+		onList, _ := cm["on"].([]any)
+		for _, pair := range onList {
+			pl, ok := pair.([]any)
+			if !ok || len(pl) != 2 {
+				continue
+			}
+			for i, el := range pl {
+				key, ok := el.(string)
+				if !ok || key == "" {
+					continue
+				}
+				if _, isRange := node.Ranges[key]; isRange {
+					continue
+				}
+				setName := ""
+				viaColumn := false
+				if _, named := setToSyms[key]; named {
+					setName = key
+				} else if shape, has := varShapes[key]; has && len(shape) == 1 {
+					setName, viaColumn = shape[0], true
+				} else {
+					continue
+				}
+				cands := setToSyms[setName]
+				// One candidate: two distinct relations. Two: the default side
+				// assignment, but only for a data column. Three or more: never.
+				if len(cands) < 2 || (len(cands) == 2 && viaColumn) {
+					continue
+				}
+				dedup := "join_side_ambiguous|" + fieldPath
+				if seen[dedup] {
+					return
+				}
+				seen[dedup] = true
+				msg := fmt.Sprintf(
+					"Aggregate join key '%s' names an index set that %d range symbols of this aggregate draw; "+
+						"reference the range symbol directly, or name the clause's two sides with `syms`",
+					key, len(cands))
+				if viaColumn {
+					msg = fmt.Sprintf(
+						"Aggregate join key column '%s' lives on index set '%s', which %d range symbols of this "+
+							"aggregate draw, so the document does not determine which one the key is read at; "+
+							"name the clause's two sides with `syms`", key, setName, len(cands))
+				}
+				side := "left"
+				if i == 1 {
+					side = "right"
+				}
+				s.addErr(StructuralError{
+					Path:    fieldPath,
+					Code:    CodeJoinSideAmbiguous,
+					Message: msg,
+					Details: map[string]any{
+						"join_key":                key,
+						"side":                    side,
+						"index_set":               setName,
+						"candidate_range_symbols": cands,
+						"model":                   modelName,
+					},
+				})
+				return
+			}
+		}
 	}
 }
 

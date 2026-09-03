@@ -376,6 +376,20 @@ pub struct JoinClause {
     /// exact narrow-phase `filter`), so join lowering treats it as a no-op.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlap: Option<OverlapClause>,
+    /// The two range symbols this clause's `on` pairs are read at — `[left,
+    /// right]` — naming what the pairs themselves cannot when one index set is
+    /// drawn by more than one of the node's ranges (a SELF-join;
+    /// CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set"). Absent ⇒ the
+    /// default side assignment, which resolves a key through its axis and, for
+    /// exactly two candidates, reads the left key at the earlier one in
+    /// canonical range order.
+    ///
+    /// These are symbols the node BINDS, not variable references, so — exactly
+    /// like [`OverlapClause::sym_src`] / [`OverlapClause::sym_tgt`] —
+    /// flattening's dot-namespacing and `variable_map` renaming leave them
+    /// alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syms: Option<[String; 2]>,
     /// The build-time resolution of this clause's `on` pairs into the two loop
     /// symbols they gate and the key columns supplying each side's values
     /// (CONFORMANCE_SPEC §5.5.8), attached by

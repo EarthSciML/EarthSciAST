@@ -163,6 +163,43 @@ end
 # 4-arg construction and any external callers working unchanged.
 _JoinGate(sym_l, sym_r, codes_l, codes_r) = _JoinGate(sym_l, sym_r, codes_l, codes_r, nothing)
 
+# A parsed value-equality (`on`) join clause: the `[left, right]` key-column
+# pairs, plus the OPTIONAL `syms` naming the two range symbols those pairs are
+# read at (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set").
+#
+# `syms` exists for the one thing a pair of column names cannot say. A key column
+# resolves to a loop symbol through its declared AXIS, which is unique for a join
+# between two distinct relations; when a node draws ONE index set with SEVERAL of
+# its ranges — a relation joined to ITSELF — the axis names two or more candidate
+# symbols and the pair alone does not say which side is which. Absent ⇒ the
+# DEFAULT side assignment (`_join_sym_for_key`): with exactly two candidates the
+# left key reads at the earlier in canonical range order and the right at the
+# later; three or more is refused.
+#
+# It is an `AbstractVector` of the pairs, so every consumer that iterates or
+# indexes a clause — `_resolve_join_gates_for`, `value_invention`, `serialize`,
+# `display` — sees exactly the pair list it always saw, and only the code that
+# needs `syms` mentions it.
+struct _OnJoinSpec <: AbstractVector{Tuple{String,String}}
+    pairs::Vector{Tuple{String,String}}
+    syms::Union{Nothing,Tuple{String,String}}
+end
+_OnJoinSpec(pairs) = _OnJoinSpec(pairs, nothing)
+Base.size(c::_OnJoinSpec) = size(c.pairs)
+Base.getindex(c::_OnJoinSpec, i::Int) = c.pairs[i]
+Base.IndexStyle(::Type{_OnJoinSpec}) = IndexLinear()
+
+# The `syms` of a clause, or `nothing` for a clause that carries none — including
+# a bare pair vector, which older callers and hand-built trees still construct.
+_clause_syms(c::_OnJoinSpec) = c.syms
+_clause_syms(::Any) = nothing
+
+# `c` with the same `syms` but `pairs` replaced — what namespacing and coupling
+# renaming need, since both rewrite key COLUMNS (references) and must leave the
+# range symbols (binders) alone.
+_with_pairs(c::_OnJoinSpec, pairs) = _OnJoinSpec(pairs, c.syms)
+_with_pairs(::Any, pairs) = pairs
+
 # A parsed OVERLAP join clause (Phase 2a) — the spatial-index-backed broad-phase
 # gate that replaces uniform-grid bin equality with envelope candidacy. It names
 # CONST-ARRAY FACTORS interpreted as per-position envelopes:

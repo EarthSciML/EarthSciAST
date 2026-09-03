@@ -363,18 +363,19 @@ fn lower_node_joins(
 
     let joins = node.join.take().unwrap_or_default();
     let ranges = node.ranges.clone().unwrap_or_default();
+    // The node's canonical range order — `output_idx` first, then the contracted
+    // symbols ascending. It is what orders the candidates of an ambiguous axis
+    // (§5.5.8 "Two ranges over one index set").
+    let order = canonical_range_order(node.output_idx.as_deref().unwrap_or(&[]), &ranges);
 
     // The loop symbols in scope (an aggregate's output indices also appear as
     // range keys). A join key naming one of these is positional on that symbol.
     let declared: HashSet<&str> = ranges.keys().map(String::as_str).collect();
     // index-set name -> the loop symbol(s) drawing `{from}` it, so a clause may
     // name the dimension (`"sourceType"`) instead of the loop symbol (`"src"`).
-    let mut set_to_syms: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (sym, spec) in &ranges {
-        if let RangeSpec::IndexSetRef { from, .. } = spec {
-            set_to_syms.entry(from.as_str()).or_default().push(sym);
-        }
-    }
+    // Ordered canonically, so a set drawn by SEVERAL symbols hands out its
+    // candidates in the one order every binding computes.
+    let set_to_syms = set_to_syms_ordered(&ranges, &order);
 
     let mut conjuncts: Vec<Expr> = Vec::new();
     // A spatial OVERLAP gate (CONFORMANCE_SPEC §5.5.6) is NOT lowered to a
@@ -406,6 +407,26 @@ fn lower_node_joins(
                  key-column pair is required (RFC semiring-faq-unified-ir §5.3)",
             ));
         }
+        // An explicit `syms` names the two range symbols this clause's pairs are
+        // read at (§5.5.8 "Two ranges over one index set"). It is the author's
+        // answer to the one question a pair of column names cannot settle, so it
+        // is validated here rather than deferred: a symbol the node does not
+        // bind would otherwise resolve every pair to nothing at all.
+        let (pick_l, pick_r) = match &clause.syms {
+            Some([sl, sr]) => {
+                for s in [sl, sr] {
+                    if !declared.contains(s.as_str()) {
+                        return Err(CompileError::build_err(format!(
+                            "`join.syms` names '{s}', which is not a range symbol of this \
+                             aggregate ({declared:?}); both entries must name one of its \
+                             `ranges` (CONFORMANCE_SPEC §5.5.8)"
+                        )));
+                    }
+                }
+                (Pick::Named(sl.as_str()), Pick::Named(sr.as_str()))
+            }
+            None => (Pick::Left, Pick::Right),
+        };
         // Resolved key pairs, grouped by the SYMBOL PAIR they gate: several
         // `on` entries over the same two loop symbols are ONE composite-key
         // gate (all pairs must agree), not several independent ones.
@@ -424,6 +445,7 @@ fn lower_node_joins(
                 &ranges,
                 index_sets,
                 var_shapes,
+                pick_l,
             )?
             .ok_or_else(|| CompileError::UnsupportedFeatureError {
                 feature: "value-equality join over data-derived columns".to_string(),
@@ -445,6 +467,7 @@ fn lower_node_joins(
                 &ranges,
                 index_sets,
                 var_shapes,
+                pick_r,
             )?
             else {
                 continue;
@@ -489,6 +512,7 @@ fn lower_node_joins(
             kept.push(JoinClause {
                 // The wire form is preserved verbatim — resolution is additive.
                 on: clause.on.clone(),
+                syms: clause.syms.clone(),
                 overlap: None,
                 on_gate: Some(OnGate {
                     id: next_gate_id(),
@@ -534,6 +558,95 @@ struct ResolvedSide {
     col: KeyColumn,
 }
 
+/// Which range symbol a key is read at when its axis is drawn by more than one
+/// of the node's ranges — the SELF-JOIN disambiguation of CONFORMANCE_SPEC
+/// §5.5.8. Irrelevant when the axis has a single candidate, which is every
+/// join between two distinct relations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Pick<'a> {
+    /// The clause said so, in `join.syms`.
+    Named(&'a str),
+    /// The LEFT key of a pair: the EARLIER candidate in canonical range order.
+    Left,
+    /// The RIGHT key of a pair: the LATER candidate.
+    Right,
+}
+
+/// WHICH resolution step is asking, which decides whether the DEFAULT side
+/// assignment ([`Pick::Left`] / [`Pick::Right`]) applies at all.
+///
+/// The two steps face different ambiguities, and only one of them is a gap in
+/// the format:
+///
+/// * [`Via::Binder`] — the key names an INDEX SET (§5.5.8 precedence step 1).
+///   An author who meant a particular side can already say so by naming the
+///   RANGE SYMBOL instead, which is exactly what the historic diagnostic
+///   advises, so an ambiguous set stays an error however many candidates it
+///   has. Only an explicit `join.syms` resolves it.
+/// * [`Via::ColumnAxis`] — the key names a DATA COLUMN and the symbol comes
+///   from the column's declared axis (step 2). Here there is nothing else the
+///   author can write: the pair holds column names and the axis is a property
+///   of the column, not of the clause. This is the self-join case, and the one
+///   the default assignment exists for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Via {
+    /// The key named a range symbol or an index set.
+    Binder,
+    /// The symbol came from a data column's (or envelope factor's) 1-D axis.
+    ColumnAxis,
+}
+
+/// A node's canonical range order: the `output_idx` symbols that are ranges, in
+/// the order `output_idx` lists them, then the contracted symbols ascending by
+/// name.
+///
+/// This is not a new order — it is the enumeration order every executing
+/// binding already walks (`simulate_array::eval` builds its contracted
+/// dimensions from `ranges.keys()` minus `output_idx`, sorted), and the order
+/// §5.5.8's partner-restricted drive shape means by "the LATER of the two gated
+/// axes". Reusing it is what makes the default side assignment a pure function
+/// of the document rather than of a hash iteration.
+fn canonical_range_order(output_idx: &[String], ranges: &HashMap<String, RangeSpec>) -> Vec<String> {
+    let mut out: Vec<String> = output_idx
+        .iter()
+        .filter(|n| ranges.contains_key(n.as_str()))
+        .cloned()
+        .collect();
+    let mut rest: Vec<String> = ranges
+        .keys()
+        .filter(|k| !out.iter().any(|n| n == *k))
+        .cloned()
+        .collect();
+    rest.sort_unstable();
+    out.append(&mut rest);
+    out
+}
+
+/// index-set name → the range symbols drawing `{from}` it, each list in
+/// canonical range order (see [`canonical_range_order`]).
+///
+/// The list is one element long for every join between two distinct relations.
+/// It is longer exactly when the node draws one index set twice — the
+/// prefix-scan shape §4.3.1 of the spec already documents, and the shape a
+/// self-join needs — and then its ORDER is what [`Pick::Left`] / [`Pick::Right`]
+/// select from.
+fn set_to_syms_ordered<'a>(
+    ranges: &'a HashMap<String, RangeSpec>,
+    order: &[String],
+) -> HashMap<&'a str, Vec<&'a str>> {
+    let rank = |s: &str| order.iter().position(|o| o == s).unwrap_or(usize::MAX);
+    let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (sym, spec) in ranges {
+        if let RangeSpec::IndexSetRef { from, .. } = spec {
+            map.entry(from.as_str()).or_default().push(sym);
+        }
+    }
+    for syms in map.values_mut() {
+        syms.sort_by_key(|s| rank(s));
+    }
+    map
+}
+
 /// Resolve one `on` key column (RFC §5.3), in the normative precedence order of
 /// CONFORMANCE_SPEC.md §5.5.6 ("binders shadow declarations"):
 ///
@@ -547,6 +660,9 @@ struct ResolvedSide {
 ///
 /// `None` when it resolves to neither; the caller decides whether that is the
 /// degenerate positional no-op (right key) or an error (left key).
+///
+/// `pick` settles the one case an axis lookup cannot: an index set drawn by
+/// SEVERAL of this node's ranges (§5.5.8 "Two ranges over one index set").
 fn resolve_side(
     key: &str,
     declared: &HashSet<&str>,
@@ -554,8 +670,9 @@ fn resolve_side(
     ranges: &HashMap<String, RangeSpec>,
     index_sets: &HashMap<String, IndexSet>,
     var_shapes: &HashMap<String, Vec<String>>,
+    pick: Pick,
 ) -> Result<Option<ResolvedSide>, CompileError> {
-    if let Some(sym) = resolve_key(key, declared, set_to_syms) {
+    if let Some(sym) = resolve_key(key, declared, set_to_syms, pick, Via::Binder)? {
         let (positions, values) = key_column(&sym, ranges, index_sets)?;
         return Ok(Some(ResolvedSide {
             sym,
@@ -564,7 +681,7 @@ fn resolve_side(
     }
     if let Some(shape) = var_shapes.get(key)
         && shape.len() == 1
-        && let Some(sym) = resolve_key(&shape[0], declared, set_to_syms)
+        && let Some(sym) = resolve_key(&shape[0], declared, set_to_syms, pick, Via::ColumnAxis)?
     {
         return Ok(Some(ResolvedSide {
             sym,
@@ -697,29 +814,28 @@ pub fn resolve_overlap_syms_expr(expr: &mut Expr, var_shapes: &HashMap<String, V
     if node.join.is_some() {
         let ranges = node.ranges.clone().unwrap_or_default();
         let declared: HashSet<&str> = ranges.keys().map(String::as_str).collect();
-        let mut set_to_syms: HashMap<&str, Vec<&str>> = HashMap::new();
-        for (sym, spec) in &ranges {
-            if let RangeSpec::IndexSetRef { from, .. } = spec {
-                set_to_syms.entry(from.as_str()).or_default().push(sym);
-            }
-        }
-        // A set drawn by two symbols is ambiguous; sort so at least the CHOICE
-        // is deterministic, then reject the ambiguous case below.
-        for syms in set_to_syms.values_mut() {
-            syms.sort_unstable();
-        }
-        let env_sym = |env: &[String]| -> Option<String> {
+        // Canonically ordered, so an index set drawn twice hands `src_env` the
+        // earlier symbol and `tgt_env` the later — the same default side
+        // assignment an `on` clause gets (§5.5.8), which is what lets an overlap
+        // gate pair one relation with itself too.
+        let order = canonical_range_order(node.output_idx.as_deref().unwrap_or(&[]), &ranges);
+        let set_to_syms = set_to_syms_ordered(&ranges, &order);
+        let env_sym = |env: &[String], pick: Pick| -> Option<String> {
             let shape = var_shapes.get(env.first()?)?;
             if shape.len() != 1 {
                 return None;
             }
-            resolve_key(&shape[0], &declared, &set_to_syms)
+            // Deliberately INFALLIBLE (see [`resolve_overlap_join_syms`]): an
+            // unresolvable side leaves the symbol `None` and the driver simply
+            // declines the gate, which is safe because an overlap broad phase
+            // sits behind the author's own narrow-phase `filter`.
+            resolve_key(&shape[0], &declared, &set_to_syms, pick, Via::ColumnAxis).unwrap_or(None)
         };
         if let Some(joins) = &mut node.join {
             for clause in joins.iter_mut() {
                 if let Some(ov) = &mut clause.overlap {
-                    ov.sym_src = env_sym(&ov.src_env);
-                    ov.sym_tgt = env_sym(&ov.tgt_env);
+                    ov.sym_src = env_sym(&ov.src_env, Pick::Left);
+                    ov.sym_tgt = env_sym(&ov.tgt_env, Pick::Right);
                 }
             }
         }
@@ -728,21 +844,83 @@ pub fn resolve_overlap_syms_expr(expr: &mut Expr, var_shapes: &HashMap<String, V
 }
 
 /// Resolve a join key to the loop symbol it denotes: the key itself if it is a
-/// declared range symbol, else the unique range symbol drawing `{from}` an index
-/// set of that name (RFC §5.3 — a clause may name the dimension instead of the
-/// loop symbol). `None` if it resolves to no single loop symbol (a positional /
+/// declared range symbol, else a range symbol drawing `{from}` an index set of
+/// that name (RFC §5.3 — a clause may name the dimension instead of the loop
+/// symbol). `Ok(None)` if it resolves to no loop symbol at all (a positional /
 /// non-loop key, handled by the caller).
+///
+/// **When the index set is drawn by SEVERAL of the node's ranges** — a relation
+/// joined to itself — the axis alone does not say which symbol, and `pick`
+/// does (§5.5.8):
+///
+/// * [`Pick::Named`] takes the symbol `join.syms` named, and errors if that
+///   symbol does not draw this axis.
+/// * [`Pick::Left`] / [`Pick::Right`] take the first / second candidate in
+///   canonical range order, and are defined only for TWO candidates. Three or
+///   more is an error naming them and pointing at `syms`: taking two of three
+///   would be a guess, and a guess here yields a plausible wrong number instead
+///   of a failure.
 fn resolve_key(
     key: &str,
     declared: &HashSet<&str>,
     set_to_syms: &HashMap<&str, Vec<&str>>,
-) -> Option<String> {
+    pick: Pick,
+    via: Via,
+) -> Result<Option<String>, CompileError> {
     if declared.contains(key) {
-        return Some(key.to_string());
+        // A key naming a range symbol OUTRIGHT is already unambiguous; `syms`
+        // may not contradict it.
+        if let Pick::Named(want) = pick
+            && want != key
+        {
+            return Err(CompileError::build_err(format!(
+                "join key '{key}' names a range symbol of this aggregate, but this clause's \
+                 `join.syms` puts that side on '{want}'; a key naming a range symbol must name \
+                 its own side's (CONFORMANCE_SPEC §5.5.8)"
+            )));
+        }
+        return Ok(Some(key.to_string()));
     }
-    match set_to_syms.get(key) {
-        Some(syms) if syms.len() == 1 => Some(syms[0].to_string()),
-        _ => None,
+    let Some(syms) = set_to_syms.get(key) else {
+        return Ok(None);
+    };
+    match pick {
+        Pick::Named(want) => {
+            if syms.contains(&want) {
+                Ok(Some(want.to_string()))
+            } else {
+                Err(CompileError::build_err(format!(
+                    "this clause's `join.syms` puts a side on range symbol '{want}', but the key \
+                     resolving through index set '{key}' is read at one of {syms:?} — '{want}' \
+                     does not draw that index set (CONFORMANCE_SPEC §5.5.8)"
+                )))
+            }
+        }
+        Pick::Left | Pick::Right => match syms.len() {
+            0 => Ok(None),
+            // The ordinary join of two distinct relations: one candidate, and
+            // both sides of a pair resolve to it independently of `pick`.
+            1 => Ok(Some(syms[0].to_string())),
+            // A key that NAMES the index set can already say which side it
+            // means by naming the range symbol instead, so the default
+            // assignment does not apply and the historic rejection stands.
+            _ if via == Via::Binder => Err(CompileError::build_err(format!(
+                "join key '{key}' names an index set bound by multiple range symbols \
+                 {syms:?}; reference the range symbol directly, or name this clause's two \
+                 sides with `join.syms` (RFC semiring-faq-unified-ir §5.3 / \
+                 CONFORMANCE_SPEC §5.5.8)"
+            ))),
+            2 => Ok(Some(
+                syms[usize::from(matches!(pick, Pick::Right))].to_string(),
+            )),
+            _ => Err(CompileError::build_err(format!(
+                "index set '{key}' is drawn by {} range symbols of this aggregate ({syms:?}), so \
+                 which one a key column over it is read at is not determined; name the two sides \
+                 explicitly with this clause's `join.syms` (CONFORMANCE_SPEC §5.5.8 \"Two ranges \
+                 over one index set\")",
+                syms.len()
+            ))),
+        },
     }
 }
 
@@ -1075,6 +1253,19 @@ mod tests {
         HashMap::new()
     }
 
+    fn interval(size: i64) -> IndexSet {
+        IndexSet {
+            kind: "interval".into(),
+            size: Some(size),
+            members: None,
+            from_faq: None,
+            member_factor: None,
+            of: None,
+            offsets: None,
+            values: None,
+        }
+    }
+
     fn categorical(members: &[&str]) -> IndexSet {
         IndexSet {
             kind: "categorical".into(),
@@ -1233,6 +1424,194 @@ mod tests {
             ..Default::default()
         });
         assert!(lower_expr_joins(&mut bogus, &HashMap::new(), &no_shapes()).is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // Two ranges over ONE index set: the self-join side assignment
+    // (CONFORMANCE_SPEC §5.5.8). Numeric end-to-end coverage lives in
+    // `tests/join_on_self_join.rs`; these pin the RESOLUTION itself, which
+    // is where a wrong choice would become a plausible wrong number.
+    // -----------------------------------------------------------------
+
+    /// A self-join node: `out[a] = Σ_b payload[b]` over `on: [[lkey, rkey]]`,
+    /// with every range in `ranges` drawing the one index set `rows`.
+    fn self_join_expr(on: Vec<[String; 2]>, syms: Option<[String; 2]>, ranges: &[&str]) -> Expr {
+        self_join_expr_out(on, syms, ranges, ranges[0])
+    }
+
+    /// [`self_join_expr`] with the OUTPUT symbol named explicitly, so a test can
+    /// make it sort after the contracted one.
+    fn self_join_expr_out(
+        on: Vec<[String; 2]>,
+        syms: Option<[String; 2]>,
+        ranges: &[&str],
+        out_sym: &str,
+    ) -> Expr {
+        let range_map: HashMap<String, RangeSpec> = ranges
+            .iter()
+            .map(|s| {
+                (
+                    (*s).to_string(),
+                    RangeSpec::IndexSetRef {
+                        from: "rows".into(),
+                        of: None,
+                    },
+                )
+            })
+            .collect();
+        Expr::operator(ExpressionNode {
+            op: "aggregate".into(),
+            ranges: Some(range_map),
+            output_idx: Some(vec![out_sym.to_string()]),
+            join: Some(vec![JoinClause {
+                on,
+                syms,
+                ..Default::default()
+            }]),
+            expr: Some(Box::new(Expr::Variable("payload".into()))),
+            ..Default::default()
+        })
+    }
+
+    /// Two 1-D data columns over `rows`, the shape a self-join needs.
+    fn self_join_shapes() -> HashMap<String, Vec<String>> {
+        ["row_prior", "row_id", "payload"]
+            .into_iter()
+            .map(|n| (n.to_string(), vec!["rows".to_string()]))
+            .collect()
+    }
+
+    fn rows_interval(size: i64) -> HashMap<String, IndexSet> {
+        HashMap::from([("rows".to_string(), interval(size))])
+    }
+
+    fn gate_of(expr: &Expr) -> OnGate {
+        let Expr::Operator(node) = expr else {
+            panic!("not an operator");
+        };
+        node.join
+            .as_ref()
+            .and_then(|j| j.first())
+            .and_then(|c| c.on_gate.clone())
+            .expect("a resolved self-join attaches a drivable gate")
+    }
+
+    #[test]
+    fn the_left_key_of_a_self_join_reads_at_the_output_symbol() {
+        // `a` is the output index and `b` the contracted one, so canonical range
+        // order is [a, b] and the LEFT key takes `a`. That is the orientation
+        // "for each row, find the row whose id is my priorID" means; the other
+        // one computes the NEXT row and is just as plausible a number.
+        let mut expr = self_join_expr(
+            vec![["row_prior".into(), "row_id".into()]],
+            None,
+            &["a", "b"],
+        );
+        lower_expr_joins(&mut expr, &rows_interval(5), &self_join_shapes()).unwrap();
+        let g = gate_of(&expr);
+        assert_eq!((g.sym_l.as_str(), g.sym_r.as_str()), ("a", "b"));
+        assert_eq!(g.cols_l, vec![KeyColumn::Column("row_prior".into())]);
+        assert_eq!(g.cols_r, vec![KeyColumn::Column("row_id".into())]);
+    }
+
+    #[test]
+    fn the_default_order_does_not_depend_on_the_symbols_names() {
+        // The grounded half of the rule is `output_idx`, not name order: rename
+        // the output symbol to sort AFTER the contracted one and the assignment
+        // must not move. (Sorting the candidates alone would flip it here, and
+        // flipping it silently returns the next row instead of the previous.)
+        let mut expr = self_join_expr_out(
+            vec![["row_prior".into(), "row_id".into()]],
+            None,
+            &["z_out", "b"],
+            "z_out",
+        );
+        lower_expr_joins(&mut expr, &rows_interval(5), &self_join_shapes()).unwrap();
+        let g = gate_of(&expr);
+        assert_eq!(
+            (g.sym_l.as_str(), g.sym_r.as_str()),
+            ("z_out", "b"),
+            "the output symbol is the left side however its name sorts"
+        );
+    }
+
+    #[test]
+    fn explicit_syms_override_the_default_orientation() {
+        let mut expr = self_join_expr(
+            vec![["row_prior".into(), "row_id".into()]],
+            Some(["b".into(), "a".into()]),
+            &["a", "b"],
+        );
+        lower_expr_joins(&mut expr, &rows_interval(5), &self_join_shapes()).unwrap();
+        let g = gate_of(&expr);
+        assert_eq!((g.sym_l.as_str(), g.sym_r.as_str()), ("b", "a"));
+    }
+
+    #[test]
+    fn a_third_range_over_the_same_index_set_is_refused_not_guessed() {
+        let mut expr = self_join_expr(
+            vec![["row_prior".into(), "row_id".into()]],
+            None,
+            &["a", "b", "c"],
+        );
+        let err = lower_expr_joins(&mut expr, &rows_interval(5), &self_join_shapes()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("drawn by 3 range symbols"), "{msg}");
+        assert!(msg.contains("join.syms"), "{msg}");
+    }
+
+    #[test]
+    fn syms_naming_a_non_range_is_refused() {
+        let mut expr = self_join_expr(
+            vec![["row_prior".into(), "row_id".into()]],
+            Some(["a".into(), "nope".into()]),
+            &["a", "b"],
+        );
+        let err = lower_expr_joins(&mut expr, &rows_interval(5), &self_join_shapes()).unwrap_err();
+        assert!(err.to_string().contains("'nope'"), "{err:?}");
+    }
+
+    #[test]
+    fn a_join_between_two_distinct_relations_is_unaffected_by_the_side_rule() {
+        // The regression guard: with one candidate per axis the default picks
+        // are inert, so every existing document resolves exactly as before.
+        let mut range_map = HashMap::new();
+        range_map.insert(
+            "l".to_string(),
+            RangeSpec::IndexSetRef {
+                from: "src".into(),
+                of: None,
+            },
+        );
+        range_map.insert(
+            "r".to_string(),
+            RangeSpec::IndexSetRef {
+                from: "emf".into(),
+                of: None,
+            },
+        );
+        let mut expr = Expr::operator(ExpressionNode {
+            op: "aggregate".into(),
+            ranges: Some(range_map),
+            output_idx: Some(vec![]),
+            join: Some(vec![JoinClause {
+                on: vec![["src_type".into(), "emf_type".into()]],
+                ..Default::default()
+            }]),
+            expr: Some(Box::new(Expr::Number(1.0))),
+            ..Default::default()
+        });
+        let shapes: HashMap<String, Vec<String>> = HashMap::from([
+            ("src_type".to_string(), vec!["src".to_string()]),
+            ("emf_type".to_string(), vec!["emf".to_string()]),
+        ]);
+        let isets = HashMap::from([
+            ("src".to_string(), interval(4)),
+            ("emf".to_string(), interval(3)),
+        ]);
+        lower_expr_joins(&mut expr, &isets, &shapes).unwrap();
+        let g = gate_of(&expr);
+        assert_eq!((g.sym_l.as_str(), g.sym_r.as_str()), ("l", "r"));
     }
 
     #[test]

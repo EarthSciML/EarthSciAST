@@ -527,6 +527,18 @@ and therefore takes the semiring's **additive identity** — `0` under `sum_prod
 under `max_sum`, and so on per the closed semiring registry (RFC semiring-faq-unified-ir
 §5.1, mirrored in the schema's `semiring` description). It is not an error.
 
+**The same two-ranges-over-one-index-set shape takes a value-equality gate, and that
+is a self-join.** The prefix reduction above pairs `i` with `j` through an inequality
+`filter`; replacing the `filter` with a `join.on` over two key COLUMNS of the one
+relation pairs each row with a *particular* other row instead of with a window — a row
+with its predecessor, or NONROAD's county row with the state row of the same table.
+Because both key columns then live on the same axis, the pair `[left, right]` cannot
+say which range symbol each is read at; the side assignment, the `syms` spelling that
+overrides it, and the refusal when three ranges draw one index set are normative in
+**CONFORMANCE_SPEC.md §5.5.8**. The shared fixture is
+`tests/valid/aggregate/join_on_self_join.esm`; the rationale is
+`docs/content/rfcs/self-join-two-ranges-over-one-index-set.md`.
+
 **Accumulation order is ascending `j` for every variant, and is normative.** A `filter`
 selects *which* combinations contribute; it never reorders them. So the reduction visits the
 contracted index in increasing order in all four rows above, and under `sum_product` the
