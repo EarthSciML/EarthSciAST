@@ -735,6 +735,32 @@ fn eval_observed(
     let mut expr = def.clone();
     resolve_expr_ranges_with_extents(&mut expr, index_sets, extents)
         .map_err(|e| err(format!("resolve ranges for {name}: {e}")))?;
+    // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) cannot be evaluated
+    // wholesale: its cells are not independent, and the self-read would
+    // resolve against a map that does not yet hold the array being built.
+    // Checked BEFORE the wholesale call, and returning `None` for every
+    // expression that contains no self-read, so a document that does not use
+    // the construct takes exactly the path it took before.
+    //
+    // This is the fix for the defect that made the construct dead on this
+    // path: it evaluated correctly under `esm test` (the per-step observed
+    // materialization) and silently wrong wherever the build pipeline was
+    // taken — which is any ingesting document, and every document under
+    // `esm simulate`. The self-read fell through to an unbound-name NaN and a
+    // `max(x, 0)` in the body laundered it to 0.0, so the answer came back
+    // finite, plausible and wrong with nothing logged.
+    if let Some(res) = crate::simulate_array::eval_observed_recurrence(
+        name,
+        &expr,
+        arrays,
+        param_vals,
+        param_names,
+        0.0,
+        extents,
+        const_arrays,
+    ) {
+        return res.map_err(|e| err(format!("evaluate {name}: {e}")));
+    }
     let val = eval_expression_with_extents_and_consts_shared(
         &expr,
         arrays,

@@ -2099,6 +2099,132 @@ pub fn eval_expression_with_extents_and_consts(
 /// caller already holds the interpreter's own [`ArrMap`] and the arrays are
 /// borrowed for the duration of the call, byte-identically — no copy of any
 /// input array is made.
+/// Evaluate one observed that is a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1),
+/// or report that it is not one.
+///
+/// `None` — `expr` contains no `index(name, …)` self-read, so the caller
+/// evaluates it exactly as it did before this existed. `Some(Ok(_))` — the
+/// sequential sweep ran and this is the finished array. `Some(Err(_))` — the
+/// self-read is there but is not a well-founded causal read, or a read reached
+/// a cell the sweep had not published.
+///
+/// **Why this exists on the build-pipeline path at all.** A recurrence has two
+/// evaluation routes in this runtime: the per-step observed materialization,
+/// and the build pipeline that materializes a relational document's whole
+/// observed graph up front. The construct originally implemented only the
+/// first, so it evaluated correctly under `esm test` and was DEAD wherever the
+/// pipeline build was taken — which is any document that ingests, and every
+/// document under `esm simulate`. Dead silently: the self-read fell through to
+/// an unbound-name `NaN`, and a body containing `max(x, 0)` — which the
+/// motivating fold's body is — turned that `NaN` into `0.0`, because IEEE-754
+/// `max` returns the non-NaN operand. The result was finite, plausible,
+/// monotone and wrong, with nothing logged at any level.
+///
+/// So this is not a second implementation. It resolves the frame with the same
+/// [`lower_recurrence`] the compiled path uses and runs the same
+/// [`sweep_recurrence`]; only the surrounding environment differs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn eval_observed_recurrence(
+    name: &str,
+    expr: &Expr,
+    inputs: &ArrMap,
+    params: &[f64],
+    param_names: &[String],
+    t: f64,
+    derived_extents: &HashMap<String, i64>,
+    const_arrays: &ConstArrayScope,
+) -> Option<Result<ArrayD<f64>, CompileError>> {
+    // Cheap structural test first: no self-read, nothing to do, and every
+    // document that does not use the construct pays one expression walk.
+    if !expr_reads_self(expr, name) {
+        return None;
+    }
+    let lhs = Expr::Variable(name.to_string());
+    let lowered = match super::compile::lower_recurrence(name, &lhs, expr) {
+        Ok(Some(l)) => l,
+        // A self-read the lowering does not recognize as a recurrence. It must
+        // NOT fall through to a wholesale evaluation, which is what laundered
+        // it into a plausible number before.
+        Ok(None) => {
+            return Some(Err(CompileError::InterpreterBuildError {
+                details: format!(
+                    "recurrence_unsupported_form: '{name}' reads itself through `index` in its \
+                     own definition, but the build pipeline could not resolve a cell frame to \
+                     sweep. Evaluating it wholesale would resolve the self-read to an unbound \
+                     name, and a body containing `max(x, 0)` would turn the resulting NaN into \
+                     a plausible zero (esm-spec §4.3.1.1; CONFORMANCE_SPEC §5.19.4)."
+                ),
+            }));
+        }
+        Err(e) => return Some(Err(e)),
+    };
+    let empty: ArrMap = ArrMap::default();
+    let derived_rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+    let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+    let env = EvalEnv {
+        state_arrays: &empty,
+        params,
+        param_names,
+        t,
+        derived_rings: &derived_rings,
+        derived_extents,
+        forcing: &forcing,
+        cse: None,
+        const_arrays,
+    };
+    let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
+    let scope = RecurScope::new(name, shape, origin);
+    take_const_array_oob(); // discard any latch left by an earlier failed call
+    let arr = {
+        let mut ctx = env.ctx(inputs);
+        super::rhs::sweep_recurrence(
+            &scope,
+            &lowered.idx_names,
+            &lowered.ranges,
+            &lowered.body,
+            lowered.axis,
+            &mut ctx,
+        )
+    };
+    // §5.19.4: an unavailable self-read is a FAULT, not a value. The latch is
+    // the channel the tree walk has for one, and draining it here is what makes
+    // this path fail closed rather than hand back an array built on a sentinel.
+    match take_const_array_oob() {
+        Some(details) => Some(Err(CompileError::InterpreterBuildError { details })),
+        None => Some(Ok(arr)),
+    }
+}
+
+/// Does `expr` read `name` through `index` — i.e. is it a self-read of the
+/// variable this expression defines? Walks `args` and every expression sidecar,
+/// so a read inside an `aggregate` body, a `filter` or a `makearray` region is
+/// found.
+fn expr_reads_self(expr: &Expr, name: &str) -> bool {
+    let Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "index"
+        && matches!(node.args.first(), Some(Expr::Variable(v)) if v == name)
+    {
+        return true;
+    }
+    node.args.iter().any(|a| expr_reads_self(a, name))
+        || [
+            node.expr.as_deref(),
+            node.filter.as_deref(),
+            node.key.as_deref(),
+            node.lower.as_deref(),
+            node.upper.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|c| expr_reads_self(c, name))
+        || node
+            .values
+            .as_ref()
+            .is_some_and(|vs| vs.iter().any(|v| expr_reads_self(v, name)))
+}
+
 pub(crate) fn eval_expression_with_extents_and_consts_shared(
     expr: &Expr,
     inputs: &ArrMap,

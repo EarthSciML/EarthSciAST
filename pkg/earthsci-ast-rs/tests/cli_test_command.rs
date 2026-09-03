@@ -156,3 +156,87 @@ fn the_run_tests_alias_reaches_the_same_command() {
     assert!(ok, "got:\n{stdout}");
     assert_eq!(total_row(&stdout), (3, 0, 0), "in:\n{stdout}");
 }
+
+// ---------------------------------------------------------------------------
+// `esm simulate` on a recurrence — the OTHER command, and the one that was dead
+// ---------------------------------------------------------------------------
+//
+// A causal self-reference (esm-spec §4.3.1.1) evaluated correctly under
+// `esm test` and returned a plausible wrong answer under `esm simulate` for as
+// long as it existed, because the two commands take different evaluation
+// routes: `esm test` materializes observeds per step, while `esm simulate`'s
+// static branch rebuilds with the BUILD PIPELINE on in order to materialize an
+// array observed at all. The construct was implemented on the first only.
+//
+// It was silent. The self-read fell through to an unbound-name NaN, and
+// `max(NaN, 0.0)` returns `0.0` — IEEE-754 `max` yields the non-NaN operand —
+// so a body containing a clamp produced a finite, monotone, wrong field with
+// nothing logged. The `esm test` verdict stayed green throughout.
+//
+// So the two commands are now held to AGREEING on the same document, which is
+// the property that was missing. Asserting `esm test` alone cannot see this
+// defect, and neither can asserting that `esm simulate` merely ran.
+
+/// The `Name.var[i] = value` lines from an `esm simulate` final-state block.
+fn final_state(stdout: &str) -> Vec<(String, f64)> {
+    stdout
+        .lines()
+        .skip_while(|l| !l.starts_with("Final state at t"))
+        .filter_map(|l| {
+            let (lhs, rhs) = l.trim().split_once(" = ")?;
+            Some((lhs.trim().to_string(), rhs.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+#[test]
+fn esm_simulate_evaluates_a_recurrence_and_agrees_with_esm_test() {
+    let doc = "../../tests/valid/recurrence_causal_self_reference.esm";
+
+    // `esm test` — the path that always worked. Six assertions, zero tolerance.
+    let (ok, out) = esm(&["test", doc]);
+    assert!(ok, "esm test must pass on the valid corpus fixture:\n{out}");
+    assert_eq!(total_row(&out), (6, 0, 0), "esm test verdict:\n{out}");
+
+    // `esm simulate` — the path that returned the non-recurrent const verbatim.
+    let (ok, out) = esm(&["simulate", doc]);
+    assert!(ok, "esm simulate must succeed:\n{out}");
+    let state = final_state(&out);
+    assert_eq!(
+        state.len(),
+        6,
+        "expected six cells of 'r' in the final state:\n{out}"
+    );
+
+    // The values an INDEPENDENT ascending fold gives. `r[3]` is the
+    // order-sensitive one and `r[6]` the cancelling one, so a reassociated or
+    // reordered evaluation fails here rather than agreeing loosely.
+    let want = [
+        1e-16,
+        0.999_999_999_999_999_9,
+        -1.0,
+        99_999_997.0,
+        -99_999_997.0,
+        -1.000_000_029_999_999_2e16,
+    ];
+    for (i, ((name, got), expect)) in state.iter().zip(want.iter()).enumerate() {
+        assert!(
+            (got - expect).abs() <= expect.abs() * 1e-12,
+            "esm simulate {name} (cell {}) = {got:?}, want {expect:?}\n{out}",
+            i + 1
+        );
+    }
+
+    // And the regression named as a value that must not come back: the
+    // document's own non-recurrent `b[y]` const, which is what every
+    // recurrence term contributing zero produces.
+    let laundered = [1e-16, 1.0, 1e-16, 100_000_000.0, 3.0, -1e16];
+    let got: Vec<f64> = state.iter().map(|(_, v)| *v).collect();
+    assert_ne!(
+        got.as_slice(),
+        laundered.as_slice(),
+        "esm simulate returned the b[y] const verbatim — the signature of a self-read \
+         resolving to NaN and the body's `max(x, 0)` laundering it to zero \
+         (CONFORMANCE_SPEC §5.19.4)\n{out}"
+    );
+}
