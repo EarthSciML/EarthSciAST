@@ -52,6 +52,7 @@ __all__ = [
     "analyze_recurrence",
     "cell_restricted_body",
     "find_self_reads",
+    "is_recurrence_candidate",
     "mentions",
 ]
 
@@ -410,6 +411,39 @@ def find_self_reads(
 
     walk(node, False)
     return reads, bare[0]
+
+
+def is_recurrence_candidate(var: str, rhs: Any, *, array_shaped: bool) -> bool:
+    """Does the recurrence check OWN the diagnosis for this equation?
+
+    A **candidate** is an array-shaped unknown with at least one ``index(var, …)``
+    read in its own RHS — **well founded or not**. This is the predicate every
+    pre-existing check that would fire on the self-edge (a cadence seeder, an
+    observed-cycle detector, a trivial-DAE factoring) must be exempted by, and
+    CONFORMANCE_SPEC §5.19.5 is explicit that it MUST NOT be the well-foundedness
+    verdict instead.
+
+    Gating on the verdict is the intuitive choice and it destroys exactly what
+    §5.19.5 requires. An ill-founded self-read is by definition not well founded,
+    so the exemption would not apply to it, so the pre-existing cycle check fires
+    and collapses the document to one cycle error — and the
+    ``recurrence_not_wellfounded`` / ``recurrence_unsupported_form`` diagnosis is
+    never reached. That is the original masking defect moved from the legal case
+    to the illegal one: the construct exists to replace a mis-attributed failure
+    with a named one, and verdict-gating gives the name back up.
+
+    Candidacy is also not merely "the equation reads its own name". A scalar
+    ``x ~ x + 1`` has no ``index`` read and can never be a recurrence — it has no
+    axis to fold along — and neither can a bare ``s ~ s + 1`` over an array. Both
+    keep whatever diagnosis they already had, because the recurrence check does
+    not own them.
+    """
+    if not array_shaped:
+        return False
+    # Symbol bounds are irrelevant here: candidacy counts self-reads, it does not
+    # weigh them, so nothing needs resolving.
+    reads, _bare = find_self_reads(rhs, var, lambda _spec: None)
+    return bool(reads)
 
 
 # ---------------------------------------------------------------------------

@@ -103,6 +103,7 @@ from .classification import (
 )
 from .errors import EarthSciAstError
 from .op_registry import by_category as _by_category
+from .recurrence import is_recurrence_candidate as _is_recurrence_candidate
 from .relational import FloatKeyError, distinct, rank, skolem, skolem_edge
 
 __all__ = [
@@ -252,7 +253,13 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
         if kind == "unknown":
             definitions = derived["observed_defs"]
             if leaf in definitions:
-                if _resolving and _resolving[-1] == leaf:
+                if (
+                    _resolving
+                    and _resolving[-1] == leaf
+                    and _is_recurrence_candidate(
+                        leaf, definitions[leaf], array_shaped=bool(var.get("shape"))
+                    )
+                ):
                     # The SELF-EDGE of a causal self-reference (esm-spec
                     # §4.3.1.1): `V` read inside `V`'s own defining equation.
                     # Dropped from the observed dependency graph, because a
@@ -263,8 +270,20 @@ def seed_leaf(leaf: Any, model: Mapping[str, Any], _resolving: tuple = ()) -> st
                     # identity of the join: the class of a cell the sweep
                     # already wrote is the class of this very body, so the
                     # remaining leaves decide it and the self-read adds nothing.
-                    # An edge between two DISTINCT variables still closes a
-                    # cycle below and is still rejected.
+                    #
+                    # Gated on CANDIDACY, never on the well-foundedness verdict
+                    # (CONFORMANCE_SPEC §5.19.5). Verdict-gating would leave the
+                    # exemption off for an ILL-founded self-read, so this check
+                    # would fire and collapse the document to one cycle error
+                    # before the `recurrence_not_wellfounded` diagnosis was ever
+                    # reached — the masking defect the construct exists to
+                    # remove, moved from the legal case to the illegal one. And
+                    # candidacy is narrower than "reads its own name": a scalar
+                    # `x ~ x + 1` and a bare `s ~ s + 1` are not candidates and
+                    # keep the cycle diagnosis they already had.
+                    #
+                    # An edge between two DISTINCT variables is never a self-edge
+                    # and still closes a cycle below.
                     return "const"
                 if leaf in _resolving:
                     raise CadenceError(

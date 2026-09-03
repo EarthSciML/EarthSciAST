@@ -657,6 +657,27 @@ def _corpus_cases() -> list[dict]:
     return list(json.loads(_REJECTION_CORPUS.read_text()).get("cases") or [])
 
 
+#: Codes that mean the document failed WHOLESALE rather than at the recurrence
+#: rule. None may come back for a corpus case: each is illegal for exactly one
+#: reason, and any of these would satisfy a naive "it was rejected" check while
+#: testing nothing about this construct.
+_WHOLE_DOCUMENT_CODES = frozenset({"load_error", "circular_dependency", "schema_validation_error"})
+
+
+def _schema_errors(document: dict) -> list[str]:
+    """Every JSON-Schema violation in ``document``, as messages.
+
+    Run through the same pinned Draft 2020-12 validator and the same bundled
+    schema ``load`` uses, so a corpus document that drifted schema-invalid is
+    named here rather than being rejected by ``load`` for a shape error and
+    silently satisfying the rejection assertion below."""
+    import jsonschema
+    from earthsci_ast.parse import _get_schema
+
+    validator = jsonschema.Draft202012Validator(_get_schema())
+    return [e.message for e in validator.iter_errors(document)]
+
+
 @pytest.mark.parametrize(
     "case", _corpus_cases(), ids=[c.get("id", str(i)) for i, c in enumerate(_corpus_cases())]
 )
@@ -667,14 +688,43 @@ def test_shared_rejection_corpus_pins_the_code_and_the_path(case: dict) -> None:
     NOT the prose — the same defect legitimately reads differently depending on
     which check reached it first, so testing one binding against another's
     wording would make the first reworded message a conformance failure. This
-    test therefore asserts the pair and nothing else.
+    test therefore asserts the pair, plus two guards against passing for the
+    wrong reason.
     """
+    # GUARD 1: the document is SCHEMA-VALID. Every case is illegal for exactly
+    # one reason — the recurrence rule — so a case that drifted schema-invalid
+    # would be refused for a shape error instead, satisfying "it was rejected"
+    # while saying nothing about this construct.
+    schema_problems = _schema_errors(case["document"])
+    assert not schema_problems, (
+        f"{case.get('id')}: the corpus document is not schema-valid, so its "
+        f"rejection would not be attributable to the recurrence rule: {schema_problems}"
+    )
+
     records = []
     try:
         load_string(json.dumps(case["document"]))
     except SchemaValidationError as err:
         records = list(getattr(err, "records", []))
+    codes = [r["code"] for r in records]
     pairs = [(r["code"], r["path"]) for r in records]
+
+    # GUARD 2: the case must NOT come back as a whole-document or cycle error.
+    # This states CONFORMANCE_SPEC §5.19.5's candidacy regression directly, and
+    # independently of the pair below: gating the self-edge exemption on the
+    # well-foundedness VERDICT instead of on CANDIDACY leaves the exemption off
+    # for every case here (they are all ill-founded by construction), so the
+    # pre-existing cycle check fires and collapses each document to one cycle
+    # error. Without this assertion that reads only as "some other code came
+    # back". The fix is `recurrence.is_recurrence_candidate` — array-shaped with
+    # at least one `index` self-read, well founded or NOT.
+    masked = sorted(set(codes) & _WHOLE_DOCUMENT_CODES)
+    assert not masked, (
+        f"{case.get('id')}: came back as {masked} instead of the recurrence "
+        f"diagnosis. The self-edge exemption must be gated on CANDIDACY, not on "
+        f"the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5); got {pairs}"
+    )
+
     assert (case["expected_code"], case["expected_path"]) in pairs, (
         f"{case.get('id')}: {case.get('why', '')}\n  got {pairs}"
     )
@@ -685,3 +735,52 @@ def test_the_rejection_corpus_is_actually_present() -> None:
     its presence is asserted separately rather than left to a zero-case run."""
     assert _REJECTION_CORPUS.is_file(), f"shared rejection corpus missing: {_REJECTION_CORPUS}"
     assert _corpus_cases(), "the shared rejection corpus lists no cases"
+
+
+def test_the_self_edge_exemption_is_gated_on_candidacy_not_on_the_verdict() -> None:
+    """CONFORMANCE_SPEC §5.19.5, on the two sides candidacy separates.
+
+    A CANDIDATE — array-shaped, at least one ``index`` self-read — is exempted
+    from the cycle check whether or not its self-read is well founded, so the
+    recurrence rule gets to name the defect. A NON-candidate keeps whatever
+    diagnosis it already had: a scalar ``x ~ x + 1`` has no ``index`` read and a
+    bare ``s ~ s + 1`` reads the whole array, and neither can ever be a
+    recurrence, so exempting them would drop a real cycle diagnosis for nothing.
+    """
+    from earthsci_ast import cadence
+    from earthsci_ast.cadence import CadenceError
+
+    def model(shape, rhs):
+        decl = {"type": "unknown"}
+        if shape:
+            decl["shape"] = list(shape)
+        return {"variables": {"s": decl}, "equations": [{"lhs": "s", "rhs": rhs}]}
+
+    def agg(body):
+        return {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": {"k": {"from": "steps"}},
+            "expr": body,
+        }
+
+    well_founded = model(
+        ["steps"], agg({"op": "index", "args": ["s", {"op": "-", "args": ["k", 1]}]})
+    )
+    # Provably FORWARD, so `recurrence_not_wellfounded` — and still a candidate,
+    # which is the whole point: the exemption must hold here too, or the cycle
+    # check fires first and the named diagnosis is never reached.
+    ill_founded = model(
+        ["steps"], agg({"op": "index", "args": ["s", {"op": "+", "args": ["k", 1]}]})
+    )
+    for name, m in (("well-founded", well_founded), ("ill-founded", ill_founded)):
+        assert cadence.classify(m["equations"][0]["rhs"], m) == "const", (
+            f"a {name} candidate must be exempted from the cycle check"
+        )
+
+    scalar = model(None, {"op": "+", "args": ["s", 1]})
+    bare_array = model(["steps"], {"op": "+", "args": ["s", 1]})
+    for name, m in (("a scalar", scalar), ("a bare array", bare_array)):
+        with pytest.raises(CadenceError, match="observed definition cycle"):
+            cadence.classify(m["equations"][0]["rhs"], m)
