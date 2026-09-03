@@ -1,0 +1,148 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceCancellationLadder",
+    "description": "THE ORDER PIN (CONFORMANCE_SPEC 5.19.3 shape 1). s[k] = s[k-1] + u[k] over u = [1e16, 1, -1e16, 1]. The normative ascending sweep is the left fold and gives [1e16, 1e16, 0, 1]. Any reassociation or reordering gives a DIFFERENT, NAMEABLE value: summing the window right-to-left, or pairwise, gives [1e16, 1e16, 1, 2] -- so a binding that batches or reorders these cells fails here rather than agreeing to a tolerance. Zero tolerance, by construction: the quantity is a fully determined left fold, not a floating-point trajectory.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "order",
+      "catastrophic-cancellation",
+      "bit-identical"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceCancellationLadder": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "Running total of u, carried through the recurrence rather than through a prefix filter."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<=",
+                      "args": [
+                        "k",
+                        1
+                      ]
+                    },
+                    0.0,
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        1e+16,
+                        1.0,
+                        -1e+16,
+                        1.0
+                      ]
+                    },
+                    "k"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "ladder_is_the_left_fold",
+          "description": "[1e16, 1e16, 0, 1] -- the ascending left fold. A reassociating implementation reaches [1e16, 1e16, 1, 2].",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1e+16,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

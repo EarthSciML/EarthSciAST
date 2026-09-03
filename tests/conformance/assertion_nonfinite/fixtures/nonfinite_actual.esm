@@ -1,0 +1,361 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "assertion_nonfinite",
+  "description": "esm-spec \u00a76.6.3 assertion comparison when the ACTUAL value is not finite. `base` is a const array of 1e200, and three observeds over it are the three non-finite outcomes ordinary model arithmetic produces: `pos` squares it (+Inf, an overflow), `neg` negates that square (-Inf), and `nanv` multiplies the square by zero (NaN, the shape an Inf*0 or Inf-Inf takes). `fin` is the finite control (1e200) and is what makes the tier non-vacuous: a binding that failed every assertion would fail it. Every assertion below names a FINITE `expected` -- a JSON document cannot spell an infinite one -- so under the \u00a76.6.3 rule every non-finite actual FAILS, whatever the tolerance. The defect this pins is a comparison that reads `|actual - expected| <= max(atol, rtol*max(|actual|, |expected|))` without a finiteness guard: with `actual = \u00b1Inf` both sides are Inf and the assertion passes for EVERY expected value, which turns a document that computes nothing meaningful into a green test run. Julia's `isapprox` carries the guard (`x == y || (isfinite(x) && isfinite(y) && ...)`); the Rust and Python re-implementations of 'Julia isapprox semantics' dropped it.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "conformance",
+   "inline-tests",
+   "assertions",
+   "non-finite",
+   "overflow",
+   "esm-spec-6.6.3"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "models": {
+  "M": {
+   "tolerance": {
+    "rel": 1e-09
+   },
+   "variables": {
+    "base": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "description": "1e200 in every cell. Finite, and asserted as such."
+    },
+    "pos": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "description": "base[i]^2 = +Inf (overflow)."
+    },
+    "neg": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "description": "-(base[i]^2) = -Inf."
+    },
+    "nanv": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "description": "0 * base[i]^2 = NaN. The control that is already right."
+    },
+    "fin": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "description": "1 * base[i] = 1e200. The finite non-vacuity control."
+    },
+    "drive": {
+     "type": "unknown",
+     "units": "1/s",
+     "shape": [
+      "rows"
+     ],
+     "description": "Zero, so the state is a clock the assertions do not read."
+    },
+    "u": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ],
+     "default": 0.5,
+     "description": "A state, so the document integrates rather than being evaluated once."
+    }
+   },
+   "equations": [
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "u"
+      ],
+      "wrt": "t"
+     },
+     "rhs": "drive"
+    },
+    {
+     "lhs": "base",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1e+200,
+       1e+200
+      ]
+     }
+    },
+    {
+     "lhs": "drive",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0.0,
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "pos",
+     "rhs": {
+      "op": "aggregate",
+      "semiring": "sum_product",
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": [
+        1,
+        2
+       ]
+      },
+      "args": [
+       "base"
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "base",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "base",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "neg",
+     "rhs": {
+      "op": "aggregate",
+      "semiring": "sum_product",
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": [
+        1,
+        2
+       ]
+      },
+      "args": [
+       "base"
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        -1.0,
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "base",
+            "i"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "base",
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "nanv",
+     "rhs": {
+      "op": "aggregate",
+      "semiring": "sum_product",
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": [
+        1,
+        2
+       ]
+      },
+      "args": [
+       "base"
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        0.0,
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "base",
+            "i"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "base",
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "fin",
+     "rhs": {
+      "op": "aggregate",
+      "semiring": "sum_product",
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": [
+        1,
+        2
+       ]
+      },
+      "args": [
+       "base"
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        1.0,
+        {
+         "op": "index",
+         "args": [
+          "base",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "nonfinite_actual",
+     "description": "Eight assertions over the four observeds. The four +Inf ones are mutually contradictory on purpose: one cell cannot equal 42, 0, 1e308 and (within abs=1e300) 0 at once, so a runner reporting all four as passes is comparing nothing.",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "pos",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 42.0
+      },
+      {
+       "variable": "pos",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0.0
+      },
+      {
+       "variable": "pos",
+       "time": 0.5,
+       "coords": {
+        "rows": 2
+       },
+       "expected": 1e+308
+      },
+      {
+       "variable": "pos",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0.0,
+       "tolerance": {
+        "abs": 1e+300
+       }
+      },
+      {
+       "variable": "neg",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": -42.0
+      },
+      {
+       "variable": "nanv",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 0.0
+      },
+      {
+       "variable": "fin",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 1e+200
+      },
+      {
+       "variable": "fin",
+       "time": 0.5,
+       "coords": {
+        "rows": 1
+       },
+       "expected": 42.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

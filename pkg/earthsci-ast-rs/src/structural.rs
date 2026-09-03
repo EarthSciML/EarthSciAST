@@ -866,10 +866,539 @@ fn validate_aggregate_constraints(
     // A join key may name a DATA COLUMN, whose range symbol comes from its
     // declared 1-D shape — so the side checks below need the model's shapes.
     let var_shapes = crate::join::declared_var_shapes(model);
+    // Array-shaped unknowns: the only variables a causal self-reference can
+    // define (esm-spec §4.3.1.1).
+    let array_shaped: HashSet<&str> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
+        .map(|(n, _)| n.as_str())
+        .collect();
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
             let field_path = format!("{model_path}/equations/{eq_idx}/{field}");
             check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, &var_shapes, errors);
+        }
+        check_recurrence_equation(
+            equation,
+            &format!("{model_path}/equations/{eq_idx}/rhs"),
+            esm_file,
+            &array_shaped,
+            errors,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Causal self-reference (recurrence) well-foundedness — esm-spec §4.3.1.1
+// ---------------------------------------------------------------------------
+//
+// The STATIC half of the construct, and the half every binding implements
+// whether or not it evaluates anything (CONFORMANCE_SPEC §5.19.5). It decides
+// two things about an equation that defines an array-shaped unknown `V` and
+// reads `index(V, …)` in its own RHS:
+//
+//   * whether the read is well founded — affine in its frame symbol, offset on
+//     exactly one axis, and not provably same-cell-or-later;
+//   * whether the construct carrying the read can be sequenced cell by cell.
+//
+// It is deliberately CONSERVATIVE where it cannot prove a lag's sign: an
+// unprovable lag is admitted here, because a self-read of a cell the sweep has
+// not published cannot return a value at all (esm-spec §4.3.1.1 point 5), so
+// soundness does not rest on this check. What rests on it is the DIAGNOSTIC —
+// rejecting the shapes that are wrong for every document, at validation time,
+// with a code rather than at evaluation time with a fault.
+
+/// Bounds of an index symbol, resolved from the ranges available to the
+/// VALIDATOR (unlike the runtime, which sees ranges already resolved against
+/// the registry). A dense literal interval, or an `interval`-kind index set's
+/// `1..size`; anything else is unknown, and an unknown symbol makes a lag
+/// unprovable rather than illegal.
+fn validator_symbol_bounds(
+    spec: &crate::types::RangeSpec,
+    esm_file: &EsmFile,
+) -> Option<(i64, i64)> {
+    match spec {
+        crate::types::RangeSpec::Interval([lo, hi]) => Some((*lo, *hi)),
+        crate::types::RangeSpec::Strided([lo, _, hi]) => Some((*lo, *hi)),
+        crate::types::RangeSpec::IndexSetRef { from, of: None } => {
+            let set = esm_file.index_sets.as_ref()?.get(from)?;
+            // `interval` by declared size, `categorical` by member count. Both
+            // are 1-origin dense ranges at evaluation, and the evaluator
+            // resolves BOTH before rule building — so leaving `categorical` out
+            // here would make the validator prove less than the evaluator and
+            // reject a document the evaluator accepts.
+            match set.kind.as_str() {
+                "interval" => Some((1, set.size?)),
+                "categorical" => Some((1, set.members.as_ref()?.len() as i64)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The affine form of an index expression with respect to the frame symbol
+/// `sym`: the coefficient of `sym`, plus the bounds of the symbol-free part —
+/// `None` for those bounds when they cannot be proved.
+///
+/// Mirrors the runtime's `affine_in_sym` exactly, and for the same reason the
+/// runtime splits the two halves: the **coefficient** must be provable (without
+/// it the read names no position relative to the cell being written), while an
+/// unprovable **constant part** is a lag of unknown sign, which esm-spec
+/// §4.3.1.1 admits and the runtime's fail-closed read guards.
+///
+/// The validator necessarily proves LESS than the evaluator — it sees ranges
+/// before they are resolved against the registry — so a validator that treated
+/// "unproven" as "illegal" would reject documents the evaluator accepts. That
+/// is the one disagreement between the two which is never defensible, so the
+/// unknown case is admitted here too.
+struct StructuralAffine {
+    coef: i64,
+    konst: Option<(i64, i64)>,
+}
+
+fn structural_affine_in_sym(
+    e: &crate::Expr,
+    sym: &str,
+    env: &HashMap<String, (i64, i64)>,
+) -> Option<StructuralAffine> {
+    let konst = |lo: i64, hi: i64| {
+        Some(StructuralAffine {
+            coef: 0,
+            konst: Some((lo, hi)),
+        })
+    };
+    match e {
+        crate::Expr::Integer(n) => konst(*n, *n),
+        crate::Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
+            let n = *f as i64;
+            konst(n, n)
+        }
+        crate::Expr::Variable(v) if v == sym => Some(StructuralAffine {
+            coef: 1,
+            konst: Some((0, 0)),
+        }),
+        crate::Expr::Variable(v) => Some(StructuralAffine {
+            coef: 0,
+            konst: env.get(v).copied(),
+        }),
+        crate::Expr::Operator(node) if node.args.len() == 2 => {
+            let a = structural_affine_in_sym(&node.args[0], sym, env)?;
+            let b = structural_affine_in_sym(&node.args[1], sym, env)?;
+            let both = a.konst.zip(b.konst);
+            match node.op.as_str() {
+                "+" => Some(StructuralAffine {
+                    coef: a.coef + b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
+                }),
+                "-" => Some(StructuralAffine {
+                    coef: a.coef - b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
+                }),
+                "*" => {
+                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
+                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
+                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
+                        _ => return None,
+                    };
+                    Some(StructuralAffine {
+                        coef: other.coef * k,
+                        konst: other.konst.map(|(lo, hi)| {
+                            let (p, q) = (lo * k, hi * k);
+                            (p.min(q), p.max(q))
+                        }),
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// One self-read the structural walk found: its index arguments, the symbol
+/// bounds in scope where it was found, and whether it was reached only through
+/// a construct that cannot be restricted to one cell.
+struct StructuralSelfRead<'a> {
+    args: &'a [crate::Expr],
+    env: HashMap<String, (i64, i64)>,
+    unsequenceable: bool,
+}
+
+/// Ops whose operands are consumed WHOLE — a self-read underneath one of these
+/// names a cell of an array that has to exist in full before the op can run, so
+/// no cell-by-cell sweep can supply it (esm-spec §4.3.1.1 `recurrence_unsupported_form`).
+fn op_blocks_cell_restriction(op: &str) -> bool {
+    // `apply_expression_template` is deliberately NOT here. Its operands ride
+    // the `bindings` field, which this walk does not visit (and must not start
+    // visiting unilaterally — five bindings mirror this field set, and §5.19.5
+    // is exact agreement), so listing it would have been a rule that barely
+    // reached what it named. It is also unreachable in practice: a template
+    // application surviving into an evaluation position is already an
+    // `unlowered_operator` error (esm-spec §9.6.4), so this list names only the
+    // ops that legitimately reach evaluation and consume an operand whole.
+    matches!(op, "reshape" | "transpose" | "concat" | "broadcast")
+}
+
+fn collect_structural_self_reads<'a>(
+    e: &'a crate::Expr,
+    var: &str,
+    esm_file: &EsmFile,
+    env: &mut Vec<(String, (i64, i64))>,
+    blocked: bool,
+    out: &mut Vec<StructuralSelfRead<'a>>,
+    bare: &mut bool,
+) {
+    let crate::Expr::Operator(node) = e else {
+        if let crate::Expr::Variable(v) = e
+            && v == var
+        {
+            *bare = true;
+        }
+        return;
+    };
+    let pushed = if node.op == "aggregate" {
+        let add: Vec<(String, (i64, i64))> = node
+            .ranges
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, spec)| {
+                        validator_symbol_bounds(spec, esm_file).map(|b| (k.clone(), b))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let n = add.len();
+        env.extend(add);
+        n
+    } else {
+        0
+    };
+    let is_self_index = node.op == "index"
+        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var);
+    if is_self_index {
+        let mut snapshot: HashMap<String, (i64, i64)> = HashMap::new();
+        for (k, v) in env.iter() {
+            snapshot.insert(k.clone(), *v);
+        }
+        out.push(StructuralSelfRead {
+            args: &node.args[1..],
+            env: snapshot,
+            unsequenceable: blocked,
+        });
+    }
+    // A `makearray` REGION VALUE is evaluated once for the whole region, so a
+    // self-read inside one cannot be sequenced; the region ORDER decides which
+    // write wins, not which cell is evaluated when (esm-spec §4.3.2).
+    let blocked_children = blocked || op_blocks_cell_restriction(&node.op);
+    let skip = usize::from(is_self_index);
+    for a in node.args.iter().skip(skip) {
+        collect_structural_self_reads(a, var, esm_file, env, blocked_children, out, bare);
+    }
+    for side in [
+        node.expr.as_deref(),
+        node.filter.as_deref(),
+        node.key.as_deref(),
+        node.lower.as_deref(),
+        node.upper.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_structural_self_reads(side, var, esm_file, env, blocked_children, out, bare);
+    }
+    if let Some(vs) = node.values.as_ref() {
+        for v in vs {
+            collect_structural_self_reads(v, var, esm_file, env, true, out, bare);
+        }
+    }
+    env.truncate(env.len() - pushed);
+}
+
+/// The variable an equation DEFINES, if its LHS names one: a bare variable, or
+/// the §4.3 indexed-aggregate LHS form `aggregate{expr: index(V, k…)}`. A
+/// derivative LHS (`D(u)`) defines no array algebraically — a stencil read of
+/// `u` at `i−1` there is a gather on the solver's state, not a self-reference —
+/// so it deliberately yields `None`.
+fn recurrence_lhs_target(lhs: &crate::Expr) -> Option<(&str, Option<&Vec<String>>)> {
+    match lhs {
+        crate::Expr::Variable(v) => Some((v.as_str(), None)),
+        crate::Expr::Operator(node) if node.op == "aggregate" => {
+            let crate::Expr::Operator(inner) = node.expr.as_deref()? else {
+                return None;
+            };
+            if inner.op != "index" {
+                return None;
+            }
+            let crate::Expr::Variable(v) = inner.args.first()? else {
+                return None;
+            };
+            Some((v.as_str(), node.output_idx.as_ref()))
+        }
+        _ => None,
+    }
+}
+
+/// Check one equation for a well-founded causal self-reference
+/// (esm-spec §4.3.1.1). Emits nothing when the RHS contains no self-read, which
+/// is every equation in every document that does not use the construct.
+fn check_recurrence_equation(
+    equation: &crate::types::Equation,
+    field_path: &str,
+    esm_file: &EsmFile,
+    array_shaped: &HashSet<&str>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let Some((var, lhs_idx)) = recurrence_lhs_target(&equation.lhs) else {
+        return;
+    };
+    if !array_shaped.contains(var) {
+        return;
+    }
+    let mut env: Vec<(String, (i64, i64))> = Vec::new();
+    let mut reads: Vec<StructuralSelfRead> = Vec::new();
+    let mut bare = false;
+    collect_structural_self_reads(
+        &equation.rhs,
+        var,
+        esm_file,
+        &mut env,
+        false,
+        &mut reads,
+        &mut bare,
+    );
+    if reads.is_empty() {
+        return;
+    }
+    let push = |errors: &mut Vec<StructuralError>,
+                code: StructuralErrorCode,
+                message: String,
+                axis: Option<&str>| {
+        errors.push(StructuralError {
+            path: field_path.to_string(),
+            code,
+            message,
+            details: serde_json::json!({
+                "variable": var,
+                "recurrence_axis": axis,
+            }),
+        });
+    };
+    if bare {
+        push(
+            errors,
+            StructuralErrorCode::RecurrenceNotWellfounded,
+            format!(
+                "'{var}' is read bare inside its own defining equation as well as through \
+                 `index`. A bare read names the whole array, which does not exist while the \
+                 recurrence sweeps it (esm-spec §4.3.1.1)."
+            ),
+            None,
+        );
+        return;
+    }
+    if let Some(read) = reads.iter().find(|r| r.unsequenceable) {
+        let _ = read;
+        push(
+            errors,
+            StructuralErrorCode::RecurrenceUnsupportedForm,
+            format!(
+                "a causal self-read of '{var}' is reached only through a construct that \
+                 evaluates its operand whole — a `makearray` region value, or a \
+                 `reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep \
+                 can supply it. A `makearray`'s region order fixes which write WINS, not the \
+                 order cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence \
+                 as one `aggregate` with the base case as an `ifelse` guard in the body."
+            ),
+            None,
+        );
+        return;
+    }
+    // The cell frame: the indexed-aggregate LHS's own indices, else the RHS
+    // aggregate's.
+    let rhs_idx = match &equation.rhs {
+        crate::Expr::Operator(node) if node.op == "aggregate" => node.output_idx.as_ref(),
+        _ => None,
+    };
+    let Some(idx_names) = lhs_idx.or(rhs_idx) else {
+        push(
+            errors,
+            StructuralErrorCode::RecurrenceUnsupportedForm,
+            format!(
+                "the definition of '{var}' reads '{var}' at another position, but the equation \
+                 declares no cell frame to sweep: its RHS is not an `aggregate` over the \
+                 variable's axes and its LHS is not the indexed-aggregate form \
+                 `aggregate{{expr: index({var}, k…)}}` (esm-spec §4.3.1.1)."
+            ),
+            None,
+        );
+        return;
+    };
+    if idx_names.is_empty() || idx_names.iter().any(|n| n.parse::<i64>().is_ok()) {
+        push(
+            errors,
+            StructuralErrorCode::RecurrenceUnsupportedForm,
+            format!(
+                "the recurrence definition of '{var}' has no symbolic output index to fold \
+                 along ({idx_names:?}); a literal singleton dimension cannot be a recurrence \
+                 axis (esm-spec §4.3.1.1)."
+            ),
+            None,
+        );
+        return;
+    }
+    let frame_env: HashMap<String, (i64, i64)> = match &equation.rhs {
+        crate::Expr::Operator(node) if node.op == "aggregate" => node
+            .ranges
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, spec)| {
+                        validator_symbol_bounds(spec, esm_file).map(|b| (k.clone(), b))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => HashMap::new(),
+    };
+
+    let mut axis: Option<usize> = None;
+    for read in &reads {
+        if read.args.len() != idx_names.len() {
+            push(
+                errors,
+                StructuralErrorCode::RecurrenceNotWellfounded,
+                format!(
+                    "a causal self-read of '{var}' supplies {} indices but its frame has {} \
+                     axes; every self-read indexes every axis (esm-spec §4.3.1.1).",
+                    read.args.len(),
+                    idx_names.len()
+                ),
+                None,
+            );
+            return;
+        }
+        let mut env = frame_env.clone();
+        for (k, v) in &read.env {
+            env.insert(k.clone(), *v);
+        }
+        let mut lagged: Option<usize> = None;
+        for (d, arg) in read.args.iter().enumerate() {
+            let sym = &idx_names[d];
+            let Some(StructuralAffine { coef, konst }) = structural_affine_in_sym(arg, sym, &env)
+            else {
+                push(
+                    errors,
+                    StructuralErrorCode::RecurrenceNotWellfounded,
+                    format!(
+                        "index {d} of a causal self-read of '{var}' is not affine in its frame \
+                         symbol '{sym}'. A self-read names a position RELATIVE to the cell being \
+                         written (`{sym} - 1`, `{sym} - a`, `{sym} - a - 2`), which is what makes \
+                         the recurrence axis and its direction decidable (esm-spec §4.3.1.1)."
+                    ),
+                    None,
+                );
+                return;
+            };
+            if coef != 1 {
+                push(
+                    errors,
+                    StructuralErrorCode::RecurrenceNotWellfounded,
+                    format!(
+                        "index {d} of a causal self-read of '{var}' carries its frame symbol \
+                         '{sym}' with coefficient {coef}, not 1, so it does not name a position \
+                         relative to the cell being written (esm-spec §4.3.1.1)."
+                    ),
+                    None,
+                );
+                return;
+            }
+            // lag = sym - arg. An unprovable constant part is a lag of
+            // unknown sign: this axis IS the recurrence axis (it is not the
+            // identity), and the cells where the lag would be non-causal cannot
+            // be read because the sweep has not published them.
+            let Some((clo, chi)) = konst else {
+                if lagged.is_some() {
+                    push(
+                        errors,
+                        StructuralErrorCode::RecurrenceNotWellfounded,
+                        format!(
+                            "a causal self-read of '{var}' is offset on more than one axis. A \
+                             recurrence folds along exactly ONE axis; every other index must be \
+                             the bare frame symbol (esm-spec §4.3.1.1)."
+                        ),
+                        Some(sym),
+                    );
+                    return;
+                }
+                lagged = Some(d);
+                continue;
+            };
+            let (lag_lo, lag_hi) = (-chi, -clo);
+            if lag_lo == 0 && lag_hi == 0 {
+                continue;
+            }
+            if lag_hi <= 0 {
+                push(
+                    errors,
+                    StructuralErrorCode::RecurrenceNotWellfounded,
+                    format!(
+                        "index {d} of a causal self-read of '{var}' names the cell being \
+                         written, or a later one, on axis '{sym}'. A causal self-reference reads \
+                         strictly EARLIER positions; no sweep order can satisfy a same-cell or \
+                         forward read (esm-spec §4.3.1.1)."
+                    ),
+                    Some(sym),
+                );
+                return;
+            }
+            if lagged.is_some() {
+                push(
+                    errors,
+                    StructuralErrorCode::RecurrenceNotWellfounded,
+                    format!(
+                        "a causal self-read of '{var}' is offset on more than one axis. A \
+                         recurrence folds along exactly ONE axis; every other index must be the \
+                         bare frame symbol (esm-spec §4.3.1.1)."
+                    ),
+                    Some(sym),
+                );
+                return;
+            }
+            lagged = Some(d);
+        }
+        let Some(d) = lagged else {
+            push(
+                errors,
+                StructuralErrorCode::RecurrenceNotWellfounded,
+                format!(
+                    "a causal self-read of '{var}' is at the same cell on every axis, so it \
+                     defines '{var}' in terms of itself rather than of an earlier position \
+                     (esm-spec §4.3.1.1)."
+                ),
+                None,
+            );
+            return;
+        };
+        match axis {
+            None => axis = Some(d),
+            Some(prev) if prev == d => {}
+            Some(prev) => {
+                push(
+                    errors,
+                    StructuralErrorCode::RecurrenceNotWellfounded,
+                    format!(
+                        "the causal self-reads of '{var}' disagree on the recurrence axis: one \
+                         folds along '{}' and another along '{}'. A definition folds along \
+                         exactly one axis (esm-spec §4.3.1.1).",
+                        idx_names[prev], idx_names[d]
+                    ),
+                    Some(&idx_names[d]),
+                );
+                return;
+            }
         }
     }
 }

@@ -1293,7 +1293,8 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                          observed_names, geom_ring_vars,
                                          geom_setup_vars, geom_inline_vars,
                                          array_inline_vars,
-                                         mat_array_vars=_EMPTY_NAME_SET)
+                                         mat_array_vars=_EMPTY_NAME_SET,
+                                         array_shaped_vars=_EMPTY_NAME_SET)
     observed_exprs = Dict{String,ASTExpr}()
     # FACTORED array observeds are pulled OUT of the substitution map: their
     # readers gather the buffer by name (`index(obs, i…)` → a slot read), so
@@ -1326,7 +1327,52 @@ function _split_observed_and_derivatives(equations::Vector{Equation},
                                 _equation_tag(eq)))
         end
     end
+    # A CAUSAL SELF-REFERENCE is not a cycle (esm-spec §4.3.1.1), and it must
+    # not reach `_resolve_observed` — which would substitute the body into
+    # itself, hit its iteration cap, and report `E_TREEWALK_OBSERVED_CYCLE` for
+    # a document the spec calls acyclic. Told apart here, before the fixed
+    # point, so a bare self-reference keeps the cycle diagnosis it earns and a
+    # recurrence gets its own.
+    _decline_recurrence_definitions(observed_exprs, mat_defs, array_shaped_vars)
     return derivative_eqs, _resolve_observed(observed_exprs), observed_exprs, mat_defs
+end
+
+# Fail closed on a recurrence definition this backend cannot honour.
+#
+# The array backend builds per-cell INDEPENDENT kernels and CLASS-MERGES them,
+# and the merge reorders cells; the one sequential-across-cells construct it has
+# is the prefix scan's post-pass fold (tree_walk/scan.jl), whose combine step is
+# a fixed `combine(acc, du[slot])` rather than an evaluated expression. A
+# recurrence needs a compiled cell body evaluated INSIDE the sweep loop, so
+# there is no path here it can take — and CONFORMANCE_SPEC §5.19.2 is explicit
+# that a binding whose default array path reorders cells MUST decline that path
+# for this construct specifically rather than "approximate" it: the cells are
+# not independent, so a reordering is a different computation, not an equivalent
+# one. Declining loudly is therefore the correct behaviour, and the only wrong
+# one is running it anyway. Tracked as Julia binding debt in
+# `docs/content/rfcs/causal-self-reference-recurrence.md` §6.1.
+function _decline_recurrence_definitions(observed_exprs::Dict{String,ASTExpr},
+                                         mat_defs::Dict{String,ASTExpr},
+                                         array_shaped_vars)
+    for defs in (observed_exprs, mat_defs)
+        for name in sort!(collect(keys(defs)))
+            # CANDIDACY, exactly as CONFORMANCE_SPEC §5.19.5 defines it: an
+            # array-shaped unknown with at least one `index` self-read, well
+            # founded or not. A scalar self-reference has no axis to fold along
+            # and can never be a recurrence, so it keeps whatever diagnosis it
+            # had — the self-edge exemption must not weaken cycle handling.
+            name in array_shaped_vars || continue
+            recurrence_self_reference_kind(name, defs[name]) === :indexed || continue
+            throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
+                "'$name' is defined by a causal self-reference (esm-spec §4.3.1.1): its " *
+                "own right-hand side reads `index($name, …)`. This is a well-founded " *
+                "recurrence, NOT a dependency cycle — but this backend's array path " *
+                "class-merges per-cell kernels and so reorders cells, which " *
+                "CONFORMANCE_SPEC §5.19.2 forbids for a construct whose cells are not " *
+                "independent. Declining rather than returning a reordered answer."))
+        end
+    end
+    return nothing
 end
 
 const _EMPTY_NAME_SET = Set{String}()
@@ -2498,7 +2544,8 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     derivative_eqs, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
         parts.equations,
         parts.observed_names, cls.geom_ring_vars, cls.geom_setup_vars,
-        cls.geom_inline_vars, cls.array_inline_vars, mat_vars)
+        cls.geom_inline_vars, cls.array_inline_vars, mat_vars,
+        Set{String}(n for (n, v) in model.variables if _is_array_shape(v.shape)))
 
     # ---- Registered-function handlers ----
     reg_funcs = Dict{String,Any}(String(k) => v

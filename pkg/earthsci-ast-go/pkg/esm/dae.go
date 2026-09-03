@@ -110,9 +110,27 @@ func ApplyDAEContract(file *ESMFile) (DAEInfo, error) {
 		info.TrivialFactoredCount += factored
 		info.PerModelFactored[mname] = factored
 
+		// esm-spec §4.3.1.1: an equation whose RHS reads the array it defines at a
+		// strictly earlier position on one axis is a RECURRENCE, and the self-edge
+		// `V -> V` is dropped — it is an ORDERING within one variable, not a
+		// dependency between two, so it closes no cycle and needs no DAE
+		// assembler. Every binding drops it (Rust `dependency_order_observed`
+		// retains `n != self_name`; `classify_segment_invariant_observeds` does the
+		// same), and CONFORMANCE_SPEC §5.19.5 makes admitting a legal recurrence as
+		// much of a duty as rejecting an illegal one: counting it as a residual
+		// algebraic equation rejected a VALID document
+		// (tests/valid/recurrence_causal_self_reference.esm) with E_NONTRIVIAL_DAE.
+		//
+		// A self-mention that is NOT a well-founded causal self-read — a bare read,
+		// a scalar cycle, a forward or same-cell index — is not dropped, and still
+		// counts exactly as it did before.
+		arrayShaped := arrayShapedUnknowns(&m)
 		residual := 0
 		for i, eq := range m.Equations {
 			if isDifferentialEquation(eq, indep) {
+				continue
+			}
+			if isWellFoundedRecurrence(eq, file, arrayShaped) {
 				continue
 			}
 			residual++
@@ -179,6 +197,14 @@ func factorTrivialDAE(model *Model, indep string) (int, error) {
 			if !ok {
 				continue
 			}
+			// `y` occurs in `f`, so `y ~ f(…)` cannot be eliminated by substitution.
+			// A well-founded RECURRENCE (esm-spec §4.3.1.1) is admitted rather than
+			// factored, and this guard is exactly why: its RHS names `y` on purpose,
+			// so substituting the definition away and deleting it would leave every
+			// surviving reference to `y` — including the `index(y, k-1)` inside the
+			// substituted body itself — pointing at nothing (audit G2). It stays in
+			// the model, resolved; ApplyDAEContract above is where it stops being
+			// counted as a residual.
 			if Contains(eq.RHS, name) {
 				continue
 			}

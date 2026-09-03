@@ -37,10 +37,13 @@ from .numpy_interpreter import (
     _resolve_range_spec,
     eval_expr,
     ragged_factor_scope,
+    sweep_recurrence,
 )
+from .recurrence import RecurrenceError
 from .serialize import _serialize_expression
 from .simulation_common import (
     DENSE_OUTPUT_MIN_POINTS,
+    ReturnCode,
     Solution,
     _failure_result,
     _limit_iters,
@@ -585,6 +588,14 @@ def _order_observed_equations(
     deps: dict[str, set[str]] = {}
     for name, rhs in observed_eqs:
         refs = _expr_referenced_names(rhs) & produced
+        # The SELF-EDGE `V -> V` is dropped. This was always the behaviour (an
+        # observed cannot be ordered after itself), and esm-spec §4.3.1.1 makes
+        # it load-bearing rather than incidental: a well-founded CAUSAL SELF-READ
+        # `index(V, k-c)` inside `V`'s own definition is an ORDERING within one
+        # variable — the sweep publishes each cell before the axis advances — not
+        # a dependency between two, so it must not be reported as a cycle. An
+        # edge between two DISTINCT variables still closes one and is still
+        # rejected (`cadence.classify` names it).
         refs.discard(name)
         deps[name] = refs
 
@@ -662,6 +673,20 @@ def _loader_volatile_observeds(
     return volatile
 
 
+def _materialize_one_observed(name: str, rhs: Expr, ctx: EvalContext) -> Any:
+    """Evaluate ONE observed assignment ``name = rhs``.
+
+    A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized here, before
+    ordinary evaluation, because ordinary evaluation would compile the self-read
+    as a gather on a variable that is bound nowhere — the pre-feature behaviour,
+    which validated and then produced nothing. :func:`sweep_recurrence` returns
+    ``None`` when the RHS contains no self-read at all, so every existing
+    document takes exactly the path below, unchanged.
+    """
+    swept = sweep_recurrence(name, rhs, ctx, ctx.element_types.get(name))
+    return eval_expr(rhs, ctx) if swept is None else swept
+
+
 def _materialize_observeds(
     ordered_observed: list[tuple[str, Expr]],
     ctx: EvalContext,
@@ -711,8 +736,8 @@ def _materialize_observeds(
         _t0 = _time.perf_counter() if _progress else 0.0
         if skip_unresolved:
             try:
-                val = eval_expr(rhs, ctx)
-            except NumpyInterpreterError as exc:
+                val = _materialize_one_observed(name, rhs, ctx)
+            except (NumpyInterpreterError, RecurrenceError) as exc:
                 if skip_reasons is not None:
                     skip_reasons[name] = str(exc)
                 if _progress:
@@ -724,7 +749,7 @@ def _materialize_observeds(
                     )
                 continue
         else:
-            val = eval_expr(rhs, ctx)
+            val = _materialize_one_observed(name, rhs, ctx)
         if _progress:
             print(
                 f"[ess-observed] {name}: {_time.perf_counter() - _t0:.1f}s "
@@ -828,6 +853,10 @@ class _NumpyRhsBuild:
     # :func:`_var_index_sets`): what a §5.5.6 ``join.overlap`` gate resolves its
     # envelope factors through. Threaded into every EvalContext this build spawns.
     var_index_sets: dict[str, str] = field(default_factory=dict)
+    # Declared per-variable ``element_type`` (see :func:`_element_types`).
+    # Threaded into every EvalContext this build spawns. Empty for every document
+    # that declares no per-variable precision.
+    element_types: dict[str, str] = field(default_factory=dict)
     # Value-invention derived-index-set extents (RFC §6.1), keyed by the producing
     # Did this system declare value-invention producer states (broad-phase bins /
     # candidate-set membership)? Such a system legitimately has an EMPTY ODE state
@@ -1774,6 +1803,7 @@ def _partition_and_materialize_observeds(
     derived_extents: dict[str, int] | None = None,
     axis_valued_input_names: frozenset[str] = frozenset(),
     var_index_sets: dict[str, str] | None = None,
+    element_types: dict[str, str] | None = None,
 ) -> tuple[list[tuple[str, Expr]], dict[str, float], dict[str, np.ndarray], dict[str, str]]:
     """Split the dependency-ordered observeds and materialize the static ones ONCE.
 
@@ -1855,6 +1885,7 @@ def _partition_and_materialize_observeds(
                 join_key_index_sets=join_key_index_sets,
                 factor_scope=factor_scope,
                 var_index_sets=dict(var_index_sets or {}),
+                element_types=dict(element_types or {}),
             )
             _materialize_observeds(
                 invariant_static,
@@ -1896,6 +1927,7 @@ def _partition_and_materialize_observeds(
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
             var_index_sets=dict(var_index_sets or {}),
+            element_types=dict(element_types or {}),
             op_cache=op_cache,
             invariant_names=invariant_names,
         )
@@ -1932,6 +1964,26 @@ def _var_index_sets(flat: FlattenedSystem) -> dict[str, str]:
             shape = getattr(var, "shape", None)
             if shape and isinstance(shape[0], str):
                 out[name] = shape[0]
+    return out
+
+
+def _element_types(flat: FlattenedSystem) -> dict[str, str]:
+    """``flattened variable name`` -> its declared ``element_type``.
+
+    esm-spec §11.3.1 lets a VARIABLE override the document-wide
+    ``domain.element_type``; a variable that declares none is absent here and
+    follows the document. Threaded into every EvalContext the build spawns
+    because the recurrence sweep needs it per cell: the value a later cell reads
+    at a lag is a cell of the variable being defined, so it carries that
+    variable's precision at every step of the fold, not only when the finished
+    array is handed back (CONFORMANCE_SPEC §5.19.3a). Empty for every document
+    that declares no per-variable precision."""
+    out: dict[str, str] = {}
+    for table in (flat.state_variables, flat.observed_variables, flat.parameters):
+        for name, var in table.items():
+            declared = getattr(var, "element_type", None)
+            if declared:
+                out[name] = str(declared)
     return out
 
 
@@ -2176,6 +2228,9 @@ def _build_numpy_rhs(
     # Declared 1-D index-set axis per variable — the table a §5.5.6 overlap gate
     # resolves its envelope factors through (numpy_interpreter._overlap_env_sym).
     var_index_sets = _var_index_sets(flat)
+    # Declared per-variable working precision (esm-spec §11.3.1): what a
+    # recurrence rounds its carried cell to at every step of the fold.
+    element_types = _element_types(flat)
 
     # Value-invention front-door (RFC §5.3 / §6.1): materialize the broad-phase
     # bins (``rg_src_bin`` / ``rg_tgt_bin``) and the derived-index-set extents ONCE
@@ -2306,6 +2361,7 @@ def _build_numpy_rhs(
             derived_extents,
             axis_valued_input_names=axis_valued_names,
             var_index_sets=var_index_sets,
+            element_types=element_types,
         )
     )
 
@@ -2358,6 +2414,7 @@ def _build_numpy_rhs(
             join_key_index_sets=join_key_index_sets,
             factor_scope=factor_scope,
             var_index_sets=dict(var_index_sets or {}),
+            element_types=element_types,
         )
         # Materialize array-valued observeds + derived rings and scalar
         # observeds into the context (dependency-ordered) so the state
@@ -2412,6 +2469,7 @@ def _build_numpy_rhs(
         join_key_index_sets=join_key_index_sets,
         factor_scope=factor_scope,
         var_index_sets=var_index_sets,
+        element_types=element_types,
         derived_extents=derived_extents,
         vi_members=vi_members,
     )
@@ -2442,6 +2500,100 @@ def evaluate_rhs(
     build = _build_numpy_rhs(flat, dict(parameters or {}), dict(state))
     dy = build.rhs_function(float(t), build.y0)
     return {name: float(val) for name, val in zip(build.elem_names, dy)}
+
+
+def _simulate_observeds_only(
+    flat: FlattenedSystem,
+    build: _NumpyRhsBuild,
+    tspan: tuple[float, float],
+    *,
+    saveat: Any = None,
+    callback: Any = None,
+) -> Solution:
+    """The observed-only result of an array document with no ODE state.
+
+    The array engine's counterpart of the scalar engine's observed-only path
+    (:func:`earthsci_ast.simulation_scalar.simulate`): sample the observed graph
+    over ``tspan`` and expose the SCALAR observeds as rows, exactly as the
+    stateful path does at its output nodes. Array-valued observeds are not
+    scalar rows on either path — a §6.6.5 assertion reads those from the build
+    inspection's ``setup_arrays`` — so materializing them here is what makes
+    them available and there is nothing further to expose.
+
+    A CALCULATOR-shaped array document is the shape a recurrence definition
+    naturally has (esm-spec §4.3.1.1 — the whole content is one array-valued
+    algebraic unknown), and the array engine used to refuse it outright while
+    the scalar engine had answered such a document since before ``ReturnCode``
+    existed. A STATE-FREE observed is constant along the trajectory, so it is
+    evaluated ONCE and broadcast rather than re-evaluated per output node; with
+    no state vector to advance, ``t`` is the only thing that can vary at all.
+    """
+    t0, t1 = float(tspan[0]), float(tspan[1])
+    saveat_list = [float(t) for t in saveat] if saveat is not None else []
+    if saveat_list:
+        t_out = np.asarray(sorted(saveat_list), dtype=float)
+    elif t0 == t1:
+        t_out = np.asarray([t0], dtype=float)
+    else:
+        t_out = np.linspace(t0, t1, DENSE_OUTPUT_MIN_POINTS)
+
+    ordered_observed = build.ordered_observed
+    varying = _time_varying_observeds(ordered_observed, set(build.state_names))
+    y_empty = np.zeros(0, dtype=float)
+
+    def _ctx(t: float) -> EvalContext:
+        return EvalContext(
+            state_layout=build.state_layout,
+            state_shapes=build.shapes,
+            param_values=build.param_values,
+            observed_values={},
+            y=y_empty,
+            t=t,
+            index_sets=flat.index_sets,
+            derived_extents=build.derived_extents,
+            join_key_buffers=build.join_key_buffers,
+            join_key_index_sets=build.join_key_index_sets,
+            factor_scope=build.factor_scope,
+            var_index_sets=build.var_index_sets,
+            element_types=build.element_types,
+        )
+
+    scalar_names: list[str] = []
+    if varying:
+        columns: list[list[float]] = []
+        for t in t_out:
+            ctx = _ctx(float(t))
+            _materialize_observeds(ordered_observed, ctx)
+            if not columns:
+                scalar_names = [n for n, _ in ordered_observed if n in ctx.observed_values]
+            columns.append([ctx.observed_values[n] for n in scalar_names])
+        y_out = (
+            np.asarray(columns, dtype=float).T
+            if scalar_names
+            else np.empty((0, t_out.size), dtype=float)
+        )
+    else:
+        ctx = _ctx(float(t_out[0]))
+        _materialize_observeds(ordered_observed, ctx)
+        scalar_names = [n for n, _ in ordered_observed if n in ctx.observed_values]
+        y_out = (
+            _observed_rows([ctx.observed_values[n] for n in scalar_names], t_out.size)
+            if scalar_names
+            else np.empty((0, t_out.size), dtype=float)
+        )
+
+    if callback is not None:
+        callback(t_out, y_out)
+    return Solution(
+        t=t_out,
+        y=y_out,
+        vars=list(scalar_names),
+        retcode=ReturnCode.Success,
+        message="The solver successfully reached the end of the integration interval.",
+        nfev=0,
+        njev=0,
+        nlu=0,
+    )
 
 
 def _simulate_with_numpy(
@@ -2492,10 +2644,20 @@ def _simulate_with_numpy(
                     inspect, flat, build, float(tspan[0]), loader_arrays=loader_arrays
                 )
         if build.total_size == 0 and not build.has_value_invention_states:
-            # Parity with the pre-EsmProblem build guard: a system with no ODE
-            # states has nothing to integrate. Construction still succeeds (the
-            # observed graph is exactly what `observed_field` reads back); it is
-            # the RUN that has no content.
+            if build.ordered_observed:
+                # A CALCULATOR-shaped array document: no ODE state, but a real
+                # observed graph — the shape a recurrence definition naturally
+                # has (esm-spec §4.3.1.1), and the shape §6.6.5's
+                # observed-assertion form is written against. There is nothing to
+                # integrate, so the run returns the observed graph's values
+                # instead of a trajectory, which is what the scalar engine's
+                # observed-only path has always done for such a document and
+                # what `test_empty_system` pinned as the contract for a
+                # stateless system: a successful result, not a failure.
+                return _simulate_observeds_only(
+                    flat, build, tspan, saveat=saveat, callback=callback
+                )
+            # Neither states nor observeds: the run really has no content.
             raise SimulationError("Flattened system has no state variables to integrate")
         shapes = build.shapes
         state_names = build.state_names
@@ -2544,6 +2706,7 @@ def _simulate_with_numpy(
                         join_key_index_sets=build.join_key_index_sets,
                         factor_scope=build.factor_scope,
                         var_index_sets=build.var_index_sets,
+                        element_types=build.element_types,
                     )
                     _materialize_observeds(ordered_observed, ctx)
                     scalar_obs = [n for n, _ in ordered_observed if n in ctx.observed_values]
@@ -2580,6 +2743,7 @@ def _simulate_with_numpy(
                             join_key_index_sets=build.join_key_index_sets,
                             factor_scope=build.factor_scope,
                             var_index_sets=build.var_index_sets,
+                            element_types=build.element_types,
                         )
                         # Per-observed skip policy (parity with the per-step RHS
                         # driver): a single DEAD observed that cannot be evaluated

@@ -1301,6 +1301,557 @@ fn build_param_tables(
     (param_names, param_index, param_defaults)
 }
 
+// ============================================================================
+// Causal self-reference (recurrence) along one index axis — esm-spec §4.3.1.1
+// ============================================================================
+//
+// An equation defining an array-shaped unknown `V` whose RHS reads
+// `index(V, …)` at a strictly earlier position along one of the defining
+// aggregate's output axes is a RECURRENCE DEFINITION of `V`. Detection is
+// structural and costs a document that has no such read one walk of each
+// algebraic RHS at build time; everything below is skipped when
+// `collect_self_reads` finds nothing, which is the overwhelmingly common case.
+//
+// Rationale, alternatives, and the reason the lag is DERIVED rather than
+// declared: `docs/content/rfcs/causal-self-reference-recurrence.md`.
+
+/// One causal self-read found in a variable's own defining RHS.
+struct SelfRead {
+    /// The read's index arguments (`args[1..]` of the `index` node).
+    args: Vec<Expr>,
+    /// Bounds of every index symbol bound by an enclosing `aggregate` at the
+    /// point the read was found — the scope a symbol-valued lag is proved in.
+    /// Innermost binding wins, matching the evaluator's `loop_binds` shadowing.
+    env: HashMap<String, (i64, i64)>,
+}
+
+/// A recurrence definition, lowered to the frame + per-cell body the sweep
+/// runs (see [`AlgebraicRule::Recurrence`]).
+struct RecurLowering {
+    idx_names: Vec<String>,
+    ranges: Vec<(i64, i64)>,
+    body: Expr,
+    axis: usize,
+    max_lag: i64,
+    lag_proven: bool,
+}
+
+fn recur_err(code: &str, detail: String) -> CompileError {
+    CompileError::InterpreterBuildError {
+        details: format!("{code}: {detail}"),
+    }
+}
+
+/// The affine form of an index expression with respect to the frame symbol
+/// `sym`: the coefficient of `sym`, plus the integer bounds of the symbol-free
+/// part — `None` when those bounds cannot be proved.
+///
+/// The two halves carry different weight. The **coefficient** must be provable:
+/// unless the expression carries `sym` exactly once with coefficient 1 it does
+/// not name a position relative to the cell being written, and there is nothing
+/// to interpret. The **constant part** need not be: an unprovable offset is a
+/// lag whose sign is unknown, which esm-spec §4.3.1.1 admits and leaves to the
+/// runtime's fail-closed read — a cell the sweep has not published cannot be
+/// read, so an unprovable lag cannot produce a wrong number, only a fault.
+///
+/// Treating an unresolvable symbol as fatal instead would make the VALIDATOR
+/// reject documents the evaluator accepts (it resolves ranges against the
+/// registry first and so proves more), which is the one disagreement between
+/// the two that is never defensible.
+struct Affine {
+    coef: i64,
+    konst: Option<(i64, i64)>,
+}
+
+fn affine_in_sym(e: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> Option<Affine> {
+    let konst = |lo: i64, hi: i64| {
+        Some(Affine {
+            coef: 0,
+            konst: Some((lo, hi)),
+        })
+    };
+    match e {
+        Expr::Integer(n) => konst(*n, *n),
+        Expr::Number(f) if f.fract() == 0.0 && f.is_finite() => {
+            let n = *f as i64;
+            konst(n, n)
+        }
+        Expr::Variable(v) if v == sym => Some(Affine {
+            coef: 1,
+            konst: Some((0, 0)),
+        }),
+        Expr::Variable(v) => Some(Affine {
+            coef: 0,
+            konst: env.get(v).copied(),
+        }),
+        Expr::Operator(node) if node.args.len() == 2 => {
+            let a = affine_in_sym(&node.args[0], sym, env)?;
+            let b = affine_in_sym(&node.args[1], sym, env)?;
+            let both = a.konst.zip(b.konst);
+            match node.op.as_str() {
+                "+" => Some(Affine {
+                    coef: a.coef + b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la + lb, ha + hb)),
+                }),
+                "-" => Some(Affine {
+                    coef: a.coef - b.coef,
+                    konst: both.map(|((la, ha), (lb, hb))| (la - hb, ha - lb)),
+                }),
+                // Scaling only by a symbol-free integer whose value is PINNED
+                // (`lo == hi`): otherwise the product is not affine with a known
+                // coefficient, and the coefficient is the half that must be
+                // provable.
+                "*" => {
+                    let (k, other) = match (a.coef, a.konst, b.coef, b.konst) {
+                        (0, Some((lo, hi)), _, _) if lo == hi => (lo, &b),
+                        (_, _, 0, Some((lo, hi))) if lo == hi => (lo, &a),
+                        _ => return None,
+                    };
+                    Some(Affine {
+                        coef: other.coef * k,
+                        konst: other.konst.map(|(lo, hi)| {
+                            let (p, q) = (lo * k, hi * k);
+                            (p.min(q), p.max(q))
+                        }),
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// How one index argument of a causal self-read relates to the frame symbol at
+/// that axis. Written in terms of the LAG `sym - <index expression>`, so a
+/// positive lag is an earlier position.
+enum SelfIdx {
+    /// The lag is exactly zero: the read stays on this axis's own cell, so this
+    /// axis is not the one the recurrence folds along.
+    Identity,
+    /// A lag that is not provably zero-or-forward, so this axis IS the
+    /// recurrence axis. `proven` records whether every value of the lag was
+    /// shown `>= 1` statically; when it is false the read may name the cell
+    /// being written or a later one for some values of a contracted symbol, and
+    /// the runtime's fail-closed read is what rules those out (esm-spec
+    /// §4.3.1.1 point 5) — a cell that has not been published cannot be read,
+    /// whether the sweep will publish it later or never.
+    Offset { proven: bool, max_lag: i64 },
+    /// A lag that is provably `<= 0` for every value: a same-cell or forward
+    /// read, which no sweep order can satisfy.
+    Forward,
+    /// Not affine in the frame symbol at all.
+    Bad,
+}
+
+fn classify_self_index(arg: &Expr, sym: &str, env: &HashMap<String, (i64, i64)>) -> SelfIdx {
+    // lag = sym - arg. `arg` must carry `sym` with coefficient exactly 1, or
+    // "the previous position along this axis" is not what it names.
+    let Some(Affine { coef, konst }) = affine_in_sym(arg, sym, env) else {
+        return SelfIdx::Bad;
+    };
+    if coef != 1 {
+        return SelfIdx::Bad;
+    }
+    let Some((clo, chi)) = konst else {
+        // A lag whose sign could not be proved. Admitted as the recurrence
+        // axis: it is not provably wrong, and the cells where it would be
+        // ill-founded cannot be read (they are not published), so the runtime
+        // faults there instead of returning a number.
+        return SelfIdx::Offset {
+            proven: false,
+            max_lag: 0,
+        };
+    };
+    let (lag_lo, lag_hi) = (-chi, -clo);
+    if lag_lo == 0 && lag_hi == 0 {
+        return SelfIdx::Identity;
+    }
+    if lag_hi <= 0 {
+        return SelfIdx::Forward;
+    }
+    SelfIdx::Offset {
+        proven: lag_lo >= 1,
+        max_lag: lag_hi,
+    }
+}
+
+/// Bounds every `aggregate` range in `node` contributes to the symbol scope.
+fn aggregate_range_env(node: &ExpressionNode) -> Vec<(String, (i64, i64))> {
+    node.ranges
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, spec)| spec.bounds().map(|b| (k.clone(), (b[0], b[1]))))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Walk `e` collecting every `index(var, …)` read, and note whether `var` is
+/// ever read BARE (which is never a causal read — esm-spec §4.3.1.1 rejection
+/// 4 — because the whole array does not exist during the sweep).
+fn collect_self_reads(
+    e: &Expr,
+    var: &str,
+    env: &mut Vec<(String, (i64, i64))>,
+    out: &mut Vec<SelfRead>,
+    bare: &mut bool,
+) {
+    match e {
+        Expr::Integer(_) | Expr::Number(_) => {}
+        Expr::Variable(v) => {
+            if v == var {
+                *bare = true;
+            }
+        }
+        Expr::Operator(node) => {
+            let pushed = if crate::aggregate::is_aggregate_op(&node.op) {
+                let add = aggregate_range_env(node);
+                let n = add.len();
+                env.extend(add);
+                n
+            } else {
+                0
+            };
+            let is_self_index = node.op == "index"
+                && matches!(node.args.first(), Some(Expr::Variable(v)) if v == var);
+            if is_self_index {
+                // Innermost binding wins: later entries overwrite earlier ones.
+                let mut snapshot: HashMap<String, (i64, i64)> = HashMap::new();
+                for (k, v) in env.iter() {
+                    snapshot.insert(k.clone(), *v);
+                }
+                out.push(SelfRead {
+                    args: node.args[1..].to_vec(),
+                    env: snapshot,
+                });
+            }
+            // `args[0]` of a self-read is the name itself, not a bare read of
+            // the array; every other operand is walked normally (an index
+            // expression may itself contain a self-read).
+            let skip = usize::from(is_self_index);
+            for a in node.args.iter().skip(skip) {
+                collect_self_reads(a, var, env, out, bare);
+            }
+            for side in [
+                node.expr.as_deref(),
+                node.filter.as_deref(),
+                node.key.as_deref(),
+                node.lower.as_deref(),
+                node.upper.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                collect_self_reads(side, var, env, out, bare);
+            }
+            if let Some(vs) = node.values.as_ref() {
+                for v in vs {
+                    collect_self_reads(v, var, env, out, bare);
+                }
+            }
+            env.truncate(env.len() - pushed);
+        }
+    }
+}
+
+/// Is `e` an `index(var, sym…)` whose indices are exactly `idx_names` in order
+/// — the §4.3 indexed-aggregate LHS form?
+fn lhs_identity_gather(e: &Expr, var: &str, idx_names: &[String]) -> bool {
+    let Expr::Operator(node) = e else {
+        return false;
+    };
+    if node.op != "index" || node.args.len() != idx_names.len() + 1 {
+        return false;
+    }
+    if !matches!(node.args.first(), Some(Expr::Variable(v)) if v == var) {
+        return false;
+    }
+    node.args[1..]
+        .iter()
+        .zip(idx_names)
+        .all(|(a, want)| matches!(a, Expr::Variable(v) if v == want))
+}
+
+/// Cell-restrict an `aggregate` that produces the whole frame: move its output
+/// indices out to the enclosing sweep, keeping its contraction, `filter`,
+/// `reduce`, `join` and `key` intact so the body evaluates at one cell exactly
+/// as §4.3.1 specifies for a non-recurrent aggregate.
+///
+/// When there is nothing left to contract or gate, the restriction IS the body,
+/// so the wrapper is dropped — the common shape (`s[k] = f(s[k-1])`) then walks
+/// one expression per cell rather than re-deriving an empty contraction.
+fn cell_restrict_aggregate(node: &ExpressionNode, idx_names: &[String]) -> Expr {
+    let body = node
+        .expr
+        .as_deref()
+        .cloned()
+        .unwrap_or(Expr::Number(f64::NAN));
+    let remaining: HashMap<String, crate::types::RangeSpec> = node
+        .ranges
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter(|(k, _)| !idx_names.iter().any(|n| n == *k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let gated = node.filter.is_some()
+        || node.join.is_some()
+        || node.key.is_some()
+        || node.distinct == Some(true);
+    if remaining.is_empty() && !gated {
+        return body;
+    }
+    let mut restricted = node.clone();
+    restricted.output_idx = Some(Vec::new());
+    restricted.ranges = Some(remaining);
+    Expr::operator(restricted)
+}
+
+/// Recognize and lower a recurrence definition of `var`.
+///
+/// `Ok(None)` — no causal self-read, so this equation is compiled exactly as it
+/// was before this feature existed. `Err(…)` — a self-read that is not a
+/// well-founded causal read, reported with the esm-spec §4.3.1.1 code. Never a
+/// silent fallback: the pre-feature behaviour for every rejected shape here was
+/// a plausible wrong number.
+fn lower_recurrence(
+    var: &str,
+    lhs: &Expr,
+    rhs: &Expr,
+) -> Result<Option<RecurLowering>, CompileError> {
+    let mut env: Vec<(String, (i64, i64))> = Vec::new();
+    let mut reads: Vec<SelfRead> = Vec::new();
+    let mut bare = false;
+    collect_self_reads(rhs, var, &mut env, &mut reads, &mut bare);
+    if reads.is_empty() {
+        return Ok(None);
+    }
+    if bare {
+        return Err(recur_err(
+            "recurrence_not_wellfounded",
+            format!(
+                "'{var}' is read BARE in its own defining equation as well as through `index`. \
+                 A bare read names the whole array, which does not exist while the recurrence \
+                 sweeps it; read every self-reference through `index` at a strictly earlier \
+                 position (esm-spec §4.3.1.1)."
+            ),
+        ));
+    }
+
+    // ---- the cell frame ----------------------------------------------------
+    // Either the indexed-aggregate LHS form (`aggregate{expr: V[k…]} ~ …`) or a
+    // bare LHS whose RHS is an aggregate over V's axes. Anything else has no
+    // frame to sweep.
+    let frame_node: &ExpressionNode = match (lhs, rhs) {
+        (Expr::Operator(l), _) if crate::aggregate::is_aggregate_op(&l.op) => l.as_ref(),
+        (Expr::Variable(v), Expr::Operator(r))
+            if v == var && crate::aggregate::is_aggregate_op(&r.op) =>
+        {
+            r.as_ref()
+        }
+        _ => {
+            return Err(recur_err(
+                "recurrence_unsupported_form",
+                format!(
+                    "the definition of '{var}' reads '{var}' at an earlier position, but its \
+                     shape gives the runtime no cell frame to sweep. Write the recurrence as one \
+                     `aggregate` over the variable's axes — either `{var} ~ aggregate{{…}}` or \
+                     `aggregate{{expr: index({var}, k…)}} ~ …` — with the base case as an \
+                     `ifelse` guard in the body (esm-spec §4.3.1.1)."
+                ),
+            ));
+        }
+    };
+    let idx_names: Vec<String> = frame_node.output_idx.clone().unwrap_or_default();
+    if idx_names.is_empty() || idx_names.iter().any(|n| n.parse::<i64>().is_ok()) {
+        return Err(recur_err(
+            "recurrence_unsupported_form",
+            format!(
+                "the recurrence definition of '{var}' has no symbolic output index to fold \
+                 along (`output_idx` is {idx_names:?}). A literal singleton dimension cannot be \
+                 a recurrence axis (esm-spec §4.3.1.1)."
+            ),
+        ));
+    }
+    let ranges_map = frame_node.ranges.clone().unwrap_or_default();
+    let mut ranges: Vec<(i64, i64)> = Vec::with_capacity(idx_names.len());
+    for n in &idx_names {
+        match ranges_map.get(n) {
+            // `Interval` specifically: a `Strided` axis has no unambiguous
+            // "previous position", and a ragged / derived / unresolved axis has
+            // no static total order to fold along at all.
+            Some(crate::types::RangeSpec::Interval([lo, hi])) => ranges.push((*lo, *hi)),
+            other => {
+                return Err(recur_err(
+                    "recurrence_not_wellfounded",
+                    format!(
+                        "axis '{n}' of the recurrence definition of '{var}' is not a static \
+                         unit-step ascending interval (range: {other:?}). A ragged, derived, \
+                         strided or unresolved axis carries no total order to fold along \
+                         (esm-spec §4.3.1.1)."
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ---- the axis and the derived lag bound --------------------------------
+    let frame_env: HashMap<String, (i64, i64)> = idx_names
+        .iter()
+        .cloned()
+        .zip(ranges.iter().copied())
+        .collect();
+    let mut axis: Option<usize> = None;
+    let mut max_lag: i64 = 0;
+    let mut lag_proven = true;
+    for read in &reads {
+        if read.args.len() != idx_names.len() {
+            return Err(recur_err(
+                "recurrence_not_wellfounded",
+                format!(
+                    "a self-read of '{var}' supplies {} indices but its frame has {} axes \
+                     ({idx_names:?}). Every causal self-read indexes every axis (esm-spec \
+                     §4.3.1.1).",
+                    read.args.len(),
+                    idx_names.len()
+                ),
+            ));
+        }
+        let mut env = frame_env.clone();
+        for (k, v) in &read.env {
+            env.insert(k.clone(), *v);
+        }
+        let mut lagged: Option<(usize, i64)> = None;
+        for (d, arg) in read.args.iter().enumerate() {
+            match classify_self_index(arg, &idx_names[d], &env) {
+                SelfIdx::Identity => {}
+                SelfIdx::Forward => {
+                    return Err(recur_err(
+                        "recurrence_not_wellfounded",
+                        format!(
+                            "index {d} of a self-read of '{var}' names the cell being written, \
+                             or a LATER one, on axis '{}'. A causal self-reference reads \
+                             strictly EARLIER positions; no sweep order can satisfy a forward \
+                             or same-cell read (esm-spec §4.3.1.1).",
+                            idx_names[d]
+                        ),
+                    ));
+                }
+                SelfIdx::Offset { proven, max_lag: hi } => {
+                    lag_proven &= proven;
+                    if lagged.is_some() {
+                        return Err(recur_err(
+                            "recurrence_not_wellfounded",
+                            format!(
+                                "a self-read of '{var}' is offset on more than one axis. A \
+                                 causal self-reference folds along exactly ONE axis; every \
+                                 other index must be the bare frame symbol (esm-spec §4.3.1.1)."
+                            ),
+                        ));
+                    }
+                    lagged = Some((d, hi));
+                }
+                SelfIdx::Bad => {
+                    return Err(recur_err(
+                        "recurrence_not_wellfounded",
+                        format!(
+                            "index {d} of a self-read of '{var}' is not an offset of the frame \
+                             symbol '{}'. A causal self-read names a position RELATIVE to the \
+                             cell being written — `{} - c`, `{} - a`, `{} - a - c` — so that \
+                             which axis the recurrence folds along, and in which direction, is \
+                             decidable. An index that does not carry '{}' with coefficient 1 \
+                             (a bare constant, `2*{}`, another axis's symbol) is rejected \
+                             rather than guessed at (esm-spec §4.3.1.1).",
+                            idx_names[d],
+                            idx_names[d],
+                            idx_names[d],
+                            idx_names[d],
+                            idx_names[d],
+                            idx_names[d]
+                        ),
+                    ));
+                }
+            }
+        }
+        let Some((d, hi)) = lagged else {
+            return Err(recur_err(
+                "recurrence_not_wellfounded",
+                format!(
+                    "a self-read of '{var}' is at the SAME cell on every axis, so it defines \
+                     '{var}' in terms of itself rather than of an earlier position. A causal \
+                     self-reference must be strictly earlier along one axis (esm-spec §4.3.1.1)."
+                ),
+            ));
+        };
+        match axis {
+            None => axis = Some(d),
+            Some(prev) if prev == d => {}
+            Some(prev) => {
+                return Err(recur_err(
+                    "recurrence_not_wellfounded",
+                    format!(
+                        "the self-reads of '{var}' disagree on the recurrence axis: one folds \
+                         along '{}' and another along '{}'. A definition folds along exactly one \
+                         axis (esm-spec §4.3.1.1).",
+                        idx_names[prev], idx_names[d]
+                    ),
+                ));
+            }
+        }
+        max_lag = max_lag.max(hi);
+    }
+    let axis = axis.expect("at least one self-read, each of which set the axis");
+
+    // ---- the per-cell body -------------------------------------------------
+    let body = match rhs {
+        Expr::Operator(r)
+            if crate::aggregate::is_aggregate_op(&r.op)
+                && r.output_idx.as_deref() == Some(idx_names.as_slice()) =>
+        {
+            cell_restrict_aggregate(r, &idx_names)
+        }
+        // The indexed-aggregate LHS form whose RHS is already a cell body, or an
+        // RHS aggregate over a DIFFERENT frame (which cannot be restricted onto
+        // this one).
+        other => {
+            if lhs_identity_gather(
+                frame_node.expr.as_deref().unwrap_or(&Expr::Integer(0)),
+                var,
+                &idx_names,
+            ) {
+                other.clone()
+            } else {
+                return Err(recur_err(
+                    "recurrence_unsupported_form",
+                    format!(
+                        "the recurrence definition of '{var}' cannot be restricted to one cell: \
+                         its RHS is not an `aggregate` over the frame {idx_names:?}, and its LHS \
+                         is not the identity gather `index({var}, {})`. A self-read reached only \
+                         through a `makearray` region, a `reshape`/`transpose`/`concat` operand, \
+                         or an aggregate over a different frame cannot be sequenced cell by cell \
+                         — the region order of a `makearray` fixes which write WINS, not the \
+                         order cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2).",
+                        idx_names.join(", ")
+                    ),
+                ));
+            }
+        }
+    };
+
+    Ok(Some(RecurLowering {
+        idx_names,
+        ranges,
+        body,
+        axis,
+        max_lag,
+        lag_proven,
+    }))
+}
+
 /// (6) Build observed algebraic rules from eliminated state variables AND
 /// from declared observed variables that define an expression, then (6b)
 /// dependency-order them so each rule is evaluated only after the observeds it
@@ -1356,6 +1907,24 @@ fn build_observed_rules(
         let Some(eq) = def_eq.get(name.as_str()) else {
             continue;
         };
+        // A CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1) is recognized before
+        // either ordinary lowering, because both of them would compile the
+        // self-read as a gather on a variable that is not bound anywhere — the
+        // pre-feature behaviour, which validated and then produced nothing.
+        // `None` here means the RHS contains no self-read at all, so every
+        // existing document takes exactly the paths below, unchanged.
+        if let Some(r) = lower_recurrence(name, &eq.lhs, &eq.rhs)? {
+            observed_rules.push(AlgebraicRule::Recurrence {
+                var: name.clone(),
+                output_idx_names: r.idx_names,
+                output_ranges: r.ranges,
+                body: Rc::new(r.body),
+                axis: r.axis,
+                max_lag: r.max_lag,
+                lag_proven: r.lag_proven,
+            });
+            continue;
+        }
         if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
             observed_rules.push(AlgebraicRule::ArrayLoop {
                 var: a.var,
@@ -1380,6 +1949,18 @@ fn build_observed_rules(
     for eq in &model.equations {
         if let Some(a) = extract_algebraic_arrayop(&eq.lhs, &eq.rhs) {
             if eliminated.contains(&a.var) && !observed_names.contains(&a.var) {
+                if let Some(r) = lower_recurrence(&a.var, &eq.lhs, &eq.rhs)? {
+                    observed_rules.push(AlgebraicRule::Recurrence {
+                        var: a.var.clone(),
+                        output_idx_names: r.idx_names,
+                        output_ranges: r.ranges,
+                        body: Rc::new(r.body),
+                        axis: r.axis,
+                        max_lag: r.max_lag,
+                        lag_proven: r.lag_proven,
+                    });
+                    continue;
+                }
                 observed_rules.push(AlgebraicRule::ArrayLoop {
                     var: a.var,
                     output_idx_names: a.idx_names,

@@ -59,6 +59,13 @@ const ERROR_CODES = (
     JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous",
     JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol",
     NULL_REACTION = "null_reaction",
+    # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
+    # A VALIDATION category, so both codes are owed by every binding whether or
+    # not it evaluates array numerics: the pre-1.0 behaviour of an ill-founded
+    # self-read was a plausible wrong number, and a binding that only declined
+    # to run it would leave the defect undiagnosed.
+    RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
+    RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",

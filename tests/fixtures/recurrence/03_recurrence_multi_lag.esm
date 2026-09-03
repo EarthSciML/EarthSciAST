@@ -1,0 +1,184 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceMultiLag",
+    "description": "CONFORMANCE_SPEC 5.19.3 shape 2, literal half: two self-reads at lags 1 AND 2 in one body -- s[k] = s[k-1] + s[k-2] from s[1] = s[2] = 1, i.e. the Fibonacci numbers. A binding that implements only the single-step shape acc[i] = f(acc[i-1], body[i]) cannot evaluate this at all, so it fails here rather than passing on the subset that a single-step accumulator happens to cover.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "multi-lag",
+      "bounded-lag"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 9
+    }
+  },
+  "models": {
+    "RecurrenceMultiLag": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "Fibonacci: 1 at the first two steps, the sum of the previous two after."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    2
+                  ]
+                },
+                1.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            2
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "two_lags_evaluate",
+          "description": "[1,1,2,3,5,8,13,21,34].",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "steps": 4
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 5.0,
+              "coords": {
+                "steps": 5
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 8.0,
+              "coords": {
+                "steps": 6
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 13.0,
+              "coords": {
+                "steps": 7
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 21.0,
+              "coords": {
+                "steps": 8
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 34.0,
+              "coords": {
+                "steps": 9
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

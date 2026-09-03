@@ -1,0 +1,132 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceDoubling",
+    "description": "The minimal causal self-reference (esm-spec 4.3.1.1): s[1]=1, s[k]=2*s[k-1], answer [1,2,4,8]. The base case is an `ifelse` guard INSIDE the body, which is the required spelling -- a self-read of an unpublished cell is a fault, never a zero (CONFORMANCE_SPEC 5.19.4), so the guard is what keeps the first cell from reading position 0. Pinned with zero tolerance: every value here is exactly representable, so this fixture pins the VALUE and the fixtures beside it pin the ORDER.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "aggregate",
+      "causal-self-reference"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceDoubling": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "1 at the first step, twice the previous value at every later one."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    2.0
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "doubling_evaluates",
+          "description": "[1, 2, 4, 8].",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 4.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 8.0,
+              "coords": {
+                "steps": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

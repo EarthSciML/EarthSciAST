@@ -35,7 +35,7 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -51,6 +51,9 @@ const N_COL: usize = 77;
 /// the inline test asserts, and it is not reachable from any `default`.
 const ANN: [f64; 3] = [100.0, 50.0, 30.0];
 const ANN_MEAN: f64 = 60.0;
+/// The SUM of the same column — the value a 0-D observed over it must report,
+/// and unreachable from any `default`.
+const ANN_TOTAL: f64 = 180.0;
 
 fn ff10_row(ann: f64, lon: f64, lat: f64) -> String {
     let mut r = vec![String::new(); N_COL];
@@ -214,6 +217,66 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
     })
 }
 
+/// The same document plus a SCALAR observed over the ingested column — the
+/// total of the very rows `annual_obs` reduces — and a second inline test
+/// asserting it POINTWISE (neither `coords` nor `reduce`, esm-spec §6.6.3).
+///
+/// This is finding F16. Bind a column to a `data_sources` entry and the
+/// document has nothing to integrate, so its answers are the build's
+/// materialized fields rather than a trajectory: the array read correctly and
+/// every scalar derived from it reported `scalar state 'annual_total' not
+/// found`, while the identical document with the column as a `const` array
+/// passed — the array runtime exposes 0-D observeds as trajectory rows and the
+/// build-static path had no route to them at all. The `mean` assertion on the
+/// array is carried alongside as the control: both halves of one document must
+/// answer.
+fn document_with_scalar_total(url: &str, sizing: Sizing, expected_total: f64) -> Value {
+    let mut doc = document(url, None, sizing);
+    doc["models"]["Ingest"]["variables"]["annual_total"] = json!({
+        "type": "unknown",
+        "units": "kg/yr",
+        "description": "Sum of the ingested column. A 0-D observed over ingested rows."
+    });
+    doc["models"]["Ingest"]["equations"]
+        .as_array_mut()
+        .expect("equations")
+        .push(json!({
+            "lhs": "annual_total",
+            "rhs": {
+                "op": "aggregate",
+                "output_idx": [],
+                "ranges": {"r": {"from": "records"}},
+                "args": ["annual"],
+                "expr": {"op": "index", "args": ["annual", "r"]}
+            }
+        }));
+    doc["models"]["Ingest"]["tests"]
+        .as_array_mut()
+        .expect("tests")
+        .push(json!({
+            "id": "column_total_from_disk",
+            "description": "sum(ANN_VALUE) as a POINTWISE scalar assertion.",
+            "time_span": {"start": 0.0, "end": 0.0},
+            "assertions": [{
+                "variable": "annual_total",
+                "time": 0.0,
+                "expected": expected_total,
+                "tolerance": {"rel": 1e-12}
+            }]
+        }));
+    doc
+}
+
+/// Write the scalar-total fixture into `dir`, returning the .esm path.
+fn fixture_with_scalar_total(dir: &Path, sizing: Sizing, expected_total: f64) -> PathBuf {
+    let url = write_ff10_zip(dir);
+    let doc = document_with_scalar_total(&url, sizing, expected_total);
+    let path = dir.join("ingest_scalar.esm");
+    fs::write(&path, serde_json::to_string_pretty(&doc).expect("doc renders"))
+        .expect("write document");
+    path
+}
+
 /// Attach the `extent` declaration under [`Sizing::Extent`].
 fn merge_extent(mut source: Value, sizing: Sizing) -> Value {
     if sizing == Sizing::Extent {
@@ -282,6 +345,52 @@ fn esm_test_reads_the_declared_data_source() {
         "a document whose data source is readable must pass; got:\n{out}"
     );
     assert_eq!(total_row(&out), (1, 0, 0), "in:\n{out}");
+}
+
+/// FINDING F16: a scalar derived from an ingested column is assertable, and
+/// the array beside it still is. Both assertions of the one document pass, and
+/// the scalar's value is the column SUM — a number no `default` can reach.
+#[cfg(feature = "esio")]
+#[test]
+fn a_scalar_derived_from_an_ingested_column_is_assertable() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture_with_scalar_total(tmp.path(), Sizing::Literal, ANN_TOTAL);
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(
+        ok,
+        "the array reduction AND the scalar total must both answer; got:\n{out}"
+    );
+    assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
+}
+
+/// The same document with the scalar's expectation moved off the true total
+/// must FAIL — not error, and certainly not pass. Without this the test above
+/// would be satisfied by a runner that reported any number at all.
+#[cfg(feature = "esio")]
+#[test]
+fn an_ingested_scalar_assertion_is_judged_against_its_expectation() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture_with_scalar_total(tmp.path(), Sizing::Literal, ANN_TOTAL + 1.0);
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(!ok, "a wrong expectation must not exit 0; got:\n{out}");
+    assert_eq!(total_row(&out), (1, 1, 0), "in:\n{out}");
+    assert!(
+        out.contains(&format!("actual={ANN_TOTAL}")),
+        "the FAIL must name the value read from disk:\n{out}"
+    );
+}
+
+/// And with the row count discovered from the data (esm-spec §8.9.4) rather
+/// than written into the document: the scalar contracts over the axis the
+/// source's own `extent` sized.
+#[cfg(feature = "esio")]
+#[test]
+fn an_ingested_scalar_contracts_over_the_discovered_extent() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture_with_scalar_total(tmp.path(), Sizing::Extent, ANN_TOTAL);
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(ok, "an extent-sized scalar must answer; got:\n{out}");
+    assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
 }
 
 /// esm-spec §8.9.1: an unrecognised `reader_options` key MUST be an error, not

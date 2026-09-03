@@ -1,0 +1,139 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceParameterValuedLag",
+    "description": "A lag the validator CANNOT prove, admitted rather than rejected. s[k] = 3*s[k-n] with `n` a parameter, so nothing static bounds the lag at all.\n\nesm-spec 4.3.1.1 splits the proof obligation in two, and this fixture pins the split. The COEFFICIENT of the frame symbol must be provable -- without it the read names no position relative to the cell being written, and which axis the recurrence folds along is undecidable. The lag's SIGN need not be: an unprovable lag is admitted, because a self-read resolves only against cells the sweep has already published, so an ill-founded read cannot return a number -- it faults. The static check therefore rejects what is provably wrong and identifies the axis; it does not certify what is right.\n\nThis matters for parity in a specific way. A binding's VALIDATOR necessarily proves less than its EVALUATOR, which has resolved every range against the index-set registry first. A binding that treated 'unproven' as 'illegal' would reject documents its own evaluator accepts, and would reject this one. With n = 2 the answer is [1, 1, 3, 3, 9].",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "unprovable-lag",
+      "parameter-lag",
+      "validator-parity"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "RecurrenceParameterValuedLag": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2,
+          "description": "The lag, supplied as a parameter -- unknown to any static analysis."
+        },
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "Trebles every n-th step; 1 at the first two."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    2
+                  ]
+                },
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            "n"
+                          ]
+                        }
+                      ]
+                    },
+                    3.0
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "parameter_valued_lag_evaluates",
+          "description": "n = 2, so [1, 1, 3, 3, 9].",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "steps": 4
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 9.0,
+              "coords": {
+                "steps": 5
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

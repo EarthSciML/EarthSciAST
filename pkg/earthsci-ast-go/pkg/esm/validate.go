@@ -845,6 +845,15 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// result does not have is `array_shape_mismatch`. Both shapes are declared,
 	// so the finding is static. See validate_array_shapes.go.
 	s.validateArrayBroadcastShapes(model, basePath)
+
+	// esm-spec §4.3.1.1 "Causal self-reference (recurrence) along one axis": an
+	// equation defining an array-shaped unknown may read that same array at a
+	// strictly earlier position along one axis, and a self-read that is NOT well
+	// founded is `recurrence_not_wellfounded` / `recurrence_unsupported_form`.
+	// CONFORMANCE_SPEC §5.19.5 gives the two non-executing bindings the same
+	// rejection duty as the three executing ones, so this static check is the
+	// whole of the construct in Go. See validate_recurrence.go.
+	s.validateRecurrences(model, basePath)
 }
 
 // validateExpressionVariables checks that every variable referenced in an

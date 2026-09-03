@@ -63,6 +63,7 @@ include("classification.jl")
 # whose derived consts are computed at include time.
 include("op_registry.jl")
 include("validate.jl")
+include("recurrence.jl")
 # Flattening pipeline (reactions → equations, subsystem flattening, shapes).
 # flatten()'s stages live in sibling files: error taxonomy, namespacing +
 # per-system collection, coupling application, pointwise lift, orchestrator,

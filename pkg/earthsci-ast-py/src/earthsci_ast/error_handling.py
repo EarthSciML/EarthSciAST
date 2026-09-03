@@ -220,6 +220,29 @@ UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
 
 
 # ===========================================================================
+# Causal self-reference (recurrence) codes (esm-spec §4.3.1.1;
+# CONFORMANCE_SPEC.md §5.19.5), raised as
+# ``earthsci_ast.recurrence.RecurrenceError`` and reported by the structural
+# validator at the containing equation's ``rhs`` pointer.
+#
+# Rejection parity is a duty of EVERY binding, executing or not: the pre-1.0
+# behaviour for each of these shapes was a document that validated and then
+# produced a plausible wrong number.
+# ===========================================================================
+
+#: A causal self-read that is not strictly earlier along exactly one axis: a
+#: read provably at the same cell or later, an index argument not affine in its
+#: frame symbol with coefficient 1, an offset on more than one axis, self-reads
+#: disagreeing on the axis, a bare read of the variable in its own RHS, or a
+#: recurrence axis that is ragged / derived / strided.
+RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded"
+#: A causal self-read the runtime cannot restrict to one cell -- reached only
+#: through a `makearray` region value or a whole-operand op -- or an RHS that is
+#: not an `aggregate` over the variable's frame.
+RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
+
+
+# ===========================================================================
 # The registry itself (API_SPEC.md §8 / H-2).
 #
 # `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code

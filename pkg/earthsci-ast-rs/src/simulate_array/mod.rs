@@ -361,6 +361,116 @@ enum AlgebraicRule {
         output_ranges: Vec<(i64, i64)>,
         body: Rc<Expr>,
     },
+    /// `var[i…] := body`, where `body` reads `var` itself at a strictly earlier
+    /// position along axis `axis` — a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1,
+    /// `docs/content/rfcs/causal-self-reference-recurrence.md`).
+    ///
+    /// Structurally an [`AlgebraicRule::ArrayLoop`] plus the recurrence axis,
+    /// but a SEPARATE variant on purpose: its cells are not independent, so it
+    /// must never reach the whole-array overlay, the tape, or any other path
+    /// that evaluates cells out of order or in a batch (CONFORMANCE_SPEC
+    /// §5.19.2). Being a distinct variant means every `match` over the rule
+    /// kinds has to say what it does with a recurrence instead of silently
+    /// inheriting a reordering path.
+    Recurrence {
+        var: String,
+        output_idx_names: Vec<String>,
+        output_ranges: Vec<(i64, i64)>,
+        body: Rc<Expr>,
+        /// Position within `output_idx_names` of the axis the recurrence folds
+        /// along. Swept ascending as the OUTERMOST loop.
+        axis: usize,
+        /// Largest lag any self-read takes along `axis`, derived from the reads
+        /// themselves and never declared (RFC §2.1). Reported for
+        /// observability; no evaluation rule depends on it.
+        max_lag: i64,
+        /// Whether every self-read was proved strictly earlier statically.
+        /// See [`RecurrenceInfo::lag_proven`].
+        lag_proven: bool,
+    },
+}
+
+/// The partially materialized array of an [`AlgebraicRule::Recurrence`], in
+/// scope for the body's causal self-reads while the sweep is in progress.
+///
+/// Interior-mutable for the same reason [`EvalCtx::derived_rings`] is: the
+/// driver publishes cell `i` while the evaluation context that reads it at cell
+/// `i + c` holds a shared borrow of the scope.
+///
+/// `written` is not redundant with the axis bounds. A read is admitted only when
+/// the cell it names has ALREADY been published, which the bounds alone cannot
+/// decide (a body may compute an index from a contracted symbol). An unwritten
+/// or out-of-range read is fail-closed (CONFORMANCE_SPEC §5.19.4) — never the
+/// §5.5.5 zero ghost, and never a bare NaN that a `max(x, 0)` in the body would
+/// launder back into a plausible number.
+pub(super) struct RecurScope<'a> {
+    /// The variable being defined; an `index` gather on this name resolves here.
+    pub(super) name: &'a str,
+    /// Extents of the cell frame.
+    pub(super) shape: DimU,
+    /// Lower bound of each axis of the cell frame.
+    pub(super) origin: DimI,
+    /// Cell values, column-major over `shape`.
+    cells: RefCell<Vec<f64>>,
+    /// Which cells have been published.
+    written: RefCell<Vec<bool>>,
+}
+
+impl<'a> RecurScope<'a> {
+    pub(super) fn new(name: &'a str, shape: DimU, origin: DimI) -> Self {
+        let total = shape.iter().copied().product::<usize>().max(1);
+        Self {
+            name,
+            shape,
+            origin,
+            cells: RefCell::new(vec![0.0; total]),
+            written: RefCell::new(vec![false; total]),
+        }
+    }
+
+    /// Publish one cell (its 1-based multi-index) so later cells may read it.
+    ///
+    /// Rounded to the ACTIVE working precision (esm-spec §11.3.1) before it is
+    /// stored, not only when it is read back. The recurrence's carried state is
+    /// a cell of the variable being defined, so it carries that variable's
+    /// `element_type` — and for a `Float32` document that has to hold at every
+    /// step of the fold, exactly as it does in a `real*4` reference
+    /// implementation. Storing a binary64 partial and rounding only on the way
+    /// out would run the fold at a precision the document did not declare and
+    /// silently beat the reference it is being checked against.
+    pub(super) fn publish(&self, tuple: &[i64], v: f64) {
+        let flat = layout::multi_to_flat_col_major(tuple, &self.shape, &self.origin);
+        let mut cells = self.cells.borrow_mut();
+        if flat < cells.len() {
+            cells[flat] = crate::precision::active().round(v);
+            self.written.borrow_mut()[flat] = true;
+        }
+    }
+
+    /// Read one published cell, or `None` when the position is outside the cell
+    /// frame or has not been published yet.
+    pub(super) fn read(&self, raw: &[i64]) -> Option<f64> {
+        if raw.len() != self.shape.len() {
+            return None;
+        }
+        for (d, &one_based) in raw.iter().enumerate() {
+            let lo = self.origin[d];
+            let hi = lo + self.shape[d] as i64 - 1;
+            if one_based < lo || one_based > hi {
+                return None;
+            }
+        }
+        let flat = layout::multi_to_flat_col_major(raw, &self.shape, &self.origin);
+        if !*self.written.borrow().get(flat)? {
+            return None;
+        }
+        self.cells.borrow().get(flat).copied()
+    }
+
+    /// The finished array, as an owned ndarray in the evaluator's layout.
+    pub(super) fn finish(&self) -> ArrayD<f64> {
+        layout::col_major_to_arrayd(&self.cells.borrow(), &self.shape)
+    }
 }
 
 /// Build/run observability record — the Rust mirror of the Julia binding's
@@ -404,6 +514,29 @@ pub struct BuildInspection {
     /// observed is materialized into `setup_arrays` with these values); `params`
     /// exposes the same map for the reference / `ic` positions.
     pub params: HashMap<String, f64>,
+    /// One entry per recognized CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1), so
+    /// the interpretation a document's self-read was given is auditable without
+    /// being authored twice. This is what stands in for a declared `recur`
+    /// annotation (RFC §2.1): the recurrence, its axis and its derived maximum
+    /// lag are reported, not required.
+    pub recurrences: Vec<RecurrenceInfo>,
+}
+
+/// A recognized causal self-reference, as reported to a [`BuildInspection`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecurrenceInfo {
+    /// The variable the recurrence defines.
+    pub var: String,
+    /// The output index symbol the sweep folds along, ascending.
+    pub axis: String,
+    /// Largest lag any self-read takes along `axis`, DERIVED from the reads.
+    pub max_lag: i64,
+    /// Whether every self-read was proved strictly earlier statically. When
+    /// `false` at least one read's lag depends on a symbol whose range admits
+    /// `0` or less, so the runtime's fail-closed read (never a value for an
+    /// unpublished cell) is what rules those cells out — typically because a
+    /// guard in the body means they are never evaluated.
+    pub lag_proven: bool,
 }
 
 /// Compiled, parameter-sweep-ready ODE model for array-op models.
@@ -635,6 +768,7 @@ impl<'a> EvalEnv<'a> {
             forcing: self.forcing,
             cse: self.cse,
             const_arrays: self.const_arrays,
+            recur: None,
         }
     }
 
@@ -711,6 +845,18 @@ struct EvalCtx<'a> {
     /// [`ConstArrayScope::empty`] on every path with no const-array registry,
     /// which reads byte-identically to the pre-§5.5.5 evaluator.
     const_arrays: &'a ConstArrayScope,
+    /// The partially materialized array of the [`AlgebraicRule::Recurrence`]
+    /// currently sweeping, if any (esm-spec §4.3.1.1). An `index` gather whose
+    /// operand names [`RecurScope::name`] resolves HERE — before state,
+    /// observed, parameters and forcing — because during the sweep the array
+    /// exists nowhere else; and it resolves fail-closed, unlike every other
+    /// gather channel.
+    ///
+    /// `None` on every path in the runtime except the recurrence sweep itself,
+    /// which is what makes the feature cost nothing for a document that does
+    /// not use it: one `Option` test on the `index` fast path and one on each
+    /// vectorized-overlay entry gate.
+    recur: Option<&'a RecurScope<'a>>,
 }
 
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's
