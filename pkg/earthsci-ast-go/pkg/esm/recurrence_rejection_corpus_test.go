@@ -55,6 +55,27 @@ type recurrenceRejectionCase struct {
 // fewer documents. Raise it when the corpus grows.
 const recurrenceRejectionCaseCount = 8
 
+// recurrencePreemptingCodes are the diagnoses that must NOT come back for any
+// corpus case. Each would mean the recurrence check never got to own the
+// diagnosis, which is the CONFORMANCE_SPEC §5.19.5 candidacy regression stated
+// directly: gate the self-edge exemption on WELL-FOUNDEDNESS instead of on
+// CANDIDACY and an ill-founded read stops qualifying for the exemption, so a
+// pre-existing cycle check fires and collapses the document to one whole-document
+// error. Without this assertion that failure reads only as "some other code came
+// back", which is a much longer trail to the actual mistake.
+//
+// `load_error` is the CROSS-BINDING spelling and this binding emits no such code;
+// it is listed anyway so the guard keeps its meaning if one is ever introduced.
+// Go's local analogue is `validation_failed` at path "" — what ValidateText
+// returns for schema-clean text that will not parse or resolve — so that is the
+// spelling this driver would actually catch today.
+var recurrencePreemptingCodes = map[string]string{
+	"load_error":             "a whole-document load error",
+	CodeValidationFailed:     "a whole-document validation failure (Go's `load_error` analogue)",
+	ErrorCircularDependency:  "a dependency-cycle error",
+	CodeCadenceObservedCycle: "an observed-definition cycle error",
+}
+
 func loadRecurrenceRejectionCorpus(t *testing.T) recurrenceRejectionCorpus {
 	t.Helper()
 	path := filepath.Join(repoTestsDir(t), "conformance", "recurrence", "rejections.json")
@@ -117,14 +138,40 @@ func TestRecurrenceRejectionCorpus(t *testing.T) {
 
 	for _, tc := range corpus.Cases {
 		t.Run(tc.ID, func(t *testing.T) {
-			file, err := LoadString(string(tc.Document))
-			if err != nil {
-				t.Fatalf("a rejection-corpus document failed to LOAD, so validation never "+
-					"ran: %v\nwhy it is illegal: %s", err, tc.Why)
+			// ValidateText, not Validate: it schema-checks the document AS WRITTEN
+			// and only then runs the semantic checks, so SchemaErrors below is a
+			// real signal. Validate takes a *ESMFile, which can only exist by having
+			// already come through a schema-validating loader, and so documents its
+			// SchemaErrors as always empty — asserting on that would be vacuous.
+			res := ValidateText(string(tc.Document))
+
+			// GUARD 1: illegal for exactly ONE reason. Each case is malformed under
+			// the recurrence rule and well formed under everything else; a corpus
+			// document that drifted schema-invalid would be rejected for a shape
+			// error instead, satisfying a bare "it was rejected" check while testing
+			// nothing about this construct.
+			for _, e := range res.SchemaErrors {
+				t.Errorf("corpus document is SCHEMA-INVALID, so it would be rejected for a "+
+					"shape error rather than for its self-reference: %s at %s",
+					e.Message, e.Path)
 			}
-			res := ValidateStructuralWithCodes(file)
-			if res.Valid {
-				t.Errorf("Valid = true, want false\nwhy it is illegal: %s", tc.Why)
+			if len(res.SchemaErrors) > 0 {
+				t.Fatalf("why it is illegal: %s", tc.Why)
+			}
+
+			if res.IsValid {
+				t.Errorf("IsValid = true, want false\nwhy it is illegal: %s", tc.Why)
+			}
+
+			// GUARD 2: the recurrence check must OWN the diagnosis.
+			for _, e := range res.StructuralErrors {
+				if what, preempting := recurrencePreemptingCodes[e.Code]; preempting {
+					t.Errorf("case came back as %s ([%s] at %s), so the recurrence diagnosis "+
+						"was pre-empted. Gate the self-edge exemption on CANDIDACY — an "+
+						"array-shaped unknown with an `index` self-read, well founded or not — "+
+						"not on the well-foundedness verdict (CONFORMANCE_SPEC §5.19.5).",
+						what, e.Code, e.Path)
+				}
 			}
 
 			// The pinned pair, and only the pair. No assertion is made about the

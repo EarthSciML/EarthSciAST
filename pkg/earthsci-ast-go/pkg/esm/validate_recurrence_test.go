@@ -130,7 +130,7 @@ func TestRecurrenceValidFixtureValidatesClean(t *testing.T) {
 // list silently stops covering the corpus the moment a fixture is added, which
 // is the audit's F5 finding. recurrenceFixtureFloor makes an EMPTIED or
 // unreachable directory fail loudly instead of vacuously passing.
-const recurrenceFixtureFloor = 8 // 8 at time of writing (01..08)
+const recurrenceFixtureFloor = 9 // 9 at time of writing (01..09)
 
 func TestRecurrenceConformanceFixturesValidateClean(t *testing.T) {
 	dir := filepath.Join(repoTestsDir(t), "fixtures", "recurrence")
