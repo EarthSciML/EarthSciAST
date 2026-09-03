@@ -368,6 +368,77 @@ fn work_tracks_the_match_count_not_the_squared_row_count() {
 }
 
 // ---------------------------------------------------------------------------
+// Determinism — the answer is a function of the key VALUES, not of row order
+// ---------------------------------------------------------------------------
+
+/// §5.7 rule 5: hashing may BUCKET only, and the match set is emitted sorted by
+/// the canonical key. A self-join is the shape where a hash-order leak would be
+/// hardest to see — both sides are the SAME table, so a pair list built from a
+/// hash iteration would look plausible in every case and would still sum to a
+/// number.
+///
+/// The test permutes the table's STORAGE order: slot `i` of the permuted table
+/// holds row `perm[i]` of the original, keys and payload moving together. A
+/// relabelling changes nothing about which key equals which, so the answer must
+/// be the same values in the permuted slots — bit for bit, not merely the same
+/// multiset.
+#[test]
+fn the_answer_is_invariant_under_a_permutation_of_the_stored_rows() {
+    let n = 12;
+    let t = Table::new(n);
+    let (base, _) = run(&t, "row_prior", Spelling::Default, true);
+
+    // Two unrelated permutations, so a fixture that happened to be symmetric
+    // under one cannot pass by accident.
+    for perm in [
+        (0..n).map(|i| (i + 5) % n).collect::<Vec<usize>>(),
+        (0..n).rev().collect::<Vec<usize>>(),
+    ] {
+        let take = |v: &[f64]| -> Vec<f64> { perm.iter().map(|&p| v[p]).collect() };
+        let arrays: HashMap<String, ArrayD<f64>> = [
+            ("row_id".to_string(), arr1(&take(&t.row_id()))),
+            ("row_prior".to_string(), arr1(&take(&t.shifted(1)))),
+            ("row_back".to_string(), arr1(&take(&t.shifted(BACK)))),
+            ("payload".to_string(), arr1(&take(&t.payload))),
+        ]
+        .into_iter()
+        .collect();
+
+        let d = doc(&t, "row_prior", Spelling::Default);
+        let prev = set_join_gate_enabled(true);
+        let prep = esm_problem(
+            &d,
+            (0.0, 0.0),
+            ProblemOptions {
+                model_name: Some("S".into()),
+                const_arrays: arrays,
+                build_providers: Vec::new(),
+                ..Default::default()
+            },
+        )
+        .expect("the permuted table builds");
+        set_join_gate_enabled(prev);
+        let out: Vec<f64> = observed_field(&prep, "out")
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+
+        let want = take(&base);
+        assert_eq!(out.len(), n);
+        assert_eq!(
+            bits(&out),
+            bits(&want),
+            "permuting the stored rows must permute the answer and nothing else: \
+             got {out:?}, want {want:?}"
+        );
+        // Not vacuous: the permuted answer genuinely differs from the original,
+        // so an implementation ignoring the data could not pass both.
+        assert_ne!(bits(&out), bits(&base));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The refusals: what the format cannot determine, it must not guess
 // ---------------------------------------------------------------------------
 

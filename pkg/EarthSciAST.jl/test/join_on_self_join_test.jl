@@ -169,6 +169,40 @@ end
 end
 
 # ===========================================================================
+# Determinism — the answer is a function of the key VALUES, not of row order
+# ===========================================================================
+@testset "the answer is invariant under a permutation of the stored rows" begin
+    # §5.7 rule 5: hashing may BUCKET only, and the match set is emitted sorted
+    # by the canonical key. A self-join is where a hash-order leak would be
+    # hardest to see — both sides are the SAME table, so a pair list built from
+    # a `Dict` iteration would look plausible and would still sum to a number.
+    #
+    # Permuting the table's STORAGE order (keys and payload moving together) is
+    # a relabelling: it changes nothing about which key equals which, so the
+    # answer must be the same values in the permuted slots.
+    n = 12
+    doc = _self_join_doc(n)
+    file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
+    function _eval(ca)
+        f!, u0, p, _, _ = build_evaluator(file; model_name = "S", const_arrays = ca,
+                                          initial_conditions = Dict("out" => zeros(n)))
+        du = similar(u0); f!(du, u0, p, 0.0)
+        return Float64[du[i] for i in 1:n]
+    end
+    base = _eval(Dict{String,Any}("row_id" => _ids(n), "row_prior" => _shifted(n, 1),
+                                  "row_back" => _shifted(n, BACK), "payload" => _payload(n)))
+    # Two unrelated permutations, so a fixture symmetric under one cannot pass
+    # by accident.
+    for perm in ([mod1(i + 5, n) for i in 1:n], collect(n:-1:1))
+        out = _eval(Dict{String,Any}(
+            "row_id" => _ids(n)[perm], "row_prior" => _shifted(n, 1)[perm],
+            "row_back" => _shifted(n, BACK)[perm], "payload" => _payload(n)[perm]))
+        @test out == base[perm]
+        @test out != base          # not vacuous
+    end
+end
+
+# ===========================================================================
 # The refusals: what the format cannot determine, it must not guess
 # ===========================================================================
 @testset "three ranges over one index set are refused by name" begin
