@@ -59,6 +59,26 @@ debt); TypeScript and Go have no array numeric executor at all and validate only
 self-references, each pinned on its `(code, path)` pair and driven by **all
 five** bindings. It pins no message prose, deliberately — see its `pinned` block.
 
+## Exercise every evaluation route (§5.19.3b)
+
+These fixtures are not a checklist to run once. A binding usually has more than
+one way to materialize an observed — a per-step route while integrating, and a
+build-time route that materializes a relational document's whole observed graph
+up front — and **each fixture must be re-checked on each route against the same
+pinned value.**
+
+The reason is recorded rather than asserted: the Rust binding shipped this
+construct implemented on its per-step route only. It was correct under
+`esm test` and silently dead wherever the build pipeline was taken — any
+document that ingests one column the recurrence never reads, and every document
+under `esm simulate`. All nine fixtures below were green the whole time, because
+all nine drove one route. The self-read resolved to `NaN` and the body's
+`max(x, 0)` laundered it to `0.0`, so the answer was finite, plausible and
+wrong.
+
+So: one shared sweep implementation, and per-route assertions on values. "Both
+routes produced something plausible" is the state that persisted here.
+
 ## What a binding must NOT do
 
 §5.19.2 forbids evaluating a recurrence through any whole-array, vectorized,

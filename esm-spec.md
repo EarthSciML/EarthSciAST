@@ -684,7 +684,7 @@ the `0` term carrying the non-recurrent part and the rest carrying
 Here `lag = a` straddles zero, and the `a = 0` cell is never evaluated because the
 guard selects the other branch — which is sound *without* the static proof, because
 a self-read of a cell the sweep has not published cannot return a value at all
-(point 5 below). Requiring `lo(lag) ≥ 1` statically would have rejected this and
+(point 6 below). Requiring `lo(lag) ≥ 1` statically would have rejected this and
 forced the terms to be written out one per lag. The derived maximum lag is reported
 by a binding's build inspection, together with whether it was *proved* or is
 runtime-guarded; **no evaluation rule depends on either**, so neither is authored.
@@ -705,7 +705,11 @@ runtime-guarded; **no evaluation rule depends on either**, so neither is authore
    vectorized, fused, tiled, kernel-merged or otherwise reordered path. The cells
    are not independent, so there is no equivalence to appeal to: a reordering is a
    different computation, and a reassociation of the body is a different number.
-5. A self-read of a position outside `R_d`, or of a cell not yet published, is a
+5. A binding MUST evaluate a recurrence identically on **every route it has**
+   for materializing an observed — a per-step route and a build-time route are
+   both routes — and MUST do so with one shared implementation of the sweep
+   rather than one per route (CONFORMANCE_SPEC §5.19.3b).
+6. A self-read of a position outside `R_d`, or of a cell not yet published, is a
    **fault** (`E_TREEWALK_RECUR_UNAVAILABLE`) and is never resolved to a value. In
    particular the homogeneous-Dirichlet **zero ghost** that §4.3.3 gives an
    out-of-range state/observed gather is **never** applied to a causal self-read,
@@ -714,7 +718,7 @@ runtime-guarded; **no evaluation rule depends on either**, so neither is authore
    whole axis, and a clamp such as `max(x, 0)` in the body would launder even a NaN
    sentinel into a plausible number.
 
-Because of (5) a base case is written as a **guard inside the body**, as in the
+Because of (6) a base case is written as a **guard inside the body**, as in the
 example above, and not left to fall off the end of the axis. Within a recurrence
 body an `ifelse` whose condition evaluates to a scalar selects its branch **before**
 evaluating it, and only the selected branch is evaluated; this is required, not

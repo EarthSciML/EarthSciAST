@@ -2965,6 +2965,40 @@ direction of plausibility. A fixture in this category that declares `Float32` MU
 therefore be pinned to the binary32 fold with **zero** tolerance, and its
 description MUST name the binary64 value the un-rounded implementation would give.
 
+#### 5.19.3b Every evaluation route, not the convenient one
+
+A binding typically has more than one way to materialize an observed — a
+per-step route used while integrating, and a build-time route that materializes
+a relational document's whole observed graph up front. **A conforming binding
+MUST evaluate a recurrence identically on every such route, and its test tier
+MUST exercise every route it has.**
+
+This is not a hypothetical. The Rust binding shipped the construct implemented
+on its per-step route only. It was correct under `esm test` and DEAD wherever
+the build pipeline was taken — which is any document that ingests so much as one
+column the recurrence never reads, and every document under `esm simulate`,
+whose static branch rebuilds with the pipeline on precisely in order to
+materialize an array observed. On that route the self-read fell through to an
+unbound-name `NaN`, and `max(NaN, 0.0)` returns `0.0` (IEEE-754 `max` yields the
+non-NaN operand), so a body containing a clamp — which the motivating fold's
+body is — produced a finite, plausible, monotone, wrong field with nothing
+logged at any level. Nine numeric fixtures and this whole section were green
+throughout, because all of them drove one route.
+
+Two obligations follow, and the second is the one that would have caught it:
+
+1. **One implementation, not one per route.** The sweep is a single function
+   both routes call. Two copies is how the two routes came to disagree, and a
+   binding with two copies satisfies this section only by accident.
+2. **Cross-route agreement is the assertion.** A fixture must be re-checked on
+   each route against the SAME pinned value — not merely re-run to see that it
+   completes. "Both routes produced something plausible" is exactly the state
+   that persisted here for as long as the construct existed.
+
+A binding whose routes cannot be made to agree MUST make the unsupported route
+decline loudly (§5.19.2 already requires this of a reordering route); a laundered
+zero is the one outcome this construct exists to prevent.
+
 #### 5.19.4 Fail-closed reads
 
 An out-of-range or not-yet-published self-read is `E_TREEWALK_RECUR_UNAVAILABLE`
