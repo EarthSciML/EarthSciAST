@@ -276,10 +276,39 @@ near-zero residual can be load-bearing in the motivating consumer.
 | Binding | Executes | Path |
 |---|---|---|
 | Rust | yes | `AlgebraicRule::Recurrence` + `RecurScope` in the per-cell oracle |
-| Python | yes | `_eval_arrayop_scalar` cell loop + `EvalContext.building_arrays` |
-| Julia | see §6.1 | — |
-| TypeScript | no (no numeric array executor) | types + structural validation |
-| Go | no (no numeric array executor) | types + structural validation |
+| Python | yes (bare-LHS form) | `_RecurScope` + `sweep_recurrence` in `numpy_interpreter.py` |
+| Julia | no — see §6.1 | validation only |
+| TypeScript | no (no numeric array executor) | validation only |
+| Go | no (no numeric array executor) | validation only |
+
+All five implement the **static** half, which is the whole of a non-executing
+binding's duty here (§5.19.5) and is pinned across bindings by
+`tests/conformance/recurrence/rejections.json`.
+
+### 6.0 The exemption is gated on candidacy — learned the hard way
+
+Every binding has to stop *some* existing check firing on the self-edge, and the
+gate for that exemption turned out to be the subtlest thing in the whole design.
+It must be **candidacy** — the equation is array-shaped and has at least one
+`index` self-read, well founded or not — and both neighbouring choices are wrong,
+each losing a different diagnosis:
+
+* gating on the **well-foundedness verdict** (too narrow) means an ill-founded
+  read is not exempt, so the pre-existing cycle check fires and pre-empts the
+  `recurrence_*` codes. Measured, when a binding implemented the first draft of
+  this RFC literally: six negative cases collapsed to a single whole-document
+  error;
+* gating on **"is it a self-edge at all"** (too wide) swallows equations the
+  recurrence check does not own — a scalar `x ~ x + 1`, a bare `s ~ s + 1` — and
+  drops the cycle error they used to get.
+
+Both were found by implementers rather than by review, in different bindings, and
+neither is visible in a binding's own tests: the narrow one fails nothing locally,
+which is exactly why the negative cases are a shared corpus.
+
+Where the check *lives* is incidental — TypeScript keeps the predicate and the
+validator at core level, Rust splits them across two files — but the two must
+share one implementation, or the gate and the verdict can disagree.
 
 Detection is **structural and opt-in by construction**: a document with no
 `index(V, …)` read inside `V`'s own definition takes byte-identical paths to the
@@ -300,3 +329,11 @@ two executing bindings needed and is tracked as binding debt rather than
 half-landed; the conformance fixtures declare Julia a `skip_bindings` port for
 this category with that reason, exactly as `20_arrayop_contraction_embedded`
 already does for the embedded-aggregate form.
+
+Julia does implement the static half, and its own vacuity probe settled a
+question the other bindings could not answer from outside: Julia's cycle
+detection does **not** run inside validation (its only in-validation cycle check
+is model-to-model coupling; the observed-cycle detector lives on the
+`build_evaluator` path), so Julia has Rust's and Go's shape rather than
+TypeScript's and either gate reads the same there. It is gated on candidacy
+anyway, so the code says candidacy where §6.0 says candidacy.
