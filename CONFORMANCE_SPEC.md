@@ -2874,6 +2874,104 @@ cannot see this class of corruption at all. A key set must be compared exactly.
 `element_type` and are tracked in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`
 §Precision.
 
+### 5.19 Non-Finite Assertion Actuals (normative)
+
+Every other §5 category governs *what a binding computes*. This one governs
+what it does with the number afterwards: the §6.6.3 **pass predicate** when the
+computed value is not finite. The three simulation bindings — **Julia, Python,
+Rust** — must agree on the verdict. The shared **offline** fixture lives in
+`tests/conformance/assertion_nonfinite/`.
+
+esm-spec §6.6.3 pins the predicate as
+
+```
+actual == expected    OR    (actual and expected both finite AND |actual − expected| within the resolved tolerance)
+```
+
+A `±Inf` or `NaN` actual therefore FAILS against every finite `expected`, at
+every tolerance, and the equality clause covers only the same infinity with the
+same sign.
+
+#### 5.19.1 Why this needs a category
+
+**It is the gate on the gate.** An inline assertion is the only check a
+`.esm`-only project has below a whole-output comparison, and the tolerance
+arithmetic alone is *vacuously satisfied* by an infinity: `|Inf − expected| =
+Inf ≤ max(atol, rtol·max(Inf, |expected|)) = Inf` for every `expected`. A
+binding that applies the bound without the finiteness guard therefore passes
+mutually contradictory assertions on one value — 42, −5 and 0 at once — and
+reports a green run for a document whose arithmetic overflowed. That is worse
+than a wrong number, and it is invisible: nothing in the summary distinguishes
+it from a document that is right.
+
+Julia was already conforming and is therefore the reference binding: its
+`_check_assertion` delegates to `isapprox`, defined as `x == y || (isfinite(x)
+&& isfinite(y) && norm(x−y) ≤ max(atol, rtol·max(norm(x), norm(y))))`. The Rust
+`check_assertion` and the Python `_check_assertion` both documented themselves
+as "Julia `isapprox` semantics" and both dropped the finiteness clause — a
+re-implementation drifting from the binding it names, which is exactly the class
+of divergence this suite exists to catch, and which no other category could see
+because every other fixture's actuals are finite.
+
+#### 5.19.2 What is compared
+
+Each in-scope binding runs the fixture's inline test through its official
+inline-test runner (`run_pde_tests`) with the pinned integrator, and for each
+`(test_id, assertion_idx)` the manifest's `cases` entry declares:
+
+| Field | Contract |
+|---|---|
+| `actual_class` | `+inf` \| `-inf` \| `nan` \| `finite` — the class of the computed value. Pins that all three bindings' arithmetic produces the SAME non-finite value, not merely that they agree on a verdict. |
+| `passed` | The §6.6.3 verdict. **This is the contract.** |
+| `actual` | Present only for a `finite` case, compared at `rtol 1e-9`. |
+
+**Verdicts, not actuals, because `±Inf` and `NaN` are not
+JSON-representable.** A numeric golden of the shape §5.9/§5.14 use cannot state
+this category's expectations at all; encoding them as strings and re-parsing
+would make the golden's format the thing under test. The manifest's `cases`
+list is therefore the golden, in the shape §5.15 already uses for a category
+whose contract is a classification.
+
+#### 5.19.3 Non-vacuity
+
+The fixture's `base` is a const array of `1e200`; `pos` squares it (`+Inf`),
+`neg` negates that square (`−Inf`), `nanv` multiplies it by zero (`NaN`), and
+`fin` scales it by one (`1e200`, finite). Cases 1–4 assert the SAME `+Inf` cell
+to be 42, 0, `1e308`, and 0-within-`abs 1e300` — mutually contradictory, so at
+most one could ever legitimately pass, and a binding reporting several passes is
+demonstrably comparing nothing. Case 4 additionally pins the ORDER of the two
+tests: `abs: 1e300` is the widest bound a document can spell and it does not
+rescue an infinity. Cases 7 and 8 are the two-sided control on the finite path —
+a correct finite actual still PASSES and a wrong one still FAILS — so a binding
+that "fixed" the category by failing everything fails it.
+
+#### 5.19.4 Gate
+
+Per-binding runners drive the fixture and gate every case: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_assertion_nonfinite_test.jl`; **Python** —
+`pkg/earthsci-ast-py/tests/test_assertion_nonfinite_conformance.py`; **Rust** —
+`pkg/earthsci-ast-rs/tests/assertion_nonfinite_conformance.rs`. Each runner
+additionally pins the predicate directly at the boundary a document cannot
+spell — `expected = ±Inf`, reachable only through the API — where the same
+infinity matches and an opposite one does not. `bindings_required` is
+`["julia", "python", "rust"]`; Go and TypeScript are rewrite-only ports with no
+simulator and no assertion comparison, and are `scope_excluded` in the manifest.
+
+**All five bindings READ this manifest**, including the two that cannot execute
+it: `pkg/earthsci-ast-go/pkg/esm/assertion_nonfinite_scope_test.go` and
+`pkg/earthsci-ast-ts/src/assertion-nonfinite-scope.test.ts` each assert their own
+exclusion — that their binding is named in `scope_excluded` with a reason and is
+absent from `bindings_required` — that the fixture still LOADS in their parser (a
+category whose document one binding cannot parse would be a format divergence
+hiding behind a scope exclusion), and that the case list stays non-vacuous (at
+least one must-fail non-finite case and one must-pass finite one). This is
+deliberate, and it is the lesson of the shared rejection corpus that was being
+consumed by two of five bindings while reading as though it covered all five: an
+exclusion is invisible by construction, so it has to be asserted somewhere that
+goes red when it stops being true. Giving Go or TypeScript a simulator will fail
+that binding's scope test until it is moved into `bindings_required` with a real
+runner.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

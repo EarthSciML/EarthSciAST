@@ -547,13 +547,38 @@ def _resolve_tolerance(
 
 
 def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -> bool:
-    """Julia ``isapprox`` semantics: ``|a − e| ≤ max(atol, rtol·max(|a|, |e|))``
-    (exact equality when both tolerances are zero)."""
+    """Julia ``isapprox`` semantics: ``actual == expected``, or both values
+    FINITE and ``|a − e| ≤ max(atol, rtol·max(|a|, |e|))`` (esm-spec §6.6.3,
+    CONFORMANCE_SPEC §5.19).
+
+    **Finiteness is judged BEFORE tolerance**, and that clause is not a
+    corollary of the bound — it contradicts it. With ``actual = ±inf`` both
+    sides of ``|actual − expected| <= max(atol, rtol*max(|actual|, |expected|))``
+    are ``inf``, so the comparison held for EVERY finite ``expected``: an
+    assertion on an overflowed product, a division by a zero denominator or a
+    ``log(0)`` reported PASS whatever it expected. NaN never had the problem
+    (every IEEE-754 comparison with NaN is false), which is why the hole was
+    specific to an infinity. Julia's ``isapprox`` — the semantics this
+    docstring claims — has always carried the guard
+    (``x == y || (isfinite(x) && isfinite(y) && ...)``).
+
+    ``actual == expected`` keeps the one case a non-finite value legitimately
+    matches: the SAME infinity, with the same sign. An ``.esm`` document cannot
+    spell an infinite ``expected`` (JSON has no infinite literal), so within a
+    document the rule reduces to "a non-finite actual always fails". It also
+    keeps the zero-tolerance exact-equality mode, and ``-0.0 == 0.0`` under
+    IEEE-754, so a signed zero is unaffected.
+    """
+    a = float(actual)
+    e = float(expected)
+    if a == e:
+        return True
+    if not (math.isfinite(a) and math.isfinite(e)):
+        return False
     if rtol == 0.0 and atol == 0.0:
-        return float(actual) == float(expected)
-    return abs(float(actual) - float(expected)) <= max(
-        atol, rtol * max(abs(float(actual)), abs(float(expected)))
-    )
+        # Exact-equality mode; the equality above already answered it.
+        return False
+    return abs(a - e) <= max(atol, rtol * max(abs(a), abs(e)))
 
 
 def _ephemeral_injected_file(

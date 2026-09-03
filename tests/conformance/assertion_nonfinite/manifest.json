@@ -1,0 +1,107 @@
+{
+    "category": "assertion_nonfinite",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec \u00a76.6.3's comparison rule when the ACTUAL value of an assertion is not finite. An assertion passes only when `actual == expected` or both values are finite and within the resolved tolerance; a \u00b1Inf or NaN actual therefore FAILS against every finite `expected`, and no tolerance can rescue it. Without the finiteness guard the tolerance arithmetic is vacuously satisfied for an infinite actual -- `|Inf - e| = Inf <= max(atol, rtol*max(Inf, |e|)) = Inf` -- so an assertion passes whatever it expected, and an overflow, a division by a zero denominator or a log(0) reports green. NaN fails on its own (every comparison with NaN is false), which is why the hole was specific to an infinity and why NaN is carried here as a control. Julia is the reference binding: its `_check_assertion` delegates to `isapprox`, which is defined as `x == y || (isfinite(x) && isfinite(y) && |x-y| <= max(atol, rtol*max(|x|,|y|)))` and already conforms. The verdicts, not the actuals, are what is compared: \u00b1Inf and NaN are not JSON-representable, so this tier's expectations live in the manifest as a per-assertion (actual_class, passed) pair rather than in a numeric golden.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no simulator, so no inline-test assertion comparison",
+        "typescript": "rewrite-only port; no simulator, so no inline-test assertion comparison"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "fixtures": [
+        {
+            "id": "nonfinite_actual",
+            "path": "fixtures/nonfinite_actual.esm",
+            "model": "M",
+            "test_id": "nonfinite_actual",
+            "tags": [
+                "esm-spec-6.6.3",
+                "assertions",
+                "non-finite",
+                "overflow",
+                "nan"
+            ],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "pos",
+                    "actual_class": "+inf",
+                    "passed": false,
+                    "note": "The defect in its plainest form: +Inf asserted to be 42."
+                },
+                {
+                    "assertion_idx": 2,
+                    "variable": "pos",
+                    "actual_class": "+inf",
+                    "passed": false,
+                    "note": "The same cell asserted to be 0. Contradicts case 1, so at most one could ever pass."
+                },
+                {
+                    "assertion_idx": 3,
+                    "variable": "pos",
+                    "actual_class": "+inf",
+                    "passed": false,
+                    "note": "Against the largest finite double. A magnitude test would call this close; finiteness is not a magnitude test."
+                },
+                {
+                    "assertion_idx": 4,
+                    "variable": "pos",
+                    "actual_class": "+inf",
+                    "passed": false,
+                    "note": "abs=1e300 is the widest tolerance a document can spell, and it does not rescue an infinity: finiteness is judged BEFORE tolerance."
+                },
+                {
+                    "assertion_idx": 5,
+                    "variable": "neg",
+                    "actual_class": "-inf",
+                    "passed": false,
+                    "note": "-Inf against a negative expected: the sign agrees and the verdict is still FAIL."
+                },
+                {
+                    "assertion_idx": 6,
+                    "variable": "nanv",
+                    "actual_class": "nan",
+                    "passed": false,
+                    "note": "CONTROL, correct in every binding before this tier existed: NaN fails because every IEEE comparison with NaN is false."
+                },
+                {
+                    "assertion_idx": 7,
+                    "variable": "fin",
+                    "actual_class": "finite",
+                    "passed": true,
+                    "actual": 1e+200,
+                    "note": "NON-VACUITY: a finite actual equal to its expected still PASSES. A binding that failed everything would fail here."
+                },
+                {
+                    "assertion_idx": 8,
+                    "variable": "fin",
+                    "actual_class": "finite",
+                    "passed": false,
+                    "actual": 1e+200,
+                    "note": "NON-VACUITY, the other way: a finite actual far from its expected still FAILS."
+                }
+            ]
+        }
+    ]
+}
