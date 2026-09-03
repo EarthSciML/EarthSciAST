@@ -500,16 +500,19 @@ fn the_shared_rejection_corpus_agrees_on_code_and_path() {
         let want_code = case["expected_code"].as_str().expect("expected_code");
         let want_path = case["expected_path"].as_str().expect("expected_path");
         let doc = case["document"].to_string();
-        // A corpus document must LOAD. A case that stopped parsing would make
-        // every assertion below vacuous, and the failure would read as a
-        // missing code rather than as a broken fixture.
-        let file = load_string(&doc).unwrap_or_else(|e| panic!("{id}: document must parse: {e}"));
-        let report = earthsci_ast::validate(&file);
-        // …and must be SCHEMA-valid. Each case is illegal for exactly one
-        // reason — the recurrence rule — and a document that drifted
-        // schema-invalid would be rejected for a shape error instead, passing
-        // an `is_valid == false` style check while testing nothing about this
-        // construct.
+        // `validate_text`, NOT `validate(&file)`. The latter takes an already-
+        // loaded `EsmFile`, which can only exist by having come through a
+        // schema-validating loader — its own docs say `schema_errors` is
+        // "always empty for this function" — so the schema guard below would
+        // have passed vacuously forever, which is exactly the failure mode the
+        // guard exists to prevent. (Caught by the Go binding's author reading
+        // the entry point's contract rather than its name; the first version of
+        // this test had the vacuous form.)
+        let report = earthsci_ast::validate_text(&doc, None);
+        // Each case is illegal for exactly ONE reason — the recurrence rule. A
+        // document that drifted schema-invalid would be rejected for a shape
+        // error instead, satisfying an "it was rejected" check while testing
+        // nothing about this construct.
         assert!(
             report.schema_errors.is_empty(),
             "{id}: the corpus document must be schema-valid so the finding under \
@@ -527,8 +530,16 @@ fn the_shared_rejection_corpus_agrees_on_code_and_path() {
         // the self-edge exemption on well-foundedness instead of candidacy
         // collapses every one of these to a whole-document error, and without
         // this assertion that reads as "some other code came back".
+        // `circular_dependency` is the code Rust could actually emit here;
+        // `load_error` is the cross-binding spelling, kept so the guard keeps
+        // its meaning if one is ever introduced (the Go binding names its own
+        // local analogue `validation_failed` alongside both). A binding
+        // asserting only on a code it cannot emit has written a comment, not a
+        // check.
         assert!(
-            !got.iter().any(|(c, _)| c == "load_error" || c == "circular_dependency"),
+            !got
+                .iter()
+                .any(|(c, _)| c == "load_error" || c == "circular_dependency"),
             "{id}: the recurrence diagnosis was pre-empted by a whole-document / cycle \
              error — gate the self-edge exemption on CANDIDACY, not on the \
              well-foundedness verdict (CONFORMANCE_SPEC §5.19.5); got {got:?}"
