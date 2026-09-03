@@ -73,6 +73,33 @@ export const ERROR_CODES = {
   //   axis to align to. Both shapes are declared, so this is static — a hard
   //   error, not a warning and not a runtime concern.
   ARRAY_SHAPE_MISMATCH: 'array_shape_mismatch',
+  // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
+  //   is not strictly earlier along exactly ONE of its aggregate's output axes:
+  //   a read provably at the same cell or later on its axis (`k`, `k+c`), an
+  //   index argument that is not affine in its frame symbol with coefficient 1
+  //   (a bare constant, `2*k`, another axis's symbol), an offset on more than
+  //   one axis, two self-reads disagreeing on the axis, or a BARE read of the
+  //   variable in its own RHS (which names the whole array, and the whole array
+  //   does not exist while the recurrence sweeps it).
+  //   Hard error in EVERY binding, executing or not (CONFORMANCE_SPEC §5.19.5):
+  //   this binding evaluates no array numerics, and rejection parity is the one
+  //   part of the construct it implements. The pre-1.0 behaviour was a
+  //   plausible WRONG NUMBER, which is why none of these is a warning.
+  RECURRENCE_NOT_WELLFOUNDED: 'recurrence_not_wellfounded',
+  // `recurrence_unsupported_form` — a causal self-read the format cannot
+  //   SEQUENCE, as opposed to one it can prove wrong (esm-spec §4.3.1.1). Two
+  //   shapes: the self-read is reachable only through a construct whose operand
+  //   is consumed WHOLE — a `makearray` region value, or a `reshape` /
+  //   `transpose` / `concat` / `broadcast` / `apply_expression_template` operand
+  //   — so no cell-by-cell sweep can supply it; or the equation declares no cell
+  //   frame to sweep (its RHS is not an `aggregate` over the variable's axes and
+  //   its LHS is not the §4.3 indexed-aggregate form).
+  //   The `makearray` case is worth naming separately because §4.3.2's overlap
+  //   rule ("later entries overwrite earlier ones") reads like a licence to
+  //   define cell `k` from cell `k-1`. It is not: region order fixes which write
+  //   WINS, not the order cells are EVALUATED in, and a region's value
+  //   expression is evaluated once for the whole region.
+  RECURRENCE_UNSUPPORTED_FORM: 'recurrence_unsupported_form',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that

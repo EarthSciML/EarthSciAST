@@ -118,6 +118,13 @@ type CadenceClassifier struct {
 	odeStates map[string]bool
 	brownian  map[string]bool
 	discrete  map[string]bool
+	// recurrenceSelfEdges holds every variable this model defines by a
+	// RECURRENCE CANDIDATE (esm-spec §4.3.1.1): an array-shaped unknown reading
+	// itself through `index` in its own RHS. The self-edge `V -> V` of such a
+	// definition is an ORDERING within one variable, not a dependency between
+	// two, so it is dropped from the observed dependency graph rather than
+	// reported as a cycle — see seedLeaf.
+	recurrenceSelfEdges map[string]bool
 }
 
 // NewCadenceClassifier builds the classifier for one model of a document. Pass
@@ -152,6 +159,9 @@ func NewCadenceClassifier(file *ESMFile, model *Model) *CadenceClassifier {
 	for _, n := range DiscreteParameters(model) {
 		c.discrete[n] = true
 	}
+	// Gated on CANDIDACY, not on the well-foundedness verdict — see
+	// isRecurrenceCandidate for why the intuitive gate destroys the diagnosis.
+	c.recurrenceSelfEdges = recurrenceCandidateVars(model, file)
 	return c
 }
 
@@ -215,6 +225,29 @@ func (c *CadenceClassifier) seedLeaf(leaf Expression, resolving []string) (Caden
 		// RHS, transitively and with a cycle guard. An ODE state or an algebraic
 		// unknown is CONTINUOUS.
 		if rhs, isObserved := c.observedDefs[name]; isObserved && !c.odeStates[name] {
+			// The RECURRENCE self-edge (esm-spec §4.3.1.1). A DIRECT self-reference
+			// inside `name`'s own definition — `resolving` ends at `name`, so we are
+			// walking that very RHS — is an ordering within one variable, not a
+			// dependency between two, and every binding drops it (Rust
+			// `dependency_order_observed` retains `n != self_name`;
+			// `classify_segment_invariant_observeds` does the same). Reporting it as
+			// a cycle rejected a LEGAL document, which CONFORMANCE_SPEC §5.19.5
+			// forbids as firmly as it forbids admitting an illegal one.
+			//
+			// CONST is the join identity (§5.7.1: CadenceConst ⊏ … and the join is
+			// max), so the dropped edge constrains nothing and the definition's other
+			// operands decide its class — exactly what removing the ref from the set
+			// achieves in the reference. Without this a state-free recurrence
+			// classified as non-static and was never hoisted.
+			//
+			// A cycle through two DISTINCT variables is NOT dropped: on `r -> z -> r`
+			// the walk meets `r` while resolving `z`, so `resolving` ends at `z` and
+			// the guard below still fires. Nor is a non-candidate self-mention — a
+			// bare `s ~ s + 1`, or a scalar `x ~ x + 1` — since neither reads itself
+			// through `index`.
+			if len(resolving) > 0 && resolving[len(resolving)-1] == name && c.recurrenceSelfEdges[name] {
+				return CadenceConst, nil
+			}
 			for _, r := range resolving {
 				if r == name {
 					return CadenceConst, &CadenceError{

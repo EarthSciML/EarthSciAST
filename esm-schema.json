@@ -353,7 +353,7 @@
         },
         "expr": {
           "$ref": "#/$defs/Expression",
-          "description": "For aggregate: the scalar body evaluated at each index point. May reference index symbols declared in output_idx as well as additional (contracted) index symbols. Mirrors SymbolicUtils.ArrayOp.expr."
+          "description": "For aggregate: the scalar body evaluated at each index point. May reference index symbols declared in output_idx as well as additional (contracted) index symbols. Mirrors SymbolicUtils.ArrayOp.expr. A causal SELF-REFERENCE is admitted here and nowhere else: when this aggregate is the right-hand side of the equation that defines an array-shaped unknown V, the body may read `index(V, k - c)` — V itself, at a strictly earlier position along ONE of this node's output axes — and V is then materialized cell by cell, that axis outermost and ascending, each cell published before the axis advances. That is the format's only spelling for a recurrence; no `scan` / `fold` / `recur` operator exists and a binding MUST NOT add one. The recurrence, its axis and its maximum lag are all DERIVED from the read, so nothing is declared and this schema gains no field: what makes a self-read legal is a constraint between this node and the equation containing it, which JSON Schema cannot express, so it is enforced by structural validation (`recurrence_not_wellfounded`, `recurrence_unsupported_form`). See esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19, and docs/content/rfcs/causal-self-reference-recurrence.md."
         },
         "reduce": {
           "type": "string",
@@ -1692,7 +1692,7 @@
             "Float32",
             "Float64"
           ],
-          "description": "Floating-point precision of THIS variable and of the arithmetic over it, overriding the document-wide `domain.element_type` (esm-spec \u00a711.3.1). It exists for the key/quantity split one document-wide precision cannot express: a relational model whose floating-point QUANTITIES are binary32 still has join keys and integer identifiers binary32 cannot represent (an SCC code is ~2.26e9, 135x binary32's exact-integer limit of 2^24), so the keys declare `Float64` while the quantities follow the document. Precision propagates from the leaves: an operator evaluates at its operands' precision, a numeric literal adopts its context's, and an operator whose operands carry DIFFERENT precisions is an error naming both variables \u2014 never a silent widening. Omitted means the document's `domain.element_type`."
+          "description": "Floating-point precision of THIS variable and of the arithmetic over it, overriding the document-wide `domain.element_type` (esm-spec §11.3.1). It exists for the key/quantity split one document-wide precision cannot express: a relational model whose floating-point QUANTITIES are binary32 still has join keys and integer identifiers binary32 cannot represent (an SCC code is ~2.26e9, 135x binary32's exact-integer limit of 2^24), so the keys declare `Float64` while the quantities follow the document. Precision propagates from the leaves: an operator evaluates at its operands' precision, a numeric literal adopts its context's, and an operator whose operands carry DIFFERENT precisions is an error naming both variables — never a silent widening. Omitted means the document's `domain.element_type`."
         },
         "description": {
           "type": "string"

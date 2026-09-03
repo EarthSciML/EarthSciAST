@@ -65,7 +65,7 @@ include("testutils.jl")
         # `file://` URL, which is machine-specific; the resolved values are
         # pinned as repo-relative paths in
         # tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC
-        # §5.19) rather than as a golden here.
+        # §5.22) rather than as a golden here.
         "tests/valid/data_source_relative_url.esm" =>
             "esm-spec §8.2.1: a relative `source.url_template` resolves against the declaring file's directory",
         # §9.6.4 rule 3 eager template expansion / rule 5 `match`-only registry drop.

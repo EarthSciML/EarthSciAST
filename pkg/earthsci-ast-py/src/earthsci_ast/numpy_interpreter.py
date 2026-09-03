@@ -32,14 +32,15 @@ from __future__ import annotations
 import functools
 import os
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import numpy as np
 
-from . import broad_phase, op_registry
+from . import broad_phase, op_registry, recurrence
 from .cadence import Partition
 from .cadence import partition as _partition_model
+from .error_handling import RECURRENCE_NOT_WELLFOUNDED
 from .errors import EarthSciAstError
 from .esm_types import ARRAY_OPS, Expr, ExprNode
 from .expr_walk import any_child
@@ -171,6 +172,25 @@ class EvalContext:
     # Empty ⇒ no overlap gate can resolve, which is exactly the fail-closed
     # behaviour a document without one wants.
     var_index_sets: dict[str, str] = field(default_factory=dict)
+    # The partially materialized array of the recurrence currently sweeping, if
+    # any (esm-spec §4.3.1.1). An `index` gather whose operand names
+    # ``recur.name`` resolves HERE — before state, observed, parameters and
+    # loader inputs — because during the sweep the array exists nowhere else;
+    # and unlike every other gather channel it resolves FAIL-CLOSED, never
+    # falling back on the §5.5.5 zero ghost.
+    #
+    # ``None`` on every path in the runtime except the sweep itself, which is
+    # what makes the construct cost nothing for a document that does not use it:
+    # one ``is None`` test on the `index` fast path and one on each reordering
+    # array path's entry gate.
+    recur: Any = None
+    # Per-variable declared ``element_type`` (esm-spec §11.3.1), keyed by the
+    # flattened variable name; a name absent here follows the document's. Read
+    # by the recurrence sweep, whose carried value is a cell of the variable
+    # being defined and so must be rounded to that variable's precision at EVERY
+    # cell of the fold (CONFORMANCE_SPEC §5.19.3a). Empty ⇒ no variable declares
+    # its own precision, which is every document that does not say otherwise.
+    element_types: dict[str, str] = field(default_factory=dict)
 
 
 def ragged_factor_scope(
@@ -291,6 +311,17 @@ def _resolve_symbol(name: str, ctx: EvalContext) -> float | np.ndarray:
         return v if isinstance(v, np.ndarray) else float(v)
     if name == "t":
         return float(ctx.t)
+    # A BARE read of the array a recurrence is sweeping (esm-spec §4.3.1.1
+    # rejection 4). The structural validator refuses this, so reaching it means
+    # the document bypassed validation; fail closed rather than let the name fall
+    # through to a stale observed entry or to an unresolved-symbol error that
+    # would read like a missing variable.
+    if ctx.recur is not None and ctx.recur.name == name:
+        raise NumpyInterpreterError(
+            f"E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence "
+            f"definition — the whole array does not exist during the sweep. Read it through "
+            f"`index` at a strictly earlier position instead (esm-spec §4.3.1.1)."
+        )
     # A materialized derived ring (RFC §8.1): an `intersect_polygon` node id
     # resolves to its CLOSED clip ring so a `polygon_area` FAQ body can
     # `index(<id>, v, c)` into the overlap vertices.
@@ -974,6 +1005,17 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
         if len(expr.args) != 3:
             raise NumpyInterpreterError("ifelse expects 3 args")
         cond = eval_expr(expr.args[0], ctx)
+        # Inside a recurrence body a SCALAR-conditioned `ifelse` evaluates ONLY
+        # the selected branch (esm-spec §4.3.1.1). This is required, not an
+        # optimization: it is what keeps a guarded self-read from being evaluated
+        # at the first cell, where the base case is taken and the lagged position
+        # has not been published — and an unpublished self-read is a fault, not a
+        # value, precisely so a wrong number cannot be laundered out of one. Gated
+        # on ``ctx.recur`` so every other document keeps the eager, whole-array
+        # form its stencil bodies rely on.
+        if ctx.recur is not None and np.ndim(cond) == 0:
+            taken = expr.args[1] if float(cond) != 0.0 else expr.args[2]
+            return eval_expr(taken, ctx)
         a = eval_expr(expr.args[1], ctx)
         b = eval_expr(expr.args[2], ctx)
         return _apply_ifelse(cond, a, b)
@@ -1127,11 +1169,20 @@ def _build_compiled_node(expr: ExprNode) -> Callable[[EvalContext], Any]:
             return _compile_delegate(expr)  # eval_expr raises the arity error
         arr_c = _compile_expr(args[0])
         idx_c = [_compile_expr(a) for a in args[1:]]
+        # The array operand's NAME, kept alongside its compiled closure so a
+        # causal self-read takes the same fail-closed path here as in the tree
+        # walker (esm-spec §4.3.1.1). A compiled closure is cached on the node
+        # and so cannot know which context will run it; the test is therefore
+        # per call, and is one ``is None`` for every document with no recurrence.
+        arr_name = args[0] if isinstance(args[0], str) else None
         if not idx_c:
             return lambda ctx: _gather_index(arr_c(ctx), [])
 
         def f_index(ctx):
-            return _gather_index(arr_c(ctx), [c(ctx) for c in idx_c])
+            idxs = [c(ctx) for c in idx_c]
+            if ctx.recur is not None and arr_name == ctx.recur.name:
+                return ctx.recur.read(idxs)
+            return _gather_index(arr_c(ctx), idxs)
 
         return f_index
 
@@ -1432,6 +1483,15 @@ def _gather_index(
 def _eval_index(expr: ExprNode, ctx: EvalContext) -> float | np.ndarray:
     if not expr.args:
         raise NumpyInterpreterError("index requires at least 1 arg (the array)")
+    # A CAUSAL SELF-READ (esm-spec §4.3.1.1), checked before every other channel
+    # and before the array operand is evaluated at all: during the sweep the
+    # array being defined exists nowhere else, so evaluating `args[0]` would only
+    # find the bare-read fault. Unlike every other gather this one FAILS CLOSED
+    # out of range instead of resolving to the §5.5.5 zero ghost. ``ctx.recur``
+    # is ``None`` on every path but a recurrence sweep, so this costs every other
+    # document one ``is None`` test.
+    if ctx.recur is not None and expr.args[0] == ctx.recur.name:
+        return ctx.recur.read([eval_expr(a, ctx) for a in expr.args[1:]])
     arr_val = eval_expr(expr.args[0], ctx)
     idxs = [eval_expr(a, ctx) for a in expr.args[1:]]
     return _gather_index(arr_val, idxs)
@@ -2231,6 +2291,31 @@ def _eval_arrayop(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     # the O(nq·nc) broad phase is built once (in the driven scalar path) rather
     # than once per declining fast path.
     overlap_gated = _join_has_overlap(expr)
+
+    # A recurrence sweep declines EVERY reordering / batching path below
+    # (CONFORMANCE_SPEC §5.19.2). The cells of a recurrence are not independent,
+    # so there is no equivalence to appeal to: a whole-array overlay, a fused or
+    # tiled kernel, a parallel-prefix accumulation or a batched leaf computes
+    # something else, and a reassociation of the body is a different number in
+    # binary floating point. The scalar per-cell evaluator is the only path whose
+    # term order is §4.3.1's, so it is the only one a recurrence may take —
+    # including for a nested aggregate INSIDE a recurrence body, which reads the
+    # partially built array just as the outer body does. A ragged contraction
+    # keeps its own (already per-output-cell, non-reordering) path below.
+    if ctx.recur is not None and not ragged_reduce:
+        return _eval_arrayop_scalar(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
+        )
 
     # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
     # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
@@ -3933,3 +4018,247 @@ def expr_contains_array_op(expr: Expr) -> bool:
             return True
         return any_child(expr, expr_contains_array_op)
     return False
+
+
+# ===========================================================================
+# Causal self-reference (recurrence) along one index axis — esm-spec §4.3.1.1
+# ===========================================================================
+#
+# The one construct in the array runtime whose output cells are NOT
+# independent, which is why it gets its own driver instead of sharing the
+# per-cell arrayop walk: the recurrence axis must be the outer loop, each cell
+# must be published before the axis advances, and no reordering / batching path
+# may touch it (CONFORMANCE_SPEC §5.19.2). Recognition and well-foundedness live
+# in :mod:`earthsci_ast.recurrence`, shared with the load-time validator.
+
+
+class _RecurScope:
+    """The partially materialized array of a sweeping recurrence.
+
+    ``written`` is not redundant with the axis bounds. A read is admitted only
+    when the cell it names has ALREADY been published, which the bounds alone
+    cannot decide (a body may compute its index from a contracted symbol whose
+    lag straddles zero). An unwritten or out-of-range read is FAIL-CLOSED
+    (CONFORMANCE_SPEC §5.19.4) — never the §5.5.5 zero ghost, and never a bare
+    NaN either: a recurrence feeds itself, so one substituted zero propagates
+    along the whole axis, and a ``max(x, 0)`` in the body would launder even a
+    NaN sentinel back into a plausible number.
+    """
+
+    __slots__ = ("name", "origin", "cells", "written", "_round")
+
+    def __init__(
+        self,
+        name: str,
+        ranges: list[tuple[int, int]],
+        round_fn: Callable[[float], float],
+    ) -> None:
+        self.name = name
+        self.origin = [lo for lo, _ in ranges]
+        shape = tuple(max(hi - lo + 1, 0) for lo, hi in ranges)
+        self.cells = np.zeros(shape, dtype=float)
+        self.written = np.zeros(shape, dtype=bool)
+        self._round = round_fn
+
+    def _flat(self, one_based: Sequence[float]) -> tuple[int, ...] | None:
+        """``one_based`` (a cell's declared coordinates) as a 0-based tuple, or
+        ``None`` when the position lies outside the cell frame."""
+        if len(one_based) != self.cells.ndim:
+            return None
+        out: list[int] = []
+        for d, raw in enumerate(one_based):
+            i = int(round(float(raw))) - self.origin[d]
+            if i < 0 or i >= self.cells.shape[d]:
+                return None
+            out.append(i)
+        return tuple(out)
+
+    def publish(self, one_based: Sequence[int], value: float) -> None:
+        """Publish one cell so later cells may read it.
+
+        Rounded to the ACTIVE working precision BEFORE it is stored, not only
+        when the finished array is handed back (CONFORMANCE_SPEC §5.19.3a). The
+        carried state is a cell of the variable being defined, so it carries
+        that variable's ``element_type`` — and for a ``Float32`` document that
+        has to hold at every step of the fold, exactly as it does in the
+        ``real*4`` reference this construct exists to reproduce. Carrying
+        binary64 partials and narrowing on the way out would run the fold at a
+        precision the document did not declare and silently beat the reference
+        it is checked against.
+        """
+        pos = self._flat(one_based)
+        if pos is None:  # pragma: no cover — the sweep only visits real cells
+            return
+        self.cells[pos] = self._round(value)
+        self.written[pos] = True
+
+    def read(self, one_based: Sequence[float]) -> float:
+        """One PUBLISHED cell, or raise ``E_TREEWALK_RECUR_UNAVAILABLE``."""
+        pos = self._flat(one_based)
+        if pos is None or not self.written[pos]:
+            at = ",".join(str(int(round(float(i)))) for i in one_based)
+            raise NumpyInterpreterError(
+                f"E_TREEWALK_RECUR_UNAVAILABLE: causal self-read of '{self.name}' at cell "
+                f"[{at}] is not available — the position is outside the recurrence axis, or "
+                f"the sweep has not published that cell yet (esm-spec §4.3.1.1; "
+                f"CONFORMANCE_SPEC.md §5.19.4: a causal self-read is fail-closed, never the "
+                f"§5.5.5 zero ghost and never a NaN a `max(x, 0)` could launder). Guard the "
+                f"base case inside the body, e.g. `ifelse(k <= 1, <base>, <recurrence>)`."
+            )
+        # Rounded on the way out as well as on the way in, so a `Float32`
+        # document's body sees a binary32 operand rather than one that merely
+        # happened to be stored narrow.
+        return self._round(float(self.cells[pos]))
+
+    def finish(self) -> np.ndarray:
+        return self.cells
+
+
+def _f32_round(v: float) -> float:
+    """One value at binary32 working precision, carried in the f64 container.
+
+    Widening f32→f64 is exact, so the container is invisible; what changes is
+    that every stored and every read-back value is exactly representable in
+    binary32 (esm-spec §11.3.1)."""
+    return float(np.float32(v))
+
+
+def _identity_round(v: float) -> float:
+    return float(v)
+
+
+def rounding_for_element_type(element_type: str | None) -> Callable[[float], float]:
+    """The working-precision rounding of a declared ``element_type``.
+
+    ``Float64`` (and an absent declaration) is the default and takes the
+    identical code path it took before this existed, so its results are
+    bit-unchanged by construction rather than by testing."""
+    return _f32_round if element_type == "Float32" else _identity_round
+
+
+def _recurrence_axis_ranges(
+    rec: Any,
+    frame_ranges: dict[str, Any],
+    ctx: EvalContext,
+) -> list[tuple[int, int]]:
+    """The frame's per-axis ``(lo, hi)``, checked sweepable.
+
+    A UNIT-STEP ascending interval specifically, and nothing looser: a strided
+    axis has no unambiguous "previous position", and a ragged / derived /
+    unresolved axis carries no static total order to fold along at all. This is
+    the one check the EVALUATOR makes and the validator does not — the validator
+    sees ranges before they are resolved against the registry, so it would only
+    be guessing (esm-spec §4.3.1.1 rejection 6)."""
+    out: list[tuple[int, int]] = []
+    for name in rec.idx_names:
+        vals = _recurrence_dense_range(frame_ranges.get(name), ctx)
+        if vals is None or vals != list(range(vals[0], vals[-1] + 1)):
+            raise recurrence.RecurrenceError(
+                RECURRENCE_NOT_WELLFOUNDED,
+                f"axis '{name}' of the recurrence definition of '{rec.var}' is not a static "
+                f"unit-step ascending interval. A ragged, derived, strided or unresolved axis "
+                f"carries no total order to fold along (esm-spec §4.3.1.1).",
+            )
+        out.append((vals[0], vals[-1]))
+    return out
+
+
+def _recurrence_dense_range(spec: Any, ctx: EvalContext) -> list[int] | None:
+    """One range spec expanded to its dense 1-based values, or ``None`` when it
+    cannot be resolved statically (ragged, derived-but-unmaterialized, absent).
+
+    Feeds both the lag-bound derivation (where an unresolvable symbol makes a lag
+    UNPROVABLE, hence admitted and left to the fail-closed read) and the axis
+    check above (where it is fatal)."""
+    if spec is None:
+        return None
+    try:
+        resolved = _resolve_range_spec(spec, ctx)
+    except NumpyInterpreterError:
+        return None
+    if isinstance(resolved, _RaggedRange):
+        return None
+    try:
+        vals = _expand_range(resolved)
+    except (TypeError, ValueError):
+        return None
+    return vals or None
+
+
+def sweep_recurrence(
+    var: str,
+    rhs: Expr,
+    ctx: EvalContext,
+    element_type: str | None = None,
+) -> np.ndarray | None:
+    """Materialize ``var`` from a recurrence definition, or ``None``.
+
+    ``None`` means ``rhs`` contains no causal self-read of ``var``, so the caller
+    evaluates it exactly as it did before this construct existed. Raises
+    :class:`~earthsci_ast.recurrence.RecurrenceError` for a self-read that is not
+    well founded and :class:`NumpyInterpreterError` (with
+    ``E_TREEWALK_RECUR_UNAVAILABLE``) for one the sweep cannot resolve.
+
+    The order is the whole point of the construct, so it is fixed (esm-spec
+    §4.3.1.1 "Evaluation order"): the recurrence axis is the OUTERMOST loop,
+    ascending; the remaining axes iterate inside it, ascending, in ``output_idx``
+    order; and each cell is published before the axis advances, so a later
+    cell's self-read observes the value the sweep already wrote.
+    """
+
+    # A cheap necessary condition first: an equation whose RHS never mentions the
+    # variable it defines cannot be a recurrence, and this is the test every
+    # ordinary observed pays (memoized on the node) instead of a full walk.
+    if not recurrence.mentions(rhs, var):
+        return None
+
+    def bounds(spec: Any) -> tuple[int, int] | None:
+        vals = _recurrence_dense_range(spec, ctx)
+        return None if vals is None else (vals[0], vals[-1])
+
+    rec = recurrence.analyze_recurrence(
+        var, var, rhs, symbol_bounds=bounds, require_static_axis=True
+    )
+    if rec is None:
+        return None
+
+    frame = rec.frame_node
+    frame_ranges = frame.ranges if isinstance(frame.ranges, dict) else {}
+    ranges = _recurrence_axis_ranges(rec, frame_ranges, ctx)
+    body = recurrence.cell_restricted_body(
+        frame,
+        rec.idx_names,
+        lambda fields: replace(frame, **fields),
+    )
+
+    scope = _RecurScope(var, ranges, rounding_for_element_type(element_type))
+    axis = rec.axis
+    # Every axis EXCEPT the recurrence axis forms the inner product. Cells
+    # sharing a recurrence coordinate cannot read one another — every self-read
+    # is strictly earlier on that axis — so their relative order cannot change a
+    # value; it is fixed anyway (`output_idx` order, ascending), so nothing about
+    # the result is left to an implementation.
+    inner_axes = [d for d in range(len(ranges)) if d != axis]
+    inner_values = [list(range(ranges[d][0], ranges[d][1] + 1)) for d in inner_axes]
+
+    prev_locals = dict(ctx.locals)
+    prev_recur = ctx.recur
+    ctx.recur = scope
+    try:
+        cell = [lo for lo, _ in ranges]
+        for i in range(ranges[axis][0], ranges[axis][1] + 1):
+            cell[axis] = i
+            ctx.locals[rec.idx_names[axis]] = i
+            for combo in _cartesian(inner_values) if inner_axes else [()]:
+                for d, v in zip(inner_axes, combo):
+                    cell[d] = int(v)
+                    ctx.locals[rec.idx_names[d]] = int(v)
+                value = _require_real(eval_expr(body, ctx), f"recurrence body of '{var}'")
+                # Published BEFORE the axis advances, which IS the construct:
+                # the next cell's self-read must observe this value.
+                scope.publish(cell, float(value))
+    finally:
+        ctx.recur = prev_recur
+        ctx.locals.clear()
+        ctx.locals.update(prev_locals)
+    return scope.finish()

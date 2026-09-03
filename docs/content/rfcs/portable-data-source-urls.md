@@ -193,7 +193,7 @@ deleted.
 
 ## Conformance
 
-Normatively: `esm-spec.md` §8.2.1 states the rule, `CONFORMANCE_SPEC.md` §5.19
+Normatively: `esm-spec.md` §8.2.1 states the rule, `CONFORMANCE_SPEC.md` §5.22
 states what is compared and why `bindings_required` is all five, and
 `ESM_COMPLIANCE_VALIDATION_MATRIX.md` carries it as FORMAT-08-A-002a/b and
 BEHAV-08-B.

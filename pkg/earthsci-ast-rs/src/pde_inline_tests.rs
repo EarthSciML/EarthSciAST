@@ -376,12 +376,39 @@ pub fn resolve_tolerance(
     }
 }
 
-/// Julia `isapprox` semantics: `|a − e| ≤ max(atol, rtol·max(|a|, |e|))`
-/// (exact equality when both tolerances are zero) — the same pass predicate
-/// the Julia / Python `run_pde_tests` use.
+/// Julia `isapprox` semantics: `actual == expected`, or both values FINITE and
+/// `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same pass predicate the
+/// Julia / Python `run_pde_tests` use (esm-spec §6.6.3, CONFORMANCE_SPEC §5.20).
+///
+/// **Finiteness is judged BEFORE tolerance**, and that clause is not a
+/// corollary of the bound — it contradicts it. With `actual = ±inf` both sides
+/// of `|actual − expected| ≤ max(atol, rtol·max(|actual|, |expected|))` are
+/// `inf`, so the comparison held for EVERY finite `expected`: an assertion on
+/// an overflowed product, a division by a zero denominator or a `log(0)`
+/// reported PASS whatever it expected, and a document that computed nothing
+/// meaningful went green. NaN never had the problem (every IEEE-754 comparison
+/// with NaN is false), which is why the hole was specific to an infinity. This
+/// is what Julia's `isapprox` has always done —
+/// `x == y || (isfinite(x) && isfinite(y) && …)` — and what this
+/// re-implementation of it dropped.
+///
+/// `actual == expected` keeps the one case a non-finite value legitimately
+/// matches: the SAME infinity, with the same sign. A `.esm` document cannot
+/// spell an infinite `expected` (JSON has no infinite literal), so within a
+/// document the rule reduces to "a non-finite actual always fails"; the
+/// equality clause governs an API caller. It also keeps the zero-tolerance
+/// exact-equality mode, and `-0.0 == 0.0` under IEEE-754, so a signed zero is
+/// unaffected.
 pub fn check_assertion(actual: f64, expected: f64, rtol: f64, atol: f64) -> bool {
+    if actual == expected {
+        return true;
+    }
+    if !actual.is_finite() || !expected.is_finite() {
+        return false;
+    }
     if rtol == 0.0 && atol == 0.0 {
-        return actual == expected;
+        // Exact-equality mode; the equality above already answered it.
+        return false;
     }
     (actual - expected).abs() <= f64::max(atol, rtol * f64::max(actual.abs(), expected.abs()))
 }
@@ -505,6 +532,48 @@ fn observed_field(
         })
         .collect();
     Some((field, cells))
+}
+
+/// A §6.6.3 POINTWISE assertion's value when the variable has no trajectory
+/// row: the STATE-FREE SCALAR OBSERVED of that name, read from the
+/// [`BuildInspection`]'s materialized fields. The 0-D twin of
+/// [`observed_field`], with the same two guards — the variable must be an
+/// OBSERVED (derived from the equations, esm-spec §6.3.1, never a state or a
+/// parameter) and its field must be one the build actually materialized — so a
+/// variable the build never bound is `None`, and the caller reports it, rather
+/// than reading a plausible zero out of an unbound slot.
+///
+/// Declared 0-D only. An array-shaped variable's field belongs to
+/// [`observed_field`], which enumerates its cells; a pointwise assertion on one
+/// is ill-formed per §6.6.5 and must not silently collapse to its first cell.
+/// Both key spellings are accepted, because the two field maps are keyed
+/// differently: the build pipeline by the selected model's own variable name,
+/// the state-free static evaluation by the flattened one.
+fn scalar_observed(
+    file: &EsmFile,
+    model_name: &str,
+    variable: &str,
+    insp: &BuildInspection,
+) -> Option<f64> {
+    let model = file.models.as_ref()?.get(model_name)?;
+    let v = model.variables.get(variable)?;
+    if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+        return None;
+    }
+    if !crate::classification::Classification::of(model).is_observed(variable) {
+        return None;
+    }
+    let qualified = format!("{model_name}.{variable}");
+    let arr = insp
+        .setup_arrays
+        .get(&qualified)
+        .or_else(|| insp.setup_arrays.get(variable))?;
+    // A 0-D field is stored rank-0 or as a single cell; anything else is not
+    // this variable's field and is not guessed at.
+    if arr.len() != 1 {
+        return None;
+    }
+    arr.iter().next().copied()
 }
 
 /// The asserted variable's declared spatial shape (ordered index-set names).
@@ -698,9 +767,23 @@ fn eval_assertion(
         return Err("`coords` and `reduce` are mutually exclusive".to_string());
     }
     if assertion.coords.is_none() && assertion.reduce.is_none() {
-        let slot = scalar_slot(&sol.state_variable_names, &assertion.variable, model_name)
-            .ok_or_else(|| format!("scalar state '{}' not found", assertion.variable))?;
-        return Ok(sol.state[slot][ti]);
+        if let Some(slot) = scalar_slot(&sol.state_variable_names, &assertion.variable, model_name)
+        {
+            return Ok(sol.state[slot][ti]);
+        }
+        // No trajectory row: a STATE-FREE SCALAR OBSERVED, read from the
+        // fields the build materialized — the 0-D twin of the array branch
+        // below, and the answer for a document with nothing to integrate at
+        // all (an ingesting one, whose whole content IS its build-time
+        // observed graph: `solve` legitimately refuses it and the trajectory
+        // carries no rows).
+        return scalar_observed(file, model_name, &assertion.variable, insp).ok_or_else(|| {
+            format!(
+                "scalar state or state-free scalar observed '{}' not found \
+                 (the build materialized neither)",
+                assertion.variable
+            )
+        });
     }
     // `coords` validation runs BEFORE field materialization so a coords
     // assertion on a scalar variable fails with the §6.6.5 coords-specific
@@ -829,6 +912,50 @@ pub fn ephemeral_injected_file(
     crate::parse::load_string_with_options(&text, &options)
 }
 
+/// The [`SolveOptions::output_observed`] request one test needs: the OBSERVED
+/// variables its POINTWISE assertions (neither `coords` nor `reduce`) read, in
+/// both the local and the model-qualified spelling, deduplicated in first-seen
+/// order.
+///
+/// Kept to exactly what will be read, because naming something here is not
+/// free: on the scalar backend it walks the observed graph over the output grid
+/// (`crate::problem::observed_trajectories`). So a declared variable that is
+/// NOT an observed — a state, whose row the trajectory already carries, or a
+/// parameter — is left out, and so is an ARRAY-shaped one, whose field is
+/// [`observed_field`]'s business and which would otherwise materialize a row
+/// per cell of a field that branch reads whole. A name this component does not
+/// declare at all — a §6.6.3 scoped reference into a subsystem — is kept as a
+/// best effort: its class is not knowable here, and a name resolving to no
+/// observed is dropped downstream.
+fn pointwise_observed_requests(
+    file: &EsmFile,
+    model_name: &str,
+    t: &crate::types::ModelTest,
+) -> Vec<String> {
+    let model = file.models.as_ref().and_then(|ms| ms.get(model_name));
+    let class = model.map(crate::classification::Classification::of);
+    let mut out: Vec<String> = Vec::new();
+    for a in &t.assertions {
+        if a.coords.is_some() || a.reduce.is_some() {
+            continue;
+        }
+        if let Some(v) = model.and_then(|m| m.variables.get(a.variable.as_str())) {
+            if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+                continue;
+            }
+            if !class.as_ref().is_some_and(|c| c.is_observed(&a.variable)) {
+                continue;
+            }
+        }
+        for spelling in [a.variable.clone(), format!("{model_name}.{}", a.variable)] {
+            if !out.contains(&spelling) {
+                out.push(spelling);
+            }
+        }
+    }
+    out
+}
+
 /// Record `message` as an ERROR verdict for EVERY assertion of `t`.
 ///
 /// A failure that happens BEFORE any assertion can be evaluated — the per-test
@@ -950,6 +1077,20 @@ fn run_model_tests(
         times.dedup();
         let mut run_opts = opts.clone();
         run_opts.saveat = Some(times);
+        // esm-spec §6.6.3: a POINTWISE assertion reads a scalar, and a scalar
+        // OBSERVED has no ODE slot. The array runtime exposes every 0-D
+        // observed as a trajectory row unasked; the SCALAR backend exposes only
+        // what the caller NAMES. So the runner names them — exactly the
+        // observeds this test's pointwise assertions read, and nothing else.
+        // Without this an algebraic scalar was unassertable in any component
+        // that carried no array (the model then takes the scalar backend, whose
+        // trajectory holds states only) and in any component that integrates.
+        for name in pointwise_observed_requests(run_file, model_name, t) {
+            // Additive: a caller's own request stands.
+            if !run_opts.output_observed.contains(&name) {
+                run_opts.output_observed.push(name);
+            }
+        }
         let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
         let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
         // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
@@ -993,27 +1134,22 @@ fn run_model_tests(
             push_test_error(results, model_name, t, model, &msg);
             continue;
         }
-        let ingesting = build_providers.is_some();
         let sim = esm_problem(run_file, (t.time_span.start, t.time_span.end), popts)
             .and_then(|prob| {
                 // The build pipeline's own products, which `observed_field`
                 // reads back for a §6.6.5 array assertion. Taken BEFORE the
                 // solve so a state-free document — whose `solve` is a legitimate
                 // `NotDynamic` — still answers its assertions.
-                let fields: Vec<(String, ndarray::ArrayD<f64>)> = if ingesting {
-                    prob.observed_fields()
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let fields: Vec<(String, ndarray::ArrayD<f64>)> = prob
+                    .observed_fields()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 let sol = match solve(&prob, &run_opts) {
                     Ok(sol) => sol,
-                    // A document with no ODEs never integrates; with providers
-                    // bound its answers are the build's, evaluated at the
-                    // asserted times.
-                    Err(crate::simulate::SimulateError::NotDynamic { .. }) if ingesting => {
+                    // A document with no ODEs never integrates; its answers are
+                    // the build's, evaluated at the asserted times.
+                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
                         build_only_solution(run_opts.saveat.clone().unwrap_or_default())
                     }
                     Err(e) => return Err(e),
@@ -1437,6 +1573,173 @@ mod tests {
         assert!(check_assertion(0.0, 1e-10, 0.0, 1e-9));
         assert!(check_assertion(2.0, 2.0, 0.0, 0.0)); // exact-equality mode
         assert!(!check_assertion(2.0, 2.0000001, 0.0, 0.0));
+    }
+
+    /// esm-spec §6.6.3: finiteness is judged BEFORE tolerance. Without the
+    /// guard `|inf − e| ≤ max(atol, rtol·max(inf, |e|))` is `inf ≤ inf`, and an
+    /// infinite actual passed against every expected value.
+    #[test]
+    fn check_assertion_judges_finiteness_before_tolerance() {
+        let inf = f64::INFINITY;
+        let nan = f64::NAN;
+        for (rtol, atol) in [(1e-9, 0.0), (0.0, 1e300), (1e-9, 1e300), (0.0, 0.0)] {
+            assert!(!check_assertion(inf, 42.0, rtol, atol));
+            assert!(!check_assertion(inf, -5.0, rtol, atol));
+            assert!(!check_assertion(inf, 0.0, rtol, atol));
+            assert!(!check_assertion(inf, f64::MAX, rtol, atol));
+            assert!(!check_assertion(-inf, -42.0, rtol, atol));
+            assert!(!check_assertion(nan, 0.0, rtol, atol));
+            assert!(!check_assertion(nan, nan, rtol, atol));
+            // A finite actual against an infinite expectation fails too.
+            assert!(!check_assertion(1e300, inf, rtol, atol));
+            // The one legitimate non-finite match: the same infinity.
+            assert!(check_assertion(inf, inf, rtol, atol));
+            assert!(check_assertion(-inf, -inf, rtol, atol));
+            assert!(!check_assertion(inf, -inf, rtol, atol));
+            assert!(!check_assertion(-inf, inf, rtol, atol));
+        }
+        // Signed zero is IEEE-equal, at every tolerance.
+        assert!(check_assertion(-0.0, 0.0, 0.0, 0.0));
+        assert!(check_assertion(-0.0, 0.0, 1e-9, 0.0));
+    }
+
+    /// esm-spec §6.6.3, finding F6: a component whose variables are ALL scalars
+    /// and whose equations are all algebraic has no state vector, and its
+    /// assertion used to ERROR with `scalar state 'answer' not found`.
+    /// Declaring one array-shaped variable anywhere in the same component made
+    /// the identical assertion pass, because the model then took the array
+    /// runtime, which exposes 0-D observeds as trajectory rows. Nothing about
+    /// an algebraic scalar depends on an array being nearby.
+    #[test]
+    fn scalar_only_component_is_assertable() {
+        let doc = json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "scalar_only"},
+            "models": {"ScalarOnly": {
+                "variables": {
+                    "input": {"type": "parameter", "units": "1", "default": 21.0},
+                    "answer": {"type": "unknown", "units": "1"},
+                },
+                "equations": [
+                    {"lhs": "answer", "rhs": {"op": "*", "args": [2.0, "input"]}},
+                ],
+                "tests": [{
+                    "id": "algebraic_scalar",
+                    "time_span": {"start": 0.0, "end": 0.0},
+                    "assertions": [
+                        {"variable": "answer", "time": 0.0, "expected": 42.0,
+                         "tolerance": {"rel": 1e-12}},
+                    ],
+                }],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("scalar-only doc loads");
+        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed, "{}", results[0].message);
+        assert_eq!(results[0].actual, Some(42.0));
+
+        // ...and the value is JUDGED, not merely produced: the same document
+        // with a wrong expectation must FAIL rather than error.
+        let mut wrong = doc.clone();
+        wrong["models"]["ScalarOnly"]["tests"][0]["assertions"][0]["expected"] = json!(41.0);
+        let file = load_string(&wrong.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        assert!(!results[0].passed);
+        assert_eq!(results[0].actual, Some(42.0));
+        assert!(
+            results[0].message.contains("actual=42"),
+            "a wrong expectation must be a FAIL naming the value, got: {}",
+            results[0].message
+        );
+    }
+
+    /// The same hole in a component that DOES integrate: a scalar observed of a
+    /// scalar ODE model has no state slot either, and the runner now asks the
+    /// observed graph for it. The state assertion beside it is the control.
+    #[test]
+    fn scalar_observed_of_an_ode_component_is_assertable() {
+        let doc = json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "scalar_ode_observed"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "units": "1", "default": 1.0},
+                    "k": {"type": "parameter", "units": "1/s", "default": 0.5},
+                    "twice": {"type": "unknown", "units": "1"},
+                },
+                "equations": [
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                     "rhs": {"op": "*", "args": [-1.0, {"op": "*", "args": ["k", "u"]}]}},
+                    {"lhs": "twice", "rhs": {"op": "*", "args": [2.0, "u"]}},
+                ],
+                "tests": [{
+                    "id": "observed_along_the_trajectory",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        {"variable": "u", "time": 0.0, "expected": 1.0,
+                         "tolerance": {"rel": 1e-9}},
+                        {"variable": "twice", "time": 0.0, "expected": 2.0,
+                         "tolerance": {"rel": 1e-9}},
+                        {"variable": "twice", "time": 1.0,
+                         "expected": 1.2130613194252668,
+                         "tolerance": {"rel": 1e-8}},
+                    ],
+                }],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("ode doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 3);
+        for r in &results {
+            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+        }
+        // 2*exp(-0.5): the observed is read at the RIGHT time, not held at t=0.
+        let late = results[2].actual.expect("actual");
+        assert!(
+            (late - 2.0 * (-0.5f64).exp()).abs() <= 1e-8,
+            "observed at t=1 is {late}"
+        );
+    }
+
+    /// An unbound scalar must be DIAGNOSABLE, not a plausible zero: a pointwise
+    /// assertion on a name the build materialized nothing for is an ERROR
+    /// naming the variable.
+    #[test]
+    fn an_unmaterialized_scalar_assertion_is_an_error_not_a_zero() {
+        let doc = json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "scalar_missing"},
+            "models": {"ScalarOnly": {
+                "variables": {
+                    "input": {"type": "parameter", "units": "1", "default": 21.0},
+                    "answer": {"type": "unknown", "units": "1"},
+                },
+                "equations": [
+                    {"lhs": "answer", "rhs": {"op": "*", "args": [2.0, "input"]}},
+                ],
+                "tests": [{
+                    "id": "no_such_variable",
+                    "time_span": {"start": 0.0, "end": 0.0},
+                    "assertions": [
+                        {"variable": "ghost", "time": 0.0, "expected": 0.0},
+                    ],
+                }],
+            }},
+        });
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert_eq!(
+            results[0].actual, None,
+            "a missing scalar must not report a value"
+        );
+        assert!(
+            results[0].message.contains("ghost"),
+            "the diagnostic must name the variable, got: {}",
+            results[0].message
+        );
     }
 
     #[test]

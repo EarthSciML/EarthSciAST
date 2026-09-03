@@ -52,6 +52,7 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `PDE-simulation producer (julia/rust/python)` | reference-comparing (golden + analytic anchors) |
 | `full-pipeline PDE self-test` | reference-comparing (golden vs independent reference integrator) |
 | `full-pipeline PDE producer (julia/rust/python)` | reference-comparing (golden + independent reference) |
+| `recurrence` (`recurrence/`, driven by each binding's own suite) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
 
 ## Round-trip contract

@@ -1,0 +1,205 @@
+{
+  "category": "recurrence",
+  "version": "1.0",
+  "description": "Cross-port fixtures for the CAUSAL SELF-REFERENCE along one index axis (esm-spec 4.3.1.1, CONFORMANCE_SPEC 5.19): an equation defining an array-shaped unknown V whose defining `aggregate` body reads index(V, ...) at a strictly earlier position along one of that aggregate's output axes, materialized cell by cell with that axis outermost and ascending, each cell published before the axis advances.\n\nEXECUTING ports must simulate each fixture and match every inline assertion at ZERO tolerance (5.19.1: the sweep order is fixed and each cell is published before the axis advances, so the value is a fully determined function of the document exactly as a left fold is -- there is no reassociation left to choose, and a divergence is a defect rather than a floating-point fact).\n\nNON-EXECUTING ports must still VALIDATE all nine, and must reject the eight malformed shapes in rejections.json (5.19.5 rejection parity). Rejection parity cuts both ways: a binding whose cycle detector or trivial-DAE factoring treats a self-read as a cycle rejects a LEGAL document, which is the same defect as admitting an illegal one. A skip is a documented gap, not a pass.",
+  "pins": {
+    "tolerance": "zero (rel 0.0, abs 0.0) on every assertion of every fixture",
+    "order": "REQUIRED, not optional: 5.19.3 obliges this category to pin the arithmetic ORDER rather than an answer within a tolerance. The construct's textbook example is [1, 2, 4, 8], every value of which is exactly representable and several WRONG orders also reach, so a fixture set that stopped there would pass a binding that batched the cells, reassociated the body, or carried binary64 partials through a Float32 fold.",
+    "forbidden_strategies": "5.19.2 -- no whole-array, vectorized, fused, tiled, kernel-merged, parallel-prefix or otherwise reordered path may evaluate a recurrence. The cells are not independent, so a reordering computes something else. The O(N) running accumulation that 4.3.1 licenses for a forward prefix scan is NOT available here either: the per-lag weights differ, so no single carried value summarises the history."
+  },
+  "rejections": {
+    "path": "rejections.json",
+    "pinned": "(code, path) only -- never the diagnostic prose; see that file's `pinned` block",
+    "driven_by": [
+      "julia",
+      "typescript",
+      "python",
+      "rust",
+      "go"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "fixtures/recurrence/01_recurrence_doubling",
+      "path": "fixtures/recurrence/01_recurrence_doubling.esm",
+      "tags": [
+        "aggregate",
+        "causal-self-reference",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "The minimal construct. Pins the VALUE only \u2014 every number is exactly representable \u2014 so it is the fixtures beside it that pin the order. Base case is an `ifelse` guard INSIDE the body, which is the required spelling: a self-read of an unpublished cell is a fault, not a zero, so nothing else keeps the first cell from reading position 0."
+    },
+    {
+      "id": "fixtures/recurrence/02_recurrence_cancellation_ladder",
+      "path": "fixtures/recurrence/02_recurrence_cancellation_ladder.esm",
+      "tags": [
+        "order",
+        "catastrophic-cancellation",
+        "bit-identical",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "THE ORDER PIN. The ascending sweep is the left fold, [1e16, 1e16, 0, 1]; any reassociation or reordering reaches [1e16, 1e16, 1, 2]. A binding that batches or reorders these cells fails here rather than agreeing to a tolerance."
+    },
+    {
+      "id": "fixtures/recurrence/03_recurrence_multi_lag",
+      "path": "fixtures/recurrence/03_recurrence_multi_lag.esm",
+      "tags": [
+        "multi-lag",
+        "bounded-lag",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "Two LITERAL lags in one body. A single-step `acc[i] = f(acc[i-1], body[i])` accumulator cannot express this at all, so a binding implementing only that shape fails rather than passing on the subset it covers."
+    },
+    {
+      "id": "fixtures/recurrence/04_recurrence_banded_lag_fold",
+      "path": "fixtures/recurrence/04_recurrence_banded_lag_fold.esm",
+      "tags": [
+        "bounded-lag",
+        "symbol-lag",
+        "contraction",
+        "filter",
+        "clamp",
+        "order",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "A SYMBOL-valued lag under a banded filter, with a clamp inside the fold, and the IN-BODY reduction order pinned to the bit: r[3] is -1.0 folded ascending in `a` and -1.0000000000000002 folded from the high end. Catches a pairwise or reverse contraction."
+    },
+    {
+      "id": "fixtures/recurrence/05_recurrence_two_axes",
+      "path": "fixtures/recurrence/05_recurrence_two_axes.esm",
+      "tags": [
+        "rank-2",
+        "array-valued-state",
+        "sweep-order",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "Rank-2, folding along ONE axis and free in the other, so the carried state is a whole column \u2014 array-valued accumulator state with no extra machinery. Also pins the sweep order: recurrence axis outermost, free axis inside it."
+    },
+    {
+      "id": "fixtures/recurrence/06_recurrence_float32_state",
+      "path": "fixtures/recurrence/06_recurrence_float32_state.esm",
+      "tags": [
+        "element_type",
+        "float32",
+        "precision",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "The carried value is rounded to the variable's element_type at EVERY cell (\u00a75.19.3a). A binding that carries binary64 partials and narrows once at the end reaches 0.9999999999999999 \u2014 a BETTER answer than the real*4 reference this construct exists to reproduce, and the hardest kind of wrong to notice."
+    },
+    {
+      "id": "fixtures/recurrence/07_recurrence_thirty_eight_lags",
+      "path": "fixtures/recurrence/07_recurrence_thirty_eight_lags.esm",
+      "tags": [
+        "bounded-lag",
+        "symbol-lag",
+        "clamp",
+        "non-linear",
+        "independent-oracle",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "The real lag scale: 38 distinct lags with 38 distinct weights in ONE node, clamp firing at 19 of 40 cells and altering 38 of the 40 values. Defeats three cheaper designs at once \u2014 a literal-lag-only primitive (would need 38 authored terms), any single carried accumulator (the weights all differ), any linear closed form (the clamp). Expected values from an INDEPENDENT ascending fold in Python, not from running the document."
+    },
+    {
+      "id": "fixtures/recurrence/08_recurrence_parameter_valued_lag",
+      "path": "fixtures/recurrence/08_recurrence_parameter_valued_lag.esm",
+      "tags": [
+        "unprovable-lag",
+        "parameter-lag",
+        "validator-parity",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "A lag NOTHING static can bound (`s[k] = 3*s[k-n]`, n a parameter) must be ADMITTED. Catches a validator that treats 'unproven' as 'illegal' \u2014 it would reject a document its own evaluator accepts, which is the one validator/evaluator disagreement that is never defensible."
+    },
+    {
+      "id": "fixtures/recurrence/09_recurrence_through_expression_template",
+      "path": "fixtures/recurrence/09_recurrence_through_expression_template.esm",
+      "tags": [
+        "expression-templates",
+        "composition",
+        "recurrence"
+      ],
+      "executing_bindings": [
+        "python",
+        "rust"
+      ],
+      "skip_bindings": {
+        "julia": "Julia's array backend builds per-cell INDEPENDENT kernels and class-merges them, and the merge reorders cells -- which 5.19.2 forbids for this construct. Its only sequential-across-cells construct is the prefix scan's post-pass fold, whose combine step is a fixed combine(acc, du[slot]) rather than an evaluated expression, so a recurrence needs a compiled per-cell body evaluated inside the sweep loop plus an out-of-place mirror. Tracked as binding debt; Julia implements the VALIDATION half (5.19.5) and drives rejections.json.",
+        "typescript": "TypeScript binding has no arrayop numeric executor; validation and round-trip only.",
+        "go": "Go binding has no arrayop numeric executor; validation and round-trip only."
+      },
+      "notes": "A self-read reached through an `apply_expression_template` BINDING. Closes a hole rather than showing a feature: `apply_expression_template` is off the cell-restriction blocking list and no binding's self-read walk visits `bindings`, which sounds like a self-read could hide there and be evaluated as a gather on a name nothing binds. Measured: it cannot, because a template application is expanded AT LOAD (esm-spec 9.6.4). If a binding ever defers expansion past recognition, this is what fails."
+    }
+  ]
+}

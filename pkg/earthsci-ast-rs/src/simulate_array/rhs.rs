@@ -213,14 +213,18 @@ pub(super) fn scatter_col_major_offset(
 /// The target variable an observed algebraic rule defines.
 pub(super) fn observed_rule_var(rule: &AlgebraicRule) -> &String {
     match rule {
-        AlgebraicRule::Scalar { var, .. } | AlgebraicRule::ArrayLoop { var, .. } => var,
+        AlgebraicRule::Scalar { var, .. }
+        | AlgebraicRule::ArrayLoop { var, .. }
+        | AlgebraicRule::Recurrence { var, .. } => var,
     }
 }
 
 /// The defining body expression of an observed algebraic rule.
 pub(super) fn observed_rule_body(rule: &AlgebraicRule) -> &Expr {
     match rule {
-        AlgebraicRule::Scalar { body, .. } | AlgebraicRule::ArrayLoop { body, .. } => body,
+        AlgebraicRule::Scalar { body, .. }
+        | AlgebraicRule::ArrayLoop { body, .. }
+        | AlgebraicRule::Recurrence { body, .. } => body,
     }
 }
 
@@ -381,7 +385,9 @@ fn precision_of_rule(rule: &AlgebraicRule) -> Option<crate::precision::Precision
         return None;
     }
     let var = match rule {
-        AlgebraicRule::Scalar { var, .. } | AlgebraicRule::ArrayLoop { var, .. } => var,
+        AlgebraicRule::Scalar { var, .. }
+        | AlgebraicRule::ArrayLoop { var, .. }
+        | AlgebraicRule::Recurrence { var, .. } => var,
     };
     Some(crate::precision::enter(crate::precision::of_variable(var)))
 }
@@ -455,6 +461,70 @@ pub(super) fn materialize_observeds_pass(
                     }
                 }
                 dst.insert(var.clone(), arr);
+            }
+            // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
+            // output cells are NOT independent, so it gets its own arm rather
+            // than sharing the `ArrayLoop` per-cell walk: the recurrence axis
+            // must be the outer loop, each cell must be published before the
+            // axis advances, and neither the whole-array overlay nor the tape
+            // may touch it (CONFORMANCE_SPEC §5.19.2).
+            AlgebraicRule::Recurrence {
+                var,
+                output_idx_names,
+                output_ranges,
+                body,
+                axis,
+                max_lag: _,
+                lag_proven: _,
+            } => {
+                stats.obs_scalar_rules += 1;
+                let shape: DimU = output_ranges
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .collect();
+                let origin: DimI = output_ranges.iter().map(|(lo, _)| *lo).collect();
+                let scope = RecurScope::new(var.as_str(), shape, origin);
+                {
+                    // Every axis EXCEPT the recurrence axis forms the inner
+                    // product; the recurrence axis is swept outside it,
+                    // ascending. Cells sharing a recurrence coordinate cannot
+                    // read one another (every self-read is strictly earlier on
+                    // that axis), so their relative order is immaterial to the
+                    // values — it is fixed anyway, `output_idx` order ascending,
+                    // so nothing about the result is left to an implementation.
+                    let (lo, hi) = output_ranges[*axis];
+                    let inner_ranges: Vec<(i64, i64)> = output_ranges
+                        .iter()
+                        .enumerate()
+                        .filter(|(d, _)| *d != *axis)
+                        .map(|(_, r)| *r)
+                        .collect();
+                    let inner_axes: Vec<(usize, &String)> = output_idx_names
+                        .iter()
+                        .enumerate()
+                        .filter(|(d, _)| *d != *axis)
+                        .collect();
+                    let mut ctx = env.oracle_ctx(&*dst);
+                    ctx.recur = Some(&scope);
+                    let mut full = vec![0i64; output_ranges.len()];
+                    for i in lo..=hi {
+                        set_bind(&mut ctx.loop_binds, &output_idx_names[*axis], i);
+                        full[*axis] = i;
+                        let mut inner = CartesianTuples::new(&inner_ranges);
+                        while let Some(tuple) = inner.next() {
+                            for ((d, name), val) in inner_axes.iter().zip(tuple.iter()) {
+                                set_bind(&mut ctx.loop_binds, name, *val);
+                                full[*d] = *val;
+                            }
+                            let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
+                            // Published BEFORE the axis advances, which is the
+                            // whole construct: the next cell's self-read must
+                            // observe this value, not a default.
+                            scope.publish(&full, v);
+                        }
+                    }
+                }
+                dst.insert(var.clone(), scope.finish());
             }
             AlgebraicRule::ArrayLoop {
                 var,

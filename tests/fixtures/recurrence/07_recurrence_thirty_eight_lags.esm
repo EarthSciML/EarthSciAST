@@ -1,0 +1,560 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceThirtyEightLags",
+    "description": "The real lag scale, in ONE node. r[y] reads r at THIRTY-EIGHT distinct lags, each with its own weight P[a], under the banded filter a <= y-1, with a clamp max(r, 0) inside the fold.\n\nThis is the shape that made the format addition necessary rather than convenient. Three properties, each of which some cheaper design would have failed:\n\n1. THE LAG IS SYMBOL-VALUED. Thirty-eight lags are one `index(r, y - a)` with `a` contracted over [0, 38], not thirty-eight hand-written terms. A primitive admitting only a literal lag would have forced the generated, unfactored spelling.\n\n2. NO SCALAR ACCUMULATOR SUMMARISES THE HISTORY. The weights P[a] all differ, so there is no running value that could stand in for the previous thirty-eight answers -- which is exactly why the forward prefix scan of esm-spec 4.3.1, whose whole optimization is one carried accumulator, cannot express this and declines a body that reads its own output.\n\n3. THE CLAMP MAKES IT NON-LINEAR. max(r, 0) fires at 19 of the 40 cells (the residual goes negative at years 2, 3, 7, 9, 11, 13, ...), and it alters 38 of the 40 values relative to the same fold without it. So no linear closed form reproduces these numbers, and a Neumann-series expansion -- valid only where the clamp does not fire -- is wrong precisely here.\n\nThe expected values were computed by an INDEPENDENT reference: a direct ascending fold in Python, not by running this document. Zero tolerance.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "bounded-lag",
+      "symbol-lag",
+      "clamp",
+      "non-linear",
+      "independent-oracle"
+    ]
+  },
+  "index_sets": {
+    "years": {
+      "kind": "interval",
+      "size": 40
+    }
+  },
+  "models": {
+    "RecurrenceThirtyEightLags": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "r": {
+          "type": "unknown",
+          "shape": [
+            "years"
+          ],
+          "units": "1",
+          "description": "Residual sequence: a non-recurrent term less the clamped, per-lag-weighted sum of its own thirty-eight previous values."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "y"
+            ],
+            "reduce": "+",
+            "ranges": {
+              "y": {
+                "from": "years"
+              },
+              "a": [
+                0,
+                38
+              ]
+            },
+            "filter": {
+              "op": "<=",
+              "args": [
+                "a",
+                {
+                  "op": "-",
+                  "args": [
+                    "y",
+                    1
+                  ]
+                }
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "a",
+                    0
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        1.05,
+                        1.1,
+                        1.15,
+                        1.2,
+                        1.25,
+                        1.3,
+                        1.35,
+                        1.4,
+                        1.45,
+                        1.5,
+                        1.55,
+                        1.6,
+                        1.65,
+                        1.7,
+                        1.75,
+                        1.8,
+                        1.85,
+                        1.9,
+                        1.95,
+                        2.0,
+                        2.05,
+                        2.1,
+                        2.15,
+                        2.2,
+                        2.25,
+                        2.3,
+                        2.35,
+                        2.4,
+                        2.45,
+                        2.5,
+                        2.55,
+                        2.6,
+                        2.65,
+                        2.7,
+                        2.75,
+                        2.8,
+                        2.85,
+                        2.9,
+                        2.95,
+                        3.0
+                      ]
+                    },
+                    "y"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    -1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "max",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "r",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "y",
+                                    "a"
+                                  ]
+                                }
+                              ]
+                            },
+                            0.0
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                0.0,
+                                2.25,
+                                1.35,
+                                0.91125,
+                                0.6561,
+                                0.492075,
+                                0.379600714286,
+                                0.2989355625,
+                                0.23914845,
+                                0.1937102445,
+                                0.158490200045,
+                                0.130754415038,
+                                0.1086267448,
+                                0.09078092244,
+                                0.07625597485,
+                                0.06434097878,
+                                0.05450059379,
+                                0.046325504721,
+                                0.039498588236,
+                                0.033771292942,
+                                0.028946822522,
+                                0.024867952075,
+                                0.021408063091,
+                                0.018464454416,
+                                0.015953288615,
+                                0.013805730533,
+                                0.011964966462,
+                                0.010383881608,
+                                0.009023235052,
+                                0.007850214495,
+                                0.006837283593,
+                                0.005961256632,
+                                0.005202551243,
+                                0.004544581527,
+                                0.003973262706,
+                                0.003476604868,
+                                0.003044378317,
+                                0.002667836788,
+                                0.002339487645
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                "a",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "thirty_eight_lags_in_one_node",
+          "description": "All 40 cells, against an independent ascending-fold reference.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 1.05,
+              "coords": {
+                "years": 1
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -1.2625000000000002,
+              "coords": {
+                "years": 2
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.2675000000000003,
+              "coords": {
+                "years": 3
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.2431874999999999,
+              "coords": {
+                "years": 4
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.013923125000000147,
+              "coords": {
+                "years": 5
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.4236910937499999,
+              "coords": {
+                "years": 6
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.24228653906279987,
+              "coords": {
+                "years": 7
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.34189191640624983,
+              "coords": {
+                "years": 8
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.08525264496874968,
+              "coords": {
+                "years": 9
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.457901059077386,
+              "coords": {
+                "years": 10
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.2447115170541569,
+              "coords": {
+                "years": 11
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.397072675389364,
+              "coords": {
+                "years": 12
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.12006434579958901,
+              "coords": {
+                "years": 13
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.4958556633047492,
+              "coords": {
+                "years": 14
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.25117963100369367,
+              "coords": {
+                "years": 15
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.4515468907508029,
+              "coords": {
+                "years": 16
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.15254370542391546,
+              "coords": {
+                "years": 17
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.5361844605477583,
+              "coords": {
+                "years": 18
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.2606336923822507,
+              "coords": {
+                "years": 19
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.505074622381576,
+              "coords": {
+                "years": 20
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.18294617721232806,
+              "coords": {
+                "years": 21
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.5781709444407822,
+              "coords": {
+                "years": 22
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.2723668051771326,
+              "coords": {
+                "years": 23
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.5576624579507073,
+              "coords": {
+                "years": 24
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.21157947351983178,
+              "coords": {
+                "years": 25
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.6213821789058463,
+              "coords": {
+                "years": 26
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.28588306876624137,
+              "coords": {
+                "years": 27
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.60941376374518,
+              "coords": {
+                "years": 28
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.23874316262189524,
+              "coords": {
+                "years": 29
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.665532116640967,
+              "coords": {
+                "years": 30
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.3008146551291641,
+              "coords": {
+                "years": 31
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.6604538082203542,
+              "coords": {
+                "years": 32
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.26470093886126717,
+              "coords": {
+                "years": 33
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.7104169239899387,
+              "coords": {
+                "years": 34
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.31687828212381713,
+              "coords": {
+                "years": 35
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.7109021167907741,
+              "coords": {
+                "years": 36
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.2896753328112515,
+              "coords": {
+                "years": 37
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.755884108413216,
+              "coords": {
+                "years": 38
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -0.3338512018146796,
+              "coords": {
+                "years": 39
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.7630192556962501,
+              "coords": {
+                "years": 40
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

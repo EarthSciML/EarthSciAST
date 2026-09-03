@@ -1,0 +1,126 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceFloat32State",
+    "description": "CONFORMANCE_SPEC 5.19.3a: the carried value is rounded to the variable's element_type at EVERY cell, not only when the finished array is read back. s[1] = 0.1, s[k] = s[k-1] + 0.1 over ten steps, with s declared Float32.\n\nThe binary32 fold reaches s[10] = 1.0000001192092896 (the binary64 image of the binary32 value). A binding that carries binary64 partials through the fold and narrows once at the end reaches 0.9999999999999999 -- a BETTER answer than the real*4 reference this construct exists to reproduce, and the hardest kind of wrong to notice, since it looks right. Zero tolerance.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "element_type",
+      "float32",
+      "precision"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 10
+    }
+  },
+  "models": {
+    "RecurrenceFloat32State": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "element_type": "Float32",
+          "description": "Tenths accumulated in binary32."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                0.1,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    0.1
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "carried_state_is_binary32_at_every_step",
+          "description": "s[3] = 0.30000001192092896 and s[10] = 1.0000001192092896 -- the binary32 fold, not the binary64 0.30000000000000004 / 0.9999999999999999.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 0.30000001192092896,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 0.5,
+              "coords": {
+                "steps": 5
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0000001192092896,
+              "coords": {
+                "steps": 10
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

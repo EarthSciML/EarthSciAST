@@ -320,6 +320,7 @@ _MODEL_VARIABLE_SPEC = (
     ("description", "description", _OMIT_NONE, None),
     ("shape", "shape", _OMIT_NONE, list),
     ("location", "location", _OMIT_NONE, None),
+    ("element_type", "element_type", _OMIT_NONE, None),
     ("distribution", "distribution", _OMIT_NONE, _serialize_distribution),
     ("update", "update", _OMIT_NONE, _serialize_parameter_update_spec),
 )

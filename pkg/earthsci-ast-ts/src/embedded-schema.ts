@@ -370,7 +370,7 @@ export const schema: AnySchemaObject = {
         },
         "expr": {
           "$ref": "#/$defs/Expression",
-          "description": "For aggregate: the scalar body evaluated at each index point. May reference index symbols declared in output_idx as well as additional (contracted) index symbols. Mirrors SymbolicUtils.ArrayOp.expr."
+          "description": "For aggregate: the scalar body evaluated at each index point. May reference index symbols declared in output_idx as well as additional (contracted) index symbols. Mirrors SymbolicUtils.ArrayOp.expr. A causal SELF-REFERENCE is admitted here and nowhere else: when this aggregate is the right-hand side of the equation that defines an array-shaped unknown V, the body may read `index(V, k - c)` — V itself, at a strictly earlier position along ONE of this node's output axes — and V is then materialized cell by cell, that axis outermost and ascending, each cell published before the axis advances. That is the format's only spelling for a recurrence; no `scan` / `fold` / `recur` operator exists and a binding MUST NOT add one. The recurrence, its axis and its maximum lag are all DERIVED from the read, so nothing is declared and this schema gains no field: what makes a self-read legal is a constraint between this node and the equation containing it, which JSON Schema cannot express, so it is enforced by structural validation (`recurrence_not_wellfounded`, `recurrence_unsupported_form`). See esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19, and docs/content/rfcs/causal-self-reference-recurrence.md."
         },
         "reduce": {
           "type": "string",

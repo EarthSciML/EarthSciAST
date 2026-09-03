@@ -38,6 +38,7 @@
 import type { EsmFile, Expression, Model } from './types.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { forEachChild, isExprNode } from './expression.js'
+import { isRecurrenceCandidate } from './recurrence.js'
 import {
   odeStates,
   observedUnknowns,
@@ -89,6 +90,13 @@ export class CadenceSeeder {
   private readonly memo = new Map<string, CadenceClass>()
   private readonly inProgress: string[] = []
   private readonly independentVariable: string
+  /**
+   * Memo for {@link isRecurrence}. A recurrence body reads itself once per lag —
+   * 38 times in `tests/fixtures/recurrence/07_recurrence_thirty_eight_lags.esm`
+   * — and each read reaches `leaf` as a separate self-edge, so without this the
+   * whole well-foundedness analysis would re-run per lag.
+   */
+  private readonly recurrenceMemo = new Map<string, boolean>()
 
   constructor(
     private readonly model: Model,
@@ -99,6 +107,25 @@ export class CadenceSeeder {
     this.brownian = new Set(brownianParameters(model))
     this.observedDefs = observedDefinitions(model)
     this.independentVariable = esmFile?.domain?.independent_variable || 't'
+  }
+
+  /**
+   * Whether `name`'s defining equation is a causal-recurrence CANDIDATE --
+   * array-shaped, with an `index` self-read in its own RHS -- and so whether its
+   * self-edge is an ordering the §4.3.1.1 rules govern rather than a cycle.
+   *
+   * Candidacy, not well-foundedness: see `isRecurrenceCandidate` for why the
+   * stricter predicate would mask the very codes §5.19.5 requires. Delegated
+   * wholesale to `recurrence.js` so the seeder and the validator cannot disagree
+   * about which equations the construct covers. Memoized because a recurrence
+   * body reads itself once per lag.
+   */
+  private isRecurrence(name: string): boolean {
+    const memoized = this.recurrenceMemo.get(name)
+    if (memoized !== undefined) return memoized
+    const verdict = isRecurrenceCandidate(this.model, name, this.esmFile)
+    this.recurrenceMemo.set(name, verdict)
+    return verdict
   }
 
   /** The set of observed unknowns, for callers that want to enumerate them. */
@@ -138,6 +165,46 @@ export class CadenceSeeder {
     // The observed sub-DAG is acyclic (§4.9.4 balance plus the DAE contract), so
     // the recursion terminates; a cycle is a defect and is REPORTED rather than
     // silently seeded.
+    //
+    // The SELF-EDGE `V -> V` is the one exception, and it is dropped rather than
+    // reported (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5). A causal
+    // self-reference — `V`'s own defining `aggregate` reading `index(V, k-1)` —
+    // is an ORDERING WITHIN one variable, not a dependency between two: the
+    // sweep publishes cell `k-1` before it evaluates cell `k`, so there is
+    // nothing to break. It therefore contributes `const`, which is
+    // `joinCadence`'s identity, leaving `V`'s seed to come from its other
+    // inputs. Mirrors the `n != self_name` retains every executing binding
+    // already applies to the observed dependency graph (Rust
+    // `dependency_order_observed`, `classify_segment_invariant_observeds`).
+    //
+    // The exemption is narrow in TWO ways, and both matter.
+    //
+    // It applies only to the edge closing on the definition being expanded RIGHT
+    // NOW, which is why this tests the TOP of the stack rather than membership:
+    // a longer path (`V -> W -> V`) is a genuine cycle through DISTINCT
+    // variables and still throws below.
+    //
+    // And it applies only when the equation is a recurrence CANDIDATE: the
+    // variable is array-shaped and its RHS carries an `index` self-read. A
+    // self-reference with no `index` read at all -- a scalar `x ~ x + 1`, or a
+    // bare `s ~ s + 1` over an array -- is not an ordering in any sense; it is
+    // an equation reading a name nothing binds, nothing else will report it, and
+    // it keeps its cycle rejection. That is §5.19.5's converse duty: admitting a
+    // recurrence must not weaken any cycle rejection.
+    //
+    // Candidacy rather than WELL-FOUNDEDNESS, deliberately. A malformed array
+    // self-read (`index(s, k+1)`, `index(s, 2*k)`, one inside a `makearray`
+    // region) has to surface as `recurrence_not_wellfounded` /
+    // `recurrence_unsupported_form` at the offending expression, because those
+    // codes are the cross-binding contract. Gating on well-foundedness would
+    // make this cycle error fire first for exactly those documents and collapse
+    // the file to a single `load_error`, losing the code -- the same masking
+    // defect this feature began as, moved from the legal case to the illegal
+    // one. So the drop hands the equation to `validateRecurrenceEquations`,
+    // which owns the verdict either way.
+    if (this.inProgress[this.inProgress.length - 1] === name && this.isRecurrence(name)) {
+      return 'const'
+    }
     if (this.inProgress.includes(name)) {
       throw new CadenceCycleError([...this.inProgress.slice(this.inProgress.indexOf(name)), name])
     }

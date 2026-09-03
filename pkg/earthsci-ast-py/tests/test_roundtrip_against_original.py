@@ -80,7 +80,7 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "absolute `file://` URL. Machine-specific by nature, which is why the "
         "resolved values are pinned as repo-relative paths in "
         "tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC "
-        "§5.19) rather than as a golden here"
+        "§5.22) rather than as a golden here"
     ),
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
     "derivative_trailing_boundary_operands.esm": _EAGER_TEMPLATE_EXPANSION,

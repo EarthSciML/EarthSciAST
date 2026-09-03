@@ -287,6 +287,11 @@ diagnostic_code_registry! {
     NULL_REACTION = "null_reaction";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
+    /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
+    /// along exactly one axis.
+    RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
+    /// A causal self-read the runtime cannot restrict to one cell.
+    RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form";
     /// A relational node in a continuous (ODE-position) expression.
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous";
     /// An `aggregate` binder (a `ranges` key or an `output_idx` entry) spelled
@@ -460,6 +465,8 @@ mod error_code_tests {
             "metaparameter_unbound",
             "null_reaction",
             "operator_variable_missing",
+            "recurrence_not_wellfounded",
+            "recurrence_unsupported_form",
             "relational_node_in_continuous",
             "reserved_index_symbol",
             "rewrite_rule_nonterminating",

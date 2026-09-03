@@ -660,6 +660,14 @@ impl Compiled {
             })
             .collect::<Result<_, _>>()?;
 
+        // Nothing asked for: no walk. The bulk caller is tolerant by contract
+        // (a name that is not an observed is filtered out before it gets here),
+        // so this is the ordinary shape of a request naming only states — and
+        // evaluating every observed expression at every output node to return
+        // an empty result is a cost with no possible payoff.
+        if slots.is_empty() {
+            return Ok(Vec::new());
+        }
         let param_vec = self.build_param_vec(params)?;
         let n_states = self.state_names.len();
         let mut out = vec![vec![0.0f64; time.len()]; names.len()];
