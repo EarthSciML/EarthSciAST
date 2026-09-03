@@ -32,6 +32,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("version_constants_test.jl")
     include("validate_test.jl")
     include("structural_validation_test.jl")
+    # Causal self-reference well-foundedness (esm-spec §4.3.1.1). A VALIDATION
+    # category (CONFORMANCE_SPEC §5.19.5), so it sits with the other structural
+    # checks rather than with the tree-walk tests.
+    include("recurrence_validation_test.jl")
     include("expression_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)

@@ -1,5 +1,5 @@
 """Cross-language conformance: esm-spec §6.6.3's assertion comparison when the
-ACTUAL value is NOT FINITE (CONFORMANCE_SPEC §5.19).
+ACTUAL value is NOT FINITE (CONFORMANCE_SPEC §5.20).
 
 The shared fixture and the per-assertion verdicts live under
 ``tests/conformance/assertion_nonfinite/`` (repo root); the Julia runner

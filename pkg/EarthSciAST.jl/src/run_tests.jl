@@ -237,7 +237,7 @@ end
 # x/0 or a log(0) reports PASS whatever it expected. The Rust and Python
 # re-implementations of "Julia isapprox semantics" dropped the clause and had
 # exactly that hole; Julia is the reference binding for the
-# `assertion_nonfinite` conformance category (CONFORMANCE_SPEC §5.19) because
+# `assertion_nonfinite` conformance category (CONFORMANCE_SPEC §5.20) because
 # it never did. NaN fails under the bound alone, so only the infinite case
 # depends on this.
 function _check_assertion(actual::Real, expected::Float64,

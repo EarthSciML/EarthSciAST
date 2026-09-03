@@ -1,0 +1,610 @@
+{
+  "category": "recurrence/rejections",
+  "version": "1.0",
+  "description": "Malformed causal self-references (esm-spec 4.3.1.1 `Rejections`) that EVERY binding must refuse, executing or not (CONFORMANCE_SPEC 5.19.5). Each case pins the (code, path) pair and NOTHING ELSE -- see `pinned` below. These live here rather than in tests/invalid/ because they are a property of one construct and belong beside the fixtures that exercise it; the two families would otherwise drift apart, which is exactly what happened to the boundary case `unprovable_offset_on_two_axes`, found by one binding's author and held by one binding's unit test until it was moved here.",
+  "pinned": {
+    "code": true,
+    "path": true,
+    "message": false,
+    "note": "The format guarantees the CODE and the JSON-pointer PATH. It does NOT guarantee the diagnostic PROSE, and a binding MUST NOT be tested against another binding's wording. This is a deliberate line: the same defect legitimately reads differently depending on which check reached it first -- an unbound parameter used as a whole index is reported by the coefficient test in some bindings and by the affinity test in others, and both are correct. Pinning prose would make the first reworded error message a cross-binding conformance failure."
+  },
+  "cases": [
+    {
+      "id": "forward_self_read",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "index(s, k+1) names a cell the sweep has not reached. Provably later on its axis, so no sweep order satisfies it.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "steps"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "s",
+                      {
+                        "op": "+",
+                        "args": [
+                          "k",
+                          1
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "same_cell_self_read",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "index(s, k) defines s in terms of itself at the same cell -- an implicit equation, not a recurrence.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "steps"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "s",
+                      "k"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "bare_self_read",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "a bare `s` alongside an `index` read names the WHOLE array, which does not exist while the sweep is in progress.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "steps"
+                    }
+                  },
+                  "expr": {
+                    "op": "+",
+                    "args": [
+                      "s",
+                      {
+                        "op": "index",
+                        "args": [
+                          "s",
+                          {
+                            "op": "-",
+                            "args": [
+                              "k",
+                              1
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "non_affine_self_index",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "index(s, 2*k) carries the frame symbol with coefficient 2, so it names no position RELATIVE to the cell being written and neither the axis nor the direction is decidable. The coefficient is the half of the proof obligation that is mandatory.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "steps"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "s",
+                      {
+                        "op": "*",
+                        "args": [
+                          "k",
+                          2
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "constant_self_index",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "index(s, 1) does not mention the frame symbol at all, so it says nothing about which axis the recurrence folds along.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "k"
+                  ],
+                  "ranges": {
+                    "k": {
+                      "from": "steps"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "s",
+                      1
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "offset_on_two_axes",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R2/equations/0/rhs",
+      "why": "index(m, i-1, j-1) is offset on both axes. A recurrence folds along exactly ONE axis; the sweep cannot advance two at once.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R2",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "rows": {
+            "kind": "interval",
+            "size": 3
+          },
+          "cols": {
+            "kind": "interval",
+            "size": 3
+          }
+        },
+        "models": {
+          "R2": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "m": {
+                "type": "unknown",
+                "shape": [
+                  "rows",
+                  "cols"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "m",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "i",
+                    "j"
+                  ],
+                  "ranges": {
+                    "i": {
+                      "from": "rows"
+                    },
+                    "j": {
+                      "from": "cols"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "m",
+                      {
+                        "op": "-",
+                        "args": [
+                          "i",
+                          1
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "j",
+                          1
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "unprovable_offset_on_two_axes",
+      "expected_code": "recurrence_not_wellfounded",
+      "expected_path": "/models/R2/equations/0/rhs",
+      "why": "THE BOUNDARY CASE. An unprovable lag is admitted (see fixture 08) -- but admitting it identifies the recurrence axis without stopping the axis COUNT. index(m, i-n, j-n) with `n` a parameter is still two axes. This is the one place an unprovable lag rejects, and it is one `if` away from being lost in a refactor, which is why it is pinned across bindings rather than in one binding's unit tests.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R2",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "rows": {
+            "kind": "interval",
+            "size": 3
+          },
+          "cols": {
+            "kind": "interval",
+            "size": 3
+          }
+        },
+        "models": {
+          "R2": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "m": {
+                "type": "unknown",
+                "shape": [
+                  "rows",
+                  "cols"
+                ],
+                "units": "1"
+              },
+              "n": {
+                "type": "parameter",
+                "units": "1",
+                "default": 1
+              }
+            },
+            "equations": [
+              {
+                "lhs": "m",
+                "rhs": {
+                  "op": "aggregate",
+                  "args": [],
+                  "output_idx": [
+                    "i",
+                    "j"
+                  ],
+                  "ranges": {
+                    "i": {
+                      "from": "rows"
+                    },
+                    "j": {
+                      "from": "cols"
+                    }
+                  },
+                  "expr": {
+                    "op": "index",
+                    "args": [
+                      "m",
+                      {
+                        "op": "-",
+                        "args": [
+                          "i",
+                          "n"
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "j",
+                          "n"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "makearray_region_self_read",
+      "expected_code": "recurrence_unsupported_form",
+      "expected_path": "/models/R/equations/0/rhs",
+      "why": "the READ is causal but the CARRIER cannot sequence it. A `makearray` region's value expression is evaluated ONCE for the whole region; 4.3.2's overlap rule (`later entries overwrite earlier ones`) fixes which write WINS, not the order cells are EVALUATED in. Distinct code from the family above for exactly that reason.",
+      "document": {
+        "esm": "1.0.0",
+        "metadata": {
+          "name": "R",
+          "description": "rejection case",
+          "authors": [
+            "EarthSciML Authors and Contributors"
+          ]
+        },
+        "index_sets": {
+          "steps": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "models": {
+          "R": {
+            "tolerance": {
+              "rel": 1e-12
+            },
+            "variables": {
+              "s": {
+                "type": "unknown",
+                "shape": [
+                  "steps"
+                ],
+                "units": "1"
+              }
+            },
+            "equations": [
+              {
+                "lhs": "s",
+                "rhs": {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        2,
+                        4
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    1.0,
+                    {
+                      "op": "aggregate",
+                      "args": [],
+                      "output_idx": [
+                        "k"
+                      ],
+                      "ranges": {
+                        "k": [
+                          2,
+                          4
+                        ]
+                      },
+                      "expr": {
+                        "op": "index",
+                        "args": [
+                          "s",
+                          {
+                            "op": "-",
+                            "args": [
+                              "k",
+                              1
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

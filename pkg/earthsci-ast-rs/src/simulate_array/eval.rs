@@ -84,6 +84,21 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
     if name == "t" {
         return Value::Scalar(prec.round(ctx.t));
     }
+    // A BARE read of the array a recurrence is sweeping (esm-spec §4.3.1.1
+    // rejection 4). The structural validator refuses this, so reaching it means
+    // the document bypassed validation; fail closed rather than let the name
+    // fall through to a stale observed entry or a NaN that reads like a missing
+    // variable.
+    if let Some(scope) = ctx.recur
+        && scope.name == name
+    {
+        latch_gather_fault(format!(
+            "E_TREEWALK_RECUR_UNAVAILABLE: '{name}' is read BARE inside its own recurrence \
+             definition — the whole array does not exist during the sweep. Read it through \
+             `index` at a strictly earlier position instead (esm-spec §4.3.1.1)."
+        ));
+        return Value::Scalar(f64::NAN);
+    }
     if let Some(v) = ctx.loop_binds.get(name) {
         return Value::Scalar(*v as f64);
     }
@@ -1487,24 +1502,54 @@ thread_local! {
     static CONST_OOB: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Take (and clear) the pending const-array out-of-range diagnostic, if any.
+/// Take (and clear) the pending fail-closed gather diagnostic, if any.
+///
+/// Named for the first fault that used this channel
+/// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
+/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4). Both are
+/// "fail closed, do not silently substitute a number" faults with the same
+/// drain sites, so they share one latch rather than adding a second one that a
+/// future drain site could forget.
 pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
 
-/// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
-fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
+/// Latch the FIRST fail-closed gather diagnostic of this evaluation.
+fn latch_gather_fault(msg: String) {
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
-            *slot = Some(format!(
-                "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
-                 1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
-                 never applied to a const-array gather; declare a per-dimension boundary policy \
-                 to resolve it as `periodic` or `clamp`)"
-            ));
+            *slot = Some(msg);
         }
     });
+}
+
+/// Latch an unavailable causal self-read (esm-spec §4.3.1.1): the position is
+/// outside the recurrence axis, or names a cell the sweep has not published.
+fn latch_recur_unavailable(name: &str, raw: &[i64]) {
+    let at = raw
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    latch_gather_fault(format!(
+        "E_TREEWALK_RECUR_UNAVAILABLE: causal self-read of '{name}' at cell [{at}] is not \
+         available — the position is outside the recurrence axis, or the sweep has not \
+         published that cell yet (esm-spec §4.3.1.1; CONFORMANCE_SPEC.md §5.19.4: a causal \
+         self-read is fail-closed, never the §5.5.5 zero ghost and never a NaN a `max(x, 0)` \
+         could launder). Guard the base case inside the body, e.g. \
+         `ifelse(k <= 1, <base>, <recurrence>)`."
+    ));
+}
+
+/// Latch the FIRST const-array out-of-range diagnostic of this evaluation.
+fn latch_const_oob(name: &str, one_based: i64, n: i64, d: usize) {
+    latch_gather_fault(format!(
+        "E_TREEWALK_CONSTARRAY_OOB: const array '{name}' index {one_based} out of range \
+         1..{n} in dim {d} (CONFORMANCE_SPEC.md §5.5.5: the zero-ghost convention is \
+         never applied to a const-array gather; declare a per-dimension boundary policy \
+         to resolve it as `periodic` or `clamp`)"
+    ));
 }
 
 /// The out-of-range boundary policy of the gather being resolved
@@ -1634,6 +1679,28 @@ pub(super) fn eval_index(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // bypass from panicking on one.
     if node.args.is_empty() {
         return Value::Scalar(f64::NAN);
+    }
+    // CAUSAL SELF-READ (esm-spec §4.3.1.1). Checked before every other channel:
+    // during the sweep the array being defined exists nowhere else, and unlike
+    // every other gather this one FAILS CLOSED out of range rather than
+    // resolving to the §5.5.5 zero ghost. `ctx.recur` is `None` on every path
+    // but a recurrence sweep, so this is one `Option` test for every other
+    // document.
+    if let Some(scope) = ctx.recur
+        && matches!(&node.args[0], Expr::Variable(name) if name == scope.name)
+    {
+        let (raw, in_bounds) = eval_index_args(&node.args[1..], ctx);
+        if !in_bounds {
+            latch_recur_unavailable(scope.name, &raw);
+            return Value::Scalar(f64::NAN);
+        }
+        return match scope.read(&raw) {
+            Some(v) => Value::Scalar(crate::precision::active().round(v)),
+            None => {
+                latch_recur_unavailable(scope.name, &raw);
+                Value::Scalar(f64::NAN)
+            }
+        };
     }
     if let Expr::Variable(name) = &node.args[0]
         && lookup_array_ref(name, ctx).is_some()
@@ -3374,7 +3441,15 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // functions and ghost-0 convention, so the result is bit-identical to the
     // per-cell oracle below; any op / ragged-bound the overlay does not handle
     // returns `None` and we fall through. A local `Pool` recycles intermediates.
-    if !shape.is_empty() && scan.is_none() && gate.is_none() {
+    // `ctx.recur.is_none()`: CONFORMANCE_SPEC §5.19.2 forbids evaluating anything
+    // inside a recurrence sweep through the whole-array overlay. The overlay
+    // resolves names through the state/observed tables, which do not hold the
+    // array being swept, and it batches cells the sweep must order — so it would
+    // be both wrong and unordered. Declining is conservative: a nested aggregate
+    // that does NOT read the swept array would also be correct vectorized, but
+    // telling the two apart per node buys nothing on an inherently sequential
+    // rule.
+    if !shape.is_empty() && scan.is_none() && gate.is_none() && ctx.recur.is_none() {
         // The pool is the THREAD's, not a fresh one per call: a stencil-heavy
         // model materializes dozens of standalone aggregates per RHS evaluation
         // and a per-call `Pool::default()` started empty every time, so every
@@ -3631,6 +3706,8 @@ pub(super) fn eval_makearray(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value 
         && ctx.loop_binds.is_empty()
         && !shape.contains(&0)
         && !values.iter().any(region_value_is_prefix_scan)
+        // See the same gate in `eval_arrayop`: CONFORMANCE_SPEC §5.19.2.
+        && ctx.recur.is_none()
     {
         let bx = VecBox {
             syms: &[],

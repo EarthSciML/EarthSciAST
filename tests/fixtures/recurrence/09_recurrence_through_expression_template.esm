@@ -1,0 +1,148 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceThroughExpressionTemplate",
+    "description": "A causal self-read reached through an `apply_expression_template` BINDING, which must still be recognized and evaluated: s[1] = 1, s[k] = twice(s[k-1]), answer [1, 2, 4, 8].\n\nThis fixture exists to close a specific hole rather than to demonstrate a feature. The cell-restriction blocking list of esm-spec 4.3.1.1 (`reshape`, `transpose`, `concat`, `broadcast`) deliberately does NOT include `apply_expression_template`, and every binding's self-read walk visits `args` and the expression sidecars but not `bindings`. Read on its own that is alarming: it sounds like a self-read could hide inside a template binding, be seen by neither the validator nor the recurrence lowering, and be evaluated as an ordinary gather on a name nothing binds -- which is exactly the plausible-wrong-number failure this construct was added to eliminate.\n\nIt cannot, and this fixture is the proof: a template application is EXPANDED AT LOAD (esm-spec 9.6.4), so by the time either the validator or the evaluator sees the document the application is gone and the self-read is an ordinary one in the expanded body. The construct composes with templates instead of being evaded by them. If a binding ever defers template expansion past recognition, this fixture is what fails.\n\nZero tolerance.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "expression-templates",
+      "composition"
+    ]
+  },
+  "index_sets": {
+    "steps": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceThroughExpressionTemplate": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "s": {
+          "type": "unknown",
+          "shape": [
+            "steps"
+          ],
+          "units": "1",
+          "description": "Doubles at each step via a two-line template, not an inline `*`."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "k"
+            ],
+            "ranges": {
+              "k": {
+                "from": "steps"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "k",
+                    1
+                  ]
+                },
+                1.0,
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "twice",
+                  "bindings": {
+                    "v": {
+                      "op": "index",
+                      "args": [
+                        "s",
+                        {
+                          "op": "-",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "self_read_through_a_template_binding_evaluates",
+          "description": "[1, 2, 4, 8] -- the template expands before recognition, so the self-read is an ordinary one.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "steps": 1
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "steps": 2
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 4.0,
+              "coords": {
+                "steps": 3
+              }
+            },
+            {
+              "variable": "s",
+              "time": 0.0,
+              "expected": 8.0,
+              "coords": {
+                "steps": 4
+              }
+            }
+          ]
+        }
+      ],
+      "expression_templates": {
+        "twice": {
+          "params": [
+            "v"
+          ],
+          "body": {
+            "op": "*",
+            "args": [
+              "v",
+              2.0
+            ]
+          },
+          "description": "Its one parameter is bound to a causal self-read at the call site."
+        }
+      }
+    }
+  }
+}

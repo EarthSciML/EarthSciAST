@@ -1967,8 +1967,9 @@ pub(super) fn build_tape_program(
 fn fallback_observed_shape(rule: &AlgebraicRule) -> Option<DimU> {
     match rule {
         // The per-cell (and vectorized) ArrayLoop paths both materialize the
-        // padded `[1, hi]` box.
-        AlgebraicRule::ArrayLoop { output_ranges, .. } => Some(
+        // padded `[1, hi]` box; so does the recurrence sweep over its frame.
+        AlgebraicRule::ArrayLoop { output_ranges, .. }
+        | AlgebraicRule::Recurrence { output_ranges, .. } => Some(
             output_ranges
                 .iter()
                 .map(|(_, hi)| (*hi).max(0) as usize)
@@ -2076,6 +2077,18 @@ impl<'m> TapeBuilder<'m> {
     /// Lower one observed rule; returns the recorded observed value.
     fn lower_observed_rule(&mut self, rule: &AlgebraicRule) -> LResult<ObsVal> {
         match rule {
+            // CONFORMANCE_SPEC §5.19.2: a recurrence's cells are not
+            // independent, so it may not be taped — the tape's scheduler
+            // (fusion, liveness coloring, SIMD super-ops) is free to reorder
+            // and batch, which is exactly what the construct forbids. Bail to
+            // the interpreter's sequential sweep, which is the ONLY
+            // implementation of this rule kind.
+            AlgebraicRule::Recurrence { .. } => {
+                bail_tape!(
+                    "observed: causal self-reference (recurrence) — sequential sweep only \
+                     (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.2)"
+                )
+            }
             AlgebraicRule::ArrayLoop {
                 output_idx_names,
                 output_ranges,

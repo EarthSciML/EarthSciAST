@@ -182,6 +182,18 @@ pub enum StructuralErrorCode {
     /// relational work is forbidden on the per-step hot path (RFC
     /// semiring-faq-unified-ir §6.1; CONFORMANCE_SPEC.md §5.7.6 guard 2).
     RelationalNodeInContinuous,
+    /// A causal self-read (esm-spec §4.3.1.1) that is not a well-founded
+    /// strictly-earlier read along exactly one axis: a provably same-cell or
+    /// forward read, an index that is not affine in its frame symbol with
+    /// coefficient 1, self-reads disagreeing on the axis, or a bare read of the
+    /// variable inside its own defining RHS.
+    RecurrenceNotWellfounded,
+    /// A causal self-read (esm-spec §4.3.1.1) the runtime cannot restrict to a
+    /// single cell: reached through a `makearray` region value or a
+    /// `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is
+    /// not an `aggregate` over the variable's own axes. The READ is causal; the
+    /// CARRIER cannot sequence it.
+    RecurrenceUnsupportedForm,
     /// An `aggregate` `ranges` entry `{ "from": NAME }` whose NAME is not a key
     /// of the document `index_sets` registry (RFC semiring-faq-unified-ir §5.2):
     /// no implicit interval is inferred for an undeclared name.
@@ -235,6 +247,8 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::DomainUnitMismatch => codes::DOMAIN_UNIT_MISMATCH,
             Self::JoinKeyInvalidType => codes::JOIN_KEY_INVALID_TYPE,
             Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
+            Self::RecurrenceNotWellfounded => codes::RECURRENCE_NOT_WELLFOUNDED,
+            Self::RecurrenceUnsupportedForm => codes::RECURRENCE_UNSUPPORTED_FORM,
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
             Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
             Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,

@@ -1,6 +1,6 @@
 /**
  * TypeScript's read of the SHARED `assertion_nonfinite` conformance manifest
- * (CONFORMANCE_SPEC §5.19, tests/conformance/assertion_nonfinite/manifest.json).
+ * (CONFORMANCE_SPEC §5.20, tests/conformance/assertion_nonfinite/manifest.json).
  *
  * TypeScript cannot run that category: the contract is the esm-spec §6.6.3 pass
  * predicate for a non-finite ACTUAL, and this binding has no simulator and no

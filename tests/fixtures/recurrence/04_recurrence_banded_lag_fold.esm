@@ -1,0 +1,220 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceBandedLagFold",
+    "description": "CONFORMANCE_SPEC 5.19.3 shapes 2 and 3 together: a BOUNDED-LAG fold written as ONE node, and an in-body reduction order pinned to the bit.\n\nr[y] = SUM over a of term(a), a contracted index running from 0, admitted by the banded filter a <= y-1. The a = 0 term carries the non-recurrent part b[y]; every a >= 1 term is -max(r[y-a], 0) * P[a], a clamped self-read at lag a. So the lag is SYMBOL-valued -- one node covers every lag in a's range instead of one hand-written term per lag -- and `lag = a` straddles zero, which esm-spec 4.3.1.1 admits precisely because the a = 0 cell is never evaluated (the guard selects the other branch) and a self-read of an unpublished cell could not return a value anyway.\n\nThe clamp is load-bearing here, not decoration: r[3] and r[5] are negative, so max(r, 0) zeroes their contribution to later cells and the recurrence is NOT linear. A closed form obtained by dropping the clamp reaches different numbers.\n\nORDER: the terms are folded ASCENDING in a (esm-spec 4.3.1, normative). At y = 3 that gives exactly -1.0; folding the same admitted window from its high end instead gives -1.0000000000000002. Zero tolerance, so a binding whose contraction sums pairwise or in reverse fails here.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "bounded-lag",
+      "symbol-lag",
+      "contraction",
+      "filter",
+      "clamp",
+      "order"
+    ]
+  },
+  "index_sets": {
+    "years": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "RecurrenceBandedLagFold": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "r": {
+          "type": "unknown",
+          "shape": [
+            "years"
+          ],
+          "units": "1",
+          "description": "Residual sequence: the non-recurrent term less the clamped, weighted sum of its own three previous values."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "y"
+            ],
+            "ranges": {
+              "y": {
+                "from": "years"
+              },
+              "a": [
+                0,
+                3
+              ]
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "==",
+                  "args": [
+                    "a",
+                    0
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "const",
+                      "args": [],
+                      "value": [
+                        1e-16,
+                        1.0,
+                        1e-16,
+                        100000000.0,
+                        3.0,
+                        -1e+16
+                      ]
+                    },
+                    "y"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    -1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "max",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "r",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "y",
+                                    "a"
+                                  ]
+                                }
+                              ]
+                            },
+                            0.0
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            {
+                              "op": "const",
+                              "args": [],
+                              "value": [
+                                0.0,
+                                1.0,
+                                3.0,
+                                3.0
+                              ]
+                            },
+                            {
+                              "op": "+",
+                              "args": [
+                                "a",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "reduce": "+",
+            "filter": {
+              "op": "<=",
+              "args": [
+                "a",
+                {
+                  "op": "-",
+                  "args": [
+                    "y",
+                    1
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "banded_lag_fold_is_the_ascending_left_fold",
+          "description": "Ascending-in-a fold. r[3] = -1.0 exactly; a high-end fold of the same window gives -1.0000000000000002.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 1e-16,
+              "coords": {
+                "years": 1
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 0.9999999999999999,
+              "coords": {
+                "years": 2
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -1.0,
+              "coords": {
+                "years": 3
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": 99999997.0,
+              "coords": {
+                "years": 4
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -99999997.0,
+              "coords": {
+                "years": 5
+              }
+            },
+            {
+              "variable": "r",
+              "time": 0.0,
+              "expected": -1.0000000299999992e+16,
+              "coords": {
+                "years": 6
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

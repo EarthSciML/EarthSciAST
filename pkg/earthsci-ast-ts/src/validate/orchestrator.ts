@@ -42,6 +42,7 @@ import {
   validateRelationalNodesInContinuous,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
+import { validateRecurrenceEquations } from '../recurrence.js'
 import {
   validateReactionConsistency,
   validateReactionReferenceIntegrity,
@@ -201,6 +202,16 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateBroadcastFns(model, modelPath))
       errors.push(...validateArrayBroadcastShapes(model, modelPath))
 
+      // esm-spec §4.3.1.1. A causal self-reference (recurrence): an equation
+      // defining an array-shaped unknown whose RHS `aggregate` body reads the
+      // array being defined, strictly earlier along ONE output axis. This
+      // binding evaluates no array numerics, so the well-foundedness check IS
+      // its whole implementation of the construct — and CONFORMANCE_SPEC
+      // §5.19.5 gives a non-executing binding exactly the same rejection duty as
+      // an executing one. `esmFile` is needed because a frame symbol's bounds
+      // come from the `index_sets` registry, which is document-scoped.
+      errors.push(...validateRecurrenceEquations(model, modelPath, esmFile))
+
       // Recursively validate subsystems
       if (model.subsystems) {
         for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
@@ -226,6 +237,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateRelationalNodesInContinuous(subsystem, subsystemPath))
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
+          errors.push(...validateRecurrenceEquations(subsystem, subsystemPath, esmFile))
         }
       }
     }

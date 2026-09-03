@@ -1,0 +1,219 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RecurrenceOnOneOfTwoAxes",
+    "description": "A recurrence over ONE axis of a rank-2 variable: m[i,j] folds along j and is free in i. The carried state is therefore a whole COLUMN, not a scalar -- the same construct serves an array-valued accumulator without any extra machinery, because the frame simply has another axis. It also pins the sweep order of esm-spec 4.3.1.1 point 1: the recurrence axis is the OUTER loop and the free axis iterates inside it, so cells sharing a j are computed before j advances. The values are exactly representable, so a wrong sweep order here shows up as an unavailable-cell fault or a wrong power of ten rather than as a low-bit difference.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "tags": [
+      "recurrence",
+      "rank-2",
+      "array-valued-state",
+      "sweep-order"
+    ]
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 3
+    },
+    "cols": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "RecurrenceOnOneOfTwoAxes": {
+      "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+      },
+      "variables": {
+        "m": {
+          "type": "unknown",
+          "shape": [
+            "rows",
+            "cols"
+          ],
+          "units": "1",
+          "description": "Row i starts at i and multiplies by ten along the columns."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "m",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              },
+              "j": {
+                "from": "cols"
+              }
+            },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "<=",
+                  "args": [
+                    "j",
+                    1
+                  ]
+                },
+                "i",
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "m",
+                        "i",
+                        {
+                          "op": "-",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    },
+                    10.0
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "folds_along_one_axis_only",
+          "description": "m[i,j] = i * 10^(j-1).",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 1.0,
+              "coords": {
+                "rows": 1,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 10.0,
+              "coords": {
+                "rows": 1,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 100.0,
+              "coords": {
+                "rows": 1,
+                "cols": 3
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 1000.0,
+              "coords": {
+                "rows": 1,
+                "cols": 4
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 2.0,
+              "coords": {
+                "rows": 2,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 20.0,
+              "coords": {
+                "rows": 2,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 200.0,
+              "coords": {
+                "rows": 2,
+                "cols": 3
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 2000.0,
+              "coords": {
+                "rows": 2,
+                "cols": 4
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 3.0,
+              "coords": {
+                "rows": 3,
+                "cols": 1
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 30.0,
+              "coords": {
+                "rows": 3,
+                "cols": 2
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 300.0,
+              "coords": {
+                "rows": 3,
+                "cols": 3
+              }
+            },
+            {
+              "variable": "m",
+              "time": 0.0,
+              "expected": 3000.0,
+              "coords": {
+                "rows": 3,
+                "cols": 4
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

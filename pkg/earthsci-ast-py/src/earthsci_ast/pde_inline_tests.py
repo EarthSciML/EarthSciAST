@@ -549,7 +549,7 @@ def _resolve_tolerance(
 def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -> bool:
     """Julia ``isapprox`` semantics: ``actual == expected``, or both values
     FINITE and ``|a − e| ≤ max(atol, rtol·max(|a|, |e|))`` (esm-spec §6.6.3,
-    CONFORMANCE_SPEC §5.19).
+    CONFORMANCE_SPEC §5.20).
 
     **Finiteness is judged BEFORE tolerance**, and that clause is not a
     corollary of the bound — it contradicts it. With ``actual = ±inf`` both

@@ -8,7 +8,7 @@ import (
 )
 
 // assertion_nonfinite_scope_test.go is Go's read of the SHARED
-// `assertion_nonfinite` conformance manifest (CONFORMANCE_SPEC §5.19,
+// `assertion_nonfinite` conformance manifest (CONFORMANCE_SPEC §5.20,
 // tests/conformance/assertion_nonfinite/manifest.json).
 //
 // Go cannot run that category: the contract is the §6.6.3 pass predicate for a
