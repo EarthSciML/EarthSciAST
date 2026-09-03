@@ -138,6 +138,15 @@ export const ERROR_CODES = {
   //   error. Replaces `undefined_data_loader_variable`, whose coupling-to-a-
   //   loader-variable shape no longer exists.
   DATA_SOURCE_UNDEFINED: 'data_source_undefined',
+  // `data_source_url_unresolved` — a `data_sources[*].source.url_template` (or
+  //   a `mirrors` entry) cannot be resolved to a URL at load time (esm-spec
+  //   §8.2.1). Raised for an unexpanded `${VAR}` — §8.2 does not expand
+  //   environment variables into a source's location at all — and for a
+  //   resolved path carrying a `?` or `#`. The message names the offending data
+  //   source and template: the failure it replaces was an "io error at
+  //   /${VAR}/x.parquet" that named neither, one step away from a source that
+  //   silently delivered a consuming parameter's default.
+  DATA_SOURCE_URL_UNRESOLVED: 'data_source_url_unresolved',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',

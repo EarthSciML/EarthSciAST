@@ -93,7 +93,7 @@
     "WRF_hourly_d01": {
       "kind": "grid",
       "source": {
-        "url_template": "file://${WRF_MIRROR}/{date:%Y}{date:%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H}.nc"
+        "url_template": "./mirrors/wrf/{date:%Y}{date:%m}/wrfout_hourly_d01_{date:%Y-%m-%d}_{date:%H}.nc"
       },
       "temporal": {
         "file_period": "PT1H",

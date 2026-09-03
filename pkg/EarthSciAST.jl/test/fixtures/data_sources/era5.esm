@@ -96,7 +96,7 @@
       "source": {
         "url_template": "cdsapi://reanalysis-era5-pressure-levels/era5_pl_{date:%Y}_{date:%m}.nc",
         "mirrors": [
-          "file://${ERA5_LOCAL}/era5_pl_{date:%Y}_{date:%m}.nc"
+          "./mirrors/era5/era5_pl_{date:%Y}_{date:%m}.nc"
         ]
       },
       "temporal": {

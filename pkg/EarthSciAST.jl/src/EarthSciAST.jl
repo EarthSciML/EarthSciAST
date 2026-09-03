@@ -91,6 +91,10 @@ include("serialize.jl")
 include("migration.jl")
 # Document load pipeline + subsystem-ref linker (RFC-3986 URL machinery,
 # top-level {ref} inlining, cycle detection, index-set registry merge)
+# esm-spec §8.2.1: load-time resolution of a data source's
+# `source.url_template` against the referencing document's own directory.
+# Ahead of resolve.jl, which calls it.
+include("data_source_urls.jl")
 include("resolve.jl")
 # Coupling-library files + `coupling_import` role binding (esm-spec §10.9–§10.11)
 include("coupling_imports.jl")

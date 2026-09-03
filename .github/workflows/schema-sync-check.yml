@@ -48,6 +48,27 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # REQUIRED, not an optimisation. Three of the seven artifacts
+    # `sync-schema.sh --check` covers are TypeScript files it can only verify by
+    # RUNNING their generators, and two of those generators need node_modules
+    # (ajv for `generated-validator.js`, json2ts for `generated.ts`). Without
+    # this step those two checks skip -- and until the companion fix in
+    # `scripts/sync-schema.sh` a skip did not set `drifted`, so THIS JOB EXITED
+    # 0 having verified neither, on every run, permanently.
+    #
+    # That is not hypothetical: it is how 0bbe8957b (per-variable element_type)
+    # merged with BOTH TypeScript artifacts stale, and they stayed stale until
+    # someone happened to run the TS suite locally. A gate that cannot fail is
+    # worse than no gate, because it is also a claim.
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
+
+    - name: Install the TypeScript dev dependencies the drift check needs
+      run: npm ci --prefix pkg/earthsci-ast-ts
+
     - name: Check schema copies and binding versions are in sync
       run: scripts/sync-schema.sh --check
 

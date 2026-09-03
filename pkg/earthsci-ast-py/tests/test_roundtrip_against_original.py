@@ -72,6 +72,16 @@ _EMPTY_EVENT_ARRAY = (
 # are held to full equality with everything else.
 
 TRANSFORMING_FIXTURES: dict[str, str] = {
+    "data_source_relative_url.esm": (
+        "a scheme-less `source.url_template` is a filesystem path, and a "
+        "relative one resolves at load against the directory of the file that "
+        "declared it (esm-spec §8.2.1) -- the same base and the same timing "
+        "rule §4.7 fixes for a `ref` -- so the emitted template is the resolved "
+        "absolute `file://` URL. Machine-specific by nature, which is why the "
+        "resolved values are pinned as repo-relative paths in "
+        "tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC "
+        "§5.22) rather than as a golden here"
+    ),
     "advection_reaction_loaded_ic_bc.esm": _EAGER_TEMPLATE_EXPANSION,
     "derivative_trailing_boundary_operands.esm": _EAGER_TEMPLATE_EXPANSION,
     "expression_templates_arrhenius.esm": _EAGER_TEMPLATE_EXPANSION,

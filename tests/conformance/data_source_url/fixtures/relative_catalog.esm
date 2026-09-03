@@ -1,0 +1,94 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DataSourceUrlResolutionCatalog",
+    "description": "esm-spec §8.2.1 location-resolution conformance fixture. A source-catalog document (data_sources only) carrying one entry per row of the §8.2.1 resolution table, so a binding's answer to 'where does this document's data live?' is checkable without reading a byte. Every expected resolution is pinned in ../manifest.json as a path RELATIVE TO THE REPOSITORY ROOT, because the resolved form is a machine-specific absolute file:// URL and a golden holding one would only ever pass on the machine that wrote it. Nothing here needs to exist on disk: §8.2.1 resolution is lexical, so that a template carrying a {date:...} substitution — which names a file per timestep, none of which exists at load time — resolves exactly like any other.",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "data-sources",
+      "source-catalog",
+      "url-template",
+      "conformance"
+    ]
+  },
+  "data_sources": {
+    "dot_relative": {
+      "kind": "static",
+      "source": {
+        "url_template": "./tables/probe.parquet"
+      }
+    },
+    "bare_relative": {
+      "kind": "static",
+      "source": {
+        "url_template": "tables/probe.parquet"
+      }
+    },
+    "parent_relative": {
+      "kind": "static",
+      "source": {
+        "url_template": "../../../../tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+      }
+    },
+    "dot_segments_collapse": {
+      "kind": "static",
+      "source": {
+        "url_template": "./tables/../tables/./probe.parquet"
+      }
+    },
+    "absolute_path": {
+      "kind": "static",
+      "source": {
+        "url_template": "/data/./probe/../probe.parquet"
+      }
+    },
+    "already_a_file_url": {
+      "kind": "static",
+      "source": {
+        "url_template": "file:///data/probe.parquet"
+      }
+    },
+    "remote_url": {
+      "kind": "static",
+      "source": {
+        "url_template": "https://example.org/data/probe.parquet"
+      }
+    },
+    "non_file_scheme": {
+      "kind": "static",
+      "source": {
+        "url_template": "s3://example-bucket/data/probe.parquet"
+      }
+    },
+    "substitution_led": {
+      "kind": "static",
+      "source": {
+        "url_template": "{archive_root}/probe.parquet"
+      }
+    },
+    "relative_with_substitution": {
+      "kind": "grid",
+      "source": {
+        "url_template": "./tables/{date:%Y%m%d}.nc"
+      },
+      "temporal": {
+        "frequency": "PT1H",
+        "file_period": "P1D",
+        "records_per_file": 24
+      }
+    },
+    "primary_and_mirrors": {
+      "kind": "static",
+      "source": {
+        "url_template": "./tables/probe.parquet",
+        "mirrors": [
+          "../mirror/probe.parquet",
+          "https://example.org/mirror/probe.parquet"
+        ]
+      }
+    }
+  }
+}

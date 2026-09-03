@@ -1613,6 +1613,43 @@ fn read_input(path: &std::path::Path) -> Result<String, Box<dyn std::error::Erro
     fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()).into())
 }
 
+/// The base directory a document loaded FROM `path` must resolve against: its
+/// own directory (esm-spec §4.7 for a relative `ref`, §8.2.1 for a relative
+/// `data_sources` location), never the process working directory.
+fn base_of(path: &std::path::Path) -> earthsci_ast::LoadOptions {
+    earthsci_ast::LoadOptions {
+        base_path: Some(
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// `load_string`, but anchored on the file the text came FROM.
+///
+/// Every subcommand here reads a document with [`read_input`] and then loaded
+/// it with a bare `load_string`, which defaults the base to the process working
+/// directory. That is downstream finding F7 -- recorded against `round-trip`,
+/// but in fact true of ~17 subcommands, `convert` and `simulate` among them --
+/// and esm-spec §8.2.1 turns it from cosmetic into dangerous. A CWD-anchored
+/// relative `ref` fails loudly with "file not found"; a CWD-anchored relative
+/// `url_template` can RESOLVE, succeed, and read a different file, which no
+/// assertion about errors can see. Measured before this fix: the same document
+/// converted from three working directories emitted three different
+/// `url_template` values.
+///
+/// `validate` and `test` were always right because they use `load_path`. This
+/// is the same anchoring for every other command that has a path in hand.
+fn load_at(
+    path: &std::path::Path,
+    content: &str,
+) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
+    earthsci_ast::load_string_with_options(content, &base_of(path))
+}
+
 /// Collect every `.esm` file under `dir` (recursing when asked), in sorted
 /// order per directory.
 fn collect_esm_files(
@@ -1641,12 +1678,16 @@ fn collect_esm_files(
 /// `benchmark --bench-type parse` and both `performance-profile` timing
 /// reports, which print the same measurement in different shapes.
 fn time_parse(
+    path: &std::path::Path,
     content: &str,
     iterations: usize,
 ) -> Result<std::time::Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        let _ = load_string(content)?;
+        // Anchored on the document, like every other command: a benchmark that
+        // resolved differently from `validate` would be timing a different
+        // amount of work (esm-spec §4.7, §8.2.1).
+        let _ = load_at(path, content)?;
     }
     Ok(start.elapsed())
 }
@@ -1660,8 +1701,12 @@ fn time_validate(esm_file: &earthsci_ast::EsmFile, iterations: usize) -> std::ti
     start.elapsed()
 }
 
-fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let duration = time_parse(content, iterations)?;
+fn bench_parse(
+    path: &std::path::Path,
+    content: &str,
+    iterations: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let duration = time_parse(path, content, iterations)?;
     println!(
         "Parse: {} iterations in {:?} ({:?}/iter)",
         iterations,
@@ -1671,8 +1716,12 @@ fn bench_parse(content: &str, iterations: usize) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = load_string(content)?;
+fn bench_validate(
+    path: &std::path::Path,
+    content: &str,
+    iterations: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let esm_file = load_at(path, content)?;
     let duration = time_validate(&esm_file, iterations);
     println!(
         "Validate: {} iterations in {:?} ({:?}/iter)",
@@ -1684,8 +1733,12 @@ fn bench_validate(content: &str, iterations: usize) -> Result<(), Box<dyn std::e
 }
 
 /// Time repeated 1-time-unit simulations from default initial conditions.
-fn bench_simulate(content: &str, iterations: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = load_string(content)?;
+fn bench_simulate(
+    path: &std::path::Path,
+    content: &str,
+    iterations: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let esm_file = load_at(path, content)?;
     let opts = earthsci_ast::SolveOptions::default();
     // Build the EsmProblem ONCE, outside the loop, and time only the solve. That
     // split is the point of the EsmProblem/`solve` surface: construction is
@@ -1856,7 +1909,7 @@ fn run_validate(file: PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::
 
 fn run_pretty(file: PathBuf, format: DisplayFormat) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     let render = |expr: &earthsci_ast::Expr| match format {
         DisplayFormat::Unicode => earthsci_ast::to_unicode(expr),
@@ -1901,7 +1954,7 @@ fn run_extract(
     output: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     // Check if component exists
     if !component_exists(&esm_file, &component) {
@@ -1976,8 +2029,8 @@ fn run_extract(
 fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let content1 = read_input(&file1)?;
     let content2 = read_input(&file2)?;
-    let esm_file1 = load_string(&content1)?;
-    let esm_file2 = load_string(&content2)?;
+    let esm_file1 = load_at(&file1, &content1)?;
+    let esm_file2 = load_at(&file2, &content2)?;
 
     println!("Comparing {} and {}:", file1.display(), file2.display());
 
@@ -1989,7 +2042,7 @@ fn run_diff(file1: PathBuf, file2: PathBuf) -> Result<(), Box<dyn std::error::Er
 
 fn run_stoich(file: PathBuf, system: String) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     if let Some(ref reaction_systems) = esm_file.reaction_systems {
         if let Some(rs) = reaction_systems.get(&system) {
@@ -2064,7 +2117,7 @@ fn run_graph(
     system: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     match level {
         GraphLevel::Component => render_graph(&component_graph(&esm_file), format),
@@ -2115,7 +2168,7 @@ fn run_convert(
     to: ConvertFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&input)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&input, &content)?;
 
     let output_content = match to {
         ConvertFormat::Json => to_json(&esm_file)?,
@@ -2136,7 +2189,7 @@ fn run_analyze(
     analysis_type: AnalysisType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("System Analysis for: {}", file.display());
     println!("Analysis Type: {}", arg_name(&analysis_type));
@@ -2287,7 +2340,7 @@ fn run_simulate(
     format: SimulateFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("Running simulation for: {}", file.display());
     println!("Simulation time: 0 → {time}");
@@ -2698,7 +2751,7 @@ fn gridded_results(
 
 fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("ESM File Information for: {}", file.display());
     println!("ESM Version: {}", esm_file.esm);
@@ -2753,7 +2806,7 @@ fn run_info(file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("Units Analysis for: {}", file.display());
 
@@ -2819,7 +2872,7 @@ fn run_coupling_analysis(
     depth: CouplingDepth,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("Coupling Dependency Analysis for: {}", file.display());
     println!("Depth: {}", arg_name(&depth));
@@ -2851,7 +2904,7 @@ fn run_performance_profile(
     profile_type: ProfileType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("Performance Profile for: {}", file.display());
     println!("Profile type: {}", arg_name(&profile_type));
@@ -2934,7 +2987,7 @@ fn run_performance_profile(
 
             // Parsing benchmark
             let iterations = 100;
-            let parse_duration = time_parse(&content, iterations)?;
+            let parse_duration = time_parse(&file, &content, iterations)?;
             println!(
                 "Parse time: {} iterations in {:?} ({:?}/iter)",
                 iterations,
@@ -2997,7 +3050,7 @@ fn run_performance_profile(
 
             // Time analysis (simplified)
             let iterations = 50;
-            let parse_duration = time_parse(&content, iterations)?;
+            let parse_duration = time_parse(&file, &content, iterations)?;
             println!("Parse time: {:?}/iter", parse_duration / iterations as u32);
 
             // Overall assessment
@@ -3021,8 +3074,8 @@ fn run_compare(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content1 = read_input(&file1)?;
     let content2 = read_input(&file2)?;
-    let esm_file1 = load_string(&content1)?;
-    let esm_file2 = load_string(&content2)?;
+    let esm_file1 = load_at(&file1, &content1)?;
+    let esm_file2 = load_at(&file2, &content2)?;
 
     println!("Comparing {} and {}:", file1.display(), file2.display());
     println!("Comparison type: {}", arg_name(&comparison_type));
@@ -3045,7 +3098,7 @@ fn run_compare(
 
 fn run_optimize(file: PathBuf, opt_type: OptimizeTarget) -> Result<(), Box<dyn std::error::Error>> {
     let content = read_input(&file)?;
-    let esm_file = load_string(&content)?;
+    let esm_file = load_at(&file, &content)?;
 
     println!("Optimization Analysis for: {}", file.display());
     println!("Optimization type: {}", arg_name(&opt_type));
@@ -3087,14 +3140,17 @@ fn run_init(name: String, template: InitTemplate) -> Result<(), Box<dyn std::err
 
     let final_content = template_content.replace("{name}", &name);
 
-    // Defensive self-check: never write a file our own loader rejects.
-    if let Err(e) = load_string(&final_content) {
+    let esm_file = project_dir.join(format!("{name}.esm"));
+
+    // Defensive self-check: never write a file our own loader rejects. Anchored
+    // on the path we are about to WRITE, so this check resolves exactly as a
+    // later `validate` of that same file will (esm-spec §4.7, §8.2.1).
+    if let Err(e) = load_at(&esm_file, &final_content) {
         return Err(fail(format!(
             "internal error: generated template does not load: {e}"
         )));
     }
 
-    let esm_file = project_dir.join(format!("{name}.esm"));
     fs::write(&esm_file, final_content)?;
 
     println!(
@@ -3167,15 +3223,15 @@ fn run_benchmark(
     println!("Type: {}, Iterations: {iterations}", arg_name(&bench_type));
 
     match bench_type {
-        BenchType::Parse => bench_parse(&content, iterations)?,
-        BenchType::Validate => bench_validate(&content, iterations)?,
-        BenchType::Simulate => bench_simulate(&content, iterations)?,
+        BenchType::Parse => bench_parse(&file, &content, iterations)?,
+        BenchType::Validate => bench_validate(&file, &content, iterations)?,
+        BenchType::Simulate => bench_simulate(&file, &content, iterations)?,
         BenchType::All => {
-            bench_parse(&content, iterations)?;
-            bench_validate(&content, iterations)?;
+            bench_parse(&file, &content, iterations)?;
+            bench_validate(&file, &content, iterations)?;
             // A file may be valid but not simulatable (e.g. no ODE
             // system); report that rather than failing the whole run.
-            if let Err(e) = bench_simulate(&content, iterations) {
+            if let Err(e) = bench_simulate(&file, &content, iterations) {
                 println!("Simulate: skipped ({e})");
             }
         }
@@ -3194,8 +3250,10 @@ fn run_schema_check(
         println!("Target schema version: {version}");
     }
 
-    // Load performs schema validation
-    match load_string(&content) {
+    // Load performs schema validation. Anchored on the document, like every
+    // other command (esm-spec §4.7, §8.2.1) -- a schema check that resolved
+    // against the CWD could pass or fail on where it was run from.
+    match load_at(&file, &content) {
         Ok(_) => println!("✓ Schema validation passed"),
         Err(e) => {
             println!("✗ Schema validation failed: {e}");
@@ -3215,10 +3273,31 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     let original_content = read_input(&file)?;
     let mut content = original_content.clone();
 
+    // esm-spec §4.7 / §8.2.1 both anchor on the directory of the REFERENCING
+    // FILE. This command used to `load_string` with no base, so every relative
+    // `ref` resolved against the process working directory instead — a document
+    // that `validate` and `test` loaded fine failed to round-trip unless you
+    // happened to `cd` into its directory first (downstream finding F7). With
+    // §8.2.1 in place that would have been worse than cosmetic: a relative
+    // `url_template` would have meant one thing under `validate` and another
+    // here, which is the bug class §8.2.1 exists to close. Every round uses the
+    // file's own directory, including the rounds that load EMITTED text — that
+    // text stands in for the same file, so it must resolve against the same
+    // base.
+    let opts = earthsci_ast::LoadOptions {
+        base_path: Some(
+            file.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+        ),
+        ..Default::default()
+    };
+
     for round in 1..=rounds {
         // Load
-        let esm_file =
-            load_string(&content).map_err(|e| fail(format!("Round {round}: Load failed: {e}")))?;
+        let esm_file = earthsci_ast::load_string_with_options(&content, &opts)
+            .map_err(|e| fail(format!("Round {round}: Load failed: {e}")))?;
 
         // Save
         content =
@@ -3228,8 +3307,8 @@ fn run_round_trip(file: PathBuf, rounds: usize) -> Result<(), Box<dyn std::error
     }
 
     // Check if final content matches original (semantically)
-    let original_esm = load_string(&original_content)?;
-    let final_esm = load_string(&content)?;
+    let original_esm = earthsci_ast::load_string_with_options(&original_content, &opts)?;
+    let final_esm = earthsci_ast::load_string_with_options(&content, &opts)?;
 
     let original_json = serde_json::to_value(&original_esm)?;
     let final_json = serde_json::to_value(&final_esm)?;

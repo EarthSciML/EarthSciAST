@@ -92,6 +92,8 @@ them), so keep this tuple in sync with the raise sites: add the code to
 `ERROR_CODES` and list it here when introducing it.
 """
 const _KNOWN_DIAGNOSTIC_CODES = (
+    # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
+    ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
     # (lower_expression_templates.jl; the recursive-body composition check
     # lives in template_imports.jl).

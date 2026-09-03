@@ -167,6 +167,17 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     )
     .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
+    // esm-spec §8.2.1: resolve every `data_sources[*].source` location against
+    // this document's own directory. AFTER ref resolution, because a referenced
+    // component file's `data_sources` block is hoisted into this document by the
+    // pass above — those entries were already anchored on THEIR file's directory
+    // there, and this pass is idempotent, so both anchors land correctly.
+    // Rewriting the raw document means the typed `DataSourceLocation`, the
+    // ingest providers and `emit` all see one resolved form and none of them
+    // needs a base directory.
+    crate::data_source_urls::resolve_data_source_urls(&mut json_value, &base)
+        .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
+
     // v0.4.0 expression_templates / apply_expression_template are rejected
     // when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
     crate::lower_expression_templates::reject_expression_templates_pre_v04(&json_value)

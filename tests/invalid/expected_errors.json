@@ -2889,5 +2889,13 @@
     "structural_errors": [],
     "is_valid": false,
     "notes": "esm-schema.json ParameterUpdateSpec admits `wiener` only as the object form. A driving noise process is the parameter's WHOLE value -- redrawn every step with sqrt(dt) scaling -- so there is no defined meaning for a scheduled `expression` layered on top of it; the combination is incoherent rather than merely unusual. Both rules are individually well-formed and `eps` carries the `distribution` that `wiener` requires, so the sole defect is `wiener` appearing in an array. Note the pointer is to the ELEMENT (`/update/0`), not the array: the restriction is per-rule. Companion negative to parameter_update_singleton_array.esm; together they pin both array-form restrictions introduced with the update array in d7012036."
+  },
+  "data_source_url_env_var.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_only": true,
+    "resolver_error_code": "data_source_url_unresolved",
+    "notes": "Resolver-level invalid (esm-spec §8.2.1). The document is SCHEMA-VALID — `url_template` is a bare string, so nothing in JSON Schema forbids a `${VAR}` in it — which is what makes this the resolver's rejection rather than a schema error. UNLIKE the other `resolver_only` pins, `is_valid` is false for EVERY binding: §8.2.1 resolution is REQUIRED of all five (it decides where a document's data comes from, and an optional capability there would make the same document resolve under one binding and not another), so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names the offending entry and template — the failure this replaces was an `io error at /${VAR}/x.parquet` that named neither. The portable spelling is tests/valid/data_source_relative_url.esm; the resolution rule itself is pinned across bindings by tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC §5.22)."
   }
 }

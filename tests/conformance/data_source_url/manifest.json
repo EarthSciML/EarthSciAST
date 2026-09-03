@@ -1,0 +1,97 @@
+{
+  "spec": "esm-spec §8.2.1",
+  "design_note": "docs/content/rfcs/portable-data-source-urls.md",
+  "notes": "The SHARED pin for data-source location resolution. Every binding's own test suite reads THIS file and asserts against it (Julia test/data_source_url_conformance_test.jl, Python tests/test_data_source_url_conformance.py, TypeScript src/data-source-urls.test.ts, Rust tests/data_source_url_conformance.rs, Go pkg/esm/data_source_url_conformance_test.go), so `./scripts/test-conformance.sh` covers all five by running the suites it already runs, and there is exactly one place where the expected resolution is written down. A path rule that differed between bindings would silently make documents non-portable, which is the defect this pins shut.\n\nExpectations are expressed as `repo_path` — a path relative to the REPOSITORY ROOT — rather than as a literal URL, because the resolved form is a machine-specific absolute `file://` URL and a golden holding one would only pass on the machine that wrote it. A binding asserts `resolved == 'file://' + abspath(repo_root + '/' + repo_path)`, with dot segments already removed. `verbatim` expectations are literal: the template was already a URL, or was substitution-led, and §8.2.1 leaves it unchanged.",
+  "fixtures": [
+    {
+      "id": "relative_catalog",
+      "path": "fixtures/relative_catalog.esm",
+      "expect": "accepted",
+      "sources": {
+        "dot_relative": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+          }
+        },
+        "bare_relative": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+          }
+        },
+        "parent_relative": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+          }
+        },
+        "dot_segments_collapse": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+          }
+        },
+        "absolute_path": {
+          "url_template": {
+            "verbatim": "file:///data/probe.parquet"
+          }
+        },
+        "already_a_file_url": {
+          "url_template": {
+            "verbatim": "file:///data/probe.parquet"
+          }
+        },
+        "remote_url": {
+          "url_template": {
+            "verbatim": "https://example.org/data/probe.parquet"
+          }
+        },
+        "non_file_scheme": {
+          "url_template": {
+            "verbatim": "s3://example-bucket/data/probe.parquet"
+          }
+        },
+        "substitution_led": {
+          "url_template": {
+            "verbatim": "{archive_root}/probe.parquet"
+          }
+        },
+        "relative_with_substitution": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/{date:%Y%m%d}.nc"
+          }
+        },
+        "primary_and_mirrors": {
+          "url_template": {
+            "repo_path": "tests/conformance/data_source_url/fixtures/tables/probe.parquet"
+          },
+          "mirrors": [
+            {
+              "repo_path": "tests/conformance/data_source_url/mirror/probe.parquet"
+            },
+            {
+              "verbatim": "https://example.org/mirror/probe.parquet"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "env_var_catalog",
+      "path": "fixtures/env_var_catalog.esm",
+      "expect": "refused",
+      "error_code": "data_source_url_unresolved",
+      "message_contains": [
+        "data_sources.needs_an_environment_variable.source.url_template",
+        "${MOVES_SNAPSHOTS}"
+      ]
+    },
+    {
+      "id": "env_var_mirror_catalog",
+      "path": "fixtures/env_var_mirror_catalog.esm",
+      "expect": "refused",
+      "error_code": "data_source_url_unresolved",
+      "message_contains": [
+        "data_sources.mirror_needs_a_variable.source.mirrors[0]",
+        "${LOCAL_MIRROR}"
+      ]
+    }
+  ]
+}

@@ -148,6 +148,20 @@ TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
 )
 
 # ===========================================================================
+# Data-source location codes (esm-spec §8.2.1), raised as
+# ``ExpressionTemplateError`` from ``_data_source_urls.py`` at load time.
+#
+# One code covers every way a `source.url_template` (or a `mirrors` entry) can
+# fail to resolve: an unexpanded `${VAR}` (§8.2 does not expand environment
+# variables at all), and a resolved path carrying a `?` or `#`. The message
+# names the offending data source and template -- the failure this replaces
+# was an "io error at /${VAR}/x.parquet" that named neither, one step away
+# from a source that silently delivered a default.
+# ===========================================================================
+
+DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
+
+# ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
 # ``subsystem_ref_is_template_library`` from ``parse.py``).
