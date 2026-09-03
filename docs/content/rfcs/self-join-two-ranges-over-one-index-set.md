@@ -171,6 +171,30 @@ That is a release decision about the migration contract, not a consequence of
 adding a field, and it belongs in its own change. The schema `description`
 records the new field so it is not undocumented in the meantime.
 
+## 2.7 The refusals are validation rules, stated about the document
+
+Both refusals in §2.2 and §2.3 began as build errors raised where each
+implementation happens to resolve a join. That is the wrong place for them, and
+the wrong way to say them. Both are decidable from the single file — the node's
+`ranges`, the document `index_sets`, the declared variable shapes and the
+clause are all in it — so they are `validate()` findings with codes every
+binding carries:
+
+* `join_side_ambiguous` — the document does not determine a range symbol for an
+  `on` key.
+* `join_syms_unknown_symbol` — a `syms` entry the node does not bind.
+
+The negative cases live in **one shared fixture set**,
+`tests/invalid/aggregate/build_time/self_join_*.esm`, pinned by `(code, path)`
+in `tests/invalid/expected_errors.json`. That file is what
+`scripts/compare-conformance-outputs.py` reads for its check B (every
+`tests/invalid/**` must be rejected, per binding, no exceptions) and check C
+(every rejection must carry the pinned findings), so
+`./scripts/test-conformance.sh` fails if any one binding accepts a fixture or
+reports a different code or a different pointer. Per-binding tests are kept as
+well, but they are not the enforcement: a rejection asserted only in each
+binding's own suite is one every binding can pass while disagreeing.
+
 ## 3. Determinism
 
 Both parts of §2 are pure functions of the document. The default consults only

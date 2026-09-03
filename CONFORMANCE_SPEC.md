@@ -1418,11 +1418,35 @@ capability must not remove a diagnostic. A binding that applied the default at
 case 1 would silently turn `on: [["county", "i"]]`, with `i` and `j` both
 drawing `county`, into a tautological pair and an ungated full product.
 
+**The two refusals are STRUCTURAL, and are stated about the document
+(normative).** Both are decidable from the single file — the node's `ranges`,
+the document `index_sets`, the declared variable shapes and the clause itself
+are all in it, so no evaluation, no runtime data and no other file are needed.
+A binding MUST therefore reject them in `validate()`, not only wherever it
+happens to resolve a join: an implementation that defers one to its evaluator
+reports it under a different code, at a different phase, or not at all for a
+document that is never simulated, and five bindings then disagree about a
+defect that is plainly in the text. Each carries a code:
+
+| code | the document does not … |
+|---|---|
+| `join_side_ambiguous` | … determine a range symbol for an `on` key. The key resolves through an index set — named outright, or the sole shape axis of the declared 1-D variable that names it — and that set is drawn `{from}` by more than one of the node's ranges while the clause carries no `syms`. TWO candidates are exempt **only** when the key is a data column, which is the default assignment above. |
+| `join_syms_unknown_symbol` | … bind a `syms` entry: it is not a key of that node's `ranges`. Left unchecked the side resolves to no symbol at all, and §5.3's degenerate-positional rule then silently DROPS the pair — an ungated full product, reported as a number rather than as a failure. |
+
+Both attach at the containing equation FIELD (`/models/<M>/equations/<i>/rhs`),
+the pointer convention the other aggregate checks use, and one finding per
+aggregate is enough.
+
 A self-join introduces no new relational semantics and no new order: inner-only,
 many-to-many, identity fill for an unmatched row, the rule-5 match set sorted by
 canonical key, and the driven walk as an order-preserving subsequence of the
-full product all hold unchanged. Cross-binding conformance: the shared fixture
-`tests/valid/aggregate/join_on_self_join.esm`.
+full product all hold unchanged. Cross-binding conformance: the shared fixtures
+`tests/valid/aggregate/join_on_self_join.esm` (the default assignment) and
+`join_on_self_join_syms.esm` (the explicit spelling, whose answer DIFFERS from
+the default's, so a binding that parses `syms` and ignores it fails it), and the
+three rejections under `tests/invalid/aggregate/build_time/`, pinned by
+`(code, path)` in `tests/invalid/expected_errors.json` — which is what
+`scripts/compare-conformance-outputs.py` enforces for every binding.
 
 A **composite key** is a clause listing several pairs over the same two loop
 symbols. It matches iff **every** pair agrees, which is tuple equality; the

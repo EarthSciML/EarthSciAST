@@ -378,6 +378,7 @@ Where:
 | BEHAV-10-B-006 | Because an `on` gate is EXACT rather than a conservative broad phase, a binding MUST keep every evaluation path that does not consult the gate — a vectorised/whole-array overlay, a compiled tape, a build-time observed evaluator — applying the equality. Resolving the clause into a gate ALONE, and leaving such a path evaluating an ungated product, is silently wrong rather than merely slow | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-007 | A relation MUST be joinable to ITSELF: two of the node's ranges drawing ONE index set. A key column's axis then names several candidate range symbols, and the SIDE ASSIGNMENT is normative — with exactly two candidates the LEFT key is read at the earlier in canonical range order (`output_idx` order, then the contracted symbols ascending) and the RIGHT at the later; with three or more the document MUST be rejected, naming the candidates | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-008 | A `join` clause MAY carry `syms`, a 2-element `[left, right]` array of range symbols overriding the default for every pair in the clause. Both MUST name ranges of the node; a key whose axis the named symbol does not draw is a build error. `syms` names BINDERS, so a binding MUST carry it unchanged through §5.5.6 namespacing and `variable_map` renaming, and MUST NOT rewrite it as a variable reference | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
+| BEHAV-10-B-010 | The two self-join refusals are STRUCTURAL and stated about the DOCUMENT: both are decidable from the single file, so `validate()` MUST report them under `join_side_ambiguous` (no range symbol determined for an `on` key) and `join_syms_unknown_symbol` (a `syms` entry the node does not bind), at the containing equation field. A binding that defers either to its evaluator reports it under a different code, at a different phase, or not at all for a document that is never simulated | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-009 | The default assignment applies to a DATA COLUMN's axis only. A key NAMING an index set that several range symbols draw MUST stay a build error advising the range symbol (or `syms`) — adding the self-join capability must not remove that diagnostic, or `on: [["county", "i"]]` with two ranges over `county` becomes a tautological pair and an ungated product | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 
 > **Binding status (2026-08-31)**: **Rust** implements all six plus the -004a SHOULD.
@@ -402,7 +403,15 @@ Where:
 > `_join_sym_for_key(…, pick, order, via)`; Python the same signature). TypeScript and
 > Go carry `syms` through unchanged with no code change — a join clause is an open bag
 > in both (`{[k: string]: unknown}` / `[]any`) — and validate it from the synced
-> schema. Gates: the shared fixture `tests/valid/aggregate/join_on_self_join.esm`
+> schema. The -010 rejections are pinned ONCE for all five, as
+> `tests/invalid/aggregate/build_time/self_join_three_ranges_ambiguous.esm`,
+> `…_index_set_key_ambiguous.esm` and `…_syms_unknown_symbol.esm` with their
+> `(code, path)` in `tests/invalid/expected_errors.json` — the file
+> `scripts/compare-conformance-outputs.py` reads for check B (every
+> `tests/invalid/**` rejected, per binding, no exceptions) and check C (each
+> rejection carries the pinned findings). Verified identical in all five: same
+> code, same JSON pointer, for each of the three.
+> Gates: the shared fixture `tests/valid/aggregate/join_on_self_join.esm`
 > (`priorSum = 1111`, NOT the transposed 11110 nor the ungated 55555; `pairCount = 4`,
 > NOT 25), plus `earthsci-ast-rs/tests/join_on_self_join.rs`,
 > `EarthSciAST.jl/test/join_on_self_join_test.jl` and
