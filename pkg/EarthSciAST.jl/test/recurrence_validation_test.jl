@@ -206,7 +206,24 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
             for case in manifest.cases
                 @testset "$(case.id)" begin
                     res = validate_text(JSON3.write(case.document))
+                    codes = [e.error_type for e in res.structural_errors]
+                    # GUARD 1. Each corpus document is illegal for exactly ONE
+                    # reason — the recurrence rule. A document that drifted
+                    # schema-invalid would be refused for a shape error instead,
+                    # satisfying an "it was rejected" check while testing nothing
+                    # about this construct.
                     @test isempty(res.schema_errors)
+                    # GUARD 2. No case may come back as a whole-document or a
+                    # cycle error. This states CONFORMANCE_SPEC §5.19.5's
+                    # candidacy regression directly and independently of the
+                    # per-case pair: gate the self-edge exemption on the
+                    # well-foundedness VERDICT instead of on CANDIDACY and every
+                    # case collapses to one of these, with the
+                    # `recurrence_*` diagnosis never reached. If this fires, the
+                    # fix is to gate on candidacy — an array-shaped unknown with
+                    # at least one `index` self-read, well founded or not.
+                    @test !("load_error" in codes)
+                    @test !("circular_dependency" in codes)
                     hits = [e for e in res.structural_errors
                             if e.error_type == String(case.expected_code)]
                     @test length(hits) >= 1
