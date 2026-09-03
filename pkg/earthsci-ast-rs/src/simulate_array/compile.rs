@@ -1327,13 +1327,13 @@ struct SelfRead {
 
 /// A recurrence definition, lowered to the frame + per-cell body the sweep
 /// runs (see [`AlgebraicRule::Recurrence`]).
-struct RecurLowering {
-    idx_names: Vec<String>,
-    ranges: Vec<(i64, i64)>,
-    body: Expr,
-    axis: usize,
-    max_lag: i64,
-    lag_proven: bool,
+pub(super) struct RecurLowering {
+    pub(super) idx_names: Vec<String>,
+    pub(super) ranges: Vec<(i64, i64)>,
+    pub(super) body: Expr,
+    pub(super) axis: usize,
+    pub(super) max_lag: i64,
+    pub(super) lag_proven: bool,
 }
 
 fn recur_err(code: &str, detail: String) -> CompileError {
@@ -1618,7 +1618,7 @@ fn cell_restrict_aggregate(node: &ExpressionNode, idx_names: &[String]) -> Expr 
 /// well-founded causal read, reported with the esm-spec §4.3.1.1 code. Never a
 /// silent fallback: the pre-feature behaviour for every rejected shape here was
 /// a plausible wrong number.
-fn lower_recurrence(
+pub(super) fn lower_recurrence(
     var: &str,
     lhs: &Expr,
     rhs: &Expr,

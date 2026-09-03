@@ -228,6 +228,78 @@ pub(super) fn observed_rule_body(rule: &AlgebraicRule) -> &Expr {
     }
 }
 
+/// The cell frame of a recurrence: column-major extents and 1-based origin.
+pub(super) fn recur_frame(output_ranges: &[(i64, i64)]) -> (DimU, DimI) {
+    (
+        output_ranges
+            .iter()
+            .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+            .collect(),
+        output_ranges.iter().map(|(lo, _)| *lo).collect(),
+    )
+}
+
+/// Run one causal-self-reference sweep into `scope` and return the finished
+/// array (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19).
+///
+/// THE single implementation of the construct's evaluation order, shared by the
+/// per-step observed materialization and by the build pipeline
+/// (`prepare::eval_observed`). Two call sites with two copies is how this
+/// construct came to evaluate correctly under `esm test` and return a
+/// plausible wrong answer under `esm simulate`; one function is the structural
+/// fix for that, not a cleanup.
+///
+/// The CALLER owns `scope`, which is what makes the borrow work without
+/// `unsafe`: the scope has to outlive the `&mut EvalCtx` it is installed into,
+/// and only the caller's stack frame can promise that.
+pub(super) fn sweep_recurrence<'a>(
+    scope: &'a RecurScope<'a>,
+    output_idx_names: &[String],
+    output_ranges: &[(i64, i64)],
+    body: &Expr,
+    axis: usize,
+    ctx: &mut EvalCtx<'a>,
+) -> ArrayD<f64> {
+    // Every axis EXCEPT the recurrence axis forms the inner product; the
+    // recurrence axis is swept outside it, ascending. Cells sharing a
+    // recurrence coordinate cannot read one another (every self-read is
+    // strictly earlier on that axis), so their relative order is immaterial to
+    // the values — it is fixed anyway, `output_idx` order ascending, so nothing
+    // about the result is left to an implementation.
+    let (lo, hi) = output_ranges[axis];
+    let inner_ranges: Vec<(i64, i64)> = output_ranges
+        .iter()
+        .enumerate()
+        .filter(|(d, _)| *d != axis)
+        .map(|(_, r)| *r)
+        .collect();
+    let inner_axes: Vec<(usize, &String)> = output_idx_names
+        .iter()
+        .enumerate()
+        .filter(|(d, _)| *d != axis)
+        .collect();
+    let saved = ctx.recur.take();
+    ctx.recur = Some(scope);
+    let mut full = vec![0i64; output_ranges.len()];
+    for i in lo..=hi {
+        set_bind(&mut ctx.loop_binds, &output_idx_names[axis], i);
+        full[axis] = i;
+        let mut inner = CartesianTuples::new(&inner_ranges);
+        while let Some(tuple) = inner.next() {
+            for ((d, name), val) in inner_axes.iter().zip(tuple.iter()) {
+                set_bind(&mut ctx.loop_binds, name, *val);
+                full[*d] = *val;
+            }
+            let v = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            // Published BEFORE the axis advances, which is the whole construct:
+            // the next cell's self-read must observe this value, not a default.
+            scope.publish(&full, v);
+        }
+    }
+    ctx.recur = saved;
+    scope.finish()
+}
+
 /// Collect every variable-reference leaf (`Expr::Variable`) in `expr`, walking
 /// the canonical expression-bearing child set
 /// ([`ExpressionNode::for_each_child`]) so a dependency edge is never missed.
@@ -468,6 +540,13 @@ pub(super) fn materialize_observeds_pass(
             // must be the outer loop, each cell must be published before the
             // axis advances, and neither the whole-array overlay nor the tape
             // may touch it (CONFORMANCE_SPEC §5.19.2).
+            // Causal self-reference (esm-spec §4.3.1.1). The one rule kind whose
+            // output cells are NOT independent, so the sweep is factored into
+            // `sweep_recurrence` and shared with the BUILD-PIPELINE path
+            // (`prepare::eval_observed`). That sharing is not tidiness: the two
+            // paths having separate implementations is exactly how the
+            // construct came to work under `esm test` and be dead under
+            // `esm simulate`, so there is now one sweep and both callers use it.
             AlgebraicRule::Recurrence {
                 var,
                 output_idx_names,
@@ -478,53 +557,20 @@ pub(super) fn materialize_observeds_pass(
                 lag_proven: _,
             } => {
                 stats.obs_scalar_rules += 1;
-                let shape: DimU = output_ranges
-                    .iter()
-                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
-                    .collect();
-                let origin: DimI = output_ranges.iter().map(|(lo, _)| *lo).collect();
+                let (shape, origin) = recur_frame(output_ranges);
                 let scope = RecurScope::new(var.as_str(), shape, origin);
-                {
-                    // Every axis EXCEPT the recurrence axis forms the inner
-                    // product; the recurrence axis is swept outside it,
-                    // ascending. Cells sharing a recurrence coordinate cannot
-                    // read one another (every self-read is strictly earlier on
-                    // that axis), so their relative order is immaterial to the
-                    // values — it is fixed anyway, `output_idx` order ascending,
-                    // so nothing about the result is left to an implementation.
-                    let (lo, hi) = output_ranges[*axis];
-                    let inner_ranges: Vec<(i64, i64)> = output_ranges
-                        .iter()
-                        .enumerate()
-                        .filter(|(d, _)| *d != *axis)
-                        .map(|(_, r)| *r)
-                        .collect();
-                    let inner_axes: Vec<(usize, &String)> = output_idx_names
-                        .iter()
-                        .enumerate()
-                        .filter(|(d, _)| *d != *axis)
-                        .collect();
+                let arr = {
                     let mut ctx = env.oracle_ctx(&*dst);
-                    ctx.recur = Some(&scope);
-                    let mut full = vec![0i64; output_ranges.len()];
-                    for i in lo..=hi {
-                        set_bind(&mut ctx.loop_binds, &output_idx_names[*axis], i);
-                        full[*axis] = i;
-                        let mut inner = CartesianTuples::new(&inner_ranges);
-                        while let Some(tuple) = inner.next() {
-                            for ((d, name), val) in inner_axes.iter().zip(tuple.iter()) {
-                                set_bind(&mut ctx.loop_binds, name, *val);
-                                full[*d] = *val;
-                            }
-                            let v = eval(body, &mut ctx).as_scalar().unwrap_or(f64::NAN);
-                            // Published BEFORE the axis advances, which is the
-                            // whole construct: the next cell's self-read must
-                            // observe this value, not a default.
-                            scope.publish(&full, v);
-                        }
-                    }
-                }
-                dst.insert(var.clone(), scope.finish());
+                    sweep_recurrence(
+                        &scope,
+                        output_idx_names,
+                        output_ranges,
+                        body,
+                        *axis,
+                        &mut ctx,
+                    )
+                };
+                dst.insert(var.clone(), arr);
             }
             AlgebraicRule::ArrayLoop {
                 var,

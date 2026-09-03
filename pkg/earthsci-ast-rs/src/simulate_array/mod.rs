@@ -81,6 +81,7 @@ pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
+pub(crate) use eval::eval_observed_recurrence;
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so the scalar interpreter
 // `crate::simulate::eval_op` routes through the SAME definition instead of
