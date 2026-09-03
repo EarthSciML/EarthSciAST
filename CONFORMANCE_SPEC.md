@@ -3013,6 +3013,14 @@ never reached. That is the original masking defect moved from the legal case to
 the illegal one: the construct's whole purpose is to replace a silent or
 mis-attributed failure with a named one, and this gives the name back up.
 
+The mirror-image mistake is just as easy and was made independently: gating on
+**"is this a self-edge at all"**, which is *wider* than candidacy. That exemption
+swallows equations the recurrence check does not own — a scalar `x ~ x + 1`, or a
+bare `s ~ s + 1` over an array — and silently drops the cycle diagnosis they used
+to get, for a self-reference that can never be a recurrence because it has no axis
+to fold along. Both mis-gatings lose a diagnosis; the narrow one loses the
+recurrence codes, the wide one loses the cycle error.
+
 Candidacy answers the right question: *does the recurrence check own the
 diagnosis for this equation?* If it does, hand the equation to that check and let
 it decide; if it does not, leave every existing check exactly as it was. A scalar
