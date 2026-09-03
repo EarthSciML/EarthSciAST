@@ -1104,19 +1104,24 @@ function _check_model_aggregates!(errors::Vector{StructuralError}, file::EsmFile
     # a state-free observed is not continuous, and the guard would otherwise
     # reject the const-folding geometry paths that rely on it.
     state_vars = Set{String}(solver_unknowns(model))
+    # A join key may name a DATA COLUMN, whose range symbol comes from its
+    # declared 1-D shape — so `_check_join_sides!` needs the model's shapes.
+    var_shapes = Dict{String,Vector{String}}(
+        n => String[String(x) for x in v.shape]
+        for (n, v) in model.variables if v.shape !== nothing)
 
     for (i, eq) in enumerate(model.equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i-1)/lhs", state_vars, registry)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i-1)/rhs", state_vars, registry)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/equations/$(i-1)/lhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/equations/$(i-1)/rhs", state_vars, registry, var_shapes)
     end
     for (i, eq) in enumerate(model.initialization_equations)
-        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs", state_vars, registry)
-        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs", state_vars, registry)
+        _walk_aggregates!(errors, file, eq.lhs, "$path/initialization_equations/$(i-1)/lhs", state_vars, registry, var_shapes)
+        _walk_aggregates!(errors, file, eq.rhs, "$path/initialization_equations/$(i-1)/rhs", state_vars, registry, var_shapes)
     end
     for name in sort!(collect(keys(model.guesses)))
         g = model.guesses[name]
         isa(g, ASTExpr) || continue
-        _walk_aggregates!(errors, file, g, "$path/guesses/$name", state_vars, registry)
+        _walk_aggregates!(errors, file, g, "$path/guesses/$name", state_vars, registry, var_shapes)
     end
 
     for (subsys_name, subsys) in model_subsystems(model)
@@ -1131,15 +1136,17 @@ end
 # a finding attaches at the field, not the leaf.
 function _walk_aggregates!(errors::Vector{StructuralError}, file::EsmFile,
                            expr::ASTExpr, anchor::String, state_vars::Set{String},
-                           registry::Set{String})
+                           registry::Set{String},
+                           var_shapes::Dict{String,Vector{String}})
     isa(expr, OpExpr) || return errors
     if expr.op == "aggregate"
         _check_undefined_index_set!(errors, expr, anchor, registry)
         _check_join_key_type!(errors, file, expr, anchor)
+        _check_join_sides!(errors, expr, anchor, var_shapes)
         _check_relational_in_continuous!(errors, expr, anchor, state_vars)
     end
     for c in _expr_children(expr)
-        _walk_aggregates!(errors, file, c, anchor, state_vars, registry)
+        _walk_aggregates!(errors, file, c, anchor, state_vars, registry, var_shapes)
     end
     return errors
 end
@@ -1164,6 +1171,96 @@ function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExp
             ERROR_CODES.UNDEFINED_INDEX_SET,
             Dict{String,Any}("index_set" => from, "range" => sym)
         ))
+    end
+    return errors
+end
+
+# The two static `join` SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
+# this ONE document — the node's `ranges`, the declared variable shapes and the
+# clause itself are all here, so no evaluation, no runtime data and no other file
+# are needed. Both are stated about the DOCUMENT rather than about where any one
+# implementation happens to resolve a join, which is what lets all five bindings
+# pin the same fixtures (tests/invalid/expected_errors.json).
+#
+#  * JOIN_SYMS_UNKNOWN_SYMBOL — a clause's `syms` entry that is not a key of the
+#    node's `ranges`. Unchecked, that side resolves to no symbol at all and RFC
+#    §5.3's degenerate-positional rule silently DROPS the pair: an ungated full
+#    product, reported as a number rather than as a failure.
+#  * JOIN_SIDE_AMBIGUOUS — an `on` key for which the document does not determine
+#    a range symbol. A key names a range symbol, an index set, or a declared 1-D
+#    variable; in the latter two the symbol comes from the index set (named
+#    outright, or the variable's sole shape axis). If that set is drawn `{from}`
+#    by more than one of the node's ranges and the clause carries no `syms`, the
+#    key does not say which. TWO candidates are resolved by the default side
+#    assignment only when the key is a DATA COLUMN — a key naming the index set
+#    can already say which side it means by naming the range symbol instead, so
+#    that spelling is ambiguous at two as well.
+#
+# One finding per aggregate.
+function _check_join_sides!(errors::Vector{StructuralError}, agg::OpExpr,
+                            anchor::String,
+                            var_shapes::Dict{String,Vector{String}})
+    (agg.join === nothing || agg.ranges === nothing) && return errors
+    ranges = agg.ranges
+    set_to_syms = Dict{String,Vector{String}}()
+    for (sym, spec) in ranges
+        spec isa IndexSetRef || continue
+        push!(get!(set_to_syms, spec.from, String[]), String(sym))
+    end
+    for v in values(set_to_syms); sort!(v); end
+
+    for clause in agg.join
+        clause isa AbstractVector || continue      # an overlap clause gates no key
+        csyms = _clause_syms(clause)
+        if csyms !== nothing
+            for cs in csyms
+                haskey(ranges, cs) && continue
+                push!(errors, StructuralError(
+                    anchor,
+                    "aggregate join `syms` names '$cs', which is not a range symbol of " *
+                    "this aggregate; both entries must name one of its `ranges`",
+                    ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
+                    Dict{String,Any}("join_syms_entry" => cs,
+                                     "declared_ranges" => sort!(String[String(k) for k in keys(ranges)]))
+                ))
+                return errors
+            end
+            continue      # an explicit `syms` answers every pair of this clause
+        end
+        for pair in clause
+            (pair isa Tuple && length(pair) == 2) || continue
+            for (side, key) in (("left", String(pair[1])), ("right", String(pair[2])))
+                haskey(ranges, key) && continue        # names a range symbol outright
+                set_name, via_column = if haskey(set_to_syms, key)
+                    (key, false)
+                else
+                    shape = get(var_shapes, key, nothing)
+                    (shape === nothing || length(shape) != 1) && continue
+                    (String(shape[1]), true)
+                end
+                cands = get(set_to_syms, set_name, nothing)
+                cands === nothing && continue
+                # One candidate: the ordinary join of two distinct relations.
+                # Two: the default assignment, but only for a data column.
+                # Three or more: never.
+                (length(cands) < 2 || (length(cands) == 2 && via_column)) && continue
+                msg = via_column ?
+                    "aggregate join key column '$key' lives on index set '$set_name', which " *
+                    "$(length(cands)) range symbols of this aggregate draw, so the document " *
+                    "does not determine which one the key is read at; name the clause's two " *
+                    "sides with `syms`" :
+                    "aggregate join key '$key' names an index set that $(length(cands)) range " *
+                    "symbols of this aggregate draw; reference the range symbol directly, or " *
+                    "name the clause's two sides with `syms`"
+                push!(errors, StructuralError(
+                    anchor, msg, ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
+                    Dict{String,Any}("join_key" => key, "side" => side,
+                                     "index_set" => set_name,
+                                     "candidate_range_symbols" => cands)
+                ))
+                return errors
+            end
+        end
     end
     return errors
 end

@@ -437,6 +437,13 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
         # equations (esm-spec §6.3.1). An observed unknown is eliminable, so it
         # is not a "state" for the purposes of the continuous-relational guard.
         state_vars = set(ode_states(m)) | set(algebraic_unknowns(m))
+        # A join key may name a DATA COLUMN, whose range symbol comes from its
+        # declared 1-D shape -- so the join-side checks need the model's shapes.
+        var_shapes = {
+            vn: list(v["shape"])
+            for vn, v in (m.get("variables") or {}).items()
+            if isinstance(v, dict) and isinstance(v.get("shape"), list)
+        }
         for site in _model_expression_sites(m, mname):
             location, expr = site[0], site[1]
             pointer = _pointer(location)
@@ -485,6 +492,115 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                                     },
                                 )
                                 break
+
+                # --- join_side_ambiguous / join_syms_unknown_symbol: the two
+                # static SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
+                # this ONE document -- the node's ``ranges``, the declared
+                # variable shapes and the clause are all here. Stated about the
+                # DOCUMENT rather than about where any implementation resolves a
+                # join, which is what lets all five bindings pin the same
+                # fixtures (``tests/invalid/expected_errors.json``).
+                #
+                # ``join_syms_unknown_symbol``: a clause's ``syms`` entry that is
+                # not a key of the node's ``ranges``. Unchecked, that side
+                # resolves to no symbol at all and RFC §5.3's
+                # degenerate-positional rule silently DROPS the pair -- an
+                # ungated full product reported as a number.
+                #
+                # ``join_side_ambiguous``: an ``on`` key for which the document
+                # does not determine a range symbol. The symbol comes from an
+                # index set (named outright, or the sole shape axis of the
+                # declared 1-D variable that names it); if that set is drawn by
+                # MORE THAN ONE of the node's ranges and the clause carries no
+                # ``syms``, the key does not say which. TWO candidates resolve by
+                # the default side assignment only for a DATA COLUMN -- a key
+                # naming the index set can already say which side it means by
+                # naming the range symbol instead.
+                if isinstance(ranges, dict):
+                    set_to_syms: dict[str, list[str]] = {}
+                    for sym, spec in ranges.items():
+                        if isinstance(spec, dict) and isinstance(spec.get("from"), str):
+                            set_to_syms.setdefault(spec["from"], []).append(str(sym))
+                    for v in set_to_syms.values():
+                        v.sort()
+                    for clause in agg.get("join") or []:
+                        if not isinstance(clause, dict):
+                            continue
+                        csyms = clause.get("syms")
+                        if csyms is not None:
+                            bad = next(
+                                (c for c in csyms if c not in ranges)
+                                if isinstance(csyms, (list, tuple))
+                                else iter(()),
+                                None,
+                            )
+                            if bad is not None:
+                                emit(
+                                    "join_syms_unknown_symbol",
+                                    pointer,
+                                    f"aggregate join `syms` names {bad!r}, which is not a "
+                                    f"range symbol of this aggregate; both entries must "
+                                    f"name one of its `ranges`",
+                                    {
+                                        "join_syms_entry": bad,
+                                        "declared_ranges": sorted(ranges),
+                                    },
+                                )
+                                break
+                            # An explicit `syms` answers every pair of the clause.
+                            continue
+                        done = False
+                        for pair in clause.get("on") or []:
+                            if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+                                continue
+                            for side, key in (("left", pair[0]), ("right", pair[1])):
+                                if not isinstance(key, str) or key in ranges:
+                                    continue
+                                if key in set_to_syms:
+                                    set_name, via_column = key, False
+                                else:
+                                    shape = var_shapes.get(key)
+                                    if not (isinstance(shape, list) and len(shape) == 1):
+                                        continue
+                                    set_name, via_column = str(shape[0]), True
+                                cands = set_to_syms.get(set_name)
+                                # One candidate: two distinct relations. Two: the
+                                # default assignment, but only for a data column.
+                                # Three or more: never.
+                                if not cands or len(cands) < 2:
+                                    continue
+                                if len(cands) == 2 and via_column:
+                                    continue
+                                msg = (
+                                    f"aggregate join key column {key!r} lives on index set "
+                                    f"{set_name!r}, which {len(cands)} range symbols of this "
+                                    f"aggregate draw, so the document does not determine "
+                                    f"which one the key is read at; name the clause's two "
+                                    f"sides with `syms`"
+                                    if via_column
+                                    else
+                                    f"aggregate join key {key!r} names an index set that "
+                                    f"{len(cands)} range symbols of this aggregate draw; "
+                                    f"reference the range symbol directly, or name the "
+                                    f"clause's two sides with `syms`"
+                                )
+                                emit(
+                                    "join_side_ambiguous",
+                                    pointer,
+                                    msg,
+                                    {
+                                        "join_key": key,
+                                        "side": side,
+                                        "index_set": set_name,
+                                        "candidate_range_symbols": cands,
+                                    },
+                                )
+                                done = True
+                                break
+                            if done:
+                                break
+                        if done:
+                            break
 
                 # --- relational_node_in_continuous: a distinct value-invention
                 # node under a relational semiring that reads a STATE variable.

@@ -277,6 +277,12 @@ diagnostic_code_registry! {
     INVALID_BROADCAST_FN = "invalid_broadcast_fn";
     /// A `join.on` key of a type the join cannot compare.
     JOIN_KEY_INVALID_TYPE = "join_key_invalid_type";
+    /// A `join.on` key whose range symbol the document does not determine —
+    /// its index set is drawn by more than one of the node's ranges and the
+    /// clause names no `syms` (CONFORMANCE_SPEC §5.5.8).
+    JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous";
+    /// A `join.syms` entry that is not a range symbol of the node.
+    JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol";
     /// A null entry in a reaction list.
     NULL_REACTION = "null_reaction";
     /// An `operator` whose declared variable the model does not have.
@@ -447,6 +453,8 @@ mod error_code_tests {
             "invalid_broadcast_fn",
             "invalid_enums_block",
             "join_key_invalid_type",
+            "join_side_ambiguous",
+            "join_syms_unknown_symbol",
             "makearray_region_inverted",
             "metaparameter_name_conflict",
             "metaparameter_type_error",

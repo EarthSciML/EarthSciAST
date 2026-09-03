@@ -223,4 +223,32 @@ end
         @test msg_null !== nothing             # rejected, not silently evaluated
         @test occursin("null", lowercase(msg_null))
     end
+
+    # The SIDE rejections of the same directory (CONFORMANCE_SPEC §5.5.8), which
+    # are structural rather than evaluator-only: each is decidable from the ONE
+    # document, so `validate` must reject it in every binding, and the expected
+    # `(code, path)` is read from the SHARED pin rather than restated here. A
+    # per-binding copy of the expected code is how five bindings drift apart one
+    # fixture at a time.
+    @testset "build-time self-join SIDE rejection (shared pin)" begin
+        pins = JSON3.read(read(joinpath(_AGG_REPO_ROOT, "tests", "invalid",
+                                        "expected_errors.json"), String))
+        for name in ("self_join_three_ranges_ambiguous.esm",
+                     "self_join_index_set_key_ambiguous.esm",
+                     "self_join_syms_unknown_symbol.esm")
+            path = joinpath(_AGG_REPO_ROOT, "tests", "invalid", "aggregate",
+                            "build_time", name)
+            @test isfile(path)
+            pin = pins[Symbol(name)]
+            @test pin["is_valid"] == false
+            @test isempty(pin["schema_errors"])       # the schema cannot express it
+            want = Set((String(e["code"]), String(e["path"])) for e in pin["structural_errors"])
+            @test !isempty(want)
+
+            r = EarthSciAST.validate_path(path)
+            @test r.is_valid == false
+            got = Set((e.error_type, e.path) for e in r.structural_errors)
+            @test issubset(want, got)
+        end
+    end
 end

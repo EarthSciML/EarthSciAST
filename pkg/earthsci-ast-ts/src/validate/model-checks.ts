@@ -819,6 +819,127 @@ export function validateAggregateJoinKeys(
 }
 
 /**
+ * The two static `join` SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
+ * this ONE document — the node's `ranges`, the declared variable shapes and the
+ * clause itself are all here, so no evaluation, no runtime data and no other
+ * file are needed. Both are stated about the DOCUMENT rather than about where
+ * any one implementation happens to resolve a join, which is what lets all five
+ * bindings pin the same fixtures (`tests/invalid/expected_errors.json`).
+ *
+ * - `join_syms_unknown_symbol` — a clause's `syms` entry that is not a key of
+ *   the node's `ranges`. Unchecked, that side resolves to no symbol at all and
+ *   RFC §5.3's degenerate-positional rule silently DROPS the pair: an ungated
+ *   full product, reported as a number rather than as a failure.
+ * - `join_side_ambiguous` — an `on` key for which the document does not
+ *   determine a range symbol. The symbol comes from an index set — named
+ *   outright, or the sole shape axis of the declared 1-D variable that names it
+ *   — and if that set is drawn `{from}` by MORE THAN ONE of the node's ranges
+ *   with no `syms` on the clause, the key does not say which. TWO candidates
+ *   resolve by the default side assignment only for a DATA COLUMN: a key naming
+ *   the index set can already say which side it means by naming the range
+ *   symbol instead, so that spelling is ambiguous at two as well.
+ *
+ * One finding per aggregate.
+ */
+export function validateAggregateJoinSides(
+  model: Model,
+  modelPath: string,
+  _esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  // A join key may name a DATA COLUMN, whose range symbol comes from its
+  // declared 1-D shape.
+  const varShapes = new Map<string, string[]>()
+  for (const [name, v] of Object.entries(model.variables || {})) {
+    const shape = (v as { shape?: unknown }).shape
+    if (Array.isArray(shape) && shape.length === 1 && typeof shape[0] === 'string') {
+      varShapes.set(name, shape as string[])
+    }
+  }
+  forEachExpressionScope(model, modelPath, (scope) => {
+    for (const site of scope) {
+      for (const agg of collectAggregates(site.expr)) {
+        const ranges = (agg.ranges || {}) as Record<string, unknown>
+        const clauses = (agg as { join?: unknown }).join
+        if (!Array.isArray(clauses) || Object.keys(ranges).length === 0) continue
+        const setToSyms = new Map<string, string[]>()
+        for (const [sym, range] of Object.entries(ranges)) {
+          const setName = rangeIndexSetName(range)
+          if (setName === undefined) continue
+          const list = setToSyms.get(setName)
+          if (list) list.push(sym)
+          else setToSyms.set(setName, [sym])
+        }
+        for (const list of setToSyms.values()) list.sort()
+        const declared = Object.keys(ranges).sort()
+
+        let done = false
+        for (const clause of clauses) {
+          if (done) break
+          if (clause === null || typeof clause !== 'object' || Array.isArray(clause)) continue
+          const c = clause as Record<string, unknown>
+          if (c.syms !== undefined) {
+            const list = Array.isArray(c.syms) ? c.syms : []
+            for (const entry of list) {
+              if (typeof entry === 'string' && entry in ranges) continue
+              errors.push({
+                path: site.path,
+                code: ERROR_CODES.JOIN_SYMS_UNKNOWN_SYMBOL,
+                message: `aggregate join \`syms\` names ${JSON.stringify(entry)}, which is not a range symbol of this aggregate; both entries must name one of its \`ranges\``,
+                details: { join_syms_entry: entry, declared_ranges: declared },
+              })
+              done = true
+              break
+            }
+            // An explicit `syms` answers every pair of this clause.
+            continue
+          }
+          const on = Array.isArray(c.on) ? c.on : []
+          for (const pair of on) {
+            if (done) break
+            if (!Array.isArray(pair) || pair.length !== 2) continue
+            for (let i = 0; i < 2; i++) {
+              const key = pair[i]
+              if (typeof key !== 'string' || key in ranges) continue
+              let setName: string | undefined
+              let viaColumn = false
+              if (setToSyms.has(key)) {
+                setName = key
+              } else {
+                const shape = varShapes.get(key)
+                if (!shape) continue
+                setName = shape[0]
+                viaColumn = true
+              }
+              const cands = setToSyms.get(setName)
+              // One candidate: two distinct relations. Two: the default side
+              // assignment, but only for a data column. Three or more: never.
+              if (!cands || cands.length < 2 || (cands.length === 2 && viaColumn)) continue
+              errors.push({
+                path: site.path,
+                code: ERROR_CODES.JOIN_SIDE_AMBIGUOUS,
+                message: viaColumn
+                  ? `aggregate join key column "${key}" lives on index set "${setName}", which ${cands.length} range symbols of this aggregate draw, so the document does not determine which one the key is read at; name the clause's two sides with \`syms\``
+                  : `aggregate join key "${key}" names an index set that ${cands.length} range symbols of this aggregate draw; reference the range symbol directly, or name the clause's two sides with \`syms\``,
+                details: {
+                  join_key: key,
+                  side: i === 0 ? 'left' : 'right',
+                  index_set: setName,
+                  candidate_range_symbols: cands,
+                },
+              })
+              done = true
+              break
+            }
+          }
+        }
+      }
+    }
+  })
+  return errors
+}
+
+/**
  * F-6 check `undefined_index_set` (RFC §5.2): an `aggregate` `ranges` entry
  * `{ from: NAME }` whose NAME is not a key of the document-scoped `index_sets`
  * registry. No implicit interval is inferred, so a typo cannot silently become

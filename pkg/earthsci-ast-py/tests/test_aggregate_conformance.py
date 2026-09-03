@@ -200,6 +200,10 @@ def test_undeclared_from_name_rejected_by_resolver() -> None:
 
 _BUILD_TIME_INVALID_DIR = INVALID_DIR / "aggregate" / "build_time"
 
+#: The shared cross-binding pin every build-time fixture's expectation comes
+#: from — the same file Rust, Julia, Go and TypeScript read.
+_EXPECTED_ERRORS = json.loads((INVALID_DIR / "expected_errors.json").read_text())
+
 
 def _build_time_invalid_fixtures() -> List[Path]:
     """Join fixtures that are schema-VALID but must be rejected at build time."""
@@ -217,27 +221,40 @@ def test_build_time_invalid_fixtures_present() -> None:
 
 
 @pytest.mark.parametrize("fixture_path", _build_time_invalid_fixtures(), ids=lambda p: p.name)
-def test_build_time_invalid_join_key_rejected(fixture_path: Path) -> None:
-    """A float or null member in a value-equality join key column (RFC
-    semiring-faq-unified-ir §5.3 / §5.7 rule 1): equality on a float repr is not
-    portable, and a null emitted into a key column is a front-end error.
+def test_build_time_invalid_fixture_rejected(fixture_path: Path) -> None:
+    """Every ``tests/invalid/aggregate/build_time/`` fixture is SCHEMA-valid and
+    structurally REJECTED, with the exact ``(code, path)`` the SHARED pin names.
 
-    F-6 (2026-07-15): this defect is decidable STATICALLY from the single
-    document, so it is now promoted from ``resolver_only`` to a structural pin
-    (``tests/invalid/expected_errors.json``: ``join_key_invalid_type`` @
-    ``/models/<M>/equations/0/rhs``). ``validate()`` REJECTS it — via the
-    raw-dict structural check in ``structural_checks`` — rather than accepting it
-    and deferring the rejection to ``simulate``. (Because the defect is now
-    caught at load/validate time, ``load`` itself raises, so the former
-    ``simulate``-based check is no longer reachable.)
+    The expectation is read from ``tests/invalid/expected_errors.json`` rather
+    than written here, because these fixtures are cross-binding: the same file
+    and the same pin are what Rust, Julia, Go and TypeScript assert against, and
+    a per-binding copy of the expected code is how five bindings drift apart one
+    fixture at a time. The directory holds two families today — the key-TYPE
+    rejections (``join_key_invalid_type``: a float or null member in a
+    value-equality key column, RFC §5.3 / §5.7 rule 1) and the self-join SIDE
+    rejections (``join_side_ambiguous`` / ``join_syms_unknown_symbol``,
+    CONFORMANCE_SPEC §5.5.8) — and this test is indifferent to which, so adding
+    a third needs only the fixture and its pin.
+
+    Every one of them is decidable STATICALLY from the single document, which is
+    why ``validate()`` must reject it rather than deferring to ``simulate``.
     """
-    raw = json.loads(fixture_path.read_text())
-    model_name = next(iter(raw["models"]))
-    result = validate_text(json.dumps(raw), base_path=str(fixture_path.parent))
+    expected = _EXPECTED_ERRORS.get(fixture_path.name)
+    assert expected is not None, (
+        f"{fixture_path.name} is not pinned in tests/invalid/expected_errors.json; "
+        "a build-time fixture no binding has an expectation for is untested"
+    )
+    assert expected["is_valid"] is False
+    assert expected["schema_errors"] == [], (
+        f"{fixture_path.name} must be SCHEMA-valid: the point of build_time/ is "
+        "defects the schema cannot express"
+    )
+    want = {(e["code"], e["path"]) for e in expected["structural_errors"]}
+    assert want, f"{fixture_path.name}: the pin names no structural error"
+
+    result = validate_text(
+        fixture_path.read_text(), base_path=str(fixture_path.parent)
+    )
     assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
-    assert (
-        "join_key_invalid_type",
-        f"/models/{model_name}/equations/0/rhs",
-    ) in {(e.code, e.path) for e in result.structural_errors}, [
-        (e.code, e.path) for e in result.structural_errors
-    ]
+    got = {(e.code, e.path) for e in result.structural_errors}
+    assert want <= got, f"{fixture_path.name}: want {sorted(want)}, got {sorted(got)}"

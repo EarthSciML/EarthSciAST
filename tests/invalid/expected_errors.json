@@ -2170,6 +2170,39 @@
     "is_valid": false,
     "notes": "Resolver/build-time invalid (bead ess-my4.2.5; RFC semiring-faq-unified-ir §5.3). The categorical index set `keys` declares members [\"x\", null]; emitting a NULL into a value-equality join key column is a front-end error surfaced at build time, never silently dropped (a null key is unmatchable and nulls never compare equal). The document is SCHEMA-VALID — the schema's categorical `members` is an untyped array — so schema-only bindings (TypeScript, Go) accept it (is_valid: true): the TS conformance.test.ts recursive invalid sweep reads `resolver_only` and asserts schema acceptance, and the Go aggregate glob (tests/invalid/aggregate/*.esm) is non-recursive so it never descends into the build_time/ subdir. The evaluating bindings reject it at build: Rust Key::try_from_json -> FloatKeyError ('unsupported relational key component null'); Julia build_evaluator -> TreeWalkError (message names null); Python simulate -> raises / success=False. Lives under tests/invalid/aggregate/build_time/. DECISION 2026-07-15: this is a REAL BINDING GAP, not a misfiled fixture. The defect is decidable STATICALLY from this one document -- no evaluation, no solver, no runtime data, no other file. `validate()` MUST catch it. Contrast the genuinely resolver-only pins (template_import_cycle, metaparameter_unbound), which need the IMPORT GRAPH: they must read other files to decide. Per CONFORMANCE_SPEC §7.1.2 `resolver_only` means 'rejected only by an evaluator/resolver a schema-only binding does not run' -- and a check that compares two declared literals is not an evaluator. Kept `resolver_only` ONLY until the five bindings implement the check; promote to a structural pin then. The old code was `FloatKeyError` -- WRONG: the offending member is NULL, not a float. Two different defects were pinned under one bogus code."
   },
+  "self_join_three_ranges_ambiguous.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/ThreeRangesAmbiguous/equations/2/rhs",
+        "code": "join_side_ambiguous"
+      }
+    ],
+    "is_valid": false,
+    "notes": "Three ranges -- a, b, c -- all draw {from: rows}, and the key column `row_prior` is a declared 1-D variable over `rows`, so its axis names THREE candidate range symbols while the pair says nothing about which two the clause gates. The default side assignment is defined for exactly TWO candidates; at three, taking two would be a guess, and a guess here returns the wrong neighbour's value rather than a failure. No `syms`, which is the spelling that resolves it. Self-join SIDE rejection (CONFORMANCE_SPEC.md §5.5.8 \"Two ranges over one index set\"). The rule is stated about the DOCUMENT, not about where any one implementation resolves a join: a join key's range symbol comes from an index set -- named outright, or the sole axis of the declared 1-D variable that names it -- and the node's `ranges`, the document `index_sets`, the variable shapes and the clause are all in this one file. Decidable STATICALLY: no evaluation, no solver, no runtime data, no other file. `validate()` MUST reject it in EVERY binding, which is why it is pinned here rather than in per-binding tests. SCHEMA-VALID -- the schema cannot express \"this key's axis is drawn by more than one range\" -- so the schema-only bindings must reach it through their structural pass like the evaluating ones. Lives under tests/invalid/aggregate/build_time/ beside float_join_key.esm and null_in_key_column.esm, whose pins have the same shape and the same rationale."
+  },
+  "self_join_index_set_key_ambiguous.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/IndexSetKeyAmbiguous/equations/2/rhs",
+        "code": "join_side_ambiguous"
+      }
+    ],
+    "is_valid": false,
+    "notes": "The left key is the literal string `rows` -- the index set itself -- and both `a` and `b` draw it. Unlike a DATA COLUMN, whose axis is a property of the column and not of the clause, a key naming an index set can already say which side it means by naming the RANGE SYMBOL instead, so the default side assignment deliberately does NOT apply here at two candidates or at any number. Adding the self-join capability must not remove a diagnostic: were the default applied, the left key would resolve to `a`, the pair would compare `a`'s key with itself, and the clause would drop as a tautology -- a 25-term ungated product reported as a number. Self-join SIDE rejection (CONFORMANCE_SPEC.md §5.5.8 \"Two ranges over one index set\"). The rule is stated about the DOCUMENT, not about where any one implementation resolves a join: a join key's range symbol comes from an index set -- named outright, or the sole axis of the declared 1-D variable that names it -- and the node's `ranges`, the document `index_sets`, the variable shapes and the clause are all in this one file. Decidable STATICALLY: no evaluation, no solver, no runtime data, no other file. `validate()` MUST reject it in EVERY binding, which is why it is pinned here rather than in per-binding tests. SCHEMA-VALID -- the schema cannot express \"this key's axis is drawn by more than one range\" -- so the schema-only bindings must reach it through their structural pass like the evaluating ones. Lives under tests/invalid/aggregate/build_time/ beside float_join_key.esm and null_in_key_column.esm, whose pins have the same shape and the same rationale."
+  },
+  "self_join_syms_unknown_symbol.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/SymsUnknownSymbol/equations/2/rhs",
+        "code": "join_syms_unknown_symbol"
+      }
+    ],
+    "is_valid": false,
+    "notes": "`syms` is the author's answer to the one question a pair of column names cannot settle -- which range symbol each side is read at -- so both entries MUST be keys of this aggregate's `ranges`. Here the right entry is `zzz`, which the node does not bind. Left unchecked, the right key resolves to no symbol at all and RFC §5.3's degenerate-positional rule silently DROPS the pair: an ungated full product, reported as a number rather than as a failure. Self-join SIDE rejection (CONFORMANCE_SPEC.md §5.5.8 \"Two ranges over one index set\"). The rule is stated about the DOCUMENT, not about where any one implementation resolves a join: a join key's range symbol comes from an index set -- named outright, or the sole axis of the declared 1-D variable that names it -- and the node's `ranges`, the document `index_sets`, the variable shapes and the clause are all in this one file. Decidable STATICALLY: no evaluation, no solver, no runtime data, no other file. `validate()` MUST reject it in EVERY binding, which is why it is pinned here rather than in per-binding tests. SCHEMA-VALID -- the schema cannot express \"this key's axis is drawn by more than one range\" -- so the schema-only bindings must reach it through their structural pass like the evaluating ones. Lives under tests/invalid/aggregate/build_time/ beside float_join_key.esm and null_in_key_column.esm, whose pins have the same shape and the same rationale."
+  },
   "ic_in_reaction_system.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2569,7 +2602,7 @@
       }
     ],
     "is_valid": false,
-    "notes": "esm-spec \u00a74.8.2: a numeric atom is legal only when its value is exactly 1. Any other number is a SCALING FACTOR, and a unit string denotes a unit, not a quantity. This string is the one an author writes when reaching for a rational exponent; the grammar reads it as ((m/s)^-1)/3, so `^(-1/3)` is the correct spelling. Four bindings used to accept it and they did NOT agree on what it meant \u2014 Julia dropped the 1/3, Rust/Go/TypeScript retained it, Python rejected the string \u2014 and the two answers that differ only in scale differ invisibly, because a dimensional checker cannot see a scale. Found in isrm.esm, where it made the same document load in Julia and fail in Python."
+    "notes": "esm-spec §4.8.2: a numeric atom is legal only when its value is exactly 1. Any other number is a SCALING FACTOR, and a unit string denotes a unit, not a quantity. This string is the one an author writes when reaching for a rational exponent; the grammar reads it as ((m/s)^-1)/3, so `^(-1/3)` is the correct spelling. Four bindings used to accept it and they did NOT agree on what it meant — Julia dropped the 1/3, Rust/Go/TypeScript retained it, Python rejected the string — and the two answers that differ only in scale differ invisibly, because a dimensional checker cannot see a scale. Found in isrm.esm, where it made the same document load in Julia and fail in Python."
   },
   "units_discriminator_rational_exponent.esm": {
     "schema_errors": [],

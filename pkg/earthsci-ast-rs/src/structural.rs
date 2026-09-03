@@ -863,10 +863,13 @@ fn validate_aggregate_constraints(
     errors: &mut Vec<StructuralError>,
 ) {
     let model_path = format!("/models/{model_name}");
+    // A join key may name a DATA COLUMN, whose range symbol comes from its
+    // declared 1-D shape — so the side checks below need the model's shapes.
+    let var_shapes = crate::join::declared_var_shapes(model);
     for (eq_idx, equation) in model.equations.iter().enumerate() {
         for (field, expr) in [("lhs", &equation.lhs), ("rhs", &equation.rhs)] {
             let field_path = format!("{model_path}/equations/{eq_idx}/{field}");
-            check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, errors);
+            check_aggregates_in_expr(expr, &field_path, esm_file, state_vars, &var_shapes, errors);
         }
     }
 }
@@ -1038,17 +1041,132 @@ fn check_aggregates_in_expr(
     field_path: &str,
     esm_file: &EsmFile,
     state_vars: &HashSet<String>,
+    var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
     let crate::Expr::Operator(node) = expr else {
         return;
     };
     if node.op == "aggregate" {
-        check_aggregate_node(node, field_path, esm_file, state_vars, errors);
+        check_aggregate_node(node, field_path, esm_file, state_vars, var_shapes, errors);
     }
     node.for_each_child(&mut |child| {
-        check_aggregates_in_expr(child, field_path, esm_file, state_vars, errors);
+        check_aggregates_in_expr(child, field_path, esm_file, state_vars, var_shapes, errors);
     });
+}
+
+/// The two static `join` SIDE checks of CONFORMANCE_SPEC §5.5.8, decidable from
+/// this one document — the node's `ranges`, the declared variable shapes and the
+/// clause itself are all here, so no evaluation, no runtime data and no other
+/// file are needed. Both are stated about the DOCUMENT rather than about where
+/// any one implementation happens to resolve a join, which is what lets all five
+/// bindings pin the same fixtures (`tests/invalid/expected_errors.json`).
+///
+/// - `join_syms_unknown_symbol` — a clause's `syms` entry that is not a key of
+///   that node's `ranges`. Unchecked, the side would resolve to no symbol at
+///   all and §5.3's degenerate-positional rule would silently DROP the pair: an
+///   ungated full product, reported as a number rather than as a failure.
+/// - `join_side_ambiguous` — an `on` key for which the document does not
+///   determine a range symbol. A key names a range symbol, an index set, or a
+///   declared 1-D variable; in the latter two the symbol comes from the index
+///   set (named outright, or the variable's single shape axis). If that set is
+///   drawn `{from}` by more than one of the node's ranges and the clause carries
+///   no `syms`, the key does not say which. TWO candidates are resolved by the
+///   default side assignment only when the key is a DATA COLUMN — a key naming
+///   the index set can already say which side it means by naming the range
+///   symbol instead, so that spelling is ambiguous at two as well.
+fn check_join_sides(
+    node: &crate::types::ExpressionNode,
+    field_path: &str,
+    var_shapes: &HashMap<String, Vec<String>>,
+    errors: &mut Vec<StructuralError>,
+) {
+    let (Some(joins), Some(ranges)) = (node.join.as_ref(), node.ranges.as_ref()) else {
+        return;
+    };
+    // index-set name -> how many of this node's ranges draw it, and which.
+    let mut set_to_syms: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (sym, spec) in ranges {
+        if let crate::types::RangeSpec::IndexSetRef { from, .. } = spec {
+            set_to_syms.entry(from.as_str()).or_default().push(sym);
+        }
+    }
+    for syms in set_to_syms.values_mut() {
+        syms.sort_unstable();
+    }
+
+    for clause in joins {
+        if let Some([sl, sr]) = clause.syms.as_ref() {
+            for s in [sl, sr] {
+                if !ranges.contains_key(s) {
+                    let mut declared: Vec<&str> = ranges.keys().map(String::as_str).collect();
+                    declared.sort_unstable();
+                    errors.push(StructuralError {
+                        path: field_path.to_string(),
+                        code: StructuralErrorCode::JoinSymsUnknownSymbol,
+                        message: format!(
+                            "Aggregate join `syms` names '{s}', which is not a range symbol of this aggregate; both entries must name one of its `ranges`"
+                        ),
+                        details: serde_json::json!({
+                            "join_syms_entry": s,
+                            "declared_ranges": declared,
+                        }),
+                    });
+                    return; // one finding per node is enough
+                }
+            }
+            // An explicit `syms` answers the ambiguity for every pair here.
+            continue;
+        }
+        for pair in &clause.on {
+            for (side, key) in [("left", pair[0].as_str()), ("right", pair[1].as_str())] {
+                // A key naming a range symbol outright is never ambiguous.
+                if ranges.contains_key(key) {
+                    continue;
+                }
+                // Otherwise the symbol comes from an index set: the one this key
+                // names, or the sole axis of the declared 1-D variable it names.
+                let (set_name, via_column) = match set_to_syms.get(key) {
+                    Some(_) => (key, false),
+                    None => match var_shapes.get(key) {
+                        Some(shape) if shape.len() == 1 => (shape[0].as_str(), true),
+                        _ => continue, // resolves to nothing here; not this check's business
+                    },
+                };
+                let Some(cands) = set_to_syms.get(set_name) else {
+                    continue;
+                };
+                // One candidate: the ordinary join of two distinct relations.
+                // Two: resolved by the default assignment, but only for a data
+                // column. Three or more: never.
+                if cands.len() < 2 || (cands.len() == 2 && via_column) {
+                    continue;
+                }
+                errors.push(StructuralError {
+                    path: field_path.to_string(),
+                    code: StructuralErrorCode::JoinSideAmbiguous,
+                    message: if via_column {
+                        format!(
+                            "Aggregate join key column '{key}' lives on index set '{set_name}', which {} range symbols of this aggregate draw, so the document does not determine which one the key is read at; name the clause's two sides with `syms`",
+                            cands.len()
+                        )
+                    } else {
+                        format!(
+                            "Aggregate join key '{key}' names an index set that {} range symbols of this aggregate draw; reference the range symbol directly, or name the clause's two sides with `syms`",
+                            cands.len()
+                        )
+                    },
+                    details: serde_json::json!({
+                        "join_key": key,
+                        "side": side,
+                        "index_set": set_name,
+                        "candidate_range_symbols": cands,
+                    }),
+                });
+                return; // one finding per node is enough
+            }
+        }
+    }
 }
 
 /// Apply the three static aggregate checks to a single `aggregate` node.
@@ -1057,9 +1175,11 @@ fn check_aggregate_node(
     field_path: &str,
     esm_file: &EsmFile,
     state_vars: &HashSet<String>,
+    var_shapes: &HashMap<String, Vec<String>>,
     errors: &mut Vec<StructuralError>,
 ) {
     let index_sets = esm_file.index_sets.as_ref();
+    check_join_sides(node, field_path, var_shapes, errors);
 
     // (a) undefined_index_set: a `{from: NAME}` range absent from the registry.
     if let Some(ranges) = &node.ranges {

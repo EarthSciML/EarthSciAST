@@ -29,6 +29,13 @@ export const ERROR_CODES = {
   //   (floats aren't portably equality-comparable; null is unmatchable).
   //   RFC semiring-faq-unified-ir §5.3 / §5.7 rule 1.
   JOIN_KEY_INVALID_TYPE: 'join_key_invalid_type',
+  // `join_side_ambiguous` — an `on` key for which the DOCUMENT does not
+  //   determine a range symbol: its index set is drawn by more than one of the
+  //   node's ranges and the clause names no `syms`. CONFORMANCE_SPEC §5.5.8.
+  JOIN_SIDE_AMBIGUOUS: 'join_side_ambiguous',
+  // `join_syms_unknown_symbol` — a `join.syms` entry that is not a range symbol
+  //   of the node. CONFORMANCE_SPEC §5.5.8.
+  JOIN_SYMS_UNKNOWN_SYMBOL: 'join_syms_unknown_symbol',
   // `domain_unit_mismatch` — an `identity`-transform `variable_map` coupling
   //   whose `from`/`to` variables carry declared, non-empty, DIFFERENT units
   //   (esm-spec §4.7.6). `param_to_var` / `conversion_factor` are exempt.

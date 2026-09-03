@@ -177,6 +177,11 @@ pub enum StructuralErrorCode {
     /// semiring-faq-unified-ir §5.3 / §5.7 rule 1): floats are not portably
     /// equality-comparable and a null key is unmatchable.
     JoinKeyInvalidType,
+    /// A `join.on` key whose range symbol the document does not determine
+    /// (CONFORMANCE_SPEC §5.5.8).
+    JoinSideAmbiguous,
+    /// A `join.syms` entry that is not a range symbol of the node.
+    JoinSymsUnknownSymbol,
     /// A value-invention `aggregate` (`distinct: true`) whose `key`/`expr` reads
     /// a model STATE variable, so the cadence partition classes it CONTINUOUS —
     /// relational work is forbidden on the per-step hot path (RFC
@@ -234,6 +239,8 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::AmbiguousSubsystemRef => codes::AMBIGUOUS_SUBSYSTEM_REF,
             Self::DomainUnitMismatch => codes::DOMAIN_UNIT_MISMATCH,
             Self::JoinKeyInvalidType => codes::JOIN_KEY_INVALID_TYPE,
+            Self::JoinSideAmbiguous => codes::JOIN_SIDE_AMBIGUOUS,
+            Self::JoinSymsUnknownSymbol => codes::JOIN_SYMS_UNKNOWN_SYMBOL,
             Self::RelationalNodeInContinuous => codes::RELATIONAL_NODE_IN_CONTINUOUS,
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
             Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,

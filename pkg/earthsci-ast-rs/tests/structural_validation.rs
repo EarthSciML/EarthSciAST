@@ -1178,6 +1178,57 @@ fn test_f6_null_in_key_column() {
     );
 }
 
+/// The self-join SIDE rejections (CONFORMANCE_SPEC §5.5.8). Each is stated
+/// about the DOCUMENT — the node's `ranges`, the declared variable shapes and
+/// the clause are all in the one file — and each is pinned for all five
+/// bindings in `tests/invalid/expected_errors.json`, which is what the shared
+/// corpus comparator enforces. These assert the Rust half of that pin directly.
+
+/// Three ranges draw one index set, so a key column over it names three
+/// candidate range symbols and the pair says nothing about which two the clause
+/// gates. The default side assignment is defined for exactly TWO; at three,
+/// taking two would be a guess that reads as the wrong neighbour's value.
+#[test]
+fn test_self_join_three_ranges_ambiguous() {
+    assert_structural(
+        include_str!(
+            "../../../tests/invalid/aggregate/build_time/self_join_three_ranges_ambiguous.esm"
+        ),
+        StructuralErrorCode::JoinSideAmbiguous,
+        "/models/ThreeRangesAmbiguous/equations/2/rhs",
+    );
+}
+
+/// A key NAMING an index set that two ranges draw stays ambiguous, because the
+/// author can already say which side is meant by naming the RANGE SYMBOL
+/// instead. Were the two-candidate default applied here, the pair would compare
+/// a symbol's key with itself and drop as a tautology — an ungated product
+/// reported as a number.
+#[test]
+fn test_self_join_index_set_key_ambiguous() {
+    assert_structural(
+        include_str!(
+            "../../../tests/invalid/aggregate/build_time/self_join_index_set_key_ambiguous.esm"
+        ),
+        StructuralErrorCode::JoinSideAmbiguous,
+        "/models/IndexSetKeyAmbiguous/equations/2/rhs",
+    );
+}
+
+/// A `syms` entry naming something the node does not bind. Unchecked, that side
+/// resolves to no symbol and §5.3's degenerate-positional rule silently DROPS
+/// the pair.
+#[test]
+fn test_self_join_syms_unknown_symbol() {
+    assert_structural(
+        include_str!(
+            "../../../tests/invalid/aggregate/build_time/self_join_syms_unknown_symbol.esm"
+        ),
+        StructuralErrorCode::JoinSymsUnknownSymbol,
+        "/models/SymsUnknownSymbol/equations/2/rhs",
+    );
+}
+
 /// A `distinct` value-invention aggregate whose Skolem key reads a state
 /// variable classifies CONTINUOUS and is rejected (no relational engine on the
 /// hot path).
