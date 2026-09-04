@@ -134,6 +134,28 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
             Value::Array(Box::new(a.clone()))
         };
     }
+    // NOTHING bound this name — not `t`, not a loop binder, not a state, not an
+    // observed, not a parameter, not a forcing channel. There is no further
+    // resolution scope to try, so the read cannot produce a value.
+    //
+    // FAIL CLOSED (CONFORMANCE_SPEC §5.23). Returning a bare `NaN` here is the
+    // sentinel that F24 and F25 both rode: IEEE-754 `max`/`min` return the
+    // NON-NaN operand, so `max(known, typo)` silently evaluates as
+    // `max(known)` — an operand disappears and the answer stays finite,
+    // plausible and wrong. A comparison launders it just as quietly. The latch
+    // is the tree walk's error channel (it returns a bare `Value`); every entry
+    // point drains it, so the read surfaces as a named build/solve failure
+    // instead of a number. The `NaN` returned alongside is only what the walk
+    // carries until the drain.
+    latch_gather_fault(format!(
+        "E_TREEWALK_UNBOUND_NAME: '{name}' is referenced in an expression but bound by \
+         NOTHING in scope — it is not the independent variable, a loop index, a state, an \
+         observed, a parameter, or a forcing channel. A name declared nowhere in the \
+         document is a structural error (`esm validate` reports it against the equation); \
+         reaching evaluation means one route skipped that gate. Fail-closed per \
+         CONFORMANCE_SPEC §5.23: never a NaN sentinel, which `max(x, floor)` or any \
+         comparison would launder into a plausible number by dropping the operand."
+    ));
     Value::Scalar(f64::NAN)
 }
 
@@ -1506,7 +1528,8 @@ thread_local! {
 ///
 /// Named for the first fault that used this channel
 /// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
-/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4). Both are
+/// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4) and
+/// `E_TREEWALK_UNBOUND_NAME` (§5.23). All three are
 /// "fail closed, do not silently substitute a number" faults with the same
 /// drain sites, so they share one latch rather than adding a second one that a
 /// future drain site could forget.

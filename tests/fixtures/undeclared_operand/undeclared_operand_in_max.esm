@@ -1,0 +1,93 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "UndeclaredOperand",
+    "description": "An equation naming an operand that is declared NOWHERE in the document — not a variable, not a parameter, not a metaparameter, not an index set. `esm validate` rejects it; so must EVERY evaluation route (CONFORMANCE_SPEC §5.23).\n\nThe body is `max(known, undeclaredFloor)` because that is the shape that makes the failure invisible: an unbound name resolving to a NaN sentinel is dropped by IEEE-754 `max`, which returns the non-NaN operand, so `max(known, undeclaredFloor)` evaluates as `max(known)` = 2.0 — finite, plausible, and missing a floor the author wrote. `clamped` is an ARRAY observed so it goes through the array runtime on both routes; `known` is 2.0 so a route that drops the operand answers 2.0 and is caught by name.",
+    "authors": [
+      "Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "free-variables",
+      "fail-closed",
+      "regression"
+    ]
+  },
+  "domain": {
+    "independent_variable": "t"
+  },
+  "index_sets": {
+    "row": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "UndeclaredOperand": {
+      "variables": {
+        "known": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "The one operand that IS declared."
+        },
+        "clamped": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "row"
+          ],
+          "description": "max(known, undeclaredFloor). No route may produce a number for this."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "`undeclaredFloor` appears in no declaration block anywhere in this document. That is the whole fixture.",
+          "lhs": "clamped",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "row"
+              }
+            },
+            "expr": {
+              "op": "max",
+              "args": [
+                "known",
+                "undeclaredFloor"
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "an_undeclared_operand_is_an_error_not_an_absent_argument",
+          "description": "Every route must refuse this document, naming `undeclaredFloor`. `expected` is deliberately NOT 2.0: pinning the laundered answer would go green on the defect. It is 10.0, the answer a floor of 10 would give, so a route that drops the operand fails as a value mismatch and a route that reaches the gate fails as a named error. Red either way until the gate is reached, and the message says which stage caught it.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "clamped",
+              "time": 0.0,
+              "expected": 10.0,
+              "coords": {
+                "row": 1
+              }
+            }
+          ],
+          "tolerance": {
+            "rel": 1e-06
+          }
+        }
+      ]
+    }
+  }
+}

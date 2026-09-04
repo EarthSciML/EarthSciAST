@@ -1087,6 +1087,7 @@ pub(crate) fn run_prepare(
     let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
     st.alias_pushdown_names(&rw.pd_coupling);
     st.seal_const_registry();
+    st.check_free_names()?;
     st.collect_observed_defs()?;
     st.eval_buildtime_coordinates()?;
     st.invent_values()?;
@@ -1512,6 +1513,54 @@ impl<'o> BuildState<'o> {
     /// and keep the zero-ghost convention.
     fn seal_const_registry(&mut self) {
         self.const_scope = ConstArrayScope::from_names(self.arrays.keys().cloned());
+    }
+
+    /// THE FREE-VARIABLE GATE, on this route too (CONFORMANCE_SPEC §5.23).
+    ///
+    /// A name declared nowhere in the document is a structural error, and both
+    /// `esm validate` and the compile path already say so by name. This route
+    /// did not: `prepare` evaluates the whole observed graph WHOLESALE through
+    /// the shared expression evaluator, upstream of the compile-path gate and
+    /// on expressions the compile path never sees again (each observed leaves
+    /// here as a materialized field). An undeclared operand therefore fell
+    /// through `simulate_array::eval::lookup_variable` to an unbound-name NaN,
+    /// and `max(known, undeclaredFloor)` evaluated as `max(known)` — IEEE-754
+    /// `max` returns the non-NaN operand, so the operand simply DISAPPEARED and
+    /// the answer stayed finite and plausible (finding F25; finding F24 was the
+    /// same sentinel reached by a different name on this same route).
+    ///
+    /// It is the SAME function the compile path calls, not a second copy: two
+    /// copies is precisely how one route came to reach a check and the other to
+    /// skip it. It runs BEFORE the observed graph, before value invention and
+    /// before the gated fetch, so a typo costs a millisecond rather than the
+    /// tens of gigabytes a real ISRM fetch moves first.
+    ///
+    /// `extra_bound` credits the names THIS route's evaluation scope binds that
+    /// the model does not declare — the caller's const arrays, the materialized
+    /// provider slabs and pushdown aliases already in `arrays`, the scalar
+    /// parameter vector, and every derived set's `member_factor` column (fed
+    /// into `arrays` later by [`Self::feed_member_factors`], so it cannot be
+    /// read off the map yet). Widening the bound set can only prevent a false
+    /// positive, which is this gate's cardinal requirement.
+    fn check_free_names(&self) -> Result<(), PrepareError> {
+        let mut extra: Vec<String> = self.arrays.keys().cloned().collect();
+        extra.extend(self.param_names.iter().cloned());
+        extra.extend(
+            self.index_sets
+                .values()
+                .filter_map(|is| is.member_factor.clone()),
+        );
+        crate::simulate_array::check_free_variables(&self.model, &self.index_sets, &extra)
+            // The DETAILS, not the rendered error: `run_build_pipeline` re-wraps
+            // a `PrepareError` in `InterpreterBuildError`, so passing the whole
+            // `Display` through would print that prefix twice. The message the
+            // author reads is then byte-identical to the compile path's.
+            .map_err(|e| match e {
+                crate::compile_error::CompileError::InterpreterBuildError { details } => {
+                    err(details)
+                }
+                other => err(other.to_string()),
+            })
     }
 
     /// Observed definitions + the join-free partition.
