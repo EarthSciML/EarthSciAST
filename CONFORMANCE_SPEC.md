@@ -3368,6 +3368,112 @@ document is schema-valid — a `${VAR}` inside a string is legal JSON Schema —
 the rejection is the resolver's, and unlike every other `resolver_only` entry
 `is_valid` is false for *all five* bindings rather than only the resolving ones.
 
+### 5.23 Name Resolution: an Unbound Operand Is a Fault, on Every Route (normative)
+
+A name that no declaration in the document binds is a structural error. Every
+binding's validator already says so — `esm validate` and its four siblings point
+at the equation and name the variable. This section is about what happens when
+an evaluation route is reached anyway, and it exists because on one binding, on
+one route, the answer was *a plausible number*.
+
+**The rule.** An expression MUST NOT be evaluated against a name that is bound
+in none of the resolution scopes available where it is evaluated. A binding MUST
+surface that as a named fault — a raise, or a latched diagnostic drained at
+every exit — and MUST NOT substitute a value for the unbound operand. In
+particular a NaN sentinel is **not** sufficient: IEEE-754 `max` and `min` return
+the non-NaN operand, so `max(known, undeclaredFloor)` silently evaluates as
+`max(known)`. The operand does not become NaN; it **disappears**, and every
+downstream digit is finite, plausible, and computed from an expression the author
+did not write. This is the same laundering §5.19.4 forbids for a causal
+self-read, stated for the general case rather than for one construct.
+
+#### 5.23.1 Every route, and one gate
+
+A binding typically has more than one route from a document to a value: a
+per-step route used while integrating, and a build-time route that materializes a
+relational document's whole observed graph up front. §5.19.3b requires a
+*recurrence* to evaluate identically on every such route. This section requires
+the same of **name resolution**, which is the more basic obligation and the one
+that was found broken twice:
+
+1. **One gate, and every route calls it.** The check that a referenced name is
+   bound MUST be a single shared implementation that each route invokes, not a
+   check that happens to sit on the route someone was testing. Two copies is how
+   two routes come to disagree; one copy reached by one caller is the same defect
+   wearing a different shape.
+2. **A route that misses the gate MUST still fail closed.** The gate is a
+   build-time check over a model and is necessarily conservative — it must credit
+   names a runtime channel may legitimately bind (a forcing field, a qualified
+   cross-namespace reference) rather than risk rejecting a valid document. So the
+   resolver itself, at the point where every scope has been tried and none
+   matched, MUST fault. Without that second layer a future route reacquires the
+   defect without anyone editing the gate.
+3. **Cross-route agreement is the assertion.** A fixture MUST be driven on each
+   route and the *same* verdict asserted, naming the same operand. "Each route
+   did something" is exactly the state that persisted while the defect existed.
+
+#### 5.23.2 Why this needs a category
+
+The Rust binding's build pipeline evaluates a document's observed graph wholesale
+through the shared expression evaluator, upstream of the compile path's
+free-variable gate and on expressions the compile path never sees again — each
+observed leaves the pipeline as a materialized field. An undeclared operand
+therefore fell through the resolver's final arm to an unbound-name NaN, and a
+`max(...)` body dropped it.
+
+That route is not an edge case. It is taken by **any** document that ingests so
+much as one column the equation never reads, and by **every** document under
+`esm simulate` whose static branch rebuilds with the pipeline on in order to
+materialize an array observed at all. Measured on one document, one operand and
+one assertion: with the `data_sources` block removed, a named error; with one
+unrelated column ingested, a clean run and an answer.
+
+Downstream this presented as a fixture reporting 120 of 120 assertions passing —
+twelve end-to-end emission rows agreeing with a reference snapshot to 4e-06 — on
+bytes `esm validate` rejected. The lost operand was a population floor that could
+not bind on that data, so no digit moved; on a state with almost no equipment it
+would have. Agreeing by accident on the data in front of you is the failure this
+repository exists to refuse, and only running `validate` *before* `test` caught
+it.
+
+The two findings behind this section share one root cause and it is worth naming
+precisely, because the first fix did not generalize. In both, a name resolved
+through the same final arm of the same resolver and got the same NaN sentinel,
+and in both a `max` in the body laundered it. They differ only in *why* the name
+was unbound: once because the array being swept was not yet in the map
+(§5.19.4), once because it was declared nowhere at all. The first was fixed by
+giving that one construct a fail-closed path. The general arm two lines below it
+still returned NaN.
+
+#### 5.23.3 Gate
+
+`tests/fixtures/undeclared_operand/undeclared_operand_in_max.esm` — one array
+observed defined as `max(known, undeclaredFloor)` with `known = 2.0` and
+`undeclaredFloor` declared nowhere. Its inline assertion deliberately expects
+`10.0`, the answer a floor of 10 would give, and **not** `2.0`: pinning the
+laundered answer would have gone green on the defect.
+
+Rust drives it on both routes in
+`pkg/earthsci-ast-rs/tests/undeclared_operand_gate.rs` — the per-step route
+(`run_pde_tests`), the build pipeline (`build_pipeline: true`, which needs no
+data reader linked and reaches the identical code an ingest reaches), a
+cross-route assertion that both name the same operand in the same words, and the
+resolver-level backstop with its non-vacuity twin.
+
+**Binding status (2026-09-04), surveyed rather than assumed:**
+
+| Binding | Unbound name at evaluation | Where |
+|---|---|---|
+| Julia | `E_TREEWALK_UNBOUND_VARIABLE` / `UnboundVariableError`, raised at tree-walk compile | `src/tree_walk/build.jl` |
+| Python | `NumpyInterpreterError: Unresolved symbol: '…'`; the loader additionally rejects the document structurally | `numpy_interpreter.py` `_resolve_symbol`, `parse.py` `_validate_structural` |
+| TypeScript | `EvaluatorError('unbound_variable', …)` | `src/codegen.ts` |
+| Go | No runner by design (parse + validate only); the validator reports `Unknown variable '…'` | `pkg/esm/validate.go` |
+| Rust | `E_TREEWALK_UNBOUND_NAME`, fail-closed — **this section's fix** | `src/simulate_array/eval.rs` `lookup_variable`, gate shared with `src/prepare.rs` |
+
+Rust was the only binding that resolved an unbound name to a NaN sentinel. No
+binding is left non-conforming by this section, so there is nothing here to
+record as deferred.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
@@ -3561,6 +3667,7 @@ A conforming harness MUST compare emitted `(code, path)` pairs against these pin
 only "some error was produced" is what let 42 pins drift undetected (audit 2026-07-14, F4).
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
+| `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 ### 7.2 Error Message Format
