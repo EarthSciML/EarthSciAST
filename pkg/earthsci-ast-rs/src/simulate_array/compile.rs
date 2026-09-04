@@ -670,10 +670,14 @@ impl ArrayCompiled {
 
             // (0b) Reject a reference to a variable bound in NONE of the model's
             // binding categories — the array-path analogue of the scalar
-            // interpreter's `resolve_expr` "Unknown variable" gate. Without it a
-            // typo'd/undeclared bare name falls through `lookup_variable`'s final
-            // arm to a silent `NaN`, poisoning the trajectory.
-            check_free_variables(model, index_sets)?;
+            // interpreter's `resolve_expr` "Unknown variable" gate, and the same
+            // function `crate::prepare` calls on the build-pipeline route
+            // (CONFORMANCE_SPEC §5.23; `extra_bound` is empty here because this
+            // path's evaluation scope is the model's own declarations). Without
+            // it a typo'd/undeclared bare name reaches `lookup_variable`'s final
+            // arm, which now fails closed but only names the fault at the drain;
+            // catching it HERE names the variable before anything is built.
+            check_free_variables(model, index_sets, &[])?;
 
             // (1) Collect state / parameter / observed variables.
             let (state_vars, param_vars, observed_vars) = classify_variables(model)?;
@@ -823,11 +827,21 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 /// (0b) Reject a reference to a variable that is bound in NONE of the model's
 /// binding categories — the array-path analogue of the scalar interpreter's
 /// [`crate::simulate`] `resolve_expr` "Unknown variable" gate. Without it a
-/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm
-/// to a silent `NaN` sentinel, poisoning the whole trajectory instead of failing
-/// loudly at build time. The error variant and message match the scalar path
+/// typo'd or undeclared bare name falls through [`lookup_variable`]'s final arm,
+/// which used to hand back a silent `NaN` sentinel that `max(x, floor)` launders
+/// into a plausible number by dropping the operand, instead of failing loudly at
+/// build time. The error variant and message match the scalar path
 /// (`InterpreterBuildError` / `Unknown variable '{name}' referenced in
 /// expression`).
+///
+/// **ONE gate, and EVERY route calls it** (CONFORMANCE_SPEC §5.23). This is not
+/// a compile-path-local check: [`crate::prepare::run_prepare`] — the build
+/// pipeline any ingesting document and every `esm simulate` of a relational
+/// document takes — calls it too, before it evaluates a single observed. A
+/// second copy is exactly how one route came to reach the check and the other
+/// to skip it (finding F24, then F25), so this is a shared function rather than
+/// a pattern repeated per caller. `extra_bound` carries the names the CALLER's
+/// evaluation scope binds outside the model's own declarations.
 ///
 /// The bound set MIRRORS [`lookup_variable`]'s runtime resolution scope so a
 /// legitimately runtime-bound name is never rejected — a false positive here
@@ -877,9 +891,10 @@ fn check_evaluable_side(expr: &Expr) -> Result<(), CompileError> {
 ///    per-cell RHS oracle; its free symbols are already credited as coordinates
 ///    above;
 ///  * a builtin function name spelled as a bare leaf (`exp`, `min`, …).
-fn check_free_variables(
+pub(crate) fn check_free_variables(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,
+    extra_bound: &[String],
 ) -> Result<(), CompileError> {
     // ---- Build the bound set. ------------------------------------------------
     let mut bound: HashSet<String> = HashSet::new();
@@ -887,6 +902,11 @@ fn check_free_variables(
     bound.insert("_var".to_string());
     bound.extend(model.variables.keys().cloned());
     bound.extend(index_sets.keys().cloned());
+    // Names the CALLER's evaluation scope binds that this model does not declare
+    // — a build-pipeline caller's const arrays / provider slabs / member-factor
+    // columns. Widening the bound set can only ever prevent a false positive,
+    // which is this gate's cardinal requirement; the compiled path passes none.
+    bound.extend(extra_bound.iter().cloned());
     for eq in &model.equations {
         if let Some(v) = equation_defined_var(&eq.lhs) {
             bound.insert(v);

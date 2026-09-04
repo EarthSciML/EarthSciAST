@@ -168,6 +168,20 @@ Where:
 > `recurrence_unsupported_form` are NEW cross-binding diagnostic codes; -003 through -005 are
 > requirements on an EXECUTING binding only, while -002, -006 and -007 bind all five.
 
+### BEHAV-04-H: Name Resolution in Expressions (CONFORMANCE_SPEC §5.23)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-H-001 | An expression MUST NOT be evaluated against a name bound in NONE of the resolution scopes available where it is evaluated. The binding MUST surface a named fault and MUST NOT substitute a value. A NaN sentinel is NOT sufficient: IEEE-754 `max`/`min` return the non-NaN operand, so `max(known, undeclaredFloor)` evaluates as `max(known)` — the operand DISAPPEARS and every downstream digit stays finite and plausible | CONFORMANCE_SPEC.md §5.23 | Yes | behavioral |
+| BEHAV-04-H-002 | The check MUST be ONE shared implementation that EVERY route to a value invokes — a per-step route and a build-time/pipeline route are both routes — and a route that misses it MUST still fail closed at the resolver. A fixture MUST be driven on each route and the SAME verdict asserted, naming the same operand; "each route did something" is the state that persisted while the defect existed | CONFORMANCE_SPEC.md §5.23.1 | Yes | behavioral |
+
+> **Binding status (2026-09-04)**: surveyed, not assumed — see the table in
+> CONFORMANCE_SPEC §5.23.3. Julia (`E_TREEWALK_UNBOUND_VARIABLE`), Python (`Unresolved
+> symbol`, plus a structural rejection at load) and TypeScript (`unbound_variable`) already
+> raised; Go has no runner by design and its validator reports `Unknown variable '…'`. Rust
+> was the only binding that resolved an unbound name to a NaN sentinel, and is FIXED
+> (`E_TREEWALK_UNBOUND_NAME`, with the build pipeline now calling the same free-variable gate
+> the compile path calls). Nothing in this family is left deferred.
+
 ### BEHAV-04-F: Aggregate Binders vs Globally-Scoped Names (esm-spec §4.3.1 / §11.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

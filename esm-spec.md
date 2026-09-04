@@ -1273,6 +1273,20 @@ A checker MUST resolve the free symbols of **every** Expression in the document,
 
 The rule is one sentence — *resolve the free symbols of every Expression* — and the way to satisfy it is one shared traversal (a `mapChildren`/`forEachChild` combinator over the node's Expression-valued fields), used by every pass. Every binding that hand-rolled a per-pass walker grew this hole, and grew it in a different place. `tests/invalid/undefined_variable_in_*.esm` and `tests/invalid/unresolved_scoped_ref_in_*.esm` pin one fixture per field, container and sidecar alike.
 
+**And the duty is the EVALUATOR's too, not only the validator's.** A binding that
+resolves free symbols correctly in `validate` and then evaluates an unresolvable
+name anyway has not satisfied this section — it has moved the failure from a
+message to a number. An evaluator MUST NOT produce a value for a name bound in
+none of the scopes available where it evaluates; it MUST fail closed, naming the
+name. A NaN sentinel is specifically **not** enough: IEEE-754 `max` and `min`
+return the non-NaN operand, so `max(known, undeclaredFloor)` quietly evaluates as
+`max(known)` — the undeclared operand does not poison the result, it *vanishes
+from it*, and every digit downstream is finite and plausible. Where a binding has
+more than one route from a document to a value (a per-step route and a build-time
+pipeline are both routes), the check MUST be one shared implementation every
+route invokes; this is normatively **CONFORMANCE_SPEC §5.23**, and it is stated
+here because it was violated twice on the same route by two different names.
+
 ## 5. Events
 
 Events enable changes to system state or parameters when certain conditions are met, or detection of discontinuities during simulation. This section is designed to be compatible with ModelingToolkit.jl's `SymbolicContinuousCallback` and `SymbolicDiscreteCallback` semantics, while remaining language-agnostic.
