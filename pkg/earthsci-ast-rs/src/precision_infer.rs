@@ -7,7 +7,7 @@
 //! it rounds *every* value to binary32. That is right for a model's
 //! floating-point quantities and catastrophic for its keys: binary32 represents
 //! every integer only to 2²⁴ = 16 777 216, and a relational model's join keys
-//! are frequently far above it. A ten-digit SCC code is ≈2.26 × 10⁹ — 135×
+//! are frequently far above it. A ten-digit category code is ≈2.26 × 10⁹ — 135×
 //! beyond — so `2265007010` and `2265007015` both become `2265007104` and a
 //! `join.on` over them merges two unrelated rows. The reference implementations
 //! these models port are `real*4` in their quantities while their keys stay
@@ -350,7 +350,7 @@ fn annotate_equation(
     // (`precision::of_variable(rule.var)`), not by a wrapper node — because a
     // wrapper at the root is invisible to the evaluator but very visible to
     // every pass that pattern-matches an equation's right-hand side. Wrapping
-    // `out_SCC ~ aggregate(…)` in one turned the equation from an
+    // `out_key ~ aggregate(…)` in one turned the equation from an
     // `AlgebraicRule::ArrayLoop` over an aggregate into a scalar rule over an
     // unrecognised op, and the key came out corrupted for a second reason
     // entirely. Markers therefore appear only INSIDE an expression, where a

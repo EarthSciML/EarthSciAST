@@ -216,7 +216,7 @@ fn an_unaddressable_index_set_is_named() {
 //
 // A document-wide binary32 rounds every value, including a relational model's
 // KEYS. Binary32 represents every integer only to 2^24 = 16 777 216, and a
-// ten-digit SCC code is ~2.26e9 — 135x beyond — so under one document-wide
+// ten-digit category code is ~2.26e9 — 135x beyond — so under one document-wide
 // precision two distinct codes collapse onto one and a `join.on` over them
 // merges unrelated rows. The reference implementations these models port are
 // `real*4` in their QUANTITIES while their keys stay `INTEGER`; per-variable

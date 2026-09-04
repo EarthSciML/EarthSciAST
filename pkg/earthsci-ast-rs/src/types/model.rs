@@ -216,7 +216,7 @@ pub struct ModelVariable {
     /// It exists for the split a single document-wide precision cannot express.
     /// A relational model may be binary32 in its floating-point *quantities* —
     /// reproducing a `real*4` reference — while its join keys are integers
-    /// binary32 cannot represent: a ten-digit SCC code is ~2.26e9, 135× above
+    /// binary32 cannot represent: a ten-digit category code is ~2.26e9, 135× above
     /// binary32's exact-integer limit of 2^24, so under a document-wide
     /// `Float32` two distinct codes collapse onto one and a `join.on` over them
     /// merges unrelated rows. Declaring the key columns `Float64` keeps them

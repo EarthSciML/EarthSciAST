@@ -2859,7 +2859,7 @@ describes — bit for bit, on the same code path.
 **Why the field exists.** One document-wide float precision cannot express the
 split every relational port of a `real*4` reference needs. Binary32 represents
 every integer only to 2²⁴ = 16 777 216, while such a model's join keys are
-routinely far above it: a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× beyond. Under
+routinely far above it: a ten-digit category code is ≈ 2.26 × 10⁹, 135× beyond. Under
 a document-wide `"Float32"`, reading one real 1 183-row key column gives **48**
 distinct codes where binary64 gives **214**; `2265007010` and `2265007015` both
 become `2265007104`, so a `join.on` over them merges two unrelated equipment

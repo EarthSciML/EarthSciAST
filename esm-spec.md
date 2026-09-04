@@ -1818,7 +1818,7 @@ Precision:
 
 | Field | Description |
 |---|---|
-| `element_type` | The floating-point precision of **this variable and of the arithmetic over it** — `"Float32"` or `"Float64"` — overriding the document's `domain.element_type`. Not to be confused with `type`, which is the variable's semantic role. It exists for the split one document-wide precision cannot express: a model whose floating-point *quantities* are binary32 still has join keys binary32 cannot represent (a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× above binary32's exact-integer limit of 2²⁴), so the keys declare `"Float64"` while the quantities follow the document. Precision propagates from an expression's leaves and an operator mixing two declared element types is an error naming both. Omitted means the document's. See §11.3.1. |
+| `element_type` | The floating-point precision of **this variable and of the arithmetic over it** — `"Float32"` or `"Float64"` — overriding the document's `domain.element_type`. Not to be confused with `type`, which is the variable's semantic role. It exists for the split one document-wide precision cannot express: a model whose floating-point *quantities* are binary32 still has join keys binary32 cannot represent (a ten-digit category code is ≈ 2.26 × 10⁹, 135× above binary32's exact-integer limit of 2²⁴), so the keys declare `"Float64"` while the quantities follow the document. Precision propagates from an expression's leaves and an operator mixing two declared element types is an error naming both. Omitted means the document's. See §11.3.1. |
 
 #### 6.3.1 Classification: what the solver needs, derived
 
@@ -4670,7 +4670,7 @@ precision of THAT variable and of the arithmetic over it, overriding
 `domain.element_type`; absent, it is the document's. It exists for the split one
 document-wide precision cannot express. Binary32 represents every integer only
 up to 2²⁴ = 16 777 216, and a relational model's keys are routinely far above
-it: a ten-digit SCC code is ≈ 2.26 × 10⁹, 135× beyond, so under a document-wide
+it: a ten-digit category code is ≈ 2.26 × 10⁹, 135× beyond, so under a document-wide
 `"Float32"` `2265007010` and `2265007015` both become `2265007104` and a
 `join.on` over them merges two unrelated rows. The reference implementations
 such models port are `real*4` in their floating-point QUANTITIES while their
