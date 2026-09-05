@@ -708,7 +708,8 @@ Coerce the top-level `enums` JSON block into the typed map carried on
 - enum names are non-empty strings
 - symbolic keys are non-empty strings
 - values are integers — ANY integer, negative, zero or positive: an enum
-  member is a categorical code, not a 1-based position (CONFORMANCE_SPEC §5.26)
+  member is a categorical code, not a 1-based position (CONFORMANCE_SPEC,
+  "An `enums` Member Is a Code, Not a Position")
 - within a single enum, integer values are unique
 
 Throws [`ParseError`](@ref) on any violation.

@@ -1132,7 +1132,8 @@ type ESMFile struct {
 	// `enum` AST op (esm-spec §9.3). Each entry is an enum name; its value is
 	// a map from symbolic names (strings) to integers — ANY integer, negative,
 	// zero or positive, since a member is a categorical code and not a 1-based
-	// position (CONFORMANCE_SPEC §5.26). Lowering (resolution to `const`-op
+	// position (CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a
+	// Position"). Lowering (resolution to `const`-op
 	// integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
 	Coupling []CouplingEntry           `json:"coupling,omitempty"` // deserialized coupling entries (discriminated union)

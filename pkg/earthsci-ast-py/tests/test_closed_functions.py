@@ -242,8 +242,8 @@ def test_enums_lowered_to_const():
 
 
 def test_zero_and_negative_enum_members_load_and_resolve_to_themselves():
-    """An ``enums`` member may be ANY integer (esm-spec §9.3, CONFORMANCE_SPEC
-    §5.26).
+    """An ``enums`` member may be ANY integer (esm-spec §9.3; CONFORMANCE_SPEC,
+    "An ``enums`` Member Is a Code, Not a Position").
 
     The schema used to carry ``minimum: 1`` on
     ``EnumDeclaration.additionalProperties``, so a zero-valued identifier could

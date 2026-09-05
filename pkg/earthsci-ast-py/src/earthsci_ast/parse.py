@@ -1386,7 +1386,8 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
 
     # Parse top-level enums block (esm-spec §9.3). Values are ANY integer --
     # negative, zero or positive: an enum member is a categorical code, not a
-    # 1-based position (CONFORMANCE_SPEC §5.26). Unique-within-enum is
+    # 1-based position (CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not
+    # a Position"). Unique-within-enum is
     # enforced here, since a JSON Schema cannot express it.
     enums: dict[str, dict[str, int]] = {}
     if "enums" in data and data["enums"] is not None:

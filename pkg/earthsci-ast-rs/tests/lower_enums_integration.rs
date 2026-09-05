@@ -145,7 +145,8 @@ fn unknown_enum_symbol_rejected_at_load() {
 }
 
 /// An `enums` member may be ANY integer -- negative, zero or positive
-/// (esm-spec §9.3, CONFORMANCE_SPEC §5.26). The `minimum: 1` this format used
+/// (esm-spec §9.3; CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a
+/// Position"). The `minimum: 1` this format used
 /// to carry on `EnumDeclaration.additionalProperties` made a zero-valued
 /// identifier unnameable, which is a real loss: MOVES's
 /// `operatingmode.opModeID = 0` is Braking, an emitting mode with its own

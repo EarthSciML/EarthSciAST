@@ -1,6 +1,7 @@
 /**
  * An `enums` member may be ANY integer — negative, zero or positive
- * (esm-spec §9.3, CONFORMANCE_SPEC §5.26).
+ * (esm-spec §9.3; CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a
+ * Position").
  *
  * The schema used to carry `minimum: 1` on
  * `EnumDeclaration.additionalProperties`, so a zero-valued identifier could not
