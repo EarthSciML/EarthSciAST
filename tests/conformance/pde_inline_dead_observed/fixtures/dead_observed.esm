@@ -1,0 +1,62 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "pde_inline_dead_observed",
+    "description": "§6.6.5 inline-test assertions on array OBSERVEDS that NO LIVE EQUATION CONSUMES — the ordinary shape of a diagnostic computed for a test. `diag` is dead; `chain` is dead and reads the dead `diag`. Neither reaches the Julia build's observed graph (the elementwise array-observed fold inlines such an observed into its readers and drops its equation, and a dead one has no readers), so Julia refused both while Python and Rust answered them."
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": { "type": "unknown", "units": "1", "shape": ["x"], "default": 1.0 },
+        "base": { "type": "unknown", "units": "1", "shape": ["x"] },
+        "diag": { "type": "unknown", "units": "1", "shape": ["x"] },
+        "chain": { "type": "unknown", "units": "1", "shape": ["x"] }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["u"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [0.0, "u"] }
+        },
+        {
+          "lhs": "base",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 4] },
+            "expr": { "op": "*", "args": [1.0, "i"] }
+          }
+        },
+        {
+          "lhs": "diag",
+          "rhs": { "op": "*", "args": [2.0, "base"] }
+        },
+        {
+          "lhs": "chain",
+          "rhs": { "op": "+", "args": ["diag", "base"] }
+        }
+      ],
+      "tests": [
+        {
+          "id": "dead_observed",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "diag", "time": 0.5, "reduce": "max", "expected": 8.0,
+              "tolerance": { "abs": 1e-9 } },
+            { "variable": "diag", "time": 0.5, "reduce": "min", "expected": 2.0,
+              "tolerance": { "abs": 1e-9 } },
+            { "variable": "diag", "time": 0.5, "coords": { "x": 3 }, "expected": 6.0,
+              "tolerance": { "abs": 1e-9 } },
+            { "variable": "chain", "time": 0.5, "reduce": "max", "expected": 12.0,
+              "tolerance": { "abs": 1e-9 } },
+            { "variable": "chain", "time": 0.5, "coords": { "x": 2 }, "expected": 6.0,
+              "tolerance": { "abs": 1e-9 } }
+          ]
+        }
+      ]
+    }
+  }
+}
