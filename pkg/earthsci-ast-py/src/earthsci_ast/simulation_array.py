@@ -2530,6 +2530,7 @@ def observed_at_state(
     that name. ``name`` is matched flattened-first: exactly, then as a UNIQUE
     ``.<name>`` suffix.
     """
+
     def _ctx() -> EvalContext:
         return EvalContext(
             state_layout=build.state_layout,
