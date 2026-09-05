@@ -768,6 +768,40 @@ order; the application sequence and the reporting sequence are separate.
      already substituted, so in both cases this rewrite is the identity. Step 4 introduces no
      renaming of its own beyond it.
    - Variables from system B that appear in the combined RHS are added to the merged system's variable list.
+   - **The merged equation belongs to its dependent variable's system.** A composed tendency is
+     no longer either author's contribution, so for the purpose of every LATER `operator_compose`
+     entry the merged equation is attributed to the system that owns `x` — the component named by
+     `x`'s leading namespace segment — and not to whichever of A and B happened to carry the
+     surviving equation.
+
+     Where A already is that system, this is the identity and there is nothing to observe. It bites
+     where A is not: §4.7.1 places no restriction on which side is the operator, and an operator
+     component may author `D(Chemistry.O3, t) = …` directly — B's variable under A's authorship.
+     A document may then CHAIN entries over one state with the operator as `systems[0]`:
+
+     ```json
+     {"type": "operator_compose", "systems": ["DepositionSink",  "Chemistry"]},
+     {"type": "operator_compose", "systems": ["EmissionSource",  "Chemistry"]},
+     {"type": "operator_compose", "systems": ["Chemistry", "Transport"], "lifting": "pointwise"}
+     ```
+
+     Entry 1 consumes `Chemistry`'s own equation for `O3`. If the sum is left attributed to
+     `DepositionSink`, entry 2 looks at `EmissionSource` and `Chemistry`, finds no equation for
+     `O3` in either, and merges nothing — so the emission term is never added and the flattened
+     system carries TWO equations claiming `D(Chemistry.O3, t)`. That is an over-determination
+     raised (at best) stages later, for a document that is spec-valid and must flatten.
+
+     Attribution is not recoverable from the equation itself: after namespacing, an operator's
+     equation for a chemistry species is textually indistinguishable from the chemistry
+     component's own, and placeholder expansion produces the same shape. An implementation MUST
+     therefore carry it explicitly — as a per-equation owner beside the equation list, or as which
+     component's equation list the equation lives in — and MUST update it here.
+
+     Attribution is about VISIBILITY to later entries, not about ordering; ordering stays what
+     §4.7.5 step 4 says. Note that in an implementation whose attribution IS the equation list an
+     equation sits in, updating it necessarily moves the equation: append it to the owner's list,
+     so that in a chained composition each merged equation trails the merges that preceded it.
+
    - **The merged-away name does not survive.** When a match renames the dependent variable — a
      translation match, or the bare-name fallback, which is a name-based translation — B's
      declaration of that variable is left with nothing to constrain it: the equation that defined
