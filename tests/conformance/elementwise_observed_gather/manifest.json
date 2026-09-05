@@ -1,0 +1,89 @@
+{
+    "category": "elementwise_observed_gather",
+    "version": "1.0",
+    "description": "Cross-binding conformance for an ARRAY-shaped OBSERVED written ELEMENTWISE over another array and consumed ONLY through an `index(f, j)` gather inside an `aggregate` body. `zc` is a const field shaped [lev]; `f = 1 + cos(pi*zc)` is the natural, spec-legible spelling of a per-level field (esm-spec §4.3.4 elementwise broadcast over index-set names); `colsum[i] = Σ_{j≤i} f[j]` and `total = Σ_j f[j]` read it through gathers and nothing else reads it at all. A binding that inlines `f` into its readers by name substitution turns the gather into `index(1 + cos(pi*zc), j)` and must DISTRIBUTE it over the elementwise combination all the way down to the array leaf — `1 + cos(pi*index(zc, j))` — which is exact, not an approximation. Julia's tree-walk resolver tested only the IMMEDIATE operands of the combination for array-ness, so a leaf one level down under a `cos` matched nothing, the gather was dropped, and `zc` reached the compiler bare as `E_TREEWALK_UNBOUND_VARIABLE: zc` (issue #175): the elementwise document was portable to Python and Rust but not to the reference binding. Julia: FIXED (`_index_pushdown_arrayish` recurses through nested elementwise ops and spans every array SOURCE the resolver can gather — array state slot, forcing buffer, const array); Python and Rust already evaluated it. Julia is the reference binding: its `run_pde_tests` minted both goldens. The category carries a controlled PAIR: `elementwise_gather` is the shape under test, and `explicit_gather` is the identical field written as an explicit `aggregate(k from lev; 1 + cos(pi*index(zc, k)))` — the spelling that never needed the push-down. The two share every assertion and every expected value, so a divergence between them is the gather push-down and cannot be the physics. Both right-hand sides are state-FREE, so `u(t) = colsum·t` and `s(t) = total·t` are integrated exactly by every pinned solver family and the goldens are integrator-independent to machine precision: a divergence here is a semantics divergence, never an integrator one.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+        "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "tolerances": {
+        "assertion_rtol": 1e-09,
+        "assertion_atol": 1e-11
+    },
+    "fixtures": [
+        {
+            "id": "elementwise_gather",
+            "path": "fixtures/elementwise_gather.esm",
+            "model": "Column",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-4.3.4",
+                "esm-spec-6.6.5",
+                "array-observed",
+                "elementwise",
+                "aggregate-gather",
+                "index-pushdown",
+                "issue-175"
+            ],
+            "shape": {
+                "lev": 4
+            },
+            "assertions": [
+                { "test_id": "elementwise_gather", "assertion_idx": 1, "variable": "u", "coords": { "lev": 1 }, "expected": 2.0 },
+                { "test_id": "elementwise_gather", "assertion_idx": 2, "variable": "u", "coords": { "lev": 3 }, "expected": 4.0 },
+                { "test_id": "elementwise_gather", "assertion_idx": 3, "variable": "u", "reduce": "max", "expected": 4.0 },
+                { "test_id": "elementwise_gather", "assertion_idx": 4, "variable": "u", "reduce": "min", "expected": 2.0 },
+                { "test_id": "elementwise_gather", "assertion_idx": 5, "variable": "s", "reduce": null, "expected": 4.0 }
+            ],
+            "golden": "golden/elementwise_gather.json"
+        },
+        {
+            "id": "explicit_gather",
+            "path": "fixtures/explicit_gather.esm",
+            "model": "Column",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-4.3.4",
+                "esm-spec-6.6.5",
+                "array-observed",
+                "explicit-gather",
+                "oracle",
+                "issue-175"
+            ],
+            "shape": {
+                "lev": 4
+            },
+            "assertions": [
+                { "test_id": "explicit_gather", "assertion_idx": 1, "variable": "u", "coords": { "lev": 1 }, "expected": 2.0 },
+                { "test_id": "explicit_gather", "assertion_idx": 2, "variable": "u", "coords": { "lev": 3 }, "expected": 4.0 },
+                { "test_id": "explicit_gather", "assertion_idx": 3, "variable": "u", "reduce": "max", "expected": 4.0 },
+                { "test_id": "explicit_gather", "assertion_idx": 4, "variable": "u", "reduce": "min", "expected": 2.0 },
+                { "test_id": "explicit_gather", "assertion_idx": 5, "variable": "s", "reduce": null, "expected": 4.0 }
+            ],
+            "golden": "golden/explicit_gather.json"
+        }
+    ]
+}
