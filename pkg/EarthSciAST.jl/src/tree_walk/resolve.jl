@@ -990,9 +990,19 @@ function _resolve_indices_op(expr::OpExpr,
         if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
             fa = first_arg::OpExpr
             subs = expr.args[2:end]
-            _arrayish(a) = (a isa OpExpr && (_is_aggregate_op((a::OpExpr).op) ||
-                                             (a::OpExpr).op == "makearray")) ||
-                           (a isa VarExpr && haskey(array_var_info, (a::VarExpr).name))
+            # The operand test is `_index_pushdown_arrayish` (build_helpers.jl),
+            # shared with `_stencilize_index`: it looks THROUGH nested elementwise
+            # ops, so `index(1 + cos(pi*zc), j)` — an elementwise-defined array
+            # observed folded into a reader that gathers it — distributes down to
+            # `1 + cos(pi*index(zc, j))` instead of dropping the gather and
+            # leaving `zc` bare (issue #175). The leaf test spans every array
+            # SOURCE the branches below can gather: an array state slot, a live
+            # forcing buffer, and a const array.
+            _leaf_is_array(n) = haskey(array_var_info, n) || haskey(pgather, n) ||
+                                (haskey(const_arrays, n) &&
+                                 !_is_scalar_const_field(const_arrays[n]))
+            _amemo = IdDict{OpExpr,Bool}()
+            _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
             if any(_arrayish, fa.args)
                 pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, subs...]) : a
                                  for a in fa.args]

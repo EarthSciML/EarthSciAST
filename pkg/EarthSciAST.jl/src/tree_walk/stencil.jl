@@ -747,11 +747,15 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     # any `_is_scalar_op` (registry categories applicable elementwise).
     if first_arg isa OpExpr && _is_scalar_op((first_arg::OpExpr).op)
         fa = first_arg::OpExpr
-        _arrayish(a) = (a isa OpExpr && (_is_aggregate_op((a::OpExpr).op) ||
-                                         (a::OpExpr).op == "makearray")) ||
-                       (a isa VarExpr && (haskey(ctx.array_var_info, (a::VarExpr).name) ||
-                                          haskey(ctx.pgather, (a::VarExpr).name) ||
-                                          haskey(ctx.const_arrays, (a::VarExpr).name)))
+        # `_index_pushdown_arrayish` (build_helpers.jl) is the resolver's operand
+        # test, shared verbatim: it looks THROUGH nested elementwise ops, so a
+        # folded elementwise array observed (`index(1 + cos(pi*zc), j)`) pushes
+        # down here too rather than declining to the per-cell tier (issue #175).
+        _leaf_is_array(n) = haskey(ctx.array_var_info, n) || haskey(ctx.pgather, n) ||
+                            (haskey(ctx.const_arrays, n) &&
+                             !_is_scalar_const_field(ctx.const_arrays[n]))
+        _amemo = IdDict{OpExpr,Bool}()
+        _arrayish(a) = _index_pushdown_arrayish(a, _leaf_is_array, _amemo)
         if any(_arrayish, fa.args)
             pushed = ASTExpr[_arrayish(a) ? OpExpr("index", ASTExpr[a, idx_args...]) : a
                              for a in fa.args]

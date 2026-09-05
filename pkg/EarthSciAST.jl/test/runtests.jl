@@ -107,6 +107,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_arrayop_test.jl")
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
+    include("tree_walk_elementwise_obs_gather_test.jl")  # #175 elementwise array observed reached only via an aggregate gather
     include("tree_walk_vectorized_test.jl")
     include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
