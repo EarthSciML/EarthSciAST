@@ -1214,6 +1214,11 @@ fn build_for_test(
 /// The memo cannot change an answer it does not also change without it: the
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
+// Nine parameters against clippy's seven. They are the loop-invariant context
+// the build memo keys on, described above; bundling them into a struct would
+// move the same values behind one more name without making any of them
+// optional.
+#[allow(clippy::too_many_arguments)]
 fn run_model_tests(
     file: &EsmFile,
     model_name: &str,
@@ -1309,17 +1314,16 @@ fn run_model_tests(
                     Ok(sol) => Ok(sol),
                     // A document with no ODEs never integrates; its answers are
                     // the build's, evaluated at the asserted times.
-                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                        Ok(build_only_solution(run_opts.saveat.clone().unwrap_or_default()))
-                    }
+                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => Ok(
+                        build_only_solution(run_opts.saveat.clone().unwrap_or_default()),
+                    ),
                     Err(e) => Err(format!("simulate failed: {e}")),
                 }
-                .map(|sol| {
+                .inspect(|_sol| {
                     insp = prob.take_inspection();
                     for (k, v) in fields {
                         insp.setup_arrays.entry(k).or_insert(v);
                     }
-                    sol
                 })
             }
         }
@@ -1881,7 +1885,11 @@ mod tests {
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
         // 2*exp(-0.5): the observed is read at the RIGHT time, not held at t=0.
         let late = results[2].actual.expect("actual");

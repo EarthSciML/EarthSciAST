@@ -28,9 +28,10 @@ fn suite_dir() -> PathBuf {
 
 fn manifest() -> Value {
     let p = suite_dir().join("manifest.json");
-    serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| {
-        panic!("the shared pin {} must be readable: {e}", p.display())
-    }))
+    serde_json::from_str(
+        &std::fs::read_to_string(&p)
+            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
+    )
     .expect("manifest.json is JSON")
 }
 
@@ -86,7 +87,7 @@ fn resolution_is_idempotent_so_parse_emit_parse_is_stable() {
     // resolving to the same place by accident.
     let m = manifest();
     let f = fixture(&m, "relative_catalog");
-    let first = earthsci_ast::load_path(&suite_dir().join(f["path"].as_str().expect("path")))
+    let first = earthsci_ast::load_path(suite_dir().join(f["path"].as_str().expect("path")))
         .expect("the catalog must load");
     let emitted = earthsci_ast::to_json(&first).expect("emits");
 

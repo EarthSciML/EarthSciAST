@@ -32,11 +32,14 @@ on:
         default: false
         type: boolean
 
-# The scan job opens an issue when it finds a high-severity vulnerability,
-# so it needs issues:write -- but nothing here needs write access to code.
+# The scan job opens an issue when it finds a high-severity vulnerability and
+# posts its report on the PR -- an issue comment on a PR is gated on
+# pull-requests:write, not issues:write -- but nothing here needs write access
+# to code.
 permissions:
   contents: read
   issues: write
+  pull-requests: write
 
 concurrency:
   group: security-scan-${{ github.ref }}
@@ -125,12 +128,14 @@ jobs:
           SCANNER_ARGS="$SCANNER_ARGS --fail-on-warnings"
         fi
 
+        # `bash -e` would abort the step the moment the scanner exits
+        # non-zero, before the outputs below are written -- so capture the
+        # status instead of letting it propagate here.
+        SCAN_EXIT_CODE=0
         python3 scripts/package-security-scanner.py $SCANNER_ARGS \
-          --output security-scan-results.json
+          --output security-scan-results.json || SCAN_EXIT_CODE=$?
 
         # Extract results for GitHub output
-        SCAN_EXIT_CODE=$?
-
         if [ $SCAN_EXIT_CODE -eq 0 ]; then
           echo "status=success" >> $GITHUB_OUTPUT
         else
@@ -160,11 +165,10 @@ jobs:
       run: |
         echo "Running package signature verification..."
 
+        SIGNATURE_EXIT_CODE=0
         python3 scripts/package-signature-verifier.py \
           --config $SECURITY_CONFIG \
-          --output signature-verification-results.json
-
-        SIGNATURE_EXIT_CODE=$?
+          --output signature-verification-results.json || SIGNATURE_EXIT_CODE=$?
 
         if [ $SIGNATURE_EXIT_CODE -eq 0 ]; then
           echo "Signature verification completed successfully"
@@ -270,6 +274,10 @@ jobs:
 
     - name: Post security report as comment (PR)
       if: github.event_name == 'pull_request' && always()
+      # The report is informational; a PR from a fork gets a read-only token
+      # whatever the permissions block says, so a failure here must not mask
+      # the scan's own verdict.
+      continue-on-error: true
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -557,14 +557,12 @@ pub(super) fn eval_vec_contracted<'a>(
     // gets the arithmetic from the precision-aware kernel table; the fusion's
     // own contract is that it is bit-identical to that route, so nothing but
     // the buffer traffic changes.
-    let fuse_mul: Option<(&Expr, &Expr)> = if filter.is_none()
-        && reduce == ReduceKind::Sum
-        && !crate::precision::is_f32()
-    {
-        as_op(body, "*", 2).map(|n| (&n.args[0], &n.args[1]))
-    } else {
-        None
-    };
+    let fuse_mul: Option<(&Expr, &Expr)> =
+        if filter.is_none() && reduce == ReduceKind::Sum && !crate::precision::is_f32() {
+            as_op(body, "*", 2).map(|n| (&n.args[0], &n.args[1]))
+        } else {
+            None
+        };
 
     // Iterate the contraction window with a mixed-radix counter (no allocation).
     let mut cvals = [0i64; MAXC];

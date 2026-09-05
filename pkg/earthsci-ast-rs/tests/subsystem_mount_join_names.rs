@@ -42,8 +42,7 @@ fn fixture(name: &str) -> PathBuf {
 /// the `{"ref": "./join_leaf.esm"}` mount relative to the host document.
 fn assert_inline_tests_pass(path: &Path, expected: f64) {
     let file = load_path(path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    let results =
-        run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(
         results.len(),
         1,

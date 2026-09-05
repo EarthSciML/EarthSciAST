@@ -588,8 +588,7 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                                     f"which one the key is read at; name the clause's two "
                                     f"sides with `syms`"
                                     if via_column
-                                    else
-                                    f"aggregate join key {key!r} names an index set that "
+                                    else f"aggregate join key {key!r} names an index set that "
                                     f"{len(cands)} range symbols of this aggregate draw; "
                                     f"reference the range symbol directly, or name the "
                                     f"clause's two sides with `syms`"

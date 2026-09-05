@@ -1548,12 +1548,13 @@ impl ArrayCompiled {
                 ..
             } = rule
             {
-                insp.recurrences.push(crate::simulate_array::RecurrenceInfo {
-                    var: var.clone(),
-                    axis: output_idx_names[*axis].clone(),
-                    max_lag: *max_lag,
-                    lag_proven: *lag_proven,
-                });
+                insp.recurrences
+                    .push(crate::simulate_array::RecurrenceInfo {
+                        var: var.clone(),
+                        axis: output_idx_names[*axis].clone(),
+                        max_lag: *max_lag,
+                        lag_proven: *lag_proven,
+                    });
             }
         }
         for name in static_names {

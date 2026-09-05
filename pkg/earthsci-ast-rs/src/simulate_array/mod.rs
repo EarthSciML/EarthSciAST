@@ -82,11 +82,11 @@ pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_inventio
 // two routes cannot disagree about which names a document declares.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
+pub(crate) use eval::eval_observed_recurrence;
 pub use eval::{
     eval_expression, eval_expression_with_extents, eval_expression_with_extents_and_consts,
     take_const_array_oob,
 };
-pub(crate) use eval::eval_observed_recurrence;
 // The scalar-op leaf kernel is defined once here (backs the per-cell oracle and
 // the vectorized overlay); re-exported crate-wide so the scalar interpreter
 // `crate::simulate::eval_op` routes through the SAME definition instead of

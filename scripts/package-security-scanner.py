@@ -16,8 +16,9 @@ import subprocess
 import sys
 import hashlib
 import re
+import tempfile
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 
@@ -285,37 +286,99 @@ class PackageVerifier:
 
     def _check_julia_dependencies(self, deps: Dict[str, str], result: Dict[str, Any]) -> None:
         """Check Julia dependencies for known vulnerabilities."""
-        # This would integrate with Julia's security advisories if available
+        # Julia has no machine-readable advisory feed to query, so the
+        # dependency set is RECORDED rather than flagged. Warning that a
+        # package has dependencies is a warning every package with
+        # dependencies always earns: it carries no signal, and it would fail
+        # every build the moment anyone passed --fail-on-warnings.
         result["checks"]["dependencies"] = "passed"
-        if deps:
-            result["warnings"].append(f"Found {len(deps)} dependencies (manual review recommended)")
+        result["dependency_count"] = len(deps)
+
+    def _declared_python_dependencies(self, package_path: str) -> List[str]:
+        """The package's own declared dependencies, runtime and optional."""
+        pyproject_path = os.path.join(package_path, "pyproject.toml")
+        if not os.path.exists(pyproject_path):
+            return []
+
+        try:
+            import toml
+
+            with open(pyproject_path, "r") as f:
+                project_info = toml.load(f).get("project", {})
+        except Exception as e:
+            logger.debug(f"Could not read dependencies from {pyproject_path}: {e}")
+            return []
+
+        dependencies = list(project_info.get("dependencies", []))
+        for extra in project_info.get("optional-dependencies", {}).values():
+            dependencies.extend(extra)
+
+        return dependencies
+
+    @staticmethod
+    def _parse_safety_json(output: str) -> Optional[Dict[str, Any]]:
+        """Pull safety's JSON report out of the output it is embedded in.
+
+        `safety check` prints a deprecation banner BEFORE the report and
+        another one after it, so its stdout is not JSON end to end and
+        json.loads on the whole of it fails -- which is why every scan warned
+        "Failed to parse safety scan results" and read no advisory at all.
+        Decode the first JSON value and let whatever follows it go.
+        """
+        start = output.find("{")
+        if start == -1:
+            return None
+
+        try:
+            report, _ = json.JSONDecoder().raw_decode(output[start:])
+        except json.JSONDecodeError:
+            return None
+
+        return report if isinstance(report, dict) else None
 
     def _run_python_safety_scan(self, package_path: str, result: Dict[str, Any]) -> None:
         """Run Python safety scan if available."""
+        # Given no target, `safety check` scans the AMBIENT environment, which
+        # on CI is the runner's own toolchain -- advisories against pip and
+        # setuptools would be reported as this package's own. Scan what the
+        # package declares instead.
+        requirements = self._declared_python_dependencies(package_path)
+        if not requirements:
+            result["warnings"].append("No declared dependencies to scan with safety")
+            return
+
+        requirements_path = ""
         try:
-            cmd = ["safety", "check", "--json", "--full-report"]
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as requirements_file:
+                requirements_file.write("\n".join(requirements) + "\n")
+                requirements_path = requirements_file.name
+
+            cmd = ["safety", "check", "--json", "-r", requirements_path]
             proc = subprocess.run(cmd, cwd=package_path, capture_output=True, text=True, timeout=60)
 
             if proc.returncode == 0:
                 result["checks"]["safety_scan"] = "passed"
             else:
-                # Parse safety output for vulnerabilities
-                try:
-                    safety_data = json.loads(proc.stdout)
+                safety_data = self._parse_safety_json(proc.stdout)
+                if safety_data is None:
+                    result["warnings"].append("Failed to parse safety scan results")
+                    result["checks"]["safety_scan"] = "warning"
+                else:
                     vulnerabilities = safety_data.get("vulnerabilities", [])
                     for vuln in vulnerabilities:
                         result["vulnerabilities"].append(
                             {
                                 "package": vuln.get("package_name"),
-                                "version": vuln.get("installed_version"),
+                                "version": vuln.get("analyzed_version")
+                                or vuln.get("installed_version"),
                                 "vulnerability": vuln.get("vulnerability_id"),
-                                "severity": vuln.get("severity", "unknown"),
+                                # The free advisory feed leaves severity null.
+                                "severity": vuln.get("severity") or "unknown",
                             }
                         )
                     result["checks"]["safety_scan"] = "failed" if vulnerabilities else "passed"
-                except json.JSONDecodeError:
-                    result["warnings"].append("Failed to parse safety scan results")
-                    result["checks"]["safety_scan"] = "warning"
 
         except FileNotFoundError:
             result["warnings"].append("Python safety tool not installed")
@@ -323,6 +386,9 @@ class PackageVerifier:
             result["warnings"].append("Safety scan timed out")
         except Exception as e:
             result["warnings"].append(f"Safety scan failed: {e}")
+        finally:
+            if requirements_path and os.path.exists(requirements_path):
+                os.unlink(requirements_path)
 
     def _run_npm_audit(self, package_path: str, result: Dict[str, Any]) -> None:
         """Run npm audit if npm is available."""
@@ -397,6 +463,56 @@ class PackageVerifier:
         except Exception as e:
             result["warnings"].append(f"cargo audit failed: {e}")
 
+    # The header of a license FILE, mapped to the identifier it stands for.
+    # Ordered longest-name-first: every AGPL and LGPL text also contains the
+    # phrase the plain GPL is matched on.
+    LICENSE_FILE_MARKERS = (
+        ("GNU AFFERO GENERAL PUBLIC LICENSE", "AGPL-3.0-only"),
+        ("GNU LESSER GENERAL PUBLIC LICENSE", "LGPL-3.0"),
+        ("GNU GENERAL PUBLIC LICENSE", "GPL-3.0"),
+        ("Apache License", "Apache-2.0"),
+        ("MIT License", "MIT"),
+        ("BSD 3-Clause", "BSD-3-Clause"),
+        ("BSD 2-Clause", "BSD-2-Clause"),
+    )
+
+    def _license_from_file(self, license_path: str) -> str:
+        """Identify the license held in the file a manifest points at."""
+        try:
+            with open(license_path, "r", encoding="utf-8", errors="replace") as f:
+                header = f.read(4096)
+        except OSError as e:
+            logger.debug(f"Could not read license file {license_path}: {e}")
+            return ""
+
+        for marker, identifier in self.LICENSE_FILE_MARKERS:
+            if marker in header:
+                return identifier
+
+        return ""
+
+    def _license_allowed(self, license_text: str) -> bool:
+        """Whether a license declaration names one of the allowed licenses.
+
+        An SPDX identifier has to match OUTRIGHT: "GPL-3.0" is a substring of
+        "AGPL-3.0-only", so a containment test reads a stronger copyleft
+        license as whichever weaker one its name happens to contain. Free-form
+        license text, which only ever mentions its name in passing, still
+        matches on containment.
+        """
+        if not license_text:
+            return False
+
+        allowed = self.config["allowed_licenses"]
+        if license_text in allowed:
+            return True
+
+        is_spdx_identifier = " " not in license_text.strip()
+        if is_spdx_identifier:
+            return False
+
+        return any(a in license_text for a in allowed)
+
     def _scan_pyproject_toml(self, pyproject_path: str, result: Dict[str, Any]) -> Dict[str, Any]:
         """Scan pyproject.toml for package information and dependencies."""
         try:
@@ -412,14 +528,22 @@ class PackageVerifier:
             result["version"] = project_info.get("version", "unknown")
             result["checks"]["pyproject_structure"] = "passed"
 
-            # Check license
+            # Check license. PEP 621 spells this {text = ...} or
+            # {file = ...}; PEP 639 replaces both with a bare SPDX expression.
+            # Reading only the "text" key left the {file = ...} form -- what
+            # this package uses -- reporting an EMPTY license as disallowed.
             license_info = project_info.get("license", {})
             if isinstance(license_info, dict):
                 license_text = license_info.get("text", "")
+                license_file = license_info.get("file", "")
+                if not license_text and license_file:
+                    license_text = self._license_from_file(
+                        os.path.join(os.path.dirname(pyproject_path), license_file)
+                    )
             else:
                 license_text = str(license_info)
 
-            if any(allowed in license_text for allowed in self.config["allowed_licenses"]):
+            if self._license_allowed(license_text):
                 result["checks"]["license"] = "passed"
             else:
                 result["warnings"].append(f'License "{license_text}" not clearly in allowed list')
@@ -528,10 +652,12 @@ class PackageVerifier:
             return "error"
 
         # Check for high-severity vulnerabilities
+        # `or ""` rather than a get() default: safety records the key with a
+        # null value, so the default never fires and .lower() would raise.
         high_severity_vulns = [
             v
             for v in result["vulnerabilities"]
-            if v.get("severity", "").lower() in ["high", "critical"]
+            if str(v.get("severity") or "").lower() in ["high", "critical"]
         ]
 
         if high_severity_vulns:
