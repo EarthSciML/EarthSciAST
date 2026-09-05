@@ -786,7 +786,11 @@ about the result and are the reason the cost rule is allowed to exist at all.
 > declaration — and wrong wherever binary32 rounding is what the reference
 > actually does, which §5.18.1 opens by measuring. Three executing bindings, two
 > answers, no diagnostic on any of them. §5.18.2 already requires the refusal
-> that would surface it.
+> that would surface it, and **PREC-11-A's binding status below already records
+> the gap** — this measurement is a witness for that row, not a new finding. What
+> it adds is that the divergence is reachable through a JOIN KEY and not only
+> through arithmetic, so it changes an answer's row membership rather than its
+> last ulp.
 >
 > **-001/-002/-004 are SHOULDs.** A binding that declines is slower, not wrong:
 > the lowered `filter` still decides every leaf. Julia's tree-walk and Python's
