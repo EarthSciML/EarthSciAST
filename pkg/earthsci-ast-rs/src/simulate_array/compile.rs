@@ -1761,7 +1761,10 @@ pub(super) fn lower_recurrence(
                         ),
                     ));
                 }
-                SelfIdx::Offset { proven, max_lag: hi } => {
+                SelfIdx::Offset {
+                    proven,
+                    max_lag: hi,
+                } => {
                     lag_proven &= proven;
                     if lagged.is_some() {
                         return Err(recur_err(
@@ -3158,13 +3161,7 @@ pub(super) fn rename_free_symbol(expr: &Expr, from: &str, to: &str) -> Expr {
 /// references into the variable registry. (`map_column_names` renames the gate's
 /// COLUMNS only, for exactly that reason.)
 fn rename_join_names(join: &[JoinClause], from: &str, to: &str) -> Vec<JoinClause> {
-    let ren = |n: &String| -> String {
-        if n == from {
-            to.to_string()
-        } else {
-            n.clone()
-        }
-    };
+    let ren = |n: &String| -> String { if n == from { to.to_string() } else { n.clone() } };
     join.iter()
         .map(|c| JoinClause {
             on: c.on.iter().map(|[l, r]| [ren(l), ren(r)]).collect(),

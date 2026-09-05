@@ -100,12 +100,7 @@ fn the_const_array_key_column_variant_is_rejected_too() {
 fn the_control_spelling_loads_and_answers_two() {
     let path = fixture("loop_symbol_named_k_control.esm");
     let file = load_path(&path).expect("control loads");
-    let results = run_pde_tests_with_base_dir(
-        &file,
-        None,
-        &SolveOptions::default(),
-        path.parent(),
-    );
+    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 1, "one inline assertion: {results:?}");
     let r = &results[0];
     assert!(
@@ -113,7 +108,11 @@ fn the_control_spelling_loads_and_answers_two() {
         "the control must still count the two matching pairs: actual={:?} expected={} — {}",
         r.actual, r.expected, r.message
     );
-    assert_eq!(r.actual, Some(2.0), "renaming a bound index must not change a result");
+    assert_eq!(
+        r.actual,
+        Some(2.0),
+        "renaming a bound index must not change a result"
+    );
 }
 
 /// A minimal single-aggregate document binding `sym`, optionally under a
@@ -268,11 +267,14 @@ fn binds_reserved(doc: &Value) -> bool {
                     .get("ranges")
                     .and_then(Value::as_object)
                     .is_some_and(|r| r.keys().any(|k| k == independent || k == "_var"))
-                    || obj.get("output_idx").and_then(Value::as_array).is_some_and(|a| {
-                        a.iter()
-                            .filter_map(Value::as_str)
-                            .any(|s| s == independent || s == "_var")
-                    });
+                    || obj
+                        .get("output_idx")
+                        .and_then(Value::as_array)
+                        .is_some_and(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .any(|s| s == independent || s == "_var")
+                        });
                 binds || obj.values().any(|c| go(c, independent))
             }
             Value::Array(arr) => arr.iter().any(|c| go(c, independent)),

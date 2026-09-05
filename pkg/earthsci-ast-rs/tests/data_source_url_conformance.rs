@@ -28,9 +28,10 @@ fn suite_dir() -> PathBuf {
 
 fn manifest() -> Value {
     let p = suite_dir().join("manifest.json");
-    serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_else(|e| {
-        panic!("the shared pin {} must be readable: {e}", p.display())
-    }))
+    serde_json::from_str(
+        &std::fs::read_to_string(&p)
+            .unwrap_or_else(|e| panic!("the shared pin {} must be readable: {e}", p.display())),
+    )
     .expect("manifest.json is JSON")
 }
 

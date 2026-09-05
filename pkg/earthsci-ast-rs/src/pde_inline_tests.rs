@@ -1309,9 +1309,9 @@ fn run_model_tests(
                     Ok(sol) => Ok(sol),
                     // A document with no ODEs never integrates; its answers are
                     // the build's, evaluated at the asserted times.
-                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                        Ok(build_only_solution(run_opts.saveat.clone().unwrap_or_default()))
-                    }
+                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => Ok(
+                        build_only_solution(run_opts.saveat.clone().unwrap_or_default()),
+                    ),
                     Err(e) => Err(format!("simulate failed: {e}")),
                 }
                 .map(|sol| {
@@ -1881,7 +1881,11 @@ mod tests {
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
         // 2*exp(-0.5): the observed is read at the RIGHT time, not held at t=0.
         let late = results[2].actual.expect("actual");

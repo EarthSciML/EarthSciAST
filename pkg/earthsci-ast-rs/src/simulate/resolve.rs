@@ -148,24 +148,24 @@ pub(super) fn resolve_expr(
             // gates the same set through `check_evaluable`; this is the scalar
             // path's mirror, so neither can silently evaluate one in binary64.
             // A no-op under Float64.
-            if let Some((construct, reason)) =
-                crate::precision::is_f32()
-                    .then(|| crate::precision::f32_unsupported_reason(&node.op, node.name.as_deref()))
-                    .flatten()
+            if let Some((construct, reason)) = crate::precision::is_f32()
+                .then(|| crate::precision::f32_unsupported_reason(&node.op, node.name.as_deref()))
+                .flatten()
             {
                 return Err(CompileError::Float32Unsupported { construct, reason });
             }
             // The precision-boundary marker, resolved to its own variant so
             // the element type in `name` survives to evaluation.
             if let Some(prec) = crate::precision_infer::marker_precision(node) {
-                let arg = node.args.first().ok_or_else(|| {
-                    CompileError::InterpreterBuildError {
+                let arg = node
+                    .args
+                    .first()
+                    .ok_or_else(|| CompileError::InterpreterBuildError {
                         details: format!(
                             "`{}` op is missing its operand",
                             crate::precision_infer::MARKER_OP
                         ),
-                    }
-                })?;
+                    })?;
                 return Ok(ResolvedExpr::Precision {
                     prec,
                     arg: Box::new(resolve_expr(

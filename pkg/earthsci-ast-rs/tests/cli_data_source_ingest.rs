@@ -106,10 +106,7 @@ fn write_ff10_zip(dir: &Path) -> String {
                 .map(|(i, a)| ff10_row(*a, -90.0 - i as f64, 40.0 + i as f64))
                 .collect::<Vec<_>>(),
         ),
-        (
-            "point/ptnonipm.csv",
-            vec![ff10_row(999.0, -94.0, 45.0)],
-        ),
+        ("point/ptnonipm.csv", vec![ff10_row(999.0, -94.0, 45.0)]),
     ] {
         zw.start_file::<_, ()>(name, zip::write::SimpleFileOptions::default())
             .expect("start member");
@@ -272,8 +269,11 @@ fn fixture_with_scalar_total(dir: &Path, sizing: Sizing, expected_total: f64) ->
     let url = write_ff10_zip(dir);
     let doc = document_with_scalar_total(&url, sizing, expected_total);
     let path = dir.join("ingest_scalar.esm");
-    fs::write(&path, serde_json::to_string_pretty(&doc).expect("doc renders"))
-        .expect("write document");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&doc).expect("doc renders"),
+    )
+    .expect("write document");
     path
 }
 
@@ -294,8 +294,11 @@ fn fixture(
     let url = write_ff10_zip(dir);
     let doc = document(&url, extra_reader_options, sizing);
     let path = dir.join("ingest.esm");
-    fs::write(&path, serde_json::to_string_pretty(&doc).expect("doc renders"))
-        .expect("write document");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&doc).expect("doc renders"),
+    )
+    .expect("write document");
     path
 }
 
@@ -399,7 +402,11 @@ fn an_ingested_scalar_contracts_over_the_discovered_extent() {
 #[test]
 fn an_unrecognised_reader_option_is_an_error_naming_the_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
-    let doc = fixture(tmp.path(), Some(("skip_headr_row", json!(true))), Sizing::Literal);
+    let doc = fixture(
+        tmp.path(),
+        Some(("skip_headr_row", json!(true))),
+        Sizing::Literal,
+    );
     let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
     assert!(!ok, "an unknown reader option must not exit 0; got:\n{out}");
     assert_eq!(total_row(&out), (0, 0, 1), "in:\n{out}");
@@ -421,7 +428,10 @@ fn a_missing_source_file_is_an_error_naming_the_source() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let doc_path = fixture(tmp.path(), None, Sizing::Literal);
     fs::remove_file(tmp.path().join("2016fd_inputs_point.zip")).expect("remove the fixture");
-    let (ok, out) = esm(tmp.path(), &["test", doc_path.to_str().expect("utf-8 path")]);
+    let (ok, out) = esm(
+        tmp.path(),
+        &["test", doc_path.to_str().expect("utf-8 path")],
+    );
     assert!(!ok, "a missing source file must not exit 0; got:\n{out}");
     assert_eq!(total_row(&out), (0, 0, 1), "in:\n{out}");
     assert!(
@@ -429,7 +439,6 @@ fn a_missing_source_file_is_an_error_naming_the_source() {
         "the diagnostic must name the source or its consumer:\n{out}"
     );
 }
-
 
 /// The row count comes from the DATA (esm-spec §8.9.4), not from the document.
 ///
@@ -505,7 +514,10 @@ fn a_build_without_the_reader_refuses_and_names_the_source() {
     );
     assert_eq!(total_row(&out), (0, 0, 1), "in:\n{out}");
     assert!(out.contains("EGU_Emis"), "must name the source:\n{out}");
-    assert!(out.contains("esio"), "must name the missing feature:\n{out}");
+    assert!(
+        out.contains("esio"),
+        "must name the missing feature:\n{out}"
+    );
     assert!(
         out.contains("Ingest.annual"),
         "must name the parameter that reads it:\n{out}"

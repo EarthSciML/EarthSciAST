@@ -97,13 +97,13 @@ pub(crate) mod parse;
 /// Text→AST parsing of the INFIX expression surface `display::to_ascii` emits
 /// (the inverse of that printer). Pure and wasm32-clean.
 pub(crate) mod parse_expression;
-pub mod provider;
 /// The evaluator's working precision — `domain.element_type` (esm-spec
 /// §11.3). Public because the contract it implements (`"Float32"` means
 /// per-operation binary32 rounding) is observable, and a host embedding the
 /// evaluator needs to be able to name it.
 pub mod precision;
 pub mod precision_infer;
+pub mod provider;
 pub(crate) mod reactions;
 pub(crate) mod ref_loading;
 pub(crate) mod reference_resolution;

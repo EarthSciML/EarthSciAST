@@ -2780,7 +2780,7 @@ def _join_sym_for_key(
         f"index set {key!r} is drawn by {len(candidates)} range symbols of this "
         f"aggregate ({candidates}), so which one a key column over it is read at is "
         f"not determined; name the two sides explicitly with this clause's "
-        f'\'syms\' (CONFORMANCE_SPEC §5.5.8 "Two ranges over one index set")'
+        f"'syms' (CONFORMANCE_SPEC §5.5.8 \"Two ranges over one index set\")"
     )
 
 

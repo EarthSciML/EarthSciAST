@@ -1814,7 +1814,8 @@ impl<'o> BuildState<'o> {
                 "  [prepare] gated fetch {key} -> {target} {:?}",
                 arr.shape()
             ));
-            self.arrays.insert(target.clone(), round_external(&target, arr));
+            self.arrays
+                .insert(target.clone(), round_external(&target, arr));
         }
         self.report(
             PreparePhase::GatedFetch,

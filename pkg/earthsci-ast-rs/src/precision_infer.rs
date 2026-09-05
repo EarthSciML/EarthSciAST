@@ -256,10 +256,7 @@ fn annotate_model_with(
     document: Precision,
     qualified: &HashMap<String, Precision>,
 ) -> Result<(), CompileError> {
-    if !model
-        .variables
-        .values()
-        .any(|v| v.element_type.is_some())
+    if !model.variables.values().any(|v| v.element_type.is_some())
         && !qualified.values().any(|p| *p != document)
     {
         return Ok(());
@@ -289,11 +286,8 @@ fn annotate_model_with(
 /// [`CompileError::UnsupportedElementType`] for any spelling that is neither
 /// `"Float64"` nor `"Float32"`.
 pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
-    let document = Precision::from_element_type(
-        file.domain
-            .as_ref()
-            .and_then(|d| d.element_type.as_deref()),
-    )?;
+    let document =
+        Precision::from_element_type(file.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
     let mut vars = VarPrecisions::default();
     for (mname, model) in file.models.iter().flatten() {
         for (vname, var) in &model.variables {
@@ -319,7 +313,9 @@ pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
 /// # Errors
 ///
 /// As [`annotate_model`].
-pub fn annotated(file: &crate::types::EsmFile) -> Result<Option<crate::types::EsmFile>, CompileError> {
+pub fn annotated(
+    file: &crate::types::EsmFile,
+) -> Result<Option<crate::types::EsmFile>, CompileError> {
     let declares = file
         .models
         .iter()

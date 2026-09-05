@@ -68,7 +68,7 @@ describe('esm-spec §8.2.1 data-source location resolution', () => {
     const f = fixture('relative_catalog')
     const first = loadPath(path.join(SUITE, f.path))
     const again = JSON.parse(toJson(first)) as object
-    for (const [name, entry] of Object.entries(first.data_sources ?? {})) {
+    for (const entry of Object.values(first.data_sources ?? {})) {
       const source = (entry as { source?: { url_template?: string } }).source
       expect(resolveSourceUrl(source?.url_template as string, '/somewhere/else')).toBe(
         source?.url_template,

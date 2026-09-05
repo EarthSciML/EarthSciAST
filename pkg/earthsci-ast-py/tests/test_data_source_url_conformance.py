@@ -50,9 +50,7 @@ def test_relative_catalog_resolves_as_pinned(source_name: str) -> None:
 
     assert source.url_template == _expected(pin["url_template"])
     if "mirrors" in pin:
-        assert [str(m) for m in (source.mirrors or [])] == [
-            _expected(m) for m in pin["mirrors"]
-        ]
+        assert [str(m) for m in (source.mirrors or [])] == [_expected(m) for m in pin["mirrors"]]
 
 
 def test_resolution_is_idempotent_so_parse_emit_parse_is_stable(tmp_path: Path) -> None:
@@ -70,9 +68,7 @@ def test_resolution_is_idempotent_so_parse_emit_parse_is_stable(tmp_path: Path) 
 
     for name, ds in first.data_sources.items():
         assert second.data_sources[name].source.url_template == ds.source.url_template
-        assert list(second.data_sources[name].source.mirrors or []) == list(
-            ds.source.mirrors or []
-        )
+        assert list(second.data_sources[name].source.mirrors or []) == list(ds.source.mirrors or [])
 
 
 @pytest.mark.parametrize("fixture_id", ["env_var_catalog", "env_var_mirror_catalog"])
