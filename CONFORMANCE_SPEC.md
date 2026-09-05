@@ -3877,6 +3877,82 @@ accept a duplicate *positive* value too), recorded here rather than left
 unstated. It is BEHAV-13's deferred column in
 `ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
 
+### 5.27 An Elementwise Array Expression Is Indexable: the Gather Distributes to the Leaves (normative)
+
+esm-spec §4.3.4 makes an elementwise combination of array operands an ARRAY of
+the broadcast shape. It follows that the combination is INDEXABLE, and that
+indexing it is the combination of the indexed operands:
+
+```
+index(op(a₁, …, aₙ), k…)  ≡  op(index(a₁, k…), …, index(aₙ, k…))     for elementwise `op`
+```
+
+with a genuinely scalar operand (a literal, a scalar parameter) left un-gathered
+so it broadcasts. This is an identity, not an approximation: the two sides are
+the same real number, cell for cell.
+
+The rule matters because it is what makes an ARRAY-shaped observed authored
+ELEMENTWISE readable through a gather. Given
+
+```json
+{"lhs": "f", "rhs": {"op": "+", "args": [1, {"op": "cos",
+    "args": [{"op": "*", "args": ["pi", "zc"]}]}]}}
+```
+
+with `zc` shaped `[lev]`, a reader that says `index(f, j)` — the body of a column
+`aggregate`, say — is asking for `f`'s value at level `j`. A binding that inlines
+`f` into its readers by name substitution (a legitimate and common lowering) has
+`index(1 + cos(pi*zc), j)` in hand, and MUST resolve it by the identity above,
+transitively, until the gather lands on the array LEAVES:
+`1 + cos(pi*index(zc, j))`.
+
+"Transitively" is the whole content of the rule. The leaves may sit at any depth
+under elementwise ops — in the example `zc` is three levels down, beneath a `cos`
+and a `*` — and a binding that inspects only the IMMEDIATE operands of the
+outermost combination finds nothing array-shaped there (`1` is a literal;
+`cos(pi*zc)` is neither an array producer node nor a variable), gathers nothing,
+and DROPS the index. The array leaf then survives into evaluation unbound.
+
+#### 5.27.1 What is a leaf, and what is not
+
+The gather must reach every array SOURCE a binding can gather at all — an array
+state slot, a live forcing buffer, a build-time const array, an array producer
+node (`makearray`, or an `aggregate`/`arrayop` that keeps at least one symbolic
+output index). It must NOT descend into, or re-wrap:
+
+- an `index` node — already a scalar; the gather it carries is its own;
+- a SCALAR reduction (an `aggregate`/`arrayop` whose `output_idx` is empty) — it
+  produces a scalar and gathering it is a rank error;
+- any non-elementwise op (a closed function `fn`, a geometry kernel, an
+  unlowered rewrite target), which consumes whole arrays under its own contract.
+
+#### 5.27.2 Gate
+
+`tests/conformance/elementwise_observed_gather/`, run by
+`conformance_elementwise_observed_gather_test.jl` (Julia),
+`test_elementwise_observed_gather_conformance.py` (Python) and
+`elementwise_observed_gather_conformance.rs` (Rust). The category carries a
+CONTROLLED PAIR of fixtures: `elementwise_gather.esm` is the shape under test,
+and `explicit_gather.esm` writes the identical field as an explicit
+`aggregate(k from lev; 1 + cos(pi*index(zc, k)))` — the spelling that needs no
+push-down. The two share every assertion and every expected value, and each
+runner additionally requires them to agree with EACH OTHER actual-for-actual, so
+a divergence between the two spellings is the push-down and cannot be the
+physics. Both right-hand sides are state-free, so the states are integrated
+exactly by every pinned solver family and the goldens are integrator-independent
+to machine precision.
+
+**Julia** — FIXED. `_resolve_indices`'s push-down branch tested only the
+immediate operands, so the elementwise document raised
+`E_TREEWALK_UNBOUND_VARIABLE: zc` while Python and Rust returned the right
+numbers (issue #175). The operand test is now `_index_pushdown_arrayish`, which
+recurses through nested elementwise ops and spans every array source above; the
+symbolic stencilizer shares it, so the same document reaches the affine tier
+rather than declining to per-cell. **Python**, **Rust** — already conforming;
+the category pins them.
+
+**TypeScript**, **Go** — rewrite-only ports with no evaluator; no rows apply.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

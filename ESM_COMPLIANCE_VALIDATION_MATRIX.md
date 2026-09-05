@@ -282,6 +282,13 @@ Where:
 > `makearray_region_inverted.esm` (`template_imports_conformance`).
 > **Python (2026-07-03)**: implemented (`earthsci_ast/lower_expression_templates.py` `_validate_makearray_regions`, run at both §9.6.4 validator sites — fast path and full path — skipping `expression_templates` and non-integer bounds). Fixtures: `makearray_empty_region_min_extent.esm` loads at `N=2` (folds `[2,1]`) and rejects at `N=1` (folds `[2,0]`); `makearray_region_inverted.esm` raises `makearray_region_inverted`.
 
+### BEHAV-04-I: Indexing an Elementwise Array Expression (esm-spec §4.3.4)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-I-001 | An elementwise combination of array operands is itself an ARRAY and MUST be INDEXABLE: `index(op(a₁, …, aₙ), k…)` resolves to `op(index(a₁, k…), …, index(aₙ, k…))` for every elementwise `op`, with genuinely scalar operands (literals, scalar parameters) left un-gathered so they broadcast. The distribution MUST be TRANSITIVE — the array leaves may sit at any depth under elementwise ops — and MUST reach every array source the binding can gather (array state slot, forcing buffer, const array, `makearray`, and an `aggregate`/`arrayop` keeping at least one symbolic output index). It MUST NOT re-wrap an `index` node, a SCALAR reduction (empty `output_idx`), or a non-elementwise op. The consequence the rule exists for: an array-shaped OBSERVED authored elementwise (`f = 1 + cos(pi*zc)`, `zc` shaped `[lev]`) and read ONLY through an `index(f, j)` gather must evaluate — a binding that inlines `f` by name substitution and then inspects only the OUTERMOST combination's immediate operands finds nothing array-shaped, drops the gather, and leaves `zc` unbound. Julia: FIXED (`_index_pushdown_arrayish` recurses through nested elementwise ops; shared by `_resolve_indices` and the symbolic stencilizer) — the elementwise document previously raised `E_TREEWALK_UNBOUND_VARIABLE: zc` while Python and Rust returned the right numbers. Gate: `tests/conformance/elementwise_observed_gather/` (Julia/Python/Rust agree on the golden actuals, and the elementwise and explicit-gather spellings agree with each other) | esm-spec.md §4.3.4, CONFORMANCE_SPEC §5.27 | Yes | simulation |
+
+> **Binding status (2026-09-05)**: **Julia** fixed; **Python** and **Rust** already conforming and now pinned by the category. **TypeScript**, **Go** — rewrite-only ports with no evaluator; the row does not apply.
+
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|

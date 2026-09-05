@@ -1,0 +1,81 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "explicit_gather",
+    "description": "ORACLE twin of elementwise_gather.esm: the identical field written as an EXPLICIT gather, f = aggregate(k from lev; 1 + cos(pi*index(zc, k))) — the spelling that never needed the index push-down. Same index sets, same equations otherwise, same assertions, same expected values, so a divergence between the two files is the push-down and cannot be the physics."
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "zc":     { "type": "unknown", "shape": ["lev"] },
+        "f":      { "type": "unknown", "shape": ["lev"] },
+        "colsum": { "type": "unknown", "shape": ["lev"] },
+        "total":  { "type": "unknown" },
+        "u":      { "type": "unknown", "shape": ["lev"], "default": 0.0 },
+        "s":      { "type": "unknown", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "colsum" },
+        { "lhs": { "op": "D", "args": ["s"], "wrt": "t" }, "rhs": "total" },
+        {
+          "lhs": "zc",
+          "rhs": { "op": "const", "args": [], "value": [0.0, 1.0, 2.0, 3.0] }
+        },
+        {
+          "lhs": "f",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": ["k"],
+            "ranges": { "k": [1, 4] },
+            "args": ["zc"],
+            "expr": {
+              "op": "+",
+              "args": [
+                1,
+                { "op": "cos", "args": [ { "op": "*", "args": [3.141592653589793,
+                  { "op": "index", "args": ["zc", "k"] }] } ] }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "colsum",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 4], "j": [1, 4] },
+            "args": ["f"],
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["f", "j"] }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": { "j": [1, 4] },
+            "args": ["f"],
+            "expr": { "op": "index", "args": ["f", "j"] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "explicit_gather",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "u", "time": 1.0, "coords": { "lev": 1 }, "expected": 2.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "coords": { "lev": 3 }, "expected": 4.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "reduce": "max", "expected": 4.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "reduce": "min", "expected": 2.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "s", "time": 1.0, "expected": 4.0, "tolerance": { "abs": 1e-11 } }
+          ]
+        }
+      ]
+    }
+  }
+}
