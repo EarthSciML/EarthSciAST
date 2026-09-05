@@ -3929,6 +3929,20 @@ collapsed over all four at once, and a per-cell `reference` indexed past the end
 of the field. The failure is silent and plausible, which is why it is stated
 here rather than left to each binding's judgement.
 
+The rule binds the OBSERVED field sources just as it binds the state rows, and
+there the resolution is by name rather than by stem: both of them (the build
+inspection's setup arrays and the trajectory replay above) fall back to a unique
+`.<name>` suffix match over the FLATTENED build, which spans every sibling
+component. So a binding MUST first require that the asserted component itself
+declares the name as an observed of its own — Rust's `observed_field` checks
+`model.variables` plus `Classification::is_observed`, Julia's `_observed_field`
+checks `observed_unknowns(model)`, and Python's assertion path now gates both of
+its sources the same way. Without that gate a model asserting a name it does not
+declare reads whichever sibling happens to declare it: a document where only
+`M1` defines `g` answered an `M2` assertion on `g` with M1's field. A name the
+asserted component does not declare is the ERROR of §5.27's rule, never a
+sibling's number.
+
 #### 5.27.2 Gate
 
 `tests/conformance/pde_inline_observed_state_dependent/` holds the shared

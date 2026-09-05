@@ -63,6 +63,7 @@ from typing import Any
 
 import numpy as np
 
+from .classification import is_observed_unknown
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .flatten import flatten
 from .parse import load_path, load_string
@@ -276,6 +277,32 @@ def _param_scope_with_aliases(params: dict[str, float] | None) -> dict[str, floa
         if bare != s and counts[bare] == 1 and bare not in out:
             out[bare] = float(v)
     return out
+
+
+def _declares_observed(file: EsmFile, model: str, variable: str) -> bool:
+    """Does ``model`` itself declare ``variable`` as an OBSERVED of its own?
+
+    The gate on every array-observed field lookup, and the reason a field
+    belongs to ONE component (CONFORMANCE_SPEC §5.27.1). Both field sources
+    resolve a bare name by a unique ``.<name>`` suffix across the FLATTENED
+    build, which spans every sibling component — so without this a model
+    asserting a name it does not declare silently reads whichever sibling
+    happens to declare it. A four-component document where only ``M1`` defines
+    ``g`` answered an ``M2`` assertion on ``g`` with M1's field instead of the
+    error the name deserves.
+
+    Identical to the guard the other two bindings already apply before they
+    look at all: Rust ``observed_field`` (``model.variables.get(variable)`` plus
+    ``Classification::is_observed``) and Julia ``_observed_field``
+    (``observed_unknowns(model)``). OBSERVED is derived from the equations
+    (esm-spec §6.3.1), not declared, so both halves are required: a declared
+    name that no equation defines as an observed is not one."""
+    model_obj = (file.models or {}).get(str(model))
+    if model_obj is None:
+        return False
+    if str(variable) not in (model_obj.variables or {}):
+        return False
+    return is_observed_unknown(model_obj, str(variable))
 
 
 def _inspection_field(
@@ -782,9 +809,15 @@ def _evaluate_assertion(
                 #     scalar row. §6.6.5 admits ANY shaped variable
                 #     here, and §5.23 makes a reference denote its
                 #     expansion, so both are readable.
-                obs = _inspection_field(insp, str(mname), a.variable)
-                if obs is None:
-                    obs = _observed_sample(sim, str(mname), a.variable, state, times[ti])
+                # Both sources resolve a bare name across the whole
+                # flattened build, so the ASSERTED component must be
+                # the one that declares the observed (§5.27.1);
+                # otherwise a sibling's field answers silently.
+                obs = None
+                if _declares_observed(eval_file, str(mname), a.variable):
+                    obs = _inspection_field(insp, str(mname), a.variable)
+                    if obs is None:
+                        obs = _observed_sample(sim, str(mname), a.variable, state, times[ti])
                 if obs is None:
                     raise RuntimeError(
                         f"array state '{a.variable}' has no cells "

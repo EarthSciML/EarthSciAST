@@ -374,6 +374,79 @@ def test_array_observed_assertions_read_both_the_build_and_the_trajectory():
     assert "has no cells in var_map" in by_idx[4].message
 
 
+def _sibling_array_observed_doc() -> dict:
+    """Two components; only ``M1`` defines the array observed ``g``. ``M2``'s
+    test asserts a bare ``g`` it does not declare."""
+    zero = {
+        "op": "aggregate",
+        "args": [],
+        "output_idx": ["i"],
+        "ranges": {"i": {"from": "x"}},
+        "expr": 0.0,
+    }
+    m1 = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+        },
+        "equations": [
+            {"lhs": {"op": "ic", "args": ["u"]}, "rhs": zero},
+            {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": zero},
+            {"lhs": "g", "rhs": {"op": "+", "args": ["u", 900]}},
+        ],
+        "tests": [],
+    }
+    m2 = {
+        "variables": {"u": {"type": "unknown", "units": "1", "shape": ["x"]}},
+        "equations": [
+            {"lhs": {"op": "ic", "args": ["u"]}, "rhs": zero},
+            {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": zero},
+        ],
+        "tests": [
+            {
+                "id": "borrowed",
+                "time_span": {"start": 0.0, "end": 1.0},
+                "assertions": [
+                    {
+                        "variable": "g",
+                        "time": 0.0,
+                        "expected": 900.0,
+                        "tolerance": {"abs": 1e-12},
+                        "reduce": "max",
+                    }
+                ],
+            }
+        ],
+    }
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "pde_inline_sibling_array_observed"},
+        "index_sets": {"x": {"kind": "interval", "size": 3}},
+        "models": {"M1": m1, "M2": m2},
+    }
+
+
+def test_array_observed_assertion_never_reads_a_sibling_components_field():
+    """An array observed field belongs to the ASSERTED component
+    (CONFORMANCE_SPEC §5.27.1), and that holds for the trajectory-replay source
+    exactly as it does for `state_cells`.
+
+    Both field sources resolve a bare name by a unique ``.<name>`` suffix over
+    the FLATTENED build, which spans every sibling component. Without the
+    declaration guard an ``M2`` assertion on a ``g`` only ``M1`` defines
+    silently answered 900.0 — M1's field, off a component the test never named
+    — instead of erroring. Rust (`observed_field`, `assertion_observed_requests`)
+    and Julia (`_observed_field`) both require the asserted model to declare the
+    name; Python now does too."""
+    f = load_string(json.dumps(_sibling_array_observed_doc()))
+    results = run_pde_tests(f, model_name="M2", method="LSODA", rtol=1e-12, atol=1e-14)
+    assert len(results) == 1
+    r = results[0]
+    assert not r.passed, f"M2 must not borrow M1's g (actual={r.actual})"
+    assert r.actual is None
+    assert "has no cells in var_map" in r.message
+
+
 def test_run_pde_tests_reports_failing_assertion_with_actual():
     doc = _decay_doc()
     # An impossible expectation: the decayed field cannot still match its
