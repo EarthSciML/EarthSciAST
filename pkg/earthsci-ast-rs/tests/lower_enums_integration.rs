@@ -172,7 +172,9 @@ fn zero_and_negative_enum_members_load_and_resolve_to_themselves() {
         .get("EnumsZeroAndNegative")
         .expect("EnumsZeroAndNegative model present");
     let defs = earthsci_ast::observed_definitions(model);
-    let expr = defs.get("mode_code").expect("mode_code has a defining equation");
+    let expr = defs
+        .get("mode_code")
+        .expect("mode_code has a defining equation");
     let Expr::Operator(node) = expr else {
         panic!("mode_code expression must be an Operator node, got {expr:?}");
     };
@@ -212,7 +214,10 @@ fn zero_and_negative_enum_members_round_trip() {
     let serialized = to_json(&file).expect("save");
     let reloaded: EsmFile = load_string(&serialized).expect("reload");
     assert_eq!(file.enums, reloaded.enums);
-    let enums = reloaded.enums.as_ref().expect("enums survive the round trip");
+    let enums = reloaded
+        .enums
+        .as_ref()
+        .expect("enums survive the round trip");
     assert_eq!(enums["operating_mode"]["Braking"], 0);
     assert_eq!(enums["pol_process"]["Unassociated"], -1);
 }

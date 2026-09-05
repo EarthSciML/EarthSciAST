@@ -39,7 +39,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::precision::{self, Precision};
-use earthsci_ast::{PdeAssertionResult, load_path, run_pde_tests, SolveOptions};
+use earthsci_ast::{PdeAssertionResult, SolveOptions, load_path, run_pde_tests};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -176,8 +176,8 @@ fn constructs_binary32_cannot_carry_are_named() {
         ("fn", Some("datetime.julian_day")),
     ] {
         let hit = precision::f32_unsupported_reason(op, name);
-        let (construct, _) = hit
-            .unwrap_or_else(|| panic!("{op}/{name:?} must be rejected under Float32"));
+        let (construct, _) =
+            hit.unwrap_or_else(|| panic!("{op}/{name:?} must be rejected under Float32"));
         let expected = name.unwrap_or(op);
         assert!(
             construct.contains(expected),
@@ -208,7 +208,10 @@ fn an_unaddressable_index_set_is_named() {
     let err = precision::check_index_set_extent("rows", precision::F32_EXACT_INT_LIMIT + 1)
         .unwrap_err()
         .to_string();
-    assert!(err.contains("float32_unsupported") && err.contains("rows"), "{err}");
+    assert!(
+        err.contains("float32_unsupported") && err.contains("rows"),
+        "{err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +283,14 @@ fn mixing_element_types_under_one_operator_is_refused() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(msg.contains("mixed_element_type"), "{msg}");
-    assert!(msg.contains("quant") && msg.contains("key"), "both operands: {msg}");
-    assert!(msg.contains("Float64") && msg.contains("Float32"), "both types: {msg}");
+    assert!(
+        msg.contains("quant") && msg.contains("key"),
+        "both operands: {msg}"
+    );
+    assert!(
+        msg.contains("Float64") && msg.contains("Float32"),
+        "both types: {msg}"
+    );
 }
 
 /// A document that declares NO per-variable element type is untouched: the

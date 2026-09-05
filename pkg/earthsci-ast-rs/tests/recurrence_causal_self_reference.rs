@@ -296,10 +296,7 @@ fn unguarded_self_read_at_the_first_cell_is_a_fault() {
 
 fn assert_probe_rejected_with(body: Value, code: &str, what: &str) {
     let msg = probe_message(body);
-    assert!(
-        msg.contains(code),
-        "{what}: expected `{code}`, got: {msg}"
-    );
+    assert!(msg.contains(code), "{what}: expected `{code}`, got: {msg}");
 }
 
 #[test]
@@ -537,16 +534,14 @@ fn the_shared_rejection_corpus_agrees_on_code_and_path() {
         // asserting only on a code it cannot emit has written a comment, not a
         // check.
         assert!(
-            !got
-                .iter()
+            !got.iter()
                 .any(|(c, _)| c == "load_error" || c == "circular_dependency"),
             "{id}: the recurrence diagnosis was pre-empted by a whole-document / cycle \
              error — gate the self-edge exemption on CANDIDACY, not on the \
              well-foundedness verdict (CONFORMANCE_SPEC §5.19.5); got {got:?}"
         );
         assert!(
-            got.iter()
-                .any(|(c, p)| c == want_code && p == want_path),
+            got.iter().any(|(c, p)| c == want_code && p == want_path),
             "{id}: expected ({want_code}, {want_path}); got {got:?}. \
              Why this case is illegal: {}",
             case["why"].as_str().unwrap_or("")
@@ -807,14 +802,29 @@ macro_rules! pipeline_test {
 }
 
 pipeline_test!(pipeline_doubling, "01_recurrence_doubling.esm");
-pipeline_test!(pipeline_cancellation_ladder, "02_recurrence_cancellation_ladder.esm");
+pipeline_test!(
+    pipeline_cancellation_ladder,
+    "02_recurrence_cancellation_ladder.esm"
+);
 pipeline_test!(pipeline_multi_lag, "03_recurrence_multi_lag.esm");
-pipeline_test!(pipeline_banded_lag_fold, "04_recurrence_banded_lag_fold.esm");
+pipeline_test!(
+    pipeline_banded_lag_fold,
+    "04_recurrence_banded_lag_fold.esm"
+);
 pipeline_test!(pipeline_two_axes, "05_recurrence_two_axes.esm");
 pipeline_test!(pipeline_float32_state, "06_recurrence_float32_state.esm");
-pipeline_test!(pipeline_thirty_eight_lags, "07_recurrence_thirty_eight_lags.esm");
-pipeline_test!(pipeline_parameter_valued_lag, "08_recurrence_parameter_valued_lag.esm");
-pipeline_test!(pipeline_through_expression_template, "09_recurrence_through_expression_template.esm");
+pipeline_test!(
+    pipeline_thirty_eight_lags,
+    "07_recurrence_thirty_eight_lags.esm"
+);
+pipeline_test!(
+    pipeline_parameter_valued_lag,
+    "08_recurrence_parameter_valued_lag.esm"
+);
+pipeline_test!(
+    pipeline_through_expression_template,
+    "09_recurrence_through_expression_template.esm"
+);
 
 /// The regression itself, stated as a value that must NOT come back.
 ///

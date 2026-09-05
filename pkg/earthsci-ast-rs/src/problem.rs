@@ -1155,12 +1155,8 @@ pub fn esm_problem<'a>(
     // `prepare` — fill NAMED variables and must round each to ITS declared
     // precision, not to the document's. Empty for every document that declares
     // none, which is the inert path.
-    let var_precisions = variable_element_types_of(
-        owned_json.as_ref(),
-        owned_file.as_ref(),
-        flat_only,
-        prec,
-    )?;
+    let var_precisions =
+        variable_element_types_of(owned_json.as_ref(), owned_file.as_ref(), flat_only, prec)?;
     let _precision_guard = precision::enter_env(prec, std::rc::Rc::new(var_precisions));
 
     // Host-supplied numbers are the one class of value the evaluator does not
@@ -1412,7 +1408,10 @@ fn variable_element_types_of(
             Err(e) => Err(SimulateError::Compile(e)),
         }
     };
-    if let Some(models) = raw.and_then(|v| v.get("models")).and_then(JsonValue::as_object) {
+    if let Some(models) = raw
+        .and_then(|v| v.get("models"))
+        .and_then(JsonValue::as_object)
+    {
         for (mname, model) in models {
             let Some(vars) = model.get("variables").and_then(JsonValue::as_object) else {
                 continue;
