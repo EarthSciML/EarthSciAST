@@ -744,14 +744,49 @@ about the result and are the reason the cost rule is allowed to exist at all.
 > once more end-to-end, as a byte-diff of the 144-row `nr-logging-county`
 > fixture against the pre-change binary.
 >
-> **-007 is a fix, not a capability**, and the other four bindings should check
-> it rather than assume it. It bites only where a document declares a working
-> precision narrower than its key magnitudes need — which is the normal state of
-> a MOVES port, whose quantities are binary32 and whose SCC and polProcessID keys
-> are nine- and ten-digit integers. Julia, Python and TypeScript each lower an
-> `on` pair to an equality predicate the same way; whether that predicate is
-> evaluated at the document's precision is a per-binding question this section
-> now makes answerable.
+> **-007 is a fix, not a capability.** It bites only where a document declares a
+> working precision narrower than its key magnitudes need — the normal state of a
+> MOVES port, whose quantities are binary32 and whose SCC and polProcessID keys
+> are nine- and ten-digit integers.
+>
+> **The other four bindings were checked (2026-09-05) and none has it**, which is
+> a stronger result than "not yet audited" and a different one from what this
+> note previously guessed. It said Julia, Python and TypeScript each lower an
+> `on` pair to an equality predicate the same way. **They do not**, and that is
+> why they are immune:
+>
+> | binding | verdict | basis |
+> |---|---|---|
+> | Julia | structurally immune | never builds a comparison expression from a join. Each pair is a `_JoinGate` of `Dict{Int,Int}` bucket codes (`types.jl:155`), encoded by `_encode_join_keys` (`tree_walk/semiring.jl:349`) and tested by integer `==` in `_join_admits` (`semiring.jl:649`). `broad_phase.jl:287` states the resulting invariant outright. Measured: 4, in both clause orders. |
+> | Python | structurally immune | same shape — `_resolve_join` (`numpy_interpreter.py:3046`) builds int-code gates, compared by `int` `!=` in `_join_admits` (`:3262`) and by int64 arrays in `_join_admits_mask` (`:2052`). Measured: 4, in both clause orders. |
+> | Go, TypeScript | cannot exhibit it | no numeric evaluation at all (§5.5.8's binding table, this file's Go/TS rows). No join is evaluated, so no comparison is lowered. |
+>
+> Rust was alone in lowering the comparison, which is why it was alone in getting
+> it wrong. **A binding with no lowered predicate has no -007 to fail** — but it
+> also has no `filter` to fall back on, so for it -005 rests entirely on
+> `_join_admits` re-testing every gate, which is what `semiring.jl:263` records.
+>
+> The control that makes those two nulls mean something is a `Float32` document
+> with integer keys straddling a binary32 collision (`2265007010` / `2265007015`;
+> binary32 spacing at that magnitude is 256) and two clauses over the same symbol
+> pair. Exact-key semantics admit 4 combinations; a binary32 key comparison
+> admits 8. On the pre-fix Rust binary it gives **4 in one clause order and 8 in
+> the other**; on Rust after -007, 4 in both. So the probe reproduces the defect
+> it is being used to rule out.
+>
+> **Separately, and NOT -007:** with the key columns left at the document's
+> `Float32` default rather than overridden to `Float64`, Rust answers **8** in
+> every clause order, before and after the fix, while Julia and Python answer
+> **4**. Rust's 8 is §5.18/F18 — the key column was narrowed at INGEST, before any
+> comparison, and `2265007104` is exactly integral so no integrality guard fires.
+> Julia's and Python's 4 is the opposite gap: neither honours
+> `domain.element_type` outside the recurrence sweep at all (`element_type` is
+> read nowhere in Julia's evaluator; Python reads `ctx.element_types` only at
+> `simulation_array.py:686`), so they are right here by not implementing the
+> declaration — and wrong wherever binary32 rounding is what the reference
+> actually does, which §5.18.1 opens by measuring. Three executing bindings, two
+> answers, no diagnostic on any of them. §5.18.2 already requires the refusal
+> that would surface it.
 >
 > **-001/-002/-004 are SHOULDs.** A binding that declines is slower, not wrong:
 > the lowered `filter` still decides every leaf. Julia's tree-walk and Python's
