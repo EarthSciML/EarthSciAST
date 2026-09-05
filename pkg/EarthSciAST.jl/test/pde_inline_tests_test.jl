@@ -488,3 +488,55 @@ end
     @test results[6].actual < 1e-12
     @test results[7].actual < 1e-12
 end
+
+# esm-spec §6.6.5: the free variables of an inline `reference` are the field's
+# DIMENSION NAMES, bound per cell to the 1-based index position. The analytic
+# cell-centre form with `x` free, a table lookup by `x`, and a gather that
+# REBINDS `x` as its own loop symbol (which must not be wrapped a second time)
+# must all read the same field.
+_pit_free_x_cos() = Dict{String,Any}(
+    "op" => "cos",
+    "args" => Any[Dict{String,Any}("op" => "*",
+        "args" => Any[Float64(pi), Dict{String,Any}("op" => "/",
+            "args" => Any[Dict("op" => "-", "args" => Any["x", 0.5]), _PIT_N])])])
+
+@testset "§6.6.5 reference binds the field's dimension names" begin
+    table = Float64[cos(pi * (i - 0.5) / _PIT_N) for i in 1:_PIT_N]
+    file = _pit_load(_pit_decay_doc(Any[
+        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
+                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
+                         "reference" => _pit_free_x_cos()),
+        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
+                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "Linf_error",
+                         "reference" => Dict{String,Any}("op" => "index",
+                             "args" => Any[Dict{String,Any}("op" => "const", "args" => Any[],
+                                                            "value" => table), "x"])),
+        Dict{String,Any}("variable" => "u", "time" => 0.0, "expected" => 0.0,
+                         "tolerance" => Dict("abs" => 1e-12), "reduce" => "L2_error",
+                         "reference" => Dict{String,Any}("op" => "aggregate", "args" => Any[],
+                             "output_idx" => Any["x"],
+                             "ranges" => Dict{String,Any}("x" => Dict("from" => "x")),
+                             "expr" => _pit_free_x_cos())),
+        Dict{String,Any}("variable" => "u", "time" => 1.0, "expected" => 0.0,
+                         "tolerance" => Dict("abs" => 1e-8), "reduce" => "L2_error",
+                         "reference" => Dict{String,Any}("op" => "*",
+                             "args" => Any[Dict("op" => "exp", "args" => Any[-1]),
+                                           _pit_free_x_cos()]))]))
+    results = _pit_run(file)
+    @test length(results) == 4
+    for r in results
+        @test r.passed
+    end
+
+    # The wrapper is capture-aware and a no-op without a free mention.
+    dims = String["x"]
+    lit = EarthSciAST.OpExpr("*", EarthSciAST.ASTExpr[EarthSciAST.NumExpr(2.0), EarthSciAST.VarExpr("k")])
+    @test EarthSciAST.bind_dimension_names(lit, dims) === lit
+    free = EarthSciAST.OpExpr("+", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("x"), EarthSciAST.IntExpr(1)])
+    wrapped = EarthSciAST.bind_dimension_names(free, dims)
+    @test wrapped isa EarthSciAST.OpExpr && wrapped.op == "aggregate"
+    @test wrapped.output_idx == Any["x"]
+    @test wrapped.expr_body === free
+    @test EarthSciAST.bind_dimension_names(wrapped, dims) === wrapped
+    @test EarthSciAST.bind_dimension_names(free, String[]) === free
+end

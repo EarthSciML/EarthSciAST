@@ -1,0 +1,48 @@
+{
+    "fixture": "reference_dimension_names",
+    "assertions": [
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "L2_error",
+            "actual": 0,
+            "assertion_idx": 1,
+            "variable": "u"
+        },
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "L2_error",
+            "actual": 1.8039955560390798e-14,
+            "assertion_idx": 2,
+            "variable": "u"
+        },
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "Linf_error",
+            "actual": 64.36081074086393,
+            "assertion_idx": 3,
+            "variable": "u"
+        },
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "L2_error",
+            "actual": 0,
+            "assertion_idx": 4,
+            "variable": "u"
+        },
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "L2_error",
+            "actual": 0,
+            "assertion_idx": 5,
+            "variable": "u"
+        },
+        {
+            "test_id": "reference_dimension_names",
+            "reduce": "mean",
+            "actual": 1.3877787807814457e-17,
+            "assertion_idx": 6,
+            "variable": "u"
+        }
+    ],
+    "reference_binding": "julia"
+}

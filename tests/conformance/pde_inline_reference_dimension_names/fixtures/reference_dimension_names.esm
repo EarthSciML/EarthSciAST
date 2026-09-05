@@ -1,0 +1,352 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "pde_inline_reference_dimension_names",
+    "description": "Conformance fixture for esm-spec 6.6.5: an inline `reference` whose free variables are the field's DIMENSION NAMES. `u` is shaped over the interval index set `x` (size 8) and decays as du/dt = -u from u(0) = cos(pi (x - 1/2)/8), so u(t) = exp(-t) cos(pi (x - 1/2)/8) exactly at the cell positions x = 1..8 (index space, convention 1 of 6.6.5). The assertions spell the reference in the four ways the section admits and pin that they agree: (1) the analytic form with the dimension name FREE, `cos(pi (x - 1/2)/8)`, at t = 0 (L2 error 0 to round-off); (2) the same free-name form times exp(-1) at t = 1; (3) a lookup form `index(const[1,4,...,64], x)` reading a per-cell table by the dimension name, whose Linf distance from u(1) is a definite number; (4) the pre-existing explicit-gather spelling `aggregate(i from x; cos(pi (i - 1/2)/8))`, which mentions no dimension name and must evaluate exactly as before; and (5) an aggregate that binds the dimension name as ITS OWN loop symbol, `aggregate(x from x; cos(pi (x - 1/2)/8))`, which must not be wrapped a second time. (6) is a `mean` with no reference, the regression guard that a reference-free reduction is untouched. A binding that leaves the dimension name unbound fails (1)-(3) with an unbound-name error; one that wraps blindly fails (5).",
+    "license": "MIT",
+    "tags": [
+      "conformance",
+      "pde-inline-test",
+      "esm-spec-6.6.5",
+      "reference",
+      "dimension-names"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 8
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "description": "Decaying field over x; u(t) = exp(-t) cos(pi (x - 1/2)/8) at cell x."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "cos",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    3.141592653589793,
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            0.5
+                          ]
+                        },
+                        8
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": [
+                1,
+                8
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -1,
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "reference_dimension_names",
+          "description": "u(t) = exp(-t) cos(pi (x - 1/2)/8) exactly; the reference is spelled with the free dimension name x (1, 2), as a table lookup by x (3), as the explicit gather (4), and with x rebound as the aggregate's own loop symbol (5); (6) has no reference.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "cos",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3.141592653589793,
+                      {
+                        "op": "/",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "x",
+                              0.5
+                            ]
+                          },
+                          8
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-08
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "exp",
+                    "args": [
+                      -1
+                    ]
+                  },
+                  {
+                    "op": "cos",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          3.141592653589793,
+                          {
+                            "op": "/",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "x",
+                                  0.5
+                                ]
+                              },
+                              8
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 64.360811,
+              "tolerance": {
+                "rel": 1e-06
+              },
+              "reduce": "Linf_error",
+              "reference": {
+                "op": "index",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      1.0,
+                      4.0,
+                      9.0,
+                      16.0,
+                      25.0,
+                      36.0,
+                      49.0,
+                      64.0
+                    ]
+                  },
+                  "x"
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "i"
+                ],
+                "ranges": {
+                  "i": {
+                    "from": "x"
+                  }
+                },
+                "expr": {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        3.141592653589793,
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                0.5
+                              ]
+                            },
+                            8
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [
+                  "x"
+                ],
+                "ranges": {
+                  "x": {
+                    "from": "x"
+                  }
+                },
+                "expr": {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        3.141592653589793,
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "x",
+                                0.5
+                              ]
+                            },
+                            8
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "reduce": "mean"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

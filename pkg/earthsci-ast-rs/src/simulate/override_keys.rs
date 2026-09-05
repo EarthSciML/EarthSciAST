@@ -37,10 +37,14 @@ fn bare_name(name: &str) -> &str {
 /// Precedence, matching the Julia tree-walk `_canonicalize_override_keys` and
 /// Python's `canonicalize_override_keys`:
 ///   1. an exact hit wins;
-///   2. else a DOTTED key whose trailing segment is itself a name resolves to
-///      it (`M.A` against a bare-named single-model system — the case the old
-///      `normalize_override_keys` handled by stripping the `<namespace>.`
-///      prefix);
+///   2. else a DOTTED key whose LONGEST dotted suffix is itself a name resolves
+///      to it (`M.A` against a bare-named single-model system — the case the
+///      old `normalize_override_keys` handled by stripping the `<namespace>.`
+///      prefix — and `M.sub.A` against a single-model build whose mounted
+///      subsystem parameter is `sub.A`: the §4.6 fully-qualified spelling of a
+///      name the build carries in a shorter form). The suffixes are tried
+///      longest first, so the most-qualified name wins; the trailing segment
+///      is the last one tried;
 ///   3. else a BARE key that is the trailing segment of exactly ONE name
 ///      resolves to it (`A` against the flattened `M.A`);
 ///   4. else a BARE key carried by two or more names is `Ambiguous`;
@@ -73,9 +77,8 @@ pub(crate) fn canonicalize_override_keys(
         if known.contains_key(k.as_str()) {
             continue; // rule 1, applied below
         }
-        let bare = bare_name(k);
-        if bare != k.as_str() && known.contains_key(bare) {
-            out.insert(bare.to_string(), *v); // rule 2
+        if let Some(suffix) = dotted_suffix_hit(known, k) {
+            out.insert(suffix.to_string(), *v); // rule 2
         } else if let Some(cands) = groups.get(k.as_str()) {
             if cands.len() == 1 {
                 out.insert(cands[0].to_string(), *v); // rule 3
@@ -101,6 +104,21 @@ pub(crate) fn canonicalize_override_keys(
         }
     }
     Ok(out)
+}
+
+/// Rule 2: the LONGEST dotted suffix of a dotted key `k` — every `<segment>.`
+/// prefix dropped in turn, most-qualified first — that is itself a known name.
+/// `None` for a bare key or when no suffix is known. `M.sub.A` tries `sub.A`
+/// then `A`; a bare `A` tries nothing (rules 3–5 handle it).
+fn dotted_suffix_hit<'a>(known: &'a HashMap<String, usize>, k: &str) -> Option<&'a str> {
+    let mut rest = k;
+    while let Some((_, tail)) = rest.split_once('.') {
+        if let Some((name, _)) = known.get_key_value(tail) {
+            return Some(name.as_str());
+        }
+        rest = tail;
+    }
+    None
 }
 
 fn override_key_of(e: &OverrideKeyError) -> &str {
@@ -131,5 +149,35 @@ pub(crate) fn ic_key_error(e: OverrideKeyError) -> SimulateError {
                 candidates,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn known(names: &[&str]) -> HashMap<String, usize> {
+        names.iter().enumerate().map(|(i, n)| (n.to_string(), i)).collect()
+    }
+
+    /// esm-spec §6.6.2 rule 2: the LONGEST dotted suffix that is a name wins;
+    /// a bare key never enters rule 2; a dotted key none of whose suffixes is
+    /// a name is unknown, so `Missing.solo` is never re-pointed at `Left.solo`.
+    #[test]
+    fn dotted_suffix_binds_the_longest_known_suffix() {
+        let k = known(&["sub.g", "g", "Left.solo"]);
+        assert_eq!(dotted_suffix_hit(&k, "P.sub.g"), Some("sub.g"));
+        assert_eq!(dotted_suffix_hit(&k, "P.g"), Some("g"));
+        assert_eq!(dotted_suffix_hit(&k, "Doc.Left.solo"), Some("Left.solo"));
+        assert_eq!(dotted_suffix_hit(&k, "Missing.solo"), None);
+        assert_eq!(dotted_suffix_hit(&k, "g"), None);
+        let over: HashMap<String, f64> = [("P.sub.g".to_string(), 1.5)].into_iter().collect();
+        let out = canonicalize_override_keys(&k, &over).expect("resolves");
+        assert_eq!(out.get("sub.g"), Some(&1.5));
+        let bad: HashMap<String, f64> = [("Missing.solo".to_string(), 1.0)].into_iter().collect();
+        assert!(matches!(
+            canonicalize_override_keys(&k, &bad),
+            Err(OverrideKeyError::Unknown(ref n)) if n == "Missing.solo"
+        ));
     }
 }

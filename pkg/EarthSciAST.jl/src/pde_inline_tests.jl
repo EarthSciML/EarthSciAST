@@ -735,6 +735,35 @@ end
 # The asserted variable's declared spatial shape (ordered index-set names).
 # Errors when the variable is missing or scalar — a `coords` assertion is
 # ill-formed on a 0-D variable per esm-spec §6.6.5.
+"""
+    bind_dimension_names(expr, dims) -> ASTExpr
+
+esm-spec §6.6.5: an inline `reference`'s free variables are the domain DIMENSION
+NAMES. For a field shaped over index sets those are the asserted variable's
+`shape` entries, each bound at every grid point to the 1-based position along
+its axis — the same index space `coords` reads (convention 1) — so
+`index(table, lev)` reads the cell's entry of a lookup array and
+`sin(pi * (x - 0.5) / N)` is the cell-centre analytic form, with no explicit
+gather. A reference that mentions a dimension name FREE (`free_variables`,
+which subtracts every binder's own loop symbols) is turned into the whole field
+by wrapping it in an `aggregate` whose output indices ARE the dimension names
+(in shape order, each ranging over its index set); one that mentions none — a
+literal, a parameter expression, or an `aggregate` that already produces the
+field under its own loop symbols — is returned untouched, so nothing that
+evaluated before evaluates differently. Mirrors the Python / Rust
+`bind_dimension_names`.
+"""
+function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString})::ASTExpr
+    isempty(dims) && return expr
+    free = free_variables(expr)
+    any(d -> String(d) in free, dims) || return expr
+    names = String[String(d) for d in dims]
+    return OpExpr("aggregate", ASTExpr[];
+                  output_idx=Any[names...],
+                  ranges=Dict{String,Any}(d => IndexSetRef(d) for d in names),
+                  expr_body=expr)
+end
+
 function _variable_shape(file::EsmFile, mname::AbstractString,
                          variable::AbstractString)::Vector{String}
     model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
@@ -936,8 +965,15 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         if a.reference isa ASTExpr
             # Model parameters (load-time constants) are in scope for a §6.6.5
             # analytic `reference`; state is not. `insp.params` carries the
-            # build's resolved scalar params (override-or-default).
-            ref = evaluate_cellwise(a.reference, cell_tuples;
+            # build's resolved scalar params (override-or-default). The field's
+            # dimension names are in scope too, bound per cell
+            # (`bind_dimension_names`).
+            dims = try
+                _variable_shape(eval_file, String(mname), String(a.variable))
+            catch err
+                err isa PdeTestError ? String[] : rethrow()
+            end
+            ref = evaluate_cellwise(bind_dimension_names(a.reference, dims), cell_tuples;
                                     const_arrays=insp.const_arrays,
                                     params=_param_scope_with_aliases(insp.params))
         elseif a.reference isa AbstractDict &&

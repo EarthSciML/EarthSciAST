@@ -401,8 +401,12 @@ def check_parameter_override_keys(
     ``canonicalize_override_keys`` implement:
 
     1. an exact hit on a flattened parameter name wins;
-    2. else a DOTTED key whose trailing segment is itself a parameter name
-       resolves to it (``M.A`` against a bare-named single-model system);
+    2. else a DOTTED key whose LONGEST dotted suffix is itself a parameter
+       name resolves to it (``M.A`` against a bare-named single-model system;
+       ``M.sub.A`` against a build that carries the mounted subsystem parameter
+       as ``sub.A`` — the §4.6 fully-qualified spelling of a name the build
+       holds in a shorter form); suffixes are tried most-qualified first and
+       the trailing segment last;
     3. else a BARE key that is the trailing segment of exactly ONE parameter
        resolves to it (``A`` against the flattened ``M.A``);
     4. else a BARE key carried by two or more parameters is AMBIGUOUS —
@@ -431,8 +435,7 @@ def check_parameter_override_keys(
     for key in overrides:
         if key in known:
             continue
-        bare = key.rsplit(".", 1)[-1]
-        if bare != key and bare in known:
+        if _dotted_suffix_hit(known, key) is not None:
             continue
         candidates = groups.get(key)
         if candidates is None:
@@ -455,12 +458,28 @@ def check_parameter_override_keys(
         )
 
 
+def _dotted_suffix_hit(known: Iterable[str], key: str) -> str | None:
+    """Rule 2 of :func:`check_parameter_override_keys`: the LONGEST dotted
+    suffix of a dotted ``key`` — every ``<segment>.`` prefix dropped in turn,
+    most-qualified first — that is itself a known name; ``None`` for a bare key
+    or when no suffix is known. ``M.sub.A`` tries ``sub.A`` then ``A``."""
+    names = known if isinstance(known, (set, frozenset, dict)) else set(known)
+    rest = key
+    while "." in rest:
+        rest = rest.split(".", 1)[1]
+        if rest in names:
+            return rest
+    return None
+
+
 def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> float:
     """Resolve a parameter / initial-condition value against caller overrides.
 
     Precedence: a caller override wins — the dot-namespaced ``name`` first, then
-    its bare trailing segment — otherwise the declared ``default`` when numeric,
-    otherwise ``0.0``. Always returned as ``float``.
+    its bare trailing segment, then a MORE-qualified key of which ``name`` is
+    the dotted suffix (``Outer.M.A`` for the name ``M.A``, rule 2 of
+    :func:`check_parameter_override_keys`) — otherwise the declared
+    ``default`` when numeric, otherwise ``0.0``. Always returned as ``float``.
     """
     bare = name.rsplit(".", 1)[-1]
     if name in overrides:
@@ -468,5 +487,9 @@ def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> flo
     elif bare in overrides:
         value = overrides[bare]
     else:
-        value = float(default) if isinstance(default, (int, float)) else 0.0
+        longer = sorted(k for k in overrides if k.endswith("." + name))
+        if longer:
+            value = overrides[longer[0]]
+        else:
+            value = float(default) if isinstance(default, (int, float)) else 0.0
     return float(value)

@@ -68,6 +68,18 @@
                     }
                 },
                 {
+                    "key": "Doc.Left.solo",
+                    "value": 9.0,
+                    "outcome": "resolved",
+                    "rule": 2,
+                    "binds": "Left.solo",
+                    "note": "A DOTTED key whose LONGEST dotted suffix is a parameter name: `Left.solo` is, so the extra leading qualifier is dropped and the key binds it. This is the esm-spec \u00a74.6 fully-qualified spelling of a name a build carries in a shorter form \u2014 `M.A` against a bare-named single-model build, `M.sub.A` against a build whose mounted subsystem parameter is `sub.A` \u2014 and it is what lets one authored test run unchanged against the isolated and the composed form of a component. Suffixes are tried most-qualified first, so `Doc.Left.solo` binds `Left.solo` rather than falling through to a bare `solo`.",
+                    "trajectory_at_t1": {
+                        "Left.x": 11.0,
+                        "Right.y": 3.0
+                    }
+                },
+                {
                     "key": "gain",
                     "value": 9.0,
                     "outcome": "ambiguous",
@@ -90,7 +102,7 @@
                     "value": 9.0,
                     "outcome": "unknown",
                     "rule": 5,
-                    "note": "A DOTTED key resolves only under rule 2, which needs its trailing segment to be a parameter name outright; here the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
+                    "note": "A DOTTED key resolves only under rule 2, which needs one of its dotted suffixes to be a parameter name outright; the only suffix here is `solo`, and the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
                 }
             ],
             "defaults_at_t1": {

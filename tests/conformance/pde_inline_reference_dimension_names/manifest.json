@@ -1,0 +1,108 @@
+{
+  "category": "pde_inline_reference_dimension_names",
+  "version": "1.0",
+  "description": "Cross-binding conformance for esm-spec 6.6.5's inline `reference` scope: 'an inline Expression whose free variables are the domain dimension names'. For a field shaped over index sets the dimension names are the asserted variable's `shape` entries, each bound at every grid point to the 1-based position along its axis (the index space `coords` reads, convention 1). Before this category all three executing bindings evaluated the reference as ONE build-time array expression and sampled it per cell, so a dimension name mentioned free was simply unbound (Rust E_TREEWALK_UNBOUND_NAME, Python 'Unresolved symbol', Julia UNBOUND_VARIABLE) and authors had to spell every reference as an explicit `aggregate(i from x; ...)` gather. The fixture asserts one exact decay field through the free-name analytic form, a table lookup by the dimension name, the explicit gather, and a gather that rebinds the dimension name as its own loop symbol (which must NOT be wrapped a second time), plus a reference-free `mean` as the regression guard; all must agree on the golden actuals. Julia is the reference binding and minted golden/reference_dimension_names.json through its own `run_pde_tests`. The right-hand side is linear decay of a per-cell constant field, so every pinned solver family reproduces exp(-t) to the assertion tolerances.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-09,
+    "note": "assertion_atol is 1e-9 rather than the 1e-11 of the sibling pde_inline_* categories because assertion 2's actual (the L2 error of u(t=1) against the analytic reference) IS the time-integrator's residual: Julia Tsit5 leaves 1.8e-14, Python RK45 5.2e-11 at the pinned rtol=1e-12/atol=1e-14. Every other actual is either exactly 0 (t=0 forms) or O(1) (the table Linf_error) and is gated by assertion_rtol."
+  },
+  "fixtures": [
+    {
+      "id": "reference_dimension_names",
+      "path": "fixtures/reference_dimension_names.esm",
+      "model": "M",
+      "test_id": "reference_dimension_names",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-6.6.5",
+        "reference",
+        "dimension-names",
+        "reduce-L2_error",
+        "reduce-Linf_error",
+        "reduce-mean"
+      ],
+      "shape": {
+        "x": 8
+      },
+      "assertions": [
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 1,
+          "variable": "u",
+          "reduce": "L2_error",
+          "expected": 0.0,
+          "reference_form": "free dimension name, analytic"
+        },
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 2,
+          "variable": "u",
+          "reduce": "L2_error",
+          "expected": 0.0,
+          "reference_form": "free dimension name, analytic, t=1"
+        },
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 3,
+          "variable": "u",
+          "reduce": "Linf_error",
+          "expected": 64.360811,
+          "reference_form": "table lookup indexed by the dimension name"
+        },
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 4,
+          "variable": "u",
+          "reduce": "L2_error",
+          "expected": 0.0,
+          "reference_form": "explicit gather (no dimension name free)"
+        },
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 5,
+          "variable": "u",
+          "reduce": "L2_error",
+          "expected": 0.0,
+          "reference_form": "gather rebinding the dimension name as its loop symbol"
+        },
+        {
+          "test_id": "reference_dimension_names",
+          "assertion_idx": 6,
+          "variable": "u",
+          "reduce": "mean",
+          "expected": 0.0,
+          "reference_form": "no reference"
+        }
+      ],
+      "golden": "golden/reference_dimension_names.json"
+    }
+  ]
+}
