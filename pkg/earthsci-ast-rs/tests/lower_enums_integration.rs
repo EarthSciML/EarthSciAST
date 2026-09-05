@@ -143,3 +143,76 @@ fn unknown_enum_symbol_rejected_at_load() {
         "diagnostic missing code: {msg}"
     );
 }
+
+/// An `enums` member may be ANY integer -- negative, zero or positive
+/// (esm-spec §9.3; CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a
+/// Position"). The `minimum: 1` this format used
+/// to carry on `EnumDeclaration.additionalProperties` made a zero-valued
+/// identifier unnameable, which is a real loss: MOVES's
+/// `operatingmode.opModeID = 0` is Braking, an emitting mode with its own
+/// rate, and `opmodepolprocassoc.polProcessID = -1` marks the drive-cycle
+/// modes associated with no pollutant/process.
+///
+/// This pins BOTH halves: the document LOADS, and the members resolve to
+/// exactly `0` and `-1` -- a binding that accepted the document but clamped
+/// or dropped the sign would still be wrong.
+#[test]
+fn zero_and_negative_enum_members_load_and_resolve_to_themselves() {
+    let fixture = include_str!("../../../tests/valid/enums_zero_and_negative.esm");
+    let file: EsmFile = load_string(fixture).expect("a zero/negative enum member must load");
+
+    let enums = file.enums.as_ref().expect("enums block should round-trip");
+    assert_eq!(enums["operating_mode"]["Braking"], 0);
+    assert_eq!(enums["pol_process"]["Unassociated"], -1);
+
+    let model = file
+        .models
+        .as_ref()
+        .expect("file should have models")
+        .get("EnumsZeroAndNegative")
+        .expect("EnumsZeroAndNegative model present");
+    let defs = earthsci_ast::observed_definitions(model);
+    let expr = defs.get("mode_code").expect("mode_code has a defining equation");
+    let Expr::Operator(node) = expr else {
+        panic!("mode_code expression must be an Operator node, got {expr:?}");
+    };
+    assert_eq!(node.op, "makearray");
+    let values = node.values.as_ref().expect("makearray carries `values`");
+
+    // values[0] — the zero-valued member, lowered to `const 0`.
+    let Expr::Operator(zero_node) = &values[0] else {
+        panic!("values[0] must be an Operator node after lowering");
+    };
+    assert_eq!(zero_node.op, "const");
+    assert_eq!(zero_node.value, Some(Value::Number(0.into())));
+
+    // values[1] — the negative member, lowered to `const -1`.
+    let Expr::Operator(neg_node) = &values[1] else {
+        panic!("values[1] must be an Operator node after lowering");
+    };
+    assert_eq!(neg_node.op, "const");
+    assert_eq!(neg_node.value, Some(Value::Number((-1).into())));
+
+    // values[2] — both read through ARITHMETIC: 0 + 10*1 + (-1) = 9. The
+    // fixture's inline test asserts the evaluated 9; here we only pin that the
+    // sub-nodes lowered, so a regression is localized to lowering.
+    let Expr::Operator(sum_node) = &values[2] else {
+        panic!("values[2] must be an Operator node after lowering");
+    };
+    assert_eq!(sum_node.op, "+");
+}
+
+/// The same file round-trips: a zero and a negative member survive
+/// serialize → reload unchanged (a serializer that wrote `0` as absent, or
+/// dropped a `-`, would be caught here).
+#[test]
+fn zero_and_negative_enum_members_round_trip() {
+    let fixture = include_str!("../../../tests/valid/enums_zero_and_negative.esm");
+    let file: EsmFile = load_string(fixture).expect("load");
+    let serialized = to_json(&file).expect("save");
+    let reloaded: EsmFile = load_string(&serialized).expect("reload");
+    assert_eq!(file.enums, reloaded.enums);
+    let enums = reloaded.enums.as_ref().expect("enums survive the round trip");
+    assert_eq!(enums["operating_mode"]["Braking"], 0);
+    assert_eq!(enums["pol_process"]["Unassociated"], -1);
+}

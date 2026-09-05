@@ -3766,6 +3766,116 @@ produces a WRONG NUMBER and not merely a fast one, so dropping any field from
 until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
 today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
 
+### 5.26 An `enums` Member Is a Code, Not a Position: the Whole Integer Range (normative)
+
+`esm-schema.json` typed an `enums` member as `{"type": "integer", "minimum": 1}`,
+so a symbolic name whose value is `0` could not be declared in any binding — the
+document did not load at all, with `/enums/<name>/<sym>: 0 is less than the
+minimum of 1`. Python and Julia mirrored the bound with their own runtime
+rejections ("value must be a positive integer"). The bound is removed.
+
+**The rule.** An `enums` member's value is ANY integer — negative, zero or
+positive. A binding MUST accept a zero-valued and a negative-valued member, MUST
+resolve it to exactly its declared integer, and MUST NOT clamp it, treat it as
+absent, or take it for a default. Uniqueness is unchanged: within one enum,
+values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT
+both map to `0`. Across enums, values MAY still collide.
+
+#### 5.26.1 Why the bound looked right and was not
+
+`minimum: 1` reads like a guard against confusing a declared member with an
+absent one, which is a real hazard for a **1-based index set**. An `enums` member
+is not an index. It lowers, at load, to a `{"op": "const", "value": <integer>}`
+node (§9.3), and from that point nothing in any binding can tell it from a
+literal the author typed: it is a NUMBER, used in arithmetic and in `join.on` key
+comparisons, where `0` and `-1` are ordinary values. The two genuinely 1-based
+constructs — `index`-op / index-set coordinates and `makearray` regions — are
+separate constructs with their own bounds validation.
+
+The one place the two meet is the canonical §4.5 example, which indexes a `const`
+table with an `enum` member. That is an authoring choice, and the `index` op
+bounds-checks its operand like any other (`E_TREEWALK_CONSTARRAY_OOB`, §5.5.5).
+An author who wants a member to double as a 1-based row number numbers it from 1;
+that is a property of their table, not of the `enums` block. Surveyed across the
+five bindings, the only consumers of the block are the lowering pass and
+serialization — no code path reads a member as a position.
+
+#### 5.26.2 Why it matters: zero and −1 are real categories
+
+The identifiers a model has to name are given by the source data, not chosen. In
+EPA's MOVES tables, `operatingmode.opModeID = 0` is **Braking** — a mode a
+decelerating second is classified into, carrying its own emission rate, and 2.0%
+of a weekend and 5.6% of a weekday operating-mode distribution in a real
+inventory. It is not a sentinel, not a default and not an absence.
+`regulatoryclass.regClassID = 0`, `modelyeargroup.modelYearGroupID = 0` and
+`fuelusagefraction.modelYearGroupID = 0` are three more, in three other tables;
+`opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes associated
+with no pollutant/process, and is 24 of the 27 rows of one snapshot of that
+table. Under the old bound each of these had to be written as a bare numeric
+literal with a comment, which is exactly the un-named magic number the `enums`
+block exists to abolish.
+
+#### 5.26.3 What a binding must prove
+
+Schema acceptance is not the assertion; a document that loads but resolves the
+member to something else is still non-conforming. A binding MUST show, on
+`tests/valid/enums_zero_and_negative.esm`:
+
+1. the document loads and validates;
+2. the zero member lowers to `const 0` and the negative member to `const -1`,
+   with the declared integers surviving into the parsed `enums` map; and
+3. both evaluate through **arithmetic** — the fixture's third row is
+   `Braking + 10*Idling + Unassociated = 0 + 10 - 1 = 9`, which a binding that
+   clamped `0` to `1` or dropped a sign cannot produce.
+
+**Binding status (2026-09-05), measured rather than assumed:**
+
+| Binding | Loads | Resolves to | Evidence |
+|---|---|---|---|
+| Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
+| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
+| Julia | yes | `0`, `-1`, arithmetic `9` | `test/closed_functions_test.jl`, "zero and negative enum members" |
+| TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
+| Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
+
+#### 5.26.4 A member is exact at load; whether a COMPARISON of it is exact is §5.24's business
+
+This section fixes the member's VALUE. It does not, and cannot, promise that a
+comparison of that value is exact, and the distinction is worth stating because
+the two look identical in a document.
+
+A lowered member is a NUMERIC LITERAL, and by the precision rules a literal has
+no precision of its own — it adopts its context (`precision_infer.rs`). So in a
+document declaring `domain.element_type: "Float32"`, two members far apart in
+value can compare EQUAL. Measured, on the SCC pair §5.24 already names:
+
+| Document | Comparison | Result |
+|---|---|---|
+| `Float32` | `enum("scc","LoggingTractor") == enum("scc","Chipper")` — 2265007010 vs 2265007015 | **1** (equal), a false match |
+| `Float32`, key parameter at the document default | `key == enum(...)`, key holding 2265007015 | **1**, a false match |
+| `Float32`, key parameter declaring `element_type: "Float64"` | the same comparison | 0, correct |
+
+That is §5.24's rule doing its job in the third row and having nothing to attach
+to in the first two: it makes a comparison exact by way of a stored key's
+declared binary64 `element_type`, and two literals — or a key left at a binary32
+document default — give it nothing to key on. It is NOT introduced by the
+widened value domain: every value in the table above is positive, so a document
+written under the old `minimum: 1` reproduces it unchanged. It is recorded here
+because an enum member is precisely an identifier compared for equality, which
+is the shape §5.24 exists for, and a reader who has just been told "the member
+is exactly its declared integer" would otherwise reasonably assume the
+comparison is too.
+
+#### 5.26.5 Uniqueness, which the schema cannot state
+
+"Values MUST be unique within an enum" is not expressible in JSON Schema, so it
+lives in each binding's loader. Python (`parse.py`) and Julia (`coerce_enums`)
+enforce it; both reject a duplicate `0` and a duplicate positive alike, so
+neither uses `0` as its own sentinel. Rust, TypeScript and Go accept a duplicate
+value silently — a gap that predates this section and is not created by it (they
+accept a duplicate *positive* value too), recorded here rather than left
+unstated. It is BEHAV-13's deferred column in
+`ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
 
 ## 6. CI Integration
 

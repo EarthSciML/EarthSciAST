@@ -632,6 +632,34 @@ Where:
 > they memoise; neither exposes a test filter, so -006/-007 are Rust-only today.
 > **TypeScript**, **Go** have no inline-test runner and no rows apply.
 
+### BEHAV-13: `enums` Member Value Domain (CONFORMANCE_SPEC §5.26)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-13-001 | An `enums` member's value is ANY integer — negative, zero or positive. A binding MUST accept a zero-valued and a negative-valued member; the old `EnumDeclaration.additionalProperties` bound `{"type":"integer","minimum":1}` made a zero-valued identifier unnameable in every binding at once | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26 | Yes | validation |
+| BEHAV-13-002 | A member MUST resolve to EXACTLY its declared integer: the load-time lowering produces `{"op":"const","value":<n>}` with `n` unchanged in value and sign. A binding MUST NOT clamp a `0` up, read it as absent, or take it for a default — schema acceptance alone is not conformance | esm-spec.md §9.3, §4.5; CONFORMANCE_SPEC.md §5.26.3 | Yes | behavioral |
+| BEHAV-13-003 | The resolved value MUST carry through ARITHMETIC as an ordinary number, keeping its magnitude and sign. The shared fixture `tests/valid/enums_zero_and_negative.esm` pins `Braking + 10*Idling + Unassociated = 0 + 10 − 1 = 9`, which a binding that clamped or dropped a sign cannot produce. Whether a COMPARISON of a member is exact is §5.24's rule, not this one's: a member is a numeric literal and adopts its context precision, so in a `Float32` document two members 5 apart compare equal (measured, §5.26.4) | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26.3, §5.26.4, §5.24 | Yes | behavioral |
+| BEHAV-13-004 | An enum member is a CODE, not a 1-based position. A binding MUST NOT reintroduce a positivity bound on the grounds that the §4.5 example indexes a `const` table with one: `index`-op coordinates and `makearray` regions are separate 1-based constructs with their own bounds validation (`E_TREEWALK_CONSTARRAY_OOB`, §5.5.5) | esm-spec.md §9.3, §4.3.3, §4.5; CONFORMANCE_SPEC.md §5.26.1 | Yes | behavioral |
+| BEHAV-13-005 | Values MUST remain unique within one enum, and `0` is a value like any other — two symbols MAY NOT both map to `0`. Not expressible in JSON Schema, so it lives in each loader | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26.5 | Yes | validation |
+
+> **Binding status (2026-09-05), measured on `tests/valid/enums_zero_and_negative.esm`:**
+> **-001 / -002 / -003 / -004 pass in all five bindings.** Rust
+> (`tests/lower_enums_integration.rs`, plus `esm test` on the fixture: 3/3
+> assertions), Python
+> (`tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves`),
+> Julia (`test/closed_functions_test.jl`, "zero and negative enum members"),
+> TypeScript (`src/enums-zero-negative.test.ts`) and Go
+> (`pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers`) each load the
+> document, assert the lowered `const 0` / `const −1`, and evaluate the
+> arithmetic row to 9.
+>
+> **-005 is DEFERRED in three bindings.** Python (`parse.py`) and Julia
+> (`coerce_enums`) reject a duplicate value, and reject a duplicate `0` exactly
+> as they reject a duplicate positive — neither uses `0` as a sentinel. **Rust**
+> (`lower_enums.rs::parse_enums_block`), **TypeScript** (`lower-enums.ts`) and
+> **Go** (`lower_enums.go`) accept a duplicate value silently. That gap is NOT
+> introduced by the widened domain — measured, they accept a duplicate positive
+> value too — and predates it; it is recorded here rather than left unstated.
+
 ---
 
 ## 4. FORMAT REQUIREMENTS
