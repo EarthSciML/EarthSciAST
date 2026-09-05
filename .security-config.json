@@ -21,6 +21,7 @@
     "CC0-1.0",
     "Unlicense"
   ],
+  "check_unpinned_requirements": false,
   "security_policies": {
     "require_signature": true,
     "max_vulnerability_score": 7.0,
