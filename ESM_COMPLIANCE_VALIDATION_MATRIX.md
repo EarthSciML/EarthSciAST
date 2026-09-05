@@ -415,6 +415,10 @@ Where:
 | BEHAV-10-B-010 | The two self-join refusals are STRUCTURAL and stated about the DOCUMENT: both are decidable from the single file, so `validate()` MUST report them under `join_side_ambiguous` (no range symbol determined for an `on` key) and `join_syms_unknown_symbol` (a `syms` entry the node does not bind), at the containing equation field. A binding that defers either to its evaluator reports it under a different code, at a different phase, or not at all for a document that is never simulated | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 | BEHAV-10-B-009 | The default assignment applies to a DATA COLUMN's axis only. A key NAMING an index set that several range symbols draw MUST stay a build error advising the range symbol (or `syms`) — adding the self-join capability must not remove that diagnostic, or `on: [["county", "i"]]` with two ranges over `county` becomes a tautological pair and an ungated product | CONFORMANCE_SPEC.md §5.5.8 | Yes | behavioral |
 
+> **Superseded in part by BEHAV-11 (CONFORMANCE_SPEC §5.24).** -004's "the gate
+> MUST DRIVE" is unchanged, but WHICH gate drives when a node carries several,
+> and whether their partner sets are intersected, is BEHAV-11's subject.
+>
 > **Binding status (2026-08-31)**: **Rust** implements all six plus the -004a SHOULD.
 > `join.rs::resolve_aggregate_joins` resolves each pair to `(loop symbol, KeyColumn)` —
 > `Const` (index-set members / interval IDs) or `Column` (a declared 1-D variable) —
@@ -636,6 +640,52 @@ Where:
 | FORMAT-07-B-002 | substrates field MUST be present | esm-spec.md:876 | Yes | format |
 | FORMAT-07-B-003 | products field MUST be present | esm-spec.md:877 | Yes | format |
 | FORMAT-07-B-004 | rate field MUST be present | esm-spec.md:878 | Yes | format |
+
+### BEHAV-11: Conjunctive, Selectivity-Ordered Join Gating (CONFORMANCE_SPEC §5.24)
+
+BEHAV-10-B pins the value-equality gate. This section pins what a node does when
+it carries SEVERAL of them, which §5.5.8 used to leave as "the first in document
+order drives". Everything here is about COST except -003 and -005, which are
+about the result and are the reason the cost rule is allowed to exist at all.
+
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-11-001 | When several gates on one node could drive, a binding SHOULD choose by an estimate of selectivity rather than by clause position. The RECOMMENDED estimate is the admitted fraction `\|matches\| / (\|L\| · \|R\|)`, every input of which the gate's own construction already produced | CONFORMANCE_SPEC.md §5.24.1 | Yes | performance |
+| BEHAV-11-002 | The estimate MUST be compared as an exact rational (`a₁·s₂` vs `a₂·s₁` in integers), never by a floating-point division: two bindings must order two nearly-equal estimates the same way | CONFORMANCE_SPEC.md §5.24.1 | Yes | determinism |
+| BEHAV-11-003 | Ties MUST break on the gate's index in the node's resolved `join` list, so the chosen order is a pure function of the DOCUMENT and the data — not of hash iteration, allocator or locale | CONFORMANCE_SPEC.md §5.24.1, §5.7 rule 5 | Yes | determinism |
+| BEHAV-11-004 | A binding SHOULD drive the CONJUNCTION: a contracted axis put opposite an already-bound output index by several gates enumerates the INTERSECTION of their partner lists, not one of them. The lists are ascending and duplicate-free (§5.5.8's canonical match order), so the intersection is a linear merge and an order-preserving subsequence of the axis's range | CONFORMANCE_SPEC.md §5.24.2 | Yes | performance |
+| BEHAV-11-005 | The emitted values MUST NOT depend on which gate drives or on whether the conjunction is intersected — bit-identically, for a floating `⊕`. This is a MUST that does not hold for free: it requires every clause to be lowered into `filter` (§5.5.8) AND that lowered comparison to be evaluated exactly (BEHAV-11-007) | CONFORMANCE_SPEC.md §5.24.1, §5.5.8 | Yes | behavioral |
+| BEHAV-11-006 | An EMPTY intersection admits no leaf and the output position takes the semiring identity `0̄` (§5.5.6 identity fill) — not a hole, not `NaN`. Many-to-many is unaffected: the intersection is over POSITIONS, so all `m·n` terms of a duplicated key still appear | CONFORMANCE_SPEC.md §5.24.2, RFC semiring-faq-unified-ir §5.3 | Yes | behavioral |
+| BEHAV-11-007 | The `filter` predicate an `on` clause lowers to MUST be evaluated on the key values AS STORED, in the binding's widest precision, and MUST NOT be narrowed to the document's `domain.element_type`. A join key is an exact-equality value and `==` returns an exact flag, so there is nothing to round — and a binary32 `==` calls two NONROAD SCCs five apart equal, which makes BEHAV-11-005 false | CONFORMANCE_SPEC.md §5.5.8, §5.18 | Yes | behavioral |
+| BEHAV-11-008 | A both-contracted gate cannot be intersected (neither side is bound); one MAY drive the partner-restricted walk and MUST intersect its partner list with what the bound gates already admitted for that axis | CONFORMANCE_SPEC.md §5.24.2, §5.5.8 | Yes | performance |
+
+> **Binding status (2026-09-04): Rust implements all eight.**
+> `simulate_array/eval.rs::resolve_join_gates` resolves every drivable clause and
+> sorts by `JoinGate::selectivity_cmp` (`i128` rational, `clause_ix` tiebreak) for
+> -001/-002/-003; `reduce_contraction_gated` intersects per contracted axis for
+> -004/-006 and composes that with the partner-restricted walk for -008;
+> `join.rs::equality_predicate` wraps the comparison in
+> `precision_infer::mark_exact_key_comparison` for -007. -005 is asserted three
+> ways in `tests/join_on_conjunctive_gate.rs` — every permutation of a node's
+> clauses against a plain-Rust oracle, against the hand-written `filter` the
+> clauses lower to, and against the same document with the driver killed — and
+> once more end-to-end, as a byte-diff of the 144-row `nr-logging-county`
+> fixture against the pre-change binary.
+>
+> **-007 is a fix, not a capability**, and the other four bindings should check
+> it rather than assume it. It bites only where a document declares a working
+> precision narrower than its key magnitudes need — which is the normal state of
+> a MOVES port, whose quantities are binary32 and whose SCC and polProcessID keys
+> are nine- and ten-digit integers. Julia, Python and TypeScript each lower an
+> `on` pair to an equality predicate the same way; whether that predicate is
+> evaluated at the document's precision is a per-binding question this section
+> now makes answerable.
+>
+> **-001/-002/-004 are SHOULDs.** A binding that declines is slower, not wrong:
+> the lowered `filter` still decides every leaf. Julia's tree-walk and Python's
+> NumPy interpreter both currently drive one gate, so both are conforming and
+> both leave the same 500×–2,000× on the table that Rust did; TypeScript and Go
+> have no evaluator and are unaffected.
 
 ### BEHAV-08-B: Data-Source Location Resolution (esm-spec §8.2.1)
 
