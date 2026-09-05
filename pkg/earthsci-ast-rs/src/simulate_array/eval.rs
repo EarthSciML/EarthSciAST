@@ -2502,15 +2502,58 @@ pub(super) fn reduce_contraction(
 // accumulator starts at `reduce.identity()` and is returned untouched — e.g. an
 // emission record outside the grid sums to `0` under `(+, 0)`.
 
-/// A resolved join gate: the two range symbols it gates, and the candidate pair
+/// A resolved join gate: the two range symbols it gates, the candidate pair
 /// index built ONCE — from the const-array envelope factors for an overlap
-/// gate, from the two key columns for a value-equality `on` gate. Everything
-/// downstream (placement, drive plan, driven unroll) reads only these three
-/// fields, which is why one struct serves both kinds.
+/// gate, from the two key columns for a value-equality `on` gate — and the
+/// three integers that make its SELECTIVITY comparable to a sibling gate's
+/// (CONFORMANCE_SPEC.md §5.24).
+///
+/// Everything about the enumeration (placement, drive plan, driven unroll)
+/// reads only `sym_src` / `sym_tgt` / `index`, which is why one struct serves
+/// both gate kinds; `n_src` / `n_tgt` / `clause_ix` are consulted ONLY to order
+/// the gates and can therefore never reach a result.
 pub(super) struct JoinGate {
     sym_src: String,
     sym_tgt: String,
     index: Rc<crate::broad_phase::OverlapIndex>,
+    /// Positions on the `src` side — the left key column's length for an `on`
+    /// gate, the `src_env` factor's length for an overlap gate.
+    n_src: usize,
+    /// Positions on the `tgt` side.
+    n_tgt: usize,
+    /// This gate's index in the node's `join` list — the deterministic
+    /// tiebreak when two gates estimate equally selective (§5.24).
+    clause_ix: usize,
+}
+
+impl JoinGate {
+    /// Compare two gates by ESTIMATED SELECTIVITY, most selective first
+    /// (CONFORMANCE_SPEC.md §5.24).
+    ///
+    /// The estimate is the gate's **admitted fraction** `|matches| / (n_src ·
+    /// n_tgt)`: what share of the two gated axes' cross product survives it.
+    /// Every input is already in hand — `|matches|` is the match set the gate
+    /// built anyway, and the two side lengths are the key columns' own — so the
+    /// estimate costs nothing beyond the comparison.
+    ///
+    /// Compared as a RATIONAL in exact `i128` arithmetic (`a₁·s₂` vs `a₂·s₁`),
+    /// never in floating point: two bindings must order a tie the same way, and
+    /// a float division can round two distinct fractions together (or apart) in
+    /// a language-dependent way. Both products fit: `|matches| ≤ n_src·n_tgt ≤
+    /// (2⁶⁴)²` is out of range in principle but not in practice, and the inputs
+    /// here are `usize` row counts of materialised arrays.
+    ///
+    /// Ties — including the degenerate `n_src·n_tgt = 0` — break on
+    /// `clause_ix`, the gate's position in the document's `join` list. That is
+    /// a property of the FILE, identical in every binding, so two bindings that
+    /// agree on the match sets agree on the order.
+    fn selectivity_cmp(&self, other: &JoinGate) -> std::cmp::Ordering {
+        let (a1, s1) = (self.index.len() as i128, (self.n_src * self.n_tgt) as i128);
+        let (a2, s2) = (other.index.len() as i128, (other.n_src * other.n_tgt) as i128);
+        (a1 * s2)
+            .cmp(&(a2 * s1))
+            .then_with(|| self.clause_ix.cmp(&other.clause_ix))
+    }
 }
 
 /// Where one of a gate's two symbols sits in the aggregate being evaluated.
@@ -2578,16 +2621,28 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
     ctx.forcing.borrow().get(name).map(|a| a.len())
 }
 
-/// Resolve the first drivable clause of `join` into a gate, building (or
-/// reusing) its candidate pair index — a broad-phase envelope set for an
-/// `overlap` clause (§5.5.6), an [`crate::relational::equijoin`] match set for
-/// a resolved `on` clause (§5.5.8).
+/// Resolve EVERY drivable clause of `join` into a gate, building (or reusing)
+/// each candidate pair index — a broad-phase envelope set for an `overlap`
+/// clause (§5.5.6), an [`crate::relational::equijoin`] match set for a resolved
+/// `on` clause (§5.5.8) — and return them ordered MOST SELECTIVE FIRST
+/// (§5.24).
 ///
-/// Returns `None` — and the caller then walks the untouched full product — when
-/// there is no drivable clause, when an overlap clause's range symbols were not
-/// resolved at build time ([`crate::join::resolve_overlap_join_syms`]), when an
-/// envelope factor is not array data in this context, or when an `on` gate's
-/// key columns cannot be read as exact-equality keys here.
+/// This used to return the FIRST resolvable clause and stop, which made the
+/// node's cost a function of the order the author happened to type the clauses
+/// in: measured on the four-clause NONROAD roll-up `tech_fraction`, the best
+/// and worst orderings of one unchanged document differ by 47× in wall clock
+/// (moves.esm `docs/findings/README.md` F17). Resolving them all costs one
+/// equijoin per clause — each `O(|L|+|R|+|matches|)`, memoised across
+/// evaluations by [`EQ_GATE_CACHE`] — and buys two things: the driver picks by
+/// SELECTIVITY rather than by position, and, because the gates compose by
+/// conjunction, [`reduce_contraction_gated`] can INTERSECT their partner sets
+/// instead of driving on one and testing the rest per leaf.
+///
+/// Returns an empty vector — and the caller then walks the untouched full
+/// product — when no clause resolves: when an overlap clause's range symbols
+/// were not resolved at build time ([`crate::join::resolve_overlap_join_syms`]),
+/// when an envelope factor is not array data in this context, or when an `on`
+/// gate's key columns cannot be read as exact-equality keys here.
 ///
 /// Declining is always SAFE. For an overlap gate the candidate set is a
 /// conservative superset behind the author's narrow `filter`, so the full
@@ -2607,26 +2662,30 @@ fn env_factor_len(name: &str, ctx: &EvalCtx) -> Option<usize> {
 /// `ctx.observed_arrays` (the prepare front door and the compiled observed
 /// pipeline both evaluate observeds in dependency order). The ordering
 /// constraint the hook exists to satisfy is satisfied structurally.
-pub(super) fn resolve_join_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<JoinGate> {
+pub(super) fn resolve_join_gates(join: &[JoinClause], ctx: &EvalCtx) -> Vec<JoinGate> {
     // The driver kill-switch (`ESS_JOIN_GATE_DISABLE=1`). Declining here is the
     // pre-driver path exactly: the full product, decided by `filter`. It is what
     // makes "the driver changes cost, never an answer" a directly testable
     // claim on the SAME document rather than an argument.
     if !crate::broad_phase::join_gate_enabled() {
-        return None;
+        return Vec::new();
     }
-    for clause in join {
+    let mut gates: Vec<JoinGate> = Vec::new();
+    for (clause_ix, clause) in join.iter().enumerate() {
         let Some(ov) = &clause.overlap else {
             // Not an overlap clause — try the value-equality gate the build-time
             // resolution attached (§5.5.8). Same three-field product; only the
             // pair-set construction differs.
             if let Some(g) = &clause.on_gate
-                && let Some(index) = resolve_equality_index(g, ctx)
+                && let Some((index, n_src, n_tgt)) = resolve_equality_index(g, ctx)
             {
-                return Some(JoinGate {
+                gates.push(JoinGate {
                     sym_src: g.sym_l.clone(),
                     sym_tgt: g.sym_r.clone(),
                     index,
+                    n_src,
+                    n_tgt,
+                    clause_ix,
                 });
             }
             continue;
@@ -2635,9 +2694,12 @@ pub(super) fn resolve_join_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<Jo
             continue;
         };
         let eps = ov.eps.unwrap_or(0.0);
+        let (Some(first_src), Some(first_tgt)) = (ov.src_env.first(), ov.tgt_env.first()) else {
+            continue;
+        };
         let (Some(nsrc), Some(ntgt)) = (
-            env_factor_len(ov.src_env.first()?, ctx),
-            env_factor_len(ov.tgt_env.first()?, ctx),
+            env_factor_len(first_src, ctx),
+            env_factor_len(first_tgt, ctx),
         ) else {
             continue;
         };
@@ -2658,14 +2720,22 @@ pub(super) fn resolve_join_gate(join: &[JoinClause], ctx: &EvalCtx) -> Option<Jo
             }
         };
         if let Some(index) = index {
-            return Some(JoinGate {
+            gates.push(JoinGate {
                 sym_src: sym_src.clone(),
                 sym_tgt: sym_tgt.clone(),
                 index,
+                n_src: nsrc,
+                n_tgt: ntgt,
+                clause_ix,
             });
         }
     }
-    None
+    // MOST SELECTIVE FIRST (§5.24). `sort_by` is stable, and the comparator
+    // already falls back to `clause_ix`, so the order is a pure function of the
+    // document and the data — never of `join`'s iteration order or of how many
+    // gates happened to tie.
+    gates.sort_by(JoinGate::selectivity_cmp);
+    gates
 }
 
 fn build_overlap_index(
@@ -2710,8 +2780,13 @@ fn build_overlap_index(
 /// silently served a stale match set.
 type EqGateKey = (u64, SmallVec<[usize; 2]>, u64);
 
+/// A cached equality gate: its match set, plus the two side lengths the
+/// §5.24 selectivity estimate divides by. Cached together because both are
+/// products of the same `side_keys` pass.
+type EqGateEntry = (Rc<crate::broad_phase::OverlapIndex>, usize, usize);
+
 thread_local! {
-    static EQ_GATE_CACHE: RefCell<HashMap<EqGateKey, Option<Rc<crate::broad_phase::OverlapIndex>>>> =
+    static EQ_GATE_CACHE: RefCell<HashMap<EqGateKey, Option<EqGateEntry>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -2821,10 +2896,7 @@ fn side_keys(
 /// replaces the `O(|L|·|R|)` product the predicate form walked. `None` declines
 /// the gate, and the lowered `filter` predicate then produces the same answer
 /// over the full product.
-fn resolve_equality_index(
-    g: &crate::join::OnGate,
-    ctx: &EvalCtx,
-) -> Option<Rc<crate::broad_phase::OverlapIndex>> {
+fn resolve_equality_index(g: &crate::join::OnGate, ctx: &EvalCtx) -> Option<EqGateEntry> {
     use crate::join::KeyColumn;
     if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
         return None;
@@ -2845,17 +2917,22 @@ fn resolve_equality_index(
     if let Some(hit) = EQ_GATE_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
     }
-    let built = build_equality_index(g, ctx).map(Rc::new);
+    let built = build_equality_index(g, ctx).map(|(ix, nl, nr)| (Rc::new(ix), nl, nr));
     EQ_GATE_CACHE.with(|c| c.borrow_mut().insert(key, built.clone()));
     built
 }
 
+/// The match set plus the two SIDE LENGTHS — `|L|` and `|R|`, the positions each
+/// key column is defined at. The lengths are the denominator of the §5.24
+/// selectivity estimate, and they fall out of the same `side_keys` pass that
+/// builds the keys, so they cost nothing to carry.
 fn build_equality_index(
     g: &crate::join::OnGate,
     ctx: &EvalCtx,
-) -> Option<crate::broad_phase::OverlapIndex> {
+) -> Option<(crate::broad_phase::OverlapIndex, usize, usize)> {
     let (pos_l, keys_l) = side_keys(&g.cols_l, ctx)?;
     let (pos_r, keys_r) = side_keys(&g.cols_r, ctx)?;
+    let (n_l, n_r) = (pos_l.len(), pos_r.len());
     // Canonical-key-ordered matches (§5.5 rule 5) mapped back onto the two
     // symbols' own values. `OverlapIndex` then re-sorts them position-ascending,
     // which is what makes the driven walk an order-preserving subsequence of the
@@ -2864,7 +2941,11 @@ fn build_equality_index(
         .into_iter()
         .map(|(i, j)| (pos_l[i], pos_r[j]))
         .collect();
-    Some(crate::broad_phase::OverlapIndex::from_pairs(&pairs))
+    Some((
+        crate::broad_phase::OverlapIndex::from_pairs(&pairs),
+        n_l,
+        n_r,
+    ))
 }
 
 /// One contracted dimension's enumeration source: its own ascending interval,
@@ -3420,7 +3501,7 @@ pub(super) struct ArrayOpSpec<'n> {
     /// Surviving `join` clauses. Either kind of gate — a spatial OVERLAP gate
     /// (CONFORMANCE_SPEC.md §5.5.6) or a resolved value-equality `on` gate
     /// (§5.5.8) — is resolved into a candidate pair index that DRIVES the
-    /// enumeration instead of merely testing it (see [`resolve_join_gate`]). A
+    /// enumeration instead of merely testing it (see [`resolve_join_gates`]). A
     /// value-equality clause is ADDITIONALLY lowered into `filter` at build
     /// time, so a path that ignores `join` still computes the same answer.
     pub(super) join: Option<&'n [JoinClause]>,
@@ -3523,9 +3604,16 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contraction below instead of the full product — the whole point of the
     // pushdown rewrite emitting a gate onto each rewritten binning aggregate,
     // and of `join.on` being a gate rather than a predicate.
+    // §5.24: resolve EVERY drivable clause and drive on the most SELECTIVE one,
+    // not on whichever the author typed first. `resolve_join_gates` returns them
+    // already ordered, ties broken by document position, so the choice is a pure
+    // function of the document and the data — and it can only change the node's
+    // COST, because every clause is also lowered into `filter` (§5.5.8) and the
+    // driven walk is an order-preserving subsequence of the filtered product.
     let gate = spec
         .join
-        .and_then(|j| resolve_join_gate(j, &*ctx))
+        .map(|j| resolve_join_gates(j, &*ctx))
+        .and_then(|gs| gs.into_iter().next())
         .map(|g| {
             let place = gate_placement(&g, spec.idx_names, &spec.contract_names);
             (g, place)
