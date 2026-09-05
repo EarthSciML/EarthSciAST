@@ -3656,14 +3656,14 @@ Nothing in §5.24 needs anything a binding does not already have for §5.5.8:
 
 | ingredient | where it already comes from |
 |---|---|
-| `|matches|` | the match set §5.5.8 requires be built once per node |
-| `|L|`, `|R|` | the two key columns' lengths, read in the same pass |
+| `\|matches\|` | the match set §5.5.8 requires be built once per node |
+| `\|L\|`, `\|R\|` | the two key columns' lengths, read in the same pass |
 | exact rational comparison | integer multiply-and-compare; no float, no library |
 | the tie-break | the clause's index in the node's `join` list |
 | ascending partner lists | §5.5.8's canonical match-set order |
 | the intersection | a linear merge of two sorted integer lists |
 
-There is no dependence on a hash implementation, an iteration order, a
+There is no dependence on a hash implementation, an iteration order, an
 allocator, or a language's numeric tower. A binding that implements §5.5.8 can
 implement §5.24.
 
