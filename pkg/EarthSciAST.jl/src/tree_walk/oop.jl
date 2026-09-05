@@ -130,9 +130,13 @@ const _oop_value_type = _rhs_value_type
 
 # A plain indexed gather, deliberately. A stencil's slots are almost always a
 # contiguous run (`c[i-1]` over the interior is the state window shifted by one), so
-# it is tempting to detect that and take `u[a:b]` instead. It buys nothing: this RHS
-# is bound by allocating one temporary per node, not by the gather's addressing mode,
-# and XLA canonicalizes such gathers to slices on its own.
+# it is tempting to detect that and take `u[a:b]` instead. It buys nothing on the
+# HOST: this RHS is bound by allocating one temporary per node, not by the gather's
+# addressing mode, and Reactant lowers a constant-stride run to a slice on its own.
+# What it does NOT lower is a strided BOX (a 3-D kernel class's `out .+ delta`,
+# see `_oop_acc_lanes`), whose gather is cheap forward but whose REVERSE is a
+# serial scatter-add; the Reactant extension's `ESS_OOP_SHIFT_SLICE=1` emits
+# such a read as a slice of the reshaped state instead (reverse: a pad).
 @inline _oop_gather(u, slots::Vector{Int}) = @inbounds u[slots]
 
 # ---- Read interning, TRACE ONLY (ess-oop-intern) -----------------------------

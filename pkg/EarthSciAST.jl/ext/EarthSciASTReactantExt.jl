@@ -210,6 +210,8 @@ _RxGatherMemo(check::Bool, gvn::Bool, interning::Bool, native::Bool) =
 # matching how `ESS_OOP_BATCH=0` declines lane batching); `2` additionally
 # re-verifies each hit. Read once per RHS call, at trace time only.
 function _oop_new_memo(u::TracedRArray{<:Any,1})
+    # ess-oop-shift-slice (see `_rx_box_slice`): trace-time, per RHS call.
+    _RX_SHIFT_SLICE[] = get(ENV, "ESS_OOP_SHIFT_SLICE", "0") != "0"
     mode = get(ENV, "ESS_OOP_INTERN", "1")
     # VALUE NUMBERING AND NATIVE EMISSION DEFAULT OFF — opt in with
     # `ESS_OOP_GVN=1` / `ESS_OOP_NATIVE=1`. Both are bit-exact and both cut the
@@ -253,6 +255,122 @@ end
 @inline _rx_rewrap(v::TracedRArray{T,N}) where {T,N} =
     TracedRArray{T,N}(v.paths, v.mlir_data, v.shape)
 @inline _rx_rewrap(v) = v
+
+# ---- Stencil shifts as affine slices (ess-oop-shift-slice) -----------------
+#
+# `u[slots]` with a host `Vector{Int}` lowers to a `stablehlo.slice` only when
+# `slots` is a single constant-stride RUN (`getindex_linear`). A stencil kernel
+# class on a 3-D grid reads `out .+ delta` where `out` enumerates a BOX of cells
+# (`_oop_acc_lanes`: `Iterators.product` over per-axis ranges with per-axis
+# strides), which is a strided box in the flat state, not a run, so it lowers to
+# a `stablehlo.gather` carrying a dense index constant. Forward that costs
+# little. In REVERSE it is a scatter-add over the same dense indices, which XLA
+# executes serially: the transport VJP at CONUS carried 628 of them and cost
+# 21.8x its primal step (reseact.esm tools/diag/p5_vjp_time.jl, 2026-09-04).
+#
+# A strided box is exactly a rectangular window of the state viewed as a
+# multi-dimensional array, and the reverse of a slice is a pad, which fuses.
+# So when `ESS_OOP_SHIFT_SLICE=1` (read once per RHS call, trace time only),
+# a gather whose slots are VERIFIED to be a strided box is emitted as
+#   reshape(u[1:need], dims) -> [o0, r1, ..., rk] -> permutedims -> vec
+# and anything else (ghost-masked slots, indirect tables, wrapping boxes, a
+# stride chain that does not divide) keeps the gather. Verification is by exact
+# reconstruction of the slot vector from the detected (base, sizes, strides),
+# so a false positive cannot read the wrong cells: the worst case is a gather
+# that could have been a slice. Pure data movement, so the primal is bit-for-bit
+# what the gather produced; only the adjoint's accumulation ORDER can differ
+# (roundoff).
+const _RX_SHIFT_SLICE = Ref{Bool}(false)
+const _RX_SHIFT_SLICE_TALLY = Ref{Tuple{Int,Int}}((0, 0))   # (sliced, gathered)
+_rx_shift_slice_stats() = _RX_SHIFT_SLICE_TALLY[]
+_rx_shift_slice_reset!() = (_RX_SHIFT_SLICE_TALLY[] = (0, 0); nothing)
+
+# Detect `slots[l] == base + sum_d i_d(l) * ss[d]` with the first axis varying
+# fastest (the product order `_oop_acc_lanes` enumerates), up to 4 axes.
+# Returns `(base, ns, ss)` or `nothing`; the result is verified element by element.
+function _rx_strided_box(slots::Vector{Int})
+    L = length(slots)
+    L >= 2 || return nothing
+    ns = Int[]; ss = Int[]
+    B = 1
+    while B < L
+        s = slots[B + 1] - slots[1]
+        s > 0 || return nothing
+        n = 1
+        while n * B < L && slots[n * B + 1] - slots[1] == n * s
+            n += 1
+        end
+        L % (B * n) == 0 || return nothing
+        push!(ns, n); push!(ss, s)
+        B *= n
+        length(ns) <= 4 || return nothing
+    end
+    base = slots[1]
+    @inbounds for l in 1:L
+        v = base; r = l - 1
+        for d in eachindex(ns)
+            v += (r % ns[d]) * ss[d]
+            r ÷= ns[d]
+        end
+        slots[l] == v || return nothing
+    end
+    return base, ns, ss
+end
+
+function _rx_box_slice(u::TracedRArray{T,1}, slots::Vector{Int}) where {T}
+    r = _rx_strided_box(slots)
+    r === nothing && return nothing
+    base, ns, ss = r
+    k = length(ns)
+    k >= 2 || return nothing                 # a 1-D run: `getindex_linear` slices it already
+    p = sortperm(ss)
+    σ = ss[p]; n = ns[p]
+    for j in 1:k - 1
+        (σ[j + 1] > σ[j] && σ[j + 1] % σ[j] == 0) || return nothing
+    end
+    Lu = length(u)
+    dims = Int[σ[1]]
+    for j in 1:k - 1
+        push!(dims, σ[j + 1] ÷ σ[j])
+    end
+    b0 = base - 1
+    o0 = b0 % σ[1]
+    rem_ = b0 ÷ σ[1]
+    offs = Int[]
+    for j in 1:k - 1
+        push!(offs, rem_ % dims[j + 1]); rem_ ÷= dims[j + 1]
+    end
+    push!(offs, rem_)
+    for j in 1:k - 1
+        offs[j] + n[j] <= dims[j + 1] || return nothing   # the box must not wrap
+    end
+    top = offs[k] + n[k]
+    need = σ[k] * top
+    need <= Lu || return nothing
+    push!(dims, top)
+    ur = need == Lu ? u : u[1:need]
+    ur = reshape(ur, Tuple(dims))
+    idx = Any[o0 + 1]
+    for j in 1:k
+        push!(idx, (offs[j] + 1):(offs[j] + n[j]))
+    end
+    S = ur[idx...]                            # dims (n[p[1]], ..., n[p[k]])
+    R = p == collect(1:k) ? S : permutedims(S, invperm(p))
+    return vec(R)
+end
+
+@inline function _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int})
+    if _RX_SHIFT_SLICE[]
+        v = _rx_box_slice(u, slots)
+        t = _RX_SHIFT_SLICE_TALLY[]
+        if v !== nothing
+            _RX_SHIFT_SLICE_TALLY[] = (t[1] + 1, t[2])
+            return v
+        end
+        _RX_SHIFT_SLICE_TALLY[] = (t[1], t[2] + 1)
+    end
+    return @inbounds u[slots]
+end
 
 function _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int},
                      memo::_RxGatherMemo)
