@@ -1261,6 +1261,11 @@ def _apply_operator_compose(
     surviving_b: list[FlattenedEquation] = []
     # b_dep -> target_dep for every match that RENAMED the dependent variable.
     merged_away: dict[str, str] = {}
+    # Positions in `a.equations` this entry merged INTO, for the reattribution
+    # below. Collected rather than acted on in place because `a_index` indexes
+    # `a.equations` positionally and stays live until the last B equation has
+    # been matched -- relocating an equation mid-loop would invalidate it.
+    merged_positions: set[int] = set()
 
     for b_eq in b.equations:
         b_dep = _lhs_dependent_var(b_eq.lhs)
@@ -1303,12 +1308,21 @@ def _apply_operator_compose(
                 rhs=new_rhs,
                 source_system=a_eq.source_system,
             )
+            merged_positions.add(i)
             if target_dep != b_dep:
                 merged_away[b_dep] = target_dep
         else:
             surviving_b.append(b_eq)
 
     b.equations = surviving_b
+
+    # `a is b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
+    # and which has just rebound the one shared list out from under
+    # `merged_positions`. The reattribution would be the identity there anyway --
+    # A and the variable owner are the same component -- so skip it rather than
+    # index a list the positions no longer describe.
+    if a is not b:
+        _reattribute_merged_equations(components, a_name, merged_positions)
 
     # A renaming match CONSUMES B's defining equation, so B's declaration of that
     # name is left with nothing to constrain it -- an algebraic unknown with no
@@ -1325,6 +1339,80 @@ def _apply_operator_compose(
         for gone in merged_away:
             b.state_vars.pop(gone, None)
             b.observed.pop(gone, None)
+
+
+def _reattribute_merged_equations(
+    components: OrderedDict[str, _ComponentSystem],
+    a_name: str,
+    merged_positions: set[int],
+) -> None:
+    """Move each freshly merged equation into its dependent variable's component.
+
+    A composed tendency is no longer any single author's contribution, so
+    esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
+    dependent variable rather than to the ``systems[0]`` that happened to carry
+    the surviving equation. Where A already is that system -- the ordinary
+    ``["Chemistry", "Advection"]`` spelling, and every fixture in the shared tree
+    before this one -- the move is the identity and nothing changes.
+
+    Where it is NOT the identity is a document that CHAINS compose entries over
+    one state with the OPERATOR as A::
+
+        {"type": "operator_compose", "systems": ["Sink", "Chem"]}
+        {"type": "operator_compose", "systems": ["Src",  "Chem"]}
+        {"type": "operator_compose", "systems": ["Chem", "Adv"], ...}
+
+    with ``Sink`` and ``Src`` authoring ``D(Chem.X, t) = ...`` directly. §4.7.1
+    permits it and ``reseact.esm`` is built on it (deposition, then emission,
+    then the transport lift). Entry 1 consumes Chem's own equation and leaves
+    the sum in ``components["Sink"].equations``; entry 2 then walks
+    ``components["Src"]`` and ``components["Chem"]`` and cannot see it. Both the
+    composed tendency and Src's un-merged contribution reach
+    :func:`_assemble_system`, which raises ``ConflictingDerivativeError`` for
+    ``Chem.O3`` -- loud rather than corrupt, but the document is spec-valid and
+    must flatten. Relocating the merge to ``components["Chem"]`` is what puts it
+    back where the next entry looks for it, in either role.
+
+    The component bag is the Python analogue of the reference implementation's
+    per-equation owner (Julia ``coupling_apply.jl``, the ``new_owners[j] =
+    _component_root(dep)`` line): membership in ``components[X].equations`` is
+    the only record of who authored an equation, and after namespacing an
+    operator's equation for a chemistry species is textually indistinguishable
+    from the chemistry component's own.
+
+    POSITION. §4.7.5 step 4 makes document order normative, and a relocated
+    equation is APPENDED to the owner's list rather than inserted at the slot of
+    the B equation it consumed. Appending is what reproduces the reference
+    order: each merge trails the ones before it, so a species whose chain ends at
+    a later entry ends up after one whose chain ended earlier -- ``Chem.NO``
+    (last merged by entry 1) ahead of ``Chem.O3`` (last merged by entry 2) in the
+    document above. Inserting at the consumed equation's slot instead would
+    freeze both at Chem's original declaration order and disagree with every
+    other binding.
+
+    An equation whose dependent variable names no component of this document
+    stays where it is; there is no bag to move it to.
+    """
+    if not merged_positions:
+        return
+    a = components[a_name]
+    kept: list[FlattenedEquation] = []
+    moved: list[tuple[str, FlattenedEquation]] = []
+    for i, eq in enumerate(a.equations):
+        owner: str | None = None
+        if i in merged_positions:
+            dep = _lhs_dependent_var(eq.lhs)
+            if dep is not None:
+                owner = dep.split(".", 1)[0]
+        if owner is None or owner == a_name or owner not in components:
+            kept.append(eq)
+        else:
+            moved.append((owner, eq))
+    if not moved:
+        return
+    a.equations = kept
+    for owner, eq in moved:
+        components[owner].equations.append(eq)
 
 
 def _retarget_merged_names(

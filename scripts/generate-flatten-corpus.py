@@ -223,6 +223,28 @@ CASES: list[tuple[str, str, str]] = [
         "flatten_registry_merge_twins",
         "conformance/expression_templates/flatten_registry_merge_transitive/fixture_twins.esm",
     ),
+    # --- operator_compose CHAINED over one state, operator as A --------------
+    # Added 2026-09-05 with the issue #173 fix. Every `operator_compose` case
+    # above composes ONE operator onto a state, with the state's own system as
+    # `systems[0]`, so all of them leave the merged equation exactly where the
+    # binding happened to keep it and none can tell the two attributions apart.
+    #
+    # This document chains THREE entries over the same two species with the
+    # OPERATOR as A (`["Sink", "Chem"]`, the sink authoring `D(Chem.O3, t)`
+    # directly) -- the shape `reseact.esm` composes SuperFast with, and the one
+    # that makes §4.7.1 step 4's OWNERSHIP rule observable: a merged equation
+    # left attributed to the operator is invisible to the next entry, so the
+    # chain stops after the first merge and the flattened system carries two
+    # equations claiming `D(Chem.O3)`. Three of five bindings did exactly that.
+    #
+    # It also pins the resulting ORDER, which is the part prose cannot fix: the
+    # equations come out `Chem.NO` then `Chem.O3` -- each species trailing to the
+    # slot of the LAST entry that merged it, not to Chem's declaration order.
+    (
+        "chained_compose",
+        "chained_operator_compose",
+        "coupling/chained_operator_compose.esm",
+    ),
     # --- reaction system: species -> derived ODEs, initial values ------------
     (
         "reaction_system",

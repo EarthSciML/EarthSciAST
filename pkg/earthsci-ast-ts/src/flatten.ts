@@ -1283,6 +1283,11 @@ function applyOperatorCompose(
   const survivingB: FlattenedEquation[] = []
   // `bDep -> targetDep` for every match that RENAMED the dependent variable.
   const mergedAway: Record<string, string> = {}
+  // Positions in `a.equations` this entry merged INTO, for the reattribution
+  // below. Collected rather than acted on in place because `aIndex` indexes
+  // `a.equations` POSITIONALLY and stays live until the last B equation has been
+  // matched — relocating an equation mid-loop would invalidate it.
+  const mergedPositions = new Set<number>()
   for (const bEq of b.equations) {
     const bDep = lhsDependentVar(bEq.lhs)
     if (bDep === undefined) {
@@ -1338,12 +1343,20 @@ function applyOperatorCompose(
         rhs: addExprs(aEq.rhs, rhs),
         sourceSystem: aEq.sourceSystem,
       }
+      mergedPositions.add(i)
       if (targetDep !== bDep) mergedAway[bDep] = targetDep
     } else {
       survivingB.push(bEq)
     }
   }
   b.equations = survivingB
+
+  // `a === b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
+  // and which has just rebound the one shared array out from under
+  // `mergedPositions`. The reattribution would be the identity there anyway — A
+  // and the variable owner are the same component — so skip it rather than index
+  // an array the positions no longer describe.
+  if (a !== b) reattributeMergedEquations(components, systems[0], mergedPositions)
 
   // §4.7.1 step 4, last bullet: THE MERGED-AWAY NAME DOES NOT SURVIVE. A
   // renaming match — a translation match, or the bare-name fallback, which is a
@@ -1366,6 +1379,85 @@ function applyOperatorCompose(
       delete b.observed[gone]
     }
   }
+}
+
+/**
+ * Move each freshly merged equation into its dependent variable's component.
+ *
+ * A composed tendency is no longer any single author's contribution, so
+ * esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
+ * dependent variable rather than to the `systems[0]` that happened to carry the
+ * surviving equation. Where A already IS that system — the ordinary
+ * `["Chemistry", "Advection"]` spelling, and every fixture in the shared tree
+ * before this one — the move is the identity and nothing changes.
+ *
+ * Where it is NOT the identity is a document that CHAINS compose entries over
+ * one state with the OPERATOR as A:
+ *
+ * ```json
+ * {"type": "operator_compose", "systems": ["Sink", "Chem"]}
+ * {"type": "operator_compose", "systems": ["Src",  "Chem"]}
+ * {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}
+ * ```
+ *
+ * with `Sink` and `Src` authoring `D(Chem.X, t) = …` directly. §4.7.1 permits it
+ * and `reseact.esm` is built on it (deposition, then emission, then the
+ * transport lift). Entry 1 consumes Chem's own equation and leaves the sum in
+ * `components.Sink.equations`; entry 2 then walks `components.Src` and
+ * `components.Chem` and cannot see it. Both the composed tendency and Src's
+ * un-merged contribution reach {@link assembleSystem}, which raises
+ * `ConflictingDerivativeError` for `Chem.O3` — loud rather than corrupt, but the
+ * document is spec-valid and must flatten. Relocating the merge to
+ * `components.Chem` is what puts it back where the next entry looks for it, in
+ * either role.
+ *
+ * The component bag is this binding's analogue of the reference
+ * implementation's per-equation owner (Julia `coupling_apply.jl`, the
+ * `new_owners[j] = _component_root(dep)` line): membership in
+ * `components[X].equations` is the only record of who authored an equation, and
+ * after namespacing an operator's equation for a chemistry species is textually
+ * indistinguishable from the chemistry component's own.
+ *
+ * POSITION. §4.7.5 step 4 makes document order normative, and a relocated
+ * equation is APPENDED to the owner's list rather than inserted at the slot of
+ * the B equation it consumed. Appending is what reproduces the reference order:
+ * each merge trails the ones before it, so a species whose chain ends at a later
+ * entry ends up after one whose chain ended earlier — `Chem.NO` (last merged by
+ * entry 1) ahead of `Chem.O3` (last merged by entry 2) in the document above.
+ * Inserting at the consumed equation's slot instead would freeze both at Chem's
+ * original declaration order and disagree with every other binding.
+ *
+ * An equation whose dependent variable names no component of this document stays
+ * where it is; there is no bag to move it to.
+ */
+function reattributeMergedEquations(
+  components: Record<string, ComponentSystem>,
+  aName: string,
+  mergedPositions: Set<number>,
+): void {
+  if (mergedPositions.size === 0) return
+  const a = components[aName]
+  const kept: FlattenedEquation[] = []
+  const moved: Array<[string, FlattenedEquation]> = []
+  a.equations.forEach((eq, i) => {
+    let owner: string | undefined
+    if (mergedPositions.has(i)) {
+      const dep = lhsDependentVar(eq.lhs)
+      if (dep !== undefined) owner = dep.includes('.') ? dep.slice(0, dep.indexOf('.')) : dep
+    }
+    if (
+      owner === undefined ||
+      owner === aName ||
+      !Object.prototype.hasOwnProperty.call(components, owner)
+    ) {
+      kept.push(eq)
+    } else {
+      moved.push([owner, eq])
+    }
+  })
+  if (moved.length === 0) return
+  a.equations = kept
+  for (const [owner, eq] of moved) components[owner].equations.push(eq)
 }
 
 /**

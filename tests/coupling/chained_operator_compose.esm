@@ -1,0 +1,216 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ChainedCompose",
+    "description": "Three operator_compose entries chained over one state, with the OPERATOR as system A.\n\nThe shape reseact.esm uses: a deposition sink and an emission source each author D(Chem.*) directly -- B's variable, A's authorship -- and are composed onto the chemistry in turn, then the whole thing is lifted onto a transport operator. Entry 1's merge must leave an equation entries 2 and 3 can still find, which is what makes the merged equation's OWNERSHIP observable (esm-libraries-spec 4.7.1 step 4).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-08-25T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "k2": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.2
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k2"
+                ]
+              },
+              "NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Src": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "e"
+        }
+      ]
+    },
+    "Adv": {
+      "variables": {
+        "wind": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "wind"
+                ]
+              },
+              {
+                "op": "grad",
+                "args": [
+                  "_var"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Sink",
+        "Chem"
+      ]
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Src",
+        "Chem"
+      ]
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Adv"
+      ],
+      "lifting": "pointwise"
+    }
+  ]
+}
