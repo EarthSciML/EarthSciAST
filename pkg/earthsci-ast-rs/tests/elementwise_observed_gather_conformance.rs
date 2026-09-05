@@ -31,7 +31,7 @@ use earthsci_ast::run_pde_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod common;
 
@@ -39,7 +39,7 @@ fn category_dir() -> PathBuf {
     common::repo_fixture("conformance/elementwise_observed_gather")
 }
 
-fn read_json(path: &PathBuf) -> serde_json::Value {
+fn read_json(path: &Path) -> serde_json::Value {
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {path:?}: {e}"))
 }
@@ -63,7 +63,7 @@ fn close(a: f64, b: f64, rtol: f64, atol: f64) -> bool {
 /// Run one fixture through the official runner, gate it against its golden, and
 /// return its actuals keyed by `assertion_idx`.
 fn run_fixture(
-    dir: &PathBuf,
+    dir: &Path,
     manifest: &serde_json::Value,
     fx: &serde_json::Value,
 ) -> BTreeMap<usize, f64> {
@@ -82,7 +82,7 @@ fn run_fixture(
     let text = fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
     let file =
         load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-    let results = run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+    let results = run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir));
 
     let expected = golden["assertions"].as_array().expect("golden assertions");
     assert_eq!(results.len(), expected.len());
