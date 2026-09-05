@@ -60,16 +60,18 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::problem::{ProblemOptions, esm_problem, solve};
+use crate::problem::{EsmProblem, ProblemOptions, esm_problem, solve};
 use crate::simulate::{Solution, SolveOptions};
 
-/// The build-time data providers one inline test consumes, produced on demand.
+/// The build-time data providers one inline-test BUILD consumes, produced on
+/// demand.
 ///
 /// A factory rather than a set because [`crate::problem::ProblemOptions`] takes
-/// its `build_providers` BY VALUE and each inline test builds its own problem:
-/// one shared vector would be moved out by the first test and missing from the
-/// second. `Err` carries a message naming what could not be constructed; it is
-/// recorded as an assertion ERROR, never ignored.
+/// its `build_providers` BY VALUE: one shared vector would be moved out by the
+/// first build and missing from the second. Called once per BUILD, so a
+/// document whose tests share a [`BuildKey`] reads its `data_sources` once
+/// rather than once per test. `Err` carries a message naming what could not be
+/// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
 /// See [`run_pde_tests_with_providers`].
 pub type BuildProviderFactory<'a> =
@@ -1032,7 +1034,204 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
     }
 }
 
+/// Everything ONE inline test's BUILD depends on, within one
+/// [`run_model_tests`] call.
+///
+/// Derived by reading the loop body rather than by listing plausible fields.
+/// The build is `esm_problem(run_file, tspan, popts)`, and inside a single call
+/// to [`run_model_tests`] the document (`file`), the component (`model_name`),
+/// the `base_dir` and the provider FACTORY are all fixed. What a test can vary
+/// is therefore exactly four things:
+///
+/// * `expression_template_imports` — the only input [`ephemeral_injected_file`]
+///   reads off the test, hence the only thing that can make `run_file` differ
+///   from `file`;
+/// * `time_span` — passed straight through as the problem's `tspan` (and, via
+///   `tspan.0`, the CONST-provider sample time);
+/// * `parameter_overrides` → [`ProblemOptions::p`];
+/// * `initial_conditions` → [`ProblemOptions::u0`].
+///
+/// Every other `ProblemOptions` field the loop sets is loop-invariant:
+/// `inspect: true`, `compile` chosen solely from `build_providers.is_some()`,
+/// `build_pipeline` likewise, and `..Default::default()` for the rest
+/// (`model_name: None`, no metaparameters, no `base_path`, no callbacks, no
+/// run-time `providers`, no `const_arrays`, no `sample_time`).
+///
+/// A test's `assertions` and `tolerance` are deliberately ABSENT: they feed the
+/// SOLVE (`saveat`, `output_observed`) and the assertion check, never the
+/// build. That is why the solve is still run per test even on a memo hit —
+/// only the build is reused.
+///
+/// Floats are keyed by their BIT PATTERN, which is conservative in the safe
+/// direction: equal bits are the same `f64` and so the same build, while two
+/// spellings of one value (`0.0` / `-0.0`) merely miss and rebuild.
+///
+/// `None` and `Some({})` collapse to the same empty binding list because
+/// [`scope_to_component`] already maps both to an empty map.
+#[derive(PartialEq)]
+struct BuildKey {
+    imports: Vec<serde_json::Value>,
+    tspan: (u64, u64),
+    p: Vec<(String, u64)>,
+    u0: Vec<(String, u64)>,
+}
+
+impl BuildKey {
+    fn of(t: &crate::types::ModelTest) -> Self {
+        fn bindings(m: Option<&HashMap<String, f64>>) -> Vec<(String, u64)> {
+            let mut v: Vec<(String, u64)> = m
+                .map(|m| m.iter().map(|(k, x)| (k.clone(), x.to_bits())).collect())
+                .unwrap_or_default();
+            v.sort();
+            v
+        }
+        BuildKey {
+            imports: t.expression_template_imports.clone(),
+            tspan: (t.time_span.start.to_bits(), t.time_span.end.to_bits()),
+            p: bindings(t.parameter_overrides.as_ref()),
+            u0: bindings(t.initial_conditions.as_ref()),
+        }
+    }
+}
+
+/// What building one test's problem produced — reusable by the next test whose
+/// [`BuildKey`] matches.
+enum Built {
+    /// The problem to solve.
+    Problem(Box<EsmProblem>),
+    /// Every assertion of the test is an ERROR carrying this message: the
+    /// per-test discretization injection failed, or the document's
+    /// `data_sources` could not be read, so the numbers were never available.
+    TestError(String),
+    /// `esm_problem` itself failed; reported exactly as a solve failure is.
+    BuildFailed(String),
+}
+
+/// The memoised build of one model's tests: the key it was built for, the
+/// ephemeral document (if the key called for one), its index sets, and the
+/// result.
+struct BuiltModel {
+    key: BuildKey,
+    /// `None` when the test declared no `expression_template_imports` and so
+    /// ran against `file` as loaded.
+    ephemeral: Option<EsmFile>,
+    index_sets: Option<HashMap<String, IndexSet>>,
+    built: Built,
+}
+
+/// Build one test's problem — the body that used to be inline in
+/// [`run_model_tests`]'s loop, lifted out so the loop can skip it on a
+/// [`BuildKey`] hit.
+fn build_for_test(
+    key: BuildKey,
+    file: &EsmFile,
+    model_name: &str,
+    t: &crate::types::ModelTest,
+    base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+) -> BuiltModel {
+    // esm-spec §9.7.10 form C: a test that injects a discretization runs
+    // against an EPHEMERAL instance of this component with the test's
+    // imports appended to its scope and its rewrite-targets lowered; the
+    // persisted `file` is untouched. A test with no injection runs against
+    // the file as loaded.
+    let (ephemeral, index_sets) = if t.expression_template_imports.is_empty() {
+        (None, None)
+    } else {
+        match ephemeral_injected_file(
+            file,
+            None,
+            model_name,
+            &t.expression_template_imports,
+            base_dir.unwrap_or_else(|| Path::new(".")),
+        ) {
+            Ok(f) => {
+                let is: HashMap<String, IndexSet> = f
+                    .index_sets
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                (Some(f), Some(is))
+            }
+            Err(e) => {
+                return BuiltModel {
+                    key,
+                    ephemeral: None,
+                    index_sets: None,
+                    built: Built::TestError(format!(
+                        "per-test discretization injection failed: {e}"
+                    )),
+                };
+            }
+        }
+    };
+    let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
+
+    let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
+    let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
+    let mut popts = ProblemOptions {
+        p: params,
+        u0: ics,
+        inspect: true,
+        compile: crate::problem::Compile::Always,
+        ..Default::default()
+    };
+    // The document's own `data_sources`, ingested (esm-spec §8.9). A
+    // failure here is NOT a solve failure and must not be reported as one:
+    // it means the numbers the test asserts on were never read, so every
+    // assertion of this test is an ERROR naming the source.
+    if let Some(make) = build_providers {
+        match make() {
+            Ok(provs) => {
+                popts.build_providers = provs;
+                popts.build_pipeline = true;
+                // `Always` on a document with no differential equations
+                // compiles a right-hand side that has nothing to integrate.
+                // With the build pipeline bound, that document's whole
+                // content IS its build-time observed graph, so let the
+                // backend fall out of the document (`Auto`) and read the
+                // fields the build materialized.
+                popts.compile = crate::problem::Compile::Auto;
+            }
+            Err(e) => {
+                return BuiltModel {
+                    key,
+                    ephemeral,
+                    index_sets,
+                    built: Built::TestError(e),
+                };
+            }
+        }
+    }
+    let built = match esm_problem(run_file, (t.time_span.start, t.time_span.end), popts) {
+        Ok(p) => Built::Problem(Box::new(p)),
+        Err(e) => Built::BuildFailed(format!("simulate failed: {e}")),
+    };
+    BuiltModel {
+        key,
+        ephemeral,
+        index_sets,
+        built,
+    }
+}
+
 /// Run every inline test of one model, appending per-assertion results.
+///
+/// `test_filter`, when given, selects the tests to RUN by the same
+/// `id.contains(needle)` predicate the CLI's `--filter` used to apply to the
+/// finished result rows. Applying it here is what makes the flag skip WORK
+/// rather than only narrow the report; the surviving rows are identical either
+/// way, because a result's `test_id` is always its test's `id`.
+///
+/// The build is memoised across CONSECUTIVE tests that share a [`BuildKey`]
+/// (see there for how the key was derived and why it is complete). One slot,
+/// not a map: a slot keeps at most one built problem — and its materialized
+/// build fields — alive at a time, and over this project's documents the
+/// consecutive form costs 47 builds against a full map's 44, for 200 tests.
+/// The memo cannot change an answer it does not also change without it: the
+/// key is compared exactly, the build is a pure function of the key plus the
+/// loop-invariant context above, and the solve still runs per test.
 fn run_model_tests(
     file: &EsmFile,
     model_name: &str,
@@ -1041,54 +1240,39 @@ fn run_model_tests(
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
+    test_filter: Option<&str>,
     results: &mut Vec<PdeAssertionResult>,
 ) {
     let Some(tests) = &model.tests else {
         return;
     };
+    let mut memo: Option<BuiltModel> = None;
     for t in tests {
-        // esm-spec §9.7.10 form C: a test that injects a discretization runs
-        // against an EPHEMERAL instance of this component with the test's
-        // imports appended to its scope and its rewrite-targets lowered; the
-        // persisted `file` is untouched. A test with no injection runs against
-        // the file as loaded.
-        let ephemeral;
-        let (run_file, run_index_sets_owned): (&EsmFile, Option<HashMap<String, IndexSet>>) =
-            if t.expression_template_imports.is_empty() {
-                (file, None)
-            } else {
-                match ephemeral_injected_file(
-                    file,
-                    None,
-                    model_name,
-                    &t.expression_template_imports,
-                    base_dir.unwrap_or_else(|| Path::new(".")),
-                ) {
-                    Ok(f) => {
-                        ephemeral = f;
-                        let is: HashMap<String, IndexSet> = ephemeral
-                            .index_sets
-                            .clone()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .collect();
-                        (&ephemeral, Some(is))
-                    }
-                    Err(e) => {
-                        // Record the build failure for every assertion and skip.
-                        push_test_error(
-                            results,
-                            model_name,
-                            t,
-                            model,
-                            &format!("per-test discretization injection failed: {e}"),
-                        );
-                        continue;
-                    }
-                }
-            };
+        if test_filter.is_some_and(|needle| !t.id.contains(needle)) {
+            continue;
+        }
+        let key = BuildKey::of(t);
+        if !memo.as_ref().is_some_and(|m| m.key == key) {
+            // Drop the previous build BEFORE the next one is constructed, so
+            // the slot never holds two documents' worth of materialized fields.
+            drop(memo.take());
+            memo = Some(build_for_test(
+                key,
+                file,
+                model_name,
+                t,
+                base_dir,
+                build_providers,
+            ));
+        }
+        let cached = memo.as_ref().expect("just built");
+        let run_file: &EsmFile = cached.ephemeral.as_ref().unwrap_or(file);
         let run_index_sets: &HashMap<String, IndexSet> =
-            run_index_sets_owned.as_ref().unwrap_or(index_sets);
+            cached.index_sets.as_ref().unwrap_or(index_sets);
+        if let Built::TestError(msg) = &cached.built {
+            push_test_error(results, model_name, t, model, msg);
+            continue;
+        }
 
         let mut times: Vec<f64> = t.assertions.iter().map(|a| a.time).collect();
         times.sort_by(f64::total_cmp);
@@ -1113,8 +1297,6 @@ fn run_model_tests(
                 run_opts.output_observed.push(name);
             }
         }
-        let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
-        let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
         // Build-observability sink: assertions on ARRAY OBSERVEDS (no ODE
         // slot) read their state-free materialized field from here
         // (`observed_field`).
@@ -1124,40 +1306,11 @@ fn run_model_tests(
         // through the run — the same move that gave `observed_field` one arity
         // in every binding.
         let mut insp = BuildInspection::default();
-        // The document's own `data_sources`, ingested (esm-spec §8.9). A
-        // failure here is NOT a solve failure and must not be reported as one:
-        // it means the numbers the test asserts on were never read, so every
-        // assertion of this test is an ERROR naming the source.
-        let mut popts = ProblemOptions {
-            p: params,
-            u0: ics,
-            inspect: true,
-            compile: crate::problem::Compile::Always,
-            ..Default::default()
-        };
-        let mut ingest_error: Option<String> = None;
-        if let Some(make) = build_providers {
-            match make() {
-                Ok(provs) => {
-                    popts.build_providers = provs;
-                    popts.build_pipeline = true;
-                    // `Always` on a document with no differential equations
-                    // compiles a right-hand side that has nothing to integrate.
-                    // With the build pipeline bound, that document's whole
-                    // content IS its build-time observed graph, so let the
-                    // backend fall out of the document (`Auto`) and read the
-                    // fields the build materialized.
-                    popts.compile = crate::problem::Compile::Auto;
-                }
-                Err(e) => ingest_error = Some(e),
-            }
-        }
-        if let Some(msg) = ingest_error {
-            push_test_error(results, model_name, t, model, &msg);
-            continue;
-        }
-        let sim = esm_problem(run_file, (t.time_span.start, t.time_span.end), popts)
-            .and_then(|prob| {
+        let sim = match &cached.built {
+            // Handled above; the `continue` there is the only exit.
+            Built::TestError(msg) => Err(msg.clone()),
+            Built::BuildFailed(msg) => Err(msg.clone()),
+            Built::Problem(prob) => {
                 // The build pipeline's own products, which `observed_field`
                 // reads back for a §6.6.5 array assertion. Taken BEFORE the
                 // solve so a state-free document — whose `solve` is a legitimate
@@ -1167,22 +1320,31 @@ fn run_model_tests(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                let sol = match solve(&prob, &run_opts) {
-                    Ok(sol) => sol,
+                // Re-arm the state a FRESHLY BUILT problem is in. Construction
+                // leaves `inspection` empty, `solve` fills it only on the array
+                // backend, and `take_inspection` DRAINS it — so without this a
+                // reused problem would hand the second test whatever the first
+                // left behind rather than what a rebuild would have produced.
+                // A no-op on the first use of a build.
+                prob.reset_inspection();
+                match solve(prob, &run_opts) {
+                    Ok(sol) => Ok(sol),
                     // A document with no ODEs never integrates; its answers are
                     // the build's, evaluated at the asserted times.
                     Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                        build_only_solution(run_opts.saveat.clone().unwrap_or_default())
+                        Ok(build_only_solution(run_opts.saveat.clone().unwrap_or_default()))
                     }
-                    Err(e) => return Err(e),
-                };
-                insp = prob.take_inspection();
-                for (k, v) in fields {
-                    insp.setup_arrays.entry(k).or_insert(v);
+                    Err(e) => Err(format!("simulate failed: {e}")),
                 }
-                Ok(sol)
-            })
-            .map_err(|e| format!("simulate failed: {e}"))
+                .map(|sol| {
+                    insp = prob.take_inspection();
+                    for (k, v) in fields {
+                        insp.setup_arrays.entry(k).or_insert(v);
+                    }
+                    sol
+                })
+            }
+        }
         // A truncated or unstable run is a solve failure, not an assertion
         // failure: without this the trajectory simply stops short and every
         // assertion past the stop reports `no saved state at t=…`, naming the
@@ -1305,9 +1467,13 @@ pub fn run_pde_tests_with_base_dir(
 /// the source rather than swallowed.
 ///
 /// `build_providers` is a FACTORY, not a set: [`crate::problem::ProblemOptions`]
-/// takes its providers by value and every inline test builds its own problem,
-/// so the runner needs a fresh set per test. It is called once per test, and
-/// only for a model that actually declares tests.
+/// takes its providers by value, so the runner needs a fresh set for every
+/// problem it builds. It is called **once per BUILD** — which is once per test
+/// only for tests that differ in their [`BuildKey`]; consecutive tests that
+/// share a build share the one provider set that built it, and a document whose
+/// tests all share a key reads its `data_sources` once rather than once per
+/// test. It is called only for a model that actually declares tests, and (with
+/// `test_filter`) only for tests that were selected.
 ///
 /// With providers bound, construction runs the deterministic build pipeline and
 /// its materialized fields answer §6.6.5 array assertions directly. A document
@@ -1321,6 +1487,28 @@ pub fn run_pde_tests_with_providers(
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
+) -> Vec<PdeAssertionResult> {
+    run_pde_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
+}
+
+/// [`run_pde_tests_with_providers`] restricted to the tests whose `id` CONTAINS
+/// `test_filter`.
+///
+/// The selection happens BEFORE anything is built or solved, which is the whole
+/// point: a caller that narrows to one test of a document should pay for one
+/// test of a document. The surviving rows are identical to filtering the
+/// returned `Vec` by `test_id`, because a result's `test_id` is always its
+/// test's `id` on every path — the assertion rows and the whole-test ERROR rows
+/// alike.
+///
+/// `None` runs every test, and is what the three unfiltered entry points pass.
+pub fn run_pde_tests_filtered(
+    file: &EsmFile,
+    model_name: Option<&str>,
+    opts: &SolveOptions,
+    base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+    test_filter: Option<&str>,
 ) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
     let Some(models) = &file.models else {
@@ -1348,6 +1536,7 @@ pub fn run_pde_tests_with_providers(
             opts,
             base_dir,
             build_providers,
+            test_filter,
             &mut results,
         );
     }

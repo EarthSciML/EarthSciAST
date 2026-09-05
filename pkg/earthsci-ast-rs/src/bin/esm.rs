@@ -3774,20 +3774,20 @@ fn run_test(
                 // convention, and the reason this loads with `load_path`
                 // rather than `load_string` (only `load_path` resolves §4.7
                 // subsystem `ref`s relative to the file).
-                let results = earthsci_ast::run_pde_tests_with_providers(
+                // `--filter` is applied INSIDE the runner, before anything is
+                // built or solved, so narrowing to one test costs one test
+                // rather than the whole document (it used to select rows out of
+                // an already-evaluated `Vec`). The surviving rows are the same
+                // either way: a result's `test_id` is its test's `id`.
+                let results = earthsci_ast::run_pde_tests_filtered(
                     &esm_file,
                     model.as_deref(),
                     &opts,
                     path.parent(),
                     providers.as_deref(),
+                    filter.as_deref(),
                 );
                 for r in results {
-                    if filter
-                        .as_ref()
-                        .is_some_and(|needle| !r.test_id.contains(needle))
-                    {
-                        continue;
-                    }
                     rows.push(TestRow {
                         file: path.clone(),
                         container: r.model,

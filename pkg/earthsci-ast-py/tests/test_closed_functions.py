@@ -20,7 +20,7 @@ import pytest
 from conftest import FIXTURES_ROOT as _TESTS_ROOT, VALID_DIR
 
 from earthsci_ast import load_path, load_string
-from earthsci_ast.numpy_interpreter import fold_constant_expr
+from earthsci_ast.numpy_interpreter import evaluate, fold_constant_expr
 from earthsci_ast.registered_functions import (
     ClosedFunctionError,
     closed_function_names,
@@ -239,6 +239,67 @@ def test_enums_lowered_to_const():
     assert expr.args[1].value == 3  # summer
     assert expr.args[2].op == "const"
     assert expr.args[2].value == 3  # deciduous_forest
+
+
+def test_zero_and_negative_enum_members_load_and_resolve_to_themselves():
+    """An ``enums`` member may be ANY integer (esm-spec §9.3; CONFORMANCE_SPEC,
+    "An ``enums`` Member Is a Code, Not a Position").
+
+    The schema used to carry ``minimum: 1`` on
+    ``EnumDeclaration.additionalProperties``, so a zero-valued identifier could
+    not be named at all -- and MOVES has load-bearing ones:
+    ``operatingmode.opModeID = 0`` is Braking (an emitting mode with its own
+    rate) and ``opmodepolprocassoc.polProcessID = -1`` marks the drive-cycle
+    modes associated with no pollutant/process.
+
+    Both halves are pinned here: the document LOADS, and each member resolves
+    to EXACTLY its declared integer -- a binding that accepted the document but
+    clamped or dropped the sign would still be wrong.
+    """
+    fixture = VALID_DIR / "enums_zero_and_negative.esm"
+    file = load_path(fixture)
+    assert file.enums["operating_mode"]["Braking"] == 0
+    assert file.enums["pol_process"]["Unassociated"] == -1
+
+    model = file.models["EnumsZeroAndNegative"]
+    defining = [eq for eq in model.equations if eq.lhs == "mode_code"]
+    assert len(defining) == 1
+    expr = defining[0].rhs
+    assert expr.op == "makearray"
+
+    # values[0] — the zero-valued member; values[1] — the negative one.
+    assert expr.values[0].op == "const"
+    assert expr.values[0].value == 0
+    assert expr.values[1].op == "const"
+    assert expr.values[1].value == -1
+
+    # values[2] — both read through ARITHMETIC: 0 + 10*1 + (-1) = 9.
+    assert evaluate(expr.values[0], {}) == 0.0
+    assert evaluate(expr.values[1], {}) == -1.0
+    assert evaluate(expr.values[2], {}) == 9.0
+
+
+def test_enum_values_must_still_be_unique_including_zero():
+    """Uniqueness is unchanged by the widened domain: ``0`` is a value like any
+    other, so two symbols may not both map to it (esm-spec §9.3). Written as a
+    separate case from the positive duplicate because a "seen set" that used
+    ``0`` as its own sentinel would pass the positive case and let this one
+    through."""
+    def doc(enums: str) -> str:
+        return (
+            '{"esm":"1.0.0","metadata":{"name":"T","description":"d",'
+            '"authors":["a"]},"enums":' + enums + ','
+            '"models":{"M":{"variables":{"x":{"type":"unknown","units":"1"}},'
+            '"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}'
+        )
+
+    with pytest.raises(Exception, match="duplicate value 0"):
+        load_string(doc('{"m":{"A":0,"B":0}}'))
+    with pytest.raises(Exception, match="duplicate value 3"):
+        load_string(doc('{"m":{"A":3,"B":3}}'))
+    # Distinct values, one of them zero and one negative, are fine.
+    loaded = load_string(doc('{"m":{"A":0,"B":-1}}'))
+    assert loaded.enums["m"] == {"A": 0, "B": -1}
 
 
 def test_enums_lowered_in_bound_filter_and_key():

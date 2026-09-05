@@ -170,6 +170,12 @@
           "detail": "`enum` op nodes resolve against the document's top-level `enums` block and lower to `const` integers. 9.3: 'The enum op MUST resolve at load time, before any expression evaluation. After lowering, no enum-op nodes remain in the in-memory representation.' All five bindings perform it." }
       ] },
 
+    { "id": "valid/enums_zero_and_negative",         "path": "valid/enums_zero_and_negative.esm",         "tags": ["enums", "zero", "negative", "transforming"],
+      "load_transforms": [
+        { "transform": "enum_lowering", "spec": "esm-spec 9.3",
+          "detail": "Same lowering as above, on a zero-valued and a negative-valued member: the member domain is the whole integer range (CONFORMANCE_SPEC, \"An `enums` Member Is a Code, Not a Position\"), so `Braking: 0` lowers to `const 0` and `Unassociated: -1` to `const -1`. A binding that clamped either would round-trip to a different document, not merely a differently-shaped one." }
+      ] },
+
     { "id": "closed_functions/datetime/year",        "path": "closed_functions/datetime/year/canonical.esm",        "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/datetime/month",       "path": "closed_functions/datetime/month/canonical.esm",       "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },
     { "id": "closed_functions/datetime/day",         "path": "closed_functions/datetime/day/canonical.esm",         "tags": ["closed-function-registry", "datetime", "esm-tzp", "esm-4aw"] },

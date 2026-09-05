@@ -76,7 +76,7 @@ The full authoring stance, normatively:
 | `models` | | ODE-based model components (fully specified) |
 | `reaction_systems` | | Reaction network components (fully specified) |
 | `data_sources` | | External data-source ingest configuration, drawn from by a parameter's `update` (see Section 8). A registry, not a component. |
-| `enums` | | File-local symbol → positive-integer mappings used by the `enum` op to make categorical lookups cross-binding-portable (see Section 9.3) |
+| `enums` | | File-local symbol → integer mappings used by the `enum` op to make categorical lookups cross-binding-portable (see Section 9.3) |
 | `function_tables` | | Component-scoped sampled function tables — named axes plus literal nested-array data, referenced by the `table_lookup` AST op (see Section 9.5) |
 | `coupling` | | Composition and coupling rules |
 | `domain` | | The single temporal domain shared by all components (see Section 11) |
@@ -373,7 +373,7 @@ by this spec.
 | Op | Required extra fields | Meaning |
 |---|---|---|
 | `fn` | `name` | Invoke a spec-defined closed function. `name` is a dotted module path (e.g. `"datetime.julian_day"`) drawn from the closed registry in Section 9. `args` are the evaluated argument expressions, passed positionally. See Section 4.4. |
-| `enum` | — | Resolve a file-local symbolic name to its declared positive integer. `args` is `[enum_name, symbol]`, both string literals; lowering happens at load time. See Section 4.5 and the `enums` top-level block (Section 9.3). |
+| `enum` | — | Resolve a file-local symbolic name to its declared integer (any integer: negative, zero or positive). `args` is `[enum_name, symbol]`, both string literals; lowering happens at load time. See Section 4.5 and the `enums` top-level block (Section 9.3). |
 | `table_lookup` | `table`, `axes` (object); optional `output` | Evaluate a sampled function table from the top-level `function_tables` block. `table` is the table id; `axes` maps each declared axis name to a scalar input expression; `output` selects which output (integer index or named entry) to return. `args` MUST be empty. Lowers at load time to the equivalent `interp.linear` / `interp.bilinear` / `index` form (bit-equivalent). See Section 9.5. |
 
 #### Inline Constants
@@ -968,14 +968,14 @@ Fields:
 
 ### 4.5 Enum References (`enum`)
 
-The `enum` op resolves a file-local symbolic name to its declared positive integer. It is the spec's mechanism for cross-binding-portable categorical lookups: authors keep human-readable names in the source file (`"summer"`, `"deciduous_forest"`), while bindings only ever see the resolved integers downstream of load.
+The `enum` op resolves a file-local symbolic name to its declared integer. It is the spec's mechanism for cross-binding-portable categorical lookups: authors keep human-readable names in the source file (`"summer"`, `"deciduous_forest"`), while bindings only ever see the resolved integers downstream of load.
 
 Fields:
 
 - `op`: `"enum"`.
 - `args`: a 2-element array `[enum_name, symbol]`, both JSON string literals (not sub-expressions). `enum_name` MUST match a key in the top-level `enums` block (Section 9.3); `symbol` MUST match a key declared under that enum.
 
-**Semantics.** Lowered at load time to the corresponding positive integer constant, equivalent to a `{"op": "const", "value": <integer>}` node. Bindings MUST reject references to undeclared enums or undeclared symbols within an enum at load time, with diagnostic codes `unknown_enum` and `unknown_enum_symbol` respectively.
+**Semantics.** Lowered at load time to the corresponding integer constant — any integer, negative, zero or positive — equivalent to a `{"op": "const", "value": <integer>}` node. Bindings MUST reject references to undeclared enums or undeclared symbols within an enum at load time, with diagnostic codes `unknown_enum` and `unknown_enum_symbol` respectively.
 
 **Example — categorical index into a tabulated coefficient array:**
 
@@ -3317,7 +3317,7 @@ The named primitive exists so that symbolic layers in bindings (notably the Juli
 
 ### 9.3 The `enums` block
 
-The `enums` top-level block declares file-local symbol → positive-integer mappings used by the `enum` op (§4.5). The block's purpose is to keep human-readable categorical labels in the source file while ensuring bindings only see resolved integers downstream of load — no per-binding string-to-int convention is required.
+The `enums` top-level block declares file-local symbol → integer mappings used by the `enum` op (§4.5). The block's purpose is to keep human-readable categorical labels in the source file while ensuring bindings only see resolved integers downstream of load — no per-binding string-to-int convention is required.
 
 ```json
 {
@@ -3347,8 +3347,9 @@ The `enums` top-level block declares file-local symbol → positive-integer mapp
 
 **Schema:**
 
-- `enums` is a JSON object. Keys are enum names (strings); values are objects mapping **string** keys (the symbolic names) to **positive integers** (the resolved values).
-- Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum defines its own namespace).
+- `enums` is a JSON object. Keys are enum names (strings); values are objects mapping **string** keys (the symbolic names) to **integers** (the resolved values). The value domain is the **whole integer range** — negative, zero and positive. An enum member is a categorical CODE, not a position: it lowers to a `const` number used in arithmetic and in `join.on` key comparisons, where `0` and `-1` are ordinary values (a source table whose `opModeID` is `0` or whose `polProcessID` is `-1` is naming a real category, not an absence). Bindings MUST NOT reject a zero or negative member.
+- The two 1-based constructs in this format — `index`-op / index-set coordinates (§4.3.3, §5.2) and `makearray` regions (§4.3.2) — are separate and carry their own bounds validation. Using an enum member as an `index` argument (the §4.5 example) is an authoring choice that the `index` op bounds-checks like any other operand; it does not constrain what an `enums` block may declare.
+- Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MAY NOT both map to `0`. Across enums, values MAY collide (each enum defines its own namespace).
 - Two `.esm` files may declare an enum of the same name with different mappings: enums are file-local and never merged across files. References from a subsystem `ref` (§4.7) inherit the enums declared in the *referenced* file, not the enclosing one.
 
 **Lowering contract:**

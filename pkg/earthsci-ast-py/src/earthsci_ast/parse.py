@@ -1384,22 +1384,25 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         for rf_name, rf_data in data["registered_functions"].items():
             registered_functions[rf_name] = _parse_registered_function(rf_data)
 
-    # Parse top-level enums block (esm-spec §9.3). Values are validated to be
-    # positive integers by the schema; unique-within-enum is also enforced.
+    # Parse top-level enums block (esm-spec §9.3). Values are ANY integer --
+    # negative, zero or positive: an enum member is a categorical code, not a
+    # 1-based position (CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not
+    # a Position"). Unique-within-enum is enforced here, since a JSON Schema
+    # cannot express it.
     enums: dict[str, dict[str, int]] = {}
     if "enums" in data and data["enums"] is not None:
         for enum_name, mapping in data["enums"].items():
             if not isinstance(mapping, dict):
                 raise ParseError(
                     f"enums/{enum_name}: must be an object mapping symbol names "
-                    f"to positive integers (esm-spec §9.3)"
+                    f"to integers (esm-spec §9.3)"
                 )
             seen_values: dict[int, str] = {}
             decoded: dict[str, int] = {}
             for sym, val in mapping.items():
-                if not isinstance(val, int) or isinstance(val, bool) or val < 1:
+                if not isinstance(val, int) or isinstance(val, bool):
                     raise ParseError(
-                        f"enums/{enum_name}/{sym}: value must be a positive integer (got {val!r})"
+                        f"enums/{enum_name}/{sym}: value must be an integer (got {val!r})"
                     )
                 if val in seen_values:
                     raise ParseError(

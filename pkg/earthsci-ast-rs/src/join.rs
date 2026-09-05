@@ -718,11 +718,19 @@ fn equality_predicate(l: &ResolvedSide, r: &ResolvedSide) -> Result<Expr, Compil
         }
         _ => (raw_key_expr(l)?, raw_key_expr(r)?),
     };
-    Ok(Expr::operator(ExpressionNode {
-        op: "==".into(),
-        args: vec![le, re],
-        ..Default::default()
-    }))
+    // Evaluated EXACTLY, never at the document's working precision: a join key
+    // is an exact-equality value (§5.5.8), and a binary32 `==` calls two keys
+    // 5 apart equal at NONROAD SCC magnitudes. Without this the `filter` and
+    // the gate test different equalities, and §5.5.8's "declining to drive
+    // costs time, never correctness" is false — see
+    // [`crate::precision_infer::mark_exact_key_comparison`].
+    Ok(crate::precision_infer::mark_exact_key_comparison(
+        Expr::operator(ExpressionNode {
+            op: "==".into(),
+            args: vec![le, re],
+            ..Default::default()
+        }),
+    ))
 }
 
 /// One side of a raw (uncoded) key comparison — see [`equality_predicate`].
@@ -1339,6 +1347,20 @@ mod tests {
             .expect("data-derived join adds a filter");
         let Expr::Operator(f) = filter.as_ref() else {
             panic!("filter is not an operator");
+        };
+        // The predicate is wrapped in the binary64 precision marker: a join key
+        // is an EXACT-equality value (§5.5.8), so the comparison must not be
+        // narrowed to the document's working precision (a binary32 `==` reports
+        // two SCCs five apart equal, and the gate and the filter then test
+        // different equalities — see `mark_exact_key_comparison`).
+        assert_eq!(
+            f.op,
+            crate::precision_infer::MARKER_OP,
+            "the lowered key comparison is marked exact"
+        );
+        assert_eq!(f.name.as_deref(), Some("Float64"));
+        let Expr::Operator(f) = &f.args[0] else {
+            panic!("marker wraps an operator");
         };
         assert_eq!(f.op, "==", "a single key pair lowers to one equality gate");
         // …and the clause SURVIVES carrying the resolved gate, so the evaluator

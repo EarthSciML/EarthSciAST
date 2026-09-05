@@ -2,6 +2,8 @@ package esm
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -169,5 +171,68 @@ func TestLowerEnumsRaisesEnumLoweringError(t *testing.T) {
 	}
 	if ele.DiagnosticCode() != "unknown_enum_symbol" {
 		t.Errorf("code = %q, want unknown_enum_symbol", ele.DiagnosticCode())
+	}
+}
+
+// TestZeroAndNegativeEnumMembers pins that an `enums` member may be ANY
+// integer — negative, zero or positive (esm-spec §9.3; CONFORMANCE_SPEC,
+// "An `enums` Member Is a Code, Not a Position").
+//
+// The schema used to carry `minimum: 1` on
+// `EnumDeclaration.additionalProperties`, so a zero-valued identifier could not
+// be named at all. MOVES has load-bearing ones: `operatingmode.opModeID = 0` is
+// Braking — an emitting mode with its own rate, not an absence — and
+// `opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes associated
+// with no pollutant/process.
+//
+// Both halves are pinned: the document LOADS, and each member resolves to
+// EXACTLY its declared integer through Evaluate. A binding that accepted the
+// document but clamped or dropped the sign would still be wrong, which is why
+// the arithmetic case is here and not just the two bare constants.
+func TestZeroAndNegativeEnumMembers(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	text, err := os.ReadFile(filepath.Join(repoRoot, "tests", "valid", "enums_zero_and_negative.esm"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	file, err := LoadString(string(text))
+	if err != nil {
+		t.Fatalf("a zero/negative enum member must load: %v", err)
+	}
+
+	if got := file.Enums["operating_mode"]["Braking"]; got != 0 {
+		t.Errorf("operating_mode.Braking = %d, want 0", got)
+	}
+	if got := file.Enums["pol_process"]["Unassociated"]; got != -1 {
+		t.Errorf("pol_process.Unassociated = %d, want -1", got)
+	}
+	if vr := Validate(file); !vr.IsValid {
+		t.Errorf("document must validate, got %+v", vr.StructuralErrors)
+	}
+
+	rhs, ok := file.Models["EnumsZeroAndNegative"].Equations[0].RHS.(ExprNode)
+	if !ok {
+		t.Fatalf("RHS is %T, want ExprNode", file.Models["EnumsZeroAndNegative"].Equations[0].RHS)
+	}
+	if rhs.Op != "makearray" {
+		t.Fatalf("RHS op = %q, want makearray", rhs.Op)
+	}
+	// values[0] is the zero-valued member, values[1] the negative one, and
+	// values[2] reads both through arithmetic: 0 + 10*1 + (-1) = 9.
+	want := []float64{0, -1, 9}
+	if len(rhs.Values) != len(want) {
+		t.Fatalf("makearray has %d values, want %d", len(rhs.Values), len(want))
+	}
+	for i, w := range want {
+		got, err := Evaluate(rhs.Values[i], map[string]float64{})
+		if err != nil {
+			t.Fatalf("Evaluate(values[%d]): %v", i, err)
+		}
+		if got != w {
+			t.Errorf("Evaluate(values[%d]) = %v, want %v", i, got, w)
+		}
 	}
 }

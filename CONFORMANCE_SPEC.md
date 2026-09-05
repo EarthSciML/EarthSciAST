@@ -1454,11 +1454,21 @@ symbols. It matches iff **every** pair agrees, which is tuple equality; the
 canonical composite key is the §5.5.1 rule-4 `skolem` tuple of the per-pair
 values, in the order the pairs are listed. Several pairs over *different* symbol
 pairs are several gates; so are several `join` clauses on one node. When a node
-carries more than one gate, **every** gate still restricts the admitted set (they
-compose by conjunction), but only ONE need DRIVE — the others are membership
-tests on the driven leaves. Which one drives is a binding's choice and cannot
-change the result; the reference drives the first in document order, matching
-§5.5.6's "the first overlap gate drives".
+carries more than one gate, **every** gate restricts the admitted set — they
+compose by conjunction — and **§5.24 says how a binding SHOULD drive that
+conjunction**. This paragraph used to end "only ONE need DRIVE … which one
+drives is a binding's choice and cannot change the result; the reference drives
+the first in document order". Both halves of that were problems:
+
+* Driving on one gate makes the node's cost a function of **where the author
+  typed the clause**. Measured on a four-clause NONROAD roll-up, the best and
+  worst orderings of one unchanged document differ by **45×** in wall clock;
+  on a six-clause onroad emission-rate lookup the spread across the six
+  single-clause choices is **66×**. §5.24 replaces the choice with a
+  selectivity estimate and, more importantly, with the **intersection**.
+* "Cannot change the result" was **false in the reference** until the fix
+  recorded under "Key comparison is EXACT" below. It is a requirement, and a
+  binding MUST make it true; it is not something that holds for free.
 
 **The match set (normative).** The gate's admissible pair set is
 `{ (pos_l, pos_r) : key_l(pos_l) = key_r(pos_r) }`, built **ONCE per node** (not
@@ -1528,6 +1538,36 @@ the same requirement §5.5.6 places on an overlap gate's envelope factors. A
 binding that memoises the match set MUST NOT serve a stale one; the reference
 keys its memo on the resolved gate's identity plus the lengths and a content
 fingerprint of the data columns.
+
+**The lowered key comparison is EXACT, not the document's working precision
+(normative).** The paragraph above makes the `filter` the load-bearing part of
+the whole construct: it is what makes a non-driving clause exact, what makes
+declining to drive safe, and what makes §5.24's choice of driver
+result-neutral. A binding MUST therefore evaluate that comparison on the key
+values **as stored**, in the widest precision it has, and MUST NOT narrow it to
+the document's `domain.element_type` (§5.18). A join key is an exact-equality
+value — an integer ID or a categorical member — so there is nothing to round;
+`==` returns an exact 0/1 flag, so nothing downstream of it changes precision
+either.
+
+Getting this wrong is silent and it is not hypothetical. binary32 carries 24
+mantissa bits, so at NONROAD `SCC` magnitudes (~2.3 × 10⁹) the representable
+values are 256 apart: `2265007010` and `2265007015` are five apart and are the
+**same** binary32 number. In the Rust reference the lowered predicate was built
+during join resolution, which runs AFTER the precision-annotation pass, so it
+carried no element type of its own and inherited the document's binary32. The
+gate compared exact `i64` keys and separated the two SCCs; the filter did not.
+The two therefore tested DIFFERENT equalities, and on
+`moves.esm/fixtures/nr-logging-county.esm` merely reordering three `join`
+clauses on one node changed 32 of the 144 emitted rows — two cohorts' emissions
+summed into one output row. The fix is to mark the comparison binary64 where it
+is built (`join.rs::equality_predicate` →
+`precision_infer::mark_exact_key_comparison`), which is unconditional and does
+not depend on the annotation pass having run.
+
+A binding that implements the same lowering MUST check the same thing, and a
+binding that evaluates the whole document in one precision only is conforming
+here exactly when that precision separates its key values.
 
 **Float keys stay forbidden.** A data column reaching a binding as floating-point
 storage is admissible **only** where every value is exactly integral, and is then
@@ -3474,7 +3514,370 @@ Rust was the only binding that resolved an unbound name to a NaN sentinel. No
 binding is left non-conforming by this section, so there is nothing here to
 record as deferred.
 
-### 5.24 Inline-Test Assertions on an ARRAY OBSERVED (normative)
+### 5.24 Conjunctive, Selectivity-Ordered Join Gating (normative)
+
+> Supersedes §5.5.8's "only ONE need DRIVE … the reference drives the first in
+> document order". Reference implementation: Rust
+> `earthsci-ast-rs/src/simulate_array/eval.rs` (`resolve_join_gates`,
+> `reduce_contraction_gated`). Gates:
+> `earthsci-ast-rs/tests/join_on_conjunctive_gate.rs`.
+
+An `aggregate` may carry several gates — several `join` clauses, or several key
+pairs over different symbol pairs within one clause (§5.5.8), or an `overlap`
+clause alongside an `on` one (§5.5.6). Their **semantics** were never in
+question: the gates compose by **conjunction**, and a combination is admitted
+iff every one of them admits it. What was left to the binding was which of them
+gets to DRIVE the enumeration, and the answer — "the first one in the file" —
+made the document's TEXT ORDER decide the node's cost.
+
+Two things follow, and they are separable. A binding SHOULD do both; a binding
+that does only the second gets nearly all of the benefit.
+
+#### 5.24.1 Selectivity, not position (SHOULD)
+
+When several gates could drive, a binding SHOULD pick by an estimate of how much
+each one restricts, not by position.
+
+**The estimate (RECOMMENDED).** A gate's **admitted fraction**
+
+```
+selectivity(g)  =  |matches(g)|  /  (|L(g)| · |R(g)|)
+```
+
+— the share of the two gated axes' cross product that survives it. `|matches|`
+is the pair set the gate has already built (§5.5.8's match set for an `on`
+gate; the broad-phase candidate set for an `overlap` one), and `|L|`, `|R|` are
+the number of positions on each side, which the same pass produces. So the
+estimate costs one division's worth of arithmetic on numbers already in hand.
+**Lower is better.**
+
+**It MUST be compared exactly.** Compare two gates as a rational —
+`a₁ · s₂` against `a₂ · s₁` in integer arithmetic — never by evaluating the
+division in floating point. Two bindings must agree on which of two nearly-equal
+estimates is smaller, and a float division can round two distinct fractions
+together, or apart, differently in different languages.
+
+**Ties MUST break on document position.** Gates estimating equally selective —
+including the degenerate case where a side is empty, so both products are zero —
+are ordered by the gate's index in the node's resolved `join` list, ascending.
+That index is a property of the FILE. The resulting order is therefore a pure
+function of the document and the data, and two bindings that agree on the match
+sets agree on the order.
+
+**Nothing about the RESULT may depend on this.** The estimate is an
+optimisation and is explicitly NOT normative: a binding MAY use a different one,
+or none. What IS normative is that the emitted values are the same either way,
+which holds because (a) every clause is also lowered into the node's `filter`
+(§5.5.8), so a gate that does not drive is still applied per leaf, and (b) a
+driven walk is an order-preserving SUBSEQUENCE of the filtered full product, so
+even a non-associative floating `⊕` folds the identical term sequence. A binding
+whose driver choice changes an answer has a defect in (a) or (b) — see §5.5.8's
+"The lowered key comparison is EXACT" for the one the reference had.
+
+**Ground truth for an estimator.** The six-clause `emissionrate` lookup in
+moves.esm's onroad fixture (a 164-row cohort grid meeting 69,200 rate rows,
+9,840 output cells) admits, by single driving clause:
+
+| driving clause | leaves |
+|---|---:|
+| `shortModYrGroupID` | 8,511,600 |
+| `opModeID` | 11,348,800 |
+| `regClassID` | 91,315,200 |
+| `fuelTypeID` (the order the document was written in) | 158,030,400 |
+| `engTechID` | 379,430,400 |
+| `polProcessID` | 561,273,600 |
+
+A 66× spread, with document order landing 18.6× worse than the best choice. The
+estimate above reproduces this ladder in full, including the delicate first
+inversion (the top two are 1.33× apart, which is where a cheap estimate is most
+likely to get it backwards) and the relative magnitudes of the middle three
+(estimated 1 : 1.73 : 4.16 against measured 1 : 1.73 : 4.15).
+
+#### 5.24.2 Drive the CONJUNCTION (SHOULD)
+
+Selecting better still leaves the node's cost at what ONE clause admits. A
+binding SHOULD instead **intersect**: for each contracted axis, enumerate only
+the values admitted by **every** gate that binds that axis against an
+already-bound output index, rather than by one of them.
+
+Concretely, extending §5.5.8's second binding case ("one gated symbol already
+bound ⇒ the contracted one enumerates that bound position's partners"): when
+several gates put the same contracted axis opposite a bound output index, that
+axis enumerates the **intersection** of their partner lists.
+
+* Each partner list is **ascending and duplicate-free** — §5.5.8 already
+  requires the match set to be canonically ordered, and a position pair occurs
+  at most once — so the intersection is a linear merge and is itself ascending
+  and duplicate-free. It is therefore an order-preserving subsequence of the
+  axis's own ascending range, which is what keeps the result **bit-identical**
+  (§5.7 rule 5).
+* An **empty** intersection admits no leaf, and the output position takes the
+  semiring identity `0̄` — §5.5.6's identity fill, unchanged. Not a hole, not
+  `NaN`.
+* **Many-to-many is unaffected** (§5.3). The intersection is over POSITIONS on
+  the contracted axis, not over key values: a key occurring `m` times on the
+  bound side is `m` distinct output cells, and `n` times on the contracted side
+  is `n` surviving positions in every list that admits them. All `m·n` terms are
+  still emitted. A binding MUST test this explicitly; it is the easiest thing to
+  break here, and it breaks quietly.
+* Gates whose two symbols are **both contracted** (§5.5.8's fourth shape) cannot
+  be intersected this way, because neither side is bound. One of them MAY still
+  drive the partner-restricted walk — the most selective, per §5.24.1 — and it
+  MUST intersect its partner list with whatever the bound gates already admitted
+  for that axis. The rest remain per-leaf `filter` tests.
+* Gates with **both** symbols already bound reduce to a membership test; if any
+  of them rejects, the output position takes `0̄` and no leaf is enumerated.
+
+**What it is worth.** Two independent MOVES/NONROAD joins, each measured as
+leaves actually enumerated over a whole-document `simulate`:
+
+| join | conjunction | best single clause | first-clause-wins |
+|---|---:|---:|---:|
+| NONROAD `tech_fraction`, 4 clauses | **4,455** | 2,320,704 | 272,523,600 (worst order) |
+| onroad `emissionrate`, 6 clauses | **3,772** | 8,511,600 | 158,030,400 (as written) |
+
+521× and 2,256× against the best single clause; the conjunction is what closes
+the gap, and §5.24.1 alone captures under 5% of it on the second join. Whole
+document, release build: 515.88 s → 11.42 s → 3.71 s for the first, and
+298 s → 24.82 s → 4.85 s for the second, byte-identical output throughout.
+
+**This is a SHOULD and not a MUST** for the same reason §5.5.8's fourth shape
+is: a binding that declines is slower and not wrong, because the lowered
+`filter` still decides every leaf. But a binding that declines cannot host a
+relational port at scale, and the authoring workaround it forces on documents —
+hand-ordering clauses by selectivity, or hand-fusing several pairs into one
+composite key to buy back the intersection — is a cost paid in every downstream
+file, invisibly, and silently lost the next time someone reorders a clause list
+for legibility.
+
+#### 5.24.3 What every binding must be able to do
+
+Nothing in §5.24 needs anything a binding does not already have for §5.5.8:
+
+| ingredient | where it already comes from |
+|---|---|
+| `\|matches\|` | the match set §5.5.8 requires be built once per node |
+| `\|L\|`, `\|R\|` | the two key columns' lengths, read in the same pass |
+| exact rational comparison | integer multiply-and-compare; no float, no library |
+| the tie-break | the clause's index in the node's `join` list |
+| ascending partner lists | §5.5.8's canonical match-set order |
+| the intersection | a linear merge of two sorted integer lists |
+
+There is no dependence on a hash implementation, an iteration order, an
+allocator, or a language's numeric tower. A binding that implements §5.5.8 can
+implement §5.24.
+### 5.25 Inline-Test Build Reuse and Test Selection (normative)
+
+esm-spec §6.6 makes an inline test "exercise one model in isolation": the test
+declares the run configuration — `expression_template_imports` (§9.7.10 form C),
+`time_span`, `parameter_overrides`, `initial_conditions` — and the assertions
+judged against that run. Nothing in the spec requires a binding to CONSTRUCT the
+model once per test, and constructing it once per test is the entire cost of an
+inline-test suite. On the MOVES port (moves.esm `docs/findings/README.md` F31)
+200 tests across 29 documents declare only 47 distinct run configurations, and
+the dominant document — `fixtures/nr-logging-county.esm`, 29 tests, 343
+assertions — declares exactly ONE. Its `esm test` took 533 s where a single
+evaluation of the same document took 16.5 s.
+
+This section governs a binding that REUSES a build across tests, and the runner
+flag that selects which tests to run. Both are optional: a binding that builds
+per test and filters after evaluation is conforming, only slow. What is
+normative is what neither may change.
+
+#### 5.25.1 The reuse key (normative)
+
+A binding MAY reuse a previously constructed problem for a later test **of the
+same component of the same document**, and MUST NOT reuse it unless every input
+that binding's own build reads is unchanged. The key MUST be compared exactly
+(no tolerance, no canonicalization that could merge two values the build would
+treat differently), and the reused artifact MUST be a pure function of it.
+
+For the construction contract this specification already pins, those inputs are
+exactly four:
+
+1. **`expression_template_imports`** — decides WHICH document is built (§9.7.10
+   form C builds an ephemeral injected copy);
+2. **`time_span`** — the construction interval, and with it the time at which
+   build-time constants and CONST providers are sampled (§2.5.2);
+3. **`parameter_overrides`** — the build-time parameter scope (§5.14);
+4. **`initial_conditions`** — the initial state the build folds (§5.16, §11.4.1).
+
+A test's `id`, `description` and `tolerance` reach no build. A test's
+`assertions` reach the RUN — the sampled times, and the observeds a pointwise
+assertion needs named on the output request — and not the build; a binding that
+reuses a build MUST therefore still perform the run per test, or else carry the
+assertion list in the key too. A binding whose build reads anything further MUST
+extend the key by that much; the enumeration above is a floor, not a ceiling.
+
+The failure mode this rule exists for is silent. A key missing a field does not
+error: the second test is answered with the FIRST test's model, which is a
+plausible number computed from a configuration the author did not write — the
+same class as §5.14, §5.19.4 and §5.23, and the reason the enumeration is stated
+rather than left to a comment.
+
+#### 5.25.2 Reuse must not carry state (normative)
+
+Construction produces artifacts a run MUTATES: the build-observability record
+(§2.5.2's `inspect` seam) is filled by a run and DRAINED by the reader, a
+refreshable forcing channel is written by a discrete-cadence refresh, and a
+provider executor advances. A binding that reuses a build MUST restore every
+such artifact to its post-construction state before each reuse, so that the
+n-th test of a shared build observes exactly what a freshly built problem would.
+A binding that cannot restore one MUST NOT reuse a build that carries it.
+
+#### 5.25.3 Order independence (normative)
+
+§5.5 rule 5 and §5.7 rule 5 make a result independent of the order in which work
+was enumerated. Reuse is subject to that rule: permuting a component's `tests`
+array MUST NOT change any assertion's actual, and MUST NOT change which
+assertions are reported. A single-slot ("reuse only across CONSECUTIVE
+same-key tests") cache is permitted — the number of BUILDS is then
+order-dependent, which is a cost and not a result — but a cache whose ANSWERS
+depend on order is non-conforming.
+
+#### 5.25.4 Test selection selects work, not rows (normative)
+
+A runner that offers a test filter (the Rust CLI's `esm test --filter`) MUST
+report exactly the rows it would report by applying the same predicate to the
+unfiltered result set: same rows, same order, same fields, including the
+whole-test ERROR rows a test that could not be built contributes. Subject to
+that, the filter SHOULD be applied BEFORE anything is built or run, so that
+narrowing to one test costs one test. Applying it to an already-computed result
+vector is conforming and useless: measured on the pre-fix Rust CLI,
+`esm test fixtures/nr-logging-county.esm --filter <one test>` took 309.3 s and
+326.2 s against 301.9 s and 306.6 s for the same document unfiltered — filtering
+28 of 29 tests away made it *slower*, within the spread, because all 29 builds
+had already run. Selecting first, `esm test ./runs --filter <one of fifteen>`
+went from 153.2 s / 156.9 s to 0.98 s / 0.97 s for the same rows.
+
+#### 5.25.5 Gate
+
+**Rust** — `pkg/earthsci-ast-rs/tests/inline_test_build_memo.rs`. The runner's
+`build_providers` factory is called exactly once per build, so a counting
+factory reports the build count directly: the suite pins one build for three
+same-key tests, two for each keyed field varied in turn (a fifth case varies the
+imports and reads two different lowered right-hand sides), equal answers under a
+permuted test list, and one build when `--filter` selects one of three
+distinct-key tests. Each case is additionally built so that a missing key field
+produces a WRONG NUMBER and not merely a fast one, so dropping any field from
+`BuildKey::of` turns the suite red on both the count and the value.
+
+**Julia**, **Python** — build per test; §5.25.1–§5.25.3 impose nothing on them
+until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
+today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
+
+### 5.26 An `enums` Member Is a Code, Not a Position: the Whole Integer Range (normative)
+
+`esm-schema.json` typed an `enums` member as `{"type": "integer", "minimum": 1}`,
+so a symbolic name whose value is `0` could not be declared in any binding — the
+document did not load at all, with `/enums/<name>/<sym>: 0 is less than the
+minimum of 1`. Python and Julia mirrored the bound with their own runtime
+rejections ("value must be a positive integer"). The bound is removed.
+
+**The rule.** An `enums` member's value is ANY integer — negative, zero or
+positive. A binding MUST accept a zero-valued and a negative-valued member, MUST
+resolve it to exactly its declared integer, and MUST NOT clamp it, treat it as
+absent, or take it for a default. Uniqueness is unchanged: within one enum,
+values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT
+both map to `0`. Across enums, values MAY still collide.
+
+#### 5.26.1 Why the bound looked right and was not
+
+`minimum: 1` reads like a guard against confusing a declared member with an
+absent one, which is a real hazard for a **1-based index set**. An `enums` member
+is not an index. It lowers, at load, to a `{"op": "const", "value": <integer>}`
+node (§9.3), and from that point nothing in any binding can tell it from a
+literal the author typed: it is a NUMBER, used in arithmetic and in `join.on` key
+comparisons, where `0` and `-1` are ordinary values. The two genuinely 1-based
+constructs — `index`-op / index-set coordinates and `makearray` regions — are
+separate constructs with their own bounds validation.
+
+The one place the two meet is the canonical §4.5 example, which indexes a `const`
+table with an `enum` member. That is an authoring choice, and the `index` op
+bounds-checks its operand like any other (`E_TREEWALK_CONSTARRAY_OOB`, §5.5.5).
+An author who wants a member to double as a 1-based row number numbers it from 1;
+that is a property of their table, not of the `enums` block. Surveyed across the
+five bindings, the only consumers of the block are the lowering pass and
+serialization — no code path reads a member as a position.
+
+#### 5.26.2 Why it matters: zero and −1 are real categories
+
+The identifiers a model has to name are given by the source data, not chosen. In
+EPA's MOVES tables, `operatingmode.opModeID = 0` is **Braking** — a mode a
+decelerating second is classified into, carrying its own emission rate, and 2.0%
+of a weekend and 5.6% of a weekday operating-mode distribution in a real
+inventory. It is not a sentinel, not a default and not an absence.
+`regulatoryclass.regClassID = 0`, `modelyeargroup.modelYearGroupID = 0` and
+`fuelusagefraction.modelYearGroupID = 0` are three more, in three other tables;
+`opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes associated
+with no pollutant/process, and is 24 of the 27 rows of one snapshot of that
+table. Under the old bound each of these had to be written as a bare numeric
+literal with a comment, which is exactly the un-named magic number the `enums`
+block exists to abolish.
+
+#### 5.26.3 What a binding must prove
+
+Schema acceptance is not the assertion; a document that loads but resolves the
+member to something else is still non-conforming. A binding MUST show, on
+`tests/valid/enums_zero_and_negative.esm`:
+
+1. the document loads and validates;
+2. the zero member lowers to `const 0` and the negative member to `const -1`,
+   with the declared integers surviving into the parsed `enums` map; and
+3. both evaluate through **arithmetic** — the fixture's third row is
+   `Braking + 10*Idling + Unassociated = 0 + 10 - 1 = 9`, which a binding that
+   clamped `0` to `1` or dropped a sign cannot produce.
+
+**Binding status (2026-09-05), measured rather than assumed:**
+
+| Binding | Loads | Resolves to | Evidence |
+|---|---|---|---|
+| Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
+| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
+| Julia | yes | `0`, `-1`, arithmetic `9` | `test/closed_functions_test.jl`, "zero and negative enum members" |
+| TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
+| Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
+
+#### 5.26.4 A member is exact at load; whether a COMPARISON of it is exact is §5.24's business
+
+This section fixes the member's VALUE. It does not, and cannot, promise that a
+comparison of that value is exact, and the distinction is worth stating because
+the two look identical in a document.
+
+A lowered member is a NUMERIC LITERAL, and by the precision rules a literal has
+no precision of its own — it adopts its context (`precision_infer.rs`). So in a
+document declaring `domain.element_type: "Float32"`, two members far apart in
+value can compare EQUAL. Measured, on the SCC pair §5.24 already names:
+
+| Document | Comparison | Result |
+|---|---|---|
+| `Float32` | `enum("scc","LoggingTractor") == enum("scc","Chipper")` — 2265007010 vs 2265007015 | **1** (equal), a false match |
+| `Float32`, key parameter at the document default | `key == enum(...)`, key holding 2265007015 | **1**, a false match |
+| `Float32`, key parameter declaring `element_type: "Float64"` | the same comparison | 0, correct |
+
+That is §5.24's rule doing its job in the third row and having nothing to attach
+to in the first two: it makes a comparison exact by way of a stored key's
+declared binary64 `element_type`, and two literals — or a key left at a binary32
+document default — give it nothing to key on. It is NOT introduced by the
+widened value domain: every value in the table above is positive, so a document
+written under the old `minimum: 1` reproduces it unchanged. It is recorded here
+because an enum member is precisely an identifier compared for equality, which
+is the shape §5.24 exists for, and a reader who has just been told "the member
+is exactly its declared integer" would otherwise reasonably assume the
+comparison is too.
+
+#### 5.26.5 Uniqueness, which the schema cannot state
+
+"Values MUST be unique within an enum" is not expressible in JSON Schema, so it
+lives in each binding's loader. Python (`parse.py`) and Julia (`coerce_enums`)
+enforce it; both reject a duplicate `0` and a duplicate positive alike, so
+neither uses `0` as its own sentinel. Rust, TypeScript and Go accept a duplicate
+value silently — a gap that predates this section and is not created by it (they
+accept a duplicate *positive* value too), recorded here rather than left
+unstated. It is BEHAV-13's deferred column in
+`ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
+
+### 5.27 Inline-Test Assertions on an ARRAY OBSERVED (normative)
 
 esm-spec §6.6.5 admits **any shaped variable** in a `coords` / `reduce`
 assertion. Nothing in it restricts the target to a STATE, and nothing restricts
@@ -3511,7 +3914,7 @@ shadow evaluator for it:
 | Python | `observed_at_state` seeds an `EvalContext` with the build's once-materialized state-free products and replays `_materialize_observeds` over the dependency-ordered time-varying observeds at that `(t, y)` — the same driver the per-step RHS uses |
 | Rust | the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already knew how to emit as one row per cell; the assertion then reads ordinary cell rows |
 
-#### 5.24.1 The companion rule: a field belongs to ONE component
+#### 5.27.1 The companion rule: a field belongs to ONE component
 
 An array field read for an assertion is the ASSERTED component's. Element names
 are model-qualified by flattening (`M2.w[1]`), and a coupled document routinely
@@ -3526,7 +3929,7 @@ collapsed over all four at once, and a per-cell `reference` indexed past the end
 of the field. The failure is silent and plausible, which is why it is stated
 here rather than left to each binding's judgement.
 
-#### 5.24.2 Gate
+#### 5.27.2 Gate
 
 `tests/conformance/pde_inline_observed_state_dependent/` holds the shared
 fixture and the Julia-minted goldens. The fixture's `g = 2*u + rate` is
@@ -3557,7 +3960,6 @@ Python (which evaluates the whole ordered graph on demand) both can. That
 residual divergence is tracked separately (EarthSciML/EarthSciAST#176) and is
 deliberately NOT what this category pins; a fixture written around it could not
 require all three bindings.
-
 
 ## 6. CI Integration
 
