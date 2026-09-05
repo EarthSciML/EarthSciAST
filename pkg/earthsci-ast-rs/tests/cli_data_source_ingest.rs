@@ -35,7 +35,10 @@
 #![cfg(all(not(target_arch = "wasm32"), feature = "cli", feature = "solve"))]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+// Only the esio-gated scalar-total fixture below returns an owned path.
+#[cfg(feature = "esio")]
+use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -53,6 +56,7 @@ const ANN: [f64; 3] = [100.0, 50.0, 30.0];
 const ANN_MEAN: f64 = 60.0;
 /// The SUM of the same column — the value a 0-D observed over it must report,
 /// and unreachable from any `default`.
+#[cfg(feature = "esio")]
 const ANN_TOTAL: f64 = 180.0;
 
 fn ff10_row(ann: f64, lon: f64, lat: f64) -> String {
@@ -227,6 +231,7 @@ fn document(url: &str, extra_reader_options: Option<(&str, Value)>, sizing: Sizi
 /// build-static path had no route to them at all. The `mean` assertion on the
 /// array is carried alongside as the control: both halves of one document must
 /// answer.
+#[cfg(feature = "esio")]
 fn document_with_scalar_total(url: &str, sizing: Sizing, expected_total: f64) -> Value {
     let mut doc = document(url, None, sizing);
     doc["models"]["Ingest"]["variables"]["annual_total"] = json!({
@@ -265,6 +270,7 @@ fn document_with_scalar_total(url: &str, sizing: Sizing, expected_total: f64) ->
 }
 
 /// Write the scalar-total fixture into `dir`, returning the .esm path.
+#[cfg(feature = "esio")]
 fn fixture_with_scalar_total(dir: &Path, sizing: Sizing, expected_total: f64) -> PathBuf {
     let url = write_ff10_zip(dir);
     let doc = document_with_scalar_total(&url, sizing, expected_total);

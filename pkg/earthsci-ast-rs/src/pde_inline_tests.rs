@@ -1214,6 +1214,10 @@ fn build_for_test(
 /// The memo cannot change an answer it does not also change without it: the
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
+// Nine, and each one is part of the memo key or of the loop-invariant
+// context described above; bundling them into a struct would only move the
+// same nine fields behind one name.
+#[allow(clippy::too_many_arguments)]
 fn run_model_tests(
     file: &EsmFile,
     model_name: &str,
@@ -1314,12 +1318,11 @@ fn run_model_tests(
                     ),
                     Err(e) => Err(format!("simulate failed: {e}")),
                 }
-                .map(|sol| {
+                .inspect(|_sol| {
                     insp = prob.take_inspection();
                     for (k, v) in fields {
                         insp.setup_arrays.entry(k).or_insert(v);
                     }
-                    sol
                 })
             }
         }

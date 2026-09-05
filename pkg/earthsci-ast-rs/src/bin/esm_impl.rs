@@ -14,8 +14,8 @@ use earthsci_ast::extension::analysis::{
 };
 use earthsci_ast::{
     ExpressionGraphOptions, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, load_string, stoichiometric_matrix, to_json, to_json_compact,
-    validate, validate_text,
+    expression_graph_with_options, stoichiometric_matrix, to_json, to_json_compact, validate,
+    validate_text,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -2401,7 +2401,7 @@ fn run_simulate(
     let prob = build(false)?;
     // Filled only on the static path: `--format csv` writes from the FIELDS,
     // not from flattened cell keys.
-    let mut evaluated: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
+    let mut evaluated: Vec<StaticField> = Vec::new();
     let sol = if prob.is_dynamic() {
         let sol = earthsci_ast::solve(&prob, &opts).map_err(|e| format!("solve failed: {e}"))?;
         println!(
@@ -2494,6 +2494,11 @@ fn run_simulate(
 // These three functions are that route. They do not add a mode to the solver;
 // they add a SINK to the evaluation the build pipeline already performs.
 
+/// One build-materialized field: its flattened name and its values. Named
+/// because the `--format csv` writer and [`static_fields`] pass the same list
+/// between them.
+type StaticField = (String, ndarray::ArrayD<f64>);
+
 /// The build-time fields to write, in the order they will be columns.
 ///
 /// `observed` names them explicitly (the `--observed` flag); empty means every
@@ -2503,7 +2508,7 @@ fn run_simulate(
 fn static_fields(
     prob: &earthsci_ast::EsmProblem,
     observed: &[String],
-) -> Result<Vec<(String, ndarray::ArrayD<f64>)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<StaticField>, Box<dyn std::error::Error>> {
     let names: Vec<String> = if observed.is_empty() {
         prob.observed_field_names()
     } else {
@@ -3457,7 +3462,7 @@ fn consumed_data_sources(doc: &serde_json::Value) -> BTreeMap<String, Vec<String
     }
     // A binding naming a source the document does not declare is a validation
     // error, not an ingest one — leave it to `validate` and ignore it here.
-    out.retain(|src, _| declared.iter().any(|d| *d == src));
+    out.retain(|src, _| declared.contains(&src));
     out
 }
 
@@ -4480,6 +4485,9 @@ fn conformance_substitution_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the unit tests below load a document with the default base path;
+    // the CLI itself always goes through `load_string_with_options`.
+    use earthsci_ast::load_string;
 
     /// Every `esm init` template must load cleanly — the CLI must never
     /// scaffold a project its own `validate` rejects.
