@@ -3838,7 +3838,35 @@ member to something else is still non-conforming. A binding MUST show, on
 | TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
 | Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
 
-#### 5.26.4 Uniqueness, which the schema cannot state
+#### 5.26.4 A member is exact at load; whether a COMPARISON of it is exact is §5.24's business
+
+This section fixes the member's VALUE. It does not, and cannot, promise that a
+comparison of that value is exact, and the distinction is worth stating because
+the two look identical in a document.
+
+A lowered member is a NUMERIC LITERAL, and by the precision rules a literal has
+no precision of its own — it adopts its context (`precision_infer.rs`). So in a
+document declaring `domain.element_type: "Float32"`, two members far apart in
+value can compare EQUAL. Measured, on the SCC pair §5.24 already names:
+
+| Document | Comparison | Result |
+|---|---|---|
+| `Float32` | `enum("scc","LoggingTractor") == enum("scc","Chipper")` — 2265007010 vs 2265007015 | **1** (equal), a false match |
+| `Float32`, key parameter at the document default | `key == enum(...)`, key holding 2265007015 | **1**, a false match |
+| `Float32`, key parameter declaring `element_type: "Float64"` | the same comparison | 0, correct |
+
+That is §5.24's rule doing its job in the third row and having nothing to attach
+to in the first two: it makes a comparison exact by way of a stored key's
+declared binary64 `element_type`, and two literals — or a key left at a binary32
+document default — give it nothing to key on. It is NOT introduced by the
+widened value domain: every value in the table above is positive, so a document
+written under the old `minimum: 1` reproduces it unchanged. It is recorded here
+because an enum member is precisely an identifier compared for equality, which
+is the shape §5.24 exists for, and a reader who has just been told "the member
+is exactly its declared integer" would otherwise reasonably assume the
+comparison is too.
+
+#### 5.26.5 Uniqueness, which the schema cannot state
 
 "Values MUST be unique within an enum" is not expressible in JSON Schema, so it
 lives in each binding's loader. Python (`parse.py`) and Julia (`coerce_enums`)
