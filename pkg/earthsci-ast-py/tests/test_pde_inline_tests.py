@@ -243,6 +243,96 @@ def test_run_pde_tests_decay_field():
     assert all(r.model == "M" and r.test_id == "decay" for r in results)
 
 
+def _free_x_cos() -> dict:
+    """cos(pi (x - 1/2)/N) with the dimension name ``x`` FREE (esm-spec §6.6.5)."""
+    return {
+        "op": "cos",
+        "args": [
+            {"op": "*", "args": [math.pi, {"op": "/", "args": [{"op": "-", "args": ["x", 0.5]}, N]}]}
+        ],
+    }
+
+
+def test_bind_dimension_names_wraps_only_a_free_mention():
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.pde_inline_tests import bind_dimension_names
+
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["x"]) is lit
+    free = ExprNode(op="+", args=["x", 1])
+    wrapped = bind_dimension_names(free, ["x"])
+    assert isinstance(wrapped, ExprNode) and wrapped.op == "aggregate"
+    assert wrapped.output_idx == ["x"]
+    assert wrapped.ranges == {"x": {"from": "x"}}
+    assert wrapped.expr is free
+    bound = ExprNode(op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
+    assert bind_dimension_names(bound, ["x"]) is bound
+    integ = ExprNode(op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1)
+    assert bind_dimension_names(integ, ["x"]) is integ
+    assert bind_dimension_names(free, []) is free
+
+
+def test_reference_binds_the_field_dimension_names():
+    """esm-spec §6.6.5: the analytic cell-centre form with ``x`` free, a table
+    lookup by ``x``, and a gather that REBINDS ``x`` as its own loop symbol
+    (which must not be wrapped again) all read the same field."""
+    table = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
+         "reduce": "L2_error", "reference": _free_x_cos()},
+        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
+         "reduce": "Linf_error",
+         "reference": {"op": "index", "args": [{"op": "const", "args": [], "value": table}, "x"]}},
+        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
+         "reduce": "L2_error",
+         "reference": {"op": "aggregate", "args": [], "output_idx": ["x"],
+                       "ranges": {"x": {"from": "x"}}, "expr": _free_x_cos()}},
+        {"variable": "u", "time": 1.0, "expected": 0.0, "tolerance": {"abs": 1e-8},
+         "reduce": "L2_error",
+         "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, _free_x_cos()]}},
+    ]
+    results = run_pde_tests(
+        load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
+    )
+    assert len(results) == 4
+    for r in results:
+        assert r.passed, f"assertion {r.assertion_idx}: {r.message}"
+
+
+def test_subsystem_parameter_override_in_every_spelling():
+    """esm-spec §4.6 / §6.6.2: inside ``P``, ``P.sub.g`` is the fully qualified
+    spelling of the mounted subsystem parameter; it resolves in an equation and
+    as an override key in every spelling (``P.sub.g``, ``sub.g``, ``g``)."""
+    doc = _decay_doc()
+    doc["models"]["P"] = doc["models"].pop("M")
+    doc["models"]["P"]["subsystems"] = {
+        "sub": {"variables": {"g": {"type": "parameter", "units": "1", "default": 9.81}}, "equations": []}
+    }
+    doc["models"]["P"]["variables"]["gg"] = {"type": "unknown", "units": "1"}
+    doc["models"]["P"]["equations"].append({"lhs": "gg", "rhs": "P.sub.g"})
+
+    def gg(want: float) -> list:
+        return [{"variable": "gg", "time": 0.0, "expected": want, "tolerance": {"rel": 1e-12}}]
+
+    span = {"start": 0.0, "end": 1.0}
+    doc["models"]["P"]["tests"] = [
+        {"id": "default", "time_span": span, "assertions": gg(9.81)},
+        {"id": "qualified", "time_span": span, "parameter_overrides": {"P.sub.g": 1.5},
+         "assertions": gg(1.5)},
+        {"id": "relative", "time_span": span, "parameter_overrides": {"sub.g": 2.5},
+         "assertions": gg(2.5)},
+        {"id": "bare", "time_span": span, "parameter_overrides": {"g": 3.5},
+         "assertions": gg(3.5)},
+    ]
+    results = run_pde_tests(
+        load_string(json.dumps(doc)), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14
+    )
+    assert len(results) == 4
+    for r in results:
+        assert r.passed, f"test {r.test_id}: {r.message}"
+
+
 def test_run_pde_tests_reports_failing_assertion_with_actual():
     doc = _decay_doc()
     # An impossible expectation: the decayed field cannot still match its

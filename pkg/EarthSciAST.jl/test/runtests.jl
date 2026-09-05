@@ -268,6 +268,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("conformance_scalar_ic_test.jl")
     include("conformance_override_key_diagnostics_test.jl")
+    include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")

@@ -64,6 +64,7 @@ from typing import Any
 import numpy as np
 
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
+from .expr_walk import iter_children
 from .flatten import flatten
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
@@ -161,6 +162,46 @@ def evaluate_cellwise(
             )
         out.append(float(arr[tuple(int(c) - 1 for c in cell)]))
     return out
+
+
+def _mentions_free(expr: Expr, name: str) -> bool:
+    """Whether ``name`` occurs FREE in ``expr``: as a variable reference not
+    bound by an enclosing ``aggregate`` / ``arrayop`` / ``makearray`` loop
+    symbol (``output_idx``, a ``ranges`` key) or an ``integral``'s integration
+    variable. A node that binds ``name`` shadows it for its whole subtree."""
+    if isinstance(expr, str):
+        return expr == name
+    if not isinstance(expr, ExprNode):
+        return False
+    if name in (expr.output_idx or []) or name in (expr.ranges or {}) or expr.var == name:
+        return False
+    return any(_mentions_free(child, name) for child in iter_children(expr))
+
+
+def bind_dimension_names(expr: Expr, dims: Sequence[str]) -> Expr:
+    """esm-spec §6.6.5: an inline ``reference``'s free variables are the
+    domain DIMENSION NAMES. For a field shaped over index sets those are the
+    asserted variable's ``shape`` entries, each bound at every grid point to
+    the 1-based position along its axis — the same index space ``coords``
+    reads (convention 1) — so ``index(table, lev)`` reads the cell's entry of
+    a lookup array and ``sin(pi * (x - 0.5) / N)`` is the cell-centre analytic
+    form, with no explicit gather. A reference that mentions a dimension name
+    FREE is turned into the whole field by wrapping it in an ``aggregate``
+    whose output indices ARE the dimension names (in shape order, each ranging
+    over its index set); one that mentions none — a literal, a parameter
+    expression, or an ``aggregate`` that already produces the field under its
+    own loop symbols — is returned untouched, so nothing that evaluated before
+    evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``."""
+    dims = [str(d) for d in dims]
+    if not dims or not any(_mentions_free(expr, d) for d in dims):
+        return expr
+    return ExprNode(
+        op="aggregate",
+        args=[],
+        output_idx=list(dims),
+        ranges={d: {"from": d} for d in dims},
+        expr=expr,
+    )
 
 
 def field_reduce(
@@ -735,9 +776,15 @@ def _evaluate_assertion(
                         # Model parameters (load-time constants) are
                         # in scope for a §6.6.5 analytic reference;
                         # state is not. `insp.params` carries the
-                        # build's resolved scalar params.
+                        # build's resolved scalar params. The field's
+                        # dimension names are in scope too, bound per
+                        # cell (`bind_dimension_names`).
+                        try:
+                            dims = _variable_shape(eval_file, str(mname), str(a.variable))
+                        except RuntimeError:
+                            dims = []
                         ref = evaluate_cellwise(
-                            a.reference,
+                            bind_dimension_names(a.reference, dims),
                             cell_tuples,
                             index_sets=eval_file.index_sets,
                             params=_param_scope_with_aliases(insp.params),
@@ -871,6 +918,7 @@ def run_pde_tests(
 __all__ = [
     "PdeAssertionResult",
     "SimulatedStates",
+    "bind_dimension_names",
     "evaluate_cellwise",
     "field_reduce",
     "run_pde_tests",

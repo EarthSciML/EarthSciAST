@@ -3767,6 +3767,79 @@ until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
 today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
 
 
+### 5.25 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
+
+esm-spec §6.6.5 says an inline `reference` is "an `Expression` whose free
+variables are the domain dimension names". For a field shaped over index sets
+(§5.2) those names are the asserted variable's `shape` entries, and the section
+now says what they are bound to: at every grid point, the **1-based position
+along that axis** — the same index space a `coords` assertion reads under
+convention 1. So `sin(π (x − ½) / N)` is the cell-centre analytic reference of
+a field over `x`, and `index(table, lev)` reads the cell's entry of a lookup
+array, with no explicit gather.
+
+Every executing binding evaluated the reference as ONE build-time array
+expression (`evaluate_cellwise` → the build-time field evaluator) and sampled
+the result per cell, so a dimension name mentioned free was simply unbound —
+Rust `E_TREEWALK_UNBOUND_NAME: 'x'`, Python `Unresolved symbol: 'x'`, Julia
+`E_TREEWALK_UNBOUND_VARIABLE: x` — and authors had to spell every reference as
+an explicit `aggregate(i from x; …)` gather. That spelling is still admitted
+and still means what it meant.
+
+**The rule.** Before evaluation, a binding MUST bind the field's dimension names
+in the reference. The pinned mechanism is the same in all three bindings
+(`bind_dimension_names`): a reference that mentions a dimension name **free** —
+as a variable reference not bound by an enclosing `aggregate` / `arrayop` /
+`makearray` loop symbol or an `integral`'s integration variable — is wrapped in
+an `aggregate` whose `output_idx` ARE the dimension names in shape order, each
+ranging over its index set, and whose body is the reference; a reference that
+mentions none is passed through untouched. The wrap is capture-aware: a gather
+that rebinds a dimension name as its own loop symbol (`aggregate(x from x; …)`)
+mentions it bound, not free, and MUST NOT be wrapped a second time. Nothing that
+evaluated before evaluates differently.
+
+#### 5.25.1 Gate
+
+`tests/conformance/pde_inline_reference_dimension_names/` holds the shared
+fixture and the Julia-minted goldens. One exact decay field
+`u(t) = e^{−t} cos(π (x − ½)/8)` is asserted through the free-name analytic
+form (at t = 0 and t = 1), a `const` table lookup indexed by the dimension name,
+the explicit gather, a gather that rebinds the dimension name as its own loop
+symbol, and a reference-free `mean`; all must agree on the golden actuals. A
+binding that leaves the name unbound fails the first three; one that wraps
+blindly fails the rebinding case.
+
+Per-binding runners: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_reference_dimension_names_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_reference_dimension_names_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_reference_dimension_names_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no inline-test runner and are `scope_excluded`.
+
+### 5.26 Override Keys: the Longest Dotted Suffix (normative)
+
+esm-spec §6.6.2 rule 2 — a dotted key resolving to a shorter flattened name —
+used to try only the key's **trailing segment**. That covered `M.A` against a
+bare-named single-model build, but not the §4.6 fully-qualified spelling of a
+mounted subsystem parameter, `M.sub.A`, against a build that carries it as
+`sub.A` (the Rust single-model array build keeps a model's own names, and mounts
+a subsystem's variables under `<sub>.`): the key fell through to "unknown" in
+Rust while Python and Julia, whose builds are always flattened to `M.sub.A`,
+took it as an exact hit — a cross-binding divergence on the same document and
+the same test. Rule 2 now tries every dotted suffix of the key, **most-qualified
+first**, and binds the longest one that is a name; the trailing segment is the
+last one tried. Rule 3 is unchanged and still bare-only, so `Missing.solo` stays
+unknown. The `override_key_diagnostics` fixture gains the resolved case
+`Doc.Left.solo` (binds `Left.solo`), gated by all three runners (§5.15).
+
+The same divergence had a second face: inside a single-model document, the
+fully-qualified reference `M.sub.g` in an EQUATION (esm-spec §4.6) resolved in
+Python and Julia and was unbound in Rust's single-model array build. Rust now
+brings a self-qualified reference (`<model>.<local>` where `<local>` is a
+declared variable or is rooted at a declared subsystem) back to the local
+spelling before the build; the multi-model and scalar paths were already right.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

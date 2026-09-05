@@ -367,7 +367,14 @@ impl ArrayCompiled {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        let mut compiled = Self::from_model(model, &index_sets)?;
+        let mut compiled = match self_qualified_references(model, model_name) {
+            hits if hits.is_empty() => Self::from_model(model, &index_sets)?,
+            hits => {
+                let mut local = model.clone();
+                resolve_self_qualified_references(&mut local, &hits);
+                Self::from_model_owned(local, &index_sets)?
+            }
+        };
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
@@ -394,7 +401,11 @@ impl ArrayCompiled {
         }
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, model) = models.into_iter().next().unwrap();
+        let (model_name, mut model) = models.into_iter().next().unwrap();
+        let hits = self_qualified_references(&model, &model_name);
+        if !hits.is_empty() {
+            resolve_self_qualified_references(&mut model, &hits);
+        }
         let mut compiled = Self::from_model_owned(model, &index_sets)?;
         compiled.namespace = Some(model_name);
         Ok(compiled)
@@ -3100,6 +3111,71 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
             node.args.iter().any(rhs_has_array_producer)
         }
         _ => false,
+    }
+}
+
+/// esm-spec §4.6: inside model `M`, `M.x` — and `M.sub.x` for a mounted
+/// subsystem `sub` — is the FULLY QUALIFIED spelling of the local `x`
+/// (`sub.x`): the same variable the bare / subsystem-relative form names. The
+/// single-model array build keeps the model's own unqualified names (the
+/// flattened multi-model build and the scalar path qualify everything, which is
+/// why the same reference resolves there), so a self-qualified reference has to
+/// be brought back to the local spelling before the build. This collects the
+/// `(qualified, local)` pairs to rewrite: every variable reference in the
+/// model's expressions that starts with `<model_name>.` and whose remainder is
+/// a declared variable or is rooted at a declared subsystem. Anything else is
+/// left alone for the usual unbound-name diagnostics. Empty — the common case,
+/// costing one read-only walk — means the model is used untouched.
+fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
+    let prefix = format!("{model_name}.");
+    let subsystems: HashSet<&str> = model
+        .subsystems
+        .as_ref()
+        .map(|s| s.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut hits: Vec<(String, String)> = Vec::new();
+    let mut visit = |expr: &Expr| {
+        for name in crate::expression::free_variables(expr) {
+            let Some(rest) = name.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            let local = model.variables.contains_key(rest)
+                || rest
+                    .split_once('.')
+                    .is_some_and(|(head, _)| subsystems.contains(head));
+            if local && !hits.iter().any(|(q, _)| q == &name) {
+                hits.push((name.clone(), rest.to_string()));
+            }
+        }
+    };
+    // The expression-bearing fields the array build compiles: every equation
+    // (both sides) and every variable's own expressions (a parameter
+    // `update`'s `when` / `expression`, esm 1.0.0).
+    for eq in &model.equations {
+        visit(&eq.lhs);
+        visit(&eq.rhs);
+    }
+    for var in model.variables.values() {
+        var.for_each_expression(&mut visit);
+    }
+    hits.sort();
+    hits
+}
+
+/// Apply the `(qualified, local)` rewrites of [`self_qualified_references`]
+/// to every expression of `model` (capture-aware, via [`rename_free_symbol`]).
+fn resolve_self_qualified_references(model: &mut Model, hits: &[(String, String)]) {
+    let mut rewrite = |expr: &mut Expr| {
+        for (from, to) in hits {
+            *expr = rename_free_symbol(expr, from, to);
+        }
+    };
+    for eq in &mut model.equations {
+        rewrite(&mut eq.lhs);
+        rewrite(&mut eq.rhs);
+    }
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut rewrite);
     }
 }
 

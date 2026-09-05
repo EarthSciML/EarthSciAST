@@ -910,9 +910,9 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
     for (rawk, v) in overrides
         k = String(rawk)
         k in names && continue
-        bare = _bare_param_name(k)
-        if bare in names                      # rule 2: dotted key, bare target
-            normalized[bare] = _override_value(V, v)
+        suffix = _dotted_suffix_hit(names, k)
+        if suffix !== nothing                 # rule 2: dotted key, its longest
+            normalized[suffix] = _override_value(V, v)   # known dotted suffix
         elseif haskey(bare_group, k)
             cands = bare_group[k]
             if length(cands) == 1             # rule 3: unique bare alias
@@ -929,6 +929,21 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
         k in names && (normalized[k] = _override_value(V, v))   # rule 1: exact hit
     end
     return normalized, unknown, ambiguous
+end
+
+# Rule 2: the LONGEST dotted suffix of a dotted key `k` — every `<segment>.`
+# prefix dropped in turn, most-qualified first — that is itself a known name;
+# `nothing` for a bare key or when no suffix is known. `M.sub.A` tries `sub.A`
+# then `A` (`M.A` against a bare-named single-model system; `M.sub.A` against a
+# build carrying the mounted subsystem parameter as `sub.A` — the §4.6
+# fully-qualified spelling of a name the build holds in a shorter form).
+function _dotted_suffix_hit(names::AbstractSet{String}, k::AbstractString)
+    rest = String(k)
+    while (i = findfirst('.', rest)) !== nothing
+        rest = rest[nextind(rest, i):end]
+        rest in names && return rest
+    end
+    return nothing
 end
 
 _bare_param_name(name::AbstractString) =
