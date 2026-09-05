@@ -66,7 +66,7 @@ const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
 /// substituted as bare variable-reference strings, so structural string
 /// fields must not be rewritten. Template `params` shadowing is handled
 /// separately in [`substitute_metaparams_decl`].
-const META_SUBST_SKIP_KEYS: [&str; 13] = [
+const META_SUBST_SKIP_KEYS: [&str; 14] = [
     "metadata",
     "params",
     "type",
@@ -79,6 +79,8 @@ const META_SUBST_SKIP_KEYS: [&str; 13] = [
     // (Julia reference: axis fields ⊂ `_META_SUBST_SKIP_KEYS`).
     "wrt",
     "dim",
+    // `integral`'s integration variable (esm-spec §4.2) is an axis NAME too.
+    "var",
     "expression_template_imports",
     "metaparameters",
     "only",
@@ -88,8 +90,18 @@ const META_SUBST_SKIP_KEYS: [&str; 13] = [
 ];
 
 /// Scalar Expression-node fields whose string value names an AXIS / index set
-/// (rewritten by the index-set rename map, param-shadowed like §9.6.1).
-const RENAME_AXIS_KEYS: [&str; 2] = ["wrt", "dim"];
+/// (rewritten by the index-set rename map, param-shadowed like §9.6.1). `var`
+/// is `integral`'s integration variable (esm-spec §4.2) — the same kind of
+/// axis-naming scalar as `wrt`/`dim`, so an imported `integral` rewrite rule
+/// follows its axis under rename exactly as a `D` rule does.
+const RENAME_AXIS_KEYS: [&str; 3] = ["wrt", "dim", "var"];
+
+/// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
+/// Expression positions — a numeric literal, a parameter reference, an AST
+/// subtree — so they stay variable-reference positions for `varmap`; only a
+/// bare string naming a RENAMED index set (the cumulative form
+/// `"upper": "x"`) is an axis occurrence and follows the rename (§9.7.7).
+const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
 
 /// The remaining scalar structural ExpressionNode fields (beyond
 /// [`META_SUBST_SKIP_KEYS`]) whose values are never variable-reference
@@ -708,8 +720,9 @@ fn name_map(
 /// One transitive-substitution pass over an imported declaration (esm-spec
 /// §9.7.7): `varmap` (renamed open metaparameters + rebound free names)
 /// rewrites bare strings in variable-reference positions; `isetmap` rewrites
-/// index-set reference positions (`{"from": …}` values, the `wrt`/`dim` axis
-/// fields, and the `where.*.shape` match-scoping index-set names, in `body` and
+/// index-set reference positions (`{"from": …}` values, the `wrt`/`dim`/`var`
+/// axis fields, a bare-axis-name `integral` `lower`/`upper` bound, and the
+/// `where.*.shape` match-scoping index-set names, in `body` and
 /// `match` alike); `tplmap` rewrites `apply_expression_template.name`. Structural
 /// scalar fields ([`is_rename_protected`]) and bound-index lists (range `of`) are
 /// never rewritten. Pure syntactic substitution. Mirrors the Julia `_rename_walk`.
@@ -758,6 +771,11 @@ fn rename_walk(
                         k.clone(),
                         Value::String(isetmap.get(s).cloned().unwrap_or_else(|| s.to_string())),
                     );
+                } else if RENAME_BOUND_KEYS.contains(&k.as_str())
+                    && v.as_str().is_some_and(|s| isetmap.contains_key(s))
+                {
+                    let s = v.as_str().unwrap();
+                    out.insert(k.clone(), Value::String(isetmap[s].clone()));
                 } else if k == "name" && is_apply && v.is_string() {
                     let s = v.as_str().unwrap();
                     out.insert(

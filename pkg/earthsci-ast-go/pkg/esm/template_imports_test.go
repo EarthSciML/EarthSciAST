@@ -138,6 +138,7 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_where_rename_two_instances", "fixture.esm", "expanded.esm"},
 		{"import_rebind_keyed_factors", "fixture.esm", "expanded.esm"},
 		{"import_rename_diamond", "fixture.esm", "expanded.esm"},
+		{"import_rename_integral_axis", "fixture.esm", "expanded.esm"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {
@@ -218,6 +219,56 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 		coef := expr["args"].([]any)[0].(map[string]any)
 		if coef["op"] != "/" || coef["args"].([]any)[1].(float64) != wantN {
 			t.Errorf("%s: coef = %v; want (1/%v)", name, coef, wantN)
+		}
+	}
+}
+
+// TestTemplateImports_IntegralRenameFollowsAxis pins the §9.7.7 occurrence list
+// for an `integral` rewrite rule: the rename must rewrite the AXIS-NAMING scalar
+// fields of the match — the integration variable `var` AND a bare-axis-name
+// `lower`/`upper` bound — alongside `wrt`/`dim`, or a renamed rule instance
+// keeps matching on the library's own axis, never fires on the consumer's
+// renamed one, and the integral survives lowering (unlowered_operator).
+func TestTemplateImports_IntegralRenameFollowsAxis(t *testing.T) {
+	doc := tiExpandRaw(t, tiConfDir(t, "import_rename_integral_axis", "fixture.esm"))
+	var v map[string]any
+	if err := json.Unmarshal([]byte(doc), &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// (the fixture's prose mentions the op by name, so match the op FIELD)
+	models := tiCanonJSON(t, v["models"])
+	if strings.Contains(models, `"op":"integral"`) {
+		t.Errorf("an `integral` survived lowering; the renamed rule did not fire:\n%s", models)
+	}
+	defs := map[string]any{}
+	for _, e := range v["models"].(map[string]any)["Column"].(map[string]any)["equations"].([]any) {
+		eq := e.(map[string]any)
+		if lhs, ok := eq["lhs"].(string); ok {
+			defs[lhs] = eq["rhs"]
+		}
+	}
+	// Each instance lowers on its OWN axis, at its OWN cell measure: the rename
+	// carried `var`/`upper` per edge, so col's rule fired on lev and row's on lat.
+	for name, want := range map[string]struct {
+		axis string
+		n    float64
+	}{"Q": {"lev", 4}, "P": {"lat", 3}} {
+		agg, ok := defs[name].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: no defining equation", name)
+		}
+		if agg["op"] != "aggregate" {
+			t.Errorf("%s: op = %v; want aggregate (integral not lowered)", name, agg["op"])
+		}
+		ranges := agg["ranges"].(map[string]any)
+		for _, sym := range []string{"i", "j"} {
+			if from := ranges[sym].(map[string]any)["from"]; from != want.axis {
+				t.Errorf("%s: ranges.%s.from = %v; want %s", name, sym, from, want.axis)
+			}
+		}
+		measure := agg["expr"].(map[string]any)["args"].([]any)[1].(map[string]any)
+		if measure["op"] != "/" || measure["args"].([]any)[1].(float64) != want.n {
+			t.Errorf("%s: cell measure = %v; want (1/%v)", name, measure, want.n)
 		}
 	}
 }

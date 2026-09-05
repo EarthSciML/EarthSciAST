@@ -239,6 +239,24 @@ rule register; the §9.6.3 equal-priority tie breaks by the §9.7.4 effective
 order (DFS post-order over the edges), so the first instance wins:
 `y = 6 * x`, and the registry carries `a.cells` (6) and `b.cells` (9).
 
+### `import_rename_integral_axis/` (expanded.esm)
+
+The §9.7.7 occurrence list for an `integral` rewrite rule.
+`column_integral_1d.esm` is a generic cumulative-integral family
+(metaparameter `N`, index set `x`, cell measure `dx`, and a `where`-constrained
+rule matching `{op: "integral", args: ["f"], var: "x", lower: 0, upper: "x"}`
+that lowers to the §4.3.1 prefix reduction). `fixture.esm` imports it twice —
+`prefix: "col"` + `rename: {"x": "lev"}` (`N = 4`) and `prefix: "row"` +
+`rename: {"x": "lat"}` (`N = 3`) — and writes both integrals in the *renamed*
+vocabulary (`var: "lev"` / `var: "lat"`), the only vocabulary a consumer of the
+library knows. The golden shows the rename carrying the match's axis-naming
+scalar fields — the integration variable `var` AND the bare-axis-name `upper`
+bound — in lockstep with the index-set declaration, the `where` shape, and the
+body's range `from`s, so each instance fires only on its own axis at its own
+cell measure (`1 / 4` on `lev`, `1 / 3` on `lat`). Without that rewrite the
+instances still match `var: "x"`, neither fires, and both integrals survive
+lowering as `unlowered_operator`.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`

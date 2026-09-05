@@ -222,6 +222,38 @@ fn import_where_rename_two_instances_matches_golden() {
     assert_eq!(vb["args"][1], "F_B");
 }
 
+/// import_rename_integral_axis: the §9.7.7 occurrence list for an `integral`
+/// rewrite rule. The rename must rewrite the AXIS-NAMING scalar fields of the
+/// `match` — the integration variable `var` AND a bare-axis-name `lower`/`upper`
+/// bound — alongside `wrt`/`dim`. Otherwise the renamed instance keeps matching
+/// the library's own axis, never fires on the consumer's renamed one, and the
+/// integral survives lowering (`unlowered_operator`).
+#[test]
+fn import_rename_integral_axis_matches_golden() {
+    let d = expand_raw(&conf(&["import_rename_integral_axis", "fixture.esm"]));
+    assert_eq!(
+        d,
+        golden(&conf(&["import_rename_integral_axis", "expanded.esm"]))
+    );
+    let model = &d["models"]["Column"];
+    // (the fixture's prose mentions the op by name, so match the op FIELD)
+    assert!(
+        !model.to_string().contains("\"op\":\"integral\""),
+        "an `integral` survived lowering; the renamed rule did not fire"
+    );
+    // Each instance lowered on its OWN axis at its OWN cell measure: the rename
+    // carried `var`/`upper` per edge, so col's rule fired on lev, row's on lat.
+    for (name, axis, n) in [("Q", "lev", 4), ("P", "lat", 3)] {
+        let agg = obs_def(model, name);
+        assert_eq!(agg["op"], "aggregate");
+        assert_eq!(agg["ranges"]["i"]["from"], axis);
+        assert_eq!(agg["ranges"]["j"]["from"], axis);
+        let measure = &agg["expr"]["args"][1];
+        assert_eq!(measure["op"], "/");
+        assert_eq!(measure["args"][1], n);
+    }
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.

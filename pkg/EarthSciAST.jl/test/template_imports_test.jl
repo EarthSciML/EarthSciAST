@@ -220,6 +220,31 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test va.args[2].name == "F_A" && vb.args[2].name == "F_B"
     end
 
+    @testset "import_rename_integral_axis: §9.7.7 rename carries an integral's var/bounds" begin
+        # The §9.7.7 occurrence list for an `integral` rewrite rule: the rename
+        # must rewrite the AXIS-NAMING scalar fields of the `match` — the
+        # integration variable `var` AND a bare-axis-name `lower`/`upper` bound
+        # — alongside `wrt`/`dim`. Otherwise the renamed instance keeps matching
+        # the library's own axis (`var: x`), never fires on the consumer's
+        # renamed one, and the integral survives lowering (unlowered_operator).
+        @test _expand_raw(conf("import_rename_integral_axis", "fixture.esm")) ==
+              _golden(conf("import_rename_integral_axis", "expanded.esm"))
+        f = EarthSciAST.load_path(conf("import_rename_integral_axis", "fixture.esm"))
+        @test f.index_sets["lev"].size == 4
+        @test f.index_sets["lat"].size == 3
+        # Each renamed rule instance fired on its OWN axis, lowering the
+        # consumer's integral to the §4.3.1 prefix reduction at that instance's
+        # cell measure (1/4 on lev, 1/3 on lat).
+        for (name, axis, n) in (("Q", "lev", 4), ("P", "lat", 3))
+            agg = observed_definition(f.models["Column"], name)
+            @test agg.op == "aggregate"
+            @test agg.ranges["i"].from == axis
+            @test agg.ranges["j"].from == axis
+            measure = agg.expr_body.args[2]
+            @test measure.op == "/" && measure.args[2].value == n
+        end
+    end
+
     @testset "import_where_rename_unknown_index_set: bad where set after rename" begin
         # A `where` shape naming a set the library never declares stays as
         # spelled through the rename (the unmapped-name rule) and is rejected at
