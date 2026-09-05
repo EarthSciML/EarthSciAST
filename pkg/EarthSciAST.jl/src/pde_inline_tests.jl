@@ -456,29 +456,12 @@ function _param_scope_with_aliases(params::AbstractDict)::Dict{String,Float64}
     return out
 end
 
-# A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output surfaced
-# "for direct assertion", like the MPAS `div_flux`) rather than a state: an
-# observed carries no ODE slot, so its field is evaluated from the build's
-# RESOLVED observed expression (BuildInspection.observed_exprs) through the same
-# official `evaluate_cellwise` machinery as an analytic `reference`, with the
-# build's const-array registry AND resolved scalar parameters
-# (BuildInspection.params — load-time constants) in scope. STATE-FREE observeds
-# only — a state-dependent observed's references stay unbound and error like
-# before; a PARAMETER-dependent one now resolves (esm-spec §6.6.5).
-# Cells are enumerated from the declared shape's interval index sets. Returns
-# `(field, cells)` or `nothing` when the variable is not such an observed.
-function _observed_field(insp::BuildInspection, file::EsmFile,
-                         mname::AbstractString, variable::AbstractString)
-    model = get(file.models, String(mname), nothing)
-    model === nothing && return nothing
-    v = get(model.variables, String(variable), nothing)
-    (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
-    # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
-    # contracts its only axis away and is a single number, which the Rust
-    # `observed_field(prob, name)` returns and this refused to. One empty cell
-    # index is exactly what `evaluate_cellwise` wants for it (its compile-once
-    # fast path is already gated on `nidx >= 1`).
-    shape = v.shape === nothing ? String[] : v.shape
+# Extents of a declared `shape`, one per axis, or `nothing` when any axis is not
+# sized at build time. Shared by the observed-field materialization and the
+# per-cell lift of an author-level observed body, so both enumerate the same
+# cells from the same index-set registry.
+function _shape_extents(insp::BuildInspection, file::EsmFile,
+                        shape)::Union{Vector{Int},Nothing}
     exts = Int[]
     for s in shape
         iset = get(file.index_sets, String(s), nothing)
@@ -503,6 +486,136 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
         e === nothing && return nothing
         push!(exts, Int(e))
     end
+    return exts
+end
+
+# The component's OWN defining equation for `variable`, lowered to the per-cell
+# form `evaluate_cellwise` consumes and rewritten into the build's FLATTENED
+# name scope. This is the fallback for an observed the build published in
+# neither `observed_exprs` nor `observed_defs` (#176) — an observed the
+# elementwise fold inlined into its readers and dropped, which for a DEAD one
+# (nothing reads it) means dropped outright.
+#
+# Three rewrites, in this order:
+#
+#  1. NAMED PRODUCERS. A reference to another observed of the same component is
+#     replaced by that observed's published body when the build has one, and
+#     otherwise — the same deadness, one level down — by ITS authored body,
+#     resolved recursively. A name the build materialized into a const array is
+#     left alone: the buffer is the cheaper and more faithful answer.
+#  2. PER-CELL LIFT. The authored body is a WHOLE-ARRAY expression (`2 * u`),
+#     while `evaluate_cellwise` walks one output cell at a time. Wrapping it in
+#     an `arrayop` over the declared shape — through the same
+#     `_index_array_leaves` the build's own promotion uses, with §4.3.4 name
+#     alignment — is exactly the form the published map would have carried, and
+#     its ranges are the extents already resolved for the cell enumeration, so
+#     nothing here re-derives an axis.
+#  3. QUALIFICATION. The authored equation names its operands as the AUTHOR
+#     wrote them (`base`), while the build's const-array and parameter scopes
+#     are keyed by the flattened name (`M.base`). Each bare leaf that resolves
+#     under `<model>.<name>` is rewritten to it; one that does not is left
+#     untouched, so an unresolvable reference still raises the unbound-variable
+#     error it earns rather than being silently renamed.
+#
+# Returns `nothing` when `variable` has no defining equation in the component,
+# or when it reappears on its OWN dependency chain (a cycle is the build's to
+# diagnose). `chain` is the path from the asserted name down to this one, NOT
+# the set of everything visited: two siblings that read the same dead observed
+# are a DIAMOND, not a cycle, and each must resolve it.
+function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Model,
+                                 mname::AbstractString, variable::AbstractString,
+                                 exts::Vector{Int},
+                                 chain::Vector{String}=String[])
+    String(variable) in chain && return nothing
+    chain = vcat(chain, String(variable))
+    body = observed_definition(model, String(variable))
+    body === nothing && return nothing
+
+    observed_here = Set{String}(observed_unknowns(model))
+    var_shapes = Dict{String,Vector{String}}()
+    for (n, mv) in model.variables
+        mv.shape === nothing && continue
+        var_shapes[String(n)] = String[String(x) for x in mv.shape]
+    end
+    arrayvars = Set{String}(String(n) for (n, mv) in model.variables
+                            if _is_array_shape(mv.shape))
+
+    # (1) Resolve the other observeds this body names.
+    subs = Dict{String,ASTExpr}()
+    for n in free_variables(body)
+        name = String(n)
+        (name == String(variable) || !(name in observed_here)) && continue
+        qual = String(mname) * "." * name
+        (haskey(insp.const_arrays, qual) || haskey(insp.const_arrays, name)) && continue
+        producer = get(insp.observed_exprs, qual, get(insp.observed_exprs, name, nothing))
+        if producer === nothing
+            nested = get(model.variables, name, nothing)
+            nested === nothing && continue
+            nshape = nested.shape === nothing ? String[] : nested.shape
+            nexts = _shape_extents(insp, file, nshape)
+            producer = nexts === nothing ? nothing :
+                _authored_observed_body(insp, file, model, mname, name, nexts, chain)
+        end
+        producer === nothing || (subs[name] = producer)
+    end
+    isempty(subs) || (body = substitute(body, subs))
+
+    # (2) Lift the whole-array body to the per-cell `arrayop` form.
+    if !isempty(exts)
+        loops = String["_p$(i - 1)" for i in 1:length(exts)]
+        result_axes = get(var_shapes, String(variable), String[])
+        ranges = Dict{String,Any}(loops[i] => Any[1, exts[i]] for i in eachindex(exts))
+        cellwise = _index_array_leaves(body, arrayvars, loops;
+                                       align=_AxisAlign(result_axes, var_shapes))
+        body = OpExpr("arrayop", ASTExpr[]; output_idx=Any[l for l in loops],
+                      ranges=ranges, expr_body=cellwise)
+    end
+
+    # (3) Rewrite bare operand names into the build's flattened scope.
+    renames = Dict{String,ASTExpr}()
+    for n in free_variables(body)
+        name = String(n)
+        haskey(renames, name) && continue
+        qual = String(mname) * "." * name
+        (haskey(insp.const_arrays, qual) || haskey(insp.params, qual)) || continue
+        renames[name] = VarExpr(qual)
+    end
+    isempty(renames) || (body = substitute(body, renames))
+    return body
+end
+
+# A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output surfaced
+# "for direct assertion", like the MPAS `div_flux`) rather than a state: an
+# observed carries no ODE slot, so its field is evaluated from the build's
+# RESOLVED observed expression (BuildInspection.observed_exprs) through the same
+# official `evaluate_cellwise` machinery as an analytic `reference`, with the
+# build's const-array registry AND resolved scalar parameters
+# (BuildInspection.params — load-time constants) in scope. STATE-FREE observeds
+# only — a state-dependent observed's references stay unbound and error like
+# before; a PARAMETER-dependent one now resolves (esm-spec §6.6.5).
+#
+# Three sources, in this order, so an observed is readable however the build
+# chose to treat it: the published body, the materialized buffer for one the
+# build folded into the const-array registry, and — for one the build dropped
+# from both, the DEAD case of #176 — the component's own defining equation
+# (`_authored_observed_body`).
+#
+# Cells are enumerated from the declared shape's interval index sets. Returns
+# `(field, cells)` or `nothing` when the variable is not such an observed.
+function _observed_field(insp::BuildInspection, file::EsmFile,
+                         mname::AbstractString, variable::AbstractString)
+    model = get(file.models, String(mname), nothing)
+    model === nothing && return nothing
+    v = get(model.variables, String(variable), nothing)
+    (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
+    # A SHAPELESS observed is rank 0, not unreadable: `E_NOx = Σ_r annual[r]·…`
+    # contracts its only axis away and is a single number, which the Rust
+    # `observed_field(prob, name)` returns and this refused to. One empty cell
+    # index is exactly what `evaluate_cellwise` wants for it (its compile-once
+    # fast path is already gated on `nidx >= 1`).
+    shape = v.shape === nothing ? String[] : v.shape
+    exts = _shape_extents(insp, file, shape)
+    exts === nothing && return nothing
     qualified = String(mname) * "." * String(variable)
     # The fully-substituted form: self-contained, always evaluable, and the only
     # form a build without `observed_defs` publishes. This stays the FALLBACK.
@@ -514,7 +627,6 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     raw = get(insp.observed_defs, qualified,
               get(insp.observed_defs, String(variable), nothing))
     expr = inlined === nothing ? raw : inlined
-    expr === nothing && return nothing
     # `vec` flattens the comprehension to a `Vector{Vector{Int}}` for ANY rank:
     # over a rank≥2 `CartesianIndices` the comprehension yields a `Matrix`
     # (higher-D array), and `sort!` on that throws `UndefKeywordError: dims`.
@@ -524,6 +636,33 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # observed-field ordering, so `field`/`reference` pair cell-for-cell.
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
+    # NEITHER form published, but the build MATERIALIZED the field: an observed
+    # whose body is build-once (a document-literal `const` array, a setup
+    # geometry buffer) is dropped from the observed graph precisely because its
+    # value already sits in the const-array registry. Read the buffer — it is
+    # both the cheaper answer and the one every reader of that observed saw.
+    if expr === nothing
+        buf = get(insp.const_arrays, qualified,
+                  get(insp.const_arrays, String(variable), nothing))
+        if buf isa AbstractArray && eltype(buf) <: Real && size(buf) == Tuple(exts)
+            return (Float64[Float64(buf[c...]) for c in cells], cells)
+        end
+    end
+    # NEITHER form published (#176). The build's observed graph is keyed by what
+    # SURVIVED lowering, and the elementwise array-observed fold
+    # (`_fold_elementwise_array_observeds`) inlines such an observed into its
+    # readers and DROPS its equation — so a diagnostic nothing else reads, the
+    # ordinary shape of a quantity computed for a test, reaches neither map and
+    # the assertion failed with "has no cells in var_map". Fall back to the
+    # component's OWN defining equation, lowered to the same per-cell form and
+    # evaluated in the same scope, so an observed is assertable whether or not
+    # the dynamics happen to consume it (esm-spec §6.6.5 admits any shaped
+    # variable; §5.23 makes a reference denote its expansion).
+    if expr === nothing
+        expr = _authored_observed_body(insp, file, model, String(mname),
+                                       String(variable), exts)
+    end
+    expr === nothing && return nothing
     params = _param_scope_with_aliases(insp.params)
     # Try the cheap path FIRST, and fall back on any failure. The un-inlined
     # definition names its producers, so it only evaluates when every one of

@@ -262,7 +262,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("observed_field_static_test.jl")  # §5.8 name resolution on a state-free document
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
+    include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("conformance_pde_inline_observed_rank2_test.jl")
+    include("conformance_pde_inline_dead_observed_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
