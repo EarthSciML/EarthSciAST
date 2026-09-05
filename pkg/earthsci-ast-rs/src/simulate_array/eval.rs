@@ -3685,6 +3685,13 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             filter,
             cell: Some(&cellbox),
         };
+        // Per-node cost reporting (`ESS_JOIN_GATE_STATS=1`, see
+        // [`crate::broad_phase::join_gate_stats_enabled`]). The counter is
+        // thread-local and bumped only on the gate-driven unroll, so the delta
+        // across this output loop is exactly the leaves THIS aggregate
+        // enumerated.
+        let stats_from = (gate.is_some() && crate::broad_phase::join_gate_stats_enabled())
+            .then(crate::broad_phase::overlap_enum_visits);
         let mut tuples = CartesianTuples::new(&ranges);
         while let Some(tuple) = tuples.next() {
             for (name, val) in idx_names.iter().zip(tuple.iter()) {
@@ -3709,6 +3716,16 @@ pub(super) fn eval_arrayop(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             };
             let flat = multi_to_flat_col_major(tuple, &shape, &origin);
             buf[flat] = v;
+        }
+        if let (Some(before), Some((g, _))) = (stats_from, &gate) {
+            eprintln!(
+                "[join-gate] gate={}~{} matches={} cells={} leaves={}",
+                g.sym_src,
+                g.sym_tgt,
+                g.index.len(),
+                total,
+                crate::broad_phase::overlap_enum_visits().wrapping_sub(before),
+            );
         }
     }
     for (name, saved) in saved_binds {
