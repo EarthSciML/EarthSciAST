@@ -3666,6 +3666,106 @@ Nothing in §5.24 needs anything a binding does not already have for §5.5.8:
 There is no dependence on a hash implementation, an iteration order, an
 allocator, or a language's numeric tower. A binding that implements §5.5.8 can
 implement §5.24.
+### 5.25 Inline-Test Build Reuse and Test Selection (normative)
+
+esm-spec §6.6 makes an inline test "exercise one model in isolation": the test
+declares the run configuration — `expression_template_imports` (§9.7.10 form C),
+`time_span`, `parameter_overrides`, `initial_conditions` — and the assertions
+judged against that run. Nothing in the spec requires a binding to CONSTRUCT the
+model once per test, and constructing it once per test is the entire cost of an
+inline-test suite. On the MOVES port (moves.esm `docs/findings/README.md` F31)
+200 tests across 29 documents declare only 47 distinct run configurations, and
+the dominant document — `fixtures/nr-logging-county.esm`, 29 tests, 343
+assertions — declares exactly ONE. Its `esm test` took 533 s where a single
+evaluation of the same document took 16.5 s.
+
+This section governs a binding that REUSES a build across tests, and the runner
+flag that selects which tests to run. Both are optional: a binding that builds
+per test and filters after evaluation is conforming, only slow. What is
+normative is what neither may change.
+
+#### 5.25.1 The reuse key (normative)
+
+A binding MAY reuse a previously constructed problem for a later test **of the
+same component of the same document**, and MUST NOT reuse it unless every input
+that binding's own build reads is unchanged. The key MUST be compared exactly
+(no tolerance, no canonicalization that could merge two values the build would
+treat differently), and the reused artifact MUST be a pure function of it.
+
+For the construction contract this specification already pins, those inputs are
+exactly four:
+
+1. **`expression_template_imports`** — decides WHICH document is built (§9.7.10
+   form C builds an ephemeral injected copy);
+2. **`time_span`** — the construction interval, and with it the time at which
+   build-time constants and CONST providers are sampled (§2.5.2);
+3. **`parameter_overrides`** — the build-time parameter scope (§5.14);
+4. **`initial_conditions`** — the initial state the build folds (§5.16, §11.4.1).
+
+A test's `id`, `description` and `tolerance` reach no build. A test's
+`assertions` reach the RUN — the sampled times, and the observeds a pointwise
+assertion needs named on the output request — and not the build; a binding that
+reuses a build MUST therefore still perform the run per test, or else carry the
+assertion list in the key too. A binding whose build reads anything further MUST
+extend the key by that much; the enumeration above is a floor, not a ceiling.
+
+The failure mode this rule exists for is silent. A key missing a field does not
+error: the second test is answered with the FIRST test's model, which is a
+plausible number computed from a configuration the author did not write — the
+same class as §5.14, §5.19.4 and §5.23, and the reason the enumeration is stated
+rather than left to a comment.
+
+#### 5.25.2 Reuse must not carry state (normative)
+
+Construction produces artifacts a run MUTATES: the build-observability record
+(§2.5.2's `inspect` seam) is filled by a run and DRAINED by the reader, a
+refreshable forcing channel is written by a discrete-cadence refresh, and a
+provider executor advances. A binding that reuses a build MUST restore every
+such artifact to its post-construction state before each reuse, so that the
+n-th test of a shared build observes exactly what a freshly built problem would.
+A binding that cannot restore one MUST NOT reuse a build that carries it.
+
+#### 5.25.3 Order independence (normative)
+
+§5.5 rule 5 and §5.7 rule 5 make a result independent of the order in which work
+was enumerated. Reuse is subject to that rule: permuting a component's `tests`
+array MUST NOT change any assertion's actual, and MUST NOT change which
+assertions are reported. A single-slot ("reuse only across CONSECUTIVE
+same-key tests") cache is permitted — the number of BUILDS is then
+order-dependent, which is a cost and not a result — but a cache whose ANSWERS
+depend on order is non-conforming.
+
+#### 5.25.4 Test selection selects work, not rows (normative)
+
+A runner that offers a test filter (the Rust CLI's `esm test --filter`) MUST
+report exactly the rows it would report by applying the same predicate to the
+unfiltered result set: same rows, same order, same fields, including the
+whole-test ERROR rows a test that could not be built contributes. Subject to
+that, the filter SHOULD be applied BEFORE anything is built or run, so that
+narrowing to one test costs one test. Applying it to an already-computed result
+vector is conforming and useless: measured on the pre-fix Rust CLI,
+`esm test fixtures/nr-logging-county.esm --filter <one test>` took 309.3 s and
+326.2 s against 301.9 s and 306.6 s for the same document unfiltered — filtering
+28 of 29 tests away made it *slower*, within the spread, because all 29 builds
+had already run. Selecting first, `esm test ./runs --filter <one of fifteen>`
+went from 153.2 s / 156.9 s to 0.98 s / 0.97 s for the same rows.
+
+#### 5.25.5 Gate
+
+**Rust** — `pkg/earthsci-ast-rs/tests/inline_test_build_memo.rs`. The runner's
+`build_providers` factory is called exactly once per build, so a counting
+factory reports the build count directly: the suite pins one build for three
+same-key tests, two for each keyed field varied in turn (a fifth case varies the
+imports and reads two different lowered right-hand sides), equal answers under a
+permuted test list, and one build when `--filter` selects one of three
+distinct-key tests. Each case is additionally built so that a missing key field
+produces a WRONG NUMBER and not merely a fast one, so dropping any field from
+`BuildKey::of` turns the suite red on both the count and the value.
+
+**Julia**, **Python** — build per test; §5.25.1–§5.25.3 impose nothing on them
+until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
+today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
+
 
 ## 6. CI Integration
 

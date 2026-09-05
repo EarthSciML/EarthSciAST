@@ -506,6 +506,21 @@ impl EsmProblem {
         std::mem::take(&mut self.inspection.borrow_mut())
     }
 
+    /// Re-arm the build-observability record to the state CONSTRUCTION leaves
+    /// it in (empty).
+    ///
+    /// [`esm_problem`] initialises `inspection` empty and only [`solve`] fills
+    /// it — and only on the array backend, which OVERWRITES rather than merges;
+    /// [`Self::take_inspection`] DRAINS it. So a caller that solves one problem
+    /// more than once (the inline-test runner, which memoises the build across
+    /// consecutive tests that share it) must re-arm between solves, or the
+    /// second read would see what the first left behind instead of what a
+    /// rebuild would have produced. Idempotent, and a no-op on a problem that
+    /// has never been read.
+    pub(crate) fn reset_inspection(&self) {
+        *self.inspection.borrow_mut() = BuildInspection::default();
+    }
+
     /// Every build-time field this EsmProblem's construction materialized, keyed
     /// by observed name.
     pub fn observed_fields(&self) -> &HashMap<String, ArrayD<f64>> {
