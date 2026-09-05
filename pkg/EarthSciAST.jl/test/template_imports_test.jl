@@ -227,21 +227,25 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         # — alongside `wrt`/`dim`. Otherwise the renamed instance keeps matching
         # the library's own axis (`var: x`), never fires on the consumer's
         # renamed one, and the integral survives lowering (unlowered_operator).
-        @test _expand_raw(conf("import_rename_integral_axis", "fixture.esm")) ==
-              _golden(conf("import_rename_integral_axis", "expanded.esm"))
+        d = _expand_raw(conf("import_rename_integral_axis", "fixture.esm"))
+        @test d == _golden(conf("import_rename_integral_axis", "expanded.esm"))
         f = EarthSciAST.load_path(conf("import_rename_integral_axis", "fixture.esm"))
         @test f.index_sets["lev"].size == 4
         @test f.index_sets["lat"].size == 3
         # Each renamed rule instance fired on its OWN axis, lowering the
         # consumer's integral to the §4.3.1 prefix reduction at that instance's
-        # cell measure (1/4 on lev, 1/3 on lat).
+        # cell measure (1/4 on lev, 1/3 on lat). Asserted on the RAW expanded
+        # document, as the other four bindings do: operand POSITION inside the
+        # lowered node is a property of that document (the one the golden above
+        # pins), not of the typed view built over it.
         for (name, axis, n) in (("Q", "lev", 4), ("P", "lat", 3))
-            agg = observed_definition(f.models["Column"], name)
-            @test agg.op == "aggregate"
-            @test agg.ranges["i"].from == axis
-            @test agg.ranges["j"].from == axis
-            measure = agg.expr_body.args[2]
-            @test measure.op == "/" && measure.args[2].value == n
+            agg = _defrhs(d, "Column", name)
+            @test agg["op"] == "aggregate"
+            @test agg["ranges"]["i"]["from"] == axis
+            @test agg["ranges"]["j"]["from"] == axis
+            measure = agg["expr"]["args"][2]
+            @test measure["op"] == "/"
+            @test measure["args"][1] == 1 && measure["args"][2] == n
         end
     end
 
