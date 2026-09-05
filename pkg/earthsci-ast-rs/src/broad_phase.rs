@@ -365,6 +365,29 @@ pub fn set_join_gate_enabled(on: bool) -> bool {
     prev
 }
 
+/// Is per-node join-gate COST REPORTING on (`ESS_JOIN_GATE_STATS=1`)?
+///
+/// The leaf-visit counter [`overlap_enum_visits`] is the only direct evidence
+/// that a gated aggregate costs `O(|matches|·∏ungated)` and not `O(∏ranges)`,
+/// and the Rust integration tests read it directly. A whole-document
+/// measurement on a real fixture cannot: it runs through the `esm` binary,
+/// where no test harness holds the counter. This switch makes the same number
+/// readable from a CLI run — one line per gated `aggregate` evaluation on
+/// stderr — so a claim about a document's enumeration cost is a command's
+/// output rather than an argument from the source.
+///
+/// Off by default and read ONCE, so the instrumented build's hot path differs
+/// from the uninstrumented one by a single already-cached predicate outside the
+/// per-cell loop.
+pub fn join_gate_stats_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ESS_JOIN_GATE_STATS")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
 /// Which side of an overlap gate a position lives on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {

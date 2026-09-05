@@ -132,6 +132,32 @@ pub fn marker_precision_json(node: &serde_json::Value) -> Option<Precision> {
     Precision::from_element_type(node.get("name").and_then(serde_json::Value::as_str)).ok()
 }
 
+/// Wrap `expr` so it is evaluated in binary64 — an EXACT comparison of stored
+/// carriers — whatever the document's working precision is.
+///
+/// The one caller is `crate::join::equality_predicate`, and the reason is
+/// normative. A `join.on` key is an exact-equality value (CONFORMANCE_SPEC.md
+/// §5.5.8: an integer ID or a categorical member; **floats are forbidden**), so
+/// the lowered `left == right` predicate is a KEY COMPARISON and not
+/// arithmetic. Narrowed to binary32 it stops being one: a NONROAD `SCC` such as
+/// `2265007010` and `2265007015` are 5 apart and *the same* binary32 number, so
+/// the predicate reports two different keys equal.
+///
+/// That mattered because §5.5.8 rests the driver's safety on the predicate:
+/// "declining to drive costs time, never correctness" is true only if the
+/// `filter` still tests the SAME equality the gate does. The gate compares
+/// exact `i64` keys; a binary32 predicate compares fewer bits, so the two
+/// disagreed, and WHICH CLAUSE DROVE decided a MOVES roll-up's answer —
+/// exactly the freedom §5.5.8 grants and calls result-neutral.
+///
+/// This pass runs before `join::resolve_aggregate_joins`, so the lowered
+/// predicate is created after annotation and would otherwise inherit the
+/// ambient precision with no marker of its own. Marking it here is also why the
+/// rule does not depend on the pass having run: it is unconditional.
+pub(crate) fn mark_exact_key_comparison(expr: Expr) -> Expr {
+    mark(expr, Precision::Float64)
+}
+
 /// Wrap `expr` in a [`MARKER_OP`] node for precision `p`.
 fn mark(expr: Expr, p: Precision) -> Expr {
     Expr::Operator(Arc::new(ExpressionNode {
