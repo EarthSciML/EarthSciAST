@@ -203,8 +203,38 @@ def test_state_cells_matching_and_order():
     var_map = {"M.u[2]": 4, "M.u[1]": 3, "M.u[10]": 9, "M.v[1]": 0, "w": 1}
     cells = state_cells(var_map, "u", "M")
     assert cells == [([1], 3), ([2], 4), ([10], 9)]  # numeric cell order
-    assert state_cells(var_map, "u", "Other") == cells  # bare-stem match
+    assert state_cells(var_map, "u", "Other") == cells  # bare-stem fallback
     assert state_cells(var_map, "w", "M") == []  # scalars never match
+
+
+def test_state_cells_qualified_stem_wins_over_a_sibling_models_bare_name():
+    """A coupled build reuses one bare array name across sibling components, and
+    the model-QUALIFIED stem must win — the array analog of ``_scalar_slot``'s
+    two-pass resolution, and identical to the Julia / Rust ``state_cells``.
+
+    The single-pass union this replaces spliced every model's cells into one
+    field: four models each declaring ``w[x]`` produced FOUR cells at index
+    ``[1]``, so a ``coords`` sample read whichever model sorted first (always the
+    same wrong one, silently), a ``reduce`` collapsed over all four models at
+    once, and a per-cell ``reference`` then indexed past the end of the field
+    (``IndexError``). The bare fallback still answers a bare-keyed build, but
+    only when NO qualified element exists."""
+    var_map = {
+        "A.w[1]": 0,
+        "A.w[2]": 1,
+        "B.w[1]": 2,
+        "B.w[2]": 3,
+        "C.w[1]": 4,
+        "C.w[2]": 5,
+    }
+    assert state_cells(var_map, "w", "B") == [([1], 2), ([2], 3)]
+    assert state_cells(var_map, "w", "C") == [([1], 4), ([2], 5)]
+    # No component of that name at all: the bare-suffix fallback is reached,
+    # and only then does it union the siblings (the pre-existing behaviour for
+    # a build whose elements carry no qualification).
+    assert len(state_cells(var_map, "w", "Nope")) == 6
+    # A bare-keyed single-model build still resolves under any model name.
+    assert state_cells({"u[1]": 7}, "u", "M") == [([1], 7)]
 
 
 def test_tolerance_precedence_and_isapprox_semantics():
@@ -241,6 +271,107 @@ def test_run_pde_tests_decay_field():
     assert by_idx[3].passed and abs(by_idx[3].actual) < 1e-9
     assert all(r.reduce in ("L2_error", "mean") for r in results)
     assert all(r.model == "M" and r.test_id == "decay" for r in results)
+
+
+def _array_observed_doc() -> dict:
+    """Both kinds of array OBSERVED on one document: ``g`` is STATE-FREE (a
+    pure index expression the build materializes once), ``h = u + 1`` is
+    STATE-DEPENDENT (its field exists only on the trajectory), and ``nope`` is
+    no variable of the component at all."""
+    agg_g = {
+        "op": "aggregate",
+        "args": [],
+        "output_idx": ["i"],
+        "ranges": {"i": {"from": "x"}},
+        "expr": {"op": "*", "args": ["i", "i"]},
+    }
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "pde_inline_array_observed"},
+        "index_sets": {"x": {"kind": "interval", "size": 3}},
+        "models": {
+            "M": {
+                "variables": {
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "g": {"type": "unknown", "units": "1", "shape": ["x"]},
+                    "h": {"type": "unknown", "units": "1", "shape": ["x"]},
+                },
+                "equations": [
+                    {"lhs": "g", "rhs": agg_g},
+                    {"lhs": "h", "rhs": {"op": "+", "args": ["u", 1]}},
+                    {"lhs": {"op": "ic", "args": ["u"]}, "rhs": 0.0},
+                    {"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": "h"},
+                ],
+                "tests": [
+                    {
+                        "id": "obs",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [
+                            {
+                                "variable": "g",
+                                "time": 1.0,
+                                "expected": 9.0,
+                                "tolerance": {"abs": 1e-12},
+                                "reduce": "max",
+                            },
+                            {
+                                "variable": "h",
+                                "time": 0.0,
+                                "expected": 1.0,
+                                "tolerance": {"abs": 1e-12},
+                                "reduce": "max",
+                            },
+                            {
+                                "variable": "h",
+                                "time": 0.0,
+                                "expected": 1.0,
+                                "tolerance": {"abs": 1e-12},
+                                "coords": {"x": 2},
+                            },
+                            {
+                                "variable": "nope",
+                                "time": 0.0,
+                                "expected": 0.0,
+                                "tolerance": {"abs": 1e-12},
+                                "reduce": "max",
+                            },
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_array_observed_assertions_read_both_the_build_and_the_trajectory():
+    """esm-spec §6.6.5 admits ANY shaped variable in a ``coords`` / ``reduce``
+    assertion, and §5.23 makes a reference denote its expansion — so a
+    STATE-DEPENDENT array observed is assertable exactly like a state-free one.
+
+    Only the state-free half used to work: a state-dependent array observed is
+    absent from the build inspection's setup arrays BY CONSTRUCTION (its value
+    moves with the state) and the output-node reconstruction exposes only
+    SCALAR observeds as rows, so every such assertion errored with "has no
+    cells in var_map". It is now evaluated at the trajectory sample through the
+    same observed driver the RHS uses."""
+    f = load_string(json.dumps(_array_observed_doc()))
+    results = run_pde_tests(f, model_name="M", method="LSODA", rtol=1e-12, atol=1e-14)
+    assert len(results) == 4
+    by_idx = {r.assertion_idx: r for r in results}
+    # g = [1, 4, 9] is state-free: read from the build's materialized field.
+    assert by_idx[1].passed, by_idx[1].message
+    assert by_idx[1].actual == pytest.approx(9.0)
+    # h = u + 1 reads the state; at t=0 (u seeded to 0) it is [1, 1, 1], and
+    # both the reduce and the coords form must find it there.
+    assert by_idx[2].passed, by_idx[2].message
+    assert by_idx[2].actual == pytest.approx(1.0)
+    assert by_idx[3].passed, by_idx[3].message
+    assert by_idx[3].actual == pytest.approx(1.0)
+    # A name that is no variable of the component still errors — the fallback
+    # resolves names, it never invents them.
+    assert not by_idx[4].passed
+    assert by_idx[4].actual is None
+    assert "has no cells in var_map" in by_idx[4].message
 
 
 def test_run_pde_tests_reports_failing_assertion_with_actual():

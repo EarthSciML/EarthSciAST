@@ -1,0 +1,48 @@
+{
+    "fixture": "observed_state_dependent",
+    "assertions": [
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": "max",
+            "actual": 39.99999999999999,
+            "assertion_idx": 1,
+            "variable": "g"
+        },
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": "min",
+            "actual": 3.9999999999999987,
+            "assertion_idx": 2,
+            "variable": "g"
+        },
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": "mean",
+            "actual": 20,
+            "assertion_idx": 3,
+            "variable": "g"
+        },
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": null,
+            "actual": 12.000000000000002,
+            "assertion_idx": 4,
+            "variable": "g"
+        },
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": null,
+            "actual": 21,
+            "assertion_idx": 5,
+            "variable": "g"
+        },
+        {
+            "test_id": "observed_state_dependent",
+            "reduce": "max",
+            "actual": 4,
+            "assertion_idx": 6,
+            "variable": "rate"
+        }
+    ],
+    "reference_binding": "julia"
+}

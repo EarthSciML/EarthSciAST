@@ -1,0 +1,244 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "pde_inline_observed_state_dependent",
+    "description": "\u00a76.6.5 inline-test assertions on a STATE-DEPENDENT array OBSERVED. `g[i] = 2*u[i] + rate[i]` moves with the trajectory, so no build-time product can carry its field (only STATE-FREE observeds are materialized at build) and it is not a scalar output row either; a binding must evaluate the observed's own expression at the SAMPLED STATE. `g` is a live node of the graph (it drives the second state `v`), and `rate` is the STATE-FREE array observed of the same document, asserted alongside as the regression guard that the build-materialized path still answers. `D(u,t) = rate` is a per-cell CONSTANT, so u(t) = i^2 + i*t is integrated exactly by every pinned solver family and the assertion values are integrator-independent."
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "state, u(0)[i] = i^2"
+        },
+        "rate": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": [
+            "lev"
+          ],
+          "description": "state-free array observed, rate[i] = i"
+        },
+        "g": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "state-dependent array observed, g[i] = 2*u[i] + rate[i]"
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "second state, driven by g so the asserted observed is a live node of the graph"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "i",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "rate",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                1.0,
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "rate"
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "args": [
+              "u",
+              "rate"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    2.0,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "rate",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "v"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "v"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "g"
+        }
+      ],
+      "tests": [
+        {
+          "id": "observed_state_dependent",
+          "description": "u(t) = i^2 + i*t exactly (a constant right-hand side is integrated exactly by every solver family here), so g(t) = 2*i^2 + i*(2t + 1). At t = 0.5, g = [4, 12, 24, 40].",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "g",
+              "time": 0.5,
+              "reduce": "max",
+              "expected": 40.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            },
+            {
+              "variable": "g",
+              "time": 0.5,
+              "reduce": "min",
+              "expected": 4.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            },
+            {
+              "variable": "g",
+              "time": 0.5,
+              "reduce": "mean",
+              "expected": 20.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            },
+            {
+              "variable": "g",
+              "time": 0.5,
+              "coords": {
+                "lev": 2
+              },
+              "expected": 12.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            },
+            {
+              "variable": "g",
+              "time": 0.0,
+              "coords": {
+                "lev": 3
+              },
+              "expected": 21.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            },
+            {
+              "variable": "rate",
+              "time": 0.5,
+              "reduce": "max",
+              "expected": 4.0,
+              "tolerance": {
+                "abs": 1e-09
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
