@@ -78,8 +78,17 @@ func nameMap(raw any, field, where string) (map[string]string, error) {
 
 // renameAxisKeys: scalar Expression-node fields whose string value names an
 // AXIS / index set (rewritten by the index-set rename map, param-shadowed like
-// §9.6.1).
-var renameAxisKeys = map[string]struct{}{"wrt": {}, "dim": {}}
+// §9.6.1). `var` is `integral`'s integration variable (esm-spec §4.2) — the
+// same kind of axis-naming scalar as `wrt`/`dim`, so an imported `integral`
+// rewrite rule follows its axis under rename exactly as a `D` rule does.
+var renameAxisKeys = map[string]struct{}{"wrt": {}, "dim": {}, "var": {}}
+
+// renameBoundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these
+// are full Expression positions — a numeric literal, a parameter reference, an
+// AST subtree — so they stay variable-reference positions for `varmap`; only a
+// bare string naming a RENAMED index set (the cumulative form `"upper": "x"`)
+// is an axis occurrence and follows the rename (§9.7.7).
+var renameBoundKeys = map[string]struct{}{"lower": {}, "upper": {}}
 
 // renameProtectedKeys: object keys whose values are never variable-reference
 // positions for the rename walk — the metaparameter skip set plus the remaining
@@ -109,8 +118,9 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // renameWalk is one transitive-substitution pass over an imported declaration
 // (esm-spec §9.7.7): `varmap` (renamed open metaparameters + rebound free names)
 // rewrites bare strings in variable-reference positions; `isetmap` rewrites
-// index-set reference positions (`{"from": …}` values, the `wrt`/`dim` axis
-// fields, and the `where.*.shape` match-scoping index-set names, in `body` and
+// index-set reference positions (`{"from": …}` values, the `wrt`/`dim`/`var`
+// axis fields, a bare-axis-name `integral` `lower`/`upper` bound, and the
+// `where.*.shape` match-scoping index-set names, in `body` and
 // `match` alike); `tplmap` rewrites `apply_expression_template.name`. Structural
 // scalar fields (renameProtectedKeys) and bound-index lists (range `of`) are
 // never rewritten. Pure syntactic substitution — no evaluation.
@@ -153,6 +163,14 @@ func renameWalk(x any, varmap, isetmap, tplmap map[string]string) any {
 				if s, ok := val.(string); ok {
 					out[k] = isetRenamed(s, isetmap)
 					continue
+				}
+			}
+			if _, isBound := renameBoundKeys[k]; isBound {
+				if s, ok := val.(string); ok {
+					if n, ok2 := isetmap[s]; ok2 {
+						out[k] = n
+						continue
+					}
 				}
 			}
 			if k == "name" && isApply {
@@ -339,7 +357,7 @@ func collectRefNames(out map[string]struct{}, x any, shadowed map[string]struct{
 // (esm-spec §9.7.7) to the target's SURVIVING export scope — templates after
 // `only`, all index sets, and metaparameters still open after this edge's
 // `bindings` — transitively through every occurrence inside the surviving
-// declarations (index-set references in `from`/`wrt`/`dim` and registry `of`
+// declarations (index-set references in `from`/`wrt`/`dim`/`var` and registry `of`
 // lists, open-metaparameter names in expression positions, keyed-factor and
 // other free names in variable-reference positions and registry
 // `offsets`/`values`, `apply_expression_template.name` references). Runs after

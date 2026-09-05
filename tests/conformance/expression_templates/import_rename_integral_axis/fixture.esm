@@ -1,0 +1,24 @@
+{
+  "esm": "1.0.0",
+  "metadata": { "name": "import_rename_integral_axis", "description": "One `integral` rule library instantiated twice in one model under esm-spec 9.7.7 renaming: a column instance (prefix col, rename x -> lev, N = 4) and a meridional instance (prefix row, rename x -> lat, N = 3). The consumer only ever names lev / lat — the renamed vocabulary is the only one it knows — so the rename must carry the rule's `match` axis fields, the integration variable `var` AND the bare-axis-name `upper` bound, in lockstep with the index-set declaration, the `where` shape, and the body's range `from`s. With that, each renamed instance fires only on its own axis and both integrals lower to the 4.3.1 prefix reduction at that instance's cell measure (1/4, 1/3); without it the rule instances still match `var: x`, nothing fires, and both integrals survive lowering as unlowered_operator" },
+  "models": {
+    "Column": {
+      "expression_template_imports": [
+        { "ref": "./column_integral_1d.esm", "prefix": "col", "rename": { "x": "lev" }, "bindings": { "N": 4 } },
+        { "ref": "./column_integral_1d.esm", "prefix": "row", "rename": { "x": "lat" }, "bindings": { "N": 3 } }
+      ],
+      "variables": {
+        "q": { "type": "unknown", "units": "1", "default": 1.5, "shape": ["lev"], "description": "profile on the column instance" },
+        "p": { "type": "unknown", "units": "1", "default": 2.5, "shape": ["lat"], "description": "profile on the meridional instance" },
+        "Q": { "type": "unknown", "units": "1", "shape": ["lev"], "description": "cumulative integral of q up to each lev: col's rule fires" },
+        "P": { "type": "unknown", "units": "1", "shape": ["lat"], "description": "cumulative integral of p up to each lat: row's rule fires" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["q"], "wrt": "t" }, "rhs": { "op": "-", "args": ["q"] } },
+        { "lhs": { "op": "D", "args": ["p"], "wrt": "t" }, "rhs": { "op": "-", "args": ["p"] } },
+        { "lhs": "Q", "rhs": { "op": "integral", "args": ["q"], "var": "lev", "lower": 0, "upper": "lev" } },
+        { "lhs": "P", "rhs": { "op": "integral", "args": ["p"], "var": "lat", "lower": 0, "upper": "lat" } }
+      ]
+    }
+  }
+}

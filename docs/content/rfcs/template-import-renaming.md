@@ -288,6 +288,11 @@ cross-binding-uniform diagnostics rather than schema-dialect artifacts.
 - `import_rename_diamond/` — one file imported thrice: identical renamed edges dedupe; a
   differently-prefixed edge registers distinctly; the equal-priority tie between the two
   axis-less rule instances is pinned by the §9.7.4 order (`y = 6 * x`).
+- `import_rename_integral_axis/` — one cumulative-`integral` rule family imported twice
+  (prefix `col`/`row`, rename `x` → `lev`/`lat`, `N` = 4/3): the transitivity list covers
+  an `integral` match's axis-naming scalars — the integration variable `var` and a
+  bare-axis-name `lower`/`upper` bound — so an `integral` rule family renames onto another
+  axis exactly as a `D` rule family does.
 
 `tests/invalid/template_imports/` (+ `expected_errors.json`, all `resolver_only`):
 `rename_unknown_name.esm`, `rebind_unknown_free_name.esm`, `rename_collision.esm`,

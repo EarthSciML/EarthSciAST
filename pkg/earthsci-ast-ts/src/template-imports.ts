@@ -230,6 +230,8 @@ const META_SUBST_SKIP_KEYS = new Set<string>([
   // NAME, never an expression, so a bound metaparameter of the same name must
   // not rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)
   'dim',
+  // `integral`'s integration variable (esm-spec §4.2) is an axis NAME too.
+  'var',
   'expression_template_imports',
   'metaparameters',
   'only',
@@ -742,8 +744,18 @@ function nameMap(raw: unknown, field: string, where: string): Record<string, str
 }
 
 // Scalar Expression-node fields whose string value names an AXIS / index set
-// (rewritten by the index-set rename map, param-shadowed like §9.6.1).
-const RENAME_AXIS_KEYS = new Set<string>(['wrt', 'dim'])
+// (rewritten by the index-set rename map, param-shadowed like §9.6.1). `var` is
+// `integral`'s integration variable (esm-spec §4.2) — the same kind of
+// axis-naming scalar as `wrt`/`dim`, so an imported `integral` rewrite rule
+// follows its axis under rename exactly as a `D` rule does.
+const RENAME_AXIS_KEYS = new Set<string>(['wrt', 'dim', 'var'])
+
+// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
+// Expression positions — a numeric literal, a parameter reference, an AST
+// subtree — so they stay variable-reference positions for `varmap`; only a bare
+// string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
+// axis occurrence and follows the rename (§9.7.7).
+const RENAME_BOUND_KEYS = new Set<string>(['lower', 'upper'])
 
 // Object keys whose values are never variable-reference positions for the
 // rename walk: the metaparameter skip set plus the remaining scalar structural
@@ -769,8 +781,9 @@ const RENAME_PROTECTED_KEYS = new Set<string>([
  * One transitive-substitution pass over an imported declaration (esm-spec
  * §9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
  * bare strings in variable-reference positions; `isetmap` rewrites index-set
- * reference positions (`{"from": …}` values, the `wrt`/`dim` axis fields, and
- * the `where.*.shape` match-scoping index-set names, in `body` and `match`
+ * reference positions (`{"from": …}` values, the `wrt`/`dim`/`var` axis fields,
+ * a bare-axis-name `integral` `lower`/`upper` bound, and the `where.*.shape`
+ * match-scoping index-set names, in `body` and `match`
  * alike); `tplmap` rewrites `apply_expression_template.name`. Structural scalar
  * fields (`RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
  * rewritten. Pure syntactic substitution — no evaluation.
@@ -806,6 +819,12 @@ function renameWalk(
         out[k] = Object.prototype.hasOwnProperty.call(isetmap, v) ? isetmap[v]! : v
       } else if (RENAME_AXIS_KEYS.has(k) && typeof v === 'string') {
         out[k] = Object.prototype.hasOwnProperty.call(isetmap, v) ? isetmap[v]! : v
+      } else if (
+        RENAME_BOUND_KEYS.has(k) &&
+        typeof v === 'string' &&
+        Object.prototype.hasOwnProperty.call(isetmap, v)
+      ) {
+        out[k] = isetmap[v]!
       } else if (k === 'name' && isApply && typeof v === 'string') {
         out[k] = Object.prototype.hasOwnProperty.call(tplmap, v) ? tplmap[v]! : v
       } else if (k === 'where' && isObject(v)) {
@@ -944,7 +963,7 @@ function collectRefNames(out: Set<string>, x: Json, shadowed: Set<string>): Set<
  * the target's SURVIVING export scope — templates after `only`, all index sets,
  * and metaparameters still open after this edge's `bindings` — transitively
  * through every occurrence inside the surviving declarations (index-set
- * references in `from`/`wrt`/`dim` and registry `of` lists, open-metaparameter
+ * references in `from`/`wrt`/`dim`/`var` and registry `of` lists, open-metaparameter
  * names in expression positions, keyed-factor and other free names in
  * variable-reference positions and registry `offsets`/`values`,
  * `apply_expression_template.name` references). Runs after `bindings`

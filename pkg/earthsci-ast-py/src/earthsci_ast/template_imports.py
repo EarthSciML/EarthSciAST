@@ -217,6 +217,9 @@ _META_SUBST_SKIP_KEYS = frozenset(
         "name",
         "wrt",
         "dim",
+        # `integral`'s integration variable is an axis NAME (esm-spec §4.2),
+        # exactly like `wrt`/`dim` — never an expression position.
+        "var",
         "expression_template_imports",
         "metaparameters",
         "only",
@@ -692,7 +695,17 @@ def _name_map(raw: Any, field: str, where: str) -> dict[str, str]:
 
 #: Scalar Expression-node fields whose string value names an AXIS / index set
 #: (rewritten by the index-set rename map, param-shadowed like §9.6.1).
-_RENAME_AXIS_KEYS = ("wrt", "dim")
+#: ``var`` is ``integral``'s integration variable (esm-spec §4.2) — the same
+#: kind of axis-naming scalar as ``wrt``/``dim``, so an imported `integral`
+#: rewrite rule follows its axis under rename exactly as a ``D`` rule does.
+_RENAME_AXIS_KEYS = ("wrt", "dim", "var")
+
+#: ``integral`` bound fields (esm-spec §4.2). Unlike ``var`` these are full
+#: Expression positions — a numeric literal, a parameter reference, an AST
+#: subtree — so they stay variable-reference positions for ``varmap``; only a
+#: bare string naming a RENAMED index set (the cumulative form
+#: ``"upper": "x"``) is an axis occurrence and follows the rename (§9.7.7).
+_RENAME_BOUND_KEYS = ("lower", "upper")
 
 #: Object keys whose values are never variable-reference positions for the
 #: rename walk: the metaparameter skip set plus the remaining scalar structural
@@ -731,8 +744,9 @@ def _rename_walk(
     """One transitive-substitution pass over an imported declaration (esm-spec
     §9.7.7): ``varmap`` (renamed open metaparameters + rebound free names)
     rewrites bare strings in variable-reference positions; ``isetmap`` rewrites
-    index-set reference positions (``{"from": …}`` values, the ``wrt``/``dim``
-    axis fields, and the ``where.*.shape`` match-scoping index-set names, in
+    index-set reference positions (``{"from": …}`` values, the ``wrt``/``dim``/
+    ``var`` axis fields, a bare-axis-name ``integral`` ``lower``/``upper``
+    bound, and the ``where.*.shape`` match-scoping index-set names, in
     ``body`` and ``match`` alike); ``tplmap`` rewrites
     ``apply_expression_template.name``. Structural scalar fields
     (:data:`_RENAME_PROTECTED_KEYS`) and bound-index lists (range ``of``) are
@@ -763,6 +777,8 @@ def _rename_walk(
             return isetmap.get(value, value)
         if ks in _RENAME_AXIS_KEYS and isinstance(value, str):
             return isetmap.get(value, value)
+        if ks in _RENAME_BOUND_KEYS and isinstance(value, str) and value in isetmap:
+            return isetmap[value]
         if ks == "name" and isinstance(value, str) and str(node.get("op")) == APPLY_OP:
             return tplmap.get(value, value)
         if ks == "where" and _is_object(value):
