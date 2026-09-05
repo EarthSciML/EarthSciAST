@@ -1,0 +1,162 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "EnumsZeroAndNegative",
+    "description": "An `enums` member may be ANY integer -- negative, zero or positive (esm-spec §9.3, CONFORMANCE_SPEC §5.26). An enum member is a categorical CODE, not a 1-based position: it lowers to a `const` number used in arithmetic and in `join.on` key comparisons, where 0 and -1 are ordinary values. Real source tables need this: MOVES's `operatingmode.opModeID = 0` is Braking (an emitting mode with its own rate, not an absence) and `opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes that are associated with no pollutant/process. This fixture pins both the LOAD (the document is schema-valid) and the EVALUATION (the lowered constants are exactly 0 and -1, and carry their sign through arithmetic) -- a binding that validates the document but resolves the member to something other than its declared integer is not conformant.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-04T00:00:00Z",
+    "tags": [
+      "enums",
+      "categorical-lookup",
+      "zero",
+      "negative",
+      "fixture"
+    ]
+  },
+  "enums": {
+    "operating_mode": {
+      "Braking": 0,
+      "Idling": 1,
+      "Coasting": 11
+    },
+    "pol_process": {
+      "Unassociated": -1,
+      "RunningExhaustTHC": 101
+    }
+  },
+  "models": {
+    "EnumsZeroAndNegative": {
+      "variables": {
+        "mode_code": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "row_ax"
+          ],
+          "description": "Row 1 is the Braking operating mode's own code (0), row 2 the unassociated pol-process code (-1), row 3 an arithmetic combination Braking + 10*Idling + Unassociated = 9. Rows 1 and 2 pin the LOAD-time resolution of a zero- and a negative-valued member; row 3 pins that both keep their value and sign through arithmetic."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "mode_code",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ],
+              [
+                [
+                  3,
+                  3
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "enum",
+                "args": [
+                  "operating_mode",
+                  "Braking"
+                ]
+              },
+              {
+                "op": "enum",
+                "args": [
+                  "pol_process",
+                  "Unassociated"
+                ]
+              },
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "enum",
+                    "args": [
+                      "operating_mode",
+                      "Braking"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      10,
+                      {
+                        "op": "enum",
+                        "args": [
+                          "operating_mode",
+                          "Idling"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "enum",
+                    "args": [
+                      "pol_process",
+                      "Unassociated"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "zero_and_negative_members_resolve_to_themselves",
+          "description": "The zero-valued member resolves to exactly 0, the negative member to exactly -1, and both carry their value and sign through arithmetic (0 + 10*1 + (-1) = 9).",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "mode_code",
+              "time": 0.0,
+              "expected": 0.0,
+              "coords": {
+                "row_ax": 1
+              }
+            },
+            {
+              "variable": "mode_code",
+              "time": 0.0,
+              "expected": -1.0,
+              "coords": {
+                "row_ax": 2
+              }
+            },
+            {
+              "variable": "mode_code",
+              "time": 0.0,
+              "expected": 9.0,
+              "coords": {
+                "row_ax": 3
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "index_sets": {
+    "row_ax": {
+      "kind": "interval",
+      "size": 3
+    }
+  }
+}

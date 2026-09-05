@@ -82,7 +82,7 @@
     },
     "enums": {
       "type": "object",
-      "description": "File-local symbol-to-positive-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to positive integers. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.",
+      "description": "File-local symbol-to-integer mappings used by the 'enum' AST op to make categorical lookups cross-binding-portable. Each entry is an enum name; its value is an object mapping symbolic names (strings) to integers — any integer, negative, zero or positive, since an enum member is a categorical code rather than a 1-based position. Two .esm files may declare an enum of the same name with different mappings; enums are file-local and never merged across files. See esm-spec.md §9.3.",
       "additionalProperties": {
         "$ref": "#/$defs/EnumDeclaration"
       }
@@ -3469,11 +3469,10 @@
     },
     "EnumDeclaration": {
       "type": "object",
-      "description": "A file-local enum mapping symbolic names to positive integers (esm-spec.md §9.3). Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.",
+      "description": "A file-local enum mapping symbolic names to integers (esm-spec.md §9.3). The value domain is the WHOLE integer range — negative, zero and positive — because an enum member is a categorical CODE, not a position: it lowers to a `const` NUMBER used in arithmetic and in `join.on` key comparisons, where 0 and -1 are ordinary values (a source table's `opModeID = 0` or `polProcessID = -1` is a real code, not an absence). The two 1-based constructs in the format — `index`-op / index-set coordinates and `makearray` regions — are separate and carry their own bounds validation; using an enum member as an `index` argument is an authoring choice the index op bounds-checks, not a constraint on this block. Within a single enum, integer values MUST be unique. Across enums, values MAY collide (each enum is its own namespace). Bindings resolve enum-op nodes at load time before evaluating expressions.",
       "minProperties": 1,
       "additionalProperties": {
-        "type": "integer",
-        "minimum": 1
+        "type": "integer"
       }
     },
     "TranslateTarget": {

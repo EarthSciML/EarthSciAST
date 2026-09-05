@@ -236,3 +236,51 @@ end
         @test undeclared isa EarthSciAST.EarthSciASTError
     end
 end
+
+# ---------------------------------------------------------------------------
+# An `enums` member may be ANY integer — negative, zero or positive
+# (esm-spec §9.3, CONFORMANCE_SPEC §5.26).
+#
+# The schema used to carry `minimum: 1` on
+# `EnumDeclaration.additionalProperties`, and `coerce_enums` mirrored it with
+# an `int_v <= 0` rejection, so a zero-valued identifier could not be named.
+# MOVES has load-bearing ones: `operatingmode.opModeID = 0` is Braking (an
+# emitting mode with its own rate, not an absence) and
+# `opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes
+# associated with no pollutant/process.
+#
+# Both halves are pinned: the document LOADS, and each member resolves to
+# EXACTLY its declared integer. A binding that accepted the document but
+# clamped or dropped the sign would still be wrong.
+# ---------------------------------------------------------------------------
+@testset "zero and negative enum members (esm-spec §9.3)" begin
+    fixture = joinpath(_CF_REPO_ROOT, "tests", "valid", "enums_zero_and_negative.esm")
+    file = load_string(read(fixture, String))
+
+    @test file.enums["operating_mode"]["Braking"] == 0
+    @test file.enums["pol_process"]["Unassociated"] == -1
+    @test validate(file).is_valid
+
+    rhs = file.models["EnumsZeroAndNegative"].equations[1].rhs
+    @test rhs.op == "makearray"
+    # values[1] — the zero-valued member; values[2] — the negative one.
+    @test rhs.values[1].op == "const"
+    @test rhs.values[1].value == 0
+    @test rhs.values[2].op == "const"
+    @test rhs.values[2].value == -1
+    # values[3] — both read through ARITHMETIC: 0 + 10*1 + (-1) = 9.
+    @test evaluate_expr(rhs.values[1], Dict{String,Float64}()) == 0.0
+    @test evaluate_expr(rhs.values[2], Dict{String,Float64}()) == -1.0
+    @test evaluate_expr(rhs.values[3], Dict{String,Float64}()) == 9.0
+
+    # Uniqueness is unchanged by the widened domain: `0` is a value like any
+    # other. Written as its own case beside the positive duplicate because a
+    # "seen set" using 0 as its own sentinel would pass the positive case and
+    # let this one through.
+    _doc(enums) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},"enums":$enums,"models":{"M":{"variables":{"x":{"type":"unknown","units":"1"}},"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}"""
+    @test_throws ParseError load_string(_doc("""{"m":{"A":0,"B":0}}"""))
+    @test_throws ParseError load_string(_doc("""{"m":{"A":3,"B":3}}"""))
+    ok = load_string(_doc("""{"m":{"A":0,"B":-1}}"""))
+    @test ok.enums["m"]["A"] == 0
+    @test ok.enums["m"]["B"] == -1
+end

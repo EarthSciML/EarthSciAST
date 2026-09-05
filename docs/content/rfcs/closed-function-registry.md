@@ -107,7 +107,7 @@ These are settled and not re-litigated below; the RFC builds on them.
 }
 ```
 
-Each `enums` entry is a string→positive-integer map. Symbols are file-local;
+Each `enums` entry is a string→integer map (any integer). Symbols are file-local;
 two `.esm` files can define `season` independently with different mappings.
 References inside expressions use the symbolic name; bindings resolve to the
 integer at load time before invoking any closed-function handler.

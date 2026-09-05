@@ -707,7 +707,8 @@ Coerce the top-level `enums` JSON block into the typed map carried on
 
 - enum names are non-empty strings
 - symbolic keys are non-empty strings
-- values are positive integers
+- values are integers — ANY integer, negative, zero or positive: an enum
+  member is a categorical code, not a 1-based position (CONFORMANCE_SPEC §5.26)
 - within a single enum, integer values are unique
 
 Throws [`ParseError`](@ref) on any violation.
@@ -730,12 +731,9 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
                 throw(ParseError("enums.$(enum_name): symbol name must be non-empty"))
             end
             if !(int_raw isa Integer) || int_raw isa Bool
-                throw(ParseError("enums.$(enum_name).$(sym): value must be a positive integer (got $(typeof(int_raw)))"))
+                throw(ParseError("enums.$(enum_name).$(sym): value must be an integer (got $(typeof(int_raw)))"))
             end
             int_v = Int(int_raw)
-            if int_v <= 0
-                throw(ParseError("enums.$(enum_name).$(sym): value must be a positive integer (got $(int_v))"))
-            end
             if int_v in seen_values
                 throw(ParseError("enums.$(enum_name): integer value $(int_v) is duplicated"))
             end

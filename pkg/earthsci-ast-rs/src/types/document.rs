@@ -76,8 +76,10 @@ pub struct EsmFile {
     pub operators: Option<IndexMap<String, Operator>>,
 
     /// File-local enum declarations (esm-spec §9.3): each entry maps a
-    /// symbolic name to a positive integer. The `enum` AST op resolves to a
-    /// `const` integer at load time using these mappings.
+    /// symbolic name to an integer — ANY integer, negative, zero or positive,
+    /// because a member is a categorical code and not a 1-based position
+    /// (CONFORMANCE_SPEC §5.26). The `enum` AST op resolves to a `const`
+    /// integer at load time using these mappings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enums: Option<IndexMap<String, IndexMap<String, i64>>>,
 
