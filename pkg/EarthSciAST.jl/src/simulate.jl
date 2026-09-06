@@ -167,27 +167,47 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # `M.f[...]` cell). `_parse_cell_key` (tree_walk.jl) is the single inverse
     # of `_cell_key`'s "name[i,j]" element encoding.
     element_names = Set{String}(String(k) for k in keys(var_map))
-    cells_of = Dict{String,Vector{Int}}()
+    # Each array base name's cells as `(multi-index, slot)` pairs: the slot is
+    # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
+    # DATA (esm-spec §6.3 / §6.6.2) is read at, so a whole authored profile
+    # lands cell-for-cell rather than by flat position.
+    cells_of = Dict{String,Vector{Tuple{Vector{Int},Int}}}()
     for (vname, idx) in var_map
         parsed = _parse_cell_key(String(vname))
         parsed === nothing && continue
-        push!(get!(cells_of, parsed[1], Int[]), idx)
+        push!(get!(cells_of, parsed[1], Tuple{Vector{Int},Int}[]), (parsed[2], idx))
     end
     base_names = Set{String}(keys(cells_of))
     element_alias = _bare_alias_groups(element_names)
     base_alias = _bare_alias_groups(base_names)
     for (rawkey, value) in ics
         key = String(rawkey)
-        v = Float64(value)
         resolved = _resolve_state_key(key, element_names, element_alias)
         if resolved !== nothing
-            u0[var_map[resolved]] = v
+            is_inline_array(value) && throw(SimulateError(
+                "simulate: initial_conditions['$key'] carries inline array data for a " *
+                "single state element; only a SHAPED unknown's whole-variable key takes " *
+                "a nested array (esm-spec §6.6.2)"))
+            u0[var_map[resolved]] = Float64(value)
             continue
         end
         resolved = _resolve_state_key(key, base_names, base_alias)
         if resolved !== nothing
-            for idx in cells_of[resolved]
-                u0[idx] = v
+            cells = cells_of[resolved]
+            if is_inline_array(value)
+                for (idxs, idx) in cells
+                    checkbounds(Bool, value, idxs...) || throw(SimulateError(
+                        "simulate: initial_conditions['$key'] has shape $(size(value)), " *
+                        "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
+                        "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
+                        "shape after metaparameter folding)"))
+                    u0[idx] = Float64(value[idxs...])
+                end
+            else
+                v = Float64(value)
+                for (_, idx) in cells
+                    u0[idx] = v
+                end
             end
             continue
         end
@@ -647,7 +667,12 @@ function esm_problem(input, tspan;
     end
     doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path)
 
-    overrides = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in p)
+    # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
+    # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
+    # `_coerce_inline_value` normalizes both; the build then routes the array
+    # ones onto the const-array channel (`_register_inline_array_parameters`),
+    # which is where an array-shaped parameter's value has always lived.
+    overrides = Dict{String,Any}(String(k) => _coerce_inline_value(v) for (k, v) in p)
 
     # Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
     # through the Provider seam, never as raw `const_arrays` keyed by internal

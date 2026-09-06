@@ -944,6 +944,17 @@ export function validateAggregateJoinSides(
  * `{ from: NAME }` whose NAME is not a key of the document-scoped `index_sets`
  * registry. No implicit interval is inferred, so a typo cannot silently become
  * an empty set. Emitted per offending aggregate field.
+ *
+ * Run only when the document DECLARES a registry. A document that declares none
+ * is a §9.7.10 discretization-agnostic PDE leaf: its index sets arrive from a
+ * discretization library injected into this component's scope by a composing
+ * document, a subsystem-ref edge or an inline test (§6.6.6), so the effective
+ * registry exists only in that per-run build and resolving `{ from: NAME }`
+ * against the empty local registry would reject every conforming leaf. The
+ * check is therefore deferred, mirroring §9.6.1, where
+ * `template_constraint_unknown_index_set` does not run for a library file
+ * validated standalone; a name still unresolved once injection has run is
+ * rejected by the evaluating bindings' resolvers (issue #185).
  */
 export function validateAggregateIndexSets(
   model: Model,
@@ -952,6 +963,7 @@ export function validateAggregateIndexSets(
 ): StructuralError[] {
   const errors: StructuralError[] = []
   const declared = new Set(Object.keys(esmFile.index_sets || {}))
+  if (declared.size === 0) return errors
   forEachExpressionScope(model, modelPath, (scope) => {
     for (const site of scope) {
       for (const agg of collectAggregates(site.expr)) {

@@ -1,0 +1,133 @@
+{
+    "fixture": "column_array_overrides",
+    "assertions": [
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 300.0
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": null,
+            "actual": 303.25
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 3,
+            "variable": "u",
+            "reduce": null,
+            "actual": 305.0
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 4,
+            "variable": "u",
+            "reduce": "max",
+            "actual": 305.0
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 5,
+            "variable": "v",
+            "reduce": null,
+            "actual": 2.0
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 6,
+            "variable": "w",
+            "reduce": null,
+            "actual": 10.0
+        },
+        {
+            "test_id": "declared_defaults",
+            "assertion_idx": 7,
+            "variable": "w",
+            "reduce": null,
+            "actual": 40.0
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 288.0
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": null,
+            "actual": 294.5
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 3,
+            "variable": "u",
+            "reduce": "min",
+            "actual": 288.0
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 4,
+            "variable": "v",
+            "reduce": null,
+            "actual": -3.0
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 5,
+            "variable": "v",
+            "reduce": "min",
+            "actual": -4.0
+        },
+        {
+            "test_id": "stable_regime",
+            "assertion_idx": 6,
+            "variable": "w",
+            "reduce": null,
+            "actual": 20.0
+        },
+        {
+            "test_id": "unstable_regime",
+            "assertion_idx": 1,
+            "variable": "u",
+            "reduce": null,
+            "actual": 310.0
+        },
+        {
+            "test_id": "unstable_regime",
+            "assertion_idx": 2,
+            "variable": "u",
+            "reduce": "max",
+            "actual": 310.0
+        },
+        {
+            "test_id": "unstable_regime",
+            "assertion_idx": 3,
+            "variable": "u",
+            "reduce": "min",
+            "actual": 304.0
+        },
+        {
+            "test_id": "unstable_regime",
+            "assertion_idx": 4,
+            "variable": "v",
+            "reduce": "max",
+            "actual": 7.5
+        },
+        {
+            "test_id": "unstable_regime",
+            "assertion_idx": 5,
+            "variable": "w",
+            "reduce": null,
+            "actual": 30.0
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/column_array_overrides.esm. Every state is held at its initial value (D = 0), so each actual IS the seeded value: the shaped parameter's inline-array `default` / `parameter_overrides` column (esm-spec 6.6.2) read through `ic(u) ~ theta0`, the shaped unknown's inline-array `default` / `initial_conditions` profile, and the state-free array observed read through `ic(w) ~ gathered` (esm-spec 11.4). The values are exactly the authored numbers, so a disagreement localises to the cell that was mis-read rather than to solver drift."
+}

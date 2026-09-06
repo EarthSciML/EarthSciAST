@@ -530,7 +530,9 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # and the reference-integrity pass, so `validate()` accepted them until now:
     #   • `undefined_index_set`         — an aggregate `ranges` `{from: NAME}`
     #                                     naming a set absent from the document
-    #                                     `index_sets` registry;
+    #                                     `index_sets` registry (only when the
+    #                                     document declares one — §9.7.10 leaves
+    #                                     get theirs by injection, issue #185);
     #   • `join_key_invalid_type`       — a value-equality `join` whose key column
     #                                     ranges over a categorical set with a
     #                                     float/null member (not portably equatable);
@@ -1079,7 +1081,8 @@ expression-bearing field of every model (and its subsystems) and, for each
 `aggregate` node it finds, applies:
 
 - [`_check_undefined_index_set!`] — a `ranges` `{from: NAME}` whose
-  NAME is not a key of the document `index_sets` registry;
+  NAME is not a key of the document `index_sets` registry (run only when the
+  document DECLARES a registry — see the function for why);
 - [`_check_join_key_type!`] — a value-equality `join` key column resolving to a
   categorical set with a float/null member;
 - [`_check_relational_in_continuous!`] — a `distinct` node whose key/body reads a
@@ -1161,9 +1164,20 @@ end
 # F-6 check: every `{from: NAME}` range of an aggregate must name a declared
 # index set. One finding per DISTINCT undeclared name (a set referenced by two
 # range symbols is one defect).
+#
+# Run only when the document DECLARES a registry. A document that declares none
+# is a §9.7.10 discretization-agnostic PDE leaf: its index sets arrive from a
+# discretization library injected into this component's scope by a composing
+# document, a subsystem-ref edge or an inline test (§6.6.6), so the effective
+# registry exists only in that per-run build and resolving `{from: NAME}`
+# against the empty local registry would reject every conforming leaf. The check
+# is deferred there, mirroring §9.6.1's standalone exemption for
+# `template_constraint_unknown_index_set`; a name still unresolved once
+# injection has run is rejected by the evaluating bindings' resolvers
+# (`E_REF_UNDECLARED_INDEX_SET` / `E_TREEWALK_UNDECLARED_INDEX_SET`; issue #185).
 function _check_undefined_index_set!(errors::Vector{StructuralError}, agg::OpExpr,
                                      anchor::String, registry::Set{String})
-    agg.ranges === nothing && return errors
+    (agg.ranges === nothing || isempty(registry)) && return errors
     reported = Set{String}()
     for sym in sort!(collect(keys(agg.ranges)))
         rv = agg.ranges[sym]

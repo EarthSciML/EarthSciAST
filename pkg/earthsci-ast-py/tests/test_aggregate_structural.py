@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
-from conftest import VALID_DIR
+from conftest import CONFORMANCE_DIR, INVALID_DIR, VALID_DIR
 
 from earthsci_ast.validation import validate_text
 
@@ -62,3 +62,42 @@ def test_aggregate_fixture_structurally_valid(fixture_path: Path) -> None:
         f"{[(e.code, e.path, e.message) for e in result.structural_errors]}"
     )
     assert result.is_valid, f"{fixture_path.name}: validate().is_valid is False"
+
+
+_AGNOSTIC_LEAF = (
+    CONFORMANCE_DIR / "expression_templates" / "inject_agnostic_aggregate" / "fixture.esm"
+)
+
+
+def test_agnostic_leaf_aggregate_range_is_not_undefined_index_set() -> None:
+    """A §9.7.10 discretization-agnostic leaf declares no `index_sets` of its own.
+
+    Its registry arrives from a grid library injected into the component's scope
+    at mount / test time (§6.6.6), so an `aggregate` range naming a set the
+    document does not declare is NOT decidable at standalone load and MUST NOT
+    be reported as ``undefined_index_set`` — mirroring §9.6.1, where
+    ``template_constraint_unknown_index_set`` does not run for a library file
+    validated standalone. Before issue #185 the check resolved against
+    ``data["index_sets"]`` unconditionally, so every conforming leaf was
+    rejected at ``load_path()``.
+    """
+    result = validate_text(_AGNOSTIC_LEAF.read_text())
+
+    assert not result.schema_errors, [e.message for e in result.schema_errors]
+    assert [e.code for e in result.structural_errors] == []
+    assert result.is_valid
+
+
+def test_undeclared_range_still_rejected_when_the_document_declares_a_registry() -> None:
+    """The negative control: the deferral is scoped to a document with NO registry.
+
+    A document that declares one is resolved against it, so a typo'd `from` name
+    is still an ``undefined_index_set`` at validate() — the typo-catching value
+    the issue asked to preserve.
+    """
+    fixture = INVALID_DIR / "aggregate" / "undeclared_from_name.esm"
+
+    result = validate_text(fixture.read_text())
+
+    assert not result.is_valid
+    assert "undefined_index_set" in {e.code for e in result.structural_errors}
