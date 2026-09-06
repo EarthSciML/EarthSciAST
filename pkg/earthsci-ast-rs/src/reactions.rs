@@ -7,7 +7,8 @@
 //! equations mirroring the Julia (Catalyst) and Python references.
 
 use crate::{
-    Equation, Expr, ExpressionNode, Model, ModelVariable, ReactionSystem, Species, VariableType,
+    Equation, Expr, ExpressionNode, InlineValue, Model, ModelVariable, ReactionSystem, Species,
+    VariableType,
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -213,7 +214,7 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
             ModelVariable {
                 var_type,
                 units: species.units.clone(),
-                default: species.default,
+                default: species.default.map(InlineValue::Scalar),
                 description: species.description.clone(),
                 ..Default::default()
             },
@@ -238,7 +239,7 @@ pub fn derive_odes(system: &ReactionSystem) -> Result<Model, DeriveError> {
             ModelVariable {
                 var_type: VariableType::Parameter,
                 units: param.units.clone(),
-                default: param.default,
+                default: param.default.map(InlineValue::Scalar),
                 description: param.description.clone(),
                 default_units: param.default_units.clone(),
                 shape: param.shape.clone(),
@@ -524,7 +525,7 @@ mod tests {
         let model = derive_odes(&system).expect("derives");
         let k1 = model.variables.get("k1").expect("k1 is declared");
         assert!(matches!(k1.var_type, VariableType::Parameter));
-        assert_eq!(k1.default, Some(1.8e-12));
+        assert_eq!(k1.default_scalar(), Some(1.8e-12));
         assert_eq!(k1.units.as_deref(), Some("cm3/molec/s"));
 
         // Species first in declaration order, then parameters -- the order
@@ -623,7 +624,7 @@ mod tests {
             matches!(model.variables["R"].var_type, VariableType::Parameter),
             "reservoir R must lower to a parameter"
         );
-        assert_eq!(model.variables["R"].default, Some(2.0));
+        assert_eq!(model.variables["R"].default_scalar(), Some(2.0));
         assert!(matches!(
             model.variables["A"].var_type,
             VariableType::Unknown

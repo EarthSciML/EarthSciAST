@@ -1,0 +1,63 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "elementwise_obs_gather",
+    "description": "An ARRAY-shaped observed defined ELEMENTWISE over other arrays (f = 1 + cos(pi*zc), h = u*f) and read ONLY through an `index(.., j)` gather inside an `aggregate` body. Regression fixture for issue #175: the folded body `index(1 + cos(pi*zc), j)` used to drop the gather and leave `zc` bare (E_TREEWALK_UNBOUND_VARIABLE)."
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "zc": { "type": "unknown", "shape": ["lev"] },
+        "f":  { "type": "unknown", "shape": ["lev"] },
+        "h":  { "type": "unknown", "shape": ["lev"] },
+        "u":  { "type": "unknown", "shape": ["lev"], "default": 2.0 },
+        "colsum": { "type": "unknown", "shape": ["lev"] },
+        "total":  { "type": "unknown" },
+        "s":  { "type": "unknown", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "colsum" },
+        { "lhs": { "op": "D", "args": ["s"], "wrt": "t" }, "rhs": "total" },
+        {
+          "lhs": "zc",
+          "rhs": { "op": "const", "args": [], "value": [0.125, 0.375, 0.625, 0.875] }
+        },
+        {
+          "lhs": "f",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1,
+              { "op": "cos", "args": [ { "op": "*", "args": [3.141592653589793, "zc"] } ] }
+            ]
+          }
+        },
+        { "lhs": "h", "rhs": { "op": "*", "args": ["u", "f"] } },
+        {
+          "lhs": "colsum",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 4], "j": [1, 4] },
+            "args": ["h"],
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["h", "j"] }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": { "j": [1, 4] },
+            "args": ["f"],
+            "expr": { "op": "index", "args": ["f", "j"] }
+          }
+        }
+      ]
+    }
+  }
+}

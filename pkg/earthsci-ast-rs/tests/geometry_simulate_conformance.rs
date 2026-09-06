@@ -147,7 +147,7 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
         ..Default::default()
     };
     let params: HashMap<String, f64> = HashMap::new();
-    let ics: HashMap<String, f64> = t.initial_conditions.as_ref().cloned().unwrap_or_default();
+    let ics: HashMap<String, f64> = t.scalar_initial_conditions();
 
     let sol = earthsci_ast::esm_problem(
         file,
@@ -259,11 +259,7 @@ fn polygon_intersection_area_planar_fixture_area_is_one() {
         saveat: Some(vec![0.0, 1.0]),
         ..Default::default()
     };
-    let ics: HashMap<String, f64> = test
-        .initial_conditions
-        .as_ref()
-        .cloned()
-        .unwrap_or_default();
+    let ics: HashMap<String, f64> = test.scalar_initial_conditions();
     let sol = earthsci_ast::esm_problem(
         &file,
         (test.time_span.start, test.time_span.end),
@@ -329,11 +325,7 @@ fn planar_ode_fixture_is_runnable_and_exposes_area() {
         saveat: Some(vec![0.0, 2.0]),
         ..Default::default()
     };
-    let ics: HashMap<String, f64> = test
-        .initial_conditions
-        .as_ref()
-        .cloned()
-        .unwrap_or_default();
+    let ics: HashMap<String, f64> = test.scalar_initial_conditions();
     let sol = earthsci_ast::esm_problem(
         &file,
         (test.time_span.start, test.time_span.end),

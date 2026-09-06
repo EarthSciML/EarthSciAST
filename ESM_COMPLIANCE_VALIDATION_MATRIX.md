@@ -282,6 +282,13 @@ Where:
 > `makearray_region_inverted.esm` (`template_imports_conformance`).
 > **Python (2026-07-03)**: implemented (`earthsci_ast/lower_expression_templates.py` `_validate_makearray_regions`, run at both §9.6.4 validator sites — fast path and full path — skipping `expression_templates` and non-integer bounds). Fixtures: `makearray_empty_region_min_extent.esm` loads at `N=2` (folds `[2,1]`) and rejects at `N=1` (folds `[2,0]`); `makearray_region_inverted.esm` raises `makearray_region_inverted`.
 
+### BEHAV-04-I: Indexing an Elementwise Array Expression (esm-spec §4.3.4)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-I-001 | An elementwise combination of array operands is itself an ARRAY and MUST be INDEXABLE: `index(op(a₁, …, aₙ), k…)` resolves to `op(index(a₁, k…), …, index(aₙ, k…))` for every elementwise `op`, with genuinely scalar operands (literals, scalar parameters) left un-gathered so they broadcast. The distribution MUST be TRANSITIVE — the array leaves may sit at any depth under elementwise ops — and MUST reach every array source the binding can gather (array state slot, forcing buffer, const array, `makearray`, and an `aggregate`/`arrayop` keeping at least one symbolic output index). It MUST NOT re-wrap an `index` node, a SCALAR reduction (empty `output_idx`), or a non-elementwise op. The consequence the rule exists for: an array-shaped OBSERVED authored elementwise (`f = 1 + cos(pi*zc)`, `zc` shaped `[lev]`) and read ONLY through an `index(f, j)` gather must evaluate — a binding that inlines `f` by name substitution and then inspects only the OUTERMOST combination's immediate operands finds nothing array-shaped, drops the gather, and leaves `zc` unbound. Julia: FIXED (`_index_pushdown_arrayish` recurses through nested elementwise ops; shared by `_resolve_indices` and the symbolic stencilizer) — the elementwise document previously raised `E_TREEWALK_UNBOUND_VARIABLE: zc` while Python and Rust returned the right numbers. Gate: `tests/conformance/elementwise_observed_gather/` (Julia/Python/Rust agree on the golden actuals, and the elementwise and explicit-gather spellings agree with each other) | esm-spec.md §4.3.4, CONFORMANCE_SPEC §5.29 | Yes | simulation |
+
+> **Binding status (2026-09-05)**: **Julia** fixed; **Python** and **Rust** already conforming and now pinned by the category. **TypeScript**, **Go** — rewrite-only ports with no evaluator; the row does not apply.
+
 ### BEHAV-08-A: Geometry-Op Operand Rings — Padding and Degenerate Vertices (esm-spec §8.6.1)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -1068,16 +1075,37 @@ capability and no binding is exempt.
 > library never declares survives the rename as spelled and is rejected at
 > registration with `template_constraint_unknown_index_set`).
 
+> **`integral` `var` / bound rewrite (2026-09-05, EXPR-09-F-003)**: the §9.7.7
+> occurrence list for an index-set rename covers the AXIS-NAMING scalar fields of
+> Expression nodes, and `integral` carries two beyond `wrt`/`dim` — the
+> integration variable `var`, and a `lower`/`upper` bound written as a bare axis
+> name (the §4.2 cumulative form `"upper": "x"`). Previously only `wrt`/`dim`
+> were rewritten, so a `D` rule family renamed onto another axis as intended
+> while an otherwise identical `integral` rule family did not: the renamed
+> instance's `match` kept `var: "x"`, never matched a consumer that only ever
+> named the renamed axis, and the integral survived lowering
+> (`unlowered_operator`) — making a shipped `integral` rule library unusable
+> through the very mechanism §9.7.7 exists to provide. Fixed in **all five
+> bindings** by adding `var` to the rename AXIS key set (and, with it, to the
+> §9.7.6 metaparameter-substitution skip set — an axis name is not an expression
+> position) and adding a bound branch that maps a bare `lower`/`upper` string
+> through the index-set map when it names a renamed set, leaving every other
+> bound an ordinary expression position. Guarded by the fixture
+> `import_rename_integral_axis` (one cumulative-`integral` rule family imported
+> twice under prefix `col`/`row` + rename `x` → `lev`/`lat` at N = 4/3; each
+> renamed instance fires only on its own axis at its own cell measure — five-way
+> byte-identical expanded AST).
+
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-F-001 | Edge pipeline order MUST be: target's own-scope resolution → `bindings` → `only` → `prefix`/`rename`/`rebind` → merge; `only`/`bindings`/`rename`/`rebind` speak the target's export vocabulary (pre this edge's rename) | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-002 | `prefix` MUST rename every surviving exported name without an explicit `rename` entry to `<prefix>.<name>`; `rename` entries override; prefixes nest through re-export chains (deeper edges and the loader API bind the renamed, dotted names) | esm-spec.md §9.7.7 | Yes | expression |
-| EXPR-09-F-003 | Renames MUST apply transitively through the pinned occurrence sites: index-set registry keys / registry `of` / `{"from"}` refs / `wrt`-`dim` scalar fields / `where.*.shape` match-scoping index-set names in `body` AND `match` (param-shadowed); metaparameter keys / expression-position bare strings / structural-site names; template keys / `apply_expression_template.name` | esm-spec.md §9.7.7 | Yes | expression |
+| EXPR-09-F-003 | Renames MUST apply transitively through the pinned occurrence sites: index-set registry keys / registry `of` / `{"from"}` refs / the `wrt`-`dim`-`var` axis scalar fields / a bare-axis-name `integral` `lower`/`upper` bound / `where.*.shape` match-scoping index-set names in `body` AND `match` (param-shadowed); metaparameter keys / expression-position bare strings / structural-site names; template keys / `apply_expression_template.name` | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-004 | `rebind` MUST rewrite free variable names in bodies/matches (incl. `aggregate` `args` and `index` gathers) and ragged `offsets`/`values`; dotted targets are §4.6 scoped references | esm-spec.md §9.7.7 | Yes | expression |
 | EXPR-09-F-005 | Renaming a name the target does not export at the edge is `template_import_rename_unknown_name`; rebinding a non-occurring or declared name is `template_import_rebind_unknown_name`; rebinding a bound index symbol is `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
 | EXPR-09-F-006 | Post-rename names MUST be unique per namespace and new bare names fresh (no capture of free names, bound symbols, or params): `template_import_rename_collision`; `prefix`/targets MUST be dotted identifiers: `template_import_rename_invalid` | esm-spec.md §9.7.7 | Yes | validation |
 | EXPR-09-F-007 | Same file under different renames = distinct registrations (no deep-equal dedup across renames); identical `ref` + instantiation + renames = dedupe at first occurrence; renamed `match`-rule instances register at their edges' §9.7.4 positions and identical patterns tie-break by that order | esm-spec.md §9.7.4, §9.7.7 | Yes | expression |
-| EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_where_rename_two_instances`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_where_rename_*`, `import_rebind_*` | expression |
+| EXPR-09-F-008 | All five bindings MUST produce byte-identical post-lowering canonical ASTs for `import_rename_two_instances`, `import_where_rename_two_instances`, `import_rename_integral_axis`, `import_rebind_keyed_factors`, `import_rename_diamond` | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/import_rename_*`, `import_where_rename_*`, `import_rebind_*` | expression |
 
 ### EXPR-09-G: Match-Pattern Scoping Constraints (`where`, esm-spec §9.6.1; RFC match-pattern-scoping-constraints)
 
