@@ -180,9 +180,18 @@ as before, and adding it changes no dynamics and no flattened system.
 | `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
 | `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
 
-Every field is optional; the block itself is optional; at least one field must be
-present when the block is written (`minProperties: 1`), so that an empty
-`solver: {}` is not a second spelling of absence.
+Every field is optional, and so is the block itself.
+
+**An empty block normalizes to absence.** `"solver": {}` is legal and means
+exactly what omitting the block means. A binding MUST normalize it away **at
+load**, so the typed document never holds a block with nothing set and the
+block does not survive `parse → emit`. This is the one exception to the
+verbatim round-trip of §2.2.4, and it is deliberate: the alternative — making
+`{}` a validation error — would make `solver` the only optional top-level
+container in the format that rejects an empty object (`coordinates`,
+`index_sets`, `metaparameters` and `coupling_roles` all admit one), a lone rule
+a reader would have to learn for no gain, and a trap for any tool that builds
+the block from optional inputs that all happened to be absent.
 
 **Absence is not a default value.** A document with no `solver` block, or with no
 `stiffness` key, has *not declared* its stiffness — it does not thereby declare
@@ -257,10 +266,13 @@ Advisory as the fields are, four things are **required** of every binding:
    non-positive tolerance, or a wrong JSON type is a validation failure. This is
    schema conformance, not behavior, and is not excused by the block being
    advisory.
-2. **Round-trip verbatim.** `solver` survives `parse → emit` unchanged. It is
-   authored configuration — a peer of `tolerance` and `parameter_overrides` —
-   not a load-time construct like `expression_template_imports` (§9.7.6), which
-   is consumed and gone by emit time.
+2. **Round-trip verbatim**, with one exception. `solver` survives
+   `parse → emit` unchanged: it is authored configuration — a peer of
+   `tolerance` and `parameter_overrides` — not a load-time construct like
+   `expression_template_imports` (§9.7.6), which is consumed and gone by emit
+   time. The exception is the empty block: `"solver": {}` normalizes to absence
+   at load (§2.2) and therefore does not round-trip, because it carries nothing
+   to preserve.
 3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
    classification, namespacing, or the flattened system.
 4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a

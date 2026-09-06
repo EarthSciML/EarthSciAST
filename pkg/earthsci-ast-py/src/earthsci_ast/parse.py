@@ -1372,12 +1372,18 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     solver: Solver | None = None
     if isinstance(data.get("solver"), dict):
         _s = data["solver"]
-        solver = Solver(
+        _candidate = Solver(
             stiffness=_s.get("stiffness"),
             abstol=_s.get("abstol"),
             reltol=_s.get("reltol"),
             splitting=_s.get("splitting"),
         )
+        # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
+        # means what omitting the block means, so the typed document never holds
+        # a block with nothing set — which is what keeps the five bindings from
+        # disagreeing about whether `{}` survives `parse -> emit`.
+        if _candidate != Solver():
+            solver = _candidate
 
     # Parse the document-scoped data-source ingest registry (esm-spec §8).
     data_sources: dict[str, DataSource] = {}

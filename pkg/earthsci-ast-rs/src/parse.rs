@@ -272,6 +272,8 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         serde_json::from_value(json_value).map_err(EsmError::JsonParse)?
     };
     esm_file.component_templates = component_templates;
+    // esm-spec §2.2: an EMPTY `solver` block normalizes to absence at load.
+    esm_file.solver = crate::solver::normalize_empty(esm_file.solver.take());
 
     Ok(esm_file)
 }

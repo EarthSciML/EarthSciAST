@@ -74,3 +74,20 @@ pub fn resolve_tolerances(
             .unwrap_or(DEFAULT_RELTOL),
     )
 }
+
+/// Map a `solver` block with nothing set to absence (esm-spec §2.2).
+///
+/// `"solver": {}` is legal — every other optional top-level container admits an
+/// empty object, and making this one the exception would be a rule with no
+/// payoff — but it means exactly what omitting the block means, so it is
+/// normalized away AT LOAD. The typed document then never holds a block with
+/// nothing set, and `parse -> emit` cannot disagree across bindings about
+/// whether `{}` survives. Not covered by `skip_serializing_if`: that is
+/// per-FIELD, so an empty `Solver` would still emit its enclosing `{}`.
+pub(crate) fn normalize_empty(solver: Option<crate::types::Solver>) -> Option<crate::types::Solver> {
+    let s = solver?;
+    if s.stiffness.is_none() && s.abstol.is_none() && s.reltol.is_none() && s.splitting.is_none() {
+        return None;
+    }
+    Some(s)
+}

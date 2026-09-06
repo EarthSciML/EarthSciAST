@@ -725,10 +725,16 @@ function coerce_solver(data)
     _f(k) = _raw_get(data, k)  # 2-arity; absent reports as `nothing`
     _num(v) = v === nothing ? nothing : Float64(v)
     _str(v) = v === nothing ? nothing : String(v)
-    return Solver(stiffness=_str(_f("stiffness")),
-                  abstol=_num(_f("abstol")),
-                  reltol=_num(_f("reltol")),
-                  splitting=_str(_f("splitting")))
+    s = Solver(stiffness=_str(_f("stiffness")),
+               abstol=_num(_f("abstol")),
+               reltol=_num(_f("reltol")),
+               splitting=_str(_f("splitting")))
+    # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
+    # means what omitting the block means, so the typed document never holds a
+    # block with nothing set — which is what keeps the five bindings from
+    # disagreeing about whether `{}` survives `parse -> emit`.
+    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting)) && return nothing
+    return s
 end
 
 """

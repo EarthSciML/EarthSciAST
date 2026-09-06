@@ -2964,17 +2964,6 @@
     "structural_errors": [],
     "is_valid": false
   },
-  "solver_empty_block.esm": {
-    "schema_errors": [
-      {
-        "path": "/solver",
-        "message": "Object must have at least 1 property (schema: minProperties 1)",
-        "keyword": "minProperties"
-      }
-    ],
-    "structural_errors": [],
-    "is_valid": false
-  },
   "solver_version_too_old.esm": {
     "resolver_only": true,
     "schema_errors": [],

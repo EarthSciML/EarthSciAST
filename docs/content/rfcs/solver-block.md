@@ -94,13 +94,30 @@ no `stiffness` key, has *not declared* its stiffness. It does not thereby
 declare `"low"`. Bindings MUST NOT treat absence as an assertion about the
 system.
 
-**The block is closed** (`additionalProperties: false`) and carries
-`minProperties: 1`. An empty `solver: {}` would be a second spelling of
-absence, and the format's convention is that any given state has a unique
-representation — the same reasoning that makes a one-element `ParameterUpdate`
-array invalid. *This is the one schema detail worth a second opinion in review:*
-the alternative (allow `{}`) costs one invalid fixture but removes an
-easy-to-hit authoring error.
+**The block is closed** (`additionalProperties: false`) but does **not** carry
+`minProperties: 1`. An empty `solver: {}` is legal and NORMALIZES to absence at
+load.
+
+This went the other way first, on the argument that `{}` and absence are two
+spellings of one state and the format keeps a unique representation per state —
+the reasoning that makes a one-element `ParameterUpdate` array invalid. Checking
+the schema settled it against that: `solver` would have been the **only**
+optional top-level container rejecting an empty object. `coordinates`,
+`index_sets`, `metaparameters` and `coupling_roles` all admit one, and
+`coordinates` is the block §2.2 is modelled on. A lone exception is a rule a
+reader has to learn for no gain, and a trap for any tool assembling the block
+from optional inputs that all happened to be absent. (The one other
+`minProperties` in the schema, on `EnumDeclaration`, is a different case: a
+*named* enum declaring no members is broken, where an unnamed singleton block
+declaring nothing is merely redundant.)
+
+The cost is one normalization, and it must be applied **at load** rather than
+left to the emitters — otherwise the bindings disagree. `omitempty` on Go's
+pointer field tests nil, not emptiness; Rust's `skip_serializing_if` is
+per-field, so an empty `Solver` still emits its enclosing `{}`; TypeScript
+serializes the whole document object. All three would have round-tripped `{}`
+verbatim while Python and Julia dropped it. Normalizing at load means the typed
+document never holds a block with nothing set, in any binding.
 
 ## What the block is not for
 
@@ -198,7 +215,8 @@ schema.
 
 ### 2. Schema — `esm-schema.json`
 
-- New `$defs.Solver`: closed, `minProperties: 1`, the four fields, enums on
+- New `$defs.Solver`: closed (no `minProperties` — an empty block normalizes
+  to absence at load), the four fields, enums on
   `stiffness` and `splitting`, `exclusiveMinimum: 0` on both tolerances.
 - `properties.solver` at top level.
 - `$id` → `https://earthsciml.org/schemas/esm/1.1.0/esm.schema.json`. Every
@@ -250,8 +268,9 @@ accessor fails CI).
 
 - `tests/valid/solver_block.esm` — all four fields, `esm: "1.1.0"`.
 - `tests/invalid/` — one fixture each: unknown enum member, unknown key inside
-  the block, non-positive `abstol`, empty `solver: {}`, and `solver` declared
-  under `esm: "1.0.0"` (→ `solver_version_too_old`).
+  the block, non-positive `abstol`, and `solver` declared under `esm: "1.0.0"`
+  (→ `solver_version_too_old`). There is deliberately no empty-block fixture:
+  `{}` is legal and normalizes to absence.
 - Round-trip fixture proving the block emits verbatim.
 - A stiff, POLLU-shaped fixture under `tests/conformance/`, **gating** under
   the §5.9 numeric-tolerance contract, anchored on the published reference

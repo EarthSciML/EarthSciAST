@@ -62,3 +62,22 @@ func RejectSolverPreV11(view map[string]any) error {
 		fmt.Sprintf("the top-level `solver` block requires esm >= 1.1.0; file declares %s (offending path: /solver)", esmRaw),
 	)
 }
+
+// normalizeSolver maps a `solver` block with nothing set to absence
+// (esm-spec §2.2).
+//
+// `"solver": {}` is legal — every other optional top-level container admits an
+// empty object, and making this one the exception would be a rule with no
+// payoff — but it means exactly what omitting the block means, so it is
+// normalized away AT LOAD. The typed document then never holds a block with
+// nothing set, and `parse -> emit` cannot disagree across bindings about
+// whether `{}` survives.
+func normalizeSolver(s *Solver) *Solver {
+	if s == nil {
+		return nil
+	}
+	if s.Stiffness == nil && s.Abstol == nil && s.Reltol == nil && s.Splitting == nil {
+		return nil
+	}
+	return s
+}

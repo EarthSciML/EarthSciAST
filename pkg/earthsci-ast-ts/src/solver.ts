@@ -73,3 +73,21 @@ export function resolveTolerances(
     reltol: opts.reltol ?? solver?.reltol ?? DEFAULT_RELTOL,
   }
 }
+
+/**
+ * Map a `solver` block with nothing set to absence (esm-spec §2.2), in place on
+ * the raw document view.
+ *
+ * `"solver": {}` is legal — every other optional top-level container admits an
+ * empty object, and making this one the exception would be a rule with no
+ * payoff — but it means exactly what omitting the block means, so it is
+ * normalized away AT LOAD. `toJson` serializes the whole document object, so
+ * without this an empty block would survive `parse → emit` here while Python
+ * and Julia dropped it: the five bindings disagreeing on one document.
+ */
+export function normalizeEmptySolver(view: unknown): void {
+  if (!isObject(view)) return
+  const solver = view.solver
+  if (!isObject(solver)) return
+  if (Object.keys(solver).length === 0) delete view.solver
+}
