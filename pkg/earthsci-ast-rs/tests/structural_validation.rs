@@ -1178,11 +1178,11 @@ fn test_f6_null_in_key_column() {
     );
 }
 
-/// The self-join SIDE rejections (CONFORMANCE_SPEC §5.5.8). Each is stated
-/// about the DOCUMENT — the node's `ranges`, the declared variable shapes and
-/// the clause are all in the one file — and each is pinned for all five
-/// bindings in `tests/invalid/expected_errors.json`, which is what the shared
-/// corpus comparator enforces. These assert the Rust half of that pin directly.
+// The self-join SIDE rejections (CONFORMANCE_SPEC §5.5.8). Each is stated
+// about the DOCUMENT — the node's `ranges`, the declared variable shapes and
+// the clause are all in the one file — and each is pinned for all five
+// bindings in `tests/invalid/expected_errors.json`, which is what the shared
+// corpus comparator enforces. These assert the Rust half of that pin directly.
 
 /// Three ranges draw one index set, so a key column over it names three
 /// candidate range symbols and the pair says nothing about which two the clause

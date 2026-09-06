@@ -13,6 +13,7 @@ and join-key buffers, the :class:`BuildInspection` observability sink,
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -51,6 +52,9 @@ from .simulation_common import (
     _resolve_override,
     _retcode_for_error,
     _retcode_from_scipy,
+    coerce_inline_array,
+    is_inline_array_value,
+    resolve_override_raw,
     solve_ivp,
 )
 from .sympy_bridge import SimulationError
@@ -214,25 +218,66 @@ def _grid_coords_from_spatial(spatial: dict[str, Any]) -> dict[str, np.ndarray]:
     return coords
 
 
+def _write_state_field(
+    y0: np.ndarray,
+    name: str,
+    sl: slice,
+    shape: tuple[int, ...],
+    value: Any,
+    *,
+    origin: str,
+) -> None:
+    """Write one whole-state value into its ``y0`` block: a scalar broadcasts to
+    every element, INLINE ARRAY DATA (a row-major nested JSON array, esm-spec
+    §6.3 / §6.6.2) is validated against the state's grid ``shape`` and written
+    element-by-element.
+
+    The flat state vector enumerates this binding's array cells ROW-major
+    (:func:`_linear_pos`: last index fastest), which is the order the authored
+    nested array already reads in, so the validated array flattens straight into
+    the block. (Julia and Rust lay their state vectors out column-major and
+    transpose at the same seam; the per-cell VALUES are identical, which is all
+    the cross-binding assertions compare.)
+    """
+    if not is_inline_array_value(value):
+        y0[sl] = float(value)
+        return
+    arr = coerce_inline_array(name, value, tuple(shape) if shape else None, origin=origin)
+    if not shape:
+        raise SimulationError(
+            f"{origin}[{name}]: inline array data was supplied for a 0-D state; only a "
+            f"SHAPED unknown takes a nested array (esm-spec §6.6.2)"
+        )
+    y0[sl] = np.asarray(arr, dtype=float).reshape(-1)
+
+
 def _apply_initial_conditions(
     y0: np.ndarray,
     state_layout: dict[str, slice],
     shapes: dict[str, tuple[int, ...]],
     state_names: list[str],
-    initial_conditions: dict[str, float],
+    initial_conditions: dict[str, Any],
 ) -> None:
     """Write initial-value overrides into ``y0``.
 
     Keys may be bare (``"u[1]"``) or namespaced (``"Chem.u[1]"``); scalar state
-    variables use a bare name without brackets.
+    variables use a bare name without brackets. A whole-state key may carry a
+    scalar (broadcast to every element, as before) or INLINE ARRAY DATA — a
+    row-major nested JSON array matching the state's declared shape (esm-spec
+    §6.6.2), which is what lets a column test supply a whole profile.
     """
     for key, value in initial_conditions.items():
-        resolved = _resolve_state_element(key, state_names, shapes, state_layout)
+        resolved = (
+            None
+            if is_inline_array_value(value)
+            else _resolve_state_element(key, state_names, shapes, state_layout)
+        )
         if resolved is None:
             # Might be a broadcast default: ``"u": 1.0`` assigns every element of a
-            # whole-array state. Prefer an exact name; a >1-way ambiguous bare key
-            # already raised in _resolve_state_element, so a lone unique dot-suffix
-            # match is the only fallback (exact-name-wins parity with resolution).
+            # whole-array state (or a nested array, one value per element). Prefer an
+            # exact name; a >1-way ambiguous bare key already raised in
+            # _resolve_state_element, so a lone unique dot-suffix match is the only
+            # fallback (exact-name-wins parity with resolution).
             base, idx = _parse_element_key(key)
             if idx is None:
                 if base in state_names:
@@ -241,9 +286,20 @@ def _apply_initial_conditions(
                     matches = [n for n in state_names if n.endswith("." + base)]
                     name = matches[0] if len(matches) == 1 else None
                 if name is not None:
-                    sl = state_layout[name]
-                    y0[sl] = float(value)
+                    _write_state_field(
+                        y0,
+                        name,
+                        state_layout[name],
+                        shapes.get(name, ()),
+                        value,
+                        origin="initial_conditions",
+                    )
                     continue
+            if is_inline_array_value(value):
+                raise SimulationError(
+                    f"initial_conditions[{key}]: inline array data names no state "
+                    f"variable of the flattened system (esm-spec §6.6.2)"
+                )
             continue
         _, flat_pos = resolved
         y0[flat_pos] = float(value)
@@ -894,6 +950,10 @@ def _resolve_field_ic(
     1. A LOADED FIELD — a bare reference to a ``loader_arrays`` entry supplying
        the initial field over the lifted grid. The cell is read directly when the
        field's rank matches the target grid; a single-element field is broadcast.
+       The registry also carries the build-time array scope of esm-spec §6.6.5:
+       a shaped parameter's inline column and every STATE-FREE array observed the
+       ic reads (:func:`_buildtime_observed_arrays`), so ``ic(u) ~ theta0`` over a
+       ``const`` gather resolves here.
     2. A BROADCAST CONSTANT — a numeric RHS applied to every cell.
     3. A COORDINATE EXPRESSION — an elementwise expression over array-producing
        ``aggregate``/``makearray`` nodes (e.g. ``cos(pi * x_coord)`` where
@@ -920,7 +980,12 @@ def _resolve_field_ic(
         return float(rhs)
     if isinstance(rhs, ExprNode):
         try:
-            value = _eval_buildtime_field(rhs, index_sets=index_sets, param_values=param_values)
+            value = _eval_buildtime_field(
+                rhs,
+                index_sets=index_sets,
+                param_values=param_values,
+                input_arrays=loader_arrays,
+            )
         except (NumpyInterpreterError, SimulationError, ValueError):
             # A coordinate expression the build-time interpreter cannot resolve
             # (unresolved symbol / bad shape) falls through to the hard error
@@ -949,6 +1014,7 @@ def _eval_buildtime_field(
     expr: Expr,
     index_sets: dict[str, Any] | None = None,
     param_values: dict[str, float] | None = None,
+    input_arrays: dict[str, np.ndarray] | None = None,
 ) -> float | np.ndarray:
     """Evaluate a state-free build-time expression (grid geometry, §6.6.5
     analytic references) through the official NumPy interpreter. Array-
@@ -958,7 +1024,10 @@ def _eval_buildtime_field(
     STATE references are not in scope — the context carries no states, so any
     state reference raises. Model PARAMETERS (load-time constants) ARE in scope
     when supplied via ``param_values`` (name → value): a parameter-dependent
-    coordinate expression / reference then resolves (esm-spec §6.6.5)."""
+    coordinate expression / reference then resolves (esm-spec §6.6.5).
+    ``input_arrays`` binds the build-time ARRAY scope — a shaped parameter's
+    inline column, a provider-seeded field, and the STATE-FREE array observeds
+    :func:`_buildtime_observed_arrays` materialized — under their own names."""
     from .numpy_interpreter import EvalContext as _EvalCtx
     from .numpy_interpreter import eval_expr as _eval_expr
 
@@ -970,8 +1039,98 @@ def _eval_buildtime_field(
         y=np.empty((0,), dtype=float),
         t=0.0,
         index_sets=dict(index_sets or {}),
+        input_arrays=dict(input_arrays or {}),
+        axis_valued_input_names=frozenset(input_arrays or {}),
     )
     return _eval_expr(expr, ctx)
+
+
+def _buildtime_observed_arrays(
+    field_ic_eqs: list[tuple[str, Expr]],
+    ordered_observed: list[tuple[str, Expr]],
+    state_names: Iterable[str],
+    param_values: dict[str, float],
+    loader_arrays: dict[str, np.ndarray],
+    index_sets: dict[str, Any] | None = None,
+) -> dict[str, np.ndarray]:
+    """Materialize the STATE-FREE observeds an ``ic`` right-hand side reads, so
+    §11.4.1 can seed a field from one (esm-spec §6.6.5 "Build-time evaluation
+    scope").
+
+    A state-free observed — one whose whole reference cone closes over
+    parameters, inline ``const`` data and other state-free observeds, with no
+    state and no ``t`` — is resolvable before the simulation runs; the build
+    already materializes exactly this class of field as a setup array for
+    :class:`BuildInspection`. Admitting it as an ``ic`` RHS is the same
+    evaluator reached from one more place, which is what lets a column test
+    seed ``u`` from a ``const`` gather instead of minting a per-regime library.
+
+    Only the observeds an ``ic`` actually reads (transitively) are evaluated,
+    in the caller's dependency order, and an observed that does not evaluate is
+    SKIPPED rather than raised on: it simply is not in the ic scope, and the
+    resolver's own diagnostic then reports the unusable RHS.
+    """
+    if not field_ic_eqs:
+        return {}
+    defs: dict[str, Expr] = dict(ordered_observed)
+    if not defs:
+        return {}
+    states = set(state_names)
+
+    # Transitive cone of a name, restricted to observeds; `None` if it reaches a
+    # state (or `t`), which puts the observed OUT of the build-time scope.
+    cone_cache: dict[str, set[str] | None] = {}
+
+    def cone(name: str, seen: frozenset[str]) -> set[str] | None:
+        if name in seen:  # a causal self-read is an ordering, not a dependency
+            return set()
+        if name in cone_cache:
+            return cone_cache[name]
+        body = defs.get(name)
+        if body is None:
+            return None
+        out: set[str] = {name}
+        for ref in _expr_referenced_names(body):
+            if ref in states or ref == "t":
+                cone_cache[name] = None
+                return None
+            if ref in defs and ref != name:
+                sub = cone(ref, seen | {name})
+                if sub is None:
+                    cone_cache[name] = None
+                    return None
+                out |= sub
+        cone_cache[name] = out
+        return out
+
+    wanted: set[str] = set()
+    for _target, rhs in field_ic_eqs:
+        refs = {rhs} if isinstance(rhs, str) else _expr_referenced_names(rhs)
+        for ref in refs:
+            if ref in defs and ref not in loader_arrays:
+                sub = cone(ref, frozenset())
+                if sub is not None:
+                    wanted |= sub
+    if not wanted:
+        return {}
+
+    out: dict[str, np.ndarray] = {}
+    scope: dict[str, np.ndarray] = dict(loader_arrays)
+    for name, body in ordered_observed:
+        if name not in wanted:
+            continue
+        try:
+            value = _eval_buildtime_field(
+                body, index_sets=index_sets, param_values=param_values, input_arrays=scope
+            )
+        except (NumpyInterpreterError, SimulationError, ValueError, TypeError, KeyError):
+            continue
+        if value is None or np.ndim(value) == 0:
+            continue
+        arr = np.asarray(value, dtype=float)
+        out[name] = arr
+        scope[name] = arr
+    return out
 
 
 def _fold_field_ics(
@@ -2204,9 +2363,52 @@ def _build_numpy_rhs(
         ]
 
     # Parameter resolution: overrides win over defaults.
+    #
+    # A SHAPED parameter may carry its value as INLINE ARRAY DATA — a row-major
+    # nested JSON array on its `default` or in a test's `parameter_overrides`
+    # (esm-spec §6.3 / §6.6.2). That value is a whole column, not a float, so it
+    # is bound on the ARRAY channel (`loader_arrays`, which reaches the
+    # interpreter as `input_arrays`) rather than in the scalar `param_values`
+    # map: `_resolve_symbol` consults `input_arrays` BEFORE `param_values`, so a
+    # bare read of the name yields the column and `index(p, k)` gathers a cell.
+    # `setdefault` keeps a provider-fed array of the same name authoritative —
+    # loaded data beats a document default, matching the caller-wins direction
+    # the Rust `vi_factor_arrays` overlay takes.
+    #
+    # The BARE alias is registered only when it is unambiguous and free. Unlike
+    # the scalar `param_values` alias below, `input_arrays` is consulted BEFORE
+    # the state layout, so a bare alias that collided with another component's
+    # state or observed would SHADOW it — a wrong answer, not a missing one.
+    _all_names = set(flat.state_variables) | set(flat.observed_variables) | set(flat.parameters)
+    _bare_owners: dict[str, list[str]] = {}
+    for _n in flat.parameters:
+        _bare_owners.setdefault(_n.rsplit(".", 1)[-1], []).append(_n)
     param_values: dict[str, float] = {}
+    param_array_names: set[str] = set()
     for pname, pvar in flat.parameters.items():
         bare = pname.rsplit(".", 1)[-1]
+        raw = resolve_override_raw(pname, parameters, pvar.default)
+        if is_inline_array_value(raw):
+            decl = getattr(pvar, "shape", None)
+            want = (
+                _resolve_index_set_shape(decl, flat.index_sets, derived_extents=None)
+                if decl
+                else None
+            )
+            arr = coerce_inline_array(
+                pname,
+                raw,
+                want,
+                origin="parameter_overrides"
+                if (pname in parameters or bare in parameters)
+                else "default",
+            )
+            loader_arrays.setdefault(pname, arr)
+            param_array_names.add(pname)
+            if bare != pname and bare not in _all_names and len(_bare_owners[bare]) == 1:
+                loader_arrays.setdefault(bare, arr)
+                param_array_names.add(bare)
+            continue
         val = _resolve_override(pname, parameters, pvar.default)
         param_values[pname] = val
         param_values[bare] = val  # also expose via bare name
@@ -2280,7 +2482,10 @@ def _build_numpy_rhs(
     # vector spans its derived set; a gated slab spans the gate's axes), so the
     # bare-reference scalarisation in ``_resolve_symbol`` must not collapse
     # them when a derived set materialises exactly ONE member (size-1 array).
-    axis_valued_input_names: set[str] = set()
+    # A SHAPED parameter's inline column (above) is DECLARED axis-valued: its
+    # extent is an index set by declaration, so a one-element column must stay an
+    # ndarray rather than being scalarised by the bare-reference rule.
+    axis_valued_input_names: set[str] = set(param_array_names)
     if vi_members:
         for _k, _v in _feed_back_vi_members(flat.index_sets, vi_members, _all_var_names).items():
             loader_arrays[_k] = _v  # engine-derived: overwrites, like Julia merge!
@@ -2309,7 +2514,13 @@ def _build_numpy_rhs(
     y0 = np.zeros(total_size, dtype=float)
     for name in state_names:
         default = flat.state_variables[name].default
-        if isinstance(default, (int, float)):
+        if is_inline_array_value(default):
+            # A SHAPED unknown's declared `default` may be a row-major nested JSON
+            # array (esm-spec §6.3) — the whole initial profile, not a broadcast.
+            _write_state_field(
+                y0, name, state_layout[name], shapes.get(name, ()), default, origin="default"
+            )
+        elif isinstance(default, (int, float)) and not isinstance(default, bool):
             sl = state_layout[name]
             y0[sl] = float(default)
     # Scoped-reference / array ``ic`` fold (esm-spec §11.4.1): now that each array
@@ -2318,12 +2529,28 @@ def _build_numpy_rhs(
     # provider-seeded at build time, DESIGN §2 R2) supplying the initial field
     # over the lifted grid, or a broadcast constant. Runs before the explicit
     # per-element overrides so those still win.
+    # esm-spec §6.6.5 build-time scope: a STATE-FREE array observed an `ic` RHS
+    # names (a `const` gather, a parameter-only expression) is resolvable before
+    # the run, so materialize the cone the ic equations read and overlay it on
+    # the loaded-field registry. A provider-seeded field of the same name still
+    # wins — loaded data beats a document-side definition.
+    ic_scope_arrays = dict(
+        _buildtime_observed_arrays(
+            field_ic_eqs,
+            ordered_observed,
+            state_names,
+            param_values,
+            loader_arrays,
+            index_sets=flat.index_sets,
+        )
+    )
+    ic_scope_arrays.update(loader_arrays)
     _fold_field_ics(
         y0,
         field_ic_eqs,
         shapes,
         state_layout,
-        loader_arrays,
+        ic_scope_arrays,
         index_sets=flat.index_sets,
         param_values=param_values,
     )
@@ -2500,6 +2727,80 @@ def evaluate_rhs(
     build = _build_numpy_rhs(flat, dict(parameters or {}), dict(state))
     dy = build.rhs_function(float(t), build.y0)
     return {name: float(val) for name, val in zip(build.elem_names, dy)}
+
+
+def observed_at_state(
+    build: _NumpyRhsBuild,
+    flat: FlattenedSystem,
+    name: str,
+    t: float,
+    y: Any,
+) -> Any:
+    """The value of observed ``name`` at ONE trajectory sample ``(t, y)``.
+
+    esm-spec §5.23 / §6.6.5: a reference denotes its expansion, so an observed
+    is readable wherever its defining expression is — including an ARRAY-valued,
+    STATE-DEPENDENT one, which no build-time product can carry (its value moves
+    with the trajectory) and which the output-node reconstruction skips because
+    it is not a scalar row. This is what a §6.6.5 ``coords`` / ``reduce``
+    assertion on such an observed reads.
+
+    The evaluation is the official one: a fresh :class:`EvalContext` seeded with
+    the build's once-materialized STATE-FREE products, then
+    :func:`_materialize_observeds` over the dependency-ordered time-varying
+    observeds at this ``(t, y)`` — the same context shape and the same driver
+    the per-step RHS and the output-node observed reconstruction use, so the
+    number is the one the RHS saw at that state.
+
+    Returns the observed's value (an ``ndarray`` for an array-valued one, a
+    ``float`` for a 0-D one), or ``None`` when the build carries no observed of
+    that name. ``name`` is matched flattened-first: exactly, then as a UNIQUE
+    ``.<name>`` suffix.
+    """
+
+    def _ctx() -> EvalContext:
+        return EvalContext(
+            state_layout=build.state_layout,
+            state_shapes=build.shapes,
+            param_values=build.param_values,
+            observed_values=dict(build.static_observed_values),
+            y=np.asarray(y, dtype=float),
+            t=float(t),
+            index_sets=flat.index_sets,
+            derived_rings=dict(build.static_derived_rings),
+            derived_extents=build.derived_extents,
+            join_key_buffers=build.join_key_buffers,
+            join_key_index_sets=build.join_key_index_sets,
+            factor_scope=build.factor_scope,
+            var_index_sets=build.var_index_sets,
+            element_types=build.element_types,
+        )
+
+    def _pick(ctx: EvalContext) -> Any:
+        for source in (ctx.derived_rings, ctx.observed_values):
+            if name in source:
+                return source[name]
+            hits = [k for k in source if str(k).endswith("." + name)]
+            if len(hits) == 1:
+                return source[hits[0]]
+        return None
+
+    # The state-free half is already materialized; only the time-varying half
+    # has to be replayed at this sample.
+    ctx = _ctx()
+    if build.varying_observed:
+        _materialize_observeds(build.varying_observed, ctx, skip_unresolved=True)
+    got = _pick(ctx)
+    if got is not None:
+        return got
+    # Fallback: an observed the const-geometry hoist DROPPED (a state-free one
+    # outside the RHS dependency cone, which the tolerant hoist skips rather
+    # than failing the build). It is still a legitimate assertion target, so
+    # evaluate the whole dependency-ordered graph on demand — the same driver,
+    # just not pre-materialized. Reached only when the cheap path found nothing.
+    ctx = _ctx()
+    _materialize_observeds(build.ordered_observed, ctx, skip_unresolved=True)
+    return _pick(ctx)
 
 
 def _simulate_observeds_only(

@@ -475,7 +475,10 @@ mod tests {
                 let _inner = enter(Precision::Float64);
                 assert!(!is_f32());
             }
-            assert!(is_f32(), "the inner guard restores Float32, not the default");
+            assert!(
+                is_f32(),
+                "the inner guard restores Float32, not the default"
+            );
         }
         assert!(!is_f32());
     }

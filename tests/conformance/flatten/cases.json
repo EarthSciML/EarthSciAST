@@ -3540,6 +3540,130 @@
       "lifted_shapes": {}
     },
     {
+      "id": "chained_operator_compose",
+      "tier": "chained_compose",
+      "fixture": "coupling/chained_operator_compose.esm",
+      "system_kind": "pde",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.O3",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.NO",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Chem.k1",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.k2",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.2,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Sink.kd",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.01,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Sink"
+        },
+        {
+          "name": "Src.e",
+          "role": "parameter",
+          "units": "mol/mol/s",
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Src"
+        },
+        {
+          "name": "Adv.wind",
+          "role": "parameter",
+          "units": "m/s",
+          "default": 3.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Adv"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(Chem.NO)/Dt",
+          "rhs": "(-Sink.kd) * Chem.NO + (-Chem.k2) * Chem.NO + (-Adv.wind) * grad(Chem.NO)",
+          "source_system": "Sink"
+        },
+        {
+          "lhs": "D(Chem.O3)/Dt",
+          "rhs": "Src.e + (-Sink.kd) * Chem.O3 + (-Chem.k1) * Chem.O3 + (-Adv.wind) * grad(Chem.O3)",
+          "source_system": "Src"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Chem",
+          "Sink",
+          "Src",
+          "Adv"
+        ],
+        "coupling_rules": [
+          "operator_compose(Sink + Chem)",
+          "operator_compose(Src + Chem)",
+          "operator_compose(Chem + Adv)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "autocatalytic_reaction",
       "tier": "reaction_system",
       "fixture": "simulation/autocatalytic_reaction.esm",

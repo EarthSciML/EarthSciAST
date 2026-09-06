@@ -93,10 +93,10 @@ pub type BuildProviderFactory<'a> =
 /// up, or simply wrong) passes through untouched, so the build reports on it
 /// exactly as it would have.
 fn scope_to_component(
-    overrides: Option<&HashMap<String, f64>>,
+    overrides: Option<&HashMap<String, InlineValue>>,
     model_name: &str,
     file: &EsmFile,
-) -> HashMap<String, f64> {
+) -> HashMap<String, InlineValue> {
     let Some(overrides) = overrides.filter(|m| !m.is_empty()) else {
         return HashMap::new();
     };
@@ -109,13 +109,13 @@ fn scope_to_component(
             let qualified = format!("{model_name}.{k}");
             let known = flat.parameters.contains_key(&qualified)
                 || flat.state_variables.contains_key(&qualified);
-            (if known { qualified } else { k.clone() }, *v)
+            (if known { qualified } else { k.clone() }, v.clone())
         })
         .collect()
 }
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
-    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance,
+    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, InlineValue, Model, Tolerance,
 };
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
@@ -462,14 +462,19 @@ fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f6
 /// surfaced "for direct assertion", like the MPAS `div_flux`) rather than a
 /// state: an observed carries no ODE slot, so its field is read from the
 /// [`BuildInspection`]'s `setup_arrays` — the STATE-FREE observed arrays the
-/// run materialized through the official observed machinery. State-free
-/// observeds only: a state- or time-dependent observed is absent from
-/// `setup_arrays` by construction, so this returns `None` and the caller
-/// errors like before (mirroring the Julia `_observed_field`, whose
-/// `evaluate_cellwise` leaves a state reference unbound). Cells are enumerated
-/// from the declared shape's interval index sets, in sorted (lexicographic)
-/// order. Returns `(field, cells)` or `None` when the variable is not such an
-/// observed.
+/// run materialized through the official observed machinery.
+///
+/// This source stays STATE-FREE-only: a state- or time-dependent observed is
+/// absent from `setup_arrays` by construction, and this returns `None` for it.
+/// That is no longer the end of the assertion, though — the runner REQUESTS such
+/// an observed (`assertion_observed_requests`), the array runtime emits it as
+/// one row per cell, and the assertion reads those rows through `state_cells`
+/// before ever reaching here. So a `None` from this function means "not a field
+/// the BUILD carries", not "unassertable".
+///
+/// Cells are enumerated from the declared shape's interval index sets, in sorted
+/// (lexicographic) order. Returns `(field, cells)` or `None` when the variable
+/// is not such an observed.
 fn observed_field(
     file: &EsmFile,
     model_name: &str,
@@ -915,21 +920,33 @@ pub fn ephemeral_injected_file(
 }
 
 /// The [`SolveOptions::output_observed`] request one test needs: the OBSERVED
-/// variables its POINTWISE assertions (neither `coords` nor `reduce`) read, in
-/// both the local and the model-qualified spelling, deduplicated in first-seen
-/// order.
+/// variables its assertions read, in both the local and the model-qualified
+/// spelling, deduplicated in first-seen order.
+///
+/// esm-spec §6.6.5 admits ANY shaped variable in a `coords` / `reduce`
+/// assertion, so both ranks are requested here:
+///
+/// * a POINTWISE assertion (neither `coords` nor `reduce`) reads a 0-D
+///   observed, which has no ODE slot and becomes one trajectory row;
+/// * a `coords` / `reduce` assertion reads an ARRAY observed, which the array
+///   runtime emits as one row per cell when — and only when — it is REQUESTED
+///   (`append_observed_trajectories`). Without the request a STATE-DEPENDENT
+///   array observed was unassertable: it is absent from the build inspection's
+///   `setup_arrays` by construction (only the state-free ones hoist there), so
+///   [`observed_field`] could not answer it either and every such assertion
+///   errored with "has no cells in var_map".
 ///
 /// Kept to exactly what will be read, because naming something here is not
 /// free: on the scalar backend it walks the observed graph over the output grid
-/// (`crate::problem::observed_trajectories`). So a declared variable that is
-/// NOT an observed — a state, whose row the trajectory already carries, or a
-/// parameter — is left out, and so is an ARRAY-shaped one, whose field is
-/// [`observed_field`]'s business and which would otherwise materialize a row
-/// per cell of a field that branch reads whole. A name this component does not
-/// declare at all — a §6.6.3 scoped reference into a subsystem — is kept as a
-/// best effort: its class is not knowable here, and a name resolving to no
-/// observed is dropped downstream.
-fn pointwise_observed_requests(
+/// (`crate::problem::observed_trajectories`), and on the array backend a
+/// requested array observed joins the output-node dependency cone. So a
+/// declared variable that is NOT an observed — a state, whose row the
+/// trajectory already carries, or a parameter — is left out, and so is one
+/// whose declared rank does not match the assertion form. A name this component
+/// does not declare at all — a §6.6.3 scoped reference into a subsystem — is
+/// kept as a best effort: its class is not knowable here, and a name resolving
+/// to no observed is dropped downstream.
+fn assertion_observed_requests(
     file: &EsmFile,
     model_name: &str,
     t: &crate::types::ModelTest,
@@ -938,16 +955,22 @@ fn pointwise_observed_requests(
     let class = model.map(crate::classification::Classification::of);
     let mut out: Vec<String> = Vec::new();
     for a in &t.assertions {
-        if a.coords.is_some() || a.reduce.is_some() {
-            continue;
-        }
+        // A `coords` / `reduce` assertion reads a FIELD, a pointwise one a
+        // scalar; the declared rank must match the form that reads it.
+        let wants_array = a.coords.is_some() || a.reduce.is_some();
         if let Some(v) = model.and_then(|m| m.variables.get(a.variable.as_str())) {
-            if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+            let is_array = v.shape.as_ref().is_some_and(|s| !s.is_empty());
+            if is_array != wants_array {
                 continue;
             }
             if !class.as_ref().is_some_and(|c| c.is_observed(&a.variable)) {
                 continue;
             }
+        } else if wants_array {
+            // An undeclared name can only be resolved downstream, and the
+            // array form has a cheaper answer available: a scoped reference is
+            // read through `state_cells` / `observed_field` as before.
+            continue;
         }
         for spelling in [a.variable.clone(), format!("{model_name}.{}", a.variable)] {
             if !out.contains(&spelling) {
@@ -1044,9 +1067,10 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// build. That is why the solve is still run per test even on a memo hit —
 /// only the build is reused.
 ///
-/// Floats are keyed by their BIT PATTERN, which is conservative in the safe
-/// direction: equal bits are the same `f64` and so the same build, while two
-/// spellings of one value (`0.0` / `-0.0`) merely miss and rebuild.
+/// Bindings are keyed by their JSON spelling, which is conservative in the safe
+/// direction: an identical spelling is the same value and so the same build,
+/// while two spellings of one value (`0.0` / `-0.0`, or a differently-nested
+/// array) merely miss and rebuild.
 ///
 /// `None` and `Some({})` collapse to the same empty binding list because
 /// [`scope_to_component`] already maps both to an empty map.
@@ -1054,15 +1078,23 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 struct BuildKey {
     imports: Vec<serde_json::Value>,
     tspan: (u64, u64),
-    p: Vec<(String, u64)>,
-    u0: Vec<(String, u64)>,
+    p: Vec<(String, String)>,
+    u0: Vec<(String, String)>,
 }
 
 impl BuildKey {
     fn of(t: &crate::types::ModelTest) -> Self {
-        fn bindings(m: Option<&HashMap<String, f64>>) -> Vec<(String, u64)> {
-            let mut v: Vec<(String, u64)> = m
-                .map(|m| m.iter().map(|(k, x)| (k.clone(), x.to_bits())).collect())
+        // A binding's value is either a scalar or inline array data (esm-spec
+        // §6.6.2), so the key carries its JSON spelling rather than one f64's
+        // bits. `serde_json` renders an f64 with the shortest round-tripping
+        // form, so two keys compare equal exactly when the values do.
+        fn bindings(m: Option<&HashMap<String, InlineValue>>) -> Vec<(String, String)> {
+            let mut v: Vec<(String, String)> = m
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, x)| (k.clone(), serde_json::to_string(x).unwrap_or_default()))
+                        .collect()
+                })
                 .unwrap_or_default();
             v.sort();
             v
@@ -1099,6 +1131,185 @@ struct BuiltModel {
     ephemeral: Option<EsmFile>,
     index_sets: Option<HashMap<String, IndexSet>>,
     built: Built,
+}
+
+/// Partition an override map into `(scalars, inline array data)` — the two
+/// value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
+/// `initial_conditions` entry.
+fn split_inline_arrays(
+    overrides: HashMap<String, InlineValue>,
+) -> (HashMap<String, f64>, HashMap<String, InlineValue>) {
+    let mut scalars = HashMap::new();
+    let mut arrays = HashMap::new();
+    for (k, v) in overrides {
+        match v.as_scalar() {
+            Some(x) => {
+                scalars.insert(k, x);
+            }
+            None => {
+                arrays.insert(k, v);
+            }
+        }
+    }
+    (scalars, arrays)
+}
+
+/// The model a (possibly dot-qualified) override key names, plus the key's
+/// LOCAL variable name within it. `None` when no model of `file` declares it.
+fn locate_override_target<'a>(file: &'a mut EsmFile, key: &str) -> Option<(&'a mut Model, String)> {
+    // Resolve the (model, local name) pair against an IMMUTABLE view first, so
+    // the single mutable borrow below is the one the caller keeps.
+    let target = {
+        let models = file.models.as_ref()?;
+        // Longest dotted prefix that names a model wins, so `M.sub.p` binds
+        // `sub.p` inside `M` rather than a bare `p` anywhere.
+        let mut split: Option<(String, String)> = None;
+        let mut best = 0usize;
+        for (mname, model) in models.iter() {
+            if let Some(rest) = key.strip_prefix(&format!("{mname}."))
+                && mname.len() > best
+                && model.variables.contains_key(rest)
+            {
+                best = mname.len();
+                split = Some((mname.clone(), rest.to_string()));
+            }
+        }
+        split.or_else(|| {
+            models
+                .iter()
+                .find(|(_, m)| m.variables.contains_key(key))
+                .map(|(n, _)| (n.clone(), key.to_string()))
+        })?
+    };
+    let model = file.models.as_mut()?.get_mut(&target.0)?;
+    Some((model, target.1))
+}
+
+/// Write each INLINE ARRAY parameter override onto the run document as that
+/// parameter's `default` (esm-spec §6.6.2: an override supplies the value the
+/// declared default would otherwise supply).
+///
+/// `file` is the EPHEMERAL run instance, never the persisted document, so this
+/// is a per-run binding and not an edit. The array compile then lowers the
+/// shaped parameter into its `const` observed
+/// ([`crate::simulate_array`]'s `lower_inline_array_parameters`), which is where
+/// the declared-shape check reports a mismatch.
+fn bind_array_parameters(
+    file: &mut EsmFile,
+    arrays: &HashMap<String, InlineValue>,
+) -> Result<(), String> {
+    let mut keys: Vec<&String> = arrays.keys().collect();
+    keys.sort();
+    for key in keys {
+        let value = &arrays[key];
+        let Some((model, local)) = locate_override_target(file, key) else {
+            return Err(format!(
+                "parameter_overrides: unknown parameter '{key}' — this document declares no such \
+                 variable. esm-spec §6.6.2 keys parameter_overrides by LOCAL parameter name."
+            ));
+        };
+        let var = model
+            .variables
+            .get_mut(&local)
+            .expect("locate_override_target returned a declared name");
+        if var.var_type != crate::types::VariableType::Parameter {
+            return Err(format!(
+                "parameter_overrides: '{key}' is an unknown, not a parameter (esm-spec §6.6.2)"
+            ));
+        }
+        var.default = Some(value.clone());
+    }
+    Ok(())
+}
+
+/// Expand each INLINE ARRAY initial condition into one `u0` entry per grid cell.
+///
+/// The state vector is keyed by ELEMENT name (`u[1]`, `u[2,3]`, … — 1-based,
+/// column-major over the declared shape), so a whole profile becomes that many
+/// scalar entries and needs no new channel. The authored array is ROW-major
+/// (JSON nesting order), so each cell's value is read at its own multi-index
+/// rather than by position — the two orders coincide only in rank 1.
+///
+/// A scalar entry already present for the same element WINS: it was authored
+/// per-element and is the more specific binding.
+fn expand_array_initial_conditions(
+    file: &EsmFile,
+    arrays: &HashMap<String, InlineValue>,
+    u0: &mut HashMap<String, f64>,
+) -> Result<(), String> {
+    let index_sets: HashMap<String, IndexSet> = file
+        .index_sets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let mut keys: Vec<&String> = arrays.keys().collect();
+    keys.sort();
+    for key in keys {
+        let (shape, values) = arrays[key]
+            .to_dense()
+            .map_err(|e| format!("initial_conditions[{key}]: {e} (esm-spec §6.3)"))?;
+        let declared = declared_extents(file, key, &index_sets);
+        if let Some(want) = declared.as_ref()
+            && *want != shape
+        {
+            return Err(format!(
+                "initial_conditions[{key}]: inline array data has shape {shape:?}, which does not \
+                 match the declared shape {want:?} (esm-spec §6.6.2 — the array MUST match the \
+                 variable's declared shape after metaparameter folding)"
+            ));
+        }
+        if shape.is_empty() {
+            return Err(format!(
+                "initial_conditions[{key}]: inline array data was supplied for a 0-D state; only a \
+                 SHAPED unknown takes a nested array (esm-spec §6.6.2)"
+            ));
+        }
+        for (flat, value) in values.iter().enumerate() {
+            // Row-major decode: the authored nesting's own order.
+            let mut rest = flat;
+            let mut multi = vec![0usize; shape.len()];
+            for d in (0..shape.len()).rev() {
+                multi[d] = rest % shape[d];
+                rest /= shape[d];
+            }
+            let idx = multi
+                .iter()
+                .map(|i| (i + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            u0.entry(format!("{key}[{idx}]")).or_insert(*value);
+        }
+    }
+    Ok(())
+}
+
+/// The integer extents of the variable `key` names, resolved from its declared
+/// `shape` against the document's index-set registry. `None` when the variable
+/// or an axis does not resolve — the caller then accepts the array as authored
+/// and lets the build report any real mismatch.
+fn declared_extents(
+    file: &EsmFile,
+    key: &str,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Option<Vec<usize>> {
+    let models = file.models.as_ref()?;
+    let local = key.rsplit('.').next().unwrap_or(key);
+    let var = models
+        .iter()
+        .find_map(|(_, m)| m.variables.get(key).or_else(|| m.variables.get(local)))?;
+    let shape = var.shape.as_ref()?;
+    let mut out = Vec::with_capacity(shape.len());
+    for axis in shape {
+        let set = index_sets.get(axis)?;
+        let size = match set.kind.as_str() {
+            "interval" => usize::try_from(set.size?).ok()?,
+            "categorical" => set.members.as_ref()?.len(),
+            _ => return None,
+        };
+        out.push(size);
+    }
+    Some(out)
 }
 
 /// Build one test's problem — the body that used to be inline in
@@ -1148,13 +1359,52 @@ fn build_for_test(
             }
         }
     };
+    let mut ephemeral = ephemeral;
     let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
 
     let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
     let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
+    // Split each override map by VALUE SHAPE (esm-spec §6.6.2). A scalar goes
+    // on the canonical SciML `p` / `u0` channel unchanged; INLINE ARRAY DATA
+    // needs a channel that can carry a whole column:
+    //
+    //   * a shaped PARAMETER's column is written onto an EPHEMERAL copy of the
+    //     run document as that parameter's `default`, which the array compile
+    //     then lowers into its `const` observed ([`lower_inline_array_parameters`]).
+    //     The persisted document is untouched — this is the same ephemeral
+    //     instance a §9.7.10 discretization injection runs against;
+    //   * a shaped UNKNOWN's profile is expanded into one `u0` entry per grid
+    //     cell (`u[1]`, `u[2]`, …), the element names the state vector is keyed
+    //     by, so no new initial-condition channel is needed at all.
+    let (scalar_params, array_params) = split_inline_arrays(params);
+    let (scalar_ics, array_ics) = split_inline_arrays(ics);
+    if !array_params.is_empty() {
+        let mut owned = ephemeral.take().unwrap_or_else(|| file.clone());
+        if let Err(e) = bind_array_parameters(&mut owned, &array_params) {
+            return BuiltModel {
+                key,
+                ephemeral: None,
+                index_sets: None,
+                built: Built::BuildFailed(format!("simulate failed: {e}")),
+            };
+        }
+        ephemeral = Some(owned);
+    }
+    let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
+    let mut u0 = scalar_ics;
+    if !array_ics.is_empty()
+        && let Err(e) = expand_array_initial_conditions(run_file, &array_ics, &mut u0)
+    {
+        return BuiltModel {
+            key,
+            ephemeral,
+            index_sets,
+            built: Built::BuildFailed(format!("simulate failed: {e}")),
+        };
+    }
     let mut popts = ProblemOptions {
-        p: params,
-        u0: ics,
+        p: scalar_params,
+        u0,
         inspect: true,
         compile: crate::problem::Compile::Always,
         ..Default::default()
@@ -1214,6 +1464,11 @@ fn build_for_test(
 /// The memo cannot change an answer it does not also change without it: the
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
+// Nine parameters against clippy's seven. They are the loop-invariant context
+// the build memo keys on, described above; bundling them into a struct would
+// move the same values behind one more name without making any of them
+// optional.
+#[allow(clippy::too_many_arguments)]
 fn run_model_tests(
     file: &EsmFile,
     model_name: &str,
@@ -1261,15 +1516,19 @@ fn run_model_tests(
         times.dedup();
         let mut run_opts = opts.clone();
         run_opts.saveat = Some(times);
-        // esm-spec §6.6.3: a POINTWISE assertion reads a scalar, and a scalar
-        // OBSERVED has no ODE slot. The array runtime exposes every 0-D
-        // observed as a trajectory row unasked; the SCALAR backend exposes only
-        // what the caller NAMES. So the runner names them — exactly the
-        // observeds this test's pointwise assertions read, and nothing else.
-        // Without this an algebraic scalar was unassertable in any component
-        // that carried no array (the model then takes the scalar backend, whose
-        // trajectory holds states only) and in any component that integrates.
-        for name in pointwise_observed_requests(run_file, model_name, t) {
+        // esm-spec §6.6.3 / §6.6.5: an assertion reads an OBSERVED, and an
+        // observed has no ODE slot. The array runtime exposes every 0-D
+        // observed as a trajectory row unasked, but an ARRAY-valued one only
+        // when it is REQUESTED, and the SCALAR backend exposes only what the
+        // caller NAMES. So the runner names them — exactly the observeds this
+        // test's assertions read, at the rank the assertion form reads them,
+        // and nothing else. Without this an algebraic scalar was unassertable
+        // in any component that carried no array (the model then takes the
+        // scalar backend, whose trajectory holds states only) and in any
+        // component that integrates, and a STATE-DEPENDENT array observed was
+        // unassertable anywhere (the build inspection hoists only the
+        // state-free ones).
+        for name in assertion_observed_requests(run_file, model_name, t) {
             // Additive: a caller's own request stands.
             if !run_opts.output_observed.contains(&name) {
                 run_opts.output_observed.push(name);
@@ -1309,17 +1568,16 @@ fn run_model_tests(
                     Ok(sol) => Ok(sol),
                     // A document with no ODEs never integrates; its answers are
                     // the build's, evaluated at the asserted times.
-                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => {
-                        Ok(build_only_solution(run_opts.saveat.clone().unwrap_or_default()))
-                    }
+                    Err(crate::simulate::SimulateError::NotDynamic { .. }) => Ok(
+                        build_only_solution(run_opts.saveat.clone().unwrap_or_default()),
+                    ),
                     Err(e) => Err(format!("simulate failed: {e}")),
                 }
-                .map(|sol| {
+                .inspect(|_sol| {
                     insp = prob.take_inspection();
                     for (k, v) in fields {
                         insp.setup_arrays.entry(k).or_insert(v);
                     }
-                    sol
                 })
             }
         }
@@ -1881,7 +2139,11 @@ mod tests {
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
-            assert!(r.passed, "{}#{}: {}", r.variable, r.assertion_idx, r.message);
+            assert!(
+                r.passed,
+                "{}#{}: {}",
+                r.variable, r.assertion_idx, r.message
+            );
         }
         // 2*exp(-0.5): the observed is read at the RIGHT time, not held at t=0.
         let late = results[2].actual.expect("actual");
@@ -2011,11 +2273,13 @@ mod tests {
         }
     }
 
-    /// §6.6.5 assertions may target a state-free ARRAY OBSERVED directly (a
-    /// rule output surfaced "for direct assertion", like the MPAS `div_flux`
-    /// max/min): the field is read from the BuildInspection's materialized
-    /// state-free setup arrays. A STATE-DEPENDENT observed must keep erroring
-    /// exactly like before (its build-time snapshot would be stale).
+    /// §6.6.5 assertions may target an ARRAY OBSERVED directly (a rule output
+    /// surfaced "for direct assertion", like the MPAS `div_flux` max/min).
+    /// Two sources, and the runner must answer from BOTH: a STATE-FREE
+    /// observed's field is read from the BuildInspection's materialized setup
+    /// arrays, while a STATE-DEPENDENT one (`h = u + 1`) is emitted by the
+    /// array runtime as cell rows because the runner REQUESTS it — never a
+    /// stale build-time snapshot, always the value at the asserted time.
     fn observed_assert_doc() -> serde_json::Value {
         let g = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
                        "ranges": {"i": {"from": "x"}},
@@ -2050,6 +2314,10 @@ mod tests {
                          "tolerance": {"abs": 1e-12}, "reduce": "min"},
                         {"variable": "h", "time": 1.0, "expected": 1.0,
                          "tolerance": {"abs": 1e-12}, "reduce": "max"},
+                        {"variable": "h", "time": 1.0, "expected": 1.0,
+                         "tolerance": {"abs": 1e-12}, "coords": {"x": 2}},
+                        {"variable": "nope", "time": 1.0, "expected": 0.0,
+                         "tolerance": {"abs": 1e-12}, "reduce": "max"},
                     ],
                 }],
             }},
@@ -2057,26 +2325,35 @@ mod tests {
     }
 
     #[test]
-    fn state_free_array_observed_assertions_evaluate_directly() {
+    fn array_observed_assertions_evaluate_directly() {
         let file = load_string(&observed_assert_doc().to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
-        assert_eq!(results.len(), 3);
-        // g = [1, 4, 9] (index arithmetic, exact): max and min pass with the
-        // exact reductions recorded.
+        assert_eq!(results.len(), 5);
+        // g = [1, 4, 9] (index arithmetic, exact) is STATE-FREE: max and min
+        // pass with the exact reductions recorded.
         assert!(results[0].passed, "g max: {}", results[0].message);
         assert_eq!(results[0].actual, Some(9.0));
         assert!(results[1].passed, "g min: {}", results[1].message);
         assert_eq!(results[1].actual, Some(1.0));
-        // h reads the state u, so it is NOT state-free: the assertion errors
-        // with the pre-existing no-cells message rather than consuming a
-        // stale build-time snapshot.
-        assert!(!results[2].passed);
+        // h = u + 1 reads the state, so its field exists only on the
+        // trajectory: with `u` held at 0 it is [1, 1, 1] at every time, and
+        // both the reduce and the coords form must read it there. esm-spec
+        // §6.6.5 admits any shaped variable in these forms; before this it
+        // errored with "has no cells in var_map" because only the state-free
+        // observeds reach a build inspection.
+        assert!(results[2].passed, "h max: {}", results[2].message);
+        assert_eq!(results[2].actual, Some(1.0));
+        assert!(results[3].passed, "h at x=2: {}", results[3].message);
+        assert_eq!(results[3].actual, Some(1.0));
+        // A name that is no variable of the component at all still errors —
+        // the request list is a best effort, never an invention.
+        assert!(!results[4].passed);
         assert!(
-            results[2].message.contains("has no cells in var_map"),
+            results[4].message.contains("has no cells in var_map"),
             "unexpected message: {}",
-            results[2].message
+            results[4].message
         );
-        assert_eq!(results[2].actual, None);
+        assert_eq!(results[4].actual, None);
     }
 
     // -----------------------------------------------------------------------

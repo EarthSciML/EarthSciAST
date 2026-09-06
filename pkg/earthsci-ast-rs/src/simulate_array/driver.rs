@@ -217,7 +217,47 @@ impl ArrayCompiled {
         if self.field_ics.is_empty() {
             return Ok(out);
         }
-        let forcing = self.forcing.borrow();
+        // esm-spec §6.6.5 build-time scope: materialize the STATE-FREE array
+        // observeds an `ic` RHS may read (a `const` gather, a parameter-only
+        // expression) and overlay them on the provider forcing buffer. A
+        // provider-served field of the same name still WINS — loaded data beats
+        // a document-side definition, the same direction `vi_factor_arrays`
+        // takes. An observed that does not evaluate is skipped rather than
+        // raised on: it simply is not in the ic scope, and the resolver's own
+        // diagnostic then names the unusable RHS.
+        //
+        // Built ONLY when the document has such definitions: with none (every
+        // document before this), the resolver reads the forcing buffer straight
+        // through and no provider field is copied.
+        let borrowed = self.forcing.borrow();
+        let mut scope: Option<HashMap<String, ArrayD<f64>>> = None;
+        if !self.ic_scope_defs.is_empty() {
+            let mut built: HashMap<String, ArrayD<f64>> = HashMap::new();
+            // One pass per definition is enough for any acyclic chain: each
+            // pass resolves at least the definitions whose dependencies are
+            // already in scope, so `n` passes close a chain of length `n`.
+            for _ in 0..self.ic_scope_defs.len() {
+                let before = built.len();
+                for (name, body) in &self.ic_scope_defs {
+                    if built.contains_key(name) {
+                        continue;
+                    }
+                    if let Ok(Value::Array(arr)) =
+                        eval_buildtime_field_in_scope(body, &self.index_sets, params, &built)
+                    {
+                        built.insert(name.clone(), *arr);
+                    }
+                }
+                if built.len() == before {
+                    break;
+                }
+            }
+            for (name, arr) in borrowed.iter() {
+                built.insert(name.clone(), arr.clone());
+            }
+            scope = Some(built);
+        }
+        let forcing: &HashMap<String, ArrayD<f64>> = scope.as_ref().unwrap_or(&borrowed);
         for (target, rhs) in &self.field_ics {
             let vs = self.var_shapes.get(target).ok_or_else(|| {
                 SimulateError::InvalidFieldInitialCondition {
@@ -244,7 +284,7 @@ impl ArrayCompiled {
                         target,
                         rhs,
                         &multi,
-                        &forcing,
+                        forcing,
                         &self.index_sets,
                         params,
                         &mut cached_field,
@@ -1548,12 +1588,13 @@ impl ArrayCompiled {
                 ..
             } = rule
             {
-                insp.recurrences.push(crate::simulate_array::RecurrenceInfo {
-                    var: var.clone(),
-                    axis: output_idx_names[*axis].clone(),
-                    max_lag: *max_lag,
-                    lag_proven: *lag_proven,
-                });
+                insp.recurrences
+                    .push(crate::simulate_array::RecurrenceInfo {
+                        var: var.clone(),
+                        axis: output_idx_names[*axis].clone(),
+                        max_lag: *max_lag,
+                        lag_proven: *lag_proven,
+                    });
             }
         }
         for name in static_names {
