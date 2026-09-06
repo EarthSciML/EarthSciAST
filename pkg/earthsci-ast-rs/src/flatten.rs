@@ -2378,6 +2378,12 @@ fn apply_operator_compose(
     // (step 4's "the merged-away name does not survive"). Insertion-ordered so
     // the prune below is deterministic.
     let mut merged_away: IndexMap<String, String> = IndexMap::new();
+    // Positions in A's equation vector this entry merged INTO, for the
+    // reattribution below. Collected rather than acted on in place because
+    // `a_index` indexes that vector POSITIONALLY and stays live until the last
+    // B equation has been matched — relocating an equation mid-loop would
+    // invalidate it.
+    let mut merged_positions: HashSet<usize> = HashSet::new();
     for b_eq in b_equations {
         let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
             surviving.push(b_eq);
@@ -2432,11 +2438,14 @@ fn apply_operator_compose(
         }
         let rhs_a = std::mem::replace(&mut per_system[a_idx].equations[i].rhs, Expr::Integer(0));
         per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
+        merged_positions.insert(i);
         if target != b_dep {
             merged_away.insert(b_dep, target);
         }
     }
     per_system[b_idx].equations = surviving;
+
+    reattribute_merged_equations(a_idx, &merged_positions, per_system);
 
     // Step 4, second half: a RENAMING match — a translation match, or the
     // bare-name fallback, which is a name-based translation — has just consumed
@@ -2461,6 +2470,92 @@ fn apply_operator_compose(
     }
 
     Ok(())
+}
+
+/// Move each freshly merged equation into its dependent variable's block.
+///
+/// A composed tendency is no longer any single author's contribution, so
+/// esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
+/// dependent variable rather than to the `systems[0]` that happened to carry
+/// the surviving equation. Where A already IS that system — the ordinary
+/// `["Chemistry", "Advection"]` spelling, and every fixture in the shared tree
+/// before this one — the move is the identity and nothing changes.
+///
+/// Where it is NOT the identity is a document that CHAINS compose entries over
+/// one state with the OPERATOR as A:
+///
+/// ```json
+/// {"type": "operator_compose", "systems": ["Sink", "Chem"]}
+/// {"type": "operator_compose", "systems": ["Src",  "Chem"]}
+/// {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}
+/// ```
+///
+/// with `Sink` and `Src` authoring `D(Chem.X, t) = …` directly. §4.7.1 permits
+/// it and `reseact.esm` is built on it (deposition, then emission, then the
+/// transport lift). Entry 1 consumes Chem's own equation and leaves the sum in
+/// the `Sink` block; entry 2 then walks the `Src` and `Chem` blocks and cannot
+/// see it. Both the composed tendency and Src's un-merged contribution survive
+/// to assembly, which reports two systems defining `Chem.O3` — loud rather than
+/// corrupt, but the document is spec-valid and must flatten. Relocating the
+/// merge to the `Chem` block is what puts it back where the next entry looks for
+/// it, in either role.
+///
+/// The per-system block is this binding's analogue of the reference
+/// implementation's per-equation owner (Julia `coupling_apply.jl`, the
+/// `new_owners[j] = _component_root(dep)` line): which block an equation sits in
+/// is the only record of who authored it, and after namespacing an operator's
+/// equation for a chemistry species is textually indistinguishable from the
+/// chemistry component's own.
+///
+/// POSITION. §4.7.5 step 4 makes document order normative, and a relocated
+/// equation is APPENDED to the owner's block rather than inserted at the slot of
+/// the B equation it consumed. Appending is what reproduces the reference order:
+/// each merge trails the ones before it, so a species whose chain ends at a
+/// later entry ends up after one whose chain ended earlier — `Chem.NO` (last
+/// merged by entry 1) ahead of `Chem.O3` (last merged by entry 2) in the
+/// document above. Inserting at the consumed equation's slot instead would
+/// freeze both at Chem's original declaration order and disagree with every
+/// other binding.
+///
+/// An equation whose dependent variable names no block of this document stays
+/// where it is; there is nowhere to move it to.
+fn reattribute_merged_equations(
+    a_idx: usize,
+    merged_positions: &HashSet<usize>,
+    per_system: &mut [SystemBlock],
+) {
+    if merged_positions.is_empty() {
+        return;
+    }
+    let a_name = per_system[a_idx].name.clone();
+    let mut kept: Vec<Equation> = Vec::new();
+    let mut moved: Vec<(String, Equation)> = Vec::new();
+    for (i, eq) in std::mem::take(&mut per_system[a_idx].equations)
+        .into_iter()
+        .enumerate()
+    {
+        let owner = if merged_positions.contains(&i) {
+            compose_dependent(&eq.lhs).map(|dep| {
+                dep.split_once('.')
+                    .map(|(root, _)| root.to_string())
+                    .unwrap_or(dep)
+            })
+        } else {
+            None
+        };
+        match owner {
+            Some(owner) if owner != a_name && per_system.iter().any(|blk| blk.name == owner) => {
+                moved.push((owner, eq));
+            }
+            _ => kept.push(eq),
+        }
+    }
+    per_system[a_idx].equations = kept;
+    for (owner, eq) in moved {
+        if let Some(blk) = per_system.iter_mut().find(|blk| blk.name == owner) {
+            blk.equations.push(eq);
+        }
+    }
 }
 
 /// Rewrite every reference to a merged-away dependent variable, EVERYWHERE
