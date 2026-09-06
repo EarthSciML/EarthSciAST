@@ -1653,6 +1653,23 @@ bound. An undeclared `from` name is a hard error — no implicit interval is
 inferred. The canonical `op: "aggregate"` tag and the deprecated `op: "arrayop"`
 alias are evaluated identically (§5.6).
 
+The registry a `from` name resolves against is the **effective** one — the
+document's own `index_sets` merged with those of every template library imported
+into the component's scope (esm-spec §9.7.5), which is settled only once that
+scope closes (§9.7.4). A document that declares **no** `index_sets` of its own is
+the esm-spec §9.7.10 / §6.6.6 discretization-agnostic PDE leaf: its sets arrive
+from a grid library that a composing document, a subsystem-ref edge or an inline
+test injects, and exist only in that per-run build. **`validate()` therefore MUST
+NOT report `undefined_index_set` for a document that declares no registry** —
+mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run for
+a library file loaded or validated standalone. A document that DOES declare a
+registry is resolved against it at validation, and an absent `from` name is
+`undefined_index_set` (`tests/invalid/aggregate/undeclared_from_name.esm`); in
+both cases a name still unresolved once injection has run is rejected by the
+evaluating bindings at build (`E_REF_UNDECLARED_INDEX_SET` and its per-binding
+peers), so no typo survives to run time. Positive control:
+`tests/conformance/expression_templates/inject_agnostic_aggregate/fixture.esm`.
+
 #### 5.6.5 Conformance requirement
 
 The shared fixtures under `tests/valid/aggregate/` carry inline `tests`
