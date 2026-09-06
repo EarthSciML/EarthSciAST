@@ -3997,12 +3997,78 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 **Why the fixture's `g` is a LIVE node.** It drives a second state rather than
 standing alone, and that is not cosmetic: the Julia build drops a DEAD observed
 — one no live equation consumes — from `BuildInspection.observed_exprs`
-entirely, so Julia cannot answer an assertion on it whether or not it is
+entirely, so Julia could not answer an assertion on it whether or not it is
 state-dependent, while Rust (which REQUESTS the observed from the runtime) and
-Python (which evaluates the whole ordered graph on demand) both can. That
-residual divergence is tracked separately (EarthSciML/EarthSciAST#176) and is
-deliberately NOT what this category pins; a fixture written around it could not
-require all three bindings.
+Python (which evaluates the whole ordered graph on demand) both can. Keeping `g`
+live is what let this category require all three bindings; the deadness
+divergence is §5.27.3's subject.
+
+#### 5.27.3 A DEAD observed is still an observed (normative)
+
+An assertion MUST be answerable on an array OBSERVED that **no live equation
+consumes**. An inline test's natural target is a quantity computed FOR the test
+— a tendency, a flux, a diagnostic — which by construction nothing else reads.
+esm-spec §6.6.5 admits any shaped variable and §5.23 makes a reference denote
+its expansion; neither is conditioned on the dynamics reading it. A binding that
+answers only what the dynamics consume forces an author to wire a diagnostic
+into the model — CHANGING the model — to make a test runnable.
+
+The trap is not in the assertion path but in what reaches it. A build is
+entitled to drop what nothing needs: Julia's elementwise array-observed fold
+inlines such an observed into its readers and drops its equation, and a dead one
+has no readers to be inlined into, so it was dropped outright and reached
+neither `BuildInspection.observed_exprs` nor `observed_defs` — every assertion
+on it failed with `array state '<name>' has no cells in var_map`. So the rule is
+about SOURCES: an observed's field MUST be readable however the build chose to
+treat it, which for Julia's `_observed_field` is three sources in order —
+
+1. the **published body** (`observed_exprs` / `observed_defs`);
+2. the **materialized buffer**, for an observed whose build-once body (a
+   document-literal `const` array, a setup geometry buffer) the build folded
+   into the const-array registry and published no body for;
+3. the component's **own defining equation**, lowered to the same per-cell form
+   through the same shape-promotion lift the build itself uses (so §4.3.4 name
+   alignment holds: a `[x]`-shaped operand in an `[x,y]` result replicates along
+   `y` rather than being gathered positionally) and evaluated in the same scope.
+
+Producers a fallback body names resolve from the published graph, or recursively
+from their own defining equations, one level of deadness down. The recursion
+guard MUST be the dependency CHAIN, not the set of everything visited: two
+siblings reading the same dead observed are a DIAMOND, not a cycle, and each
+must resolve it.
+
+Two things this does NOT change. A published body still WINS — an observed the
+build publishes is read from the build, never re-derived. And a name the
+asserted component does not declare as an observed of its own is still the ERROR
+of §5.27.1, never a sibling's number.
+
+One diagnostic DOES change, deliberately. A declared observed whose defining
+equation cannot be evaluated at assertion time (it names a variable the document
+never declares, a provider array not yet fetched) now REACHES the evaluator and
+reports `E_TREEWALK_UNBOUND_VARIABLE: <name>` where it previously reported
+`array state '<v>' has no cells in var_map`. Both are an ERROR verdict, never a
+plausible number; the new message names the unresolved operand instead of
+describing a state lookup that was never the point.
+
+**Gate.** `tests/conformance/pde_inline_dead_observed/` holds the shared fixture
+and the Julia-minted golden. The fixture's `diag = 2*base` is dead, and
+`chain = diag + base` is dead AND reads a dead observed, so the recursive
+resolution is pinned and not just the one-level case. Its only state is
+integrated with a zero right-hand side, so the trajectory is constant and the
+goldens are integrator-independent: a divergence here is a semantics divergence,
+never an integrator one.
+
+Per-binding runners drive it and gate every assertion against BOTH the golden
+actual and the fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_dead_observed_test.jl`;
+**Python** — `pkg/earthsci-ast-py/tests/test_pde_inline_dead_observed_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_dead_observed_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest. Rust and Python were already conforming — Rust
+requests the observed from the runtime, Python evaluates the ordered observed
+graph on demand — so the category also pins that neither regresses into
+consuming-equation-gated answers.
 
 ### 5.28 Inline Array Data for a Shaped Variable (normative)
 
