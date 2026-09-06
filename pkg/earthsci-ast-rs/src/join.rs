@@ -606,7 +606,10 @@ enum Via {
 /// §5.5.8's partner-restricted drive shape means by "the LATER of the two gated
 /// axes". Reusing it is what makes the default side assignment a pure function
 /// of the document rather than of a hash iteration.
-fn canonical_range_order(output_idx: &[String], ranges: &HashMap<String, RangeSpec>) -> Vec<String> {
+fn canonical_range_order(
+    output_idx: &[String],
+    ranges: &HashMap<String, RangeSpec>,
+) -> Vec<String> {
     let mut out: Vec<String> = output_idx
         .iter()
         .filter(|n| ranges.contains_key(n.as_str()))

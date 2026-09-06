@@ -252,9 +252,7 @@ def test_build_time_invalid_fixture_rejected(fixture_path: Path) -> None:
     want = {(e["code"], e["path"]) for e in expected["structural_errors"]}
     assert want, f"{fixture_path.name}: the pin names no structural error"
 
-    result = validate_text(
-        fixture_path.read_text(), base_path=str(fixture_path.parent)
-    )
+    result = validate_text(fixture_path.read_text(), base_path=str(fixture_path.parent))
     assert not result.is_valid, f"{fixture_path.name}: expected a structural rejection"
     got = {(e.code, e.path) for e in result.structural_errors}
     assert want <= got, f"{fixture_path.name}: want {sorted(want)}, got {sorted(got)}"

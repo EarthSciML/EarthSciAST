@@ -248,6 +248,7 @@ def compare(outputs: Dict[str, Dict[str, dict]]) -> List[dict]:
                     "ok": False,
                     "error": entry.get("error", "unknown"),
                 }
+
         # TWO SIGNALS, DELIBERATELY NOT MERGED. `diverged` keeps its exact
         # pre-SOURCE meaning — THE BINDINGS DISAGREE WITH EACH OTHER — because
         # folding the source into it would silently change what
@@ -428,8 +429,10 @@ def main() -> int:
                 if n != SOURCE_PARTICIPANT and r["ok"]
             )
             print(f"  {entry['fixture']}", file=sys.stderr)
-            print(f"    SOURCE   {entry['bindings'][SOURCE_PARTICIPANT]['canonical']}",
-                  file=sys.stderr)
+            print(
+                f"    SOURCE   {entry['bindings'][SOURCE_PARTICIPANT]['canonical']}",
+                file=sys.stderr,
+            )
             print(f"    bindings {got}", file=sys.stderr)
 
     if args.require_divergence and summary["diverged_count"] == 0:

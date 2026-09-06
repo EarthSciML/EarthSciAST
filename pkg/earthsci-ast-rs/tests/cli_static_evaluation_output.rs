@@ -149,7 +149,11 @@ fn a_relational_document_writes_its_computed_values() {
     // The VALUES, not merely a file: a run that wrote defaults would pass a
     // "the file exists" assertion and fail every one of these.
     for (i, want) in LEFT.iter().enumerate() {
-        assert_eq!(values[&format!("Rel.left[{}]", i + 1)], *want, "in {values:?}");
+        assert_eq!(
+            values[&format!("Rel.left[{}]", i + 1)],
+            *want,
+            "in {values:?}"
+        );
     }
     for (i, want) in RIGHT.iter().enumerate() {
         assert_eq!(
@@ -230,7 +234,10 @@ fn a_named_field_the_build_did_not_produce_is_an_error() {
         "--output",
         out.to_str().expect("utf-8"),
     ]);
-    assert!(!ok, "a missing field must not silently drop a column:\n{text}");
+    assert!(
+        !ok,
+        "a missing field must not silently drop a column:\n{text}"
+    );
     assert!(text.contains("not_a_field"), "in:\n{text}");
 }
 

@@ -297,20 +297,20 @@ macro_rules! dispatch_bin_kernel {
             $apply!(binary_kernel_of(*$op))
         } else {
             match $op {
-            BinCode::Add => $apply!(|x, y| x + y),
-            BinCode::Sub => $apply!(|x, y| x - y),
-            BinCode::Mul => $apply!(|x, y| x * y),
-            BinCode::Div => $apply!(|x, y| x / y),
-            BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
-            BinCode::Min => $apply!(|x: f64, y: f64| x.min(y)),
-            BinCode::Max => $apply!(|x: f64, y: f64| x.max(y)),
-            BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
-            BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
-            BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
-            BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
-            BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
-            BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
-            other => $apply!(binary_kernel_of(*other)),
+                BinCode::Add => $apply!(|x, y| x + y),
+                BinCode::Sub => $apply!(|x, y| x - y),
+                BinCode::Mul => $apply!(|x, y| x * y),
+                BinCode::Div => $apply!(|x, y| x / y),
+                BinCode::Pow => $apply!(|x: f64, y: f64| x.powf(y)),
+                BinCode::Min => $apply!(|x: f64, y: f64| x.min(y)),
+                BinCode::Max => $apply!(|x: f64, y: f64| x.max(y)),
+                BinCode::Eq => $apply!(|x, y| (x == y) as i32 as f64),
+                BinCode::Ne => $apply!(|x, y| (x != y) as i32 as f64),
+                BinCode::Lt => $apply!(|x, y| (x < y) as i32 as f64),
+                BinCode::Le => $apply!(|x, y| (x <= y) as i32 as f64),
+                BinCode::Gt => $apply!(|x, y| (x > y) as i32 as f64),
+                BinCode::Ge => $apply!(|x, y| (x >= y) as i32 as f64),
+                other => $apply!(binary_kernel_of(*other)),
             }
         }
     };
@@ -329,26 +329,26 @@ macro_rules! dispatch_un_kernel {
             $apply!(unary_kernel_of(*$op))
         } else {
             match $op {
-            UnCode::Abs => $apply!(|x: f64| x.abs()),
-            UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
-            UnCode::Exp => $apply!(|x: f64| x.exp()),
-            UnCode::Ln => $apply!(|x: f64| x.ln()),
-            UnCode::Log10 => $apply!(|x: f64| x.log10()),
-            UnCode::Sin => $apply!(|x: f64| x.sin()),
-            UnCode::Cos => $apply!(|x: f64| x.cos()),
-            UnCode::Tanh => $apply!(|x: f64| x.tanh()),
-            UnCode::Floor => $apply!(|x: f64| x.floor()),
-            UnCode::Ceil => $apply!(|x: f64| x.ceil()),
-            UnCode::Sign => $apply!(|x: f64| {
-                if x > 0.0 {
-                    1.0
-                } else if x < 0.0 {
-                    -1.0
-                } else {
-                    0.0
-                }
-            }),
-            other => $apply!(unary_kernel_of(*other)),
+                UnCode::Abs => $apply!(|x: f64| x.abs()),
+                UnCode::Sqrt => $apply!(|x: f64| x.sqrt()),
+                UnCode::Exp => $apply!(|x: f64| x.exp()),
+                UnCode::Ln => $apply!(|x: f64| x.ln()),
+                UnCode::Log10 => $apply!(|x: f64| x.log10()),
+                UnCode::Sin => $apply!(|x: f64| x.sin()),
+                UnCode::Cos => $apply!(|x: f64| x.cos()),
+                UnCode::Tanh => $apply!(|x: f64| x.tanh()),
+                UnCode::Floor => $apply!(|x: f64| x.floor()),
+                UnCode::Ceil => $apply!(|x: f64| x.ceil()),
+                UnCode::Sign => $apply!(|x: f64| {
+                    if x > 0.0 {
+                        1.0
+                    } else if x < 0.0 {
+                        -1.0
+                    } else {
+                        0.0
+                    }
+                }),
+                other => $apply!(unary_kernel_of(*other)),
             }
         }
     };
