@@ -67,6 +67,9 @@ function _dob_doc(assertions::Vector)
                 "both" => _dob_var(("x",)),
                 "grid" => _dob_var(("x", "y")),
                 "mix" => _dob_var(("x", "y")),
+                # DEAD *and* STATE-DEPENDENT: reaching the scope is this fix's
+                # half, resolving `u` in it is #177's.
+                "dyn" => _dob_var(("x",)),
                 # LIVE, and defined by an aggregate the fold leaves alone, so
                 # the build publishes its body: the fallback must not shadow it.
                 "scaled" => _dob_var(("x",))),
@@ -108,6 +111,10 @@ function _dob_doc(assertions::Vector)
                 Dict{String, Any}("lhs" => "mix",
                                   "rhs" => Dict{String, Any}("op" => "*",
                                       "args" => Any["base", "m"])),
+                # Reads the STATE `u`, which the trajectory sample binds.
+                Dict{String, Any}("lhs" => "dyn",
+                                  "rhs" => Dict{String, Any}("op" => "*",
+                                      "args" => Any[3.0, "u"])),
                 Dict{String, Any}("lhs" => "scaled",
                     "rhs" => Dict{String, Any}("op" => "aggregate",
                         "args" => Any["base"], "output_idx" => Any["i"],
@@ -203,6 +210,26 @@ end
     ])))
     @test length(results) == 2
     @test all(r -> r.status == EarthSciAST.PASS, results)
+end
+
+@testset "a DEAD observed that reads STATE resolves at the sample (#177)" begin
+    # The two fixes compose, and only together: #177 puts the trajectory sample
+    # into the scope `_observed_field` builds, and this one makes a dead
+    # observed reach that scope at all. Neither alone answers `dyn = 3*u` —
+    # before #177 it reported `E_TREEWALK_UNBOUND_VARIABLE: u`, and before this
+    # fix `array state 'dyn' has no cells in var_map`. `u` starts at 1.0 and is
+    # integrated with a zero right-hand side, so dyn = [3,3,3,3] at every time.
+    results = _dob_run(_dob_load(_dob_doc(Any[
+        _dob_reduce("dyn", "max", 3.0),
+        _dob_reduce("dyn", "min", 3.0),
+        _dob_coords("dyn", ["x" => 2], 3.0),
+        _dob_coords("dyn", ["x" => 4], 3.0; time = 1.0),
+    ])))
+    @test length(results) == 4
+    for r in results
+        @test r.status == EarthSciAST.PASS
+        @test r.passed
+    end
 end
 
 @testset "a name the component does not declare is still refused" begin
