@@ -343,3 +343,21 @@ INTACT and each test KEEPS its import field (form C survives `parse → emit`).
 Each test runs as an independent per-test ephemeral build in which the leaf's
 derivative is lowered under that test's grid; the persisted component is never
 mutated (the Julia reference runs this through `run_pde_tests`).
+
+### `inject_agnostic_aggregate/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
+
+`fixture.esm` is an agnostic PDE leaf that declares NO `index_sets` of its own
+and whose `aggregate` `ranges` name `{ "from": "cells" }` — a set that arrives
+only when a grid library is injected into this component's scope (form A, B or
+C above). The contract is **load-time acceptance**: `validate()` MUST NOT emit
+`undefined_index_set` here, because the effective registry (§9.7.5) is not
+knowable until the component's template scope closes (§9.7.4). This mirrors
+§9.6.1, where `template_constraint_unknown_index_set` does not run for a library
+file validated standalone. Every binding asserts the acceptance; the typo case
+stays covered by `tests/invalid/aggregate/undeclared_from_name.esm`, which
+*does* declare a registry and ranges over a name absent from it, and by the
+evaluating bindings' resolvers, which still reject a name left unresolved once
+injection has run (`E_REF_UNDECLARED_INDEX_SET` and peers). Like every §6.6.6
+leaf the fixture is un-runnable in isolation, so it deliberately lives here
+rather than under `tests/valid/`, whose corpus sweeps require every fixture to
+resolve standalone.

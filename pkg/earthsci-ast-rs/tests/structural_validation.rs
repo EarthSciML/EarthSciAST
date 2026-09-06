@@ -1252,6 +1252,32 @@ fn test_f6_undefined_index_set() {
     );
 }
 
+/// A §9.7.10 / §6.6.6 discretization-agnostic PDE leaf declares NO `index_sets`
+/// of its own: its registry arrives from the grid library a composing document,
+/// a subsystem-ref edge or an inline test injects into this component's scope.
+/// An `aggregate` range naming a set the document does not declare is therefore
+/// NOT decidable at standalone load and must NOT be reported as
+/// `undefined_index_set` — mirroring esm-spec §9.6.1, where
+/// `template_constraint_unknown_index_set` does not run for a library file
+/// validated standalone (issue #185).
+#[test]
+fn test_f6_undefined_index_set_deferred_for_agnostic_leaf() {
+    let fixture = include_str!(
+        "../../../tests/conformance/expression_templates/inject_agnostic_aggregate/fixture.esm"
+    );
+    let esm = load_string(fixture).expect("agnostic leaf loads");
+    let result = validate(&esm);
+    assert!(
+        result.is_valid,
+        "a leaf whose index sets arrive by injection must validate; got {:?}",
+        result
+            .structural_errors
+            .iter()
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// An `identity` variable_map bridging two variables with declared, non-empty,
 /// differing units (K vs degC) is rejected at the coupling entry.
 #[test]

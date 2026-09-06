@@ -425,13 +425,30 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
       mesh literals / parameters is allowed (positive control:
       ``tests/valid/cadence/pure_topology.esm``).
     * ``undefined_index_set`` — a ``ranges`` entry ``{"from": NAME}`` whose NAME
-      is not a key of the document ``index_sets`` registry (RFC §5.2).
+      is not a key of the document ``index_sets`` registry (RFC §5.2). Run only
+      when the document DECLARES a registry: a document that declares none is a
+      §9.7.10 discretization-agnostic leaf whose index sets arrive by injection
+      at mount / test time (§6.6.6), so its effective registry is not knowable
+      at standalone load and the check is deferred to the resolver, exactly as
+      §9.6.1 defers ``template_constraint_unknown_index_set`` for a library file
+      validated standalone (issue #185).
 
     Emitted as ``(code, json_pointer, message, details)`` 4-tuples so each finding
     carries its own code (the collect-level code is a fallback only), deduped per
     ``(code, pointer)``.
     """
     index_sets = data.get("index_sets") or {}
+    # A document that declares NO `index_sets` of its own does not close its own
+    # registry: under §9.7.10 the sets arrive from a discretization library that
+    # a composing document, a subsystem-ref edge or an inline test injects into
+    # this component's scope (§6.6.6), and the effective registry only exists in
+    # that per-run build. Resolving `{from: NAME}` against an empty local
+    # registry there rejects every conforming agnostic PDE leaf, so the check is
+    # deferred — the evaluating bindings still reject a name that is still
+    # unresolved once injection has run (`E_REF_UNDECLARED_INDEX_SET` and its
+    # peers), which is where the typo-catching value actually lives. A document
+    # that DOES declare a registry is resolved against it, unchanged.
+    check_index_sets = bool(index_sets)
     seen: set[tuple[str, str]] = set()
 
     def emit(code: str, pointer: str, message: str, details: dict) -> None:
@@ -461,7 +478,9 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                 ranges = agg.get("ranges") or {}
 
                 # --- undefined_index_set: a {"from": NAME} not in the registry.
-                for spec in ranges.values() if isinstance(ranges, dict) else []:
+                for spec in (
+                    ranges.values() if check_index_sets and isinstance(ranges, dict) else []
+                ):
                     if isinstance(spec, dict):
                         name = spec.get("from")
                         if isinstance(name, str) and name not in index_sets:
