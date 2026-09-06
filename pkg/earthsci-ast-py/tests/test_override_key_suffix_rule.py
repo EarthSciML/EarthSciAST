@@ -66,5 +66,7 @@ def test_resolve_override_is_deterministic_when_two_keys_designate_one_name() ->
     known = {"Left.solo"}
     overrides = {"B.Left.solo": 2.0, "A.Left.solo": 1.0}
     assert _resolve_override("Left.solo", overrides, 5.0, known=known) == 1.0
-    assert _resolve_override("Left.solo", dict(reversed(list(overrides.items()))), 5.0,
-                             known=known) == 1.0
+    assert (
+        _resolve_override("Left.solo", dict(reversed(list(overrides.items()))), 5.0, known=known)
+        == 1.0
+    )

@@ -278,7 +278,10 @@ def _free_x_cos() -> dict:
     return {
         "op": "cos",
         "args": [
-            {"op": "*", "args": [math.pi, {"op": "/", "args": [{"op": "-", "args": ["x", 0.5]}, N]}]}
+            {
+                "op": "*",
+                "args": [math.pi, {"op": "/", "args": [{"op": "-", "args": ["x", 0.5]}, N]}],
+            }
         ],
     }
 
@@ -295,9 +298,13 @@ def test_bind_dimension_names_wraps_only_a_free_mention():
     assert wrapped.output_idx == ["x"]
     assert wrapped.ranges == {"x": {"from": "x"}}
     assert wrapped.expr is free
-    bound = ExprNode(op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
+    )
     assert bind_dimension_names(bound, ["x"]) is bound
-    integ = ExprNode(op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1)
+    integ = ExprNode(
+        op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1
+    )
     assert bind_dimension_names(integ, ["x"]) is integ
     # A `wrt` is a differentiation TARGET, not a free read of the enclosing
     # scope, so it does not trigger the wrap (the Julia and Rust predicates
@@ -324,7 +331,9 @@ def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
     lit = ExprNode(op="*", args=[2.0, "k"])
     assert bind_dimension_names(lit, ["x"], {"x": 3.0}) is lit
     # A gather that rebinds `x` itself keeps working.
-    bound = ExprNode(op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
+    )
     assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
     # And with no scope supplied the wrap is unchanged.
     assert bind_dimension_names(free, ["x"]).op == "aggregate"
@@ -337,18 +346,47 @@ def test_reference_binds_the_field_dimension_names():
     table = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
     doc = _decay_doc()
     doc["models"]["M"]["tests"][0]["assertions"] = [
-        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
-         "reduce": "L2_error", "reference": _free_x_cos()},
-        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
-         "reduce": "Linf_error",
-         "reference": {"op": "index", "args": [{"op": "const", "args": [], "value": table}, "x"]}},
-        {"variable": "u", "time": 0.0, "expected": 0.0, "tolerance": {"abs": 1e-12},
-         "reduce": "L2_error",
-         "reference": {"op": "aggregate", "args": [], "output_idx": ["x"],
-                       "ranges": {"x": {"from": "x"}}, "expr": _free_x_cos()}},
-        {"variable": "u", "time": 1.0, "expected": 0.0, "tolerance": {"abs": 1e-8},
-         "reduce": "L2_error",
-         "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, _free_x_cos()]}},
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "L2_error",
+            "reference": _free_x_cos(),
+        },
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "Linf_error",
+            "reference": {
+                "op": "index",
+                "args": [{"op": "const", "args": [], "value": table}, "x"],
+            },
+        },
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "L2_error",
+            "reference": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": ["x"],
+                "ranges": {"x": {"from": "x"}},
+                "expr": _free_x_cos(),
+            },
+        },
+        {
+            "variable": "u",
+            "time": 1.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-8},
+            "reduce": "L2_error",
+            "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, _free_x_cos()]},
+        },
     ]
     results = run_pde_tests(
         load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
@@ -365,7 +403,10 @@ def test_subsystem_parameter_override_in_every_spelling():
     doc = _decay_doc()
     doc["models"]["P"] = doc["models"].pop("M")
     doc["models"]["P"]["subsystems"] = {
-        "sub": {"variables": {"g": {"type": "parameter", "units": "1", "default": 9.81}}, "equations": []}
+        "sub": {
+            "variables": {"g": {"type": "parameter", "units": "1", "default": 9.81}},
+            "equations": [],
+        }
     }
     doc["models"]["P"]["variables"]["gg"] = {"type": "unknown", "units": "1"}
     doc["models"]["P"]["equations"].append({"lhs": "gg", "rhs": "P.sub.g"})
@@ -376,12 +417,19 @@ def test_subsystem_parameter_override_in_every_spelling():
     span = {"start": 0.0, "end": 1.0}
     doc["models"]["P"]["tests"] = [
         {"id": "default", "time_span": span, "assertions": gg(9.81)},
-        {"id": "qualified", "time_span": span, "parameter_overrides": {"P.sub.g": 1.5},
-         "assertions": gg(1.5)},
-        {"id": "relative", "time_span": span, "parameter_overrides": {"sub.g": 2.5},
-         "assertions": gg(2.5)},
-        {"id": "bare", "time_span": span, "parameter_overrides": {"g": 3.5},
-         "assertions": gg(3.5)},
+        {
+            "id": "qualified",
+            "time_span": span,
+            "parameter_overrides": {"P.sub.g": 1.5},
+            "assertions": gg(1.5),
+        },
+        {
+            "id": "relative",
+            "time_span": span,
+            "parameter_overrides": {"sub.g": 2.5},
+            "assertions": gg(2.5),
+        },
+        {"id": "bare", "time_span": span, "parameter_overrides": {"g": 3.5}, "assertions": gg(3.5)},
     ]
     results = run_pde_tests(
         load_string(json.dumps(doc)), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14

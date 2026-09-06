@@ -251,9 +251,7 @@ def _build_scalar_rhs(
     known_states = set(flat.state_variables)
     for name in state_names:
         default = eq_ics.get(name, flat.state_variables[name].default)
-        y0_list.append(
-            _resolve_override(name, initial_conditions, default, known=known_states)
-        )
+        y0_list.append(_resolve_override(name, initial_conditions, default, known=known_states))
     y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.

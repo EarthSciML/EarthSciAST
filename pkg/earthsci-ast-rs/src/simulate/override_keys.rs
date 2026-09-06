@@ -157,7 +157,11 @@ mod tests {
     use super::*;
 
     fn known(names: &[&str]) -> HashMap<String, usize> {
-        names.iter().enumerate().map(|(i, n)| (n.to_string(), i)).collect()
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.to_string(), i))
+            .collect()
     }
 
     /// esm-spec §6.6.2 rule 2: the LONGEST dotted suffix that is a name wins;

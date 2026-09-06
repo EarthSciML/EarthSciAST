@@ -230,16 +230,16 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// esm-spec §6.6.5: an inline `reference`'s free variables are the domain
 /// DIMENSION NAMES. For a field shaped over index sets those are the asserted
 /// variable's `shape` entries, each bound at every grid point to the 1-based
-/// position along its axis — the same index space `coords` reads (convention
-/// 1) — so `index(zc, lev)` reads the cell's coordinate from a geometry array
-/// and `sin(pi * (x - 0.5) / N)` is the cell-centre analytic form, with no
-/// explicit gather. A reference that mentions a dimension name FREE is turned
-/// into the whole field by wrapping it in an `aggregate` whose output indices
-/// ARE the dimension names (in shape order, each ranging over its index set);
-/// one that mentions none — a literal, a parameter expression, or an
-/// `aggregate` that already produces the field under its own loop symbols — is
-/// returned untouched, so nothing that evaluated before evaluates differently.
-/// Mirrors the Julia / Python `bind_dimension_names`.
+/// position along its axis — the same index space `coords` reads
+/// (convention 1) — so `index(zc, lev)` reads the cell's coordinate from a
+/// geometry array and `sin(pi * (x - 0.5) / N)` is the cell-centre analytic
+/// form, with no explicit gather. A reference that mentions a dimension name
+/// FREE is turned into the whole field by wrapping it in an `aggregate` whose
+/// output indices ARE the dimension names (in shape order, each ranging over
+/// its index set); one that mentions none — a literal, a parameter expression,
+/// or an `aggregate` that already produces the field under its own loop
+/// symbols — is returned untouched, so nothing that evaluated before evaluates
+/// differently. Mirrors the Julia / Python `bind_dimension_names`.
 ///
 /// `scope` is the reference's build-time parameter scope (flattened names plus
 /// their unambiguous bare aliases). "Nothing that evaluated before evaluates
@@ -2130,8 +2130,10 @@ mod tests {
                                  "expr": {"op": "+", "args": ["x", 1]}}));
         assert_eq!(bind(&bound, &dims), bound);
         // An integral's variable is a binder too.
-        let integ = parse(json!({"op": "integral", "args": [{"op": "*", "args": [2, "x"]}],
-                                 "var": "x", "lower": 0, "upper": 1}));
+        let integ = parse(
+            json!({"op": "integral", "args": [{"op": "*", "args": [2, "x"]}],
+                                 "var": "x", "lower": 0, "upper": 1}),
+        );
         assert_eq!(bind(&integ, &dims), integ);
         // A `wrt` is a differentiation TARGET, not a free read of the scope.
         let deriv = parse(json!({"op": "D", "args": ["u"], "wrt": "x"}));
@@ -2156,12 +2158,18 @@ mod tests {
         // A reference that does not mention it is unaffected — the clash only
         // matters where the wrap would actually rebind the name.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
-        assert_eq!(bind_dimension_names(&lit, &dims, &scope).expect("no mention"), lit);
+        assert_eq!(
+            bind_dimension_names(&lit, &dims, &scope).expect("no mention"),
+            lit
+        );
         // And a gather that rebinds `x` itself keeps working.
         let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
-        assert_eq!(bind_dimension_names(&bound, &dims, &scope).expect("rebound"), bound);
+        assert_eq!(
+            bind_dimension_names(&bound, &dims, &scope).expect("rebound"),
+            bound
+        );
     }
 
     /// esm-spec §4.6 / §6.6.2: inside model `P`, `P.sub.g` is the fully
@@ -2180,9 +2188,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"lhs": "gg", "rhs": "P.sub.g"}));
-        let assert_gg = |want: f64| {
-            json!([{"variable": "gg", "time": 0.0, "expected": want, "tolerance": {"rel": 1e-12}}])
-        };
+        let assert_gg = |want: f64| json!([{"variable": "gg", "time": 0.0, "expected": want, "tolerance": {"rel": 1e-12}}]);
         doc["models"]["P"]["tests"] = json!([
             {"id": "default", "time_span": {"start": 0.0, "end": 1.0},
              "assertions": assert_gg(9.81)},
