@@ -914,8 +914,9 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 # So rewrite each caller key onto the name the build actually resolves, once,
 # before any consumer sees it:
 #   1. an exact parameter-name hit wins;
-#   2. else a DOTTED key whose trailing segment is itself a parameter name
-#      resolves to that parameter (`M.A` against a bare-named `Model`);
+#   2. else a DOTTED key whose LONGEST dotted suffix is itself a parameter name
+#      resolves to that parameter (`M.A` against a bare-named `Model`, `M.sub.A`
+#      against a build carrying the mounted subsystem parameter as `sub.A`);
 #   3. else a BARE key that is the trailing segment of exactly ONE parameter
 #      resolves to it (`A` against the flattened `M.A`);
 #   4. a BARE key that is the trailing segment of MORE THAN ONE parameter is
@@ -994,31 +995,45 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
     normalized = Dict{String,V}()
     unknown = String[]
     ambiguous = Dict{String,Vector{String}}()
-    # Two passes so precedence is DETERMINISTIC when a caller supplies both
-    # spellings of one name (`A` and `M.A`): the alias-resolved keys land first,
-    # the exact-name keys overwrite them. Same order as Python's
-    # `_resolve_override` (exact key checked before the bare segment).
+    # Which key CLAIMED each resolved name, as `(rank, key)`. Two distinct keys
+    # can designate one name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
+    # bind `Left.solo`, and `A.M.g` and `B.M.g` both bind `M.g` — and picking by
+    # `Dict` iteration order would make the run depend on hash order. The claim
+    # with the SMALLEST `(rank, key)` wins, where rank is 0 for an exact hit, 1
+    # for the bare local spelling and 2 for a longer dotted key: the same
+    # precedence Python's `_resolve_override` reads with (exact name, then the
+    # bare segment, then the lexicographically first more-qualified key) and the
+    # same one Rust's `canonicalize_override_keys` applies.
+    claim = Dict{String,Tuple{Int,String}}()
     for (rawk, v) in overrides
         k = String(rawk)
-        k in names && continue
-        suffix = _dotted_suffix_hit(names, k)
-        if suffix !== nothing                 # rule 2: dotted key, its longest
-            normalized[suffix] = _override_value(V, v)   # known dotted suffix
-        elseif haskey(bare_group, k)
-            cands = bare_group[k]
-            if length(cands) == 1             # rule 3: unique bare alias
-                normalized[cands[1]] = _override_value(V, v)
-            else                              # rule 4: ambiguous local name
-                ambiguous[k] = cands
+        local name::String, rank::Int
+        if k in names                             # rule 1: exact hit
+            name, rank = k, 0
+        else
+            suffix = _dotted_suffix_hit(names, k)
+            if suffix !== nothing                 # rule 2: longest known suffix
+                name, rank = suffix, 2
+            elseif haskey(bare_group, k)
+                cands = bare_group[k]
+                if length(cands) == 1             # rule 3: unique bare alias
+                    name, rank = cands[1], 1
+                else                              # rule 4: ambiguous local name
+                    ambiguous[k] = cands
+                    continue
+                end
+            else                                  # rule 5: matches nothing
+                push!(unknown, k)
+                continue
             end
-        else                                  # rule 5: matches nothing
-            push!(unknown, k)
+        end
+        prev = get(claim, name, nothing)
+        if prev === nothing || (rank, k) < prev
+            claim[name] = (rank, k)
+            normalized[name] = _override_value(V, v)
         end
     end
-    for (rawk, v) in overrides
-        k = String(rawk)
-        k in names && (normalized[k] = _override_value(V, v))   # rule 1: exact hit
-    end
+    sort!(unknown)
     return normalized, unknown, ambiguous
 end
 

@@ -4309,8 +4309,19 @@ rewrite-only ports with no inline-test runner and are `scope_excluded`.
 
 The two clauses above that a document cannot express as a passing fixture — a
 `wrt` that must not trigger the wrap, and the scope clash that must be a fault —
-are gated per binding on `bind_dimension_names` directly: **Julia**
-`test/pde_inline_tests_test.jl`, **Python**
+are gated per binding on `bind_dimension_names` directly, one test each.
+
+The `wrt` clause: **Julia** `test/pde_inline_tests_test.jl`
+(`bind_dimension_names` wraps only a free mention), **Python**
+`tests/test_pde_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
+**Rust** `pde_inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
+The same three cases also pin the two other non-mentions the rule turns on: an
+`aggregate` that rebinds the dimension name, and an `integral` whose integration
+variable is it.
+
+The scope clash: **Julia** `test/pde_inline_tests_test.jl`
+(`bind_dimension_names` rejects a dimension the parameter scope binds),
+**Python**
 `tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
 **Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
 

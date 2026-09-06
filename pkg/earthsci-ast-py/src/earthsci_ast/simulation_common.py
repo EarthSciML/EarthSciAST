@@ -11,7 +11,7 @@ import guard, and the dense-output point budget — so the pathway submodules
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -459,7 +459,7 @@ def check_parameter_override_keys(
         )
 
 
-def _dotted_suffix_hit(known: Iterable[str], key: str) -> str | None:
+def _dotted_suffix_hit(known: Collection[str], key: str) -> str | None:
     """Rule 2 of :func:`check_parameter_override_keys`: the LONGEST dotted
     suffix of a dotted ``key`` — every ``<segment>.`` prefix dropped in turn,
     most-qualified first — that is itself a known name; ``None`` for a bare key
@@ -477,7 +477,7 @@ def resolve_override_raw(
     name: str,
     overrides: dict[str, Any],
     default: Any,
-    known: Iterable[str] | None = None,
+    known: Collection[str] | None = None,
 ) -> Any:
     """The value :func:`_resolve_override` resolves, BEFORE the ``float`` cast.
 
@@ -507,16 +507,26 @@ def resolve_override_raw(
     ``known`` defaults to ``{name}`` — the single-name view, under which rule 2
     still admits ``Doc.Left.solo`` for ``Left.solo`` — so a caller resolving one
     isolated name need not supply it; every caller resolving a whole build
-    passes its name set.
+    passes its name set. It must be a CONTAINER, not a one-shot iterator: it is
+    membership-tested and reused per call.
     """
+    if not overrides:
+        return default
     bare = name.rsplit(".", 1)[-1]
     if name in overrides:
         return overrides[name]
     if bare in overrides:
         return overrides[bare]
     # `name` is always in the view, so a caller that passes a partial `known`
-    # cannot make its own name unresolvable.
-    names = {name} if known is None else set(known) | {name}
+    # cannot make its own name unresolvable. The caller's own set is REUSED when
+    # it already carries `name` — copying it per parameter is quadratic on a
+    # build with thousands of them, and this is the common case.
+    if known is None:
+        names: Collection[str] = {name}
+    elif name in known:
+        names = known
+    else:
+        names = set(known) | {name}
     longer = sorted(k for k in overrides if k not in names and _dotted_suffix_hit(names, k) == name)
     if longer:
         # Two distinct more-qualified keys designating one name is a caller
@@ -583,7 +593,7 @@ def _resolve_override(
     name: str,
     overrides: dict[str, Any],
     default: Any,
-    known: Iterable[str] | None = None,
+    known: Collection[str] | None = None,
 ) -> float:
     """Resolve a parameter / initial-condition value against caller overrides.
 

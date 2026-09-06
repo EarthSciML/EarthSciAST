@@ -157,8 +157,8 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # 'u'". Same defect as `parameter_overrides` had, on the state side; it
     # merely failed loudly instead of silently. Resolve the caller's key onto
     # the name the build uses with the SAME rules (build.jl
-    # `_canonicalize_override_keys`): exact hit, else a dotted key whose
-    # trailing segment is a state name, else a bare key that is the trailing
+    # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
+    # dotted suffix is a state name, else a bare key that is the trailing
     # segment of exactly one — an ambiguous local name is rejected, never
     # guessed at.
     #

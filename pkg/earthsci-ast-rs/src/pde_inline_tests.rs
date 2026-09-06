@@ -269,14 +269,21 @@ pub fn bind_dimension_names(
         .iter()
         .map(|d| (d.clone(), serde_json::json!({ "from": d })))
         .collect();
+    // Reported, not asserted: `run_pde_tests` records a per-assertion failure
+    // message for every error this returns, and `bind_dimension_names` is `pub`,
+    // so an `Expr` built programmatically (a non-finite `Expr::Number`, say)
+    // must not abort the whole run through a panicking `expect`.
     let wrapped = serde_json::json!({
         "op": "aggregate",
         "args": [],
         "output_idx": dims,
         "ranges": ranges,
-        "expr": serde_json::to_value(expr).expect("an Expr serializes"),
+        "expr": serde_json::to_value(expr)
+            .map_err(|e| format!("inline `reference` could not be serialized: {e}"))?,
     });
-    Ok(serde_json::from_value(wrapped).expect("a well-formed aggregate node deserializes"))
+    serde_json::from_value(wrapped).map_err(|e| {
+        format!("inline `reference` could not be wrapped in a dimension-name gather: {e}")
+    })
 }
 
 /// Collapse a spatial field to the scalar a §6.6.5 `reduce` assertion

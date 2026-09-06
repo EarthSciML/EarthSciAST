@@ -7,6 +7,8 @@ bare-only."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from earthsci_ast.errors import AmbiguousParameterError, UnknownParameterError
@@ -14,6 +16,7 @@ from earthsci_ast.simulation_common import (
     _dotted_suffix_hit,
     _resolve_override,
     check_parameter_override_keys,
+    resolve_override_raw,
 )
 
 
@@ -70,3 +73,80 @@ def test_resolve_override_is_deterministic_when_two_keys_designate_one_name() ->
         _resolve_override("Left.solo", dict(reversed(list(overrides.items()))), 5.0, known=known)
         == 1.0
     )
+
+
+def test_resolve_override_raw_applies_rule_2_on_the_array_channel_too() -> None:
+    """The rule lives in ``resolve_override_raw``, not only in the ``float``
+    wrapper, so a SHAPED parameter's inline array data (esm-spec §6.3 / §6.6.2)
+    is found under a more-qualified key exactly as a scalar is. The array path
+    (``simulation_array._build_numpy_rhs``) reads only the raw resolver, so a
+    rule living one level up would accept ``Doc.Left.solo`` in
+    ``check_parameter_override_keys`` and then silently ignore it."""
+    assert resolve_override_raw("Left.solo", {"Doc.Left.solo": [1.0, 2.0]}, None) == [1.0, 2.0]
+    # …and it is still resolved FORWARD: an exact hit on another parameter is
+    # never also read as a more-qualified spelling of this one.
+    known = {"Left.solo", "Right.Left.solo"}
+    assert resolve_override_raw("Left.solo", {"Right.Left.solo": [1.0]}, None, known=known) is None
+
+
+def test_array_path_binds_a_more_qualified_parameter_key() -> None:
+    """End to end on the ARRAY pathway, which reads ``resolve_override_raw``
+    rather than ``_resolve_override``.
+
+    ``check_parameter_override_keys`` accepts ``Doc.M.k`` under rule 2; if the
+    resolver one level down did not, the parameter would silently keep its
+    default — an accepted override that does nothing, which is the wrong-answer
+    shape §6.6.2's key checking exists to prevent. ``u`` integrates ``k`` from 0
+    over [0, 1], so the override is visible in the trajectory.
+    """
+    from earthsci_ast.parse import load_string
+    from earthsci_ast.problem import esm_problem, solve
+
+    loop = {
+        "op": "aggregate",
+        "args": [],
+        "output_idx": ["i"],
+        "ranges": {"i": {"from": "x"}},
+    }
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {
+            "name": "override_key_array_path",
+            "description": "One shaped state integrating one scalar parameter.",
+            "license": "MIT",
+        },
+        "index_sets": {"x": {"kind": "interval", "size": 2}},
+        "models": {
+            "M": {
+                "variables": {
+                    "k": {"type": "parameter", "units": "1", "default": 1.0},
+                    "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 0.0},
+                },
+                "equations": [
+                    {
+                        "lhs": {
+                            **loop,
+                            "expr": {
+                                "op": "D",
+                                "args": [{"op": "index", "args": ["u", "i"]}],
+                                "wrt": "t",
+                            },
+                        },
+                        "rhs": {**loop, "expr": "k"},
+                    }
+                ],
+            }
+        },
+    }
+    file = load_string(json.dumps(doc))
+
+    def at_t1(overrides: dict[str, float] | None) -> float:
+        sol = solve(esm_problem(file, (0.0, 1.0), p=overrides))
+        return float(sol["M.u[1]"][-1])
+
+    assert at_t1(None) == pytest.approx(1.0, rel=1e-6)
+    # Rule 2: the extra leading qualifier is dropped, and the parameter moves.
+    assert at_t1({"Doc.M.k": 4.0}) == pytest.approx(4.0, rel=1e-6)
+    # The spellings that already worked keep working.
+    assert at_t1({"M.k": 3.0}) == pytest.approx(3.0, rel=1e-6)
+    assert at_t1({"k": 2.0}) == pytest.approx(2.0, rel=1e-6)

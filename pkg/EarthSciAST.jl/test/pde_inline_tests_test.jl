@@ -539,6 +539,17 @@ _pit_free_x_cos() = Dict{String,Any}(
     @test wrapped.expr_body === free
     @test EarthSciAST.bind_dimension_names(wrapped, dims) === wrapped
     @test EarthSciAST.bind_dimension_names(free, String[]) === free
+    # An `integral`'s integration variable is a binder too (the same node set
+    # `_bound_symbols` reports, which is what Rust's `mentions_free` and
+    # Python's `_mentions_free` check).
+    integ = EarthSciAST.OpExpr("integral",
+                               EarthSciAST.ASTExpr[EarthSciAST.OpExpr("*",
+                                   EarthSciAST.ASTExpr[EarthSciAST.IntExpr(2),
+                                                       EarthSciAST.VarExpr("x")])];
+                               int_var="x", lower=EarthSciAST.IntExpr(0),
+                               upper=EarthSciAST.IntExpr(1))
+    @test !EarthSciAST._mentions_free(integ, "x")
+    @test EarthSciAST.bind_dimension_names(integ, dims) === integ
 
     # A `wrt` is a differentiation TARGET, not a free read of the enclosing
     # scope, so it does not trigger the wrap. `free_variables` reports it (it is

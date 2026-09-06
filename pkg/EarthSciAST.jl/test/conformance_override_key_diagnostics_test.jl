@@ -105,3 +105,35 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
         end
     end
 end
+
+# Rule 2 was widened to the LONGEST dotted suffix (CONFORMANCE_SPEC §5.31), which
+# makes it possible for TWO distinct keys to designate ONE build name. The winner
+# must not be whichever key `Dict` iteration reached last: it is ranked by the
+# rule that resolved it (exact 0, bare 1, longer dotted 2), ties broken
+# lexicographically — the same order Python's `_resolve_override` reads with and
+# Rust's `canonicalize_override_keys` applies.
+@testset "override keys: two keys, one name, one deterministic winner" begin
+    names = Set{String}(["Left.solo"])
+    pick(pairs) = begin
+        normalized, unknown, ambiguous =
+            EarthSciAST._canonicalize_override_keys(Float64, names, Dict(pairs))
+        @test isempty(unknown)
+        @test isempty(ambiguous)
+        normalized["Left.solo"]
+    end
+    # Rule 1 (exact) beats rule 3 (bare) beats rule 2 (longer dotted).
+    @test pick(["Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0]) == 1.0
+    @test pick(["solo" => 2.0, "Doc.Left.solo" => 9.0]) == 2.0
+    # Same rank: the lexicographically first key, in either insertion order.
+    @test pick(["A.Left.solo" => 1.0, "B.Left.solo" => 2.0]) == 1.0
+    @test pick(["B.Left.solo" => 2.0, "A.Left.solo" => 1.0]) == 1.0
+    # The §4.6 fully-qualified spelling of a name the build holds shorter.
+    sub, u, a = EarthSciAST._canonicalize_override_keys(
+        Float64, Set{String}(["sub.g", "g"]), Dict("P.sub.g" => 1.5))
+    @test sub == Dict("sub.g" => 1.5)
+    @test isempty(u) && isempty(a)
+    # A key none of whose suffixes is a name stays UNKNOWN (rule 3 is bare-only).
+    _, u2, _ = EarthSciAST._canonicalize_override_keys(
+        Float64, names, Dict("Missing.solo" => 1.0))
+    @test u2 == ["Missing.solo"]
+end

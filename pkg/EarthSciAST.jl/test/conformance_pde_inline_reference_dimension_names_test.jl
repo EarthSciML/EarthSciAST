@@ -39,6 +39,13 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
     rtol = Float64(manifest.tolerances.assertion_rtol)
     atol = Float64(manifest.tolerances.assertion_atol)
 
+    # Julia MINTS the golden here, so a drift between the manifest's pinned
+    # integrator and the one this runner actually uses would be invisible: read
+    # the settings from the manifest rather than restating them.
+    @test String(manifest.integrators.julia.algorithm) == "Tsit5"
+    solver_reltol = Float64(manifest.integrators.julia.reltol)
+    solver_abstol = Float64(manifest.integrators.julia.abstol)
+
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
@@ -52,7 +59,7 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
 
             results = run_pde_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+                                    reltol=solver_reltol, abstol=solver_abstol)
             @test length(results) == length(golden.assertions)
 
             # Index by assertion_idx and gate each against BOTH the golden
@@ -72,6 +79,11 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
                 r = by_idx[Int(decl.assertion_idx)]
                 @test r.variable == String(decl.variable)
                 @test r.expected == Float64(decl.expected)
+                # The reduction the manifest declares must be the one the runner
+                # actually applied — the Python and Rust runners assert this
+                # too, and without it a fixture edit could silently change what
+                # the golden measures.
+                @test String(r.reduce) == String(decl.reduce)
             end
         end
     end

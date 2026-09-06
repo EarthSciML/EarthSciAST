@@ -50,6 +50,12 @@ fn bare_name(name: &str) -> &str {
 ///   4. else a BARE key carried by two or more names is `Ambiguous`;
 ///   5. else it is `Unknown`.
 ///
+/// Two DIFFERENT keys may designate one name — `solo` (rule 3) and
+/// `Doc.Left.solo` (rule 2) both bind `Left.solo`. The rule that applies to the
+/// key ranks the claim (exact 0, bare 1, longer dotted 2) and the smallest
+/// `(rank, key)` wins, so the outcome is the same in every binding and in every
+/// process, not whichever key `HashMap` iteration happened to reach last.
+///
 /// Errors are reported for the lexicographically first offending key so the
 /// diagnostic does not depend on `HashMap` iteration order.
 pub(crate) fn canonicalize_override_keys(
@@ -68,20 +74,26 @@ pub(crate) fn canonicalize_override_keys(
         }
     }
 
+    // Which key CLAIMED each resolved name, as `(rank, key)`. Two distinct keys
+    // can designate one name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
+    // bind `Left.solo`, and `A.M.g` and `B.M.g` both bind `M.g` — and picking by
+    // `HashMap` iteration order would make the run depend on this process's hash
+    // seed. The claim with the SMALLEST `(rank, key)` wins, where rank is 0 for
+    // an exact hit, 1 for the bare local spelling and 2 for a longer dotted key:
+    // the same precedence Python's `_resolve_override` reads with (exact name,
+    // then the bare segment, then the lexicographically first more-qualified
+    // key) and the same one Julia's `_canonicalize_override_keys` applies.
+    let mut claim: HashMap<&str, (u8, &str)> = HashMap::new();
     let mut out: HashMap<String, f64> = HashMap::new();
     let mut failures: Vec<OverrideKeyError> = Vec::new();
-    // Two passes so precedence is DETERMINISTIC when a caller supplies both
-    // spellings of one name (`A` and `M.A`): alias-resolved keys land first,
-    // exact-name keys overwrite them.
     for (k, v) in overrides {
-        if known.contains_key(k.as_str()) {
-            continue; // rule 1, applied below
-        }
-        if let Some(suffix) = dotted_suffix_hit(known, k) {
-            out.insert(suffix.to_string(), *v); // rule 2
+        let (name, rank): (&str, u8) = if let Some((n, _)) = known.get_key_value(k.as_str()) {
+            (n.as_str(), 0) // rule 1: exact hit
+        } else if let Some(suffix) = dotted_suffix_hit(known, k) {
+            (suffix, 2) // rule 2: longest known dotted suffix
         } else if let Some(cands) = groups.get(k.as_str()) {
             if cands.len() == 1 {
-                out.insert(cands[0].to_string(), *v); // rule 3
+                (cands[0], 1) // rule 3: unique bare alias
             } else {
                 let mut candidates: Vec<String> = cands.iter().map(|s| (*s).to_string()).collect();
                 candidates.sort();
@@ -89,19 +101,21 @@ pub(crate) fn canonicalize_override_keys(
                     key: k.clone(),
                     candidates,
                 }); // rule 4
+                continue;
             }
         } else {
             failures.push(OverrideKeyError::Unknown(k.clone())); // rule 5
+            continue;
+        };
+        let bid = (rank, k.as_str());
+        if claim.get(name).is_none_or(|prev| bid < *prev) {
+            claim.insert(name, bid);
+            out.insert(name.to_string(), *v);
         }
     }
     if !failures.is_empty() {
         failures.sort_by(|a, b| override_key_of(a).cmp(override_key_of(b)));
         return Err(failures.swap_remove(0));
-    }
-    for (k, v) in overrides {
-        if known.contains_key(k.as_str()) {
-            out.insert(k.clone(), *v); // rule 1
-        }
     }
     Ok(out)
 }
@@ -183,5 +197,34 @@ mod tests {
             canonicalize_override_keys(&k, &bad),
             Err(OverrideKeyError::Unknown(ref n)) if n == "Missing.solo"
         ));
+    }
+
+    /// Two keys designating ONE name resolve the same way every run and in
+    /// every binding: exact beats bare beats a longer dotted key, and two keys
+    /// of the same rank are settled lexicographically. Before rule 2 was
+    /// widened, `Doc.Left.solo` was Unknown and this collision was unreachable;
+    /// a `HashMap`-iteration-order winner would make the run depend on the
+    /// process hash seed and disagree with Python's `_resolve_override`.
+    #[test]
+    fn two_keys_designating_one_name_resolve_deterministically() {
+        let k = known(&["Left.solo"]);
+        let pick = |pairs: &[(&str, f64)]| -> f64 {
+            let over: HashMap<String, f64> =
+                pairs.iter().map(|(n, v)| ((*n).to_string(), *v)).collect();
+            *canonicalize_override_keys(&k, &over)
+                .expect("resolves")
+                .get("Left.solo")
+                .expect("bound")
+        };
+        // Rule 1 (exact) beats rule 3 (bare) beats rule 2 (longer dotted).
+        assert_eq!(
+            pick(&[("Left.solo", 1.0), ("solo", 2.0), ("Doc.Left.solo", 9.0)]),
+            1.0
+        );
+        assert_eq!(pick(&[("solo", 2.0), ("Doc.Left.solo", 9.0)]), 2.0);
+        // Same rank: the lexicographically first key, whichever order the map
+        // is built in.
+        assert_eq!(pick(&[("A.Left.solo", 1.0), ("B.Left.solo", 2.0)]), 1.0);
+        assert_eq!(pick(&[("B.Left.solo", 2.0), ("A.Left.solo", 1.0)]), 1.0);
     }
 }
