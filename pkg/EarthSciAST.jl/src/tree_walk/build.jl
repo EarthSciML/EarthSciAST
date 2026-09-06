@@ -4135,10 +4135,15 @@ Keyword arguments (see `_build_evaluator_impl` for the full set,
 including `const_arrays`, `param_arrays`, `const_array_boundaries`,
 `index_sets`, and `inspect`):
 
-* `initial_conditions::Dict{String,<:Real}` — override the default
-  values in `model.variables` for specific state variables.
-* `parameter_overrides::Dict{String,<:Real}` — override the default
-  values for specific parameters. Keys may be spelled either LOCALLY
+* `initial_conditions::AbstractDict` — override the default values in
+  `model.variables` for specific state variables. A value is a real number,
+  or — for a SHAPED unknown — INLINE ARRAY DATA (a nested array matching the
+  declared `shape`, esm-spec §6.6.2), which is expanded into the per-cell
+  initial values.
+* `parameter_overrides::AbstractDict` — override the default
+  values for specific parameters. A value is a real number, or — for a SHAPED
+  parameter — INLINE ARRAY DATA, which is registered as build-time data in
+  `const_arrays` rather than as a scalar `p` slot (esm-spec §6.3 / §6.6.2). Keys may be spelled either LOCALLY
   (`pert_amp`, the form esm-spec §6.6 pins for a test's
   `parameter_overrides`) or with the flattening qualification the run
   document carries (`SimpleClimate.pert_amp`); both resolve to the same

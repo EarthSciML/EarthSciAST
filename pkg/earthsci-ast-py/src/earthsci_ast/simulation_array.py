@@ -2374,6 +2374,15 @@ def _build_numpy_rhs(
     # `setdefault` keeps a provider-fed array of the same name authoritative —
     # loaded data beats a document default, matching the caller-wins direction
     # the Rust `vi_factor_arrays` overlay takes.
+    #
+    # The BARE alias is registered only when it is unambiguous and free. Unlike
+    # the scalar `param_values` alias below, `input_arrays` is consulted BEFORE
+    # the state layout, so a bare alias that collided with another component's
+    # state or observed would SHADOW it — a wrong answer, not a missing one.
+    _all_names = set(flat.state_variables) | set(flat.observed_variables) | set(flat.parameters)
+    _bare_owners: dict[str, list[str]] = {}
+    for _n in flat.parameters:
+        _bare_owners.setdefault(_n.rsplit(".", 1)[-1], []).append(_n)
     param_values: dict[str, float] = {}
     param_array_names: set[str] = set()
     for pname, pvar in flat.parameters.items():
@@ -2395,8 +2404,10 @@ def _build_numpy_rhs(
                 else "default",
             )
             loader_arrays.setdefault(pname, arr)
-            loader_arrays.setdefault(bare, arr)
-            param_array_names.update((pname, bare))
+            param_array_names.add(pname)
+            if bare != pname and bare not in _all_names and len(_bare_owners[bare]) == 1:
+                loader_arrays.setdefault(bare, arr)
+                param_array_names.add(bare)
             continue
         val = _resolve_override(pname, parameters, pvar.default)
         param_values[pname] = val
