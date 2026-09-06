@@ -462,14 +462,19 @@ fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f6
 /// surfaced "for direct assertion", like the MPAS `div_flux`) rather than a
 /// state: an observed carries no ODE slot, so its field is read from the
 /// [`BuildInspection`]'s `setup_arrays` — the STATE-FREE observed arrays the
-/// run materialized through the official observed machinery. State-free
-/// observeds only: a state- or time-dependent observed is absent from
-/// `setup_arrays` by construction, so this returns `None` and the caller
-/// errors like before (mirroring the Julia `_observed_field`, whose
-/// `evaluate_cellwise` leaves a state reference unbound). Cells are enumerated
-/// from the declared shape's interval index sets, in sorted (lexicographic)
-/// order. Returns `(field, cells)` or `None` when the variable is not such an
-/// observed.
+/// run materialized through the official observed machinery.
+///
+/// This source stays STATE-FREE-only: a state- or time-dependent observed is
+/// absent from `setup_arrays` by construction, and this returns `None` for it.
+/// That is no longer the end of the assertion, though — the runner REQUESTS such
+/// an observed (`assertion_observed_requests`), the array runtime emits it as
+/// one row per cell, and the assertion reads those rows through `state_cells`
+/// before ever reaching here. So a `None` from this function means "not a field
+/// the BUILD carries", not "unassertable".
+///
+/// Cells are enumerated from the declared shape's interval index sets, in sorted
+/// (lexicographic) order. Returns `(field, cells)` or `None` when the variable
+/// is not such an observed.
 fn observed_field(
     file: &EsmFile,
     model_name: &str,
@@ -915,21 +920,33 @@ pub fn ephemeral_injected_file(
 }
 
 /// The [`SolveOptions::output_observed`] request one test needs: the OBSERVED
-/// variables its POINTWISE assertions (neither `coords` nor `reduce`) read, in
-/// both the local and the model-qualified spelling, deduplicated in first-seen
-/// order.
+/// variables its assertions read, in both the local and the model-qualified
+/// spelling, deduplicated in first-seen order.
+///
+/// esm-spec §6.6.5 admits ANY shaped variable in a `coords` / `reduce`
+/// assertion, so both ranks are requested here:
+///
+/// * a POINTWISE assertion (neither `coords` nor `reduce`) reads a 0-D
+///   observed, which has no ODE slot and becomes one trajectory row;
+/// * a `coords` / `reduce` assertion reads an ARRAY observed, which the array
+///   runtime emits as one row per cell when — and only when — it is REQUESTED
+///   (`append_observed_trajectories`). Without the request a STATE-DEPENDENT
+///   array observed was unassertable: it is absent from the build inspection's
+///   `setup_arrays` by construction (only the state-free ones hoist there), so
+///   [`observed_field`] could not answer it either and every such assertion
+///   errored with "has no cells in var_map".
 ///
 /// Kept to exactly what will be read, because naming something here is not
 /// free: on the scalar backend it walks the observed graph over the output grid
-/// (`crate::problem::observed_trajectories`). So a declared variable that is
-/// NOT an observed — a state, whose row the trajectory already carries, or a
-/// parameter — is left out, and so is an ARRAY-shaped one, whose field is
-/// [`observed_field`]'s business and which would otherwise materialize a row
-/// per cell of a field that branch reads whole. A name this component does not
-/// declare at all — a §6.6.3 scoped reference into a subsystem — is kept as a
-/// best effort: its class is not knowable here, and a name resolving to no
-/// observed is dropped downstream.
-fn pointwise_observed_requests(
+/// (`crate::problem::observed_trajectories`), and on the array backend a
+/// requested array observed joins the output-node dependency cone. So a
+/// declared variable that is NOT an observed — a state, whose row the
+/// trajectory already carries, or a parameter — is left out, and so is one
+/// whose declared rank does not match the assertion form. A name this component
+/// does not declare at all — a §6.6.3 scoped reference into a subsystem — is
+/// kept as a best effort: its class is not knowable here, and a name resolving
+/// to no observed is dropped downstream.
+fn assertion_observed_requests(
     file: &EsmFile,
     model_name: &str,
     t: &crate::types::ModelTest,
@@ -938,16 +955,22 @@ fn pointwise_observed_requests(
     let class = model.map(crate::classification::Classification::of);
     let mut out: Vec<String> = Vec::new();
     for a in &t.assertions {
-        if a.coords.is_some() || a.reduce.is_some() {
-            continue;
-        }
+        // A `coords` / `reduce` assertion reads a FIELD, a pointwise one a
+        // scalar; the declared rank must match the form that reads it.
+        let wants_array = a.coords.is_some() || a.reduce.is_some();
         if let Some(v) = model.and_then(|m| m.variables.get(a.variable.as_str())) {
-            if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+            let is_array = v.shape.as_ref().is_some_and(|s| !s.is_empty());
+            if is_array != wants_array {
                 continue;
             }
             if !class.as_ref().is_some_and(|c| c.is_observed(&a.variable)) {
                 continue;
             }
+        } else if wants_array {
+            // An undeclared name can only be resolved downstream, and the
+            // array form has a cheaper answer available: a scoped reference is
+            // read through `state_cells` / `observed_field` as before.
+            continue;
         }
         for spelling in [a.variable.clone(), format!("{model_name}.{}", a.variable)] {
             if !out.contains(&spelling) {
@@ -1261,15 +1284,19 @@ fn run_model_tests(
         times.dedup();
         let mut run_opts = opts.clone();
         run_opts.saveat = Some(times);
-        // esm-spec §6.6.3: a POINTWISE assertion reads a scalar, and a scalar
-        // OBSERVED has no ODE slot. The array runtime exposes every 0-D
-        // observed as a trajectory row unasked; the SCALAR backend exposes only
-        // what the caller NAMES. So the runner names them — exactly the
-        // observeds this test's pointwise assertions read, and nothing else.
-        // Without this an algebraic scalar was unassertable in any component
-        // that carried no array (the model then takes the scalar backend, whose
-        // trajectory holds states only) and in any component that integrates.
-        for name in pointwise_observed_requests(run_file, model_name, t) {
+        // esm-spec §6.6.3 / §6.6.5: an assertion reads an OBSERVED, and an
+        // observed has no ODE slot. The array runtime exposes every 0-D
+        // observed as a trajectory row unasked, but an ARRAY-valued one only
+        // when it is REQUESTED, and the SCALAR backend exposes only what the
+        // caller NAMES. So the runner names them — exactly the observeds this
+        // test's assertions read, at the rank the assertion form reads them,
+        // and nothing else. Without this an algebraic scalar was unassertable
+        // in any component that carried no array (the model then takes the
+        // scalar backend, whose trajectory holds states only) and in any
+        // component that integrates, and a STATE-DEPENDENT array observed was
+        // unassertable anywhere (the build inspection hoists only the
+        // state-free ones).
+        for name in assertion_observed_requests(run_file, model_name, t) {
             // Additive: a caller's own request stands.
             if !run_opts.output_observed.contains(&name) {
                 run_opts.output_observed.push(name);
@@ -2011,11 +2038,13 @@ mod tests {
         }
     }
 
-    /// §6.6.5 assertions may target a state-free ARRAY OBSERVED directly (a
-    /// rule output surfaced "for direct assertion", like the MPAS `div_flux`
-    /// max/min): the field is read from the BuildInspection's materialized
-    /// state-free setup arrays. A STATE-DEPENDENT observed must keep erroring
-    /// exactly like before (its build-time snapshot would be stale).
+    /// §6.6.5 assertions may target an ARRAY OBSERVED directly (a rule output
+    /// surfaced "for direct assertion", like the MPAS `div_flux` max/min).
+    /// Two sources, and the runner must answer from BOTH: a STATE-FREE
+    /// observed's field is read from the BuildInspection's materialized setup
+    /// arrays, while a STATE-DEPENDENT one (`h = u + 1`) is emitted by the
+    /// array runtime as cell rows because the runner REQUESTS it — never a
+    /// stale build-time snapshot, always the value at the asserted time.
     fn observed_assert_doc() -> serde_json::Value {
         let g = json!({"op": "aggregate", "args": [], "output_idx": ["i"],
                        "ranges": {"i": {"from": "x"}},
@@ -2050,6 +2079,10 @@ mod tests {
                          "tolerance": {"abs": 1e-12}, "reduce": "min"},
                         {"variable": "h", "time": 1.0, "expected": 1.0,
                          "tolerance": {"abs": 1e-12}, "reduce": "max"},
+                        {"variable": "h", "time": 1.0, "expected": 1.0,
+                         "tolerance": {"abs": 1e-12}, "coords": {"x": 2}},
+                        {"variable": "nope", "time": 1.0, "expected": 0.0,
+                         "tolerance": {"abs": 1e-12}, "reduce": "max"},
                     ],
                 }],
             }},
@@ -2057,26 +2090,35 @@ mod tests {
     }
 
     #[test]
-    fn state_free_array_observed_assertions_evaluate_directly() {
+    fn array_observed_assertions_evaluate_directly() {
         let file = load_string(&observed_assert_doc().to_string()).expect("doc loads");
         let results = run_pde_tests(&file, Some("M"), &tight_opts());
-        assert_eq!(results.len(), 3);
-        // g = [1, 4, 9] (index arithmetic, exact): max and min pass with the
-        // exact reductions recorded.
+        assert_eq!(results.len(), 5);
+        // g = [1, 4, 9] (index arithmetic, exact) is STATE-FREE: max and min
+        // pass with the exact reductions recorded.
         assert!(results[0].passed, "g max: {}", results[0].message);
         assert_eq!(results[0].actual, Some(9.0));
         assert!(results[1].passed, "g min: {}", results[1].message);
         assert_eq!(results[1].actual, Some(1.0));
-        // h reads the state u, so it is NOT state-free: the assertion errors
-        // with the pre-existing no-cells message rather than consuming a
-        // stale build-time snapshot.
-        assert!(!results[2].passed);
+        // h = u + 1 reads the state, so its field exists only on the
+        // trajectory: with `u` held at 0 it is [1, 1, 1] at every time, and
+        // both the reduce and the coords form must read it there. esm-spec
+        // §6.6.5 admits any shaped variable in these forms; before this it
+        // errored with "has no cells in var_map" because only the state-free
+        // observeds reach a build inspection.
+        assert!(results[2].passed, "h max: {}", results[2].message);
+        assert_eq!(results[2].actual, Some(1.0));
+        assert!(results[3].passed, "h at x=2: {}", results[3].message);
+        assert_eq!(results[3].actual, Some(1.0));
+        // A name that is no variable of the component at all still errors —
+        // the request list is a best effort, never an invention.
+        assert!(!results[4].passed);
         assert!(
-            results[2].message.contains("has no cells in var_map"),
+            results[4].message.contains("has no cells in var_map"),
             "unexpected message: {}",
-            results[2].message
+            results[4].message
         );
-        assert_eq!(results[2].actual, None);
+        assert_eq!(results[4].actual, None);
     }
 
     // -----------------------------------------------------------------------
