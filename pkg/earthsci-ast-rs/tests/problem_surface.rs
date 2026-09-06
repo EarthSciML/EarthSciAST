@@ -116,7 +116,7 @@ fn one_problem_serves_many_solves() {
             &prob,
             &SolveOptions {
                 alg,
-                reltol,
+                reltol: Some(reltol),
                 abstol: Some(1e-12),
                 saveat: grid(1.0, 4),
                 ..Default::default()
@@ -139,9 +139,27 @@ fn one_problem_serves_many_solves() {
 fn the_default_tolerances_are_julias() {
     assert_eq!(earthsci_ast::DEFAULT_RELTOL, 1e-4);
     assert_eq!(earthsci_ast::DEFAULT_ABSTOL, 1e-6);
+    // The DEFAULT is `None` — "the caller expressed no opinion" — not the
+    // number. esm-spec §2.2.2 puts a document's `solver` block between the call
+    // site and the binding default, and a concrete value here could not express
+    // that: a caller who never touched the field would be indistinguishable
+    // from one who passed exactly 1e-6, and the document could never win. The
+    // constants are still what an unopinionated call resolves TO.
     let d = SolveOptions::default();
-    assert_eq!(d.reltol, earthsci_ast::DEFAULT_RELTOL);
-    assert_eq!(d.abstol, earthsci_ast::DEFAULT_ABSTOL);
+    assert_eq!(d.reltol, None);
+    assert_eq!(d.abstol, None);
+    assert_eq!(d.reltol_or_default(), earthsci_ast::DEFAULT_RELTOL);
+    assert_eq!(d.abstol_or_default(), earthsci_ast::DEFAULT_ABSTOL);
+    // And an explicit argument still beats them (§2.2.2 level 1).
+    assert_eq!(
+        earthsci_ast::resolve_tolerances(None, Some(1e-12), Some(1e-11)),
+        (1e-12, 1e-11)
+    );
+    // With no caller value and no document, the chain bottoms out on them.
+    assert_eq!(
+        earthsci_ast::resolve_tolerances(None, None, None),
+        (earthsci_ast::DEFAULT_ABSTOL, earthsci_ast::DEFAULT_RELTOL)
+    );
 }
 
 /// What the defaults cost, measured rather than assumed — and the reason every
