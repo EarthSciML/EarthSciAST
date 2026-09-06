@@ -456,19 +456,75 @@ function _param_scope_with_aliases(params::AbstractDict)::Dict{String,Float64}
     return out
 end
 
+# The TRAJECTORY SAMPLE as an evaluation scope: every state of `var_map`, read
+# out of the flat state vector `state` and re-assembled into the shape its
+# references expect — an array state as an `Array{Float64}` addressed by its own
+# 1-based cell tuple, under its flattened stem (`"PB.u"`, from the `"PB.u[3]"`
+# cell keys); a scalar state as a `Float64`.
+#
+# This is what makes a STATE-DEPENDENT observed readable at an assertion time.
+# `evaluate_cellwise` binds names from two scopes — `const_arrays` (arrays) and
+# `params` (scalars) — and STATE was in neither, so `dudt = D(D(u,lev),lev)`
+# could only ever fail with `E_TREEWALK_UNBOUND_VARIABLE: PB.u`. Handing it the
+# solved state at the assertion time binds exactly the names the resolved
+# observed expression reads, and nothing else: the values are the solver's own,
+# so the observed is evaluated at the state the trajectory actually had.
+#
+# A stem whose cell keys do not tile a dense box (a partial or ragged layout) is
+# skipped rather than guessed at. `_parse_cell_key` (tree_walk.jl) is the single
+# inverse of the `name[i,j]` cell-key encoding.
+function _state_scope(var_map::AbstractDict, state::AbstractVector)
+    arrays = Dict{String,Any}()
+    scalars = Dict{String,Float64}()
+    cells = Dict{String,Vector{Tuple{Vector{Int},Int}}}()
+    for (name, slot) in var_map
+        s = String(name)
+        i = Int(slot)
+        (1 <= i <= length(state)) || continue
+        parsed = _parse_cell_key(s)
+        if parsed === nothing
+            scalars[s] = Float64(state[i])
+        else
+            stem, cell = parsed
+            push!(get!(cells, String(stem), Tuple{Vector{Int},Int}[]), (cell, i))
+        end
+    end
+    for (stem, entries) in cells
+        nd = length(first(entries)[1])
+        all(e -> length(e[1]) == nd, entries) || continue
+        exts = Int[maximum(e[1][d] for e in entries) for d in 1:nd]
+        (prod(exts) == length(entries) && all(>(0), exts)) || continue
+        arr = Array{Float64}(undef, exts...)
+        for (cell, slot) in entries
+            arr[cell...] = Float64(state[slot])
+        end
+        arrays[stem] = arr
+    end
+    return arrays, scalars
+end
+
 # A §6.6.5 assertion may target an ARRAY OBSERVED (e.g. a rule output surfaced
 # "for direct assertion", like the MPAS `div_flux`) rather than a state: an
 # observed carries no ODE slot, so its field is evaluated from the build's
 # RESOLVED observed expression (BuildInspection.observed_exprs) through the same
 # official `evaluate_cellwise` machinery as an analytic `reference`, with the
 # build's const-array registry AND resolved scalar parameters
-# (BuildInspection.params — load-time constants) in scope. STATE-FREE observeds
-# only — a state-dependent observed's references stay unbound and error like
-# before; a PARAMETER-dependent one now resolves (esm-spec §6.6.5).
+# (BuildInspection.params — load-time constants) in scope.
+#
+# `state_arrays` / `state_scalars` (from `_state_scope`) add the TRAJECTORY
+# SAMPLE to those two scopes, which is what makes a STATE-DEPENDENT observed
+# readable: esm-spec §6.6.5 admits ANY shaped variable in a `coords` / `reduce`
+# assertion, and §5.23 makes a reference denote its expansion, so `g = 2*u` and
+# a lowered `dudt = D(D(u,lev),lev)` are assertable at a time exactly like the
+# scalar observeds already were. With an empty state scope this is the previous
+# state-free-only behaviour, value for value.
+#
 # Cells are enumerated from the declared shape's interval index sets. Returns
 # `(field, cells)` or `nothing` when the variable is not such an observed.
 function _observed_field(insp::BuildInspection, file::EsmFile,
-                         mname::AbstractString, variable::AbstractString)
+                         mname::AbstractString, variable::AbstractString;
+                         state_arrays::AbstractDict=Dict{String,Any}(),
+                         state_scalars::AbstractDict=Dict{String,Float64}())
     model = get(file.models, String(mname), nothing)
     model === nothing && return nothing
     v = get(model.variables, String(variable), nothing)
@@ -525,6 +581,13 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     cells = sort!(vec(Vector{Int}[collect(Int, Tuple(I))
                                   for I in CartesianIndices(Tuple(exts))]))
     params = _param_scope_with_aliases(insp.params)
+    # The trajectory sample wins over a same-named build constant: a name that
+    # is a STATE is not a constant, and its value at this time is the answer.
+    isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
+        String(k) => Float64(v) for (k, v) in state_scalars)))
+    const_scope = isempty(state_arrays) ? insp.const_arrays :
+        merge(Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays),
+              Dict{String,Any}(String(k) => v for (k, v) in state_arrays))
     # Try the cheap path FIRST, and fall back on any failure. The un-inlined
     # definition names its producers, so it only evaluates when every one of
     # them was materialized; a producer this build-time scope cannot evaluate
@@ -533,10 +596,24 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # E_TREEWALK_UNBOUND_VARIABLE. The inlined form has no such dependency, so
     # falling back to it makes this change strictly an optimisation: identical
     # values when it succeeds, previous behaviour exactly when it cannot.
+    # The producer-materializing fast path runs against `const_scope`, NOT the
+    # build's const arrays alone, so it serves both kinds of target. Gating it on
+    # an empty state scope instead would have disabled it outright: the assertion
+    # callsite always seeds `state_scalars` with `t`, so `isempty(state_scalars)`
+    # is never true there and the MPAS `div_flux` case — state-free, and the very
+    # case this path was written for — would have paid the per-output-cell
+    # re-execution it exists to remove. Seeding the scope with the trajectory
+    # sample instead lets a STATE-DEPENDENT target's producers materialize too,
+    # at that sample: `raw` names them, they are filled once each in dependency
+    # order, and the target is then one cellwise pass over buffers. Values are
+    # the inlined form's either way — a producer neither form can evaluate here
+    # simply stays un-materialized and its reader inlines it, and any failure
+    # still falls through to the self-contained body below.
     if raw !== nothing
         try
-            ca = _materialized_obs_scope(insp, file, mname, String(variable), params)
-            if ca !== insp.const_arrays          # something actually materialized
+            ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
+                                         base=const_scope)
+            if ca !== const_scope                # something actually materialized
                 return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params),
                         cells)
             end
@@ -544,15 +621,23 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
             # fall through to the inlined form below
         end
     end
-    field = evaluate_cellwise(expr, cells; const_arrays=insp.const_arrays, params=params)
+    field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params)
     return (field, cells)
 end
 
 """
-    _materialized_obs_scope(insp, file, mname, target, params) -> const-array scope
+    _materialized_obs_scope(insp, file, mname, target, params; base) -> const-array scope
 
 Materialize the ARRAY-shaped observed producers `target` depends on, once each in
-dependency order, and return `insp.const_arrays` augmented with those buffers.
+dependency order, and return `base` augmented with those buffers.
+
+`base` is the array scope the producers are evaluated AGAINST as well as the map
+that is extended, and defaults to `insp.const_arrays` — the build-time answer.
+A §6.6.5 assertion passes the build's const arrays PLUS the trajectory sample
+(`_state_scope`), which is what lets a STATE-DEPENDENT target use this path at
+all: its producers read the solved state, so against `insp.const_arrays` alone
+every one of them fails to resolve and the whole chain re-executes per output
+cell of the consumer.
 
 Why this exists. `evaluate_cellwise` walks the expression once PER OUTPUT CELL, so
 an array observed inlined into its readers is re-executed at every cell of the
@@ -580,15 +665,17 @@ downstream field in its last bits — observed at 5e-15 on the ISRM point docume
 when the `observed_exprs` fallback below was added. Nothing semantic changes, and
 nothing about WHICH terms are summed.
 
-Returns `insp.const_arrays` itself when there is nothing to materialize, so models
-whose observeds are scalar or independent keep the previous behaviour and cost.
+Returns `base` ITSELF (by identity, which is how the caller detects the no-op)
+when there is nothing to materialize, so models whose observeds are scalar or
+independent keep the previous behaviour and cost.
 """
 function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                                  mname::AbstractString, target::AbstractString,
-                                 params::AbstractDict)
-    isempty(insp.observed_defs) && return insp.const_arrays
+                                 params::AbstractDict;
+                                 base::AbstractDict=insp.const_arrays)
+    isempty(insp.observed_defs) && return base
     model = get(file.models, String(mname), nothing)
-    model === nothing && return insp.const_arrays
+    model === nothing && return base
 
     # TWO published forms of an observed's body, and this needs BOTH.
     #
@@ -667,7 +754,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     end
     visit(String(target))
 
-    ca = Dict{String,Any}(insp.const_arrays)
+    ca = Dict{String,Any}(base)
     materialized = 0
     for n in order
         n == String(target) && continue        # the caller evaluates this one
@@ -701,7 +788,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         ca[n] = buf
         materialized += 1
     end
-    return materialized == 0 ? insp.const_arrays : ca
+    return materialized == 0 ? base : ca
 end
 
 # Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
@@ -916,9 +1003,15 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         field = Float64[state[slot] for (_, slot) in cells]
         cell_tuples = [c for (c, _) in cells]
     else
-        # No ODE slots: try a state-free ARRAY OBSERVED (a rule output
-        # asserted directly, §6.6.5).
-        obs = _observed_field(insp, eval_file, String(mname), String(a.variable))
+        # No ODE slots: an ARRAY OBSERVED asserted directly (§6.6.5). The
+        # trajectory sample at this time is put in scope alongside the build's
+        # constants and parameters, so a STATE-DEPENDENT observed evaluates at
+        # the state the solver had; a state-free one never reads those names and
+        # is unaffected.
+        state_arrays, state_scalars = _state_scope(var_map, state)
+        state_scalars["t"] = Float64(sim.t[ti])
+        obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
+                              state_arrays=state_arrays, state_scalars=state_scalars)
         obs === nothing && throw(PdeTestError(
             "array state '$(a.variable)' has no cells in var_map"))
         field, cell_tuples = obs

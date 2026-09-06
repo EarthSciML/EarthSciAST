@@ -276,7 +276,11 @@ fn a_bounded_lookback_is_just_another_key_column() {
 
     assert_eq!(out.len(), 9);
     assert_eq!(bits(&out), bits(&t.back_oracle()), "got {out:?}");
-    assert_eq!(&out[0..3], &[0.0, 0.0, 0.0], "the first 3 rows are unmatched");
+    assert_eq!(
+        &out[0..3],
+        &[0.0, 0.0, 0.0],
+        "the first 3 rows are unmatched"
+    );
     assert_eq!(out[3], 4.0, "row 4 reads payload[1] = 4");
     assert_eq!(out[8], 39.0, "row 9 reads payload[6] = 39");
     assert_eq!(visits, t.match_count(BACK), "6 matched pairs, 6 visits");
@@ -478,7 +482,11 @@ fn three_ranges_are_spellable_with_explicit_syms() {
     )
     .expect("explicit syms resolve a three-candidate axis");
     set_join_gate_enabled(prev);
-    let out: Vec<f64> = observed_field(&prep, "out").unwrap().iter().copied().collect();
+    let out: Vec<f64> = observed_field(&prep, "out")
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
     let want: Vec<f64> = t.prior_oracle().iter().map(|v| v * t.n as f64).collect();
     assert_eq!(out.len(), 6);
     assert_eq!(bits(&out), bits(&want), "got {out:?}, want {want:?}");
@@ -505,5 +513,8 @@ fn syms_contradicting_a_key_that_names_its_own_range_symbol_is_refused() {
     let mut d = doc(&t, "row_prior", Spelling::Syms("b", "a"));
     d["models"]["S"]["equations"][0]["rhs"]["join"][0]["on"] = json!([["a", "row_id"]]);
     let msg = build_err(&d, 5);
-    assert!(msg.contains("names a range symbol") && msg.contains("'b'"), "got {msg}");
+    assert!(
+        msg.contains("names a range symbol") && msg.contains("'b'"),
+        "got {msg}"
+    );
 }

@@ -30,6 +30,7 @@ from .simulation_array import (  # noqa: F401
     _time_varying_observeds,
     _vi_lhs_base,
     evaluate_rhs,
+    observed_at_state,
 )
 
 # Optional scipy import - only needed for actual simulation. The guard lives
