@@ -536,6 +536,25 @@ function _shape_extents(insp::BuildInspection, file::EsmFile,
     return exts
 end
 
+# The const-array key holding `<mname>.<name>`'s materialized buffer, or
+# `nothing` when the build materialized no such field FOR THIS COMPONENT.
+#
+# QUALIFIED-FIRST, the array analog of `_scalar_slot` / `_state_cells` (§6.6,
+# §6.6.5): the model-qualified key wins outright, and the BARE key is this
+# component's only when no model qualifies that suffix — a bare-keyed registry
+# is the single-model build. Reading the bare key while some `<other>.<name>`
+# exists would answer an `M2` assertion with `M1`'s buffer, which is exactly
+# what the two-pass rule elsewhere in this file exists to prevent.
+function _const_array_key(insp::BuildInspection, mname::AbstractString,
+                          name::AbstractString)::Union{String,Nothing}
+    qual = String(mname) * "." * String(name)
+    haskey(insp.const_arrays, qual) && return qual
+    haskey(insp.const_arrays, String(name)) || return nothing
+    suffix = "." * String(name)
+    any(k -> endswith(String(k), suffix), keys(insp.const_arrays)) && return nothing
+    return String(name)
+end
+
 # The component's OWN defining equation for `variable`, lowered to the per-cell
 # form `evaluate_cellwise` consumes and rewritten into the build's FLATTENED
 # name scope. This is the fallback for an observed the build published in
@@ -599,7 +618,7 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
         name = String(n)
         (name == String(variable) || !(name in observed_here)) && continue
         qual = String(mname) * "." * name
-        (haskey(insp.const_arrays, qual) || haskey(insp.const_arrays, name)) && continue
+        _const_array_key(insp, mname, name) === nothing || continue
         producer = get(insp.observed_exprs, qual, get(insp.observed_exprs, name, nothing))
         if producer === nothing
             nested = get(model.variables, name, nothing)
@@ -615,15 +634,14 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
     end
     isempty(subs) || (body = substitute(body, subs))
 
-    # (2) Lift the whole-array body to the per-cell `arrayop` form.
+    # (2) Lift the whole-array body to the per-cell `arrayop` form — through the
+    # BUILD'S OWN `_lift_to_arrayop` (shape_promotion.jl), with the resolved
+    # extents as ranges. Sharing it is the point: the `_p<k>` loop convention
+    # and the §4.3.4 alignment then cannot drift from the promotion that minted
+    # the published bodies this one stands in for.
     if !isempty(exts)
-        loops = String["_p$(i - 1)" for i in 1:length(exts)]
-        result_axes = get(var_shapes, String(variable), String[])
-        ranges = Dict{String,Any}(loops[i] => Any[1, exts[i]] for i in eachindex(exts))
-        cellwise = _index_array_leaves(body, arrayvars, loops;
-                                       align=_AxisAlign(result_axes, var_shapes))
-        body = OpExpr("arrayop", ASTExpr[]; output_idx=Any[l for l in loops],
-                      ranges=ranges, expr_body=cellwise)
+        body = _lift_to_arrayop(body, get(var_shapes, String(variable), String[]),
+                                arrayvars, var_shapes; bounds=exts)
     end
 
     # (3) Rewrite bare operand names into the build's flattened scope.
@@ -661,6 +679,16 @@ end
 # build folded into the const-array registry, and — for one the build dropped
 # from both, the DEAD case of #176 — the component's own defining equation
 # (`_authored_observed_body`).
+#
+# ONE DIAGNOSTIC CHANGES, deliberately (CONFORMANCE_SPEC §5.27.3). A declared
+# observed whose defining equation cannot be evaluated here — it names something
+# the document never declares, a provider array not yet fetched — used to fall
+# out of this function as `nothing` and be reported by the caller as
+# "array state '<v>' has no cells in var_map". It now reaches the evaluator and
+# raises `E_TREEWALK_UNBOUND_VARIABLE: <name>`, which `run_tests.jl` turns into
+# the same ERROR verdict with the unresolved operand named. An UNDECLARED
+# variable is unaffected: it never gets this far (`observed_unknowns` gate
+# above) and still earns the var_map message.
 #
 # Cells are enumerated from the declared shape's interval index sets. Returns
 # `(field, cells)` or `nothing` when the variable is not such an observed.
@@ -706,8 +734,8 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # value already sits in the const-array registry. Read the buffer — it is
     # both the cheaper answer and the one every reader of that observed saw.
     if expr === nothing
-        buf = get(insp.const_arrays, qualified,
-                  get(insp.const_arrays, String(variable), nothing))
+        bufkey = _const_array_key(insp, String(mname), String(variable))
+        buf = bufkey === nothing ? nothing : insp.const_arrays[bufkey]
         if buf isa AbstractArray && eltype(buf) <: Real && size(buf) == Tuple(exts)
             return (Float64[Float64(buf[c...]) for c in cells], cells)
         end

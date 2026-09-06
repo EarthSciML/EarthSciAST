@@ -145,6 +145,66 @@ _dob_coords(var, coords, expected; time = 0.0) =
                       "tolerance" => Dict("abs" => 1e-9),
                       "coords" => Dict{String, Any}(coords...))
 
+# A document whose dead observed names an operand NOTHING declares. Separate
+# from `_dob_doc` on purpose: the shared document must stay one every other
+# testset can build, and this one exists only to be unevaluable.
+function _dob_unbound_doc()
+    Dict{String, Any}(
+        "esm" => "1.0.0",
+        "metadata" => Dict("name" => "pde_inline_dead_observed_unbound"),
+        "index_sets" => Dict{String, Any}(
+            "x" => Dict("kind" => "interval", "size" => _DOB_NX)),
+        "models" => Dict{String, Any}("M" => Dict{String, Any}(
+            "variables" => Dict{String, Any}(
+                "u" => merge(_dob_var(("x",)), Dict("default" => 1.0)),
+                "sink" => _dob_var(("x",))),
+            "equations" => Any[
+                Dict{String, Any}(
+                    "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                    "rhs" => Dict{String, Any}("op" => "*",
+                                               "args" => Any[0.0, "u"])),
+                # `ghost` is declared nowhere in the document.
+                Dict{String, Any}("lhs" => "sink",
+                                  "rhs" => Dict{String, Any}("op" => "*",
+                                      "args" => Any[2.0, "ghost"]))],
+            "tests" => Any[Dict{String, Any}(
+                "id" => "unbound",
+                "time_span" => Dict("start" => 0.0, "end" => 1.0),
+                "assertions" => Any[_dob_reduce("sink", "max", 1.0)])])))
+end
+
+# TWO components declaring the SAME array name, each with its own values and
+# its own dead observed over it. The asserted component's field must be the one
+# read — the const-array analog of the two-pass `_state_cells` rule (§6.6.5,
+# BEHAV-06-B-010) — so a sibling's buffer can never answer.
+function _dob_sibling_doc(model_name::AbstractString, assertions::Vector)
+    component(values) = Dict{String, Any}(
+        "variables" => Dict{String, Any}(
+            "u" => merge(_dob_var(("x",)), Dict("default" => 1.0)),
+            "base" => _dob_var(("x",)),
+            "diag" => _dob_var(("x",))),
+        "equations" => Any[
+            Dict{String, Any}(
+                "lhs" => Dict("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                "rhs" => Dict{String, Any}("op" => "*", "args" => Any[0.0, "u"])),
+            Dict{String, Any}("lhs" => "base", "rhs" => _dob_const(values)),
+            Dict{String, Any}("lhs" => "diag",
+                              "rhs" => Dict{String, Any}("op" => "*",
+                                  "args" => Any[2.0, "base"]))])
+    models = Dict{String, Any}(
+        "M1" => component(Any[Float64(i) for i in 1:_DOB_NX]),
+        "M2" => component(Any[100.0 * i for i in 1:_DOB_NX]))
+    models[String(model_name)]["tests"] = Any[Dict{String, Any}(
+        "id" => "sibling",
+        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+        "assertions" => Any[assertions...])]
+    Dict{String, Any}("esm" => "1.0.0",
+                      "metadata" => Dict("name" => "pde_inline_dead_observed_siblings"),
+                      "index_sets" => Dict{String, Any}(
+                          "x" => Dict("kind" => "interval", "size" => _DOB_NX)),
+                      "models" => models)
+end
+
 @testset "a DEAD observed is assertable (#176)" begin
     # base = [1,2,3,4]; diag = 2·base = [2,4,6,8]; chain = diag + base = 3·base.
     # m[i,j] = 3(i-1)+j; grid = 2m; mix[i,j] = base[i]·m[i,j] = i·(3(i-1)+j).
@@ -230,6 +290,40 @@ end
         @test r.status == EarthSciAST.PASS
         @test r.passed
     end
+end
+
+@testset "a dead observed reads its OWN component's array, not a sibling's" begin
+    # M1.base = [1,2,3,4] and M2.base = [100,200,300,400]; each component's dead
+    # `diag` is 2·its own base. Both the authored fallback's producer lookup and
+    # the materialized-buffer read resolve model-qualified-first, so neither
+    # assertion can be answered with the other component's numbers.
+    for (mname, top, cell2) in (("M1", 8.0, 4.0), ("M2", 800.0, 400.0))
+        doc = _dob_sibling_doc(mname, Any[
+            _dob_reduce("diag", "max", top),
+            _dob_coords("diag", ["x" => 2], cell2),
+            _dob_reduce("base", "max", top / 2)])
+        results = run_pde_tests(_dob_load(doc); model_name = mname,
+                                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                                reltol = 1e-12, abstol = 1e-14)
+        @test length(results) == 3
+        for r in results
+            @test r.status == EarthSciAST.PASS
+            @test r.passed
+        end
+    end
+end
+
+@testset "an UNEVALUABLE body names the operand it could not bind" begin
+    # The one diagnostic this fix changes (CONFORMANCE_SPEC §5.27.3). Reaching
+    # the evaluator is the whole point of the fallback, so a body that cannot
+    # be evaluated there now reports WHY instead of the state-lookup message it
+    # used to fall out with. Same ERROR verdict, never a plausible number.
+    results = _dob_run(_dob_load(_dob_unbound_doc()))
+    @test length(results) == 1
+    @test results[1].status == EarthSciAST.ERROR
+    @test results[1].actual === nothing
+    @test occursin("E_TREEWALK_UNBOUND_VARIABLE", results[1].message)
+    @test occursin("ghost", results[1].message)
 end
 
 @testset "a name the component does not declare is still refused" begin
