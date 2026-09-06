@@ -317,20 +317,34 @@ end
 
 _try_require(pkg::Base.PkgId) = get(Base.loaded_modules, pkg, nothing)
 
-# Default per-file stiff-solver override set: .esm basenames listed here are
-# integrated with the stiff Rosenbrock23 solver instead of the default
-# non-stiff Tsit5. This is a pragmatic library default for known-stiff shared
-# fixtures; callers override it per run via `run_esm_tests(...; stiff_files=…)`.
-# (Declaring stiffness in the .esm test metadata itself would be the right
-# long-term home, but that needs an esm-spec §6.6 change.)
+# FALLBACK per-file stiff-solver override set, for documents that do not
+# declare their own stiffness: .esm basenames listed here are integrated with
+# the stiff Rosenbrock23 solver instead of the default non-stiff Tsit5.
+# Callers override it per run via `run_esm_tests(...; stiff_files=…)`.
+#
+# A document should not need to be on this list. `solver.stiffness` (esm-spec
+# §2.2) is the declaration a document makes about ITSELF, and `_pick_solver`
+# consults it FIRST — which is the whole point of the block: a basename table
+# in one binding's runner cannot travel, so every other binding rediscovers a
+# stiff system the same way, as a hang or an overflow. This set remains for
+# documents that predate the block or decline to use it.
 const STIFF_SOLVER_OVERRIDE_FILENAMES = Set(["pollu.esm"])
 
 # Pick a solver: prefer Tsit5 (non-stiff, fast); fall back to Rosenbrock23.
-# `stiff_files` is the set of .esm basenames forced onto Rosenbrock23.
+#
+# `stiffness` is the document's own declaration (esm-spec §2.2, the `solver`
+# block) and is consulted FIRST: `"high"` selects the stiff Rosenbrock23. The
+# field is ADVISORY — this binding is free to ignore it, and does ignore
+# `"low"` / `"moderate"`, which say nothing Tsit5 does not already handle — but
+# acting on `"high"` is exactly what keeps a stiff document from being a hang.
+#
+# `stiff_files` is the FALLBACK: the set of .esm basenames forced onto
+# Rosenbrock23 when the document declares nothing.
 function _pick_solver(file::AbstractString="";
-                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                      stiffness=nothing)
     rb = _try_require(_ROSENBROCK_PKGID)
-    if rb !== nothing && basename(file) in stiff_files
+    if rb !== nothing && (stiffness == "high" || basename(file) in stiff_files)
         return (rb.Rosenbrock23(), :rosenbrock23)
     end
     tsit = _try_require(_TSIT5_PKGID)
@@ -543,7 +557,8 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                name::AbstractString, container,
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
-                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                               stiffness=nothing)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
@@ -557,7 +572,8 @@ function _run_container_tests!(results::Vector{AssertionResult},
         end
         return
     end
-    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files)
+    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files,
+                                        stiffness=stiffness)
     defaults_u0, defaults_p =
         _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
     engine = MtkTestEngine(simp, sys_name, container_kind, solver,
@@ -578,11 +594,16 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         return
     end
 
+    # The document's own stiffness declaration (esm-spec §2.2), which
+    # `_pick_solver` prefers over the basename fallback set. Document-scoped,
+    # so it applies to every container in the file.
+    stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
+
     if esm_file.models !== nothing
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
-                                  stiff_files=stiff_files)
+                                  stiff_files=stiff_files, stiffness=stiffness)
         end
     end
 
@@ -591,7 +612,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
-                                  stiff_files=stiff_files)
+                                  stiff_files=stiff_files, stiffness=stiffness)
         end
     end
 end

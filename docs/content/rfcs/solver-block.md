@@ -3,7 +3,7 @@ title: "A top-level `solver` block: numerics the document knows about itself"
 description: "An optional, top-level, purely advisory `solver` block carrying stiffness, integration tolerances, and a splitting hint — facts about the model that every binding independently needs and none can derive cheaply. Advisory governs the mechanism, never the outcome: a binding that ignores every field and still converges conforms; one that ignores them and hangs does not. Not an algorithm name, not a compile knob, not part of the flattened IR."
 ---
 
-Status: scoped (implementation not started)
+Status: implemented (esm 1.1.0)
 Target format version: 1.1.0 (additive; gated with `solver_version_too_old`)
 Issue: [EarthSciML/EarthSciAST#187](https://github.com/EarthSciML/EarthSciAST/issues/187)
 

@@ -100,6 +100,7 @@ fn test_component_graph_generation() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -184,6 +185,7 @@ fn test_component_graph_exports() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -455,6 +457,7 @@ fn test_component_existence() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

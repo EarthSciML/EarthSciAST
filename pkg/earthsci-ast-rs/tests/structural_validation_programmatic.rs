@@ -58,6 +58,7 @@ fn test_undefined_variable_in_model() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -172,6 +173,7 @@ fn test_equation_count_mismatch() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -272,6 +274,7 @@ fn test_undefined_species_in_reaction() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -392,6 +395,7 @@ fn test_valid_file_passes() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

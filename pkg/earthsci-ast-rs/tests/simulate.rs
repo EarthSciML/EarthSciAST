@@ -49,6 +49,7 @@ fn esm_with_model(model_name: &str, model: Model) -> EsmFile {
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

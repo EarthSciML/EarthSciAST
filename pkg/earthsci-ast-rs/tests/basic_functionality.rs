@@ -107,6 +107,7 @@ fn test_structural_validation() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -281,6 +282,7 @@ fn test_component_graph() {
     let esm_file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,

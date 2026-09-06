@@ -44,6 +44,7 @@ fn empty_file() -> EsmFile {
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -172,6 +173,7 @@ fn expression_transform_fixture(transform: VariableMapTransform, factor: Option<
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(vec![CouplingEntry::VariableMap {

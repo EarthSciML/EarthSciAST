@@ -66,3 +66,23 @@ function resolve_tolerances(solver; abstol=nothing, reltol=nothing)
         (doc_reltol !== nothing ? doc_reltol : DEFAULT_SIM_RELTOL)
     return (a, r)
 end
+
+"""
+    _document_solver(prob) -> Union{Solver,Nothing}
+
+The §2.2 `solver` block of the document an `EsmProblem` was built from.
+
+Read from the problem's own run document rather than from a separate typed
+field, so the §2.2.2 chain holds however the problem was built. Returns
+`nothing` when the document declares no block, or when `prob` carries no
+document at all (the direct-`f!` construction paths).
+"""
+function _document_solver(prob)
+    doc = try
+        getfield(prob, :run_doc)
+    catch
+        return nothing
+    end
+    doc isa AbstractDict || return nothing
+    return coerce_solver(get(doc, "solver", nothing))
+end
