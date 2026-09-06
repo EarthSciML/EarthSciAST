@@ -1,6 +1,6 @@
 ---
 title: "A top-level `solver` block: numerics the document knows about itself"
-description: "An optional, top-level, purely advisory `solver` block carrying stiffness, integration tolerances, and a splitting hint — facts about the model that every binding independently needs and none can derive cheaply. Advisory by construction: a binding that ignores every field still conforms. Not an algorithm name, not a compile knob, not part of the flattened IR."
+description: "An optional, top-level, purely advisory `solver` block carrying stiffness, integration tolerances, and a splitting hint — facts about the model that every binding independently needs and none can derive cheaply. Advisory governs the mechanism, never the outcome: a binding that ignores every field and still converges conforms; one that ignores them and hangs does not. Not an algorithm name, not a compile knob, not part of the flattened IR."
 ---
 
 Status: scoped (implementation not started)
@@ -45,7 +45,10 @@ portably:
 Every field is optional, the block itself is optional, and **every field is
 advisory**: a binding that reads the block and does nothing with it is
 conforming. What is normative is that every binding parses it, validates it,
-and round-trips it unchanged.
+and round-trips it unchanged — and, unchanged by this proposal, that it
+integrates the document successfully and agrees with the other bindings within
+the CONFORMANCE_SPEC §5.9 error band. Advisory governs *how* a binding gets the
+right answer, never *whether* it has to.
 
 Rust has a second, independent stake in this. `rust-diffsol-solver-guard-gap.md`
 records 33 conformance cases where `earthsci-ast-rs` **hangs indefinitely** —
@@ -56,19 +59,21 @@ or for refusing fast instead of hanging.
 
 ## Decisions of record
 
-Eight questions were open. Seven were ruled by the maintainer; the eighth is
-noted below as decided here, and is the one most worth a second look in review.
+Eight questions were open. Seven were ruled by the maintainer. The eighth was
+decided here, got it wrong, and is recorded in its corrected form — the error
+was treating integration tolerance and assertion tolerance as the same
+quantity.
 
 | # | Question | Decision | Why |
 |---|---|---|---|
 | 1 | Placement | **Top-level only** | Matches §9's flatten-to-a-single-solver-object model, opens exactly one sealed container, and covers the motivating case. A per-component block with a §6.6.4-style resolution order stays available as a later additive change; nothing here forecloses it. |
-| 2 | Advisory or normative | **Fully advisory** | Every field is a MAY. Keeps the block from becoming the portability hazard a literal algorithm name would be. Cost is stated plainly under *Consequences* below. |
+| 2 | Advisory or normative | **Fully advisory** | Every field is a MAY. Keeps the block from becoming the portability hazard a literal algorithm name would be. Advisory applies to the *mechanism*, never to the outcome — see *What "advisory" does and does not mean*. |
 | 3 | `splitting` semantics | **Advisory hint, no prescribed substep structure** | The document declares that its system tolerates or benefits from operator splitting. It does not prescribe how a binding splits, and it does not amend §9. |
 | 4 | Delivery | **Spec + schema + all five bindings + conformance** | A field no binding reads is decoration. |
 | 5 | Tolerance spelling | **`abstol` / `reltol`, flat numbers** | Exactly the `solve()` keyword names (API_SPEC §4), so `solver.abstol` → `solve(abstol=)` is a literal pass-through. Deliberately *not* the `tolerance: {abs, rel}` object, which is assertion-comparison tolerance (§6.6.4) — a different quantity that must not be confused with integration accuracy. API_SPEC §189–190 already rejected scipy's `atol`/`rtol` for the API surface; the document follows the API. |
 | 6 | Version gating | **Bump to 1.1.0; reject `solver` under a lower declared version with `solver_version_too_old`** | Follows the `template_import_version_too_old` precedent exactly. Minor bump because the change is purely additive. |
 | 7 | Precedence | **Caller > document > binding default** | An explicit `solve(prob, abstol=…)` always wins; the document's value replaces the binding's built-in default (`reltol 1e-4` / `abstol 1e-6`, API_SPEC §5.8). Mirrors §6.6.4's most-specific-first order and keeps `solve()`'s signature meaningful. |
-| 8 | Inline-test runner tolerances | **Runner-pinned tolerances count as *caller*, so they win over `solver.abstol`/`reltol`** — decided here, not by the maintainer | The inline-test runners pin their own tolerances (Python's `DEFAULT_TEST_RELTOL = 1e-10`) precisely to hold cross-binding agreement fixed. If a document's `solver` block could loosen the integration tolerance *underneath its own assertions*, an author could make a failing assertion pass by editing the solver block. `stiffness` and `splitting` are unaffected and do apply during inline tests — which is what the POLLU case actually needs, so this rule costs the motivating case nothing. |
+| 8 | Inline-test runner tolerances | **The order applies uniformly: the runner's `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL` are *binding defaults*, so the document wins over them** | Integration tolerance and assertion tolerance are separate quantities, and conflating them was an error in an earlier draft of this document. `DEFAULT_TEST_RELTOL` is handed to the *solver*; what an assertion is compared at is the document's own `tolerance: {abs, rel}` (§6.6.4). Loosening integration accuracy therefore makes an assertion *more* likely to fail, not less — there is no pass-manufacturing hazard to defend against, and the field that could manufacture a pass is `tolerance`, which the author already controls. Letting the document win is also the better outcome for agreement: every binding then integrates at the same tolerance instead of at five different runner defaults. |
 
 ## The block
 
@@ -116,9 +121,11 @@ Stated up front, because a container named `solver` invites accretion:
 
 ## Semantics, precisely
 
-**Advisory (MAY).** A conforming binding may ignore any or every field. Two
-bindings may therefore produce different trajectories for the same document —
-see *Consequences*.
+**Advisory (MAY).** A conforming binding may ignore any or every field, and
+may reach a conforming result by any route. Two bindings may therefore differ
+in the integrator they select and in the last bits of the trajectory — but not
+in whether they integrate, nor by more than the §5.9 band. See *What "advisory"
+does and does not mean*.
 
 **Normative (MUST), and therefore conformance-testable:**
 
@@ -137,24 +144,42 @@ see *Consequences*.
 
 **Resolution order for `abstol` / `reltol`,** most-specific first:
 
-1. An explicit argument at the `solve()` call site — including a tolerance an
-   inline-test runner pins for itself (decision 8).
+1. An explicit argument at the `solve()` call site.
 2. Otherwise, the document's `solver.abstol` / `solver.reltol`.
 3. Otherwise, the binding default (`reltol 1e-4`, `abstol 1e-6`).
 
-## Consequences of "advisory"
+## What "advisory" does and does not mean
 
-Worth stating rather than discovering: because a binding may ignore
-`stiffness`, the conformance suite **cannot** assert that POLLU integrates. It
-can assert parse, validate, round-trip, the version gate, and the diagnostics —
-nothing about resulting trajectories. Two conforming bindings can legitimately
-disagree on the same document, which cuts against the cross-binding-agreement
-property the suite exists to protect.
+Advisory governs the **mechanism**, never the **outcome**.
 
-That is the accepted trade: it is what keeps a coarse, portable hint from
-hardening into a portability hazard. The spec text will say so explicitly, so
-the advisory status is a decision on the record rather than an omission someone
-later reads as a bug.
+A binding is free to reach the right answer by any route: its default
+integrator, its own stiffness detection, or by reading `stiffness` and
+selecting an implicit method. A binding that ignores every field in the block
+and still converges is fully conforming. What no binding is free to do is
+**fail** — hang, overflow, or return a trajectory outside the agreement band.
+
+That requirement is not created, weakened, or qualified by this block. It is
+CONFORMANCE_SPEC §5.9, which already governs simulation output: numeric
+tolerance rather than byte-identity, an explicitly stated rel/abs band, and a
+gate that fails loudly on any divergence beyond it. §5.9 is exactly the
+"error tolerance, separate from the solver tolerance" that the outcome is
+judged against, and it long predates this proposal.
+
+So the block adds information that helps a binding choose a method that
+converges. It does not hand any binding an excuse for not converging. A
+stiff conformance fixture therefore **gates** like any other simulation
+fixture: ignoring `stiffness: "high"` is permitted, and failing POLLU is not.
+The two statements are consistent precisely because the hint is about how a
+binding gets there, not about whether it has to arrive.
+
+One interaction worth noting for the implementer. §5.9.2 pins each binding's
+integrator and step controls per binding in `manifest.json` (`integrators`) so
+the comparison stays apples-to-apples. A document-level `stiffness` declaration
+is the same fact stated one level up, in the document rather than in the
+harness — which is the whole point of the issue. Whether a stiff fixture's
+manifest entry should defer to the document, or keep pinning per binding for
+reproducibility, is a decision for the fixture work in §5 below, not for the
+schema.
 
 ## Work breakdown
 
@@ -166,8 +191,9 @@ later reads as a bug.
   the advisory/normative split, the resolution order, the non-goals, and the
   consequences paragraph above.
 - §2 top-level JSON sketch and field table: add the `solver` row.
-- §6.6.4: a cross-reference distinguishing assertion-comparison `tolerance`
-  from integration `abstol`/`reltol`, and stating decision 8.
+- §6.6.4: a cross-reference stating that assertion-comparison `tolerance` and
+  integration `abstol`/`reltol` are separate quantities that resolve
+  independently — the confusion the two spellings exist to prevent.
 - Diagnostics table: `solver_version_too_old`.
 
 ### 2. Schema — `esm-schema.json`
@@ -214,8 +240,8 @@ accessor fails CI).
 
 | Binding | Additional work |
 |---|---|
-| **Julia** | `src/types.jl` struct; `src/error_codes.jl` gains `SOLVER_VERSION_TOO_OLD`; `src/simulate.jl` applies the resolution order in `solve`; `src/run_tests.jl` follows decision 8. |
-| **Python** | `solve()` applies the order; the inline-test runner keeps its pinned `DEFAULT_TEST_RELTOL`. This is the binding whose downstream harness the block is meant to retire. |
+| **Julia** | `src/types.jl` struct; `src/error_codes.jl` gains `SOLVER_VERSION_TOO_OLD`; `src/simulate.jl` applies the resolution order in `solve`; `src/run_tests.jl`'s `DEFAULT_TEST_*` become defaults the document can displace. |
+| **Python** | `solve()` applies the order; `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL` in the inline-test runner become defaults the document can displace. This is the binding whose downstream basename table the block is meant to retire. |
 | **Rust** | `src/diagnostic.rs`; `src/simulate.rs` applies the order and MAY consult `stiffness` — see the diffsol guard gap above. |
 | **TypeScript** | Types and validation only; no `solve`. Regenerated artifacts must match. |
 | **Go** | Types, validation, gate; no `solve`. |
@@ -227,10 +253,16 @@ accessor fails CI).
   the block, non-positive `abstol`, empty `solver: {}`, and `solver` declared
   under `esm: "1.0.0"` (→ `solver_version_too_old`).
 - Round-trip fixture proving the block emits verbatim.
-- A stiff, POLLU-shaped fixture under `tests/conformance/`, **informative**:
-  it pins the intended reading of `stiffness: "high"` and is a place for a
-  binding to demonstrate it acts on the hint. It cannot gate, because the
-  field is advisory (see *Consequences*).
+- A stiff, POLLU-shaped fixture under `tests/conformance/`, **gating** under
+  the §5.9 numeric-tolerance contract, anchored on the published reference
+  (`O3@3600 = 5.523140`). Every executing binding must integrate it and land
+  inside the band. How each gets there is its own business — default
+  integrator, its own stiffness detection, or by reading `stiffness: "high"`.
+  Two sub-tasks the fixture work must settle: whether the fixture's
+  `manifest.json` `integrators` entry defers to the document or keeps pinning
+  per binding (§5.9.2), and whether Rust can clear the gate at all today given
+  `rust-diffsol-solver-guard-gap.md` — if it cannot, that is a Rust bug the
+  fixture exposes, not a reason to downgrade the fixture.
 - `tests/COVERAGE_MATRIX.md` and `CONFORMANCE_SPEC.md` updated for the new
   category.
 
