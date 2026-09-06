@@ -87,7 +87,7 @@ fn resolution_is_idempotent_so_parse_emit_parse_is_stable() {
     // resolving to the same place by accident.
     let m = manifest();
     let f = fixture(&m, "relative_catalog");
-    let first = earthsci_ast::load_path(&suite_dir().join(f["path"].as_str().expect("path")))
+    let first = earthsci_ast::load_path(suite_dir().join(f["path"].as_str().expect("path")))
         .expect("the catalog must load");
     let emitted = earthsci_ast::to_json(&first).expect("emits");
 
