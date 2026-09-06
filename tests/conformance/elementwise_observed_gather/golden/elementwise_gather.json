@@ -1,0 +1,41 @@
+{
+    "fixture": "elementwise_gather",
+    "assertions": [
+        {
+            "test_id": "elementwise_gather",
+            "reduce": null,
+            "actual": 1.9999999999999996,
+            "assertion_idx": 1,
+            "variable": "u"
+        },
+        {
+            "test_id": "elementwise_gather",
+            "reduce": null,
+            "actual": 3.999999999999999,
+            "assertion_idx": 2,
+            "variable": "u"
+        },
+        {
+            "test_id": "elementwise_gather",
+            "reduce": "max",
+            "actual": 3.999999999999999,
+            "assertion_idx": 3,
+            "variable": "u"
+        },
+        {
+            "test_id": "elementwise_gather",
+            "reduce": "min",
+            "actual": 1.9999999999999996,
+            "assertion_idx": 4,
+            "variable": "u"
+        },
+        {
+            "test_id": "elementwise_gather",
+            "reduce": null,
+            "actual": 3.999999999999999,
+            "assertion_idx": 5,
+            "variable": "s"
+        }
+    ],
+    "reference_binding": "julia"
+}
