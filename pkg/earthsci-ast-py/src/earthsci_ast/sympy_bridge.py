@@ -8,9 +8,10 @@ via :func:`sympy.lambdify`. This module owns:
   :class:`FlattenedSystem` with scalar algebraic-equation elimination.
 * :class:`_CompiledRhs` and :func:`_compile_flat_rhs` — the lambdify +
   CSE compile that dominates ``solve()`` wall time on large mechanisms.
-* :class:`_EsmNumPyPrinter` and :func:`_lambdify` — the NumPy code printer
-  every lambdify in this tier goes through, which fixes SymPy's float-valued
-  printing of BOOLEAN-valued ``Piecewise``/``ITE`` (esm issue #192).
+* :class:`_EsmNumPyPrinter`, :func:`_boolean_aware_cse` and :func:`_lambdify`
+  — the NumPy code printer every lambdify in this tier goes through, which
+  fixes SymPy's float-valued printing of BOOLEAN-valued ``Piecewise``/``ITE``
+  (esm issue #192). Numeric selections keep SymPy's own printing untouched.
 
 The ESM ``Expr`` → SymPy converter itself (:func:`_expr_to_sympy`), the
 NaN-safe abs placeholder (:class:`_ess_numeric_abs`, esm-5gk), and
@@ -41,10 +42,29 @@ from .esm_types import ExprNode
 from .expression import SimulationError, _ess_numeric_abs, _expr_to_sympy  # noqa: F401
 from .flatten import FlattenedSystem
 
-# Module-mapping handed to every ``sp.lambdify`` call in this module so
+# Module-mapping handed to every :func:`_lambdify` call in this tier (which is
+# every lambdify in it — there are no bare ``sp.lambdify`` call sites left) so
 # the ``_ess_numeric_abs`` calls emitted by ``_expr_to_sympy`` resolve to
 # ``numpy.abs`` at runtime.
 _LAMBDIFY_MODULES = [{"_ess_numeric_abs": np.abs}, "numpy"]
+
+
+def _is_boolean_atom(value: Any) -> bool:
+    """True when ``value`` is boolean-valued *by construction*.
+
+    Relationals (``a < b``), ``And``/``Or``/``Not``/``Xor``, ``ITE`` and the
+    ``BooleanTrue``/``BooleanFalse`` singletons all subclass
+    :class:`~sympy.logic.boolalg.Boolean` WITHOUT subclassing
+    :class:`~sympy.core.expr.Expr`.
+
+    The ``not isinstance(value, sp.Expr)`` half is load-bearing:
+    :class:`~sympy.core.symbol.Symbol` (and :class:`~sympy.core.symbol.Dummy`,
+    which is what ``lambdify(dummify=True)`` and CSE hand back) subclass BOTH,
+    so a bare ``isinstance(value, Boolean)`` test is true of every ORDINARY
+    NUMERIC VARIABLE. Using that alone would classify the everyday
+    ``ifelse(c, x, y)`` — branch values are two plain symbols — as boolean.
+    """
+    return isinstance(value, Boolean) and not isinstance(value, sp.Expr)
 
 
 class _EsmNumPyPrinter(NumPyPrinter):
@@ -76,12 +96,63 @@ class _EsmNumPyPrinter(NumPyPrinter):
     than in the CSE step: a boolean selection printed in ANY position must
     stay boolean.
 
-    Both overrides emit ``numpy.where``, which preserves the branches' dtype
-    (bool stays bool) and evaluates the condition once.
+    Only a selection this printer can PROVE is boolean is rerouted; everything
+    else falls through to ``super()``, so numeric ``Piecewise`` printing —
+    including its ``default=nan`` "undefined outside the conditions" sentinel
+    and its float promotion — is untouched. The boolean form keeps
+    ``numpy.select``'s flat shape (one call, not one per branch, so a wide
+    selection cannot blow CPython's 200-level parenthesis-nesting limit) and
+    only swaps the default: ``nan`` has no boolean counterpart, so an
+    unmatched boolean selection is ``False``. ESM's ``ifelse`` always emits a
+    ``(value, True)`` tail, so that arm is unreachable from a model artifact.
+
+    ``boolean_symbols`` carries the CSE temporaries whose definitions were
+    themselves boolean; see :func:`_boolean_aware_cse`. Without it, a boolean
+    selection ALL of whose branches were hoisted — ``ITE(e > 0, x0, x1)`` — is
+    indistinguishable from a numeric one by inspection alone.
     """
+
+    def __init__(self, settings: dict[str, Any] | None = None) -> None:
+        super().__init__(settings)
+        #: CSE replacement symbols known to hold a boolean value.
+        self.boolean_symbols: set[sp.Symbol] = set()
+
+    def _value_kind(self, value: Any) -> bool | None:
+        """``True`` boolean, ``False`` numeric, ``None`` undetermined."""
+        if _is_boolean_atom(value):
+            return True
+        if isinstance(value, sp.Symbol):
+            # A CSE temporary is boolean only if its definition was; an
+            # untracked symbol is a model variable, which is always numeric
+            # under ESM's type system but is left undetermined so that a
+            # single relational sibling still decides the selection.
+            return True if value in self.boolean_symbols else None
+        if isinstance(value, sp.Piecewise):
+            return self.is_boolean_selection(arg.expr for arg in value.args)
+        return False
+
+    def is_boolean_selection(self, values: Any) -> bool:
+        """True when these branch values make up a boolean-valued selection.
+
+        Requires at least one PROVABLY boolean branch and no provably numeric
+        one. All-undetermined (every branch a plain symbol) is the everyday
+        numeric ``ifelse(c, x, y)``, so it must answer False.
+        """
+        found_boolean = False
+        for value in values:
+            kind = self._value_kind(value)
+            if kind is False:
+                return False
+            if kind is True:
+                found_boolean = True
+        return found_boolean
 
     def _print_ITE(self, expr: Any) -> str:
         cond, if_true, if_false = expr.args
+        if not self.is_boolean_selection((if_true, if_false)):
+            return super()._print_ITE(expr)
+        # Two total branches, so ``numpy.where`` needs no default and keeps the
+        # branches' dtype.
         return "{}({}, {}, {})".format(
             self._module_format(self._module + ".where"),
             self._print(cond),
@@ -90,26 +161,49 @@ class _EsmNumPyPrinter(NumPyPrinter):
         )
 
     def _print_Piecewise(self, expr: Any) -> str:
-        if not all(isinstance(arg.expr, Boolean) for arg in expr.args):
+        if not self.is_boolean_selection(arg.expr for arg in expr.args):
             return super()._print_Piecewise(expr)
-        # Boolean-valued: fold to nested ``numpy.where`` so the result stays a
-        # boolean array. A Piecewise with no ``True`` fallback is undefined
-        # outside its conditions; ``select`` spells that ``nan``, which has no
-        # boolean counterpart, so the fallback is ``False``. ESM's ``ifelse``
-        # always emits a ``(value, True)`` tail, so that arm is unreachable
-        # from a model artifact.
-        out = "False"
-        for arg in reversed(expr.args):
-            if arg.cond == sp.true:
-                out = self._print(arg.expr)
-                continue
-            out = "{}({}, {}, {})".format(
-                self._module_format(self._module + ".where"),
-                self._print(arg.cond),
-                self._print(arg.expr),
-                out,
+        # Mirrors super()'s shape exactly but for ``default``: an ITE-bearing
+        # condition still goes through ``simplify_logic``, matching the numeric
+        # path so the two cannot drift.
+        conds = "[{}]".format(
+            ",".join(
+                self._print(sp.simplify_logic(arg.cond))
+                if arg.cond.has(sp.ITE)
+                else self._print(arg.cond)
+                for arg in expr.args
             )
-        return out
+        )
+        values = "[{}]".format(",".join(self._print(arg.expr) for arg in expr.args))
+        return "{}({}, {}, default=False)".format(
+            self._module_format(self._module + ".select"), conds, values
+        )
+
+
+def _boolean_aware_cse(printer: _EsmNumPyPrinter) -> Callable:
+    """A :func:`sympy.lambdify` ``cse`` hook that classifies its temporaries.
+
+    ``lambdify(cse=True)`` hoists shared subexpressions into ``x0 = …``
+    assignments, each printed on its own. A hoisted BOOLEAN subexpression that
+    is then referenced only by symbol leaves the printer no way to tell a
+    boolean selection from a numeric one — ``ITE(e > 0, x0, x1)`` looks exactly
+    like ``ifelse(c, x, y)``. Passing this callable instead of ``cse=True``
+    (both are accepted, and it runs before any printing) lets the printer learn
+    which temporaries are boolean. :func:`sympy.cse` returns its replacements
+    in topological order, so each definition is classified with every
+    temporary it can reference already classified.
+    """
+
+    def run(exprs: Any) -> Any:
+        # ``list=False`` matches what lambdify's own ``cse=True`` branch does,
+        # so a list of expressions is not re-wrapped.
+        replacements, reduced = sp.cse(exprs, list=False)
+        for symbol, replacement in replacements:
+            if printer.is_boolean_selection((replacement,)):
+                printer.boolean_symbols.add(symbol)
+        return replacements, reduced
+
+    return run
 
 
 def _lambdify(
@@ -126,22 +220,20 @@ def _lambdify(
     ``from numpy import *``), inline printing, and unknown functions — the
     ``_ess_numeric_abs`` / ``_ess_fn_<idx>`` placeholders this tier injects
     through its module dicts — printed as bare calls.
+
+    The printer is built per call rather than shared: it accumulates the
+    boolean CSE temporaries of the expression it is printing, which are
+    meaningless to any other call.
     """
-    user_functions: dict[str, str] = {}
-    module_list = modules if isinstance(modules, (list, tuple)) else [modules]
-    for module in reversed(list(module_list)):
-        if isinstance(module, dict):
-            for name in module:
-                user_functions[name] = name
     printer = _EsmNumPyPrinter(
         {
             "fully_qualified_modules": False,
             "inline": True,
             "allow_unknown_functions": True,
-            "user_functions": user_functions,
         }
     )
-    return sp.lambdify(args, expr, modules=modules, printer=printer, cse=cse)
+    cse_arg: Any = _boolean_aware_cse(printer) if cse else False
+    return sp.lambdify(args, expr, modules=modules, printer=printer, cse=cse_arg)
 
 
 def _topo_sort(names: list[str], deps: dict[str, list[str]], label: str) -> list[str]:
