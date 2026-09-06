@@ -1812,6 +1812,16 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
 /// extension-seam progress observer into the one per-step hook `run_solver`
 /// already drives.
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
+    // esm-spec §2.2.2: caller > the document's `solver` block > binding
+    // default. Resolved once here, at the single point where the run's options
+    // and the document meet, so every backend below sees concrete tolerances
+    // and none of them has to know about the chain.
+    let (abstol, reltol) = crate::resolve_tolerances(
+        document_solver(&prob.doc).as_ref(),
+        opts.abstol,
+        opts.reltol,
+    );
+
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
     let set = opts
@@ -1819,14 +1829,30 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
         .clone()
         .unwrap_or_else(|| prob.callbacks.clone());
     if set.is_empty() {
-        return opts.clone();
+        return SolveOptions {
+            abstol: Some(abstol),
+            reltol: Some(reltol),
+            ..opts.clone()
+        };
     }
     let user = opts.progress.clone();
     let observer: ProgressFn = wrap_observer(set, user);
     SolveOptions {
+        abstol: Some(abstol),
+        reltol: Some(reltol),
         progress: Some(observer),
         ..opts.clone()
     }
+}
+
+/// The document's §2.2 `solver` block, read back from the raw document the
+/// [`EsmProblem`] carries.
+///
+/// Read from the raw JSON rather than from a typed field so the chain holds
+/// however the problem was built — including the paths that construct one from
+/// a document that never went through the typed `EsmFile`.
+fn document_solver(doc: &JsonValue) -> Option<crate::Solver> {
+    serde_json::from_value(doc.get("solver")?.clone()).ok()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

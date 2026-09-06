@@ -192,8 +192,8 @@ fn test_exponential_decay_matches_analytical() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 10_000,
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         ..Default::default()
@@ -276,8 +276,8 @@ fn test_reversible_reaction_reaches_steady_state() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 10_000,
         saveat: Some(vec![10.0, 50.0]),
         ..Default::default()
@@ -360,8 +360,8 @@ fn test_autocatalytic_conserves_mass() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 10_000,
         saveat: Some((0..=20).map(|i| i as f64 * 0.5).collect()),
         ..Default::default()
@@ -480,8 +480,8 @@ fn test_robertson_stiff_problem() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![0.4, 4.0, 40.0, 400.0, 4000.0]),
         ..Default::default()
@@ -599,8 +599,8 @@ fn test_round_trip_simple_ode_fixture() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 10_000,
         saveat: Some(vec![0.0, 1.0, 10.0, 100.0]),
         ..Default::default()
@@ -665,8 +665,8 @@ fn test_round_trip_stiff_vdp_fixture() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-8,
-        reltol: 1e-6,
+        abstol: Some(1e-8),
+        reltol: Some(1e-6),
         maxiters: 100_000,
         saveat: None,
         ..Default::default()
@@ -711,8 +711,8 @@ fn test_compiled_reuse_for_parameter_sweep() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 10_000,
         saveat: Some(vec![1.0]),
         ..Default::default()

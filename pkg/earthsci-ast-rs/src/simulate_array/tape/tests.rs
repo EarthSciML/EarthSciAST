@@ -1196,8 +1196,8 @@ fn ab_model_file_if_available() {
             &prob,
             &crate::simulate::SolveOptions {
                 alg: crate::simulate::Alg::Erk,
-                abstol: 1e-8,
-                reltol: 1e-6,
+                abstol: Some(1e-8),
+                reltol: Some(1e-6),
                 saveat: Some(vec![0.0]),
                 ..Default::default()
             },

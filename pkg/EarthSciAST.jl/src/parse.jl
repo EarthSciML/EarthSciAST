@@ -681,6 +681,13 @@ function coerce_esm_file(data::Any)::EsmFile
     # boundary means the direct `coerce_esm_file` entry point keeps it too.
     coupling_roles = _maybe(_to_native_json, _get_field(data, :coupling_roles, nothing))
 
+    # Document-scoped solver hints (esm-spec §2.2), read at the coercion
+    # boundary for the same reason as `coupling_roles` above: no lowering pass
+    # rewrites the block, and reading it here means the direct
+    # `coerce_esm_file` entry point keeps it too. Typed rather than verbatim
+    # because `solve` READS it (§2.2.2 resolution order).
+    solver = coerce_solver(_get_field(data, :solver, nothing))
+
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
@@ -691,12 +698,37 @@ function coerce_esm_file(data::Any)::EsmFile
                   function_tables=function_tables,
                   index_sets=index_sets,
                   component_templates=component_templates,
-                  coupling_roles=coupling_roles)
+                  coupling_roles=coupling_roles,
+                  solver=solver)
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
     lower_enums!(file)
     return file
+end
+
+"""
+    coerce_solver(data) -> Union{Solver,Nothing}
+
+Coerce the top-level `solver` block (esm-spec §2.2) into the typed
+[`Solver`](@ref) carried on [`EsmFile`](@ref), or `nothing` when the document
+declares none.
+
+Field VALUES are not re-validated here — the schema already pins the two enums
+and the two positive tolerances, and this runs after schema validation. What it
+does is keep absence distinguishable from any default: a missing key stays
+`nothing` rather than acquiring a value the author never wrote.
+"""
+function coerce_solver(data)
+    data === nothing && return nothing
+    data isa AbstractDict || return nothing
+    _f(k) = _raw_get(data, k, nothing)
+    _num(v) = v === nothing ? nothing : Float64(v)
+    _str(v) = v === nothing ? nothing : String(v)
+    return Solver(stiffness=_str(_f("stiffness")),
+                  abstol=_num(_f("abstol")),
+                  reltol=_num(_f("reltol")),
+                  splitting=_str(_f("splitting")))
 end
 
 """

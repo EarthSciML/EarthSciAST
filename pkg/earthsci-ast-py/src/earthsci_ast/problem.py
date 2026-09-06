@@ -55,6 +55,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import EsmFile
+from .solver import resolve_tolerances
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -710,8 +711,8 @@ def solve(
     prob: EsmProblem | EnsembleProblem,
     *,
     alg: str = DEFAULT_ALG,
-    abstol: float = DEFAULT_ABSTOL,
-    reltol: float = DEFAULT_RELTOL,
+    abstol: float | None = None,
+    reltol: float | None = None,
     saveat: Any = None,
     callback: Any = None,
     maxiters: int | None = None,
@@ -737,7 +738,15 @@ def solve(
         The solver algorithm. This binding's ecosystem has no first-class
         algorithm object, so a SciPy method name is accepted (§2.5.3).
     abstol, reltol:
-        Absolute and relative solver tolerances.
+        Absolute and relative INTEGRATION tolerances. ``None`` (the default)
+        means "not given" and resolves per esm-spec §2.2.2, most-specific
+        first: an explicit argument here, then the document's
+        ``solver.abstol`` / ``solver.reltol`` (§2.2), then the binding default
+        (``abstol`` 1e-6, ``reltol`` 1e-4). The two resolve independently, so a
+        document declaring only ``reltol`` leaves ``abstol`` on the default.
+
+        These are a different quantity from the ``tolerance`` object an
+        assertion is COMPARED at (§6.6.4), which resolves on its own chain.
     saveat:
         Output times: an explicit sequence, or a scalar output STEP measured
         from ``tspan[0]``. ``None`` keeps the dense uniform default grid.
@@ -759,6 +768,15 @@ def solve(
         exception, so interactive workflows can branch on it; a dimensionality
         violation still raises.
     """
+    # esm-spec §2.2.2: caller > document `solver` block > binding default. Read
+    # from the raw document the EsmProblem carries, so the order holds however
+    # the problem was built.
+    abstol, reltol = resolve_tolerances(
+        (prob.doc or {}).get("solver") if isinstance(prob, EsmProblem) else None,
+        abstol=abstol,
+        reltol=reltol,
+    )
+
     if isinstance(prob, EnsembleProblem):
         return prob.solve(
             trajectories=trajectories,

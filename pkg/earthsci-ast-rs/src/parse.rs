@@ -189,6 +189,11 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     crate::template_imports::reject_template_imports_pre_v08(&json_value)
         .map_err(|e| EsmError::SchemaValidation(e.to_string()))?;
 
+    // The top-level `solver` block arrives at esm 1.1.0; a file declaring an
+    // earlier version that carries one is rejected (esm-spec §2.2.4).
+    crate::solver::reject_solver_pre_v11(&json_value)
+        .map_err(|e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()))?;
+
     // Validate against schema
     validate_schema(&json_value)?;
 

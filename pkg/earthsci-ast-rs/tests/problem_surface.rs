@@ -87,8 +87,8 @@ fn decay_problem(tspan: (f64, f64)) -> EsmProblem {
 /// widening its own comparison epsilon, which would measure nothing.
 fn tight(saveat: Option<Vec<f64>>) -> SolveOptions {
     SolveOptions {
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         saveat,
         ..Default::default()
     }
@@ -117,7 +117,7 @@ fn one_problem_serves_many_solves() {
             &SolveOptions {
                 alg,
                 reltol,
-                abstol: 1e-12,
+                abstol: Some(1e-12),
                 saveat: grid(1.0, 4),
                 ..Default::default()
             },

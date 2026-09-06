@@ -103,8 +103,8 @@ fn run_model_test(
     sorted_times.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(sorted_times.clone()),
         ..Default::default()

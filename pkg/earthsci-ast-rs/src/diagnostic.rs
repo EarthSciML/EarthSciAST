@@ -173,6 +173,9 @@ diagnostic_code_registry! {
     /// An imported library declaring a `min_spec_version` newer than this
     /// binding implements.
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old";
+    /// A top-level `solver` block in a document declaring `esm` < 1.1.0
+    /// (esm-spec §2.2.4, §2.2.5).
+    SOLVER_VERSION_TOO_OLD = "solver_version_too_old";
     /// An `inject` whose target names a data LOADER rather than a component.
     TEMPLATE_INJECT_TARGET_IS_LOADER = "template_inject_target_is_loader";
     /// An `inject` whose target resolves to something that is not a component.

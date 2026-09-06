@@ -88,6 +88,7 @@ from .esm_types import (
     Reaction,
     ReactionSystem,
     Reference,
+    Solver,
     Species,
     SweepDimension,
     SweepRange,
@@ -1364,6 +1365,20 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "coordinates" in data and data["coordinates"] is not None:
         coordinates = copy.deepcopy(dict(data["coordinates"]))
 
+    # Parse the document-scoped solver hints (esm-spec §2.2) — advisory
+    # numerics the document knows about itself. Typed rather than carried as a
+    # raw dict because `solve` READS it (§2.2.2 resolution order); `None` when
+    # the document declares none, which is NOT a synonym for any default.
+    solver: Solver | None = None
+    if isinstance(data.get("solver"), dict):
+        _s = data["solver"]
+        solver = Solver(
+            stiffness=_s.get("stiffness"),
+            abstol=_s.get("abstol"),
+            reltol=_s.get("reltol"),
+            splitting=_s.get("splitting"),
+        )
+
     # Parse the document-scoped data-source ingest registry (esm-spec §8).
     data_sources: dict[str, DataSource] = {}
     if "data_sources" in data:
@@ -1487,6 +1502,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         domain=domain,
         index_sets=index_sets,
         coordinates=coordinates,
+        solver=solver,
     )
 
 
@@ -2320,6 +2336,7 @@ def _load_data(
         reject_expression_templates_pre_v04,
     )
     from ._data_source_urls import resolve_data_source_urls
+    from .solver import reject_solver_pre_v11
     from .template_imports import (
         apply_scope_injections,
         reject_template_imports_pre_v08,
@@ -2332,6 +2349,10 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+
+    # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
+    # earlier version that carries one is rejected (esm-spec §2.2.4).
+    reject_solver_pre_v11(data)
 
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed

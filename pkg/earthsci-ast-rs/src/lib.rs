@@ -110,6 +110,7 @@ pub(crate) mod reference_resolution;
 pub(crate) mod registered_functions;
 pub(crate) mod relational;
 pub(crate) mod serialize;
+pub(crate) mod solver;
 pub(crate) mod structural;
 pub(crate) mod substitute;
 pub(crate) mod template_imports;
@@ -266,6 +267,10 @@ pub use template_imports::{
     apply_scope_injections, is_template_library_doc, reject_template_imports_pre_v08,
     resolve_template_machinery,
 };
+// Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
+// §2.2.2 tolerance resolution order — the two parts of the block that are NOT
+// advisory.
+pub use solver::{reject_solver_pre_v11, resolve_tolerances};
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
@@ -273,7 +278,8 @@ pub use types::{
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
-    ReactionSystem, RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance,
+    ReactionSystem, RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, TimeSpan,
+    Tolerance,
     UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{

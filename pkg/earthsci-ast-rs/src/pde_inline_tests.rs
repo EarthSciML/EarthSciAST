@@ -1625,8 +1625,8 @@ mod tests {
     fn tight_opts() -> SolveOptions {
         SolveOptions {
             alg: Alg::Erk,
-            reltol: 1e-12,
-            abstol: 1e-14,
+            reltol: Some(1e-12),
+            abstol: Some(1e-14),
             ..Default::default()
         }
     }

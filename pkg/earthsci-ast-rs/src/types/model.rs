@@ -70,6 +70,45 @@ pub struct IndexSet {
 /// rule covers rectilinear (1-D monotonic → CF *dimension* coordinate),
 /// unstructured (1-D over a shared dimension) and curvilinear (2-D `lat(y,x)`)
 /// grids, the latter two emitting CF *auxiliary* coordinates.
+/// Document-scoped, OPTIONAL solver hints (esm-spec §2.2).
+///
+/// Numerics the document knows about ITSELF, which each binding maps to its own
+/// integrator. Every field is ADVISORY: a binding may ignore any or all of them
+/// and still conform. Advisory governs the MECHANISM, never the OUTCOME — a
+/// binding that ignores every field and still converges conforms; the
+/// CONFORMANCE_SPEC §5.9 requirement to integrate successfully and agree within
+/// the error band is untouched by this block and is not excused by it.
+///
+/// `abstol` / `reltol` are INTEGRATION tolerances and are a different quantity
+/// from [`Tolerance`], which is what an assertion is COMPARED at (§6.6.4). They
+/// resolve on independent chains and neither substitutes for the other.
+///
+/// Every field is `Option` because each is independently optional and absence
+/// is NOT a default value: a document omitting `stiffness` has not declared its
+/// stiffness, and a binding must not read absence as an assertion about it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Solver {
+    /// The author's declaration of the system's stiffness: `"low"`,
+    /// `"moderate"` or `"high"`. A binding MAY select an implicit / BDF-family
+    /// integrator on `"high"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stiffness: Option<String>,
+
+    /// Absolute INTEGRATION tolerance the document asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abstol: Option<f64>,
+
+    /// Relative INTEGRATION tolerance the document asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reltol: Option<f64>,
+
+    /// Advisory operator-splitting convention: `"none"`, `"lie"` or
+    /// `"strang"`. Carries no prescribed substep structure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splitting: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Coordinate {

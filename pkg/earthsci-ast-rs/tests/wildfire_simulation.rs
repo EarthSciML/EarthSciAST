@@ -67,8 +67,8 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
     times.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 1_000_000,
         saveat: Some(times),
         ..Default::default()
@@ -140,8 +140,8 @@ fn wildfire_regrid_trajectory_and_constant_states() {
     let file = common::load_repo_fixture("valid/wildfire_atmosphere_ocean.esm");
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 1_000_000,
         saveat: Some(vec![0.0, 3600.0]),
         ..Default::default()

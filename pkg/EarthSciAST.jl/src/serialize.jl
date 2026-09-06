@@ -454,6 +454,19 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     if file.coordinates !== nothing && !isempty(file.coordinates)
         result["coordinates"] = file.coordinates
     end
+    # esm-spec §2.2 `solver` hints, written back VERBATIM (§2.2.4 requirement 2:
+    # authored configuration, a peer of `tolerance`). Unset fields are OMITTED
+    # rather than emitted as `null`, so `parse -> emit` is stable and an empty
+    # block — which the schema rejects as a second spelling of absence — is
+    # never produced.
+    if file.solver !== nothing
+        block = OrderedDict{String,Any}()
+        file.solver.stiffness === nothing || (block["stiffness"] = file.solver.stiffness)
+        file.solver.abstol === nothing || (block["abstol"] = file.solver.abstol)
+        file.solver.reltol === nothing || (block["reltol"] = file.solver.reltol)
+        file.solver.splitting === nothing || (block["splitting"] = file.solver.splitting)
+        isempty(block) || (result["solver"] = block)
+    end
     # esm-spec §10.9 `coupling_roles`, written back VERBATIM. Presence of this
     # key is the sole positive identifier of the coupling-library file kind, so
     # dropping it re-emitted a library as an ordinary document.

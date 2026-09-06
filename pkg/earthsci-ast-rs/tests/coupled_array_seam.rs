@@ -175,8 +175,8 @@ const COUPLED_ARRAY_JSON: &str = r#"
 fn fast_opts(final_t: f64) -> SolveOptions {
     SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![final_t]),
         ..Default::default()
