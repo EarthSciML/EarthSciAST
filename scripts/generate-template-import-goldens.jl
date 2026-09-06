@@ -12,6 +12,7 @@
 #   tests/conformance/expression_templates/metaparameter_resolutions/expanded_n4.esm
 #   tests/conformance/expression_templates/metaparameter_resolutions/expanded_n8.esm
 #   tests/conformance/expression_templates/import_rename_two_instances/expanded.esm
+#   tests/conformance/expression_templates/import_rename_integral_axis/expanded.esm
 #   tests/conformance/expression_templates/import_rebind_keyed_factors/expanded.esm
 #   tests/conformance/expression_templates/import_rename_diamond/expanded.esm
 #   tests/invalid/template_imports/body_chain_too_deep.esm   (33-template chain, generated)
@@ -91,6 +92,7 @@ for (dir, fixture, golden) in [
     ("scalar_field_param", "fixture.esm", "expanded.esm"),
     ("aggregate_int_ratio_golden", "fixture.esm", "expanded.esm"),
     ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
+    ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
     ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
     ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
     ("import_rename_diamond", "fixture.esm", "expanded.esm"),

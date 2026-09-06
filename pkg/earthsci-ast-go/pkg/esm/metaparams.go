@@ -91,7 +91,11 @@ var metaSubstSkipKeys = map[string]struct{}{
 	// bound metaparameter sharing that name must not rewrite it into an integer.
 	// (The §9.7.7 rename walk handles renaming it, via renameAxisKeys.) Omitting
 	// it here diverged from the other four bindings, all of which skip `dim`.
-	"dim":                         {},
+	"dim": {},
+	// `integral`'s integration variable (esm-spec §4.2) is an axis NAME, never
+	// an expression position — a bound metaparameter of the same name must not
+	// rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)
+	"var":                         {},
 	"expression_template_imports": {}, "metaparameters": {}, "only": {},
 	// `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
 	// NAMES, a structural namespace — never expression positions.
