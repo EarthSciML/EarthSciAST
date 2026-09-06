@@ -65,7 +65,8 @@ The full authoring stance, normatively:
   "coordinates": { ... },
   "expression_templates": { ... },
   "expression_template_imports": [ ... ],
-  "metaparameters": { ... }
+  "metaparameters": { ... },
+  "solver": { ... }
 }
 ```
 
@@ -85,6 +86,7 @@ The full authoring stance, normatively:
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
+| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
@@ -150,6 +152,125 @@ expressible: connectivity is a `ragged`/`derived` `IndexSet`, and mesh location 
 `ModelVariable.location` — so UGRID-compliant output is a mapping choice over
 existing constructs, with plain-CF auxiliary coordinates the default emission
 (RFC streaming-output-sinks §8.4).
+
+### 2.2 Solver hints (`solver`)
+
+The `solver` block is a **document-scoped, optional** record of numerics the
+document knows about **itself** — facts about the model that every binding
+independently needs and none can derive cheaply. Like `coordinates` (§2.1) it is
+**purely additive**: a document without it validates, flattens and emits exactly
+as before, and adding it changes no dynamics and no flattened system.
+
+```json
+{
+  "esm": "1.1.0",
+  "solver": {
+    "stiffness": "high",
+    "abstol": 1e-8,
+    "reltol": 1e-6,
+    "splitting": "strang"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stiffness` | `"low"` \| `"moderate"` \| `"high"` | The author's declaration of the system's stiffness. A binding MAY select an implicit / BDF-family integrator on `"high"`. |
+| `abstol` | number > 0 | Absolute **integration** tolerance the document asks for. |
+| `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
+| `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
+
+Every field is optional; the block itself is optional; at least one field must be
+present when the block is written (`minProperties: 1`), so that an empty
+`solver: {}` is not a second spelling of absence.
+
+**Absence is not a default value.** A document with no `solver` block, or with no
+`stiffness` key, has *not declared* its stiffness — it does not thereby declare
+`"low"`. A binding MUST NOT read absence as an assertion about the system.
+
+#### 2.2.1 Advisory: the mechanism, never the outcome
+
+Every field in the block is **advisory**. A conforming binding MAY ignore any or
+all of them, and MAY reach a conforming result by any route — its default
+integrator, its own stiffness detection, or by acting on `stiffness`.
+
+What advisory does **not** mean is that the answer is optional. The requirement
+to integrate the document successfully and to agree with the other bindings
+within the stated error band is CONFORMANCE_SPEC §5.9, it is judged on a
+**different** tolerance from `abstol`/`reltol` (the agreement band, not the
+integrator's step control), and it is neither created nor weakened by this block.
+A binding that ignores `stiffness` and converges anyway is conforming; a binding
+that ignores it and hangs, overflows, or lands outside the band is not — and it
+fails against §5.9, which applied before this section existed.
+
+So the block carries information that helps a binding **choose a method that
+converges**. It hands no binding an excuse for not converging.
+
+The one consequence worth stating: because the hint may be ignored, two
+conforming bindings may select different integrators for the same document and
+differ in the last bits of the trajectory. That is already true of every
+simulation the format describes, and §5.9 already governs it.
+
+#### 2.2.2 `abstol` / `reltol` are not the assertion `tolerance`
+
+The `tolerance` object on a model, reaction system, test, or assertion (§6.6.4)
+is the tolerance an assertion result is **compared at**. The `solver` block's
+`abstol` / `reltol` are the tolerances the **integrator** is asked to hold. They
+are different quantities, they resolve independently, and neither substitutes for
+the other. The distinct spellings — `{abs, rel}` against `abstol`/`reltol`, the
+latter exactly the `solve()` keyword names — are deliberate, so that a reader can
+tell at a glance which is meant.
+
+**Resolution order for `abstol` / `reltol`**, most-specific first:
+
+1. An explicit argument at the `solve()` call site — it always wins.
+2. Otherwise, the document's `solver.abstol` / `solver.reltol`.
+3. Otherwise, the binding default (`reltol` `1e-4`, `abstol` `1e-6`).
+
+An inline-test runner's own default tolerances (§6.6) sit at level 3: they are
+binding defaults, and a document that declares `solver.reltol` displaces them.
+This is deliberate — it means every binding runs a given document's inline tests
+at one integration tolerance rather than at five different runner defaults.
+
+#### 2.2.3 What the block is not for
+
+A container named `solver` invites accretion, so the boundary is stated up front.
+It is **not** for:
+
+- **Algorithm names.** `"BDF"` and `"LSODA"` are scipy identifiers; Julia would
+  want `Rosenbrock23`. A document carrying one would not be portable, which is
+  why there is deliberately no `alg` field.
+- **Binding-specific compile knobs.** `cse` is a `sympy.lambdify` concern with no
+  meaning outside one binding; it belongs in that binding's harness.
+- **A DAE declaration.** `system_kind` / system class is **derived** from the
+  equation set (§6.3.1); a declared field could only agree with the derivation or
+  contradict it.
+- **Anything in the flattened IR.** Flattening (§10.7) does not consume,
+  transform, or namespace the block. It is document-level configuration riding
+  alongside the flat system, never an input to building it.
+
+#### 2.2.4 Normative requirements
+
+Advisory as the fields are, four things are **required** of every binding:
+
+1. **Parse and validate.** An unknown key, an unknown enum member, a
+   non-positive tolerance, or a wrong JSON type is a validation failure. This is
+   schema conformance, not behavior, and is not excused by the block being
+   advisory.
+2. **Round-trip verbatim.** `solver` survives `parse → emit` unchanged. It is
+   authored configuration — a peer of `tolerance` and `parameter_overrides` —
+   not a load-time construct like `expression_template_imports` (§9.7.6), which
+   is consumed and gone by emit time.
+3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
+   classification, namespacing, or the flattened system.
+4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a
+   `solver` block MUST be rejected with `solver_version_too_old`.
+
+#### 2.2.5 Diagnostics
+
+| Code | Meaning |
+|---|---|
+| `solver_version_too_old` | File declares `esm` < 1.1.0 but carries a top-level `solver` block (§2.2.4). |
 
 ---
 
@@ -2159,6 +2280,8 @@ Tolerance is resolved most-specific first:
 4. Otherwise, an **implementation default** — conforming runtimes should use `rel = 1e-6` and no `abs` bound.
 
 Each level is a `{abs?, rel?}` object; absent fields fall through to the next level independently. Specifying only `abs` at a lower level does not mask `rel` from an upper level — they are merged per-field.
+
+**This is not the integrator's tolerance.** The chain above resolves the tolerance an assertion result is **compared at**. The tolerance the **integrator** is asked to hold is the `solver` block's `abstol` / `reltol` (§2.2.2), which resolves on its own independent chain (call site → document → binding default). The two are different quantities and neither substitutes for the other: loosening `abstol` makes a trajectory less accurate and its assertions *more* likely to fail, while loosening `tolerance` makes the same trajectory easier to pass. The distinct spellings — `{abs, rel}` here, `abstol`/`reltol` there — are what keep the two legible at a glance. An inline-test runner's own default integration tolerances sit at the bottom of the §2.2.2 chain, so a document's `solver` block displaces them.
 
 #### 6.6.5 PDE-Aware Assertions
 
