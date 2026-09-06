@@ -1,0 +1,106 @@
+{
+  "category": "pde_inline_observed_state_dependent",
+  "version": "1.0",
+  "description": "Cross-binding conformance for \u00a76.6.5 inline-test assertions on a STATE-DEPENDENT array OBSERVED. The asserted `g[i] = 2*u[i] + rate[i]` is an array-shaped observed of an integrated state: its field moves with the trajectory, so no build-time product can carry it (only STATE-FREE observeds hoist into a build inspection's setup arrays) and no scalar output row can either. A binding must therefore evaluate the observed's own defining expression at the SAMPLED STATE \u2014 the same 'a reference denotes its expansion' semantics (\u00a75.23) that already made scalar observeds assertable \u2014 and then apply the ordinary `reduce` collapses and `coords` point-samples. Before the fix all three bindings refused such an assertion outright with 'array state <v> has no cells in var_map'. The fixture's `rate` is the STATE-FREE array observed of the same document, asserted alongside as the regression guard that the build-materialized path still answers. Julia is the reference binding: its `run_pde_tests` minted golden/observed_state_dependent.json. The fixture's right-hand side is a per-cell CONSTANT, so u(t) = i^2 + i*t is integrated exactly by every solver family named below and the goldens are integrator-independent to machine precision.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-11
+  },
+  "fixtures": [
+    {
+      "id": "observed_state_dependent",
+      "path": "fixtures/observed_state_dependent.esm",
+      "model": "M",
+      "test_id": "observed_state_dependent",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-6.6.5",
+        "array-observed",
+        "state-dependent",
+        "reduce-max",
+        "reduce-min",
+        "reduce-mean",
+        "coords"
+      ],
+      "shape": {
+        "lev": 4
+      },
+      "assertions": [
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 1,
+          "variable": "g",
+          "reduce": "max",
+          "expected": 40.0
+        },
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 2,
+          "variable": "g",
+          "reduce": "min",
+          "expected": 4.0
+        },
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 3,
+          "variable": "g",
+          "reduce": "mean",
+          "expected": 20.0
+        },
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 4,
+          "variable": "g",
+          "coords": {
+            "lev": 2
+          },
+          "expected": 12.0
+        },
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 5,
+          "variable": "g",
+          "coords": {
+            "lev": 3
+          },
+          "expected": 21.0
+        },
+        {
+          "test_id": "observed_state_dependent",
+          "assertion_idx": 6,
+          "variable": "rate",
+          "reduce": "max",
+          "expected": 4.0
+        }
+      ],
+      "golden": "golden/observed_state_dependent.json"
+    }
+  ]
+}

@@ -2502,6 +2502,80 @@ def evaluate_rhs(
     return {name: float(val) for name, val in zip(build.elem_names, dy)}
 
 
+def observed_at_state(
+    build: _NumpyRhsBuild,
+    flat: FlattenedSystem,
+    name: str,
+    t: float,
+    y: Any,
+) -> Any:
+    """The value of observed ``name`` at ONE trajectory sample ``(t, y)``.
+
+    esm-spec §5.23 / §6.6.5: a reference denotes its expansion, so an observed
+    is readable wherever its defining expression is — including an ARRAY-valued,
+    STATE-DEPENDENT one, which no build-time product can carry (its value moves
+    with the trajectory) and which the output-node reconstruction skips because
+    it is not a scalar row. This is what a §6.6.5 ``coords`` / ``reduce``
+    assertion on such an observed reads.
+
+    The evaluation is the official one: a fresh :class:`EvalContext` seeded with
+    the build's once-materialized STATE-FREE products, then
+    :func:`_materialize_observeds` over the dependency-ordered time-varying
+    observeds at this ``(t, y)`` — the same context shape and the same driver
+    the per-step RHS and the output-node observed reconstruction use, so the
+    number is the one the RHS saw at that state.
+
+    Returns the observed's value (an ``ndarray`` for an array-valued one, a
+    ``float`` for a 0-D one), or ``None`` when the build carries no observed of
+    that name. ``name`` is matched flattened-first: exactly, then as a UNIQUE
+    ``.<name>`` suffix.
+    """
+
+    def _ctx() -> EvalContext:
+        return EvalContext(
+            state_layout=build.state_layout,
+            state_shapes=build.shapes,
+            param_values=build.param_values,
+            observed_values=dict(build.static_observed_values),
+            y=np.asarray(y, dtype=float),
+            t=float(t),
+            index_sets=flat.index_sets,
+            derived_rings=dict(build.static_derived_rings),
+            derived_extents=build.derived_extents,
+            join_key_buffers=build.join_key_buffers,
+            join_key_index_sets=build.join_key_index_sets,
+            factor_scope=build.factor_scope,
+            var_index_sets=build.var_index_sets,
+            element_types=build.element_types,
+        )
+
+    def _pick(ctx: EvalContext) -> Any:
+        for source in (ctx.derived_rings, ctx.observed_values):
+            if name in source:
+                return source[name]
+            hits = [k for k in source if str(k).endswith("." + name)]
+            if len(hits) == 1:
+                return source[hits[0]]
+        return None
+
+    # The state-free half is already materialized; only the time-varying half
+    # has to be replayed at this sample.
+    ctx = _ctx()
+    if build.varying_observed:
+        _materialize_observeds(build.varying_observed, ctx, skip_unresolved=True)
+    got = _pick(ctx)
+    if got is not None:
+        return got
+    # Fallback: an observed the const-geometry hoist DROPPED (a state-free one
+    # outside the RHS dependency cone, which the tolerant hoist skips rather
+    # than failing the build). It is still a legitimate assertion target, so
+    # evaluate the whole dependency-ordered graph on demand — the same driver,
+    # just not pre-materialized. Reached only when the cheap path found nothing.
+    ctx = _ctx()
+    _materialize_observeds(build.ordered_observed, ctx, skip_unresolved=True)
+    return _pick(ctx)
+
+
 def _simulate_observeds_only(
     flat: FlattenedSystem,
     build: _NumpyRhsBuild,

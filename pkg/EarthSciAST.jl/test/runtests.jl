@@ -264,6 +264,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_scalar_slot_collision_test.jl")
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
+    include("conformance_pde_inline_observed_state_dependent_test.jl")  # §6.6.5 state-dependent array observed
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("conformance_scalar_ic_test.jl")

@@ -63,11 +63,12 @@ from typing import Any
 
 import numpy as np
 
+from .classification import is_observed_unknown
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .flatten import flatten
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
-from .simulation import BuildInspection, _eval_buildtime_field
+from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
 from .simulation_common import ReturnCode
 
 # esm-spec §6.6.4: the default tolerance when neither the assertion, its test,
@@ -215,22 +216,40 @@ def state_cells(
     model: str,
 ) -> list[tuple[list[int], int]]:
     """Collect the (cell-index-tuple, flat-slot) pairs of one array state from
-    a ``var_map`` (element name → row/slot). Flattening may prefix element
-    names with the owning model (``"Heat.u[3]"``); a name matches when its
-    element stem equals ``variable`` bare, or ``model.variable`` qualified.
-    Sorted by cell tuple so callers get a deterministic pairing (identical to
-    the Julia reference's ``_state_cells``)."""
-    out: list[tuple[list[int], int]] = []
+    a ``var_map`` (element name → row/slot). Flattening prefixes element names
+    with the owning model (``"Heat.u[3]"``), and a coupled build routinely
+    reuses the same bare array name across sibling components (``M1.u`` /
+    ``M2.u``). So the model-qualified stem MUST win, in two passes: exact
+    ``model.variable`` / exact-bare stem matches first, and a bare-SUFFIX
+    fallback reached only when no exact stem matched (a bare-keyed
+    single-model build).
+
+    A single pass that unioned both — what this used to do — spliced EVERY
+    sibling model's cells into one field: a document with four models each
+    declaring ``w[x]`` produced four cells at index ``[1]``, and a ``coords``
+    sample read whichever model sorted first (always the same wrong one), while
+    a ``reduce`` collapsed over all four models at once and a per-cell
+    ``reference`` then indexed past the end of the field. Identical to the
+    Julia reference's ``_state_cells`` and the Rust ``state_cells``, and the
+    array analog of :func:`_scalar_slot`'s qualified-first resolution.
+
+    Sorted by cell tuple so callers get a deterministic pairing."""
+    exact: list[tuple[list[int], int]] = []
+    fallback: list[tuple[list[int], int]] = []
     qualified = f"{model}.{variable}"
     for name, slot in var_map.items():
         m = _CELL_NAME_RE.match(str(name))
         if m is None:
             continue
         stem = m.group(1)
-        bare = stem.split(".", 1)[1] if "." in stem else stem
-        if stem not in (qualified, variable) and bare != variable:
+        cell = ([int(x) for x in m.group(2).split(",")], int(slot))
+        if stem in (qualified, variable):
+            exact.append(cell)
             continue
-        out.append(([int(x) for x in m.group(2).split(",")], int(slot)))
+        bare = stem.split(".", 1)[1] if "." in stem else stem
+        if bare == variable:
+            fallback.append(cell)
+    out = exact if exact else fallback
     out.sort(key=lambda p: p[0])
     return out
 
@@ -260,6 +279,32 @@ def _param_scope_with_aliases(params: dict[str, float] | None) -> dict[str, floa
     return out
 
 
+def _declares_observed(file: EsmFile, model: str, variable: str) -> bool:
+    """Does ``model`` itself declare ``variable`` as an OBSERVED of its own?
+
+    The gate on every array-observed field lookup, and the reason a field
+    belongs to ONE component (CONFORMANCE_SPEC §5.27.1). Both field sources
+    resolve a bare name by a unique ``.<name>`` suffix across the FLATTENED
+    build, which spans every sibling component — so without this a model
+    asserting a name it does not declare silently reads whichever sibling
+    happens to declare it. A four-component document where only ``M1`` defines
+    ``g`` answered an ``M2`` assertion on ``g`` with M1's field instead of the
+    error the name deserves.
+
+    Identical to the guard the other two bindings already apply before they
+    look at all: Rust ``observed_field`` (``model.variables.get(variable)`` plus
+    ``Classification::is_observed``) and Julia ``_observed_field``
+    (``observed_unknowns(model)``). OBSERVED is derived from the equations
+    (esm-spec §6.3.1), not declared, so both halves are required: a declared
+    name that no equation defines as an observed is not one."""
+    model_obj = (file.models or {}).get(str(model))
+    if model_obj is None:
+        return False
+    if str(variable) not in (model_obj.variables or {}):
+        return False
+    return is_observed_unknown(model_obj, str(variable))
+
+
 def _inspection_field(
     insp: BuildInspection | None,
     model: str,
@@ -285,6 +330,44 @@ def _inspection_field(
     hits = [k for k in insp.setup_arrays if k.endswith("." + variable)]
     if len(hits) == 1:
         return np.asarray(insp.setup_arrays[hits[0]], dtype=float)
+    return None
+
+
+def _observed_sample(
+    sim: SimulatedStates,
+    model: str,
+    variable: str,
+    state: np.ndarray,
+    t: float,
+) -> np.ndarray | None:
+    """The ARRAY OBSERVED ``variable`` evaluated at ONE trajectory sample — the
+    §6.6.5 answer for a STATE-DEPENDENT array observed.
+
+    A state-free array observed is constant along the trajectory and the build
+    materialized it (:func:`_inspection_field` reads it back). A state-dependent
+    one cannot be read that way at all: its value moves with the state, and the
+    output-node reconstruction exposes only SCALAR observeds as rows. So it is
+    computed the only way that is faithful to §5.23's "a reference denotes its
+    expansion" — replaying the observed's own expression through the official
+    NumPy observed driver at this sample, which is exactly what
+    :func:`~earthsci_ast.simulation_array.observed_at_state` does.
+
+    Returns the field as an ``ndarray``, or ``None`` when the run kept no built
+    problem, the name is not an observed of this build, or its value at this
+    sample is 0-D (a scalar observed is not a field; the caller then reports the
+    missing-field error, as before)."""
+    prob = getattr(sim, "problem", None)
+    build = getattr(prob, "build", None)
+    if build is None:
+        return None
+    for name in (f"{model}.{variable}", str(variable)):
+        value = observed_at_state(build, prob.flat, name, float(t), state)
+        if value is None:
+            continue
+        arr = np.asarray(value, dtype=float)
+        if arr.ndim == 0:
+            return None
+        return arr
     return None
 
 
@@ -445,11 +528,19 @@ def _from_file_reference(
 class SimulatedStates:
     """States of one simulation sampled at requested times: ``states[k]`` is
     the flat state vector at ``times[k]``; ``var_map`` maps each element name
-    (``"Heat.u[3]"``) to its row in that vector."""
+    (``"Heat.u[3]"``) to its row in that vector.
+
+    ``problem`` is the built :class:`~earthsci_ast.problem.EsmProblem` the run
+    came from, kept so an assertion on a STATE-DEPENDENT array observed can
+    replay that observed's own expression at a trajectory sample
+    (:func:`~earthsci_ast.simulation_array.observed_at_state`) — such a value is
+    in neither the state vector nor any build-time product. ``None`` for a
+    caller that built the states some other way."""
 
     times: list[float]
     states: list[np.ndarray]
     var_map: dict[str, int]
+    problem: Any = None
 
 
 def _scope_to_component(
@@ -527,7 +618,7 @@ def simulate_states(
             raise RuntimeError(f"no saved state at t={t} (nearest {float(result.t[ti])})")
         times.append(float(result.t[ti]))
         states.append(np.asarray(result.y[:, ti], dtype=float))
-    return SimulatedStates(times=times, states=states, var_map=var_map)
+    return SimulatedStates(times=times, states=states, var_map=var_map, problem=prob)
 
 
 def _resolve_tolerance(
@@ -702,16 +793,37 @@ def _evaluate_assertion(
                 field = [float(state[slot]) for _, slot in cells]
             else:
                 # §6.6.5 observed-assertion form: the asserted
-                # variable is a state-free ARRAY OBSERVED whose
-                # field the build inspection materialized (the
-                # MPAS rule output div_flux max/min).
-                obs = _inspection_field(insp, str(mname), a.variable)
+                # variable is an ARRAY OBSERVED, which carries no
+                # ODE slot. Two sources, cheapest first:
+                #   * the build inspection's setup arrays — a
+                #     STATE-FREE observed the const-geometry hoist
+                #     already materialized (the MPAS rule output
+                #     div_flux max/min);
+                #   * failing that, the observed's own expression
+                #     replayed at this trajectory sample, which is
+                #     the only source for a STATE-DEPENDENT one
+                #     (`dudt = D(D(u,lev),lev)`, `g = 2*u`): its
+                #     value moves with the state, so no build-time
+                #     product can carry it and the output-node
+                #     reconstruction skips it for not being a
+                #     scalar row. §6.6.5 admits ANY shaped variable
+                #     here, and §5.23 makes a reference denote its
+                #     expansion, so both are readable.
+                # Both sources resolve a bare name across the whole
+                # flattened build, so the ASSERTED component must be
+                # the one that declares the observed (§5.27.1);
+                # otherwise a sibling's field answers silently.
+                obs = None
+                if _declares_observed(eval_file, str(mname), a.variable):
+                    obs = _inspection_field(insp, str(mname), a.variable)
+                    if obs is None:
+                        obs = _observed_sample(sim, str(mname), a.variable, state, times[ti])
                 if obs is None:
                     raise RuntimeError(
                         f"array state '{a.variable}' has no cells "
-                        f"in var_map, and no state-free array "
-                        f"observed of that name is exposed by the "
-                        f"build inspection"
+                        f"in var_map, and no array observed of "
+                        f"that name is exposed by the build or "
+                        f"evaluable at the assertion time"
                     )
                 idxs = list(np.ndindex(*obs.shape))
                 cell_tuples = [[int(i) + 1 for i in idx] for idx in idxs]
