@@ -87,6 +87,8 @@ include("testutils.jl")
         # §9.3 enum lowering.
         "tests/valid/enums_categorical_lookup.esm" =>
             "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
+        "tests/valid/enums_zero_and_negative.esm" =>
+            "esm-spec §9.3: `enum` op nodes are lowered to `const` integers at load",
         # §4.7 subsystem `{ref}` resolution.
         "tests/valid/lib_calendar_subsystem_inclusion.esm" =>
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",

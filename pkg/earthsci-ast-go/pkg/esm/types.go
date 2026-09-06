@@ -1128,10 +1128,13 @@ type ESMFile struct {
 	// NOT a map of components: nothing here can be coupled, subsystem'd, or used
 	// as a scoped-reference path root.
 	DataSources map[string]DataSource `json:"data_sources,omitempty"`
-	// Enums holds file-local symbol → positive-integer mappings used by the
+	// Enums holds file-local symbol → integer mappings used by the
 	// `enum` AST op (esm-spec §9.3). Each entry is an enum name; its value is
-	// a map from symbolic names (strings) to positive integers. Lowering
-	// (resolution to `const`-op integers) happens at load time.
+	// a map from symbolic names (strings) to integers — ANY integer, negative,
+	// zero or positive, since a member is a categorical code and not a 1-based
+	// position (CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not a
+	// Position"). Lowering (resolution to `const`-op
+	// integers) happens at load time.
 	Enums    map[string]map[string]int `json:"enums,omitempty"`
 	Coupling []CouplingEntry           `json:"coupling,omitempty"` // deserialized coupling entries (discriminated union)
 	// CouplingRoles is present only in a coupling-library file (esm-spec §10.9):

@@ -344,6 +344,16 @@ def _walk_expression_strings(expr) -> list[str]:
     result: list[str] = []
     if not (isinstance(expr, dict) and "op" in expr):
         return result
+    if expr.get("op") == "enum":
+        # `enum`'s two args are STRING LITERALS -- an enum name and a symbol
+        # (esm-spec §4.5) -- not variable references. They are checked by the
+        # load-time lowering pass (`unknown_enum` / `unknown_enum_symbol`),
+        # which is the only thing that can check them. Collecting them here
+        # made every `enum` op outside an `index` coordinate position (where
+        # `_expression_bound_symbols` already masks bare strings) report two
+        # bogus `undefined_variable` findings -- so an `enum` under `+` did
+        # not load at all.
+        return result
     # Descend the full child set — args, the single-child slots, values, axes,
     # `apply_expression_template` bindings values (free-variable targets,
     # §10.10.2), and makearray `[[lo, hi], …]` region bounds — via the shared
@@ -578,8 +588,7 @@ def _check_aggregate_semantics(data: dict[str, Any], errors: list) -> None:
                                     f"which one the key is read at; name the clause's two "
                                     f"sides with `syms`"
                                     if via_column
-                                    else
-                                    f"aggregate join key {key!r} names an index set that "
+                                    else f"aggregate join key {key!r} names an index set that "
                                     f"{len(cands)} range symbols of this aggregate draw; "
                                     f"reference the range symbol directly, or name the "
                                     f"clause's two sides with `syms`"

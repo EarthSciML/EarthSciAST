@@ -2034,7 +2034,8 @@ struct EsmFile
     # variables and spatial models are shaped over index sets.
     domain::Union{Domain,Nothing}
     # File-local enum mappings used by the `enum` AST op (esm-spec §9.3).
-    # Keys are enum names; each value maps a symbol → positive integer.
+    # Keys are enum names; each value maps a symbol → integer (any integer:
+    # a member is a categorical code, not a 1-based position).
     # `enum`-op nodes are lowered to `const`-int nodes at load time, so the
     # in-memory expression tree never carries enum strings.
     enums::Union{Dict{String,Dict{String,Int}},Nothing}

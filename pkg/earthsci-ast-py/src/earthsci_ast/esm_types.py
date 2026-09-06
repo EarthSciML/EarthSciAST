@@ -1241,7 +1241,8 @@ class EsmFile:
     registered_functions: dict[str, RegisteredFunction] = field(default_factory=dict)
     coupling: list[CouplingEntry] = field(default_factory=list)
     # File-local enum mappings for the `enum` AST op (esm-spec §9.3). Keyed by
-    # enum name; each value maps symbolic names to positive integers. Resolved
+    # enum name; each value maps symbolic names to integers (any integer, so
+    # a source table's zero- or negative-valued code can be named). Resolved
     # at load time by `lower_enums` before expression evaluation.
     enums: dict[str, dict[str, int]] = field(default_factory=dict)
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Keyed

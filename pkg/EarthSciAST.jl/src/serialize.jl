@@ -412,8 +412,8 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
         result["data_sources"] = Dict(k => serialize_data_source(v) for (k, v) in file.data_sources)
     end
     if file.enums !== nothing
-        # esm-spec §9.3 — enum names map to objects mapping symbol → positive
-        # integer. The on-wire shape is the parsed shape unchanged.
+        # esm-spec §9.3 — enum names map to objects mapping symbol → integer
+        # (any integer). The on-wire shape is the parsed shape unchanged.
         result["enums"] = Dict{String,Any}(
             k => Dict{String,Int}(s => i for (s, i) in v) for (k, v) in file.enums)
     end

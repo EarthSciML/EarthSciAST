@@ -85,9 +85,7 @@ describe('join.syms (CONFORMANCE_SPEC §5.5.8)', () => {
 
     // Exactly two entries — a left side and a right side.
     const short = structuredClone(base)
-    short.models.SelfJoin.equations[3].rhs.join = [
-      { on: [['row_prior', 'row_id']], syms: ['a'] },
-    ]
+    short.models.SelfJoin.equations[3].rhs.join = [{ on: [['row_prior', 'row_id']], syms: ['a'] }]
     expect(validateText(JSON.stringify(short)).is_valid).toBe(false)
   })
 })

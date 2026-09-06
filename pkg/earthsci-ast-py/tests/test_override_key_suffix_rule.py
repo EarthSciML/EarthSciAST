@@ -1,4 +1,4 @@
-"""esm-spec §6.6.2 rule 2, as of CONFORMANCE_SPEC §5.27: a dotted override key
+"""esm-spec §6.6.2 rule 2, as of CONFORMANCE_SPEC §5.29: a dotted override key
 resolves to the LONGEST of its dotted suffixes that is a known name — the
 trailing segment being tried last — so the §4.6 fully-qualified ``M.sub.A``
 binds a build's ``sub.A`` and ``M.A`` binds a bare ``A``, while a key none of

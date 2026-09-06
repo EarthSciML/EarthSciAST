@@ -169,6 +169,7 @@ var transformingFixtures = map[string]string{
 	// Enum lowering (esm-spec §9.3): `enum` op nodes are resolved to `const`
 	// integers at load time.
 	"enums_categorical_lookup.esm": "enum lowering to const",
+	"enums_zero_and_negative.esm":  "enum lowering to const",
 
 	// The v0.5.0 inline multi-series shorthand: an array-form `plots[].y` is
 	// normalized at load into a canonical single `y` plus a `series` list

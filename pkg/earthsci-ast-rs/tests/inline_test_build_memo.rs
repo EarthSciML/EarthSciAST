@@ -23,8 +23,8 @@
 //! `rebuilds_when_*` test fails on both counts.
 
 use earthsci_ast::{
-    BuildProviderFactory, PdeAssertionResult, SolveOptions, load_string,
-    run_pde_tests_filtered, run_pde_tests_with_base_dir, run_pde_tests_with_providers,
+    BuildProviderFactory, PdeAssertionResult, SolveOptions, load_string, run_pde_tests_filtered,
+    run_pde_tests_with_base_dir, run_pde_tests_with_providers,
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
@@ -157,7 +157,10 @@ fn absent_and_empty_overrides_are_one_key() {
     set["parameter_overrides"] = json!({"k": 5.0});
     let (results, builds) = run_counting(&doc(json!([none, empty, set])), None);
     assert_all_pass(&results);
-    assert_eq!(builds, 2, "absent and empty are one build; the override is another");
+    assert_eq!(
+        builds, 2,
+        "absent and empty are one build; the override is another"
+    );
 }
 
 /// `initial_conditions` — `x(1) = x0 + 1`, so a memo that ignored `u0` would
@@ -350,19 +353,20 @@ fn filter_matching_nothing_builds_nothing() {
 /// is `run_pde_tests_filtered(.., None)`.
 #[test]
 fn unfiltered_entry_point_runs_everything() {
-    let file = load_string(&doc(json!([
-        test_entry("a", 0.0, 1.0, 1.0, 1.0),
-        test_entry("b", 0.0, 1.0, 1.0, 1.0),
-    ]))
-    .to_string())
+    let file = load_string(
+        &doc(json!([
+            test_entry("a", 0.0, 1.0, 1.0, 1.0),
+            test_entry("b", 0.0, 1.0, 1.0, 1.0),
+        ]))
+        .to_string(),
+    )
     .expect("document loads");
     let builds = Cell::new(0usize);
     let make: Box<BuildProviderFactory<'_>> = Box::new(|| {
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results =
-        run_pde_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results = run_pde_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
     assert_eq!(results.len(), 2);
     assert_eq!(builds.get(), 1);
 }

@@ -210,6 +210,8 @@ _RxGatherMemo(check::Bool, gvn::Bool, interning::Bool, native::Bool) =
 # matching how `ESS_OOP_BATCH=0` declines lane batching); `2` additionally
 # re-verifies each hit. Read once per RHS call, at trace time only.
 function _oop_new_memo(u::TracedRArray{<:Any,1})
+    # ess-oop-shift-slice (see `_rx_box_slice`): trace-time, per RHS call.
+    _RX_SHIFT_SLICE[] = get(ENV, "ESS_OOP_SHIFT_SLICE", "0") != "0"
     mode = get(ENV, "ESS_OOP_INTERN", "1")
     # VALUE NUMBERING AND NATIVE EMISSION DEFAULT OFF — opt in with
     # `ESS_OOP_GVN=1` / `ESS_OOP_NATIVE=1`. Both are bit-exact and both cut the
@@ -254,6 +256,194 @@ end
     TracedRArray{T,N}(v.paths, v.mlir_data, v.shape)
 @inline _rx_rewrap(v) = v
 
+# ---- Stencil shifts as affine slices (ess-oop-shift-slice) -----------------
+#
+# `u[slots]` with a host `Vector{Int}` lowers to a `stablehlo.slice` only when
+# `slots` is a single constant-stride RUN (`getindex_linear`). A stencil kernel
+# class on a 3-D grid reads `out .+ delta` where `out` enumerates a BOX of cells
+# (`_oop_acc_lanes`: `Iterators.product` over per-axis ranges with per-axis
+# strides), which is a strided box in the flat state, not a run, so it lowers to
+# a `stablehlo.gather` carrying a dense index constant. Forward that costs
+# little. In REVERSE it is a scatter-add over the same dense indices, which XLA
+# executes serially: the transport VJP at CONUS carried 628 of them and cost
+# 21.8x its primal step (reseact.esm tools/diag/p5_vjp_time.jl, 2026-09-04).
+#
+# A strided box is exactly a rectangular window of the state viewed as a
+# multi-dimensional array, and the reverse of a slice is a pad, which fuses.
+# So when `ESS_OOP_SHIFT_SLICE=1` (read once per RHS call, trace time only),
+# a gather whose slots are VERIFIED to be a strided box is emitted as
+#   reshape(u[1:need], dims) -> [o0, r1, ..., rk] -> permutedims -> vec
+# and anything else (ghost-masked slots, indirect tables, wrapping boxes, a
+# stride chain that does not divide) keeps the gather. Verification is by exact
+# reconstruction of the slot vector from the detected (base, sizes, strides),
+# so a false positive cannot read the wrong cells: the worst case is a gather
+# that could have been a slice. Pure data movement, so the primal is bit-for-bit
+# what the gather produced; only the adjoint's accumulation ORDER can differ
+# (roundoff).
+#
+# MEASURED (2026-09-05, reseact.esm tools/diag/p6_shift_slice_time.jl, Reactant
+# v0.2.280, driver default excluded_passes, flag off -> on, one build, interleaved):
+#
+#   CONUS 13x7x72 (slurm 10372375, quiet node)      6x6x8 (10372374 / 10372466)
+#   ssp_step  13.5 -> 12.1 ms  1.12x   gathers 2824->920   1.38 -> 1.62 ms  0.86x
+#   ssp_vjp  306.2 -> 315.9 ms 0.97x   scatters 2834->962  11.3 -> 12.2 ms  0.93x
+#   ros_step  39.1 -> 43.5 ms  0.90x   76 transposes        3.1 -> 3.0 ms   1.03x
+#   ros_vjp   78.1 -> 113.7 ms 0.69x   138 transposes       7.8 -> 7.4 ms   1.06x
+#   gates: primal steps bit-for-bit (chemistry) or within 2e-20 of the largest
+#   entry (transport, XLA re-fuses the slices); VJP lambda within 5e-18 of the
+#   largest entry; p-gradient differences only on components at 1e-21..1e-24;
+#   the paired 6x6x8 fwd,adj driver run (10366679) agrees to 4.3e-15 on all 160
+#   components, 11 of the 19 nonzero ones bit-identical.
+#
+# VERDICT: the emission is exact and converts two thirds of the transport
+# reads, but the transport VJP does NOT speed up when two thirds of its
+# scatter-adds are gone -- the scatters were not where its time is. The
+# chemistry programs lose (their converted reads all need a transpose). So the
+# flag stays OFF; if it is ever turned on it should decline conversions that
+# need a transpose (`q != 1:m`), which would leave chemistry untouched and keep
+# the transport step's 1.12x.
+const _RX_SHIFT_SLICE = Ref{Bool}(false)
+const _RX_SHIFT_SLICE_VERSION = "v3-slab"   # printed by the probes, so a run names the code it measured
+const _RX_SHIFT_SLICE_TALLY = Ref{Tuple{Int,Int}}((0, 0))   # (sliced, gathered)
+const _RX_SHIFT_SLICE_WHY = Dict{Symbol,Int}()               # why a read stayed a gather
+_rx_shift_slice_stats() = _RX_SHIFT_SLICE_TALLY[]
+_rx_shift_slice_reasons() = copy(_RX_SHIFT_SLICE_WHY)
+_rx_shift_slice_reset!() = (_RX_SHIFT_SLICE_TALLY[] = (0, 0); empty!(_RX_SHIFT_SLICE_WHY); nothing)
+@inline _rx_why!(r::Symbol) = (_RX_SHIFT_SLICE_WHY[r] = get(_RX_SHIFT_SLICE_WHY, r, 0) + 1; nothing)
+
+# Detect `slots[l] == base + sum_d i_d(l) * ss[d]` with the first axis varying
+# fastest (the product order `_oop_acc_lanes` enumerates), up to 6 axes. A
+# stride may be ZERO (every lane of that axis reads the same slot: the E-lane
+# plan of a CSR reduce repeats a cell once per entry) or NEGATIVE (a descending
+# enumeration). Returns `(base, ns, ss)` or `nothing`; the result is verified
+# element by element, so whatever the run scan guessed cannot read wrong cells.
+function _rx_strided_box(slots::Vector{Int})
+    L = length(slots)
+    L >= 2 || return (_rx_why!(:len1); nothing)
+    ns = Int[]; ss = Int[]
+    B = 1
+    while B < L
+        s = slots[B + 1] - slots[1]
+        n = 1
+        while n * B < L && slots[n * B + 1] - slots[1] == n * s
+            n += 1
+        end
+        L % (B * n) == 0 || return (_rx_why!(:ragged); nothing)
+        push!(ns, n); push!(ss, s)
+        B *= n
+        length(ns) <= 6 || return (_rx_why!(:too_many_axes); nothing)
+    end
+    base = slots[1]
+    @inbounds for l in 1:L
+        v = base; r = l - 1
+        for d in eachindex(ns)
+            v += (r % ns[d]) * ss[d]
+            r ÷= ns[d]
+        end
+        slots[l] == v || return (_rx_why!(:not_a_box); nothing)
+    end
+    return base, ns, ss
+end
+
+# The box read as slice / reverse / transpose / broadcast, in TWO levels:
+#   1. the SLAB: the run of whole top-stride rows the box spans (for a state
+#      read, the species block over the box's level range), read through the
+#      interning memo so every shift of the same field shares ONE slice;
+#   2. the BOX: a slice of the reshaped slab.
+# Why two levels: the reverse of a slice is a pad to the size of its OPERAND.
+# Slicing the box straight out of the full state (or the 1.3M-element extended
+# buffer) puts one full-size pad per shift into the reverse pass -- measured at
+# CONUS (2026-09-05, p6_shift_slice_time.jl): the chemistry VJP went 0.78x and
+# the transport VJP 1.01x, the scatters merely traded for pads of the same
+# bytes. Slab-sized pads are NS to ~200x smaller, and the slab's own reverse pad
+# to the full operand is emitted once per (field, level range), not per shift.
+#   * nonzero-stride axes form the memory box: sorted |stride| must be a
+#     dividing chain, and the box must not wrap a dimension;
+#   * a negative-stride axis is the same slice read backwards (`stablehlo.reverse`);
+#   * a zero-stride axis is a broadcast (`broadcast_in_dim`; reverse: reduce-sum);
+#   * a single positive run is left to `getindex_linear`, which slices it already.
+function _rx_box_slice(u::TracedRArray{T,1}, slots::Vector{Int}, memo) where {T}
+    r = _rx_strided_box(slots)
+    r === nothing && return nothing
+    base, ns, ss = r
+    k = length(ns); L = length(slots)
+    nz = [d for d in 1:k if ss[d] != 0]
+    z  = [d for d in 1:k if ss[d] == 0]
+    if isempty(nz)                            # every lane reads ONE slot
+        return Reactant.broadcast_to_size(u[base:base], (L,))
+    end
+    (length(nz) == 1 && isempty(z) && ss[nz[1]] > 0) &&
+        return (_rx_why!(:run_1d); nothing)
+    m = length(nz)
+    a = abs.(ss[nz]); nn = ns[nz]
+    p = sortperm(a)
+    σ = a[p]; n = nn[p]
+    for j in 1:m - 1
+        (σ[j + 1] > σ[j] && σ[j + 1] % σ[j] == 0) || return (_rx_why!(:strides_not_chain); nothing)
+    end
+    Lu = length(u)
+    dims = Int[σ[1]]
+    for j in 1:m - 1
+        push!(dims, σ[j + 1] ÷ σ[j])
+    end
+    # the box's smallest slot: a negative-stride axis reaches it at its LAST lane
+    bmin = base
+    for d in nz
+        ss[d] < 0 && (bmin += (ns[d] - 1) * ss[d])
+    end
+    bmin >= 1 || return (_rx_why!(:below_start); nothing)
+    b0 = bmin - 1
+    o0 = b0 % σ[1]
+    rem_ = b0 ÷ σ[1]
+    offs = Int[]
+    for j in 1:m - 1
+        push!(offs, rem_ % dims[j + 1]); rem_ ÷= dims[j + 1]
+    end
+    push!(offs, rem_)
+    for j in 1:m - 1
+        offs[j] + n[j] <= dims[j + 1] || return (_rx_why!(:wraps); nothing)
+    end
+    slab_lo = offs[m] * σ[m] + 1
+    slab_hi = (offs[m] + n[m]) * σ[m]
+    slab_hi <= Lu || return (_rx_why!(:past_end); nothing)
+    # level 1: the slab, a 1-D run (Reactant slices it), interned when a memo exists
+    slab = memo === nothing ? u[slab_lo:slab_hi] :
+           _oop_gather(u, collect(slab_lo:slab_hi), memo)
+    push!(dims, n[m])
+    ur = reshape(slab, Tuple(dims))
+    # level 2: the box out of the slab
+    idx = Any[o0 + 1]
+    for j in 1:m - 1
+        push!(idx, (offs[j] + 1):(offs[j] + n[j]))
+    end
+    push!(idx, 1:n[m])
+    S = ur[idx...]                            # dims (nn[p[1]], ..., nn[p[m]])
+    negd = [j for j in 1:m if ss[nz[p[j]]] < 0]
+    isempty(negd) || (S = Reactant.Ops.reverse(S; dimensions = negd))
+    q = invperm(p)
+    R = q == collect(1:m) ? S : permutedims(S, q)   # dims nn = ns[nz], lane order
+    isempty(z) && return vec(R)
+    shp1 = Tuple(d in z ? 1 : ns[d] for d in 1:k)
+    return vec(Reactant.broadcast_to_size(reshape(R, shp1), Tuple(ns)))
+end
+
+# The flag-gated gather: try the box form, count the outcome, fall back.
+@inline function _rx_gather_or_box(u::TracedRArray{<:Any,1}, slots::Vector{Int}, memo)
+    if _RX_SHIFT_SLICE[]
+        v = _rx_box_slice(u, slots, memo)
+        t = _RX_SHIFT_SLICE_TALLY[]
+        if v !== nothing
+            _RX_SHIFT_SLICE_TALLY[] = (t[1] + 1, t[2])
+            return v
+        end
+        _RX_SHIFT_SLICE_TALLY[] = (t[1], t[2] + 1)
+    end
+    return @inbounds u[slots]
+end
+
+@inline _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int}) =
+    _rx_gather_or_box(u, slots, nothing)
+
 function _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int},
                      memo::_RxGatherMemo)
     memo.interning || return _oop_gather(u, slots)
@@ -265,7 +455,7 @@ function _oop_gather(u::TracedRArray{<:Any,1}, slots::Vector{Int},
         _oop_intern_tally!(true)
         return _rx_rewrap(hit)
     end
-    v = _oop_gather(u, slots)
+    v = _rx_gather_or_box(u, slots, memo)
     d[key] = v
     _oop_intern_tally!(false)
     return v

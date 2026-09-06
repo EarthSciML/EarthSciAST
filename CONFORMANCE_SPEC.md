@@ -3766,8 +3766,228 @@ produces a WRONG NUMBER and not merely a fast one, so dropping any field from
 until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
 today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
 
+### 5.26 An `enums` Member Is a Code, Not a Position: the Whole Integer Range (normative)
 
-### 5.26 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
+`esm-schema.json` typed an `enums` member as `{"type": "integer", "minimum": 1}`,
+so a symbolic name whose value is `0` could not be declared in any binding — the
+document did not load at all, with `/enums/<name>/<sym>: 0 is less than the
+minimum of 1`. Python and Julia mirrored the bound with their own runtime
+rejections ("value must be a positive integer"). The bound is removed.
+
+**The rule.** An `enums` member's value is ANY integer — negative, zero or
+positive. A binding MUST accept a zero-valued and a negative-valued member, MUST
+resolve it to exactly its declared integer, and MUST NOT clamp it, treat it as
+absent, or take it for a default. Uniqueness is unchanged: within one enum,
+values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT
+both map to `0`. Across enums, values MAY still collide.
+
+#### 5.26.1 Why the bound looked right and was not
+
+`minimum: 1` reads like a guard against confusing a declared member with an
+absent one, which is a real hazard for a **1-based index set**. An `enums` member
+is not an index. It lowers, at load, to a `{"op": "const", "value": <integer>}`
+node (§9.3), and from that point nothing in any binding can tell it from a
+literal the author typed: it is a NUMBER, used in arithmetic and in `join.on` key
+comparisons, where `0` and `-1` are ordinary values. The two genuinely 1-based
+constructs — `index`-op / index-set coordinates and `makearray` regions — are
+separate constructs with their own bounds validation.
+
+The one place the two meet is the canonical §4.5 example, which indexes a `const`
+table with an `enum` member. That is an authoring choice, and the `index` op
+bounds-checks its operand like any other (`E_TREEWALK_CONSTARRAY_OOB`, §5.5.5).
+An author who wants a member to double as a 1-based row number numbers it from 1;
+that is a property of their table, not of the `enums` block. Surveyed across the
+five bindings, the only consumers of the block are the lowering pass and
+serialization — no code path reads a member as a position.
+
+#### 5.26.2 Why it matters: zero and −1 are real categories
+
+The identifiers a model has to name are given by the source data, not chosen. In
+EPA's MOVES tables, `operatingmode.opModeID = 0` is **Braking** — a mode a
+decelerating second is classified into, carrying its own emission rate, and 2.0%
+of a weekend and 5.6% of a weekday operating-mode distribution in a real
+inventory. It is not a sentinel, not a default and not an absence.
+`regulatoryclass.regClassID = 0`, `modelyeargroup.modelYearGroupID = 0` and
+`fuelusagefraction.modelYearGroupID = 0` are three more, in three other tables;
+`opmodepolprocassoc.polProcessID = -1` marks the drive-cycle modes associated
+with no pollutant/process, and is 24 of the 27 rows of one snapshot of that
+table. Under the old bound each of these had to be written as a bare numeric
+literal with a comment, which is exactly the un-named magic number the `enums`
+block exists to abolish.
+
+#### 5.26.3 What a binding must prove
+
+Schema acceptance is not the assertion; a document that loads but resolves the
+member to something else is still non-conforming. A binding MUST show, on
+`tests/valid/enums_zero_and_negative.esm`:
+
+1. the document loads and validates;
+2. the zero member lowers to `const 0` and the negative member to `const -1`,
+   with the declared integers surviving into the parsed `enums` map; and
+3. both evaluate through **arithmetic** — the fixture's third row is
+   `Braking + 10*Idling + Unassociated = 0 + 10 - 1 = 9`, which a binding that
+   clamped `0` to `1` or dropped a sign cannot produce.
+
+**Binding status (2026-09-05), measured rather than assumed:**
+
+| Binding | Loads | Resolves to | Evidence |
+|---|---|---|---|
+| Rust | yes | `0`, `-1`, arithmetic `9` | `tests/lower_enums_integration.rs`; `esm test` on the fixture, 3/3 assertions |
+| Python | yes | `0`, `-1`, arithmetic `9` | `tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves` |
+| Julia | yes | `0`, `-1`, arithmetic `9` | `test/closed_functions_test.jl`, "zero and negative enum members" |
+| TypeScript | yes | `0`, `-1`, arithmetic `9` | `src/enums-zero-negative.test.ts` |
+| Go | yes | `0`, `-1`, arithmetic `9` | `pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers` |
+
+#### 5.26.4 A member is exact at load; whether a COMPARISON of it is exact is §5.24's business
+
+This section fixes the member's VALUE. It does not, and cannot, promise that a
+comparison of that value is exact, and the distinction is worth stating because
+the two look identical in a document.
+
+A lowered member is a NUMERIC LITERAL, and by the precision rules a literal has
+no precision of its own — it adopts its context (`precision_infer.rs`). So in a
+document declaring `domain.element_type: "Float32"`, two members far apart in
+value can compare EQUAL. Measured, on the SCC pair §5.24 already names:
+
+| Document | Comparison | Result |
+|---|---|---|
+| `Float32` | `enum("scc","LoggingTractor") == enum("scc","Chipper")` — 2265007010 vs 2265007015 | **1** (equal), a false match |
+| `Float32`, key parameter at the document default | `key == enum(...)`, key holding 2265007015 | **1**, a false match |
+| `Float32`, key parameter declaring `element_type: "Float64"` | the same comparison | 0, correct |
+
+That is §5.24's rule doing its job in the third row and having nothing to attach
+to in the first two: it makes a comparison exact by way of a stored key's
+declared binary64 `element_type`, and two literals — or a key left at a binary32
+document default — give it nothing to key on. It is NOT introduced by the
+widened value domain: every value in the table above is positive, so a document
+written under the old `minimum: 1` reproduces it unchanged. It is recorded here
+because an enum member is precisely an identifier compared for equality, which
+is the shape §5.24 exists for, and a reader who has just been told "the member
+is exactly its declared integer" would otherwise reasonably assume the
+comparison is too.
+
+#### 5.26.5 Uniqueness, which the schema cannot state
+
+"Values MUST be unique within an enum" is not expressible in JSON Schema, so it
+lives in each binding's loader. Python (`parse.py`) and Julia (`coerce_enums`)
+enforce it; both reject a duplicate `0` and a duplicate positive alike, so
+neither uses `0` as its own sentinel. Rust, TypeScript and Go accept a duplicate
+value silently — a gap that predates this section and is not created by it (they
+accept a duplicate *positive* value too), recorded here rather than left
+unstated. It is BEHAV-13's deferred column in
+`ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
+
+### 5.27 Inline-Test Assertions on an ARRAY OBSERVED (normative)
+
+esm-spec §6.6.5 admits **any shaped variable** in a `coords` / `reduce`
+assertion. Nothing in it restricts the target to a STATE, and nothing restricts
+it to a state-free one — §5.23's "a reference denotes its expansion" is what
+makes an observed assertable at all, and it does not stop at rank 0. Yet all
+three executing bindings answered a `coords`/`reduce` assertion on a
+state-dependent array observed with
+
+```
+array state 'g' has no cells in var_map
+```
+
+because each looked in exactly two places: the ODE state rows, and the
+build-time products. A state-dependent array observed is in neither **by
+construction** — only STATE-FREE observeds hoist into a build inspection's setup
+arrays (their value is constant along the trajectory; a state-dependent one's is
+not), and the output-node observed reconstruction exposes only SCALAR observeds
+as trajectory rows. This section closes that.
+
+**The rule.** For a `coords` / `reduce` assertion whose target has no ODE cells,
+a binding MUST answer from the observed's own definition evaluated **at the
+sampled state** — the same value the right-hand side saw at that time — and MUST
+NOT substitute a build-time snapshot for a state-dependent one. A state-FREE
+array observed keeps its existing answer (the build-materialized field): the two
+agree by construction, since a state-free body is constant along the trajectory.
+A name that resolves to no observed at all stays an ERROR naming it (§5.23).
+
+Each binding reaches it through its own official pathway, and no binding grew a
+shadow evaluator for it:
+
+| Binding | How |
+|---|---|
+| Julia | `_state_scope` re-assembles the solved state (and `t`) from the flat state vector and puts it into the two `evaluate_cellwise` scopes the observed's resolved expression already resolves against; without it the same expression raised `E_TREEWALK_UNBOUND_VARIABLE: <Model>.u` |
+
+**The trajectory sample is a SCOPE, not a mode switch.** A binding that reaches
+the answer by adding the sample to an existing evaluation scope MUST NOT make
+the state-free path conditional on that scope being empty. The assertion path
+seeds the scope unconditionally (with `t` if nothing else), so such a condition
+never holds there, and what it disables is the build's own optimisation for the
+state-FREE target — the MPAS `div_flux` case, whose producers are then
+re-executed once per output cell of the consumer instead of materialized once
+each. Julia's `_materialized_obs_scope` therefore takes the scope it evaluates
+against from its caller: the build path passes the const arrays, the assertion
+path passes those plus the sample, and a state-dependent target's producers
+materialize at that sample exactly as a state-free one's do at build.
+| Python | `observed_at_state` seeds an `EvalContext` with the build's once-materialized state-free products and replays `_materialize_observeds` over the dependency-ordered time-varying observeds at that `(t, y)` — the same driver the per-step RHS uses |
+| Rust | the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already knew how to emit as one row per cell; the assertion then reads ordinary cell rows |
+
+#### 5.27.1 The companion rule: a field belongs to ONE component
+
+An array field read for an assertion is the ASSERTED component's. Element names
+are model-qualified by flattening (`M2.w[1]`), and a coupled document routinely
+reuses one bare array name across sibling components, so resolution is two-pass:
+exact `model.variable` / exact-bare stem matches first, and the bare-SUFFIX match
+only when no exact stem exists (a bare-keyed single-model build). This is the
+array analog of the pointwise `scalar_slot` rule, and Julia and Rust already had
+it; **Python's `state_cells` was a single pass that UNIONED both**, so a document
+with four components each declaring `w[x]` produced four cells at index `[1]`: a
+`coords` sample silently read whichever component sorted first, a `reduce`
+collapsed over all four at once, and a per-cell `reference` indexed past the end
+of the field. The failure is silent and plausible, which is why it is stated
+here rather than left to each binding's judgement.
+
+The rule binds the OBSERVED field sources just as it binds the state rows, and
+there the resolution is by name rather than by stem: both of them (the build
+inspection's setup arrays and the trajectory replay above) fall back to a unique
+`.<name>` suffix match over the FLATTENED build, which spans every sibling
+component. So a binding MUST first require that the asserted component itself
+declares the name as an observed of its own — Rust's `observed_field` checks
+`model.variables` plus `Classification::is_observed`, Julia's `_observed_field`
+checks `observed_unknowns(model)`, and Python's assertion path now gates both of
+its sources the same way. Without that gate a model asserting a name it does not
+declare reads whichever sibling happens to declare it: a document where only
+`M1` defines `g` answered an `M2` assertion on `g` with M1's field. A name the
+asserted component does not declare is the ERROR of §5.27's rule, never a
+sibling's number.
+
+#### 5.27.2 Gate
+
+`tests/conformance/pde_inline_observed_state_dependent/` holds the shared
+fixture and the Julia-minted goldens. The fixture's `g = 2*u + rate` is
+state-dependent; the same document's `rate` is state-free and is asserted
+alongside, so a binding that "fixed" the category by routing everything through
+the new path still has to keep the build-materialized path right. The
+right-hand side is a per-cell CONSTANT, so `u(t) = i² + i·t` is integrated
+exactly by every pinned solver family and the goldens are integrator-independent
+to machine precision — a divergence in this category is a semantics divergence,
+never an integrator one.
+
+Per-binding runners drive it and gate every assertion against BOTH the golden
+actual and the fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_state_dependent_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_observed_state_dependent_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_observed_state_dependent_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest.
+
+**Why the fixture's `g` is a LIVE node.** It drives a second state rather than
+standing alone, and that is not cosmetic: the Julia build drops a DEAD observed
+— one no live equation consumes — from `BuildInspection.observed_exprs`
+entirely, so Julia cannot answer an assertion on it whether or not it is
+state-dependent, while Rust (which REQUESTS the observed from the runtime) and
+Python (which evaluates the whole ordered graph on demand) both can. That
+residual divergence is tracked separately (EarthSciML/EarthSciAST#176) and is
+deliberately NOT what this category pins; a fixture written around it could not
+require all three bindings.
+
+### 5.28 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
 
 esm-spec §6.6.5 says an inline `reference` is "an `Expression` whose free
 variables are the domain dimension names". For a field shaped over index sets
@@ -3816,7 +4036,7 @@ reject it with an error naming the clashing name, rather than silently choosing
 either meaning. A reference that does NOT mention the name is unaffected, as is
 a gather that rebinds it as its own loop symbol.
 
-#### 5.26.1 Gate
+#### 5.28.1 Gate
 
 `tests/conformance/pde_inline_reference_dimension_names/` holds the shared
 fixture and the Julia-minted goldens. One exact decay field
@@ -3842,7 +4062,7 @@ are gated per binding on `bind_dimension_names` directly: **Julia**
 `tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
 **Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
 
-### 5.27 Override Keys: the Longest Dotted Suffix (normative)
+### 5.29 Override Keys: the Longest Dotted Suffix (normative)
 
 esm-spec §6.6.2 rule 2 — a dotted key resolving to a shorter flattened name —
 used to try only the key's **trailing segment**. That covered `M.A` against a

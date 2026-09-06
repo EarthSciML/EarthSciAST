@@ -311,8 +311,10 @@ Where:
 | BEHAV-06-B-006 | A `coords`/`reduce` assertion on a rank≥2 (multidimensional) array OBSERVED MUST materialize the field over the full Cartesian product of its interval index sets in row-major (lexicographic) cell order paired with the value layout, so all bindings agree. Julia: FIXED (`vec()` around the `CartesianIndices` cell sweep — a rank≥2 comprehension yields a Matrix that `sort!` rejected without `dims=`); Python (`np.ndindex`) and Rust (row-major `IxDyn` enumeration) were already rank-agnostic. Gate: `tests/conformance/pde_inline_observed_rank2/` (Julia/Python/Rust agree on the golden actuals) | esm-spec.md §6.6.5 convention 1 | Yes | simulation |
 | BEHAV-06-B-007 | An assertion whose ACTUAL value is not finite MUST FAIL unless `expected` is the same infinity: the pass predicate is `actual == expected OR (both finite AND within tolerance)`, and finiteness is judged BEFORE tolerance. Applying the tolerance bound alone makes `\|±Inf − expected\| ≤ max(atol, rtol·max(Inf, \|expected\|))` vacuously true, so the assertion passes for EVERY expected value and an overflow / `x/0` / `log(0)` reports green. Julia: already conforming (`isapprox` carries the clause). Rust (`check_assertion`) and Python (`_check_assertion`): FIXED — both re-implemented "Julia isapprox semantics" without it. Gate: `tests/conformance/assertion_nonfinite/` (Julia/Python/Rust agree on the VERDICTS; ±Inf and NaN are not JSON-representable) | esm-spec.md §6.6.3, CONFORMANCE_SPEC §5.20 | Yes | simulation |
 | BEHAV-06-B-008 | A POINTWISE assertion on a 0-D OBSERVED MUST be answerable wherever that observed's value exists — in a component with no array variable at all (no state vector to be found in), in a component that integrates (the observed is read along the trajectory, not held at t=0), and in a component with nothing to integrate whose value is a build-materialized field (a document that ingests `data_sources`). A variable the build bound NOTHING for MUST be an ERROR naming it, never a plausible zero. Rust: FIXED — the runner requests the pointwise-asserted observeds (`output_observed`) and falls back to the build's state-free scalar fields. Julia's MTK runner reads observeds natively; the Julia and Python tree-walk `run_pde_tests` still resolve a pointwise assertion against state rows only | esm-spec.md §6.6.3, §6.3.1 | Yes | simulation |
-| BEHAV-06-B-009 | An inline `reference`'s free variables are the field's DIMENSION NAMES: for a variable shaped over index sets, each `shape` entry is bound at every grid point to the 1-based position along its axis (the index space `coords` reads). A reference mentioning a dimension name free MUST be evaluated per cell as if wrapped in an `aggregate` whose output indices are the dimension names; one mentioning none (a literal, a parameter expression, an explicit gather, a gather that rebinds the dimension name as its own loop symbol) MUST be evaluated as written. A node's `wrt` is a differentiation target, not a free mention, and MUST NOT by itself trigger the wrap; a dimension name the build-time parameter scope ALSO binds MUST be a fault, since wrapping would silently shadow the parameter with the cell index. All three executing bindings left the name unbound. Julia/Python/Rust: FIXED (`bind_dimension_names`). Gate: `tests/conformance/pde_inline_reference_dimension_names/` | esm-spec.md §6.6.5, CONFORMANCE_SPEC §5.26 | Yes | simulation |
-| BEHAV-06-B-010 | A dotted `parameter_overrides` / `initial_conditions` key MUST resolve to the LONGEST of its dotted suffixes that is a flattened name (rule 2), the trailing segment being tried last, so the §4.6 fully-qualified `M.sub.A` binds a build's `sub.A` and `M.A` binds a bare `A`; a key none of whose suffixes is a name stays unknown (`Missing.solo`). Rust (`canonicalize_override_keys`), Python (`check_parameter_override_keys` / `_resolve_override`), Julia (`_canonicalize_override_keys`): FIXED. Rust additionally resolves a self-qualified EQUATION reference `M.sub.g` in a single-model array build to its local spelling (esm-spec §4.6). Gate: `tests/conformance/override_key_diagnostics/` case `Doc.Left.solo` | esm-spec.md §6.6.2, §4.6, CONFORMANCE_SPEC §5.27 | Yes | simulation |
+| BEHAV-06-B-009 | A `coords` / `reduce` assertion MUST be answerable on a STATE-DEPENDENT array OBSERVED, not only on a state or a state-free one. Such a field is in NO build-time product (only state-free observeds are materialized at build) and is not a scalar output row either, so a binding must evaluate the observed's own expression AT THE SAMPLED STATE — §5.23's "a reference denotes its expansion", already applied to scalar observeds. All three executing bindings refused it with "array state '<v>' has no cells in var_map". Rust: FIXED — the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already emits as one row per cell. Python: FIXED — `observed_at_state` replays the observed driver on the trajectory sample. Julia: FIXED — `_state_scope` puts the solved state and `t` into the `evaluate_cellwise` scopes. Gate: `tests/conformance/pde_inline_observed_state_dependent/` (Julia/Python/Rust agree on the golden actuals; the same fixture's state-free `rate` keeps the build-materialized path pinned) | esm-spec.md §6.6.5, §5.23 | Yes | simulation |
+| BEHAV-06-B-010 | An array field read for an assertion MUST be the ASSERTED COMPONENT's, never a union across sibling components that reuse the bare name: the model-qualified element stem wins, with the bare-suffix match reached only when no qualified element exists (the array analog of the pointwise `scalar_slot` rule). A single-pass union splices every model's cells into one field — four components each declaring `w[x]` yield four cells at index `[1]`, so a `coords` sample silently reads whichever component sorts first, a `reduce` collapses over all of them, and a per-cell `reference` indexes past the end. Julia and Rust: already two-pass. Python (`state_cells`): FIXED. The same rule binds the OBSERVED field sources, which resolve a bare name by a unique `.<name>` suffix over the whole flattened build: the asserted component MUST declare the name as an observed of its own before either source is read (Rust `observed_field` and Julia `_observed_field` already did; Python's assertion path: FIXED — a document where only `M1` defined `g` answered an `M2` assertion on `g` with M1's field) | esm-spec.md §6.6, §6.6.5 | Yes | simulation |
+| BEHAV-06-B-011 | An inline `reference`'s free variables are the field's DIMENSION NAMES: for a variable shaped over index sets, each `shape` entry is bound at every grid point to the 1-based position along its axis (the index space `coords` reads). A reference mentioning a dimension name free MUST be evaluated per cell as if wrapped in an `aggregate` whose output indices are the dimension names; one mentioning none (a literal, a parameter expression, an explicit gather, a gather that rebinds the dimension name as its own loop symbol) MUST be evaluated as written. A node's `wrt` is a differentiation target, not a free mention, and MUST NOT by itself trigger the wrap; a dimension name the build-time parameter scope ALSO binds MUST be a fault, since wrapping would silently shadow the parameter with the cell index. All three executing bindings left the name unbound. Julia/Python/Rust: FIXED (`bind_dimension_names`). Gate: `tests/conformance/pde_inline_reference_dimension_names/` | esm-spec.md §6.6.5, CONFORMANCE_SPEC §5.28 | Yes | simulation |
+| BEHAV-06-B-012 | A dotted `parameter_overrides` / `initial_conditions` key MUST resolve to the LONGEST of its dotted suffixes that is a flattened name (rule 2), the trailing segment being tried last, so the §4.6 fully-qualified `M.sub.A` binds a build's `sub.A` and `M.A` binds a bare `A`; a key none of whose suffixes is a name stays unknown (`Missing.solo`). Rust (`canonicalize_override_keys`), Python (`check_parameter_override_keys` / `_resolve_override`), Julia (`_canonicalize_override_keys`): FIXED. Rust additionally resolves a self-qualified EQUATION reference `M.sub.g` in a single-model array build to its local spelling (esm-spec §4.6). Gate: `tests/conformance/override_key_diagnostics/` case `Doc.Left.solo` | esm-spec.md §6.6.2, §4.6, CONFORMANCE_SPEC §5.29 | Yes | simulation |
 
 ### BEHAV-10-A: `join` Names Under Flattening (CONFORMANCE_SPEC §5.5.6)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -634,6 +636,34 @@ Where:
 > they memoise; neither exposes a test filter, so -006/-007 are Rust-only today.
 > **TypeScript**, **Go** have no inline-test runner and no rows apply.
 
+### BEHAV-13: `enums` Member Value Domain (CONFORMANCE_SPEC §5.26)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-13-001 | An `enums` member's value is ANY integer — negative, zero or positive. A binding MUST accept a zero-valued and a negative-valued member; the old `EnumDeclaration.additionalProperties` bound `{"type":"integer","minimum":1}` made a zero-valued identifier unnameable in every binding at once | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26 | Yes | validation |
+| BEHAV-13-002 | A member MUST resolve to EXACTLY its declared integer: the load-time lowering produces `{"op":"const","value":<n>}` with `n` unchanged in value and sign. A binding MUST NOT clamp a `0` up, read it as absent, or take it for a default — schema acceptance alone is not conformance | esm-spec.md §9.3, §4.5; CONFORMANCE_SPEC.md §5.26.3 | Yes | behavioral |
+| BEHAV-13-003 | The resolved value MUST carry through ARITHMETIC as an ordinary number, keeping its magnitude and sign. The shared fixture `tests/valid/enums_zero_and_negative.esm` pins `Braking + 10*Idling + Unassociated = 0 + 10 − 1 = 9`, which a binding that clamped or dropped a sign cannot produce. Whether a COMPARISON of a member is exact is §5.24's rule, not this one's: a member is a numeric literal and adopts its context precision, so in a `Float32` document two members 5 apart compare equal (measured, §5.26.4) | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26.3, §5.26.4, §5.24 | Yes | behavioral |
+| BEHAV-13-004 | An enum member is a CODE, not a 1-based position. A binding MUST NOT reintroduce a positivity bound on the grounds that the §4.5 example indexes a `const` table with one: `index`-op coordinates and `makearray` regions are separate 1-based constructs with their own bounds validation (`E_TREEWALK_CONSTARRAY_OOB`, §5.5.5) | esm-spec.md §9.3, §4.3.3, §4.5; CONFORMANCE_SPEC.md §5.26.1 | Yes | behavioral |
+| BEHAV-13-005 | Values MUST remain unique within one enum, and `0` is a value like any other — two symbols MAY NOT both map to `0`. Not expressible in JSON Schema, so it lives in each loader | esm-spec.md §9.3; CONFORMANCE_SPEC.md §5.26.5 | Yes | validation |
+
+> **Binding status (2026-09-05), measured on `tests/valid/enums_zero_and_negative.esm`:**
+> **-001 / -002 / -003 / -004 pass in all five bindings.** Rust
+> (`tests/lower_enums_integration.rs`, plus `esm test` on the fixture: 3/3
+> assertions), Python
+> (`tests/test_closed_functions.py::test_zero_and_negative_enum_members_load_and_resolve_to_themselves`),
+> Julia (`test/closed_functions_test.jl`, "zero and negative enum members"),
+> TypeScript (`src/enums-zero-negative.test.ts`) and Go
+> (`pkg/esm/lower_enums_test.go::TestZeroAndNegativeEnumMembers`) each load the
+> document, assert the lowered `const 0` / `const −1`, and evaluate the
+> arithmetic row to 9.
+>
+> **-005 is DEFERRED in three bindings.** Python (`parse.py`) and Julia
+> (`coerce_enums`) reject a duplicate value, and reject a duplicate `0` exactly
+> as they reject a duplicate positive — neither uses `0` as a sentinel. **Rust**
+> (`lower_enums.rs::parse_enums_block`), **TypeScript** (`lower-enums.ts`) and
+> **Go** (`lower_enums.go`) accept a duplicate value silently. That gap is NOT
+> introduced by the widened domain — measured, they accept a duplicate positive
+> value too — and predates it; it is recorded here rather than left unstated.
+
 ---
 
 ## 4. FORMAT REQUIREMENTS
@@ -718,14 +748,53 @@ about the result and are the reason the cost rule is allowed to exist at all.
 > once more end-to-end, as a byte-diff of the 144-row `nr-logging-county`
 > fixture against the pre-change binary.
 >
-> **-007 is a fix, not a capability**, and the other four bindings should check
-> it rather than assume it. It bites only where a document declares a working
-> precision narrower than its key magnitudes need — which is the normal state of
-> a MOVES port, whose quantities are binary32 and whose SCC and polProcessID keys
-> are nine- and ten-digit integers. Julia, Python and TypeScript each lower an
-> `on` pair to an equality predicate the same way; whether that predicate is
-> evaluated at the document's precision is a per-binding question this section
-> now makes answerable.
+> **-007 is a fix, not a capability.** It bites only where a document declares a
+> working precision narrower than its key magnitudes need — the normal state of a
+> MOVES port, whose quantities are binary32 and whose SCC and polProcessID keys
+> are nine- and ten-digit integers.
+>
+> **The other four bindings were checked (2026-09-05) and none has it**, which is
+> a stronger result than "not yet audited" and a different one from what this
+> note previously guessed. It said Julia, Python and TypeScript each lower an
+> `on` pair to an equality predicate the same way. **They do not**, and that is
+> why they are immune:
+>
+> | binding | verdict | basis |
+> |---|---|---|
+> | Julia | structurally immune | never builds a comparison expression from a join. Each pair is a `_JoinGate` of `Dict{Int,Int}` bucket codes (`types.jl:155`), encoded by `_encode_join_keys` (`tree_walk/semiring.jl:349`) and tested by integer `==` in `_join_admits` (`semiring.jl:649`). `broad_phase.jl:287` states the resulting invariant outright. Measured: 4, in both clause orders. |
+> | Python | structurally immune | same shape — `_resolve_join` (`numpy_interpreter.py:3046`) builds int-code gates, compared by `int` `!=` in `_join_admits` (`:3262`) and by int64 arrays in `_join_admits_mask` (`:2052`). Measured: 4, in both clause orders. |
+> | Go, TypeScript | cannot exhibit it | no numeric evaluation at all (§5.5.8's binding table, this file's Go/TS rows). No join is evaluated, so no comparison is lowered. |
+>
+> Rust was alone in lowering the comparison, which is why it was alone in getting
+> it wrong. **A binding with no lowered predicate has no -007 to fail** — but it
+> also has no `filter` to fall back on, so for it -005 rests entirely on
+> `_join_admits` re-testing every gate, which is what `semiring.jl:263` records.
+>
+> The control that makes those two nulls mean something is a `Float32` document
+> with integer keys straddling a binary32 collision (`2265007010` / `2265007015`;
+> binary32 spacing at that magnitude is 256) and two clauses over the same symbol
+> pair. Exact-key semantics admit 4 combinations; a binary32 key comparison
+> admits 8. On the pre-fix Rust binary it gives **4 in one clause order and 8 in
+> the other**; on Rust after -007, 4 in both. So the probe reproduces the defect
+> it is being used to rule out.
+>
+> **Separately, and NOT -007:** with the key columns left at the document's
+> `Float32` default rather than overridden to `Float64`, Rust answers **8** in
+> every clause order, before and after the fix, while Julia and Python answer
+> **4**. Rust's 8 is §5.18/F18 — the key column was narrowed at INGEST, before any
+> comparison, and `2265007104` is exactly integral so no integrality guard fires.
+> Julia's and Python's 4 is the opposite gap: neither honours
+> `domain.element_type` outside the recurrence sweep at all (`element_type` is
+> read nowhere in Julia's evaluator; Python reads `ctx.element_types` only at
+> `simulation_array.py:686`), so they are right here by not implementing the
+> declaration — and wrong wherever binary32 rounding is what the reference
+> actually does, which §5.18.1 opens by measuring. Three executing bindings, two
+> answers, no diagnostic on any of them. §5.18.2 already requires the refusal
+> that would surface it, and **PREC-11-A's binding status below already records
+> the gap** — this measurement is a witness for that row, not a new finding. What
+> it adds is that the divergence is reachable through a JOIN KEY and not only
+> through arithmetic, so it changes an answer's row membership rather than its
+> last ulp.
 >
 > **-001/-002/-004 are SHOULDs.** A binding that declines is slower, not wrong:
 > the lowered `filter` still decides every leaf. Julia's tree-walk and Python's

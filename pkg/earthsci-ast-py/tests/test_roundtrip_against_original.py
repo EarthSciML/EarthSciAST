@@ -95,6 +95,10 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         "`enum` nodes are lowered to `const` against the document's top-level "
         "`enums` block at load (esm-spec §9.3)"
     ),
+    "enums_zero_and_negative.esm": (
+        "`enum` nodes are lowered to `const` against the document's top-level "
+        "`enums` block at load (esm-spec §9.3)"
+    ),
     "lib_calendar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "lib_solar_subsystem_inclusion.esm": _SUBSYSTEM_REF_RESOLUTION,
     "subsystem_index_set_merge.esm": (
