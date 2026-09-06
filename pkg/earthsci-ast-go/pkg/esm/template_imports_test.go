@@ -222,6 +222,68 @@ func TestTemplateImports_WhereRenameCarriesShape(t *testing.T) {
 	}
 }
 
+// TestTemplateImports_MetaparamDoesNotRewriteDimSlot pins `dim` as opaque to
+// §9.7.6 metaparameter substitution, alongside `wrt`.
+//
+// `dim` is a scalar field naming a spatial axis (esm-spec §4.9.1) — an axis
+// NAME, not an expression position. Go was the only binding that omitted it
+// from the substitution skip set, so a bound metaparameter sharing a name with
+// an axis rewrote the axis into an integer: with `x` bound to 3,
+// {"op":"grad","args":["c"],"dim":"x"} became {"op":"grad","args":["c"],"dim":3}
+// in Go alone, while `wrt` in the same node was correctly left alone. Julia,
+// TypeScript, Python and Rust all skip `dim`; this asserts Go agrees.
+func TestTemplateImports_MetaparamDoesNotRewriteDimSlot(t *testing.T) {
+	var node any
+	if err := json.Unmarshal(
+		[]byte(`{"op":"grad","args":["c"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		t.Fatal(err)
+	}
+	got := substituteMetaparams(node, map[string]any{"x": int64(3)})
+	obj, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("substituteMetaparams returned %T; want map", got)
+	}
+	// The two axis-naming slots must behave IDENTICALLY — that symmetry is the
+	// invariant the divergence broke.
+	for _, k := range []string{"dim", "wrt"} {
+		if obj[k] != "x" {
+			t.Errorf("%s = %#v; want %q — an axis name is not an expression position",
+				k, obj[k], "x")
+		}
+	}
+	// The substitution still reaches genuine expression positions in the node.
+	var expr any
+	if err := json.Unmarshal([]byte(`{"op":"*","args":["x",2]}`), &expr); err != nil {
+		t.Fatal(err)
+	}
+	sub := substituteMetaparams(expr, map[string]any{"x": int64(3)})
+	if args := sub.(map[string]any)["args"].([]any); args[0] != int64(3) {
+		t.Errorf("args[0] = %#v; want 3 — skipping `dim` must not stop ordinary "+
+			"expression-position substitution", args[0])
+	}
+}
+
+// TestTemplateImports_RenameStillRewritesDimAxis guards the other side of the
+// change above: `dim` joining metaSubstSkipKeys also puts it in the DERIVED
+// renameProtectedKeys, and a protected key is copied verbatim by the §9.7.7
+// rename walk. It must still rename, because renameWalk tests renameAxisKeys
+// FIRST — this pins that ordering so a future reshuffle cannot silently make an
+// index-set rename stop following a `dim` axis.
+func TestTemplateImports_RenameStillRewritesDimAxis(t *testing.T) {
+	var node any
+	if err := json.Unmarshal(
+		[]byte(`{"op":"grad","args":["c"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		t.Fatal(err)
+	}
+	out := renameWalk(node, map[string]string{}, map[string]string{"x": "lev"},
+		map[string]string{}).(map[string]any)
+	for _, k := range []string{"dim", "wrt"} {
+		if out[k] != "lev" {
+			t.Errorf("%s = %#v; want %q — the rename must follow the axis", k, out[k], "lev")
+		}
+	}
+}
+
 // TestTemplateImports_WhereRenameUnknownIndexSet confirms a `where` shape naming
 // a set the library never declares survives the rename as spelled and is
 // rejected at rule registration — the fix does not paper over genuine typos.

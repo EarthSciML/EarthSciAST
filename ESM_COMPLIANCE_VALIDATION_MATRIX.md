@@ -996,6 +996,23 @@ capability and no binding is exempt.
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
 
 ### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+
+> **`dim` is opaque to metaparameter substitution (2026-09-06, EXPR-09-E-008)**:
+> §9.7.6 substitutes a bound metaparameter name wherever it appears as a bare
+> string in an EXPRESSION position. The axis-naming scalar fields of an
+> Expression node are not expression positions — `dim` names a spatial
+> coordinate structurally (§4.9.1), exactly as `wrt` names one — so a
+> metaparameter that happens to share a name with an axis must not rewrite them
+> into integers. Julia, TypeScript, Python and Rust all skipped `dim`; **Go
+> alone did not**, so with `x` bound to 3 a node
+> `{"op": "grad", "args": ["c"], "dim": "x"}` became `"dim": 3` in Go and stayed
+> `"dim": "x"` everywhere else — a silent cross-binding divergence in the one
+> direction no fixture happened to cover. Fixed by adding `dim` to Go's
+> `metaSubstSkipKeys`, bringing it to the four-binding behavior. Because Go's
+> rename-walk protect set is DERIVED from that skip set, the §9.7.7 rename walk
+> now also treats `dim` as protected — it still renames, since the walk tests
+> its axis keys first, and a regression test pins that ordering.
+
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
@@ -1005,7 +1022,7 @@ capability and no binding is exempt.
 | EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
 | EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
 | EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
-| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding; structural fields are NOT expression positions and MUST be skipped — including the axis-naming scalars `wrt` and `dim` (§4.9.1), which name a spatial coordinate rather than referencing a value | esm-spec.md §9.7.6 | Yes | expression |
 | EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
 | EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
