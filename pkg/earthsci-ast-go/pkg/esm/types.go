@@ -559,7 +559,16 @@ type ReactionSystem struct {
 // ========================================
 
 // Tolerance is a numerical comparison tolerance. Any of Abs/Rel may be set; an
-// assertion passes when any set bound is satisfied.
+// assertion passes when any set bound is satisfied:
+//
+//	|actual - expected| <= Abs   OR   |actual - expected| <= Rel * max(|actual|, |expected|)
+//
+// The relative bound is SYMMETRIC in actual and expected -- its scale is the
+// larger of the two magnitudes, not |expected| alone (Julia isapprox; esm-spec
+// 6.6.3). Finiteness is judged before tolerance: a non-finite actual fails
+// against every finite expected. Go has no simulator, so this binding never
+// evaluates the predicate; the contract is recorded here so a future runner
+// does not have to re-derive it.
 type Tolerance struct {
 	Abs *float64 `json:"abs,omitempty"`
 	Rel *float64 `json:"rel,omitempty"`

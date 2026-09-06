@@ -253,6 +253,52 @@ def test_tolerance_precedence_and_isapprox_semantics():
     assert not _check_assertion(2.0, 2.0000001, 0.0, 0.0)
 
 
+def test_relative_bound_is_symmetric_in_actual_and_expected():
+    """esm-spec §6.6.3: the relative bound scales by ``max(|actual|,
+    |expected|)`` — the larger of the two magnitudes — NOT by ``|expected|``
+    alone.
+
+    §6.6.3 used to state both readings: the normative box (and the schema's
+    ``Tolerance`` description) gave the ``|expected|``-only denominator while
+    the finiteness rationale further down the same section reasoned from
+    ``max(|inf|, |expected|)``. All three executing bindings implemented the
+    symmetric one; EarthSciML/EarthSciAST#193 settled the spec as symmetric.
+
+    The two readings disagree ONLY when ``|actual| > |expected|`` — an
+    overshoot. Everywhere else ``max(|a|, |e|) == |e|`` and they are the same
+    number, which is why the divergence went unnoticed: every pre-existing
+    tolerance case in every binding sits in the agreeing region, and the
+    ``assertion_nonfinite`` category compares verdicts on non-finite actuals.
+    Reverting ``_check_assertion`` to the ``|expected|`` denominator must turn
+    this red.
+    """
+    # The discriminator (issue #193): the symmetric scale is 1.6, not 1.0.
+    #   symmetric:  0.6 <= 0.5 * max(1.6, 1.0) = 0.8  -> PASS
+    #   |expected|: 0.6 <= 0.5 * 1.0           = 0.5  -> FAIL
+    assert _check_assertion(1.6, 1.0, 0.5, 0.0)
+    # Past the symmetric bound too, so both readings agree again.
+    assert not _check_assertion(3.0, 1.0, 0.5, 0.0)
+
+    # Symmetry as the property, not just the one case: swapping the arguments
+    # cannot change the verdict. Under an |expected|-only denominator the first
+    # pair below disagrees with itself reversed.
+    for a, e in ((1.6, 1.0), (1.0, 1.6), (3.0, 1.0), (1.0, 3.0), (-2.0, -1.2)):
+        assert _check_assertion(a, e, 0.5, 0.0) == _check_assertion(e, a, 0.5, 0.0)
+
+    # No epsilon floor, and none permitted: the bound is a product, not a
+    # quotient, so expected == 0 needs no protection. It reads |a| <= rel*|a|,
+    # which a nonzero actual clears only at rel >= 1 — a purely relative
+    # tolerance says nothing about how close to zero is close enough.
+    assert not _check_assertion(1.0, 0.0, 0.5, 0.0)
+    assert _check_assertion(1.0, 0.0, 1.0, 0.0)
+    assert _check_assertion(1.0, 0.0, 0.0, 1.0)  # an abs bound is the way to spell it
+    assert _check_assertion(0.0, 0.0, 0.0, 0.0)  # exact-equality clause
+
+    # An abs bound never narrows what rel already admits: the predicate takes
+    # the MAX of the two bounds.
+    assert _check_assertion(1.6, 1.0, 0.5, 1e-12)
+
+
 # ---------------------------------------------------------------------------
 # run_pde_tests end-to-end (coordinate-expression ic + reductions)
 # ---------------------------------------------------------------------------

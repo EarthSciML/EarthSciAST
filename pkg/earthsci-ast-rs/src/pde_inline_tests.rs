@@ -378,9 +378,20 @@ pub fn resolve_tolerance(
     }
 }
 
-/// Julia `isapprox` semantics: `actual == expected`, or both values FINITE and
-/// `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same pass predicate the
-/// Julia / Python `run_pde_tests` use (esm-spec §6.6.3, CONFORMANCE_SPEC §5.20).
+/// The esm-spec §6.6.3 pass predicate — `actual == expected`, or both values
+/// FINITE and `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same predicate
+/// the Julia / Python `run_pde_tests` use (see also CONFORMANCE_SPEC §5.20).
+/// This is Julia `isapprox`.
+///
+/// **The relative bound is SYMMETRIC** in `actual` and `expected`: its scale is
+/// `max(|a|, |e|)`, the larger of the two magnitudes, not `|e|` alone. §6.6.3
+/// used to state both readings at once — the normative box gave an
+/// `|expected|`-only denominator while the finiteness rationale further down
+/// that same section reasoned from `max(|inf|, |expected|)` — and this function was written against the
+/// second. EarthSciML/EarthSciAST#193 settled the spec as symmetric, so the two
+/// now agree and this line is normative rather than merely conventional. The
+/// readings differ only on an overshoot (`|actual| > |expected|`);
+/// `relative_bound_is_symmetric_in_actual_and_expected` pins that seam.
 ///
 /// **Finiteness is judged BEFORE tolerance**, and that clause is not a
 /// corollary of the bound — it contradicts it. With `actual = ±inf` both sides
@@ -1793,6 +1804,58 @@ mod tests {
         assert!(check_assertion(0.0, 1e-10, 0.0, 1e-9));
         assert!(check_assertion(2.0, 2.0, 0.0, 0.0)); // exact-equality mode
         assert!(!check_assertion(2.0, 2.0000001, 0.0, 0.0));
+    }
+
+    /// esm-spec §6.6.3: the relative bound is SYMMETRIC in `actual` and
+    /// `expected` — its scale is `max(|actual|, |expected|)`, the larger of the
+    /// two magnitudes, NOT `|expected|` alone.
+    ///
+    /// §6.6.3 used to state both readings: the normative box (and the schema's
+    /// `Tolerance` description) gave the `|expected|`-only denominator while
+    /// the finiteness rationale further down the same section reasoned from
+    /// `max(|inf|, |expected|)`. All three executing bindings implemented the
+    /// symmetric one; EarthSciML/EarthSciAST#193 settled the spec as symmetric.
+    ///
+    /// The readings disagree ONLY when `|actual| > |expected|` — an overshoot.
+    /// Everywhere else `max(|a|, |e|) == |e|` and they are the same number,
+    /// which is why the divergence went unnoticed: every pre-existing tolerance
+    /// case in every binding sits in the agreeing region, and the
+    /// `assertion_nonfinite` category compares verdicts on non-finite actuals.
+    /// Reverting `check_assertion` to the `|expected|` denominator must turn
+    /// this red.
+    #[test]
+    fn relative_bound_is_symmetric_in_actual_and_expected() {
+        // The discriminator: the symmetric scale is 1.6, not 1.0.
+        //   symmetric:  0.6 <= 0.5 * max(1.6, 1.0) = 0.8  -> PASS
+        //   |expected|: 0.6 <= 0.5 * 1.0           = 0.5  -> FAIL
+        assert!(check_assertion(1.6, 1.0, 0.5, 0.0));
+        // Past the symmetric bound too, so both readings agree again.
+        assert!(!check_assertion(3.0, 1.0, 0.5, 0.0));
+
+        // Symmetry as the property, not just the one case: swapping the
+        // arguments cannot change the verdict. Under an `|expected|`-only
+        // denominator the first pair below disagrees with itself reversed.
+        for (a, e) in [(1.6, 1.0), (1.0, 1.6), (3.0, 1.0), (1.0, 3.0), (-2.0, -1.2)] {
+            assert_eq!(
+                check_assertion(a, e, 0.5, 0.0),
+                check_assertion(e, a, 0.5, 0.0),
+                "verdict must not depend on argument order: ({a}, {e})"
+            );
+        }
+
+        // No epsilon floor, and none permitted: the bound is a product, not a
+        // quotient, so `expected == 0` needs no protection. It reads
+        // `|a| <= rel*|a|`, which a nonzero actual clears only at `rel >= 1` —
+        // a purely relative tolerance says nothing about how close to zero is
+        // close enough.
+        assert!(!check_assertion(1.0, 0.0, 0.5, 0.0));
+        assert!(check_assertion(1.0, 0.0, 1.0, 0.0));
+        assert!(check_assertion(1.0, 0.0, 0.0, 1.0)); // an `abs` bound spells it
+        assert!(check_assertion(0.0, 0.0, 0.0, 0.0)); // exact-equality clause
+
+        // An `abs` bound never narrows what `rel` already admits: the predicate
+        // takes the MAX of the two bounds.
+        assert!(check_assertion(1.6, 1.0, 0.5, 1e-12));
     }
 
     /// esm-spec §6.6.3: finiteness is judged BEFORE tolerance. Without the

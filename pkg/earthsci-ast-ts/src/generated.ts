@@ -1043,7 +1043,7 @@ export interface Tolerance {
    */
   abs?: number;
   /**
-   * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
+   * Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone.
    */
   rel?: number;
 }
@@ -1100,7 +1100,7 @@ export interface Tolerance1 {
    */
   abs?: number;
   /**
-   * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
+   * Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone.
    */
   rel?: number;
 }
@@ -1113,7 +1113,7 @@ export interface Tolerance2 {
    */
   abs?: number;
   /**
-   * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
+   * Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone.
    */
   rel?: number;
 }
@@ -1369,7 +1369,7 @@ export interface Tolerance3 {
    */
   abs?: number;
   /**
-   * Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel.
+   * Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone.
    */
   rel?: number;
 }

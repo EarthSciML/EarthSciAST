@@ -2132,10 +2132,20 @@ Assertions are stored **inline** only — there is no file-reference option. Tes
 An assertion passes when the computed value `actual` satisfies
 
 ```
-|actual - expected| ≤ abs    OR    |actual - expected| / max(|expected|, ε) ≤ rel
+|actual - expected| ≤ abs    OR    |actual - expected| ≤ rel · max(|actual|, |expected|)
 ```
 
-for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention. An implementation-defined small `ε` (e.g., `1e-300`) protects the relative check when `expected` is zero.
+equivalently, in the single-bound form the bindings implement:
+
+```
+|actual - expected| ≤ max(abs, rel · max(|actual|, |expected|))
+```
+
+for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention, and taking the `max` of the two bounds is the same statement.
+
+**The relative bound is symmetric in `actual` and `expected`.** Its scale is `max(|actual|, |expected|)` — the larger of the two magnitudes — not `|expected|` alone. This is Julia `isapprox`, and it is what every executing binding implements. The distinction is invisible whenever `|actual| ≤ |expected|` and only shows on an overshoot: at `expected = 1.0`, `actual = 1.6`, `rel = 0.5`, `abs = 0` the symmetric bound is `0.6 ≤ 0.5 · 1.6 = 0.8` — a **PASS**, where an `|expected|`-only denominator would give `0.6 ≤ 0.5` and FAIL. A conforming runtime MUST use the symmetric scale; an asymmetric one is a divergence, not a rounding difference.
+
+No `ε` floor is needed, and none is permitted. The bound is stated as a product rather than a quotient, so there is no division to protect: at `expected = 0` it reads `|actual| ≤ max(abs, rel · |actual|)`, which is well-defined and is satisfied by `actual = 0` through the `actual == expected` clause below. A nonzero `actual` against a zero `expected` therefore needs an `abs` bound (or `rel ≥ 1`) to pass — which is the intended reading: a purely relative tolerance carries no information about how close to zero is close enough.
 
 **Finiteness is judged before tolerance.** The full pass predicate is
 
