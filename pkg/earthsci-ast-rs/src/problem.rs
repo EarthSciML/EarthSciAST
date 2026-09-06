@@ -1172,6 +1172,9 @@ pub fn esm_problem<'a>(
         for (k, v) in opts.u0.iter_mut() {
             *v = precision::of_variable(k).round(*v);
         }
+        // `const_arrays` is a host-side build-pipeline input and does not
+        // exist on wasm32, where `ProblemOptions` carries no build half.
+        #[cfg(not(target_arch = "wasm32"))]
         for (k, a) in opts.const_arrays.iter_mut() {
             let kp = precision::of_variable(k);
             if kp.is_f32() {
