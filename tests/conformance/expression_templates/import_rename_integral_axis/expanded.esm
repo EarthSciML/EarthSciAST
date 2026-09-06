@@ -1,0 +1,183 @@
+{
+  "esm": "1.0.0",
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 3
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "metadata": {
+    "description": "One `integral` rule library instantiated twice in one model under esm-spec 9.7.7 renaming: a column instance (prefix col, rename x -> lev, N = 4) and a meridional instance (prefix row, rename x -> lat, N = 3). The consumer only ever names lev / lat — the renamed vocabulary is the only one it knows — so the rename must carry the rule's `match` axis fields, the integration variable `var` AND the bare-axis-name `upper` bound, in lockstep with the index-set declaration, the `where` shape, and the body's range `from`s. With that, each renamed instance fires only on its own axis and both integrals lower to the 4.3.1 prefix reduction at that instance's cell measure (1/4, 1/3); without it the rule instances still match `var: x`, nothing fires, and both integrals survive lowering as unlowered_operator",
+    "name": "import_rename_integral_axis"
+  },
+  "models": {
+    "Column": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "q"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "q"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": {
+            "args": [
+              "p"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "p"
+            ],
+            "op": "-"
+          }
+        },
+        {
+          "lhs": "Q",
+          "rhs": {
+            "args": [
+              "q"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "q",
+                    "j"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    1,
+                    4
+                  ],
+                  "op": "/"
+                }
+              ],
+              "op": "*"
+            },
+            "filter": {
+              "args": [
+                "j",
+                "i"
+              ],
+              "op": "<="
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              },
+              "j": {
+                "from": "lev"
+              }
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "P",
+          "rhs": {
+            "args": [
+              "p"
+            ],
+            "expr": {
+              "args": [
+                {
+                  "args": [
+                    "p",
+                    "j"
+                  ],
+                  "op": "index"
+                },
+                {
+                  "args": [
+                    1,
+                    3
+                  ],
+                  "op": "/"
+                }
+              ],
+              "op": "*"
+            },
+            "filter": {
+              "args": [
+                "j",
+                "i"
+              ],
+              "op": "<="
+            },
+            "op": "aggregate",
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lat"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "reduce": "+"
+          }
+        }
+      ],
+      "variables": {
+        "P": {
+          "description": "cumulative integral of p up to each lat: row's rule fires",
+          "shape": [
+            "lat"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "Q": {
+          "description": "cumulative integral of q up to each lev: col's rule fires",
+          "shape": [
+            "lev"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "p": {
+          "default": 2.5,
+          "description": "profile on the meridional instance",
+          "shape": [
+            "lat"
+          ],
+          "type": "unknown",
+          "units": "1"
+        },
+        "q": {
+          "default": 1.5,
+          "description": "profile on the column instance",
+          "shape": [
+            "lev"
+          ],
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}
