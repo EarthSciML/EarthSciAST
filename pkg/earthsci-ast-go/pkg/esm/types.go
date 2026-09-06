@@ -603,12 +603,19 @@ type Assertion struct {
 
 // Test is an inline validation test for a Model or ReactionSystem.
 type Test struct {
-	ID                 string             `json:"id"`
-	Description        *string            `json:"description,omitempty"`
-	InitialConditions  map[string]float64 `json:"initial_conditions,omitempty"`
-	ParameterOverrides map[string]float64 `json:"parameter_overrides,omitempty"`
-	TimeSpan           TimeSpan           `json:"time_span"`
-	Tolerance          *Tolerance         `json:"tolerance,omitempty"`
+	ID          string  `json:"id"`
+	Description *string `json:"description,omitempty"`
+	// InitialConditions and ParameterOverrides each map a LOCAL variable name to
+	// its value for this run. A value is a number, or — for a SHAPED variable —
+	// INLINE ARRAY DATA: a row-major nested JSON array matching the declared
+	// shape after metaparameter folding (esm-spec §6.6.2, §6.3). Hence `any`
+	// rather than float64: this binding is a rewrite-only port with no
+	// simulator, so it carries the authored value through parse → emit
+	// verbatim rather than interpreting it.
+	InitialConditions  map[string]any `json:"initial_conditions,omitempty"`
+	ParameterOverrides map[string]any `json:"parameter_overrides,omitempty"`
+	TimeSpan           TimeSpan       `json:"time_span"`
+	Tolerance          *Tolerance     `json:"tolerance,omitempty"`
 	// ExpressionTemplateImports are raw §9.7.2 import entries injected into the
 	// ENCLOSING component's template scope for THIS test's run only (esm-spec
 	// §9.7.10 form C / §6.6.6): the discretization a discretization-agnostic PDE

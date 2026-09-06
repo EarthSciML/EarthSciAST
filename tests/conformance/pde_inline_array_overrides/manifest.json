@@ -1,0 +1,349 @@
+{
+    "category": "pde_inline_array_overrides",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec \u00a76.6.2 'Shaped values' and the \u00a711.4 state-free-array-observed `ic` right-hand side: a SHAPED variable carries its whole field as INLINE ARRAY DATA \u2014 a row-major nested JSON array on its `default`, in a test's `parameter_overrides`, or in a test's `initial_conditions` (\u00a76.3) \u2014 and an `ic` may be seeded from a state-free array observed resolvable in the \u00a76.6.5 build-time evaluation scope. Before this, all three positions were `number`-only in `esm-schema.json` and a `const`-gather `ic` RHS was rejected at build, so a \u00a76.6 inline test could not supply a SHAPED input at all: the only escape was a test-injected rewrite-rule library (\u00a79.7.10) lowering a rewrite-target op to an inline `const` column \u2014 one generated `.esm` per test \u2014 which is what a column-physics component replaying a Fortran kernel dump had to do for every regime, because its inputs ARE columns (\u03b8, q_v, u, v, p, dz, K profiles). Each fixture is ONE shared component whose regimes are ordinary tests of the same document. Non-vacuity is structural rather than incidental: the `declared_defaults` / `rank2_declared_default` half reads the array-valued DEFAULTS and the override half replaces them, so a binding that dropped array data entirely fails the first half instead of passing both on zeros; and every fixture re-asserts a state seeded by a `const` gather the overrides do not touch, so an override leaking into the build-time array scope fails rather than silently agreeing. The RANK-2 fixture's axes have different extents (lev=2, col=3) and pairwise-distinct element values, which pins the row-major nesting order element-for-element: a binding that read the authored array in column-major order, or flattened it against its own state-vector order, disagrees on every off-diagonal cell. Julia is the reference binding; its `run_pde_tests` minted both goldens.",
+    "reference_binding": "julia",
+    "bindings_required": [
+        "julia",
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+        "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+    },
+    "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "tolerances": {
+        "assertion_rtol": 1e-09,
+        "assertion_atol": 1e-11
+    },
+    "fixtures": [
+        {
+            "id": "column_array_overrides",
+            "path": "fixtures/column_array_overrides.esm",
+            "model": "Column",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-6.3",
+                "esm-spec-6.6.2",
+                "esm-spec-6.6.5",
+                "esm-spec-11.4",
+                "inline-array-data",
+                "parameter-overrides",
+                "initial-conditions",
+                "state-free-array-observed-ic"
+            ],
+            "shape": {
+                "lev": 4
+            },
+            "note": "One shared column component, three regimes as ordinary tests. `theta0` (shaped parameter, inline-array `default`) is read ONLY by `ic(u)`, so an override can change the answer through the build-time scope and nowhere else; `v` carries an inline-array `default` a test replaces through `initial_conditions`; `w` is seeded by `ic(w) ~ gathered` over a state-free `const` array observed and is re-asserted under every regime.",
+            "assertions": [
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 300.0
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 303.25
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 3,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 305.0
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 4,
+                    "variable": "u",
+                    "reduce": "max",
+                    "expected": 305.0
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 5,
+                    "variable": "v",
+                    "reduce": null,
+                    "expected": 2.0
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 6,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 10.0
+                },
+                {
+                    "test_id": "declared_defaults",
+                    "assertion_idx": 7,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 40.0
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 288.0
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 294.5
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 3,
+                    "variable": "u",
+                    "reduce": "min",
+                    "expected": 288.0
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 4,
+                    "variable": "v",
+                    "reduce": null,
+                    "expected": -3.0
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 5,
+                    "variable": "v",
+                    "reduce": "min",
+                    "expected": -4.0
+                },
+                {
+                    "test_id": "stable_regime",
+                    "assertion_idx": 6,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 20.0
+                },
+                {
+                    "test_id": "unstable_regime",
+                    "assertion_idx": 1,
+                    "variable": "u",
+                    "reduce": null,
+                    "expected": 310.0
+                },
+                {
+                    "test_id": "unstable_regime",
+                    "assertion_idx": 2,
+                    "variable": "u",
+                    "reduce": "max",
+                    "expected": 310.0
+                },
+                {
+                    "test_id": "unstable_regime",
+                    "assertion_idx": 3,
+                    "variable": "u",
+                    "reduce": "min",
+                    "expected": 304.0
+                },
+                {
+                    "test_id": "unstable_regime",
+                    "assertion_idx": 4,
+                    "variable": "v",
+                    "reduce": "max",
+                    "expected": 7.5
+                },
+                {
+                    "test_id": "unstable_regime",
+                    "assertion_idx": 5,
+                    "variable": "w",
+                    "reduce": null,
+                    "expected": 30.0
+                }
+            ],
+            "golden": "golden/column_array_overrides.json"
+        },
+        {
+            "id": "slab_array_overrides_rank2",
+            "path": "fixtures/slab_array_overrides_rank2.esm",
+            "model": "Slab",
+            "tags": [
+                "pde-inline-test",
+                "esm-spec-6.3",
+                "esm-spec-6.6.2",
+                "esm-spec-11.4",
+                "inline-array-data",
+                "rank-2",
+                "row-major-nesting"
+            ],
+            "shape": {
+                "lev": 2,
+                "col": 3
+            },
+            "note": "The rank-2 half: unequal axis extents and pairwise-distinct element values, with every cell asserted, so the row-major nesting order of \u00a76.6.2 is gated rather than assumed.",
+            "assertions": [
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 1,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 1.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 2,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 2.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 3,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 3.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 4,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 4.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 5,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 5.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 6,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 6.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 7,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -1.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 8,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -2.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 9,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -3.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 10,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -4.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 11,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -5.0
+                },
+                {
+                    "test_id": "rank2_declared_default",
+                    "assertion_idx": 12,
+                    "variable": "b",
+                    "reduce": null,
+                    "expected": -6.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 1,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 10.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 2,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 20.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 3,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 30.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 4,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 40.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 5,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 50.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 6,
+                    "variable": "a",
+                    "reduce": null,
+                    "expected": 60.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 7,
+                    "variable": "a",
+                    "reduce": "max",
+                    "expected": 60.0
+                },
+                {
+                    "test_id": "rank2_override",
+                    "assertion_idx": 8,
+                    "variable": "b",
+                    "reduce": "min",
+                    "expected": -6.0
+                }
+            ],
+            "golden": "golden/slab_array_overrides_rank2.json"
+        }
+    ]
+}

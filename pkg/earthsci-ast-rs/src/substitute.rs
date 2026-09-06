@@ -551,7 +551,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default: Some(298.15),
+                default: Some(298.15.into()),
                 ..var(VariableType::Unknown, Some("K"))
             },
         );
@@ -591,7 +591,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default: Some(298.15),
+                default: Some(298.15.into()),
                 ..var(VariableType::Unknown, Some("K"))
             },
         );
@@ -634,7 +634,7 @@ mod tests {
         model_variables.insert(
             "temperature".to_string(),
             ModelVariable {
-                default: Some(298.15),
+                default: Some(298.15.into()),
                 ..var(VariableType::Unknown, Some("K"))
             },
         );
@@ -677,14 +677,14 @@ mod tests {
         model_variables.insert(
             "Chemistry.FastChem.O3".to_string(),
             ModelVariable {
-                default: Some(40e-9),
+                default: Some(40e-9.into()),
                 ..var(VariableType::Unknown, Some("mol/L"))
             },
         );
         model_variables.insert(
             "Chemistry.FastChem.k_rate".to_string(),
             ModelVariable {
-                default: Some(1.8e-12),
+                default: Some(1.8e-12.into()),
                 ..var(VariableType::Parameter, Some("s-1"))
             },
         );
@@ -843,7 +843,7 @@ mod tests {
                 vars.insert(
                     "state_var".to_string(),
                     ModelVariable {
-                        default: Some(0.0),
+                        default: Some(0.0.into()),
                         ..var(VariableType::Unknown, Some("m"))
                     },
                 );

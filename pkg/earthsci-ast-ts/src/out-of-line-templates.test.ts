@@ -128,6 +128,7 @@ describe('out-of-line expression templates (Option B, esm-spec §9.6.4)', () => 
       ],
       ['import_rebind_keyed_factors', 'fixture.esm', 'expanded.esm'],
       ['import_rename_diamond', 'fixture.esm', 'expanded.esm'],
+      ['import_rename_integral_axis', 'fixture.esm', 'expanded.esm'],
       ['import_rename_two_instances', 'fixture.esm', 'expanded.esm'],
       ['import_smoke', 'fixture.esm', 'expanded.esm'],
       ['import_where_rename_two_instances', 'fixture.esm', 'expanded.esm'],

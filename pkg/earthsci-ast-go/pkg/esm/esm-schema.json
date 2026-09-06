@@ -1673,6 +1673,20 @@
         }
       }
     },
+    "NumericArrayLiteral": {
+      "type": "array",
+      "description": "A row-major nested JSON array of numbers carrying a SHAPED variable's inline data (esm-spec §6.3, §6.6.2). Every axis is a JSON array and every leaf a number; the nesting depth and the per-axis lengths MUST match the variable's declared `shape` after metaparameter folding, and a mismatch is a load-time error — the same convention `from_file` data already follows (§6.6.5 convention 3). A SCALAR in the same position keeps its broadcast meaning (one value applied to every element).",
+      "items": {
+        "oneOf": [
+          {
+            "type": "number"
+          },
+          {
+            "$ref": "#/$defs/NumericArrayLiteral"
+          }
+        ]
+      }
+    },
     "ModelVariable": {
       "type": "object",
       "description": "A variable in a model — either an `unknown` the solver solves for, or a `parameter` supplied to it. There is no third kind. Everything the solver additionally needs to know is DERIVED: whether an unknown is an ODE state, an observed quantity, or an algebraic one follows from the EQUATIONS, and whether a parameter is Brownian, discrete, sampled, or constant follows from its `distribution` and `update` (esm-spec §6.3.1).",
@@ -1693,8 +1707,15 @@
           "type": "string"
         },
         "default": {
-          "type": "number",
-          "description": "For an unknown, its initial value at t=0. For a parameter, its constant value — mutually exclusive with `distribution`, which draws the value instead."
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "$ref": "#/$defs/NumericArrayLiteral"
+            }
+          ],
+          "description": "For an unknown, its initial value at t=0. For a parameter, its constant value — mutually exclusive with `distribution`, which draws the value instead. A SHAPED variable (non-empty `shape`) may instead carry a row-major nested JSON array whose nesting matches the declared shape after metaparameter folding; a mismatch is a load-time error. A scalar on a shaped variable keeps its broadcast meaning — the one value applies to every element (esm-spec §6.3)."
         },
         "default_units": {
           "type": "string",
@@ -2691,16 +2712,32 @@
         },
         "initial_conditions": {
           "type": "object",
-          "description": "Initial-value overrides for unknowns, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default.",
+          "description": "Initial-value overrides for unknowns, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default. A shaped unknown's value may be a row-major nested JSON array matching its declared shape (esm-spec §6.6.2).",
           "additionalProperties": {
-            "type": "number"
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/NumericArrayLiteral"
+              }
+            ],
+            "description": "Initial value for one unknown: a number, or — for a SHAPED unknown — a row-major nested JSON array matching its declared shape after metaparameter folding (a mismatch is a load-time error). A scalar broadcasts to every element (esm-spec §6.6.2)."
           }
         },
         "parameter_overrides": {
           "type": "object",
-          "description": "Parameter overrides, keyed by parameter name (local to this component). Values not listed fall back to the parameter's declared default.",
+          "description": "Parameter overrides, keyed by parameter name (local to this component). Values not listed fall back to the parameter's declared default. A shaped parameter's value may be a row-major nested JSON array matching its declared shape (esm-spec §6.6.2).",
           "additionalProperties": {
-            "type": "number"
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/NumericArrayLiteral"
+              }
+            ],
+            "description": "Value for one parameter: a number, or — for a SHAPED parameter — a row-major nested JSON array matching its declared shape after metaparameter folding (a mismatch is a load-time error). A scalar broadcasts to every element (esm-spec §6.6.2)."
           }
         },
         "time_span": {

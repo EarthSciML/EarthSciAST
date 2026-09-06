@@ -1711,7 +1711,21 @@ fn check_aggregate_node(
     check_join_sides(node, field_path, var_shapes, errors);
 
     // (a) undefined_index_set: a `{from: NAME}` range absent from the registry.
-    if let Some(ranges) = &node.ranges {
+    //
+    // Run only when the document DECLARES a registry. A document that declares
+    // none is a §9.7.10 discretization-agnostic PDE leaf: its index sets arrive
+    // from a discretization library injected into this component's scope by a
+    // composing document, a subsystem-ref edge or an inline test (§6.6.6), so
+    // the effective registry exists only in that per-run build and resolving
+    // `{from: NAME}` against the empty local registry would reject every
+    // conforming leaf. The check is deferred there, mirroring §9.6.1's
+    // standalone exemption for `template_constraint_unknown_index_set`; a name
+    // still unresolved once injection has run is rejected by the evaluating
+    // bindings' resolvers (issue #185).
+    let registry_declared = index_sets.is_some_and(|m| !m.is_empty());
+    if let Some(ranges) = &node.ranges
+        && registry_declared
+    {
         let mut undeclared: Vec<String> = ranges
             .values()
             .filter_map(|r| match r {

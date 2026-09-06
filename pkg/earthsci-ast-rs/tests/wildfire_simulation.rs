@@ -73,7 +73,7 @@ fn run(file: &EsmFile, test: &ModelTest) -> Solution {
         saveat: Some(times),
         ..Default::default()
     };
-    let ics = test.initial_conditions.clone().unwrap_or_default();
+    let ics = test.scalar_initial_conditions();
     earthsci_ast::esm_problem(
         file,
         (test.time_span.start, test.time_span.end),

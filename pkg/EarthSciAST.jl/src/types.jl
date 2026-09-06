@@ -1059,7 +1059,11 @@ Parameter-only value fields:
 """
 struct ModelVariable
     type::ModelVariableType
-    default::Union{Float64,Nothing}
+    # A scalar value, or — for a SHAPED variable — INLINE ARRAY DATA: the whole
+    # field, authored as a row-major nested JSON array whose nesting matches the
+    # declared `shape` after metaparameter folding (esm-spec §6.3 / §6.6.2). A
+    # scalar on a shaped variable keeps its broadcast meaning.
+    default::Union{Float64,Array{Float64},Nothing}
     description::Union{String,Nothing}
     units::Union{String,Nothing}
     default_units::Union{String,Nothing}
@@ -1083,9 +1087,88 @@ struct ModelVariable
                   location=nothing,
                   distribution=nothing,
                   update=nothing) =
-        new(type, default, description, units, default_units,
+        new(type, _coerce_inline_value(default), description, units, default_units,
             shape, location, distribution, _coerce_update_vector(update))
 end
+
+# ---- Inline value coercion (esm-spec §6.3 / §6.6.2) --------------------------
+# A `default`, a `parameter_overrides` entry and an `initial_conditions` entry
+# each carry either a SCALAR or INLINE ARRAY DATA — a row-major nested JSON
+# array holding a shaped variable's whole field. `_coerce_inline_value` maps the
+# first to `Float64` and the second to a dense `Array{Float64,N}` whose axis `d`
+# is the nesting depth `d`, so `A[i, j]` is the authored `data[i][j]`. A ragged
+# array (sibling axes of different lengths, or a mix of number and array at one
+# depth) is a load-time error, mirroring the `from_file` convention of §6.6.5.
+_coerce_inline_value(::Nothing) = nothing
+# Already a dense NUMERIC array (a re-coerced value, or one a caller built
+# directly): its axes ARE the shape, so it passes through. Walking it as if it
+# were nested would read `length` on the whole array and collapse a 2x3 slab to
+# a 6-vector.
+_coerce_inline_value(x::AbstractArray{<:Real}) = Array{Float64}(x)
+# The wire form: a nested `Vector{Any}` (JSON), one level per axis.
+_coerce_inline_value(x::AbstractArray) = _inline_array(x)
+_coerce_inline_value(x) = Float64(x)
+
+function _inline_array(v::AbstractArray)
+    dims = Int[]
+    node = v
+    while node isa AbstractArray
+        push!(dims, length(node))
+        isempty(node) && break
+        node = first(node)
+    end
+    A = Array{Float64}(undef, dims...)
+    _fill_inline_array!(A, v, (), dims)
+    return A
+end
+
+function _fill_inline_array!(A::Array{Float64}, v, idx::Tuple, dims::Vector{Int})
+    depth = length(idx)
+    if v isa AbstractArray
+        depth < length(dims) || throw(ArgumentError(
+            "inline array data is ragged: an array appears where a number is expected " *
+            "(esm-spec §6.3)"))
+        length(v) == dims[depth + 1] || throw(ArgumentError(
+            "inline array data is ragged: axis $(depth + 1) has both $(dims[depth + 1]) " *
+            "and $(length(v)) elements (esm-spec §6.3)"))
+        for (i, x) in enumerate(v)
+            _fill_inline_array!(A, x, (idx..., i), dims)
+        end
+    else
+        depth == length(dims) || throw(ArgumentError(
+            "inline array data is ragged: a number appears at nesting depth $(depth) " *
+            "where an array of $(dims[depth + 1]) elements is expected (esm-spec §6.3)"))
+        A[idx...] = Float64(v)
+    end
+    return nothing
+end
+
+"""
+    _emit_inline_value(x)
+
+The wire form of a coerced inline value: a scalar emits as its number, a dense
+`Array{Float64,N}` re-nests into the ROW-MAJOR nested JSON array it was authored
+as (axis 1 outermost), so `parse → emit` is the identity on the document text.
+"""
+_emit_inline_value(x::Nothing) = nothing
+_emit_inline_value(x::Number) = x
+function _emit_inline_value(A::AbstractArray)
+    ndims(A) == 0 && return Float64(A[])
+    return [_emit_inline_value(_inline_slice(A, i)) for i in axes(A, 1)]
+end
+_emit_inline_value(x) = x
+
+# One outer-axis slice of `A`, dropping axis 1 (a rank-1 array yields a number).
+_inline_slice(A::AbstractArray, i) =
+    ndims(A) == 1 ? A[i] : view(A, i, ntuple(_ -> Colon(), ndims(A) - 1)...)
+
+"""
+    is_inline_array(x) -> Bool
+
+Whether a resolved `default` / override value is INLINE ARRAY DATA (esm-spec
+§6.3) rather than a scalar.
+"""
+is_inline_array(x) = x isa AbstractArray
 
 # `update` accepts a single rule or a vector of rules; it is stored as a vector
 # (or `nothing`) so every consumer iterates one shape. The emitted wire form is
@@ -1246,8 +1329,11 @@ span — and a list of scalar assertions that must hold.
 struct InlineTest
     id::String
     description::Union{String,Nothing}
-    initial_conditions::Dict{String,Float64}
-    parameter_overrides::Dict{String,Float64}
+    # esm-spec §6.6.2: each value is a scalar, or — for a SHAPED variable —
+    # INLINE ARRAY DATA (a dense `Array{Float64,N}` coerced from the authored
+    # row-major nested JSON array). `Any`-valued so one map carries both.
+    initial_conditions::Dict{String,Any}
+    parameter_overrides::Dict{String,Any}
     time_span::TimeSpan
     tolerance::Union{Tolerance,Nothing}
     assertions::Vector{Assertion}
@@ -1261,13 +1347,15 @@ struct InlineTest
 
     function InlineTest(id::AbstractString, time_span::TimeSpan, assertions::Vector{Assertion};
                   description=nothing,
-                  initial_conditions=Dict{String,Float64}(),
-                  parameter_overrides=Dict{String,Float64}(),
+                  initial_conditions=Dict{String,Any}(),
+                  parameter_overrides=Dict{String,Any}(),
                   tolerance=nothing,
                   expression_template_imports=Any[])
         return new(String(id), description,
-                   Dict{String,Float64}(string(k) => Float64(v) for (k, v) in initial_conditions),
-                   Dict{String,Float64}(string(k) => Float64(v) for (k, v) in parameter_overrides),
+                   Dict{String,Any}(string(k) => _coerce_inline_value(v)
+                                    for (k, v) in initial_conditions),
+                   Dict{String,Any}(string(k) => _coerce_inline_value(v)
+                                    for (k, v) in parameter_overrides),
                    time_span, tolerance, assertions,
                    Vector{Any}(expression_template_imports))
     end
@@ -2519,6 +2607,8 @@ source of truth from which BOTH wire directions are generated
       `:float`, `:int`, `:bool`, `:number_or_string`, `:number_or_expr`,
       `:expr`, `:expr_vec`, `:string_vec` (`string.()` each),
       `:string_vec_strict` (`Vector{String}(v)`), `:float_map`,
+      `:value_map` (scalar-or-inline-array map, esm-spec §6.6.2),
+      `:inline_value` (scalar-or-inline-array, esm-spec §6.3),
       `:str_keyed_copy` (string-keyed shallow `Dict{String,Any}` copy),
       `:raw` (`_to_native_json` verbatim passthrough), `:raw_vec`,
       `:model_variable_type`, `:record`/`:record_vec`/`:record_map`
@@ -2736,7 +2826,8 @@ const RECORD_FIELD_TABLES = (
     )),
     (T = :ModelVariable, fn = :model_variable, rows = (
         (f = :type, wire = "type", kind = :model_variable_type, mode = :req, emit = :always, pos = true),
-        (f = :default,       wire = "default",       kind = :float,  mode = :opt, emit = :nonnothing),
+        # Scalar, or INLINE ARRAY DATA for a shaped variable (esm-spec §6.3).
+        (f = :default,       wire = "default",       kind = :inline_value, mode = :opt, emit = :nonnothing),
         (f = :description,   wire = "description",   kind = :string, mode = :opt, emit = :nonnothing),
         (f = :units,         wire = "units",         kind = :string, mode = :opt, emit = :nonnothing),
         (f = :default_units, wire = "default_units", kind = :string, mode = :opt, emit = :nonnothing),
@@ -2837,10 +2928,10 @@ const RECORD_FIELD_TABLES = (
         (f = :assertions, wire = "assertions", kind = :record_vec, of = :assertion,
          eltype = :Assertion, mode = :req, emit = :always, pos = true),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
-        (f = :initial_conditions, wire = "initial_conditions", kind = :float_map,
-         mode = :opt_empty, default = :(Dict{String,Float64}()), emit = :nonempty),
-        (f = :parameter_overrides, wire = "parameter_overrides", kind = :float_map,
-         mode = :opt_empty, default = :(Dict{String,Float64}()), emit = :nonempty),
+        (f = :initial_conditions, wire = "initial_conditions", kind = :value_map,
+         mode = :opt_empty, default = :(Dict{String,Any}()), emit = :nonempty),
+        (f = :parameter_overrides, wire = "parameter_overrides", kind = :value_map,
+         mode = :opt_empty, default = :(Dict{String,Any}()), emit = :nonempty),
         (f = :tolerance, wire = "tolerance", kind = :record, of = :tolerance, mode = :opt, emit = :nonnothing),
         # esm-spec §9.7.10 form C: a test's injected imports are authored
         # per-run config and DO survive parse → emit (unlike a component's

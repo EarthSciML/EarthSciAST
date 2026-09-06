@@ -107,6 +107,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("tree_walk_arrayop_test.jl")
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
+    include("tree_walk_elementwise_obs_gather_test.jl")  # #175 elementwise array observed reached only via an aggregate gather
     include("tree_walk_vectorized_test.jl")
     include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
@@ -262,10 +263,14 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("observed_field_static_test.jl")  # §5.8 name resolution on a state-free document
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
+    include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("conformance_pde_inline_observed_rank2_test.jl")
+    include("conformance_pde_inline_dead_observed_test.jl")
+    include("conformance_elementwise_observed_gather_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
     include("conformance_pde_inline_observed_state_dependent_test.jl")  # §6.6.5 state-dependent array observed
     include("conformance_pde_inline_ic_param_override_test.jl")
+    include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
     include("conformance_scalar_ic_test.jl")

@@ -1,0 +1,41 @@
+{
+    "fixture": "dead_observed",
+    "assertions": [
+        {
+            "test_id": "dead_observed",
+            "reduce": "max",
+            "actual": 8,
+            "assertion_idx": 1,
+            "variable": "diag"
+        },
+        {
+            "test_id": "dead_observed",
+            "reduce": "min",
+            "actual": 2,
+            "assertion_idx": 2,
+            "variable": "diag"
+        },
+        {
+            "test_id": "dead_observed",
+            "reduce": null,
+            "actual": 6,
+            "assertion_idx": 3,
+            "variable": "diag"
+        },
+        {
+            "test_id": "dead_observed",
+            "reduce": "max",
+            "actual": 12,
+            "assertion_idx": 4,
+            "variable": "chain"
+        },
+        {
+            "test_id": "dead_observed",
+            "reduce": null,
+            "actual": 6,
+            "assertion_idx": 5,
+            "variable": "chain"
+        }
+    ],
+    "reference_binding": "julia"
+}
