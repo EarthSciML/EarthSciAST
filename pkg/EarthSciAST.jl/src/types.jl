@@ -26,7 +26,7 @@ Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
 Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
 NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "1.0.0"
+const SCHEMA_VERSION = "1.1.0"
 
 """
     LIBRARY_VERSION
