@@ -8,6 +8,9 @@ via :func:`sympy.lambdify`. This module owns:
   :class:`FlattenedSystem` with scalar algebraic-equation elimination.
 * :class:`_CompiledRhs` and :func:`_compile_flat_rhs` — the lambdify +
   CSE compile that dominates ``solve()`` wall time on large mechanisms.
+* :class:`_EsmNumPyPrinter` and :func:`_lambdify` — the NumPy code printer
+  every lambdify in this tier goes through, which fixes SymPy's float-valued
+  printing of BOOLEAN-valued ``Piecewise``/``ITE`` (esm issue #192).
 
 The ESM ``Expr`` → SymPy converter itself (:func:`_expr_to_sympy`), the
 NaN-safe abs placeholder (:class:`_ess_numeric_abs`, esm-5gk), and
@@ -27,6 +30,8 @@ from typing import Any, Callable
 
 import numpy as np
 import sympy as sp
+from sympy.logic.boolalg import Boolean
+from sympy.printing.numpy import NumPyPrinter
 
 from .esm_types import ExprNode
 
@@ -40,6 +45,103 @@ from .flatten import FlattenedSystem
 # the ``_ess_numeric_abs`` calls emitted by ``_expr_to_sympy`` resolve to
 # ``numpy.abs`` at runtime.
 _LAMBDIFY_MODULES = [{"_ess_numeric_abs": np.abs}, "numpy"]
+
+
+class _EsmNumPyPrinter(NumPyPrinter):
+    """NumPy code printer that keeps BOOLEAN-valued selections boolean.
+
+    SymPy's :class:`~sympy.printing.numpy.NumPyPrinter` lowers every
+    ``Piecewise`` — and every ``ITE``, which it first rewrites to a
+    ``Piecewise`` — to ``numpy.select(conds, vals, default=numpy.nan)``.
+    ``numpy.select`` with a ``nan`` default always returns a FLOAT array, so a
+    selection whose branch values are themselves booleans comes back as
+    ``0.0``/``1.0`` instead of ``False``/``True``. Feeding that float back in
+    as the condition of an enclosing ``select`` is what raises
+
+        invalid entry 0 in condlist: should be boolean ndarray
+
+    Such boolean-valued selections are routine in ESM models: ``ifelse``
+    lowers to ``Piecewise``, and a relational over an ``ifelse`` result —
+    ``ifelse(ζ <= 1, …)`` where ``ζ`` is itself an ``ifelse`` — folds at
+    construction time into ``Piecewise((a <= 1, c), (b <= 1, True))``, which
+    SymPy canonicalizes to ``ITE`` when it lands in a condition slot.
+
+    Without CSE this stays invisible: the enclosing ``_print_Piecewise``
+    special-cases a condition containing ``ITE`` and routes it through
+    ``simplify_logic``, which emits ``logical_and``/``logical_or``. With
+    ``cse=True`` the shared ``ITE`` is hoisted into its own temporary
+    (``x19 = …``), so it is printed on its own — never as a condition — and
+    the ``simplify_logic`` escape hatch never fires. That is why the failure
+    in issue #192 is CSE-only, and why the fix belongs in the printer rather
+    than in the CSE step: a boolean selection printed in ANY position must
+    stay boolean.
+
+    Both overrides emit ``numpy.where``, which preserves the branches' dtype
+    (bool stays bool) and evaluates the condition once.
+    """
+
+    def _print_ITE(self, expr: Any) -> str:
+        cond, if_true, if_false = expr.args
+        return "{}({}, {}, {})".format(
+            self._module_format(self._module + ".where"),
+            self._print(cond),
+            self._print(if_true),
+            self._print(if_false),
+        )
+
+    def _print_Piecewise(self, expr: Any) -> str:
+        if not all(isinstance(arg.expr, Boolean) for arg in expr.args):
+            return super()._print_Piecewise(expr)
+        # Boolean-valued: fold to nested ``numpy.where`` so the result stays a
+        # boolean array. A Piecewise with no ``True`` fallback is undefined
+        # outside its conditions; ``select`` spells that ``nan``, which has no
+        # boolean counterpart, so the fallback is ``False``. ESM's ``ifelse``
+        # always emits a ``(value, True)`` tail, so that arm is unreachable
+        # from a model artifact.
+        out = "False"
+        for arg in reversed(expr.args):
+            if arg.cond == sp.true:
+                out = self._print(arg.expr)
+                continue
+            out = "{}({}, {}, {})".format(
+                self._module_format(self._module + ".where"),
+                self._print(arg.cond),
+                self._print(arg.expr),
+                out,
+            )
+        return out
+
+
+def _lambdify(
+    args: Any,
+    expr: Any,
+    modules: Any,
+    cse: bool = False,
+) -> Callable:
+    """:func:`sympy.lambdify` pinned to :class:`_EsmNumPyPrinter`.
+
+    ``lambdify`` only builds its own printer when none is passed, so the
+    printer settings it would have chosen for a NumPy module list are
+    reproduced here: unqualified names (the generated module does
+    ``from numpy import *``), inline printing, and unknown functions — the
+    ``_ess_numeric_abs`` / ``_ess_fn_<idx>`` placeholders this tier injects
+    through its module dicts — printed as bare calls.
+    """
+    user_functions: dict[str, str] = {}
+    module_list = modules if isinstance(modules, (list, tuple)) else [modules]
+    for module in reversed(list(module_list)):
+        if isinstance(module, dict):
+            for name in module:
+                user_functions[name] = name
+    printer = _EsmNumPyPrinter(
+        {
+            "fully_qualified_modules": False,
+            "inline": True,
+            "allow_unknown_functions": True,
+            "user_functions": user_functions,
+        }
+    )
+    return sp.lambdify(args, expr, modules=modules, printer=printer, cse=cse)
 
 
 def _topo_sort(names: list[str], deps: dict[str, list[str]], label: str) -> list[str]:
@@ -526,7 +628,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     if algebraic_state_names:
         alg_funcs: dict[str, Callable] = {}
         for n in sorted_alg:
-            alg_funcs[n] = sp.lambdify(
+            alg_funcs[n] = _lambdify(
                 all_args,
                 algebraic_value_exprs[n],
                 modules=modules,
@@ -552,7 +654,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
     # Differential RHS — compact core function + sequential-alg wrapper.
     # -------------------------------------------------------------------------
     if state_names:
-        rhs_core_func = sp.lambdify(all_args, rhs_exprs, modules=modules, cse=cse)
+        rhs_core_func = _lambdify(all_args, rhs_exprs, modules=modules, cse=cse)
         if algebraic_state_names:
 
             def rhs_vector_func(
@@ -586,7 +688,7 @@ def _compile_flat_rhs(flat: FlattenedSystem, cse: bool = True) -> _CompiledRhs:
         # able to bind. Plumbing ``t`` here keeps the runner generic
         # without per-equation dispatch.
         t_symbol = sp.Symbol("t")
-        obs_core_func = sp.lambdify(
+        obs_core_func = _lambdify(
             [t_symbol, *all_args],
             obs_value_list,
             modules=modules,
