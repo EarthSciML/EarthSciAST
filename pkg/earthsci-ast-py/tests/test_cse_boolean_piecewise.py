@@ -123,7 +123,12 @@ def _boolean_condition_model() -> EsmFile:
 def _final_values(esm: EsmFile, cse: bool, p: dict[str, float]) -> dict[str, float]:
     res = solve(esm_problem(esm, (0.0, 1.0), p=p, cse=cse), reltol=1e-10, abstol=1e-12)
     assert res.retcode is ReturnCode.Success, res.message
-    return {name.split(".")[-1]: float(res.y[i, -1]) for i, name in enumerate(res.vars)}
+    # Keyed by the FULL name: a leaf-name key would silently collapse
+    # same-suffix variables if the fixture ever grew a second model, leaving
+    # the agreement loop below comparing a survivor against itself.
+    values = {name: float(res.y[i, -1]) for i, name in enumerate(res.vars)}
+    assert len(values) == len(res.vars), f"duplicate variable names in {res.vars}"
+    return values
 
 
 @pytest.mark.parametrize(
@@ -149,12 +154,19 @@ def test_a_boolean_condition_model_solves_and_agrees_under_cse(overrides, phi_m,
     no_cse = _final_values(esm, cse=False, p=overrides)
     with_cse = _final_values(esm, cse=True, p=overrides)
 
-    assert no_cse["phi_m"] == pytest.approx(phi_m)
-    assert no_cse["phi_h"] == pytest.approx(phi_h)
-    assert with_cse["phi_m"] == pytest.approx(phi_m)
-    assert with_cse["phi_h"] == pytest.approx(phi_h)
+    # The two arms must expose the same variables before any value comparison
+    # is meaningful; without this a mismatch surfaces as a bare KeyError.
+    assert no_cse.keys() == with_cse.keys()
+
+    def leaf(values: dict[str, float], name: str) -> float:
+        (match,) = [v for k, v in values.items() if k.split(".")[-1] == name]
+        return match
+
+    for values in (no_cse, with_cse):
+        assert leaf(values, "phi_m") == pytest.approx(phi_m)
+        assert leaf(values, "phi_h") == pytest.approx(phi_h)
     # c(1) = exp(-(φ_m + φ_h)); the shared selection reaches the ODE RHS too.
-    assert with_cse["c"] == pytest.approx(np.exp(-(phi_m + phi_h)), rel=1e-6)
+    assert leaf(with_cse, "c") == pytest.approx(np.exp(-(phi_m + phi_h)), rel=1e-6)
     for name, value in no_cse.items():
         assert with_cse[name] == pytest.approx(value, rel=1e-12, abs=1e-14)
 
