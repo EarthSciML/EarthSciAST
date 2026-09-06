@@ -462,14 +462,19 @@ fn param_scope_with_aliases(params: &HashMap<String, f64>) -> HashMap<String, f6
 /// surfaced "for direct assertion", like the MPAS `div_flux`) rather than a
 /// state: an observed carries no ODE slot, so its field is read from the
 /// [`BuildInspection`]'s `setup_arrays` — the STATE-FREE observed arrays the
-/// run materialized through the official observed machinery. State-free
-/// observeds only: a state- or time-dependent observed is absent from
-/// `setup_arrays` by construction, so this returns `None` and the caller
-/// errors like before (mirroring the Julia `_observed_field`, whose
-/// `evaluate_cellwise` leaves a state reference unbound). Cells are enumerated
-/// from the declared shape's interval index sets, in sorted (lexicographic)
-/// order. Returns `(field, cells)` or `None` when the variable is not such an
-/// observed.
+/// run materialized through the official observed machinery.
+///
+/// This source stays STATE-FREE-only: a state- or time-dependent observed is
+/// absent from `setup_arrays` by construction, and this returns `None` for it.
+/// That is no longer the end of the assertion, though — the runner REQUESTS such
+/// an observed (`assertion_observed_requests`), the array runtime emits it as
+/// one row per cell, and the assertion reads those rows through `state_cells`
+/// before ever reaching here. So a `None` from this function means "not a field
+/// the BUILD carries", not "unassertable".
+///
+/// Cells are enumerated from the declared shape's interval index sets, in sorted
+/// (lexicographic) order. Returns `(field, cells)` or `None` when the variable
+/// is not such an observed.
 fn observed_field(
     file: &EsmFile,
     model_name: &str,

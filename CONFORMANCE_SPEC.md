@@ -3911,6 +3911,18 @@ shadow evaluator for it:
 | Binding | How |
 |---|---|
 | Julia | `_state_scope` re-assembles the solved state (and `t`) from the flat state vector and puts it into the two `evaluate_cellwise` scopes the observed's resolved expression already resolves against; without it the same expression raised `E_TREEWALK_UNBOUND_VARIABLE: <Model>.u` |
+
+**The trajectory sample is a SCOPE, not a mode switch.** A binding that reaches
+the answer by adding the sample to an existing evaluation scope MUST NOT make
+the state-free path conditional on that scope being empty. The assertion path
+seeds the scope unconditionally (with `t` if nothing else), so such a condition
+never holds there, and what it disables is the build's own optimisation for the
+state-FREE target — the MPAS `div_flux` case, whose producers are then
+re-executed once per output cell of the consumer instead of materialized once
+each. Julia's `_materialized_obs_scope` therefore takes the scope it evaluates
+against from its caller: the build path passes the const arrays, the assertion
+path passes those plus the sample, and a state-dependent target's producers
+materialize at that sample exactly as a state-free one's do at build.
 | Python | `observed_at_state` seeds an `EvalContext` with the build's once-materialized state-free products and replays `_materialize_observeds` over the dependency-ordered time-varying observeds at that `(t, y)` — the same driver the per-step RHS uses |
 | Rust | the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already knew how to emit as one row per cell; the assertion then reads ordinary cell rows |
 

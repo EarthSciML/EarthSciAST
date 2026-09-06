@@ -596,15 +596,24 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # E_TREEWALK_UNBOUND_VARIABLE. The inlined form has no such dependency, so
     # falling back to it makes this change strictly an optimisation: identical
     # values when it succeeds, previous behaviour exactly when it cannot.
-    # The producer-materializing fast path is a BUILD-scope optimisation (it
-    # evaluates state-free producers once instead of per output cell). With a
-    # trajectory sample in scope the target is state-dependent, so its producers
-    # are too and none of them materializes; go straight to the self-contained
-    # inlined form.
-    if raw !== nothing && isempty(state_arrays) && isempty(state_scalars)
+    # The producer-materializing fast path runs against `const_scope`, NOT the
+    # build's const arrays alone, so it serves both kinds of target. Gating it on
+    # an empty state scope instead would have disabled it outright: the assertion
+    # callsite always seeds `state_scalars` with `t`, so `isempty(state_scalars)`
+    # is never true there and the MPAS `div_flux` case — state-free, and the very
+    # case this path was written for — would have paid the per-output-cell
+    # re-execution it exists to remove. Seeding the scope with the trajectory
+    # sample instead lets a STATE-DEPENDENT target's producers materialize too,
+    # at that sample: `raw` names them, they are filled once each in dependency
+    # order, and the target is then one cellwise pass over buffers. Values are
+    # the inlined form's either way — a producer neither form can evaluate here
+    # simply stays un-materialized and its reader inlines it, and any failure
+    # still falls through to the self-contained body below.
+    if raw !== nothing
         try
-            ca = _materialized_obs_scope(insp, file, mname, String(variable), params)
-            if ca !== insp.const_arrays          # something actually materialized
+            ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
+                                         base=const_scope)
+            if ca !== const_scope                # something actually materialized
                 return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params),
                         cells)
             end
@@ -617,10 +626,18 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
 end
 
 """
-    _materialized_obs_scope(insp, file, mname, target, params) -> const-array scope
+    _materialized_obs_scope(insp, file, mname, target, params; base) -> const-array scope
 
 Materialize the ARRAY-shaped observed producers `target` depends on, once each in
-dependency order, and return `insp.const_arrays` augmented with those buffers.
+dependency order, and return `base` augmented with those buffers.
+
+`base` is the array scope the producers are evaluated AGAINST as well as the map
+that is extended, and defaults to `insp.const_arrays` — the build-time answer.
+A §6.6.5 assertion passes the build's const arrays PLUS the trajectory sample
+(`_state_scope`), which is what lets a STATE-DEPENDENT target use this path at
+all: its producers read the solved state, so against `insp.const_arrays` alone
+every one of them fails to resolve and the whole chain re-executes per output
+cell of the consumer.
 
 Why this exists. `evaluate_cellwise` walks the expression once PER OUTPUT CELL, so
 an array observed inlined into its readers is re-executed at every cell of the
@@ -648,15 +665,17 @@ downstream field in its last bits — observed at 5e-15 on the ISRM point docume
 when the `observed_exprs` fallback below was added. Nothing semantic changes, and
 nothing about WHICH terms are summed.
 
-Returns `insp.const_arrays` itself when there is nothing to materialize, so models
-whose observeds are scalar or independent keep the previous behaviour and cost.
+Returns `base` ITSELF (by identity, which is how the caller detects the no-op)
+when there is nothing to materialize, so models whose observeds are scalar or
+independent keep the previous behaviour and cost.
 """
 function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                                  mname::AbstractString, target::AbstractString,
-                                 params::AbstractDict)
-    isempty(insp.observed_defs) && return insp.const_arrays
+                                 params::AbstractDict;
+                                 base::AbstractDict=insp.const_arrays)
+    isempty(insp.observed_defs) && return base
     model = get(file.models, String(mname), nothing)
-    model === nothing && return insp.const_arrays
+    model === nothing && return base
 
     # TWO published forms of an observed's body, and this needs BOTH.
     #
@@ -735,7 +754,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     end
     visit(String(target))
 
-    ca = Dict{String,Any}(insp.const_arrays)
+    ca = Dict{String,Any}(base)
     materialized = 0
     for n in order
         n == String(target) && continue        # the caller evaluates this one
@@ -769,7 +788,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         ca[n] = buf
         materialized += 1
     end
-    return materialized == 0 ? insp.const_arrays : ca
+    return materialized == 0 ? base : ca
 end
 
 # Flat slot of a SCALAR state / scalar OBSERVED by model-qualified name
