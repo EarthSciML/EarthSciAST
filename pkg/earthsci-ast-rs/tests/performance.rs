@@ -591,6 +591,9 @@ fn test_parallel_stoichiometric_matrix_computation() {
     let system = ReactionSystem {
         subsystems: None,
         reference: None,
+        tolerance: None,
+        tests: None,
+        analyses: None,
         species,
         parameters,
         reactions,
