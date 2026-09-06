@@ -722,7 +722,7 @@ does is keep absence distinguishable from any default: a missing key stays
 function coerce_solver(data)
     data === nothing && return nothing
     data isa AbstractDict || return nothing
-    _f(k) = _raw_get(data, k, nothing)
+    _f(k) = _raw_get(data, k)  # 2-arity; absent reports as `nothing`
     _num(v) = v === nothing ? nothing : Float64(v)
     _str(v) = v === nothing ? nothing : String(v)
     return Solver(stiffness=_str(_f("stiffness")),
