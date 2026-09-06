@@ -127,6 +127,7 @@ fn bridge_expand_equals_expanded_oracle() {
         ),
         ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
         ("import_rename_diamond", "fixture.esm", "expanded.esm"),
+        ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
         ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
         ("import_smoke", "fixture.esm", "expanded.esm"),
         (

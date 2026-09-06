@@ -1,0 +1,29 @@
+{
+  "esm": "1.0.0",
+  "metadata": { "name": "column_integral_1d", "description": "Cumulative-integral rule family for a uniform 1-D axis sized by metaparameter N: index set x, cell-measure template dx = 1/N, and a `where`-constrained rule cumulative_integral_x matching the partial integral {op: integral, args: [f], var: x, lower: 0, upper: x} (esm-spec 4.2) and lowering it to the canonical prefix reduction of 4.3.1. Every axis occurrence of the rule is written in the library's own generic vocabulary — the shape constraint, the range `from`s, AND the match's `var` / `upper` bounds — so an import edge that renames x MUST rewrite all of them together (esm-spec 9.7.7); a rule whose `var` stayed x would no longer match a consumer that only ever named the renamed axis, and the integral would survive lowering as unlowered_operator." },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 4, "description": "cell count" }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "dx": { "params": [], "body": { "op": "/", "args": [1, "N"] } },
+    "cumulative_integral_x": {
+      "params": ["f"],
+      "match": { "op": "integral", "args": ["f"], "var": "x", "lower": 0, "upper": "x" },
+      "where": { "f": { "shape": ["x"] } },
+      "body": {
+        "op": "aggregate",
+        "output_idx": ["i"],
+        "reduce": "+",
+        "args": ["f"],
+        "ranges": { "i": { "from": "x" }, "j": { "from": "x" } },
+        "filter": { "op": "<=", "args": ["j", "i"] },
+        "expr": { "op": "*", "args": [
+          { "op": "index", "args": ["f", "j"] },
+          { "op": "apply_expression_template", "args": [], "name": "dx", "bindings": {} } ] }
+      }
+    }
+  }
+}

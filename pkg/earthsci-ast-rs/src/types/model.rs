@@ -86,7 +86,7 @@ fn flatten_inline(
         InlineValue::Scalar(v) => {
             if depth != shape.len() {
                 return Err(format!(
-                    "inline array data is ragged: a number appears at nesting depth {depth}                      where an array of {} elements is expected",
+                    "inline array data is ragged: a number appears at nesting depth {depth} where an array of {} elements is expected",
                     shape[depth]
                 ));
             }

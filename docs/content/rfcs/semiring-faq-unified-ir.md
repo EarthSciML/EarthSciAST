@@ -203,7 +203,13 @@ one of the three kinds in the list above:
 
 A reference resolves by name to exactly one entry; the resolver MUST error on an
 undeclared name (no implicit interval inference) so that a typo can't silently
-become an empty set.
+become an empty set. The registry it resolves against is the *effective* one —
+the document's own entries merged with those of any template library imported
+into the component's scope (esm-spec §9.7.5) — so a document that declares no
+`index_sets` at all is a §9.7.10 discretization-agnostic leaf whose sets arrive
+by injection, and `validate()` does not decide `undefined_index_set` for it at
+standalone load (CONFORMANCE_SPEC §5.6.4). The resolver still errors once the
+scope has closed.
 
 **How a ragged set binds to its backing array.** A `kind: "ragged"` set is the
 named, first-class form of the per-cell dynamic bound the evaluator already

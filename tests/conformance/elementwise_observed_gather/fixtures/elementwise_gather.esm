@@ -1,0 +1,74 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "elementwise_gather",
+    "description": "An ARRAY-shaped observed written ELEMENTWISE over another array (f = 1 + cos(pi*zc), zc shaped [lev]) and consumed ONLY through an `index(f, j)` gather inside `aggregate` bodies. The spelling a column library reaches for; the gather must distribute over the elementwise combination down to the array leaf `zc`."
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": 4 }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "zc":     { "type": "unknown", "shape": ["lev"] },
+        "f":      { "type": "unknown", "shape": ["lev"] },
+        "colsum": { "type": "unknown", "shape": ["lev"] },
+        "total":  { "type": "unknown" },
+        "u":      { "type": "unknown", "shape": ["lev"], "default": 0.0 },
+        "s":      { "type": "unknown", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "colsum" },
+        { "lhs": { "op": "D", "args": ["s"], "wrt": "t" }, "rhs": "total" },
+        {
+          "lhs": "zc",
+          "rhs": { "op": "const", "args": [], "value": [0.0, 1.0, 2.0, 3.0] }
+        },
+        {
+          "lhs": "f",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1,
+              { "op": "cos", "args": [ { "op": "*", "args": [3.141592653589793, "zc"] } ] }
+            ]
+          }
+        },
+        {
+          "lhs": "colsum",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": ["i"],
+            "ranges": { "i": [1, 4], "j": [1, 4] },
+            "args": ["f"],
+            "filter": { "op": "<=", "args": ["j", "i"] },
+            "expr": { "op": "index", "args": ["f", "j"] }
+          }
+        },
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "aggregate", "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": { "j": [1, 4] },
+            "args": ["f"],
+            "expr": { "op": "index", "args": ["f", "j"] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "elementwise_gather",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "u", "time": 1.0, "coords": { "lev": 1 }, "expected": 2.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "coords": { "lev": 3 }, "expected": 4.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "reduce": "max", "expected": 4.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "u", "time": 1.0, "reduce": "min", "expected": 2.0, "tolerance": { "abs": 1e-11 } },
+            { "variable": "s", "time": 1.0, "expected": 4.0, "tolerance": { "abs": 1e-11 } }
+          ]
+        }
+      ]
+    }
+  }
+}

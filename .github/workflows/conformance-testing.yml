@@ -633,6 +633,16 @@ jobs:
     timeout-minutes: 10
     needs: [standard-conformance-testing]
     if: always()
+    # This is the only job that writes to the PR. The workflow-level default
+    # is `contents: read`, under which the comment step below 403s on every
+    # pull request ("Resource not accessible by integration"), failing the job
+    # whatever the conformance outcome. Granted here rather than workflow-wide
+    # so the ~20 test jobs keep the read-only token. A job-level block replaces
+    # the workflow-level one outright, so `contents: read` is restated for
+    # `actions/checkout`.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -710,14 +720,14 @@ jobs:
 
                 comment += `\n📊 [View detailed conformance report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
 
-                github.rest.issues.createComment({
+                await github.rest.issues.createComment({
                   issue_number: context.issue.number,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   body: comment
                 });
               } else {
-                github.rest.issues.createComment({
+                await github.rest.issues.createComment({
                   issue_number: context.issue.number,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -725,13 +735,20 @@ jobs:
                 });
               }
             } catch (error) {
+              // Reporting the result must not decide the result. A fork PR
+              // still carries a read-only token no `permissions:` block can
+              // widen, so this path stays reachable by design.
               console.error('Error posting conformance results:', error);
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `❌ Error processing conformance test results: ${error.message}`
-              });
+              try {
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `❌ Error processing conformance test results: ${error.message}`
+                });
+              } catch (postError) {
+                console.error('Could not post the failure comment either:', postError);
+              }
             }
 
       # Final status check
