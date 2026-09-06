@@ -127,6 +127,7 @@ def _err_code(fn) -> str | None:
         ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
         ("import_rebind_keyed_factors", "fixture.esm", "expanded.esm"),
         ("import_rename_diamond", "fixture.esm", "expanded.esm"),
+        ("import_rename_integral_axis", "fixture.esm", "expanded.esm"),
     ],
 )
 def test_import_conformance_matches_golden(group, fixture, golden):
@@ -362,6 +363,30 @@ def test_import_where_rename_carries_where_shape():
     f = load_path(os.path.join(CONF, "import_where_rename_two_instances", "fixture.esm"))
     assert f.index_sets["meshA.x"]["size"] == 16
     assert f.index_sets["meshB.x"]["size"] == 8
+
+
+def test_import_rename_integral_axis_follows_var_and_bounds():
+    """§9.7.7 occurrence list for an ``integral`` rewrite rule: the rename must
+    rewrite the AXIS-NAMING scalar fields of the match — the integration
+    variable ``var`` AND a bare-axis-name ``lower``/``upper`` bound — alongside
+    ``wrt``/``dim``. Otherwise the renamed instance keeps matching the library's
+    own axis, never fires on the consumer's renamed one, and the integral
+    survives lowering (``unlowered_operator``)."""
+    d = _expand_raw(os.path.join(CONF, "import_rename_integral_axis", "fixture.esm"))
+    # (the fixture's prose mentions the op by name, so match the op FIELD)
+    models = json.dumps(d["models"], separators=(",", ":"))
+    assert '"op":"integral"' not in models, "an `integral` survived lowering"
+    # Each instance lowered on its OWN axis at its OWN cell measure: the rename
+    # carried `var`/`upper` per edge, so col's rule fired on lev, row's on lat.
+    for var, axis, n in (("Q", "lev", 4), ("P", "lat", 3)):
+        agg = _defining(d, "Column", var)
+        assert agg["op"] == "aggregate"
+        assert agg["ranges"]["i"] == {"from": axis}
+        assert agg["ranges"]["j"] == {"from": axis}
+        assert agg["expr"]["args"][1] == {"op": "/", "args": [1, n]}
+    f = load_path(os.path.join(CONF, "import_rename_integral_axis", "fixture.esm"))
+    assert f.index_sets["lev"]["size"] == 4
+    assert f.index_sets["lat"]["size"] == 3
 
 
 def test_import_where_rename_unknown_index_set_rejected():

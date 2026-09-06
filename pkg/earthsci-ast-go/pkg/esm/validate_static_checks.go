@@ -116,8 +116,18 @@ func (s *structuralScan) validateModelStaticAggregateChecks(modelName string, mo
 // checkAggregateUndefinedIndexSet reports undefined_index_set for every
 // `ranges` entry whose `{from: NAME}` names a set absent from the document
 // `index_sets` registry (RFC §5.2 — no implicit interval is inferred).
+//
+// Run only when the document DECLARES a registry. A document that declares none
+// is a §9.7.10 discretization-agnostic PDE leaf: its index sets arrive from a
+// discretization library injected into this component's scope by a composing
+// document, a subsystem-ref edge or an inline test (§6.6.6), so the effective
+// registry exists only in that per-run build and resolving `{from: NAME}`
+// against the empty local registry would reject every conforming leaf. The
+// check is deferred there, mirroring §9.6.1's standalone exemption for
+// template_constraint_unknown_index_set; a name still unresolved once injection
+// has run is rejected by the evaluating bindings' resolvers (issue #185).
 func (s *structuralScan) checkAggregateUndefinedIndexSet(node ExprNode, fieldPath, modelName string, seen map[string]bool) {
-	if s.file == nil {
+	if s.file == nil || len(s.file.IndexSets) == 0 {
 		return
 	}
 	for _, rangeKey := range sortedKeys(node.Ranges) {

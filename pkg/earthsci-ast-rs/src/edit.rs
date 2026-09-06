@@ -582,7 +582,7 @@ mod tests {
     fn test_add_variable() {
         let model = create_simple_model();
         let variable = ModelVariable {
-            default: Some(1.0),
+            default: Some(1.0.into()),
             ..var(VariableType::Parameter, Some("mol/L"))
         };
 
@@ -602,7 +602,7 @@ mod tests {
         );
 
         let variable = ModelVariable {
-            default: Some(1.0),
+            default: Some(1.0.into()),
             ..var(VariableType::Unknown, Some("mol/L"))
         };
 

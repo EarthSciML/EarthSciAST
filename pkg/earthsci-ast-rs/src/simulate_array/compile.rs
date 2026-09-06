@@ -579,6 +579,11 @@ impl ArrayCompiled {
         // subsystems / ragged sets.
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
+        // Lower every SHAPED parameter whose value is authored as inline array
+        // data (esm-spec §6.3 / §6.6.2) into the `const`-observed channel this
+        // runtime already reads. Runs after mounting so a subsystem's shaped
+        // parameter is lowered under its namespaced name too.
+        lower_inline_array_parameters(&mut model_owned, &index_sets_owned)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -692,7 +697,7 @@ impl ArrayCompiled {
             let (final_states, eliminated, held_at_ic) = partition_states(model, &state_vars);
 
             // (4) Build flat offsets and scalar-slot names per state variable.
-            let slots = build_slot_tables(model, &final_states, &shape_map);
+            let slots = build_slot_tables(model, &final_states, &shape_map)?;
 
             // (5) Build the param tables.
             let (param_names, param_index, param_defaults) = build_param_tables(model, &param_vars);
@@ -711,6 +716,10 @@ impl ArrayCompiled {
                 param_defaults,
             )
         };
+
+        // (5c) The build-time array scope a field `ic` may read (esm-spec
+        // §6.6.5) — captured before stage (6) moves the bodies out.
+        let ic_scope_defs = capture_ic_scope_defs(&model_owned, &observed_names, &slots.var_shapes);
 
         // (6)+(6b) Build the dependency-ordered observed algebraic rules,
         // MOVING each declared observed's body expression out of the model.
@@ -747,6 +756,7 @@ impl ArrayCompiled {
             n_states,
             forcing: Rc::new(RefCell::new(HashMap::new())),
             field_ics,
+            ic_scope_defs,
             index_sets: index_sets.clone(),
             namespace: None,
             const_scope,
@@ -1091,6 +1101,175 @@ fn check_expr_free_vars(expr: &Expr, scope: &HashSet<String>) -> Result<(), Comp
     }
 }
 
+/// Collect every bare-variable name an expression references, at any depth.
+fn collect_expr_names(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Variable(name) => {
+            out.insert(name.clone());
+        }
+        Expr::Operator(node) => {
+            node.for_each_child(&mut |child| collect_expr_names(child, out));
+        }
+        _ => {}
+    }
+}
+
+/// The STATE-FREE observed definitions an `ic` right-hand side may read
+/// (esm-spec §6.6.5 "Build-time evaluation scope").
+///
+/// A state-free observed — one whose defining expression closes over parameters,
+/// inline `const` data and other state-free observeds, with no state and no `t`
+/// — is resolvable BEFORE the simulation runs; the build already materializes
+/// exactly this class of field as a setup array for `BuildInspection`.
+/// Admitting it as an `ic` RHS (esm-spec §11.4.1) is the same evaluator reached
+/// from one more place, and it is what lets a column test seed `u` from a
+/// `const` gather instead of minting a per-regime rewrite-rule library.
+///
+/// Captured HERE, before stage (6) MOVES each observed's body out of the model,
+/// and evaluated lazily by [`ArrayCompiled::resolve_field_ics`] — only when the
+/// document actually has a field `ic` to fold.
+fn capture_ic_scope_defs(
+    model: &Model,
+    observed_names: &[String],
+    state_names: &IndexMap<String, VarShape>,
+) -> Vec<(String, Expr)> {
+    if !model
+        .equations
+        .iter()
+        .any(|eq| matches!(&eq.lhs, Expr::Operator(n) if n.op == "ic"))
+    {
+        return Vec::new();
+    }
+    let observed: HashSet<&String> = observed_names.iter().collect();
+    let bodies = observed_bodies(model);
+    let mut out: Vec<(String, Expr)> = Vec::new();
+    for (name, body) in bodies {
+        if !observed.contains(&name) {
+            continue;
+        }
+        let mut names = HashSet::new();
+        collect_expr_names(&body, &mut names);
+        if names
+            .iter()
+            .any(|n| n == "t" || state_names.contains_key(n))
+        {
+            continue;
+        }
+        out.push((name, body));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// The ROW-major (last index fastest) linear offset of the 0-based multi-index
+/// `multi` in an array of extents `shape` — the order an authored nested JSON
+/// array reads in, which is not this runtime's column-major slot order.
+fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
+    multi
+        .iter()
+        .zip(shape.iter())
+        .fold(0usize, |acc, (i, n)| acc * n + i)
+}
+
+/// Lower every SHAPED parameter whose value is authored as INLINE ARRAY DATA —
+/// a row-major nested JSON array on its `default` (esm-spec §6.3, and the
+/// `parameter_overrides` a test resolves into it, §6.6.2) — into the `const`
+/// observed channel this runtime already evaluates.
+///
+/// A parameter's value reaches the RHS through the positional scalar `params`
+/// vector, which has exactly one f64 per parameter: a whole column has nowhere
+/// to live there. It does have somewhere to live as a `const`-op observed —
+/// the established self-contained build-time array channel ([`eval_const`],
+/// [`collect_const_factor_arrays`], the `ConstArrayScope` gather policy) — so
+/// the parameter is re-declared as an observed defined by its own data. That is
+/// exactly the lowering a column component had to author by hand as a per-regime
+/// rewrite-rule library; doing it here is what lets one shared component carry
+/// its profiles inline.
+///
+/// A parameter with a SCALAR default is untouched (it keeps its broadcast
+/// meaning and its `params` slot), and so is a 0-D one, so this is a no-op for
+/// every document that does not author array data.
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] when the authored array is ragged or
+/// its extents do not match the declared `shape` resolved against the index-set
+/// registry — the load-time shape check esm-spec §6.6.2 requires.
+fn lower_inline_array_parameters(
+    model: &mut Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Result<(), CompileError> {
+    let mut lowered: Vec<(String, JsonValue)> = Vec::new();
+    for (name, var) in &mut model.variables {
+        if var.var_type != VariableType::Parameter {
+            continue;
+        }
+        let Some(default) = var.default.as_ref() else {
+            continue;
+        };
+        if !default.is_array() {
+            continue;
+        }
+        let (shape, values) = default.to_dense().map_err(|e| {
+            CompileError::build_err(format!("parameter '{name}': {e} (esm-spec §6.3)"))
+        })?;
+        let declared = var.shape.as_deref().unwrap_or(&[]);
+        if declared.is_empty() {
+            return Err(CompileError::build_err(format!(
+                "parameter '{name}' carries inline array data but declares no `shape`; only a \
+                 SHAPED variable takes a nested array (esm-spec §6.3)"
+            )));
+        }
+        if let Some(want) = resolve_declared_shape(declared, index_sets)
+            && want != shape
+        {
+            return Err(CompileError::build_err(format!(
+                "parameter '{name}': inline array data has shape {shape:?}, which does not match \
+                 the declared shape {want:?} (esm-spec §6.6.2 — the array MUST match the \
+                 variable's declared shape after metaparameter folding)"
+            )));
+        }
+        var.var_type = VariableType::Unknown;
+        var.default = None;
+        lowered.push((name.clone(), dense_to_json(&shape, &values)));
+    }
+    for (name, value) in lowered {
+        // A bare-variable LHS makes it an OBSERVED (esm-spec §6.3.1), and a
+        // `const` RHS makes it build-time data — the same pair
+        // `rewrite_equation_to_const` produces for a materialized relational
+        // output.
+        model.equations.push(crate::types::Equation {
+            lhs: Expr::Variable(name),
+            rhs: Expr::operator(ExpressionNode {
+                op: "const".to_string(),
+                value: Some(value),
+                ..Default::default()
+            }),
+            comment: None,
+        });
+    }
+    Ok(())
+}
+
+/// Re-nest a row-major dense buffer into the nested JSON array a `const` node
+/// carries. The inverse of [`crate::types::InlineValue::to_dense`].
+fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
+    fn build(shape: &[usize], values: &[f64]) -> JsonValue {
+        let Some((&axis, rest)) = shape.split_first() else {
+            return serde_json::Number::from_f64(values[0])
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null);
+        };
+        let stride = rest.iter().product::<usize>().max(1);
+        JsonValue::Array(
+            (0..axis)
+                .map(|i| build(rest, &values[i * stride..(i + 1) * stride]))
+                .collect(),
+        )
+    }
+    build(shape, values)
+}
+
 /// (1) Collect state / parameter / observed variables (sorted by name for a
 /// deterministic build).
 ///
@@ -1242,11 +1421,16 @@ struct SlotTables {
 
 /// (4) Build the flat offset and scalar-slot names per state variable
 /// (column-major slot enumeration).
+///
+/// # Errors
+///
+/// [`CompileError::InterpreterBuildError`] when a state's inline array `default`
+/// (esm-spec §6.3) is ragged or does not match its resolved grid shape.
 fn build_slot_tables(
     model: &Model,
     final_states: &[String],
     shape_map: &HashMap<String, Vec<usize>>,
-) -> SlotTables {
+) -> Result<SlotTables, CompileError> {
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
     let mut scalar_state_names: Vec<String> = Vec::new();
     let mut scalar_state_index: HashMap<String, usize> = HashMap::new();
@@ -1260,7 +1444,32 @@ fn build_slot_tables(
         } else {
             vec![1i64; shape.len()]
         };
-        let default = model.variables.get(name).and_then(|v| v.default);
+        let var = model.variables.get(name);
+        let default = var.and_then(|v| v.default_scalar());
+        // A SHAPED unknown may declare its whole initial profile as INLINE
+        // ARRAY DATA (esm-spec §6.3) instead of one broadcast scalar. Flatten it
+        // ROW-major (the authored nesting's order) and read each cell at its own
+        // multi-index below — the slot enumeration here is COLUMN-major, so the
+        // two orders coincide only in rank 1 and the value must be gathered, not
+        // zipped. A ragged array or a shape that disagrees with the slots is a
+        // build error, never a silently mis-seeded state vector.
+        let default_field = match var.and_then(|v| v.default_array()) {
+            Some(Ok((dshape, values))) => {
+                if dshape != shape {
+                    return Err(CompileError::build_err(format!(
+                        "state '{name}': inline array `default` has shape {dshape:?}, which does \
+                         not match the resolved grid shape {shape:?} (esm-spec §6.6.2)"
+                    )));
+                }
+                Some(values)
+            }
+            Some(Err(e)) => {
+                return Err(CompileError::build_err(format!(
+                    "state '{name}': {e} (esm-spec §6.3)"
+                )));
+            }
+            None => None,
+        };
         let total = shape.iter().copied().product::<usize>().max(1);
         if shape.is_empty() {
             scalar_state_names.push(name.clone());
@@ -1279,7 +1488,10 @@ fn build_slot_tables(
                 let slot_name = format!("{name}[{idx_str}]");
                 scalar_state_names.push(slot_name.clone());
                 scalar_state_index.insert(slot_name, flat_offset + flat);
-                state_defaults.push(default);
+                state_defaults.push(match default_field.as_ref() {
+                    Some(values) => Some(values[row_major_offset(&multi, &shape)]),
+                    None => default,
+                });
             }
         }
         var_shapes.insert(
@@ -1293,13 +1505,13 @@ fn build_slot_tables(
         flat_offset += total;
     }
 
-    SlotTables {
+    Ok(SlotTables {
         var_shapes,
         scalar_state_names,
         scalar_state_index,
         state_defaults,
         n_states: flat_offset,
-    }
+    })
 }
 
 /// (5) Build the param tables: positional names, name → position index, and
@@ -1316,7 +1528,7 @@ fn build_param_tables(
         .collect();
     let param_defaults: Vec<Option<f64>> = param_vars
         .iter()
-        .map(|n| model.variables.get(*n).and_then(|v| v.default))
+        .map(|n| model.variables.get(*n).and_then(|v| v.default_scalar()))
         .collect();
     (param_names, param_index, param_defaults)
 }
@@ -2420,11 +2632,25 @@ pub(crate) fn eval_buildtime_field(
     index_sets: &HashMap<String, IndexSet>,
     params: &HashMap<String, f64>,
 ) -> Result<Value, CompileError> {
+    eval_buildtime_field_in_scope(expr, index_sets, params, &HashMap::new())
+}
+
+/// [`eval_buildtime_field`] with a build-time ARRAY scope bound by name — a
+/// provider-served forcing field, a shaped parameter's inline column, and the
+/// STATE-FREE array observeds an `ic` RHS may read (esm-spec §6.6.5). The arrays
+/// bind exactly where state arrays would, so a bare read yields the whole field
+/// and `index(name, k)` gathers a cell.
+pub(crate) fn eval_buildtime_field_in_scope(
+    expr: &Expr,
+    index_sets: &HashMap<String, IndexSet>,
+    params: &HashMap<String, f64>,
+    scope: &HashMap<String, ArrayD<f64>>,
+) -> Result<Value, CompileError> {
     let mut resolved = expr.clone();
     crate::aggregate::resolve_expr_ranges(&mut resolved, index_sets)?;
     let param_names: Vec<String> = params.keys().cloned().collect();
     let param_vec: Vec<f64> = param_names.iter().map(|n| params[n]).collect();
-    eval_expression(&resolved, &HashMap::new(), &param_vec, &param_names, 0.0)
+    eval_expression(&resolved, scope, &param_vec, &param_names, 0.0)
 }
 
 /// Resolve one grid cell's initial value for a scoped-reference / array `ic`
@@ -2900,7 +3126,7 @@ fn collect_scalar_param_defaults(model: &Model) -> HashMap<String, f64> {
     for (name, var) in &model.variables {
         if var.var_type == VariableType::Parameter
             && var.shape.as_ref().map(|s| s.is_empty()).unwrap_or(true)
-            && let Some(d) = var.default
+            && let Some(d) = var.default_scalar()
         {
             out.insert(name.clone(), d);
         }

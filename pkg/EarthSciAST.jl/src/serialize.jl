@@ -625,6 +625,12 @@ function _record_emit_expr(row, v)
         :(let x = $v; x isa Number ? x : serialize_expression(x) end)
     elseif kind === :float_map
         :(Dict{String,Any}(k => x for (k, x) in $v))
+    elseif kind === :value_map
+        # A scalar emits as a number; INLINE ARRAY DATA emits as the row-major
+        # nested JSON array it was authored as (esm-spec §6.6.2).
+        :(Dict{String,Any}(k => _emit_inline_value(x) for (k, x) in $v))
+    elseif kind === :inline_value
+        :(_emit_inline_value($v))
     elseif kind === :raw_vec
         :([_to_native_json(e) for e in $v])
     elseif kind === :model_variable_type

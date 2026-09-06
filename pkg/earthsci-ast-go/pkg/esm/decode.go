@@ -177,6 +177,25 @@ func unmarshalOptionalExpression(raw json.RawMessage) (Expression, error) {
 	return UnmarshalExpression(raw)
 }
 
+// unmarshalDefaultValue decodes a variable's `default`: a scalar goes through
+// [UnmarshalExpression] (keeping the int/float wire shape), while a JSON ARRAY
+// is INLINE ARRAY DATA for a SHAPED variable (esm-spec §6.3 / §6.6.2) and is
+// decoded verbatim into nested `[]any`, so `parse → emit` reproduces the
+// authored nesting exactly.
+func unmarshalDefaultValue(raw json.RawMessage) (any, error) {
+	if !rawIsPresent(raw) {
+		return nil, nil
+	}
+	if trimmed := bytes.TrimLeft(raw, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
+		var arr []any
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, err
+		}
+		return arr, nil
+	}
+	return UnmarshalExpression(raw)
+}
+
 // Custom JSON unmarshaling for Equation
 func (e *Equation) UnmarshalJSON(data []byte) error {
 	// Define a temporary struct with the same structure but using json.RawMessage
@@ -303,7 +322,12 @@ func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
 	// Decode `default` through UnmarshalExpression so an integer-valued default
 	// (`"default": 1`) keeps its int wire shape instead of collapsing to
 	// float64 and re-emitting as "1.0", per RFC §5.4.1 int/float distinction.
-	def, err := unmarshalOptionalExpression(temp.Default)
+	//
+	// A JSON ARRAY is INLINE ARRAY DATA — a SHAPED variable's whole field as a
+	// row-major nested array (esm-spec §6.3 / §6.6.2) — not an expression, so it
+	// is carried verbatim. This binding is a rewrite-only port with no
+	// simulator: it round-trips the authored value rather than interpreting it.
+	def, err := unmarshalDefaultValue(temp.Default)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal default: %w", err)
 	}

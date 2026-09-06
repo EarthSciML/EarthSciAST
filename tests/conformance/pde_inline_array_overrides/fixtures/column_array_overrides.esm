@@ -1,0 +1,438 @@
+{
+    "esm": "1.0.0",
+    "metadata": {
+        "name": "pde_inline_array_overrides",
+        "description": "esm-spec 6.6.2 'Shaped values' + 11.4 state-free array observed ic. One SHARED column component carries its per-regime inputs inline: the shaped parameter `theta0` takes a row-major nested array as its `default` and as each test's `parameter_overrides`, the shaped unknown `v` takes one as its `initial_conditions`, and `w` is seeded by `ic(w) ~ gathered` where `gathered` is a state-free array observed (a `const` gather). Every regime is one test of the same document -- the shape 6.6 describes for 0-D components -- instead of one generated .esm per regime.",
+        "authors": [
+            "EarthSciAST"
+        ],
+        "tags": [
+            "pde-inline-test",
+            "esm-spec-6.3",
+            "esm-spec-6.6.2",
+            "esm-spec-6.6.5",
+            "esm-spec-11.4",
+            "inline-array-data",
+            "parameter-overrides",
+            "initial-conditions",
+            "state-free-array-observed-ic"
+        ]
+    },
+    "index_sets": {
+        "lev": {
+            "kind": "interval",
+            "size": 4
+        }
+    },
+    "models": {
+        "Column": {
+            "tolerance": {
+                "abs": 1e-12,
+                "rel": 1e-09
+            },
+            "variables": {
+                "theta0": {
+                    "type": "parameter",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": [
+                        300.0,
+                        301.5,
+                        303.25,
+                        305.0
+                    ],
+                    "description": "The column's potential-temperature profile, authored as INLINE ARRAY DATA. Each test replaces it wholesale through parameter_overrides; it is read ONLY by ic(u), so the override can change the answer through the build-time scope and nowhere else."
+                },
+                "gathered": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "description": "A STATE-FREE array observed: a const gather, resolvable before the run. Its whole purpose is to be an ic RHS (esm-spec 11.4)."
+                },
+                "u": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "description": "Seeded from the shaped parameter's inline column by ic(u) ~ theta0; held constant by D(u)/dt = 0 so every assertion reads the seed."
+                },
+                "v": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": [
+                        1.0,
+                        2.0,
+                        3.0,
+                        4.0
+                    ],
+                    "description": "Its declared `default` is inline array data; a test may replace the whole profile through initial_conditions. Held constant."
+                },
+                "w": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "description": "Seeded by ic(w) ~ gathered -- a state-free array observed as the ic RHS. Held constant."
+                }
+            },
+            "equations": [
+                {
+                    "lhs": "gathered",
+                    "rhs": {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                            10.0,
+                            20.0,
+                            30.0,
+                            40.0
+                        ]
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "u"
+                        ]
+                    },
+                    "rhs": "theta0"
+                },
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "w"
+                        ]
+                    },
+                    "rhs": "gathered"
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "u",
+                                        "k"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": 0
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "v",
+                                        "k"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": 0
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "w",
+                                        "k"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": 0
+                    }
+                }
+            ],
+            "tests": [
+                {
+                    "id": "declared_defaults",
+                    "description": "No overrides: `theta0` takes its inline-array `default` and `v` takes its own, so u(0) is the declared profile and v(0) is [1,2,3,4]. The non-vacuity anchor -- it proves the array-valued defaults are genuinely read, so the override half below cannot pass by both halves reading zero.",
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 300.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 3
+                            },
+                            "expected": 303.25
+                        },
+                        {
+                            "variable": "u",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 305.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "max",
+                            "expected": 305.0
+                        },
+                        {
+                            "variable": "v",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2
+                            },
+                            "expected": 2.0
+                        },
+                        {
+                            "variable": "w",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 10.0
+                        },
+                        {
+                            "variable": "w",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 40.0
+                        }
+                    ]
+                },
+                {
+                    "id": "stable_regime",
+                    "description": "One regime of the shared component: the whole theta profile arrives as parameter_overrides array data, and v's whole profile as initial_conditions array data. `w` is untouched -- its const-gather ic must still read the same values, so a binding that let the overrides leak into the build-time scope fails here rather than silently agreeing.",
+                    "parameter_overrides": {
+                        "theta0": [
+                            288.0,
+                            290.0,
+                            292.0,
+                            294.5
+                        ]
+                    },
+                    "initial_conditions": {
+                        "v": [
+                            -1.0,
+                            -2.0,
+                            -3.0,
+                            -4.0
+                        ]
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 288.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 294.5
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "min",
+                            "expected": 288.0
+                        },
+                        {
+                            "variable": "v",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 3
+                            },
+                            "expected": -3.0
+                        },
+                        {
+                            "variable": "v",
+                            "time": 1.0,
+                            "reduce": "min",
+                            "expected": -4.0
+                        },
+                        {
+                            "variable": "w",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2
+                            },
+                            "expected": 20.0
+                        }
+                    ]
+                },
+                {
+                    "id": "unstable_regime",
+                    "description": "A second regime of the SAME component -- the point of the category. Only the arrays differ; no per-regime document, no injected rewrite-rule library.",
+                    "parameter_overrides": {
+                        "theta0": [
+                            310.0,
+                            308.0,
+                            306.0,
+                            304.0
+                        ]
+                    },
+                    "initial_conditions": {
+                        "v": [
+                            7.5,
+                            7.5,
+                            7.5,
+                            7.5
+                        ]
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 310.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "max",
+                            "expected": 310.0
+                        },
+                        {
+                            "variable": "u",
+                            "time": 0.0,
+                            "reduce": "min",
+                            "expected": 304.0
+                        },
+                        {
+                            "variable": "v",
+                            "time": 0.0,
+                            "reduce": "max",
+                            "expected": 7.5
+                        },
+                        {
+                            "variable": "w",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 3
+                            },
+                            "expected": 30.0
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

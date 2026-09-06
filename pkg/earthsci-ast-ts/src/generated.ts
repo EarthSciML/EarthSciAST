@@ -22,9 +22,9 @@ export type ModelVariable = ModelVariable1 & {
   type: "unknown" | "parameter";
   units?: string;
   /**
-   * For an unknown, its initial value at t=0. For a parameter, its constant value — mutually exclusive with `distribution`, which draws the value instead.
+   * For an unknown, its initial value at t=0. For a parameter, its constant value — mutually exclusive with `distribution`, which draws the value instead. A SHAPED variable (non-empty `shape`) may instead carry a row-major nested JSON array whose nesting matches the declared shape after metaparameter folding; a mismatch is a load-time error. A scalar on a shaped variable keeps its broadcast meaning — the one value applies to every element (esm-spec §6.3).
    */
-  default?: number;
+  default?: number | NumericArrayLiteral;
   /**
    * Units of the default value, if different from the declared units field. When present, validators flag a unit_inconsistency error if these do not match the declared units (including dimensionally incompatible cases like K vs kg, and same-dimension mismatches like K vs degC). Default is the same as `units`.
    */
@@ -74,6 +74,10 @@ export type ModelVariable = ModelVariable1 & {
 export type ModelVariable1 = {
   [k: string]: unknown;
 };
+/**
+ * A row-major nested JSON array of numbers carrying a SHAPED variable's inline data (esm-spec §6.3, §6.6.2). Every axis is a JSON array and every leaf a number; the nesting depth and the per-axis lengths MUST match the variable's declared `shape` after metaparameter folding, and a mismatch is a load-time error — the same convention `from_file` data already follows (§6.6.5 convention 3). A SCALAR in the same position keeps its broadcast meaning (one value applied to every element).
+ */
+export type NumericArrayLiteral = (number | NumericArrayLiteral)[];
 /**
  * Declares WHEN a parameter refreshes and WHAT it refreshes from. A parameter with no `update` is a constant (or, with a `distribution`, is sampled once at setup). Six kinds. `wiener` is a driving stochastic process and takes no value form — it resamples the parameter's own `distribution`. The other five each take EXACTLY ONE value form: an `expression`, a `from` binding to a data source, or a registered `handler`. Together they subsume three constructs the 0.x format kept apart: the `brownian` variable type (now `wiener`), the `discrete` type with its `RefreshTrigger` (now `schedule` / `data` / `remesh`), and the `discrete_parameters` event lists with their `functional_affect` (now `condition` / `crossing`). This is also the sole seed of the DISCRETE cadence class in the dependency-partition pass (RFC semiring-faq-unified-ir §6.1): without it such inputs would be mis-seeded as CONST (never refresh) or CONTINUOUS (recompute every step).
  */
@@ -1061,16 +1065,22 @@ export interface Test {
    */
   description?: string;
   /**
-   * Initial-value overrides for unknowns, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default.
+   * Initial-value overrides for unknowns, keyed by variable name (local to this component). Values not listed fall back to the variable's declared default. A shaped unknown's value may be a row-major nested JSON array matching its declared shape (esm-spec §6.6.2).
    */
   initial_conditions?: {
-    [k: string]: number;
+    /**
+     * Initial value for one unknown: a number, or — for a SHAPED unknown — a row-major nested JSON array matching its declared shape after metaparameter folding (a mismatch is a load-time error). A scalar broadcasts to every element (esm-spec §6.6.2).
+     */
+    [k: string]: number | NumericArrayLiteral;
   };
   /**
-   * Parameter overrides, keyed by parameter name (local to this component). Values not listed fall back to the parameter's declared default.
+   * Parameter overrides, keyed by parameter name (local to this component). Values not listed fall back to the parameter's declared default. A shaped parameter's value may be a row-major nested JSON array matching its declared shape (esm-spec §6.6.2).
    */
   parameter_overrides?: {
-    [k: string]: number;
+    /**
+     * Value for one parameter: a number, or — for a SHAPED parameter — a row-major nested JSON array matching its declared shape after metaparameter folding (a mismatch is a load-time error). A scalar broadcasts to every element (esm-spec §6.6.2).
+     */
+    [k: string]: number | NumericArrayLiteral;
   };
   time_span: TimeSpan;
   tolerance?: Tolerance1;

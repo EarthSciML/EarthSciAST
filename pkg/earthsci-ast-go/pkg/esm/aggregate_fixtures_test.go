@@ -132,6 +132,66 @@ func TestAggregateInvalidFixtures(t *testing.T) {
 	}
 }
 
+// TestAggregateAgnosticLeafIndexSetsInjected asserts the LOAD-TIME contract of a
+// §9.7.10 / §6.6.6 discretization-agnostic PDE leaf (issue #185): the document
+// declares NO `index_sets` of its own — its registry arrives from the grid
+// library a composing document, a subsystem-ref edge or an inline test injects
+// into this component's scope — so an `aggregate` range naming a set the
+// document does not declare is NOT decidable here and MUST NOT be reported as
+// undefined_index_set. Mirrors §9.6.1, where template_constraint_unknown_index_set
+// does not run for a library file validated standalone.
+func TestAggregateAgnosticLeafIndexSetsInjected(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	path := filepath.Join(repoRoot, "tests", "conformance", "expression_templates",
+		"inject_agnostic_aggregate", "fixture.esm")
+
+	file, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("agnostic leaf must load: %v", err)
+	}
+	result := Validate(file)
+	if !result.IsValid {
+		t.Fatalf("agnostic leaf must validate; got structural errors: %v", result.StructuralErrors)
+	}
+	for _, se := range result.StructuralErrors {
+		if se.Code == CodeUndefinedIndexSet {
+			t.Fatalf("undefined_index_set must be deferred for a leaf with no registry: %v", se)
+		}
+	}
+}
+
+// TestAggregateUndeclaredRangeStillRejected is the negative control for the
+// deferral above: a document that DOES declare a registry is resolved against
+// it, so a `from` name absent from that registry is still undefined_index_set.
+func TestAggregateUndeclaredRangeStillRejected(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	path := filepath.Join(repoRoot, "tests", "invalid", "aggregate", "undeclared_from_name.esm")
+
+	file, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("schema-valid fixture must load: %v", err)
+	}
+	result := Validate(file)
+	if result.IsValid {
+		t.Fatalf("expected undeclared_from_name.esm to be rejected by validate()")
+	}
+	found := false
+	for _, se := range result.StructuralErrors {
+		if se.Code == CodeUndefinedIndexSet {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected undefined_index_set; got %v", result.StructuralErrors)
+	}
+}
+
 // assertStructuralRejection asserts a SCHEMA-VALID fixture loads cleanly yet
 // validate() rejects it (IsValid=false) with every pinned structural (code,
 // path) present in the emitted structural errors.

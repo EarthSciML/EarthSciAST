@@ -861,38 +861,15 @@ end
         # dependent variable, not left as A's authored contribution. Keeping
         # A's ownership made entries 2 and 3 match nothing, and the flattened
         # system carried THREE equations claiming `D(Chem.O3)`.
-        doc = """
-        {"esm": "1.0.0",
-         "metadata": {"name": "ChainedCompose",
-                      "description": "chained operator_compose with the operator as A",
-                      "authors": ["EarthSciAST test suite"],
-                      "created": "2026-08-25T00:00:00Z"},
-         "models": {
-           "Chem": {"variables": {"O3": {"type": "unknown", "units": "mol/mol", "default": 1.0},
-                                  "NO": {"type": "unknown", "units": "mol/mol", "default": 1.0},
-                                  "k1": {"type": "parameter", "units": "1/s", "default": 0.1},
-                                  "k2": {"type": "parameter", "units": "1/s", "default": 0.2}},
-                    "equations": [{"lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["k1"]}, "O3"]}},
-                                  {"lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["k2"]}, "NO"]}}]},
-           "Sink": {"variables": {"kd": {"type": "parameter", "units": "1/s", "default": 0.01}},
-                    "equations": [{"lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["kd"]}, "Chem.O3"]}},
-                                  {"lhs": {"op": "D", "args": ["Chem.NO"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["kd"]}, "Chem.NO"]}}]},
-           "Src":  {"variables": {"e": {"type": "parameter", "units": "mol/mol/s", "default": 2.0}},
-                    "equations": [{"lhs": {"op": "D", "args": ["Chem.O3"], "wrt": "t"},
-                                   "rhs": "e"}]},
-           "Adv":  {"variables": {"wind": {"type": "parameter", "units": "m/s", "default": 3.0}},
-                    "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"},
-                                   "rhs": {"op": "*", "args": [{"op": "-", "args": ["wind"]},
-                                                               {"op": "grad", "args": ["_var"]}]}}]}},
-         "coupling": [{"type": "operator_compose", "systems": ["Sink", "Chem"]},
-                      {"type": "operator_compose", "systems": ["Src", "Chem"]},
-                      {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}]}
-        """
-        flat = flatten(load_string(doc))
+        #
+        # The document moved into the shared tree with the issue #173 fix (the
+        # same gap in the Python oracle, TypeScript, Rust and Go), so the corpus
+        # now carries it as the `chained_compose` tier and this testset drives
+        # the SAME file. What stays here is the rendered answer: the corpus
+        # records it too, but reading it as prose is what makes a regression
+        # legible.
+        flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "coupling",
+                                          "chained_operator_compose.esm")))
         # ONE equation per species, every chained contribution in its RHS. The
         # POSITIONS are the merge trail: each merge keeps the surviving A
         # equation's document slot, so NO's chain ends at the sink's slot and

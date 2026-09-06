@@ -118,6 +118,26 @@ end
     @test occursin("ghost_cells", sprint(showerror, err))
 end
 
+# esm-spec §9.7.10 / §6.6.6 (issue #185): a discretization-agnostic PDE leaf
+# declares NO `index_sets` of its own — its registry arrives from the grid
+# library a composing document, a subsystem-ref edge or an inline test injects
+# into this component's scope, so the sets exist only in that per-run build. An
+# `aggregate` range naming a set the document does not declare is therefore NOT
+# decidable at standalone load and must NOT be reported as `undefined_index_set`,
+# mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run
+# for a library file validated standalone. Before the fix `validate()` rejected
+# every conforming leaf. The typo case stays covered by the negative fixture
+# above (which DOES declare a registry) and by `build_evaluator`.
+@testset "valid: agnostic leaf's injected {from} index set is not a load error (#185)" begin
+    path = joinpath(_AGG_REPO_ROOT, "tests", "conformance", "expression_templates",
+                    "inject_agnostic_aggregate", "fixture.esm")
+    @test isfile(path)
+    file = EarthSciAST.load_path(path)
+    result = EarthSciAST.validate(file)
+    @test isempty(result.structural_errors)
+    @test result.is_valid
+end
+
 # M2 join.on conformance (bead ess-my4.2.5). Evaluates the shared join fixtures
 # under tests/valid/aggregate/. Julia and Python check the SAME inline expected
 # values; Rust additionally checks the degenerate fixture (the value-equality

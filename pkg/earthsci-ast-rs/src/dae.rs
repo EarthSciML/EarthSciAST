@@ -402,7 +402,7 @@ mod tests {
 
     fn state_var() -> ModelVariable {
         ModelVariable {
-            default: Some(1.0),
+            default: Some(1.0.into()),
             ..typed_var(VariableType::Unknown, None)
         }
     }
@@ -413,7 +413,7 @@ mod tests {
 
     fn param_var() -> ModelVariable {
         ModelVariable {
-            default: Some(0.5),
+            default: Some(0.5.into()),
             ..typed_var(VariableType::Parameter, None)
         }
     }

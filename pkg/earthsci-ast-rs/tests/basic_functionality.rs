@@ -357,7 +357,7 @@ fn test_editing() {
         default_units: None,
         var_type: VariableType::Parameter,
         units: Some("s^-1".to_string()),
-        default: Some(0.1),
+        default: Some(0.1.into()),
         description: Some("Test rate constant".to_string()),
         shape: None,
         location: None,

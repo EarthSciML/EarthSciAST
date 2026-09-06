@@ -107,7 +107,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(0.0),
+                default: Some(0.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
