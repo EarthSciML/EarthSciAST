@@ -170,32 +170,30 @@ fn execute_component(
         Compiled::from_file(subset).unwrap_or_else(|e| panic!("{label}: compile failed: {e}"));
 
     for t in tests {
+        // Scalar bindings: these fixtures carry no inline array data (esm-spec
+        // §6.6.2), and the scalar backend's `solve` binds one f64 per name.
         let mut params = HashMap::new();
-        if let Some(po) = &t.parameter_overrides {
-            for (k, v) in po {
-                // Rust's simulate validates against namespaced parameter
-                // names, so translate bare names to `component.name`.
-                let namespaced = format!("{component}.{k}");
-                if compiled.parameter_names().iter().any(|n| n == &namespaced) {
-                    params.insert(namespaced, *v);
-                } else {
-                    params.insert(k.clone(), *v);
-                }
+        for (k, v) in t.scalar_parameter_overrides() {
+            // Rust's simulate validates against namespaced parameter
+            // names, so translate bare names to `component.name`.
+            let namespaced = format!("{component}.{k}");
+            if compiled.parameter_names().iter().any(|n| n == &namespaced) {
+                params.insert(namespaced, v);
+            } else {
+                params.insert(k, v);
             }
         }
         let mut ics = HashMap::new();
-        if let Some(ic) = &t.initial_conditions {
-            for (k, v) in ic {
-                let namespaced = format!("{component}.{k}");
-                if compiled
-                    .state_variable_names()
-                    .iter()
-                    .any(|n| n == &namespaced)
-                {
-                    ics.insert(namespaced, *v);
-                } else {
-                    ics.insert(k.clone(), *v);
-                }
+        for (k, v) in t.scalar_initial_conditions() {
+            let namespaced = format!("{component}.{k}");
+            if compiled
+                .state_variable_names()
+                .iter()
+                .any(|n| n == &namespaced)
+            {
+                ics.insert(namespaced, v);
+            } else {
+                ics.insert(k, v);
             }
         }
 

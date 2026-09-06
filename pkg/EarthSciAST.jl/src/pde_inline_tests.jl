@@ -1108,7 +1108,7 @@ end
 # that does not (already qualified, a scoped reference the prefix would double
 # up, or simply wrong) passes through untouched, so `esm_problem` reports on it
 # exactly as it would have.
-_overrides_or_empty(o) = o === nothing ? Dict{String,Float64}() : o
+_overrides_or_empty(o) = o === nothing ? Dict{String,Any}() : o
 
 function _scope_to_component(overrides, mname, target)
     (overrides === nothing || isempty(overrides)) && return overrides
@@ -1119,11 +1119,14 @@ function _scope_to_component(overrides, mname, target)
     catch
         return overrides   # let `esm_problem` report the real failure
     end
-    out = Dict{String,Float64}()
+    # `Any`-valued: esm-spec §6.6.2 admits a scalar or INLINE ARRAY DATA (a
+    # shaped variable's whole column), and re-scoping must not flatten the
+    # second to a number.
+    out = Dict{String,Any}()
     for (rawk, v) in overrides
         k = String(rawk)
         q = string(mname, ".", k)
-        out[q in known ? q : k] = Float64(v)
+        out[q in known ? q : k] = v
     end
     return out
 end
