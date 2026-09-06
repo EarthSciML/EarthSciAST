@@ -16,8 +16,9 @@ import subprocess
 import sys
 import hashlib
 import re
+import tempfile
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 
@@ -61,6 +62,11 @@ class PackageVerifier:
                 "ISC",
                 "CC0-1.0",
             ],
+            # Safety evaluates only pinned (`==`) requirements by default. Turn
+            # this on to scan a declared RANGE as well -- which reports every
+            # advisory against any version the range admits, so it speaks to
+            # the declared floor rather than to what actually gets installed.
+            "check_unpinned_requirements": False,
             "security_policies": {
                 "require_signature": True,
                 "max_vulnerability_score": 7.0,
@@ -189,9 +195,19 @@ class PackageVerifier:
             result["version"] = package_data.get("version", "unknown")
             result["checks"]["package_json"] = "passed"
 
-            # Check license
+            # Check license. Matched through the same test as every other
+            # manifest, so an SPDX identifier is not read as whichever weaker
+            # license its name contains. npm spells "the text is in a file"
+            # as `SEE LICENSE IN <file>`, which is package.json's analogue of
+            # PEP 621's {file = ...} and is resolved the same way.
             license_info = package_data.get("license", "")
-            if license_info in self.config["allowed_licenses"]:
+            if not isinstance(license_info, str):
+                license_info = ""
+            if license_info.startswith("SEE LICENSE IN "):
+                license_info = self._license_from_file(
+                    os.path.join(package_path, license_info[len("SEE LICENSE IN ") :].strip())
+                )
+            if self._license_allowed(license_info):
                 result["checks"]["license"] = "passed"
             else:
                 result["warnings"].append(f'License "{license_info}" not in allowed list')
@@ -224,9 +240,13 @@ class PackageVerifier:
             result["version"] = package_info.get("version", "unknown")
             result["checks"]["cargo_structure"] = "passed"
 
-            # Check license
+            # Check license. Same test as every other manifest; Cargo's
+            # `license-file` is its spelling of PEP 621's {file = ...}.
             license_info = package_info.get("license", "")
-            if license_info in self.config["allowed_licenses"]:
+            license_file = package_info.get("license-file", "")
+            if not license_info and license_file:
+                license_info = self._license_from_file(os.path.join(package_path, license_file))
+            if self._license_allowed(license_info):
                 result["checks"]["license"] = "passed"
             else:
                 result["warnings"].append(f'License "{license_info}" not in allowed list')
@@ -285,44 +305,199 @@ class PackageVerifier:
 
     def _check_julia_dependencies(self, deps: Dict[str, str], result: Dict[str, Any]) -> None:
         """Check Julia dependencies for known vulnerabilities."""
-        # This would integrate with Julia's security advisories if available
+        # Julia has no machine-readable advisory feed to query, so the
+        # dependency set is RECORDED rather than flagged. Warning that a
+        # package has dependencies is a warning every package with
+        # dependencies always earns: it carries no signal, and it would fail
+        # every build the moment anyone passed --fail-on-warnings.
         result["checks"]["dependencies"] = "passed"
-        if deps:
-            result["warnings"].append(f"Found {len(deps)} dependencies (manual review recommended)")
+        result["dependency_count"] = len(deps)
+
+    def _declared_python_dependencies(self, package_path: str) -> List[str]:
+        """The package's own declared dependencies, runtime and optional."""
+        pyproject_path = os.path.join(package_path, "pyproject.toml")
+        if not os.path.exists(pyproject_path):
+            return []
+
+        try:
+            import toml
+
+            with open(pyproject_path, "r") as f:
+                project_info = toml.load(f).get("project", {})
+        except Exception as e:
+            logger.debug(f"Could not read dependencies from {pyproject_path}: {e}")
+            return []
+
+        dependencies = list(project_info.get("dependencies", []))
+        for extra in project_info.get("optional-dependencies", {}).values():
+            dependencies.extend(extra)
+
+        return dependencies
+
+    @staticmethod
+    def _parse_safety_json(output: str) -> Optional[Dict[str, Any]]:
+        """Pull safety's JSON report out of the output it is embedded in.
+
+        `safety check` prints a deprecation banner BEFORE the report and
+        another one after it, so its stdout is not JSON end to end and
+        json.loads on the whole of it fails -- which is why every scan warned
+        "Failed to parse safety scan results" and read no advisory at all.
+        Decode the first JSON value and let whatever follows it go.
+        """
+        start = output.find("{")
+        if start == -1:
+            return None
+
+        try:
+            report, _ = json.JSONDecoder().raw_decode(output[start:])
+        except json.JSONDecodeError:
+            return None
+
+        return report if isinstance(report, dict) else None
 
     def _run_python_safety_scan(self, package_path: str, result: Dict[str, Any]) -> None:
         """Run Python safety scan if available."""
+        # Given no target, `safety check` scans the AMBIENT environment, which
+        # on CI is the runner's own toolchain -- advisories against pip and
+        # setuptools would be reported as this package's own. Scan what the
+        # package declares instead.
+        requirements = self._declared_python_dependencies(package_path)
+        if not requirements:
+            result["warnings"].append("No declared dependencies to scan with safety")
+            result["checks"]["safety_scan"] = "warning"
+            return
+
+        requirements_path = ""
         try:
-            cmd = ["safety", "check", "--json", "--full-report"]
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as requirements_file:
+                requirements_file.write("\n".join(requirements) + "\n")
+                requirements_path = requirements_file.name
+
+            cmd = ["safety", "check", "--json", "-r", requirements_path]
+            # Safety evaluates only PINNED (`==`) requirements unless told
+            # otherwise, and a range is then reported against every version it
+            # admits -- so `numpy>=1.20` earns every numpy advisory since
+            # 1.20, which is a statement about the declared FLOOR rather than
+            # about what the package installs. Off by default for that reason;
+            # `check_unpinned_requirements` in the config turns it on.
+            if self.config.get("check_unpinned_requirements"):
+                cmd.append("--check-unpinned-requirements")
             proc = subprocess.run(cmd, cwd=package_path, capture_output=True, text=True, timeout=60)
 
-            if proc.returncode == 0:
-                result["checks"]["safety_scan"] = "passed"
-            else:
-                # Parse safety output for vulnerabilities
-                try:
-                    safety_data = json.loads(proc.stdout)
-                    vulnerabilities = safety_data.get("vulnerabilities", [])
-                    for vuln in vulnerabilities:
-                        result["vulnerabilities"].append(
-                            {
-                                "package": vuln.get("package_name"),
-                                "version": vuln.get("installed_version"),
-                                "vulnerability": vuln.get("vulnerability_id"),
-                                "severity": vuln.get("severity", "unknown"),
-                            }
-                        )
-                    result["checks"]["safety_scan"] = "failed" if vulnerabilities else "passed"
-                except json.JSONDecodeError:
+            # Parse on EVERY exit code, not just a non-zero one. Exit 0 does
+            # not mean "nothing is wrong", it means "nothing was reported" --
+            # and safety exits 0 after evaluating no requirement at all,
+            # recording that fact in the report it prints and nowhere else.
+            safety_data = self._parse_safety_json(proc.stdout)
+            if safety_data is None:
+                if proc.returncode == 0:
+                    # Nothing to read, but nothing was flagged either.
+                    result["checks"]["safety_scan"] = "passed"
+                else:
                     result["warnings"].append("Failed to parse safety scan results")
                     result["checks"]["safety_scan"] = "warning"
+                return
+
+            vulnerabilities = safety_data.get("vulnerabilities", [])
+            for vuln in vulnerabilities:
+                result["vulnerabilities"].append(
+                    {
+                        "package": vuln.get("package_name"),
+                        # A range scan analyzes no single version; name the
+                        # vulnerable range instead of reporting a null.
+                        "version": vuln.get("analyzed_version")
+                        or vuln.get("installed_version")
+                        or ", ".join(vuln.get("vulnerable_spec") or [])
+                        or "unknown",
+                        "vulnerability": vuln.get("vulnerability_id"),
+                        # The free advisory feed leaves severity null.
+                        "severity": vuln.get("severity") or "unknown",
+                    }
+                )
+
+            covered = self._record_safety_coverage(
+                safety_data,
+                requirements,
+                bool(self.config.get("check_unpinned_requirements")),
+                result,
+            )
+            if vulnerabilities:
+                result["checks"]["safety_scan"] = "failed"
+            else:
+                # No advisory AND nothing evaluated is not a clean bill of
+                # health; only the first of those two earns a pass.
+                result["checks"]["safety_scan"] = "passed" if covered else "warning"
 
         except FileNotFoundError:
             result["warnings"].append("Python safety tool not installed")
+            result["checks"]["safety_scan"] = "warning"
         except subprocess.TimeoutExpired:
             result["warnings"].append("Safety scan timed out")
+            result["checks"]["safety_scan"] = "warning"
         except Exception as e:
             result["warnings"].append(f"Safety scan failed: {e}")
+            result["checks"]["safety_scan"] = "warning"
+        finally:
+            if requirements_path and os.path.exists(requirements_path):
+                os.unlink(requirements_path)
+
+    @staticmethod
+    def _record_safety_coverage(
+        safety_data: Dict[str, Any],
+        requirements: List[str],
+        check_unpinned: bool,
+        result: Dict[str, Any],
+    ) -> bool:
+        """Record how much of the declared dependency set safety evaluated.
+
+        Returns whether the scan evaluated anything at all.
+
+        A scan that evaluates NOTHING exits 0 and reports no vulnerability,
+        which in the summary is indistinguishable from a clean bill of health.
+        It is not one: every dependency of this package is declared as a
+        RANGE, and safety skips unpinned requirements unless asked not to. So
+        the counts are recorded and an empty scan is called out in its own
+        right, rather than being left to read as a passing one.
+
+        `scanned_packages` is what safety parsed out of the file, which
+        includes the requirements it then declined to evaluate -- pinning is
+        what separates the two, so that is what is counted here.
+        """
+        read = list(safety_data.get("scanned_packages") or {})
+        # `==` has to be looked for in the VERSION SPECIFIER, not in the
+        # environment marker that may follow it: `foo; python_version == "3.9"`
+        # is an unpinned requirement whose marker is an equality test.
+        pinned = sum("==" in r.split(";", 1)[0] for r in requirements)
+        evaluated = len(read) if check_unpinned else pinned
+        result["safety_coverage"] = {
+            "declared": len(requirements),
+            "read": len(read),
+            "evaluated": evaluated,
+        }
+
+        reported_unpinned = bool(requirements) and not evaluated
+        if reported_unpinned:
+            result["warnings"].append(
+                f"safety evaluated 0 of {len(requirements)} declared dependencies "
+                f'(all unpinned); set "check_unpinned_requirements": true in the '
+                f"security config to scan declared ranges instead"
+            )
+
+        # Safety states an unevaluated requirement in `announcements` and
+        # nowhere else -- not in its exit code, and not in `vulnerabilities`.
+        for announcement in safety_data.get("announcements") or []:
+            if announcement.get("type") not in ("warning", "error"):
+                continue
+            message = " ".join(str(announcement.get("message", "")).split())
+            # The unpinned notice is the one the warning above already makes,
+            # in this project's own terms; anything else safety announces is
+            # news and is relayed as it stands.
+            if message and not (reported_unpinned and "unpinned" in message.lower()):
+                result["warnings"].append(f"safety: {message}")
+
+        return bool(evaluated) or not requirements
 
     def _run_npm_audit(self, package_path: str, result: Dict[str, Any]) -> None:
         """Run npm audit if npm is available."""
@@ -397,6 +572,82 @@ class PackageVerifier:
         except Exception as e:
             result["warnings"].append(f"cargo audit failed: {e}")
 
+    # The header of a license FILE, mapped to the identifier it stands for.
+    # Ordered longest-name-first: every AGPL and LGPL text also contains the
+    # phrase the plain GPL is matched on.
+    LICENSE_FILE_MARKERS = (
+        ("GNU AFFERO GENERAL PUBLIC LICENSE", "AGPL-3.0-only"),
+        ("GNU LESSER GENERAL PUBLIC LICENSE", "LGPL-3.0"),
+        ("GNU GENERAL PUBLIC LICENSE", "GPL-3.0"),
+        ("Apache License", "Apache-2.0"),
+        ("MIT License", "MIT"),
+        ("BSD 3-Clause", "BSD-3-Clause"),
+        ("BSD 2-Clause", "BSD-2-Clause"),
+    )
+
+    def _license_from_file(self, license_path: str) -> str:
+        """Identify the license held in the file a manifest points at."""
+        try:
+            with open(license_path, "r", encoding="utf-8", errors="replace") as f:
+                header = f.read(4096)
+        except OSError as e:
+            logger.debug(f"Could not read license file {license_path}: {e}")
+            return ""
+
+        for marker, identifier in self.LICENSE_FILE_MARKERS:
+            if marker in header:
+                return identifier
+
+        return ""
+
+    # An SPDX expression joins identifiers with these operators, optionally
+    # parenthesized: `MIT OR Apache-2.0`, `(MIT AND BSD-3-Clause)`. Splitting on
+    # them leaves the bare identifiers.
+    SPDX_OPERATORS = re.compile(r"\s+(?:OR|AND)\s+|[()]")
+    # `<license> WITH <exception>` qualifies the license on the LEFT; the
+    # exception is not itself a license and is not in any allowed list.
+    SPDX_EXCEPTION = re.compile(r"\s+WITH\s+\S+")
+
+    def _license_allowed(self, license_text: str) -> bool:
+        """Whether a license declaration names only allowed licenses.
+
+        An SPDX identifier has to match OUTRIGHT: "GPL-3.0" is a substring of
+        "AGPL-3.0-only", so a containment test reads a stronger copyleft
+        license as whichever weaker one its name happens to contain. The same
+        hazard sits inside a compound EXPRESSION, where the identifiers are
+        joined by OR/AND rather than standing alone, so an expression is split
+        into its identifiers and every one of them is matched outright rather
+        than the whole string being searched. A disjunction is judged on its strictest
+        branch: a dual license is allowed only if BOTH halves are, which
+        warns on `MIT OR Proprietary` rather than reading the MIT and
+        stopping. Free-form license TEXT, which only ever mentions its name in
+        passing, is the one thing still matched on containment.
+        """
+        if not license_text:
+            return False
+
+        allowed = self.config["allowed_licenses"]
+        text = license_text.strip()
+        if text in allowed:
+            return True
+
+        # `GPL-3.0+` is SPDX's deprecated spelling of `GPL-3.0-or-later`; an
+        # allowed list naming either spelling should accept it.
+        def identifier_allowed(ident: str) -> bool:
+            return ident in allowed or (ident.endswith("+") and ident[:-1] in allowed)
+
+        parts = [
+            p.strip()
+            for p in self.SPDX_OPERATORS.split(self.SPDX_EXCEPTION.sub("", text))
+            if p.strip()
+        ]
+        # Every part being a bare identifier is what makes this an expression
+        # rather than prose; prose splits into fragments that contain spaces.
+        if parts and all(" " not in p for p in parts):
+            return all(identifier_allowed(p) for p in parts)
+
+        return any(a in text for a in allowed)
+
     def _scan_pyproject_toml(self, pyproject_path: str, result: Dict[str, Any]) -> Dict[str, Any]:
         """Scan pyproject.toml for package information and dependencies."""
         try:
@@ -412,14 +663,22 @@ class PackageVerifier:
             result["version"] = project_info.get("version", "unknown")
             result["checks"]["pyproject_structure"] = "passed"
 
-            # Check license
+            # Check license. PEP 621 spells this {text = ...} or
+            # {file = ...}; PEP 639 replaces both with a bare SPDX expression.
+            # Reading only the "text" key left the {file = ...} form -- what
+            # this package uses -- reporting an EMPTY license as disallowed.
             license_info = project_info.get("license", {})
             if isinstance(license_info, dict):
                 license_text = license_info.get("text", "")
+                license_file = license_info.get("file", "")
+                if not license_text and license_file:
+                    license_text = self._license_from_file(
+                        os.path.join(os.path.dirname(pyproject_path), license_file)
+                    )
             else:
                 license_text = str(license_info)
 
-            if any(allowed in license_text for allowed in self.config["allowed_licenses"]):
+            if self._license_allowed(license_text):
                 result["checks"]["license"] = "passed"
             else:
                 result["warnings"].append(f'License "{license_text}" not clearly in allowed list')
@@ -528,10 +787,12 @@ class PackageVerifier:
             return "error"
 
         # Check for high-severity vulnerabilities
+        # `or ""` rather than a get() default: safety records the key with a
+        # null value, so the default never fires and .lower() would raise.
         high_severity_vulns = [
             v
             for v in result["vulnerabilities"]
-            if v.get("severity", "").lower() in ["high", "critical"]
+            if str(v.get("severity") or "").lower() in ["high", "critical"]
         ]
 
         if high_severity_vulns:

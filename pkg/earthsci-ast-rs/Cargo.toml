@@ -12,6 +12,11 @@ keywords = ["earth-science", "modeling", "serialization", "json"]
 categories = ["science", "parsing", "simulation"]
 readme = "README.md"
 
+# Every binary target is declared explicitly below, so nothing in `src/bin`
+# should be auto-discovered as one: `esm.rs` is a thin native-only shim over
+# `esm_impl.rs`, and an auto-discovered `esm_impl` bin would have no `main`.
+autobins = false
+
 # Support both library and CLI binary
 [[bin]]
 name = "esm"

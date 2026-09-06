@@ -285,10 +285,11 @@ def test_enum_values_must_still_be_unique_including_zero():
     separate case from the positive duplicate because a "seen set" that used
     ``0`` as its own sentinel would pass the positive case and let this one
     through."""
+
     def doc(enums: str) -> str:
         return (
             '{"esm":"1.0.0","metadata":{"name":"T","description":"d",'
-            '"authors":["a"]},"enums":' + enums + ','
+            '"authors":["a"]},"enums":' + enums + ","
             '"models":{"M":{"variables":{"x":{"type":"unknown","units":"1"}},'
             '"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}'
         )
