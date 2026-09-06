@@ -269,7 +269,35 @@ def test_bind_dimension_names_wraps_only_a_free_mention():
     assert bind_dimension_names(bound, ["x"]) is bound
     integ = ExprNode(op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1)
     assert bind_dimension_names(integ, ["x"]) is integ
+    # A `wrt` is a differentiation TARGET, not a free read of the enclosing
+    # scope, so it does not trigger the wrap (the Julia and Rust predicates
+    # ignore `wrt` too).
+    deriv = ExprNode(op="D", args=["u"], wrt="x")
+    assert bind_dimension_names(deriv, ["x"]) is deriv
     assert bind_dimension_names(free, []) is free
+
+
+def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
+    """A dimension name the parameter scope ALSO binds is a fault, not a silent
+    rebinding: wrapping would shadow the parameter with the cell index, so a
+    reference that used to read the parameter would quietly return a different
+    number. One name, two meanings, one scope — ill-formed."""
+    import pytest
+
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.pde_inline_tests import bind_dimension_names
+
+    free = ExprNode(op="+", args=["x", 1])
+    with pytest.raises(RuntimeError, match="parameter in scope"):
+        bind_dimension_names(free, ["x"], {"x": 3.0})
+    # No mention of the clashing name: unaffected.
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["x"], {"x": 3.0}) is lit
+    # A gather that rebinds `x` itself keeps working.
+    bound = ExprNode(op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free)
+    assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
+    # And with no scope supplied the wrap is unchanged.
+    assert bind_dimension_names(free, ["x"]).op == "aggregate"
 
 
 def test_reference_binds_the_field_dimension_names():

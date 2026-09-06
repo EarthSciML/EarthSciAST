@@ -3767,7 +3767,7 @@ until they memoise. Neither exposes a test filter, so §5.25.4 is Rust-only
 today. **TypeScript**, **Go** — no inline-test runner; no rows apply.
 
 
-### 5.25 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
+### 5.26 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
 
 esm-spec §6.6.5 says an inline `reference` is "an `Expression` whose free
 variables are the domain dimension names". For a field shaped over index sets
@@ -3795,10 +3795,28 @@ an `aggregate` whose `output_idx` ARE the dimension names in shape order, each
 ranging over its index set, and whose body is the reference; a reference that
 mentions none is passed through untouched. The wrap is capture-aware: a gather
 that rebinds a dimension name as its own loop symbol (`aggregate(x from x; …)`)
-mentions it bound, not free, and MUST NOT be wrapped a second time. Nothing that
-evaluated before evaluates differently.
+mentions it bound, not free, and MUST NOT be wrapped a second time.
 
-#### 5.25.1 Gate
+A node's `wrt` — the symbol a derivative differentiates WITH RESPECT TO — is
+NOT a free mention. It is a target the node names, not a value read from the
+enclosing scope, so `deriv(u, wrt: "x")` inside a reference MUST NOT by itself
+trigger the wrap. (Julia's general-purpose `free_variables` reports `wrt`, and
+adds it after binder subtraction; the predicate this rule pins is the narrower
+`_mentions_free` / `mentions_free`, which does not.)
+
+**A dimension name the parameter scope also binds is a FAULT.** "Nothing that
+evaluated before evaluates differently" holds only with this clause. Where a
+reference mentions free a name that is BOTH a dimension of the asserted field
+and a parameter in the build-time scope the reference is evaluated against
+(flattened parameter names plus their unambiguous bare aliases), the wrap would
+shadow the parameter with the cell's 1-based index: the same reference, a
+different number, no diagnostic — the §5.14 / §5.23 failure class. One name
+meaning two things in one scope is an ill-formed document, so a binding MUST
+reject it with an error naming the clashing name, rather than silently choosing
+either meaning. A reference that does NOT mention the name is unaffected, as is
+a gather that rebinds it as its own loop symbol.
+
+#### 5.26.1 Gate
 
 `tests/conformance/pde_inline_reference_dimension_names/` holds the shared
 fixture and the Julia-minted goldens. One exact decay field
@@ -3817,7 +3835,14 @@ Per-binding runners: **Julia** —
 `bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
 rewrite-only ports with no inline-test runner and are `scope_excluded`.
 
-### 5.26 Override Keys: the Longest Dotted Suffix (normative)
+The two clauses above that a document cannot express as a passing fixture — a
+`wrt` that must not trigger the wrap, and the scope clash that must be a fault —
+are gated per binding on `bind_dimension_names` directly: **Julia**
+`test/pde_inline_tests_test.jl`, **Python**
+`tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
+**Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+
+### 5.27 Override Keys: the Longest Dotted Suffix (normative)
 
 esm-spec §6.6.2 rule 2 — a dotted key resolving to a shorter flattened name —
 used to try only the key's **trailing segment**. That covered `M.A` against a

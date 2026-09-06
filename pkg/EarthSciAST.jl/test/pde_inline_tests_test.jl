@@ -539,4 +539,27 @@ _pit_free_x_cos() = Dict{String,Any}(
     @test wrapped.expr_body === free
     @test EarthSciAST.bind_dimension_names(wrapped, dims) === wrapped
     @test EarthSciAST.bind_dimension_names(free, String[]) === free
+
+    # A `wrt` is a differentiation TARGET, not a free read of the enclosing
+    # scope, so it does not trigger the wrap. `free_variables` reports it (it is
+    # added after binder subtraction); the Rust `mentions_free` and the Python
+    # `_mentions_free` do not, and this binding must agree with them.
+    deriv = EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("u")]; wrt="x")
+    @test "x" in EarthSciAST.free_variables(deriv)
+    @test !EarthSciAST._mentions_free(deriv, "x")
+    @test EarthSciAST.bind_dimension_names(deriv, dims) === deriv
+    # A genuine free mention alongside the `wrt` still wraps.
+    both = EarthSciAST.OpExpr("+", EarthSciAST.ASTExpr[deriv, EarthSciAST.VarExpr("x")])
+    @test EarthSciAST.bind_dimension_names(both, dims) !== both
+
+    # A dimension name the parameter scope ALSO binds is a fault, not a silent
+    # rebinding: wrapping would shadow the parameter with the cell index, so a
+    # reference that used to read the parameter would quietly return a
+    # different number. One name, two meanings, one scope — ill-formed.
+    clash = Dict{String,Float64}("x" => 3.0)
+    @test_throws EarthSciAST.PdeTestError EarthSciAST.bind_dimension_names(free, dims, clash)
+    # No mention of the clashing name: unaffected.
+    @test EarthSciAST.bind_dimension_names(lit, dims, clash) === lit
+    # A gather that rebinds `x` itself keeps working.
+    @test EarthSciAST.bind_dimension_names(wrapped, dims, clash) === wrapped
 end

@@ -2205,9 +2205,13 @@ def _build_numpy_rhs(
 
     # Parameter resolution: overrides win over defaults.
     param_values: dict[str, float] = {}
+    # The whole flattened parameter set: §6.6.2 rule 2 resolves a key FORWARD to
+    # the single name it designates, so a key that exactly names one parameter is
+    # never also read as a more-qualified spelling of another.
+    known_params = set(flat.parameters)
     for pname, pvar in flat.parameters.items():
         bare = pname.rsplit(".", 1)[-1]
-        val = _resolve_override(pname, parameters, pvar.default)
+        val = _resolve_override(pname, parameters, pvar.default, known=known_params)
         param_values[pname] = val
         param_values[bare] = val  # also expose via bare name
 

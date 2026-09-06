@@ -1,4 +1,4 @@
-"""esm-spec §6.6.2 rule 2, as of CONFORMANCE_SPEC §5.26: a dotted override key
+"""esm-spec §6.6.2 rule 2, as of CONFORMANCE_SPEC §5.27: a dotted override key
 resolves to the LONGEST of its dotted suffixes that is a known name — the
 trailing segment being tried last — so the §4.6 fully-qualified ``M.sub.A``
 binds a build's ``sub.A`` and ``M.A`` binds a bare ``A``, while a key none of
@@ -42,3 +42,29 @@ def test_resolve_override_reads_a_more_qualified_key() -> None:
     assert _resolve_override("Left.solo", {"solo": 2.0, "Doc.Left.solo": 9.0}, 5.0) == 2.0
     # A key that merely ends with the bare segment is not a suffix match.
     assert _resolve_override("Left.solo", {"Right.solo": 9.0}, 5.0) == 5.0
+
+
+def test_a_key_that_exactly_names_one_parameter_does_not_drive_another() -> None:
+    """Rule 2 resolves a key FORWARD, to the single name it designates.
+
+    ``Right.Left.solo`` is an exact hit on the parameter of that name; read
+    backwards it is also ``"." + "Left.solo"``-suffixed, so a reverse scan
+    would drive BOTH parameters from the one override. Julia's
+    ``_canonicalize_override_keys`` and Rust's ``canonicalize_override_keys``
+    map each key to one name; Python must agree.
+    """
+    known = {"Left.solo", "Right.Left.solo"}
+    overrides = {"Right.Left.solo": 9.0}
+    assert _resolve_override("Right.Left.solo", overrides, 5.0, known=known) == 9.0
+    assert _resolve_override("Left.solo", overrides, 5.0, known=known) == 5.0
+    # With no such parameter in the build, the key IS the more-qualified
+    # spelling of `Left.solo` — the §4.6 case rule 2 exists for.
+    assert _resolve_override("Left.solo", overrides, 5.0, known={"Left.solo"}) == 9.0
+
+
+def test_resolve_override_is_deterministic_when_two_keys_designate_one_name() -> None:
+    known = {"Left.solo"}
+    overrides = {"B.Left.solo": 2.0, "A.Left.solo": 1.0}
+    assert _resolve_override("Left.solo", overrides, 5.0, known=known) == 1.0
+    assert _resolve_override("Left.solo", dict(reversed(list(overrides.items()))), 5.0,
+                             known=known) == 1.0

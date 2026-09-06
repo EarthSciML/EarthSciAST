@@ -57,7 +57,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,7 +178,9 @@ def _mentions_free(expr: Expr, name: str) -> bool:
     return any(_mentions_free(child, name) for child in iter_children(expr))
 
 
-def bind_dimension_names(expr: Expr, dims: Sequence[str]) -> Expr:
+def bind_dimension_names(
+    expr: Expr, dims: Sequence[str], scope: Mapping[str, float] | None = None
+) -> Expr:
     """esm-spec §6.6.5: an inline ``reference``'s free variables are the
     domain DIMENSION NAMES. For a field shaped over index sets those are the
     asserted variable's ``shape`` entries, each bound at every grid point to
@@ -191,10 +193,28 @@ def bind_dimension_names(expr: Expr, dims: Sequence[str]) -> Expr:
     over its index set); one that mentions none — a literal, a parameter
     expression, or an ``aggregate`` that already produces the field under its
     own loop symbols — is returned untouched, so nothing that evaluated before
-    evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``."""
+    evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``.
+
+    ``scope`` is the reference's build-time parameter scope (flattened names
+    plus their unambiguous bare aliases). "Nothing that evaluated before
+    evaluates differently" holds only because a dimension name that scope ALSO
+    binds is rejected here: wrapping would silently shadow the parameter with
+    the cell's index — the same expression, a different number, no diagnostic.
+    One name meaning two things in one scope is an ill-formed document, so it
+    is a fault."""
     dims = [str(d) for d in dims]
-    if not dims or not any(_mentions_free(expr, d) for d in dims):
+    mentioned = [d for d in dims if _mentions_free(expr, d)]
+    if not mentioned:
         return expr
+    clash = next((d for d in mentioned if scope is not None and d in scope), None)
+    if clash is not None:
+        raise RuntimeError(
+            f"inline `reference` mentions {clash!r}, which is both a dimension of the "
+            "asserted field and a parameter in scope. esm-spec §6.6.5 binds a free "
+            "dimension name to the cell's 1-based position, which would shadow the "
+            "parameter. Rename one of them, or gather explicitly with "
+            f"`aggregate(i from {clash}; …)`."
+        )
     return ExprNode(
         op="aggregate",
         args=[],
@@ -783,11 +803,12 @@ def _evaluate_assertion(
                             dims = _variable_shape(eval_file, str(mname), str(a.variable))
                         except RuntimeError:
                             dims = []
+                        scope = _param_scope_with_aliases(insp.params)
                         ref = evaluate_cellwise(
-                            bind_dimension_names(a.reference, dims),
+                            bind_dimension_names(a.reference, dims, scope),
                             cell_tuples,
                             index_sets=eval_file.index_sets,
-                            params=_param_scope_with_aliases(insp.params),
+                            params=scope,
                         )
                     else:
                         raise RuntimeError(f"unsupported `reference` shape {type(a.reference)}")

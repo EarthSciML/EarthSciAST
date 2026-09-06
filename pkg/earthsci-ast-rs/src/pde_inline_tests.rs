@@ -240,9 +240,30 @@ fn mentions_free(expr: &Expr, name: &str) -> bool {
 /// `aggregate` that already produces the field under its own loop symbols — is
 /// returned untouched, so nothing that evaluated before evaluates differently.
 /// Mirrors the Julia / Python `bind_dimension_names`.
-pub fn bind_dimension_names(expr: &Expr, dims: &[String]) -> Expr {
-    if dims.is_empty() || !dims.iter().any(|d| mentions_free(expr, d)) {
-        return expr.clone();
+///
+/// `scope` is the reference's build-time parameter scope (flattened names plus
+/// their unambiguous bare aliases). "Nothing that evaluated before evaluates
+/// differently" holds only because a dimension name that scope ALSO binds is
+/// rejected here: wrapping would silently shadow the parameter with the cell's
+/// index — the same expression, a different number, no diagnostic. One name
+/// meaning two things in one scope is an ill-formed document, so it is a fault.
+pub fn bind_dimension_names(
+    expr: &Expr,
+    dims: &[String],
+    scope: &HashMap<String, f64>,
+) -> Result<Expr, String> {
+    let mentioned: Vec<&String> = dims.iter().filter(|d| mentions_free(expr, d)).collect();
+    if mentioned.is_empty() {
+        return Ok(expr.clone());
+    }
+    if let Some(clash) = mentioned.iter().find(|d| scope.contains_key(d.as_str())) {
+        return Err(format!(
+            "inline `reference` mentions '{clash}', which is both a dimension of the \
+             asserted field and a parameter in scope. esm-spec §6.6.5 binds a free \
+             dimension name to the cell's 1-based position, which would shadow the \
+             parameter. Rename one of them, or gather explicitly with \
+             `aggregate(i from {clash}; …)`."
+        ));
     }
     let ranges: serde_json::Map<String, serde_json::Value> = dims
         .iter()
@@ -255,7 +276,7 @@ pub fn bind_dimension_names(expr: &Expr, dims: &[String]) -> Expr {
         "ranges": ranges,
         "expr": serde_json::to_value(expr).expect("an Expr serializes"),
     });
-    serde_json::from_value(wrapped).expect("a well-formed aggregate node deserializes")
+    Ok(serde_json::from_value(wrapped).expect("a well-formed aggregate node deserializes"))
 }
 
 /// Collapse a spatial field to the scalar a §6.6.5 `reduce` assertion
@@ -896,7 +917,7 @@ fn eval_assertion(
             // in scope too, bound per cell (`bind_dimension_names`).
             let scope = param_scope_with_aliases(&insp.params);
             let dims = variable_shape(file, model_name, &assertion.variable).unwrap_or_default();
-            let bound = bind_dimension_names(expr, &dims);
+            let bound = bind_dimension_names(expr, &dims, &scope)?;
             Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
         }
         Some(AssertionReference::FromFile(ff)) => {
@@ -2054,13 +2075,15 @@ mod tests {
     #[test]
     fn bind_dimension_names_wraps_only_a_free_mention() {
         let dims = vec!["x".to_string()];
+        let scope: HashMap<String, f64> = HashMap::from([("k".to_string(), 2.0)]);
         let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let bind = |e: &Expr, d: &[String]| bind_dimension_names(e, d, &scope).expect("no clash");
         // No mention: untouched.
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
-        assert_eq!(bind_dimension_names(&lit, &dims), lit);
+        assert_eq!(bind(&lit, &dims), lit);
         // Free mention: wrapped in an aggregate over the dimension names.
         let free = parse(json!({"op": "+", "args": ["x", 1]}));
-        let Expr::Operator(node) = bind_dimension_names(&free, &dims) else {
+        let Expr::Operator(node) = bind(&free, &dims) else {
             panic!("expected an aggregate wrapper");
         };
         assert_eq!(node.op, "aggregate");
@@ -2070,13 +2093,40 @@ mod tests {
         let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
                                  "ranges": {"x": {"from": "x"}},
                                  "expr": {"op": "+", "args": ["x", 1]}}));
-        assert_eq!(bind_dimension_names(&bound, &dims), bound);
+        assert_eq!(bind(&bound, &dims), bound);
         // An integral's variable is a binder too.
         let integ = parse(json!({"op": "integral", "args": [{"op": "*", "args": [2, "x"]}],
                                  "var": "x", "lower": 0, "upper": 1}));
-        assert_eq!(bind_dimension_names(&integ, &dims), integ);
+        assert_eq!(bind(&integ, &dims), integ);
+        // A `wrt` is a differentiation TARGET, not a free read of the scope.
+        let deriv = parse(json!({"op": "D", "args": ["u"], "wrt": "x"}));
+        assert_eq!(bind(&deriv, &dims), deriv);
         // Empty dims: untouched.
-        assert_eq!(bind_dimension_names(&free, &[]), free);
+        assert_eq!(bind(&free, &[]), free);
+    }
+
+    /// A dimension name the parameter scope ALSO binds is a fault, not a silent
+    /// rebinding: wrapping would shadow the parameter with the cell index, so
+    /// the same reference that used to read the parameter would quietly return
+    /// a different number. One name, two meanings, one scope — ill-formed.
+    #[test]
+    fn bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter() {
+        let dims = vec!["x".to_string()];
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let scope: HashMap<String, f64> = HashMap::from([("x".to_string(), 3.0)]);
+        let free = parse(json!({"op": "+", "args": ["x", 1]}));
+        let err = bind_dimension_names(&free, &dims, &scope).expect_err("clash is a fault");
+        assert!(err.contains("'x'"), "{err}");
+        assert!(err.contains("parameter in scope"), "{err}");
+        // A reference that does not mention it is unaffected — the clash only
+        // matters where the wrap would actually rebind the name.
+        let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
+        assert_eq!(bind_dimension_names(&lit, &dims, &scope).expect("no mention"), lit);
+        // And a gather that rebinds `x` itself keeps working.
+        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
+                                 "ranges": {"x": {"from": "x"}},
+                                 "expr": {"op": "+", "args": ["x", 1]}}));
+        assert_eq!(bind_dimension_names(&bound, &dims, &scope).expect("rebound"), bound);
     }
 
     /// esm-spec §4.6 / §6.6.2: inside model `P`, `P.sub.g` is the fully

@@ -472,14 +472,36 @@ def _dotted_suffix_hit(known: Iterable[str], key: str) -> str | None:
     return None
 
 
-def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> float:
+def _resolve_override(
+    name: str,
+    overrides: dict[str, Any],
+    default: Any,
+    known: Iterable[str] | None = None,
+) -> float:
     """Resolve a parameter / initial-condition value against caller overrides.
 
     Precedence: a caller override wins — the dot-namespaced ``name`` first, then
-    its bare trailing segment, then a MORE-qualified key of which ``name`` is
-    the dotted suffix (``Outer.M.A`` for the name ``M.A``, rule 2 of
-    :func:`check_parameter_override_keys`) — otherwise the declared
-    ``default`` when numeric, otherwise ``0.0``. Always returned as ``float``.
+    its bare trailing segment, then a MORE-qualified key that RESOLVES to
+    ``name`` under rule 2 of :func:`check_parameter_override_keys`
+    (``Outer.M.A`` for the name ``M.A``) — otherwise the declared ``default``
+    when numeric, otherwise ``0.0``. Always returned as ``float``.
+
+    Rule 2 is applied FORWARD — key to the one name it designates — exactly as
+    Julia's ``_canonicalize_override_keys`` and Rust's
+    ``canonicalize_override_keys`` apply it, which is why ``known`` (the build's
+    full set of resolvable names) is needed rather than just ``name``. Matching
+    backwards, "every key of which ``name`` is a dotted suffix", is not the same
+    rule: with the flattened parameters ``Left.solo`` and ``Right.Left.solo``
+    both in the build, the key ``Right.Left.solo`` is an EXACT hit on the second
+    and a dotted suffix of nothing else, but read backwards it also matches
+    ``Left.solo`` and silently drives two unrelated parameters from one
+    override. A key that is itself a known name is therefore never read as a
+    more-qualified spelling of some other name.
+
+    ``known`` defaults to ``{name}`` — the single-name view, under which rule 2
+    still admits ``Doc.Left.solo`` for ``Left.solo`` — so a caller resolving one
+    isolated name need not supply it; every caller resolving a whole build
+    passes its name set.
     """
     bare = name.rsplit(".", 1)[-1]
     if name in overrides:
@@ -487,8 +509,16 @@ def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> flo
     elif bare in overrides:
         value = overrides[bare]
     else:
-        longer = sorted(k for k in overrides if k.endswith("." + name))
+        # `name` is always in the view, so a caller that passes a partial
+        # `known` cannot make its own name unresolvable.
+        names = {name} if known is None else set(known) | {name}
+        longer = sorted(
+            k for k in overrides if k not in names and _dotted_suffix_hit(names, k) == name
+        )
         if longer:
+            # Two distinct more-qualified keys designating one name is a caller
+            # oddity, not a build fault; take the lexicographically first so the
+            # choice does not depend on `dict` insertion order.
             value = overrides[longer[0]]
         else:
             value = float(default) if isinstance(default, (int, float)) else 0.0
