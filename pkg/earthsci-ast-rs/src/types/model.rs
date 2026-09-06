@@ -3,6 +3,118 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A `default` / override VALUE: either a scalar, or inline row-major nested
+/// array data (esm-spec §6.3, §6.6.2 — the `NumericArrayLiteral` of the schema).
+///
+/// A SHAPED variable's `default`, and a shaped variable's entry in a test's
+/// `parameter_overrides` / `initial_conditions`, may carry the whole field as a
+/// nested JSON array whose nesting matches the declared `shape` after
+/// metaparameter folding; a mismatch is a load-time error. A scalar in the same
+/// position keeps its broadcast meaning — the one value applies to every element.
+/// This is what lets a column test supply its θ, q_v, u, v, p profiles inline
+/// rather than through a per-regime generated rewrite-rule library.
+///
+/// `#[serde(untagged)]`, so a scalar round-trips as a bare JSON number and array
+/// data as the nested array it was authored as.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InlineValue {
+    /// A single number — a 0-D value, or the broadcast value of a shaped one.
+    Scalar(f64),
+    /// One axis of row-major nested array data.
+    Array(Vec<InlineValue>),
+}
+
+/// A flattened inline array: its per-axis extents and its values in ROW-MAJOR
+/// order (last index fastest), as [`InlineValue::to_dense`] produces them.
+pub type DenseInlineArray = (Vec<usize>, Vec<f64>);
+
+impl From<f64> for InlineValue {
+    fn from(v: f64) -> Self {
+        InlineValue::Scalar(v)
+    }
+}
+
+impl InlineValue {
+    /// The scalar this value carries, or `None` when it is array data.
+    pub fn as_scalar(&self) -> Option<f64> {
+        match self {
+            InlineValue::Scalar(v) => Some(*v),
+            InlineValue::Array(_) => None,
+        }
+    }
+
+    /// Whether this value is inline ARRAY data rather than a scalar.
+    pub fn is_array(&self) -> bool {
+        matches!(self, InlineValue::Array(_))
+    }
+
+    /// Flatten row-major nested array data into `(shape, values)` — the dense
+    /// buffer plus its per-axis extents, with the values in ROW-MAJOR order
+    /// (last index fastest), exactly as the JSON nesting reads.
+    ///
+    /// # Errors
+    ///
+    /// A string naming the defect when an axis is ragged (sibling arrays of
+    /// different lengths or mixed scalar/array siblings) — the schema admits
+    /// the shape, so the check has to live here.
+    pub fn to_dense(&self) -> Result<DenseInlineArray, String> {
+        let mut shape = Vec::new();
+        let mut probe = self;
+        while let InlineValue::Array(items) = probe {
+            shape.push(items.len());
+            match items.first() {
+                Some(first) => probe = first,
+                None => break,
+            }
+        }
+        let mut out = Vec::new();
+        flatten_inline(self, 0, &shape, &mut out)?;
+        Ok((shape, out))
+    }
+}
+
+/// Row-major flatten of `value` at nesting `depth`, checking every axis against
+/// the `shape` the first branch established.
+fn flatten_inline(
+    value: &InlineValue,
+    depth: usize,
+    shape: &[usize],
+    out: &mut Vec<f64>,
+) -> Result<(), String> {
+    match value {
+        InlineValue::Scalar(v) => {
+            if depth != shape.len() {
+                return Err(format!(
+                    "inline array data is ragged: a number appears at nesting depth {depth}                      where an array of {} elements is expected",
+                    shape[depth]
+                ));
+            }
+            out.push(*v);
+            Ok(())
+        }
+        InlineValue::Array(items) => {
+            if depth >= shape.len() {
+                return Err(
+                    "inline array data is ragged: an array appears where a number is expected"
+                        .to_string(),
+                );
+            }
+            if items.len() != shape[depth] {
+                return Err(format!(
+                    "inline array data is ragged: axis {depth} has both {} and {} elements",
+                    shape[depth],
+                    items.len()
+                ));
+            }
+            for item in items {
+                flatten_inline(item, depth + 1, shape, out)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A document-scoped index set declared in a model's `index_sets` registry
 /// (RFC semiring-faq-unified-ir §5.2 / §8). Unifies ESM `domain.spatial` grid
 /// dims and ESI categorical index sets under one shape. `kind` selects which
@@ -192,9 +304,10 @@ pub struct ModelVariable {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub units: Option<String>,
 
-    /// Default/initial value
+    /// Default/initial value: a scalar, or — for a SHAPED variable — inline
+    /// row-major nested array data (esm-spec §6.3). See [`InlineValue`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<f64>,
+    pub default: Option<InlineValue>,
 
     /// The unit the `default` VALUE is expressed in, when it is not the
     /// variable's declared `units` (schema `ModelVariable.default_units`).
@@ -289,6 +402,30 @@ impl Default for ModelVariable {
 }
 
 impl ModelVariable {
+    /// This variable's SCALAR `default`, or `None` when it has none or carries
+    /// inline array data instead (esm-spec §6.3).
+    ///
+    /// Every consumer that seeds one f64 slot reads through here, so a shaped
+    /// variable whose whole column is authored inline never lands a bogus number
+    /// in a scalar slot — the array channel picks it up instead
+    /// ([`crate::simulate_array`]).
+    pub fn default_scalar(&self) -> Option<f64> {
+        self.default.as_ref().and_then(InlineValue::as_scalar)
+    }
+
+    /// This variable's `default` as inline ARRAY data, flattened row-major with
+    /// its per-axis extents. `None` when the default is absent or scalar.
+    ///
+    /// # Errors
+    ///
+    /// A string naming the defect when the authored array is ragged.
+    pub fn default_array(&self) -> Option<Result<DenseInlineArray, String>> {
+        match self.default.as_ref() {
+            Some(v @ InlineValue::Array(_)) => Some(v.to_dense()),
+            _ => None,
+        }
+    }
+
     /// Visit every Expression this variable carries, in a stable order.
     ///
     /// From esm 1.0.0 a variable has no `expression` field — an unknown's

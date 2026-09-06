@@ -120,12 +120,19 @@ pub struct ModelTest {
     pub description: Option<String>,
 
     /// Initial-value overrides for state variables, keyed by variable name.
+    ///
+    /// A SHAPED unknown's entry may carry inline row-major nested array data —
+    /// the whole initial profile, matching the declared `shape` after
+    /// metaparameter folding (esm-spec §6.6.2). See [`InlineValue`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_conditions: Option<HashMap<String, f64>>,
+    pub initial_conditions: Option<HashMap<String, InlineValue>>,
 
     /// Parameter overrides, keyed by parameter name.
+    ///
+    /// A SHAPED parameter's entry may carry inline row-major nested array data,
+    /// on the same terms as `initial_conditions` (esm-spec §6.6.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameter_overrides: Option<HashMap<String, f64>>,
+    pub parameter_overrides: Option<HashMap<String, InlineValue>>,
 
     /// Simulation time interval for this test.
     pub time_span: TimeSpan,
@@ -148,6 +155,36 @@ pub struct ModelTest {
     /// for a non-PDE / discretization-free test.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expression_template_imports: Vec<serde_json::Value>,
+}
+
+impl ModelTest {
+    /// The SCALAR entries of `initial_conditions`, dropping any that carry
+    /// inline array data (esm-spec §6.6.2).
+    ///
+    /// The canonical SciML `u0` channel binds one f64 per state element, so a
+    /// caller driving it directly wants exactly this projection; a shaped
+    /// unknown's whole profile is bound by the inline-test runner instead
+    /// ([`crate::pde_inline_tests`]), which expands it into per-element entries.
+    pub fn scalar_initial_conditions(&self) -> HashMap<String, f64> {
+        scalar_entries(self.initial_conditions.as_ref())
+    }
+
+    /// The SCALAR entries of `parameter_overrides`, dropping any that carry
+    /// inline array data (esm-spec §6.6.2) — the `p` counterpart of
+    /// [`Self::scalar_initial_conditions`].
+    pub fn scalar_parameter_overrides(&self) -> HashMap<String, f64> {
+        scalar_entries(self.parameter_overrides.as_ref())
+    }
+}
+
+/// The scalar-valued entries of one override map.
+fn scalar_entries(m: Option<&HashMap<String, InlineValue>>) -> HashMap<String, f64> {
+    m.map(|m| {
+        m.iter()
+            .filter_map(|(k, v)| v.as_scalar().map(|x| (k.clone(), x)))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Generated range of values for one [`SweepDimension`] (schema `SweepRange`).

@@ -952,6 +952,38 @@ fn perform_structural_comparison(
     }
 }
 
+/// Numeric difference between two `default` values, or `None` when they agree
+/// to `tolerance`. Inline ARRAY data (esm-spec §6.3) compares elementwise after
+/// a row-major flatten; a shape change, a scalar-vs-array change, or a ragged
+/// array is itself a reported difference rather than a silent pass.
+fn inline_value_difference(
+    a: &earthsci_ast::InlineValue,
+    b: &earthsci_ast::InlineValue,
+    tolerance: f64,
+) -> Option<String> {
+    match (a.as_scalar(), b.as_scalar()) {
+        (Some(x), Some(y)) => ((x - y).abs() > tolerance).then(|| format!("{x} vs {y}")),
+        (None, None) => {
+            let (sa, va) = match a.to_dense() {
+                Ok(v) => v,
+                Err(e) => return Some(format!("unreadable array data ({e})")),
+            };
+            let (sb, vb) = match b.to_dense() {
+                Ok(v) => v,
+                Err(e) => return Some(format!("unreadable array data ({e})")),
+            };
+            if sa != sb {
+                return Some(format!("array shape {sa:?} vs {sb:?}"));
+            }
+            va.iter()
+                .zip(vb.iter())
+                .position(|(x, y)| (x - y).abs() > tolerance)
+                .map(|i| format!("array element {i}: {} vs {}", va[i], vb[i]))
+        }
+        _ => Some("scalar vs array data".to_string()),
+    }
+}
+
 fn perform_numerical_comparison(
     esm_file1: &earthsci_ast::EsmFile,
     esm_file2: &earthsci_ast::EsmFile,
@@ -970,11 +1002,12 @@ fn perform_numerical_comparison(
                 // Compare variable default values
                 for (var_name, var1) in &model1.variables {
                     if let Some(var2) = model2.variables.get(var_name)
-                        && let (Some(default1), Some(default2)) = (var1.default, var2.default)
-                        && (default1 - default2).abs() > tolerance
+                        && let (Some(default1), Some(default2)) =
+                            (var1.default.as_ref(), var2.default.as_ref())
+                        && let Some(detail) = inline_value_difference(default1, default2, tolerance)
                     {
                         differences.push(format!(
-                            "Model {model_id}, variable {var_name}: default {default1} vs {default2}"
+                            "Model {model_id}, variable {var_name}: default {detail}"
                         ));
                     }
                 }

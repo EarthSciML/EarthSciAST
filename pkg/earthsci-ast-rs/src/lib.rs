@@ -271,7 +271,7 @@ pub use types::{
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
     DataSourceKind, DataSourceLocation, DataSourceMetadata, DataSourceTemporal, DiscreteEvent,
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
-    EsmFile, Expr, ExpressionNode, FunctionalUpdate, Metadata, Model, ModelTest,
+    EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
     ReactionSystem, RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance,
     UnitConversion, UpdateValue, VariableMapTransform, VariableType,

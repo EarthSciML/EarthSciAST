@@ -587,7 +587,7 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
                 .get(n)
                 .or_else(|| overrides.get(n.rsplit('.').next().unwrap_or(n)))
                 .copied()
-                .unwrap_or_else(|| model.variables[n].default.unwrap_or(0.0))
+                .unwrap_or_else(|| model.variables[n].default_scalar().unwrap_or(0.0))
         })
         .collect();
     (vals, names)

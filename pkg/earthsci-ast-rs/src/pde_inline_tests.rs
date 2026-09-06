@@ -93,10 +93,10 @@ pub type BuildProviderFactory<'a> =
 /// up, or simply wrong) passes through untouched, so the build reports on it
 /// exactly as it would have.
 fn scope_to_component(
-    overrides: Option<&HashMap<String, f64>>,
+    overrides: Option<&HashMap<String, InlineValue>>,
     model_name: &str,
     file: &EsmFile,
-) -> HashMap<String, f64> {
+) -> HashMap<String, InlineValue> {
     let Some(overrides) = overrides.filter(|m| !m.is_empty()) else {
         return HashMap::new();
     };
@@ -109,13 +109,13 @@ fn scope_to_component(
             let qualified = format!("{model_name}.{k}");
             let known = flat.parameters.contains_key(&qualified)
                 || flat.state_variables.contains_key(&qualified);
-            (if known { qualified } else { k.clone() }, *v)
+            (if known { qualified } else { k.clone() }, v.clone())
         })
         .collect()
 }
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
-    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, Model, Tolerance,
+    AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, InlineValue, Model, Tolerance,
 };
 
 /// esm-spec §6.6.4: the default relative tolerance when neither the
@@ -1044,9 +1044,10 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 /// build. That is why the solve is still run per test even on a memo hit —
 /// only the build is reused.
 ///
-/// Floats are keyed by their BIT PATTERN, which is conservative in the safe
-/// direction: equal bits are the same `f64` and so the same build, while two
-/// spellings of one value (`0.0` / `-0.0`) merely miss and rebuild.
+/// Bindings are keyed by their JSON spelling, which is conservative in the safe
+/// direction: an identical spelling is the same value and so the same build,
+/// while two spellings of one value (`0.0` / `-0.0`, or a differently-nested
+/// array) merely miss and rebuild.
 ///
 /// `None` and `Some({})` collapse to the same empty binding list because
 /// [`scope_to_component`] already maps both to an empty map.
@@ -1054,15 +1055,23 @@ fn build_only_solution(times: Vec<f64>) -> Solution {
 struct BuildKey {
     imports: Vec<serde_json::Value>,
     tspan: (u64, u64),
-    p: Vec<(String, u64)>,
-    u0: Vec<(String, u64)>,
+    p: Vec<(String, String)>,
+    u0: Vec<(String, String)>,
 }
 
 impl BuildKey {
     fn of(t: &crate::types::ModelTest) -> Self {
-        fn bindings(m: Option<&HashMap<String, f64>>) -> Vec<(String, u64)> {
-            let mut v: Vec<(String, u64)> = m
-                .map(|m| m.iter().map(|(k, x)| (k.clone(), x.to_bits())).collect())
+        // A binding's value is either a scalar or inline array data (esm-spec
+        // §6.6.2), so the key carries its JSON spelling rather than one f64's
+        // bits. `serde_json` renders an f64 with the shortest round-tripping
+        // form, so two keys compare equal exactly when the values do.
+        fn bindings(m: Option<&HashMap<String, InlineValue>>) -> Vec<(String, String)> {
+            let mut v: Vec<(String, String)> = m
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, x)| (k.clone(), serde_json::to_string(x).unwrap_or_default()))
+                        .collect()
+                })
                 .unwrap_or_default();
             v.sort();
             v
@@ -1099,6 +1108,185 @@ struct BuiltModel {
     ephemeral: Option<EsmFile>,
     index_sets: Option<HashMap<String, IndexSet>>,
     built: Built,
+}
+
+/// Partition an override map into `(scalars, inline array data)` — the two
+/// value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
+/// `initial_conditions` entry.
+fn split_inline_arrays(
+    overrides: HashMap<String, InlineValue>,
+) -> (HashMap<String, f64>, HashMap<String, InlineValue>) {
+    let mut scalars = HashMap::new();
+    let mut arrays = HashMap::new();
+    for (k, v) in overrides {
+        match v.as_scalar() {
+            Some(x) => {
+                scalars.insert(k, x);
+            }
+            None => {
+                arrays.insert(k, v);
+            }
+        }
+    }
+    (scalars, arrays)
+}
+
+/// The model a (possibly dot-qualified) override key names, plus the key's
+/// LOCAL variable name within it. `None` when no model of `file` declares it.
+fn locate_override_target<'a>(file: &'a mut EsmFile, key: &str) -> Option<(&'a mut Model, String)> {
+    // Resolve the (model, local name) pair against an IMMUTABLE view first, so
+    // the single mutable borrow below is the one the caller keeps.
+    let target = {
+        let models = file.models.as_ref()?;
+        // Longest dotted prefix that names a model wins, so `M.sub.p` binds
+        // `sub.p` inside `M` rather than a bare `p` anywhere.
+        let mut split: Option<(String, String)> = None;
+        let mut best = 0usize;
+        for (mname, model) in models.iter() {
+            if let Some(rest) = key.strip_prefix(&format!("{mname}."))
+                && mname.len() > best
+                && model.variables.contains_key(rest)
+            {
+                best = mname.len();
+                split = Some((mname.clone(), rest.to_string()));
+            }
+        }
+        split.or_else(|| {
+            models
+                .iter()
+                .find(|(_, m)| m.variables.contains_key(key))
+                .map(|(n, _)| (n.clone(), key.to_string()))
+        })?
+    };
+    let model = file.models.as_mut()?.get_mut(&target.0)?;
+    Some((model, target.1))
+}
+
+/// Write each INLINE ARRAY parameter override onto the run document as that
+/// parameter's `default` (esm-spec §6.6.2: an override supplies the value the
+/// declared default would otherwise supply).
+///
+/// `file` is the EPHEMERAL run instance, never the persisted document, so this
+/// is a per-run binding and not an edit. The array compile then lowers the
+/// shaped parameter into its `const` observed
+/// ([`crate::simulate_array`]'s `lower_inline_array_parameters`), which is where
+/// the declared-shape check reports a mismatch.
+fn bind_array_parameters(
+    file: &mut EsmFile,
+    arrays: &HashMap<String, InlineValue>,
+) -> Result<(), String> {
+    let mut keys: Vec<&String> = arrays.keys().collect();
+    keys.sort();
+    for key in keys {
+        let value = &arrays[key];
+        let Some((model, local)) = locate_override_target(file, key) else {
+            return Err(format!(
+                "parameter_overrides: unknown parameter '{key}' — this document declares no such \
+                 variable. esm-spec §6.6.2 keys parameter_overrides by LOCAL parameter name."
+            ));
+        };
+        let var = model
+            .variables
+            .get_mut(&local)
+            .expect("locate_override_target returned a declared name");
+        if var.var_type != crate::types::VariableType::Parameter {
+            return Err(format!(
+                "parameter_overrides: '{key}' is an unknown, not a parameter (esm-spec §6.6.2)"
+            ));
+        }
+        var.default = Some(value.clone());
+    }
+    Ok(())
+}
+
+/// Expand each INLINE ARRAY initial condition into one `u0` entry per grid cell.
+///
+/// The state vector is keyed by ELEMENT name (`u[1]`, `u[2,3]`, … — 1-based,
+/// column-major over the declared shape), so a whole profile becomes that many
+/// scalar entries and needs no new channel. The authored array is ROW-major
+/// (JSON nesting order), so each cell's value is read at its own multi-index
+/// rather than by position — the two orders coincide only in rank 1.
+///
+/// A scalar entry already present for the same element WINS: it was authored
+/// per-element and is the more specific binding.
+fn expand_array_initial_conditions(
+    file: &EsmFile,
+    arrays: &HashMap<String, InlineValue>,
+    u0: &mut HashMap<String, f64>,
+) -> Result<(), String> {
+    let index_sets: HashMap<String, IndexSet> = file
+        .index_sets
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let mut keys: Vec<&String> = arrays.keys().collect();
+    keys.sort();
+    for key in keys {
+        let (shape, values) = arrays[key]
+            .to_dense()
+            .map_err(|e| format!("initial_conditions[{key}]: {e} (esm-spec §6.3)"))?;
+        let declared = declared_extents(file, key, &index_sets);
+        if let Some(want) = declared.as_ref()
+            && *want != shape
+        {
+            return Err(format!(
+                "initial_conditions[{key}]: inline array data has shape {shape:?}, which does not \
+                 match the declared shape {want:?} (esm-spec §6.6.2 — the array MUST match the \
+                 variable's declared shape after metaparameter folding)"
+            ));
+        }
+        if shape.is_empty() {
+            return Err(format!(
+                "initial_conditions[{key}]: inline array data was supplied for a 0-D state; only a \
+                 SHAPED unknown takes a nested array (esm-spec §6.6.2)"
+            ));
+        }
+        for (flat, value) in values.iter().enumerate() {
+            // Row-major decode: the authored nesting's own order.
+            let mut rest = flat;
+            let mut multi = vec![0usize; shape.len()];
+            for d in (0..shape.len()).rev() {
+                multi[d] = rest % shape[d];
+                rest /= shape[d];
+            }
+            let idx = multi
+                .iter()
+                .map(|i| (i + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            u0.entry(format!("{key}[{idx}]")).or_insert(*value);
+        }
+    }
+    Ok(())
+}
+
+/// The integer extents of the variable `key` names, resolved from its declared
+/// `shape` against the document's index-set registry. `None` when the variable
+/// or an axis does not resolve — the caller then accepts the array as authored
+/// and lets the build report any real mismatch.
+fn declared_extents(
+    file: &EsmFile,
+    key: &str,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Option<Vec<usize>> {
+    let models = file.models.as_ref()?;
+    let local = key.rsplit('.').next().unwrap_or(key);
+    let var = models
+        .iter()
+        .find_map(|(_, m)| m.variables.get(key).or_else(|| m.variables.get(local)))?;
+    let shape = var.shape.as_ref()?;
+    let mut out = Vec::with_capacity(shape.len());
+    for axis in shape {
+        let set = index_sets.get(axis)?;
+        let size = match set.kind.as_str() {
+            "interval" => usize::try_from(set.size?).ok()?,
+            "categorical" => set.members.as_ref()?.len(),
+            _ => return None,
+        };
+        out.push(size);
+    }
+    Some(out)
 }
 
 /// Build one test's problem — the body that used to be inline in
@@ -1148,13 +1336,52 @@ fn build_for_test(
             }
         }
     };
+    let mut ephemeral = ephemeral;
     let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
 
     let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
     let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
+    // Split each override map by VALUE SHAPE (esm-spec §6.6.2). A scalar goes
+    // on the canonical SciML `p` / `u0` channel unchanged; INLINE ARRAY DATA
+    // needs a channel that can carry a whole column:
+    //
+    //   * a shaped PARAMETER's column is written onto an EPHEMERAL copy of the
+    //     run document as that parameter's `default`, which the array compile
+    //     then lowers into its `const` observed ([`lower_inline_array_parameters`]).
+    //     The persisted document is untouched — this is the same ephemeral
+    //     instance a §9.7.10 discretization injection runs against;
+    //   * a shaped UNKNOWN's profile is expanded into one `u0` entry per grid
+    //     cell (`u[1]`, `u[2]`, …), the element names the state vector is keyed
+    //     by, so no new initial-condition channel is needed at all.
+    let (scalar_params, array_params) = split_inline_arrays(params);
+    let (scalar_ics, array_ics) = split_inline_arrays(ics);
+    if !array_params.is_empty() {
+        let mut owned = ephemeral.take().unwrap_or_else(|| file.clone());
+        if let Err(e) = bind_array_parameters(&mut owned, &array_params) {
+            return BuiltModel {
+                key,
+                ephemeral: None,
+                index_sets: None,
+                built: Built::BuildFailed(format!("simulate failed: {e}")),
+            };
+        }
+        ephemeral = Some(owned);
+    }
+    let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
+    let mut u0 = scalar_ics;
+    if !array_ics.is_empty()
+        && let Err(e) = expand_array_initial_conditions(run_file, &array_ics, &mut u0)
+    {
+        return BuiltModel {
+            key,
+            ephemeral,
+            index_sets,
+            built: Built::BuildFailed(format!("simulate failed: {e}")),
+        };
+    }
     let mut popts = ProblemOptions {
-        p: params,
-        u0: ics,
+        p: scalar_params,
+        u0,
         inspect: true,
         compile: crate::problem::Compile::Always,
         ..Default::default()

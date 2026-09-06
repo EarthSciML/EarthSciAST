@@ -1802,7 +1802,10 @@ function _build_setup_env(model, const_arrays_kw;
             (env[n] = Float64(v.default))
     end
     for (k, v) in param_overrides
-        env[String(k)] = Float64(v)
+        # esm-spec §6.6.2: a SHAPED parameter's override is INLINE ARRAY DATA —
+        # build-time data the setup evaluator gathers, exactly like a `const`-op
+        # array observed above, not a scalar to coerce.
+        env[String(k)] = v isa AbstractArray ? Array{Float64}(v) : Float64(v)
     end
     if vi_maps !== nothing
         for (name, buf) in vi_maps

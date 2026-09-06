@@ -45,8 +45,8 @@
 
 use crate::types::{
     ContinuousEvent, CouplingEntry, DiscreteEvent, Domain, Equation, EsmFile, Expr, ExpressionNode,
-    IndexSet, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec, ReactionSystem,
-    VariableMapTransform, VariableType,
+    IndexSet, InlineValue, JoinClause, Model, ModelVariable, OverlapClause, RangeSpec,
+    ReactionSystem, VariableMapTransform, VariableType,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -1611,7 +1611,7 @@ fn build_reaction_block(
                 VariableType::Unknown
             },
             units: species.units.clone(),
-            default: species.default,
+            default: species.default.map(InlineValue::Scalar),
             description: species.description.clone(),
             ..Default::default()
         };
@@ -1634,7 +1634,7 @@ fn build_reaction_block(
             ModelVariable {
                 var_type: VariableType::Parameter,
                 units: param.units.clone(),
-                default: param.default,
+                default: param.default.map(InlineValue::Scalar),
                 description: param.description.clone(),
                 default_units: param.default_units.clone(),
                 shape: param.shape.clone(),
@@ -3257,14 +3257,14 @@ mod tests {
         vars.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(0.0),
+                default: Some(0.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
         vars.insert(
             "k".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Parameter, None)
             },
         );

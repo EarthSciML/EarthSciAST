@@ -75,7 +75,7 @@ mod vectorized;
 // Only `area_faq` / `pde_inline_tests` consume this re-export, and both stay
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use compile::eval_buildtime_field;
+pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
 pub use compile::{file_has_array_ops, file_has_spatial_model, run_value_invention};
 // The ONE free-variable gate (CONFORMANCE_SPEC §5.23), shared with the build
 // pipeline: `crate::prepare` runs the same check the compile path runs, so the
@@ -601,6 +601,18 @@ pub struct ArrayCompiled {
     /// coordinate expression over grid-geometry aggregates — into the flat state
     /// vector cell-by-cell (DESIGN pde_simulation_pipeline §2 R2).
     field_ics: Vec<(String, Expr)>,
+    /// The STATE-FREE observed definitions a field `ic` RHS may read, in name
+    /// order (esm-spec §6.6.5 "Build-time evaluation scope").
+    ///
+    /// A state-free observed — one whose defining expression closes over
+    /// parameters, inline `const` data and other state-free observeds — is
+    /// resolvable before the simulation runs, so §11.4.1 admits it as an `ic`
+    /// right-hand side alongside a loaded field, a constant and a coordinate
+    /// expression. Captured at compile (before the observed bodies are moved
+    /// into the rules) and materialized lazily at `u0` build time, in the
+    /// resolved parameter scope, by [`Self::resolve_field_ics`]. Empty for a
+    /// document with no field `ic`.
+    ic_scope_defs: Vec<(String, Expr)>,
     /// Document-scoped index-set registry, kept so `ic` RHS coordinate
     /// expressions (whose `aggregate` ranges may still carry `{ "from": <set> }`
     /// references on the flattened path) resolve at `u0` build time exactly as

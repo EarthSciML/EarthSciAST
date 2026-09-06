@@ -812,6 +812,93 @@ function _partition_variables(model::Model;
     return param_names, observed_names, state_var_names
 end
 
+# ---- Stage: inline array data (esm-spec §6.3 / §6.6.2) ----------------------
+# A SHAPED variable may carry its whole field inline, as a row-major nested JSON
+# array on its `default` or in a test's `parameter_overrides` /
+# `initial_conditions`. `_coerce_inline_value` (types.jl) has already turned
+# such a value into a dense `Array{Float64,N}`; these two stages route it to the
+# channel the build already reads it from.
+
+# Every SHAPED parameter whose resolved value is inline array data, merged into
+# the const-array registry. Precedence follows §6.6.2: an explicit
+# `parameter_overrides` entry wins over everything, then a caller-supplied
+# `const_arrays` entry (loaded data beats a document default), then the declared
+# `default`. Returns the ORIGINAL registry object when nothing was added, so a
+# document with no inline array data builds byte-identically.
+function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
+                                           parameter_overrides::AbstractDict,
+                                           index_sets::AbstractDict)
+    additions = Dict{String,Any}()
+    for (name, v) in model.variables
+        v.type == ParameterVariable && _is_array_shape(v.shape) || continue
+        ov = get(parameter_overrides, name, nothing)
+        value = if is_inline_array(ov)
+            ov
+        elseif haskey(const_arrays, name)
+            continue                      # caller-supplied data is authoritative
+        elseif is_inline_array(v.default)
+            v.default
+        else
+            continue
+        end
+        _check_inline_shape(name, value, v.shape, index_sets,
+                            is_inline_array(ov) ? "parameter_overrides" : "default")
+        additions[name] = value
+    end
+    isempty(additions) && return const_arrays
+    merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    for (k, v) in additions
+        merged[k] = v
+    end
+    return merged
+end
+
+# Expand every INLINE ARRAY `initial_conditions` entry into the per-cell keys
+# (`u[1]`, `u[2,3]`, …) the u0 seeding reads, leaving scalar entries untouched.
+# A per-cell key the caller wrote explicitly WINS: it is the more specific
+# binding. Returns the ORIGINAL map when nothing was expanded.
+function _expand_inline_array_ics(model::Model, initial_conditions::AbstractDict,
+                                  index_sets::AbstractDict)
+    any(is_inline_array(v) for (_, v) in initial_conditions) || return initial_conditions
+    out = Dict{String,Any}(String(k) => v for (k, v) in initial_conditions
+                           if !is_inline_array(v))
+    for (k, v) in initial_conditions
+        is_inline_array(v) || continue
+        name = String(k)
+        var = get(model.variables, name, nothing)
+        var === nothing && throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_EQUATION",
+            "initial_conditions[$(name)]: inline array data names no variable of this " *
+            "model (esm-spec §6.6.2)"))
+        _check_inline_shape(name, v, var.shape, index_sets, "initial_conditions")
+        for I in CartesianIndices(v)
+            key = _cell_key(name, collect(Int, Tuple(I)))
+            haskey(out, key) || (out[key] = Float64(v[I]))
+        end
+    end
+    return out
+end
+
+# esm-spec §6.6.2: inline array data MUST match the variable's declared `shape`
+# after metaparameter folding, and a mismatch is a LOAD-TIME error. A shape that
+# does not resolve against the registry (an unmaterialized derived set) is
+# accepted as authored — the build's own extent checks then report any real
+# disagreement.
+function _check_inline_shape(name::AbstractString, value, shape, index_sets::AbstractDict,
+                             origin::AbstractString)
+    _is_array_shape(shape) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
+        "$(origin)[$(name)]: inline array data was supplied for a variable with no " *
+        "declared `shape`; only a SHAPED variable takes a nested array (esm-spec §6.3)"))
+    exts = _declared_shape_extents(shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+    exts === nothing && return nothing
+    size(value) == Tuple(exts) || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
+        "$(origin)[$(name)]: inline array data has shape $(size(value)), which does not " *
+        "match the declared shape $(Tuple(exts)) (esm-spec §6.6.2 — the array MUST match " *
+        "the variable\'s declared shape after metaparameter folding)"))
+    return nothing
+end
+
+const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
+
 # ---- Stage: canonicalize the caller's `parameter_overrides` keys ----
 # esm-spec §6.6 pins `parameter_overrides` as "keyed by LOCAL parameter name"
 # (`pert_amp`), but every document front-door reaches the build through
@@ -852,8 +939,12 @@ function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
     isempty(overrides) && return overrides
     param_names = Set{String}(n for (n, v) in model.variables
                               if v.type == ParameterVariable)
+    # `Any`-valued: esm-spec §6.6.2 admits INLINE ARRAY DATA for a SHAPED
+    # parameter alongside a scalar, and the array must survive key
+    # canonicalization intact (`_register_inline_array_parameters` routes it to
+    # the const-array channel just below).
     normalized, unknown, ambiguous =
-        _canonicalize_override_keys(param_names, overrides)
+        _canonicalize_override_keys(Any, param_names, overrides)
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
         throw(ArgumentError(
@@ -1264,12 +1355,25 @@ function _build_u0(model::Model, scalar_state_names::Vector{String},
         elseif haskey(eq_ics, cname)
             u0[i_abs] = eq_ics[cname]   # scoped-reference / array ic (§11.4.1)
         else
-            # Try the parent variable's scalar default (rare fallback).
+            # The parent variable's declared default: a scalar broadcasts to
+            # every cell, and INLINE ARRAY DATA (esm-spec §6.3) supplies this
+            # cell's own value at its multi-index.
             parsed = _parse_cell_key(cname)
             vname = parsed === nothing ? "" : parsed[1]
             if haskey(model.variables, vname)
                 d = model.variables[vname].default
-                u0[i_abs] = d === nothing ? 0.0 : Float64(d)
+                u0[i_abs] = if d === nothing
+                    0.0
+                elseif is_inline_array(d)
+                    idxs = parsed[2]
+                    checkbounds(Bool, d, idxs...) || throw(TreeWalkError(
+                        "E_TREEWALK_UNSUPPORTED_SHAPE",
+                        "default[$(vname)]: inline array data has shape $(size(d)), which " *
+                        "does not cover cell $(Tuple(idxs)) (esm-spec §6.6.2)"))
+                    Float64(d[idxs...])
+                else
+                    Float64(d)
+                end
             else
                 u0[i_abs] = 0.0
             end
@@ -3095,6 +3199,19 @@ function _build_evaluator_impl_inner(model::Model;
     # `inspect.params`. Idempotent — the AbstractDict front-door normalizes
     # too, and a document whose parameters are already bare is unchanged.
     parameter_overrides = _normalize_param_override_keys(model, parameter_overrides)
+    # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
+    # A SHAPED parameter whose value is authored as a row-major nested array —
+    # on its own `default`, or in the caller's `parameter_overrides` — is
+    # BUILD-TIME DATA, not a scalar `p` slot. Register it in the const-array
+    # registry, which is exactly the channel `_partition_variables` already
+    # requires an array-shaped parameter to be backed by; nothing else in the
+    # build then needs to know the column was authored inline rather than
+    # loaded. A shaped UNKNOWN's inline `initial_conditions` profile is expanded
+    # into the per-cell keys `_build_u0` seeds from. Both are no-ops (and the
+    # registries byte-identical) for a document that authors no array data.
+    const_arrays = _register_inline_array_parameters(model, const_arrays,
+                                                     parameter_overrides, index_sets)
+    initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
         const_arrays=const_arrays, param_arrays=param_arrays, vi_vars=_vi_vars,
@@ -3115,9 +3232,27 @@ function _build_evaluator_impl_inner(model::Model;
         has_value_invention=_has_value_invention, param_reads=param_reads)
 
     # ---- Phase 3: array-cell discovery + flat state layout + u0/p ----
+    # The build-time ARRAY scope a field `ic` resolves against (esm-spec §6.6.5
+    # "Build-time evaluation scope"): the caller's const arrays OVERLAID on the
+    # STATE-FREE array observeds this build already materialized
+    # (`cls.const_obs_arrays` — a `const`-op gather, a shaped parameter's inline
+    # column, a bare-alias re-exposure). Such a field is resolvable before the
+    # simulation runs, so §11.4.1 admits it as an `ic` right-hand side alongside
+    # a loaded field, a constant and a coordinate expression — which is what
+    # lets a column test seed `u` from a `const` gather instead of minting a
+    # per-regime rewrite-rule library. Caller-supplied data still wins.
+    ic_const_arrays = if isempty(cls.const_obs_arrays)
+        const_arrays
+    else
+        merged = Dict{String,Any}(String(n) => a for (n, a) in cls.const_obs_arrays)
+        for (k, v) in const_arrays
+            merged[String(k)] = v
+        end
+        merged
+    end
     layout = _build_state_layout(model, cls, parts;
         initial_conditions=initial_conditions, index_sets=index_sets,
-        registered_functions=registered_functions, const_arrays=const_arrays,
+        registered_functions=registered_functions, const_arrays=ic_const_arrays,
         vi_vars=_vi_vars, param_reads=param_reads)
 
     # ---- The parameter partition (differentiability plan §3 Phase 5) ----

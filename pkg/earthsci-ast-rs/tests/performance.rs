@@ -526,6 +526,7 @@ fn test_parallel_stoichiometric_matrix_computation() {
         Species {
             units: Some("mol".to_string()),
             default: Some(1.0),
+            default_units: None,
             description: None,
             constant: None,
         },
@@ -535,6 +536,7 @@ fn test_parallel_stoichiometric_matrix_computation() {
         Species {
             units: Some("mol".to_string()),
             default: Some(1.0),
+            default_units: None,
             description: None,
             constant: None,
         },
@@ -544,6 +546,7 @@ fn test_parallel_stoichiometric_matrix_computation() {
         Species {
             units: Some("mol".to_string()),
             default: Some(0.0),
+            default_units: None,
             description: None,
             constant: None,
         },
@@ -577,7 +580,11 @@ fn test_parallel_stoichiometric_matrix_computation() {
         Parameter {
             units: Some("1/s".to_string()),
             default: Some(1.0),
+            default_units: None,
             description: None,
+            shape: None,
+            distribution: None,
+            update: None,
         },
     );
 
@@ -590,6 +597,9 @@ fn test_parallel_stoichiometric_matrix_computation() {
         constraint_equations: None,
         discrete_events: None,
         continuous_events: None,
+        tolerance: None,
+        tests: None,
+        analyses: None,
     };
 
     let matrix = evaluator
