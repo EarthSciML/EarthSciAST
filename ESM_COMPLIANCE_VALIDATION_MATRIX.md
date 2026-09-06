@@ -1008,10 +1008,37 @@ capability and no binding is exempt.
 > `{"op": "grad", "args": ["c"], "dim": "x"}` became `"dim": 3` in Go and stayed
 > `"dim": "x"` everywhere else — a silent cross-binding divergence in the one
 > direction no fixture happened to cover. Fixed by adding `dim` to Go's
-> `metaSubstSkipKeys`, bringing it to the four-binding behavior. Because Go's
-> rename-walk protect set is DERIVED from that skip set, the §9.7.7 rename walk
-> now also treats `dim` as protected — it still renames, since the walk tests
-> its axis keys first, and a regression test pins that ordering.
+> `metaSubstSkipKeys`, closing that asymmetry.
+>
+> The divergence was **reachable**, not latent. §9.7.6 forbids a metaparameter
+> name colliding with a visible variable / parameter / species / index-set name,
+> so the obvious repro (metaparameter `x` + index set `x`) never reaches
+> substitution — but §4.9.1 clause (ii) makes a `dim` value name a spatial
+> coordinate *structurally*, with no `index_sets` entry required, and a bare
+> coordinate is none of the four kinds that check covers. So one document may
+> legally declare metaparameter `lev` and write `dim: "lev"`, which is what
+> `TestTemplateImports_MetaparamDoesNotRewriteDimInDocument` drives through the
+> real load pipeline.
+>
+> Because Go's rename-walk protect set is DERIVED from that skip set, the §9.7.7
+> rename walk now also treats `dim` as protected — a STRING `dim` still renames,
+> since the walk tests its axis keys first, and a regression test pins that
+> ordering; a non-string `dim` (schema-invalid, but the walk runs at load, before
+> validation) is now copied verbatim instead of recursed, which is what the other
+> four bindings already do, since `dim` is in their rename-protected sets too.
+>
+> **Still open after this fix (opposite direction, EXPR-09-E-008).** The skip
+> sets are *not* yet identical. Go carries three entries the other four do not —
+> `op`, `id`, `expect_cadence` — so a metaparameter named after an operator or a
+> node id still diverges the other way: with `max` bound to 3,
+> `{"op": "max", …}` stays `"op": "max"` in Go and becomes `"op": 3` in Julia,
+> TypeScript, Python and Rust (the latter then dying in the typed load with a raw
+> "cannot unmarshal number into `ExprNode.op`" rather than a diagnostic — Go's
+> audit-G12 reason for adding it). §9.7.6 substitutes only in *expression
+> positions*, and an operator name is not one, so **Go's behavior is the correct
+> one and the other four need the three entries added**. That is a four-binding
+> behavior change and is deliberately NOT part of this Go-only fix; it needs its
+> own PR with a shared fixture.
 
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -1022,7 +1049,7 @@ capability and no binding is exempt.
 | EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
 | EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
 | EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
-| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding; structural fields are NOT expression positions and MUST be skipped — including the axis-naming scalars `wrt` and `dim` (§4.9.1), which name a spatial coordinate rather than referencing a value | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding. The **axis-naming scalar fields** are NOT expression positions and MUST be skipped: `wrt`, `dim` (§4.9.1) and `integral`'s integration variable `var` (§4.2) name a spatial coordinate rather than referencing a value, so a metaparameter sharing an axis's name MUST NOT rewrite them | esm-spec.md §9.7.6, §9.7.7 | Yes | expression |
 | EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
 | EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
