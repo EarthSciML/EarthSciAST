@@ -1653,6 +1653,23 @@ bound. An undeclared `from` name is a hard error — no implicit interval is
 inferred. The canonical `op: "aggregate"` tag and the deprecated `op: "arrayop"`
 alias are evaluated identically (§5.6).
 
+The registry a `from` name resolves against is the **effective** one — the
+document's own `index_sets` merged with those of every template library imported
+into the component's scope (esm-spec §9.7.5), which is settled only once that
+scope closes (§9.7.4). A document that declares **no** `index_sets` of its own is
+the esm-spec §9.7.10 / §6.6.6 discretization-agnostic PDE leaf: its sets arrive
+from a grid library that a composing document, a subsystem-ref edge or an inline
+test injects, and exist only in that per-run build. **`validate()` therefore MUST
+NOT report `undefined_index_set` for a document that declares no registry** —
+mirroring §9.6.1, where `template_constraint_unknown_index_set` does not run for
+a library file loaded or validated standalone. A document that DOES declare a
+registry is resolved against it at validation, and an absent `from` name is
+`undefined_index_set` (`tests/invalid/aggregate/undeclared_from_name.esm`); in
+both cases a name still unresolved once injection has run is rejected by the
+evaluating bindings at build (`E_REF_UNDECLARED_INDEX_SET` and its per-binding
+peers), so no typo survives to run time. Positive control:
+`tests/conformance/expression_templates/inject_agnostic_aggregate/fixture.esm`.
+
 #### 5.6.5 Conformance requirement
 
 The shared fixtures under `tests/valid/aggregate/` carry inline `tests`
@@ -3980,12 +3997,247 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 **Why the fixture's `g` is a LIVE node.** It drives a second state rather than
 standing alone, and that is not cosmetic: the Julia build drops a DEAD observed
 — one no live equation consumes — from `BuildInspection.observed_exprs`
-entirely, so Julia cannot answer an assertion on it whether or not it is
+entirely, so Julia could not answer an assertion on it whether or not it is
 state-dependent, while Rust (which REQUESTS the observed from the runtime) and
-Python (which evaluates the whole ordered graph on demand) both can. That
-residual divergence is tracked separately (EarthSciML/EarthSciAST#176) and is
-deliberately NOT what this category pins; a fixture written around it could not
-require all three bindings.
+Python (which evaluates the whole ordered graph on demand) both can. Keeping `g`
+live is what let this category require all three bindings; the deadness
+divergence is §5.27.3's subject.
+
+#### 5.27.3 A DEAD observed is still an observed (normative)
+
+An assertion MUST be answerable on an array OBSERVED that **no live equation
+consumes**. An inline test's natural target is a quantity computed FOR the test
+— a tendency, a flux, a diagnostic — which by construction nothing else reads.
+esm-spec §6.6.5 admits any shaped variable and §5.23 makes a reference denote
+its expansion; neither is conditioned on the dynamics reading it. A binding that
+answers only what the dynamics consume forces an author to wire a diagnostic
+into the model — CHANGING the model — to make a test runnable.
+
+The trap is not in the assertion path but in what reaches it. A build is
+entitled to drop what nothing needs: Julia's elementwise array-observed fold
+inlines such an observed into its readers and drops its equation, and a dead one
+has no readers to be inlined into, so it was dropped outright and reached
+neither `BuildInspection.observed_exprs` nor `observed_defs` — every assertion
+on it failed with `array state '<name>' has no cells in var_map`. So the rule is
+about SOURCES: an observed's field MUST be readable however the build chose to
+treat it, which for Julia's `_observed_field` is three sources in order —
+
+1. the **published body** (`observed_exprs` / `observed_defs`);
+2. the **materialized buffer**, for an observed whose build-once body (a
+   document-literal `const` array, a setup geometry buffer) the build folded
+   into the const-array registry and published no body for;
+3. the component's **own defining equation**, lowered to the same per-cell form
+   through the same shape-promotion lift the build itself uses (so §4.3.4 name
+   alignment holds: a `[x]`-shaped operand in an `[x,y]` result replicates along
+   `y` rather than being gathered positionally) and evaluated in the same scope.
+
+Producers a fallback body names resolve from the published graph, or recursively
+from their own defining equations, one level of deadness down. The recursion
+guard MUST be the dependency CHAIN, not the set of everything visited: two
+siblings reading the same dead observed are a DIAMOND, not a cycle, and each
+must resolve it.
+
+Two things this does NOT change. A published body still WINS — an observed the
+build publishes is read from the build, never re-derived. And a name the
+asserted component does not declare as an observed of its own is still the ERROR
+of §5.27.1, never a sibling's number.
+
+One diagnostic DOES change, deliberately. A declared observed whose defining
+equation cannot be evaluated at assertion time (it names a variable the document
+never declares, a provider array not yet fetched) now REACHES the evaluator and
+reports `E_TREEWALK_UNBOUND_VARIABLE: <name>` where it previously reported
+`array state '<v>' has no cells in var_map`. Both are an ERROR verdict, never a
+plausible number; the new message names the unresolved operand instead of
+describing a state lookup that was never the point.
+
+**Gate.** `tests/conformance/pde_inline_dead_observed/` holds the shared fixture
+and the Julia-minted golden. The fixture's `diag = 2*base` is dead, and
+`chain = diag + base` is dead AND reads a dead observed, so the recursive
+resolution is pinned and not just the one-level case. Its only state is
+integrated with a zero right-hand side, so the trajectory is constant and the
+goldens are integrator-independent: a divergence here is a semantics divergence,
+never an integrator one.
+
+Per-binding runners drive it and gate every assertion against BOTH the golden
+actual and the fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_dead_observed_test.jl`;
+**Python** — `pkg/earthsci-ast-py/tests/test_pde_inline_dead_observed_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_dead_observed_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest. Rust and Python were already conforming — Rust
+requests the observed from the runtime, Python evaluates the ordered observed
+graph on demand — so the category also pins that neither regresses into
+consuming-equation-gated answers.
+
+### 5.28 Inline Array Data for a Shaped Variable (normative)
+
+§5.14 governs which parameter VALUES the build-time scope sees when a run is an
+inline test. This section governs the value's **shape**. esm-spec §6.6.2
+("Shaped values") and §6.3 make a shaped variable's `default`, and a test's
+`parameter_overrides` / `initial_conditions` entry for one, either a **number**
+or a **row-major nested JSON array** matching the declared `shape` after
+metaparameter folding; esm-spec §11.4 additionally admits a **state-free array
+observed** as an `ic` right-hand side, which is the same §6.6.5 build-time
+evaluator reached from one more position. The three simulation bindings —
+**Julia, Python, Rust** — must agree on the resulting assertion actuals. The
+shared **offline** fixtures live in
+`tests/conformance/pde_inline_array_overrides/`.
+
+This is a **capability** gate rather than a quiet-wrong-answer one, and it
+closes a documented workaround. Before it, all three value positions were
+`number`-only in `esm-schema.json` and a `const`-gather `ic` RHS was rejected at
+build, so a §6.6 inline test could not supply a SHAPED input at all. The only
+escape was a test-injected rewrite-rule library (§9.7.10) whose rules lower a
+rewrite-target op to an inline `const` column — one GENERATED `.esm` per test.
+That is what a column-physics component replaying a Fortran kernel dump had to
+do for every regime, because its inputs ARE columns (θ, q_v, u, v, p, dz, K
+profiles) and the instantaneous-derivative test shape (observed tendencies
+asserted at `time: 0`) needs them on one shared model.
+
+#### 5.28.1 What is compared
+
+Each in-scope binding runs the fixtures' inline tests through its official
+inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+every assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)` — each fixture's tests differ *only* in their inline
+array data, so the pair is the identity.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+#### 5.28.2 Non-vacuity
+
+Non-vacuity is structural rather than incidental, in three independent ways.
+The `declared_defaults` / `rank2_declared_default` half of each fixture reads the
+array-valued **defaults** and the override half **replaces** them, so a binding
+that dropped array data entirely fails the first half instead of passing both on
+zeros. Every fixture re-asserts a state seeded by a `const` gather the overrides
+do not touch (`ic(w) ~ gathered`), so an override that leaked into the
+build-time array scope fails rather than silently agreeing. And the rank-2
+fixture's axes have **different extents** (`lev=2`, `col=3`) with pairwise-
+distinct element values, every cell asserted.
+
+#### 5.28.3 Row-major nesting
+
+Axis 1 of `shape` is the OUTER JSON array, so `data[i][j]` is the element at
+`(i, j)`. This is the ONE place the bindings could silently disagree while every
+value still "looked right": their flat state vectors are laid out differently
+(Python enumerates array cells row-major, Julia and Rust column-major), so a
+binding that flattened the authored array against its own state order rather
+than by multi-index would agree at rank 1 and on every square-diagonal cell.
+Hence the rank-2 fixture's unequal extents: such a binding disagrees on every
+off-diagonal cell instead. Each per-binding runner additionally pins the order
+directly, off the runner path, by reading the declared array and the seeded
+state cell-by-cell.
+
+#### 5.28.4 Shape mismatch is a load-time error
+
+An array whose extents, rank, or nesting disagree with the declared `shape` MUST
+be rejected — never truncated, padded, or broadcast — mirroring convention 3 of
+§6.6.5 for `from_file` data. Each per-binding runner drives a deliberately
+2-element column at a `lev`-shaped (=4) parameter and requires the diagnostic to
+name the mismatch. The error type is language-idiomatic (`TreeWalkError`,
+`SimulationError`, `CompileError`); the CLASSIFICATION is the cross-binding
+contract.
+
+#### 5.28.5 Gate
+
+Per-binding runners drive the fixtures and gate every assertion actual against
+the committed goldens: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_array_overrides_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_array_overrides_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/pde_inline_array_overrides_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; TypeScript and Go are
+`scope_excluded` (rewrite-only ports with no `makearray` lowering, simulator, or
+inline PDE-test runner), though both accept and round-trip the widened schema.
+
+Each binding routes the value through whatever channel it already uses for
+build-time constant arrays rather than through its scalar parameter vector — a
+whole column has nowhere to live in one f64 slot. Julia registers it in
+`const_arrays` (the channel `_partition_variables` already requires an
+array-shaped parameter to be backed by), Python binds it as an interpreter
+`input_arrays` entry, and Rust lowers it into the `const` observed channel. The
+values are what conform; the channel is each binding's own.
+
+### 5.29 An Elementwise Array Expression Is Indexable: the Gather Distributes to the Leaves (normative)
+
+esm-spec §4.3.4 makes an elementwise combination of array operands an ARRAY of
+the broadcast shape. It follows that the combination is INDEXABLE, and that
+indexing it is the combination of the indexed operands:
+
+```
+index(op(a₁, …, aₙ), k…)  ≡  op(index(a₁, k…), …, index(aₙ, k…))     for elementwise `op`
+```
+
+with a genuinely scalar operand (a literal, a scalar parameter) left un-gathered
+so it broadcasts. This is an identity, not an approximation: the two sides are
+the same real number, cell for cell.
+
+The rule matters because it is what makes an ARRAY-shaped observed authored
+ELEMENTWISE readable through a gather. Given
+
+```json
+{"lhs": "f", "rhs": {"op": "+", "args": [1, {"op": "cos",
+    "args": [{"op": "*", "args": ["pi", "zc"]}]}]}}
+```
+
+with `zc` shaped `[lev]`, a reader that says `index(f, j)` — the body of a column
+`aggregate`, say — is asking for `f`'s value at level `j`. A binding that inlines
+`f` into its readers by name substitution (a legitimate and common lowering) has
+`index(1 + cos(pi*zc), j)` in hand, and MUST resolve it by the identity above,
+transitively, until the gather lands on the array LEAVES:
+`1 + cos(pi*index(zc, j))`.
+
+"Transitively" is the whole content of the rule. The leaves may sit at any depth
+under elementwise ops — in the example `zc` is three levels down, beneath a `cos`
+and a `*` — and a binding that inspects only the IMMEDIATE operands of the
+outermost combination finds nothing array-shaped there (`1` is a literal;
+`cos(pi*zc)` is neither an array producer node nor a variable), gathers nothing,
+and DROPS the index. The array leaf then survives into evaluation unbound.
+
+#### 5.29.1 What is a leaf, and what is not
+
+The gather must reach every array SOURCE a binding can gather at all — an array
+state slot, a live forcing buffer, a build-time const array, an array producer
+node (`makearray`, or an `aggregate`/`arrayop` that keeps at least one symbolic
+output index). It must NOT descend into, or re-wrap:
+
+- an `index` node — already a scalar; the gather it carries is its own;
+- a SCALAR reduction (an `aggregate`/`arrayop` whose `output_idx` is empty) — it
+  produces a scalar and gathering it is a rank error;
+- any non-elementwise op (a closed function `fn`, a geometry kernel, an
+  unlowered rewrite target), which consumes whole arrays under its own contract.
+
+#### 5.29.2 Gate
+
+`tests/conformance/elementwise_observed_gather/`, run by
+`conformance_elementwise_observed_gather_test.jl` (Julia),
+`test_elementwise_observed_gather_conformance.py` (Python) and
+`elementwise_observed_gather_conformance.rs` (Rust). The category carries a
+CONTROLLED PAIR of fixtures: `elementwise_gather.esm` is the shape under test,
+and `explicit_gather.esm` writes the identical field as an explicit
+`aggregate(k from lev; 1 + cos(pi*index(zc, k)))` — the spelling that needs no
+push-down. The two share every assertion and every expected value, and each
+runner additionally requires them to agree with EACH OTHER actual-for-actual, so
+a divergence between the two spellings is the push-down and cannot be the
+physics. Both right-hand sides are state-free, so the states are integrated
+exactly by every pinned solver family and the goldens are integrator-independent
+to machine precision.
+
+**Julia** — FIXED. `_resolve_indices`'s push-down branch tested only the
+immediate operands, so the elementwise document raised
+`E_TREEWALK_UNBOUND_VARIABLE: zc` while Python and Rust returned the right
+numbers (issue #175). The operand test is now `_index_pushdown_arrayish`, which
+recurses through nested elementwise ops and spans every array source above; the
+symbolic stencilizer shares it, so the same document reaches the affine tier
+rather than declining to per-cell. **Python**, **Rust** — already conforming;
+the category pins them.
+
+**TypeScript**, **Go** — rewrite-only ports with no evaluator; no rows apply.
 
 ## 6. CI Integration
 

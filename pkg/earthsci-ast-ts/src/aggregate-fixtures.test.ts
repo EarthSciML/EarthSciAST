@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'fs'
 import { join, basename } from 'path'
-import { loadString, toJson, validateText, validateSchema } from './index.js'
+import { loadString, toJson, validateText, validateSchema, ERROR_CODES } from './index.js'
 import { fixturesDir } from './test-helpers.js'
 
 const testsDir = fixturesDir()
@@ -114,6 +114,42 @@ describe('Aggregate / semiring fixtures', () => {
           `${basename(filePath)}: corpus pins "${pinnedCode}", binding emitted: ${codes.join(', ') || '(none)'}`,
         ).toContain(pinnedCode)
       }
+    })
+  })
+
+  describe('discretization-agnostic leaf (esm-spec §9.7.10 / §6.6.6, issue #185)', () => {
+    const leafPath = join(
+      testsDir,
+      'conformance',
+      'expression_templates',
+      'inject_agnostic_aggregate',
+      'fixture.esm',
+    )
+
+    it('accepts an aggregate range over an index set that arrives by injection', () => {
+      // The leaf declares NO `index_sets` of its own: its registry arrives from
+      // the grid library a composing document, a subsystem-ref edge or an inline
+      // test injects into this component's scope, so `{ from: "cells" }` is not
+      // decidable at standalone load and must not be reported. Mirrors §9.6.1,
+      // where `template_constraint_unknown_index_set` does not run for a library
+      // file validated standalone.
+      const result = validateText(readFileSync(leafPath, 'utf-8'))
+
+      expect(result.schema_errors).toHaveLength(0)
+      expect(result.structural_errors.map((e) => e.code)).toEqual([])
+      expect(result.is_valid).toBe(true)
+    })
+
+    it('still rejects an undeclared range when the document declares a registry', () => {
+      // The negative control: the deferral is scoped to a document with no
+      // registry of its own, so a typo'd `from` name in a document that HAS one
+      // is still `undefined_index_set`.
+      const result = validateText(
+        readFileSync(join(testsDir, 'invalid', 'aggregate', 'undeclared_from_name.esm'), 'utf-8'),
+      )
+
+      expect(result.is_valid).toBe(false)
+      expect(result.structural_errors.map((e) => e.code)).toContain(ERROR_CODES.UNDEFINED_INDEX_SET)
     })
   })
 })
