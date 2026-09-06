@@ -74,8 +74,11 @@ impl Compiled {
         // (2) Build name -> index tables for state, params, observed.
         let state_names: Vec<String> = flat.state_variables.keys().cloned().collect();
         let state_index = build_index_map(&state_names);
-        let state_defaults: Vec<Option<f64>> =
-            flat.state_variables.values().map(|mv| mv.default).collect();
+        let state_defaults: Vec<Option<f64>> = flat
+            .state_variables
+            .values()
+            .map(|mv| mv.default_scalar())
+            .collect();
 
         // EVERY parameter, of every cadence. A DISCRETE parameter is
         // piecewise-constant between refreshes, and this scalar backend has no
@@ -87,8 +90,11 @@ impl Compiled {
         // sitting beside it, so one map is the whole set.
         let param_names: Vec<String> = flat.parameters.keys().cloned().collect();
         let param_index = build_index_map(&param_names);
-        let param_defaults: Vec<Option<f64>> =
-            flat.parameters.values().map(|mv| mv.default).collect();
+        let param_defaults: Vec<Option<f64>> = flat
+            .parameters
+            .values()
+            .map(|mv| mv.default_scalar())
+            .collect();
 
         let observed_names_raw: Vec<String> = flat.observed_variables.keys().cloned().collect();
         let observed_index_raw = build_index_map(&observed_names_raw);

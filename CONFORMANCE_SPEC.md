@@ -3987,6 +3987,100 @@ residual divergence is tracked separately (EarthSciML/EarthSciAST#176) and is
 deliberately NOT what this category pins; a fixture written around it could not
 require all three bindings.
 
+### 5.28 Inline Array Data for a Shaped Variable (normative)
+
+§5.14 governs which parameter VALUES the build-time scope sees when a run is an
+inline test. This section governs the value's **shape**. esm-spec §6.6.2
+("Shaped values") and §6.3 make a shaped variable's `default`, and a test's
+`parameter_overrides` / `initial_conditions` entry for one, either a **number**
+or a **row-major nested JSON array** matching the declared `shape` after
+metaparameter folding; esm-spec §11.4 additionally admits a **state-free array
+observed** as an `ic` right-hand side, which is the same §6.6.5 build-time
+evaluator reached from one more position. The three simulation bindings —
+**Julia, Python, Rust** — must agree on the resulting assertion actuals. The
+shared **offline** fixtures live in
+`tests/conformance/pde_inline_array_overrides/`.
+
+This is a **capability** gate rather than a quiet-wrong-answer one, and it
+closes a documented workaround. Before it, all three value positions were
+`number`-only in `esm-schema.json` and a `const`-gather `ic` RHS was rejected at
+build, so a §6.6 inline test could not supply a SHAPED input at all. The only
+escape was a test-injected rewrite-rule library (§9.7.10) whose rules lower a
+rewrite-target op to an inline `const` column — one GENERATED `.esm` per test.
+That is what a column-physics component replaying a Fortran kernel dump had to
+do for every regime, because its inputs ARE columns (θ, q_v, u, v, p, dz, K
+profiles) and the instantaneous-derivative test shape (observed tendencies
+asserted at `time: 0`) needs them on one shared model.
+
+#### 5.28.1 What is compared
+
+Each in-scope binding runs the fixtures' inline tests through its official
+inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+every assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)` — each fixture's tests differ *only* in their inline
+array data, so the pair is the identity.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+#### 5.28.2 Non-vacuity
+
+Non-vacuity is structural rather than incidental, in three independent ways.
+The `declared_defaults` / `rank2_declared_default` half of each fixture reads the
+array-valued **defaults** and the override half **replaces** them, so a binding
+that dropped array data entirely fails the first half instead of passing both on
+zeros. Every fixture re-asserts a state seeded by a `const` gather the overrides
+do not touch (`ic(w) ~ gathered`), so an override that leaked into the
+build-time array scope fails rather than silently agreeing. And the rank-2
+fixture's axes have **different extents** (`lev=2`, `col=3`) with pairwise-
+distinct element values, every cell asserted.
+
+#### 5.28.3 Row-major nesting
+
+Axis 1 of `shape` is the OUTER JSON array, so `data[i][j]` is the element at
+`(i, j)`. This is the ONE place the bindings could silently disagree while every
+value still "looked right": their flat state vectors are laid out differently
+(Python enumerates array cells row-major, Julia and Rust column-major), so a
+binding that flattened the authored array against its own state order rather
+than by multi-index would agree at rank 1 and on every square-diagonal cell.
+Hence the rank-2 fixture's unequal extents: such a binding disagrees on every
+off-diagonal cell instead. Each per-binding runner additionally pins the order
+directly, off the runner path, by reading the declared array and the seeded
+state cell-by-cell.
+
+#### 5.28.4 Shape mismatch is a load-time error
+
+An array whose extents, rank, or nesting disagree with the declared `shape` MUST
+be rejected — never truncated, padded, or broadcast — mirroring convention 3 of
+§6.6.5 for `from_file` data. Each per-binding runner drives a deliberately
+2-element column at a `lev`-shaped (=4) parameter and requires the diagnostic to
+name the mismatch. The error type is language-idiomatic (`TreeWalkError`,
+`SimulationError`, `CompileError`); the CLASSIFICATION is the cross-binding
+contract.
+
+#### 5.28.5 Gate
+
+Per-binding runners drive the fixtures and gate every assertion actual against
+the committed goldens: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_array_overrides_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_array_overrides_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/pde_inline_array_overrides_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; TypeScript and Go are
+`scope_excluded` (rewrite-only ports with no `makearray` lowering, simulator, or
+inline PDE-test runner), though both accept and round-trip the widened schema.
+
+Each binding routes the value through whatever channel it already uses for
+build-time constant arrays rather than through its scalar parameter vector — a
+whole column has nowhere to live in one f64 slot. Julia registers it in
+`const_arrays` (the channel `_partition_variables` already requires an
+array-shaped parameter to be backed by), Python binds it as an interpreter
+`input_arrays` entry, and Rust lowers it into the `const` observed channel. The
+values are what conform; the channel is each binding's own.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

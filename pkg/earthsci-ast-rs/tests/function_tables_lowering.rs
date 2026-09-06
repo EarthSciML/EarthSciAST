@@ -67,7 +67,7 @@ fn resolve_axis_value(expr: &Expr, vars: &IndexMap<String, earthsci_ast::ModelVa
         Expr::Variable(name) => vars
             .get(name)
             .unwrap_or_else(|| panic!("axis input variable {name:?} not in model"))
-            .default
+            .default_scalar()
             .expect("variable has default"),
         Expr::Operator(_) => {
             panic!("complex axis input expression not exercised by these fixtures")
@@ -180,7 +180,7 @@ fn reference_inline_const(
             };
             let (axis_name, var_name) = axis_inputs[0];
             assert_eq!(axis_name, axis.name);
-            let x = model_vars[var_name].default.unwrap();
+            let x = model_vars[var_name].default_scalar().unwrap();
             evaluate_interp(
                 "interp.linear",
                 vec![
@@ -202,8 +202,8 @@ fn reference_inline_const(
             let (axn1, vn1) = axis_inputs[1];
             assert_eq!(axn0, ax.name);
             assert_eq!(axn1, ay.name);
-            let x = model_vars[vn0].default.unwrap();
-            let y = model_vars[vn1].default.unwrap();
+            let x = model_vars[vn0].default_scalar().unwrap();
+            let y = model_vars[vn1].default_scalar().unwrap();
             evaluate_interp(
                 "interp.bilinear",
                 vec![
