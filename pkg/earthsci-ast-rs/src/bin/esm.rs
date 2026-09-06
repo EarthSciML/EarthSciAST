@@ -11,8 +11,8 @@ use earthsci_ast::extension::analysis::{
 };
 use earthsci_ast::{
     ExpressionGraphOptions, component_exists, component_graph, expression_graph,
-    expression_graph_with_options, load_string, stoichiometric_matrix, to_json, to_json_compact,
-    validate, validate_text,
+    expression_graph_with_options, stoichiometric_matrix, to_json, to_json_compact, validate,
+    validate_text,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -2476,7 +2476,6 @@ fn run_simulate(
     Ok(())
 }
 
-
 // =============================================================================
 // Single evaluation of a document with nothing to integrate
 // =============================================================================
@@ -2492,6 +2491,10 @@ fn run_simulate(
 // These three functions are that route. They do not add a mode to the solver;
 // they add a SINK to the evaluation the build pipeline already performs.
 
+/// The materialized static fields a run emits: one named column per field,
+/// each an N-dimensional array.
+type StaticFields = Vec<(String, ndarray::ArrayD<f64>)>;
+
 /// The build-time fields to write, in the order they will be columns.
 ///
 /// `observed` names them explicitly (the `--observed` flag); empty means every
@@ -2501,7 +2504,7 @@ fn run_simulate(
 fn static_fields(
     prob: &earthsci_ast::EsmProblem,
     observed: &[String],
-) -> Result<Vec<(String, ndarray::ArrayD<f64>)>, Box<dyn std::error::Error>> {
+) -> Result<StaticFields, Box<dyn std::error::Error>> {
     let names: Vec<String> = if observed.is_empty() {
         prob.observed_field_names()
     } else {
@@ -3455,7 +3458,7 @@ fn consumed_data_sources(doc: &serde_json::Value) -> BTreeMap<String, Vec<String
     }
     // A binding naming a source the document does not declare is a validation
     // error, not an ingest one — leave it to `validate` and ignore it here.
-    out.retain(|src, _| declared.iter().any(|d| *d == src));
+    out.retain(|src, _| declared.contains(&src));
     out
 }
 
@@ -3496,12 +3499,19 @@ fn no_reader_diagnostic(consumed: &BTreeMap<String, Vec<String>>) -> String {
          `cargo build --release --features esio` (see pkg/earthsci-ast-rs/Cargo.toml). \
          Running anyway would evaluate every data-fed parameter at its `default` \
          and report the result as the document's answer.",
-        if consumed.len() == 1 { "a source" } else { "sources" },
-        if consumed.len() == 1 { "it" } else { "its parameters" },
+        if consumed.len() == 1 {
+            "a source"
+        } else {
+            "sources"
+        },
+        if consumed.len() == 1 {
+            "it"
+        } else {
+            "its parameters"
+        },
         consumed_summary(consumed)
     )
 }
-
 
 /// Close every metaparameter a `data_sources` `extent` binds, by SAMPLING the
 /// sources that measure themselves, and re-load the document with the sizes the
@@ -3749,9 +3759,8 @@ fn run_test(
                 // been resolved and a mounted component's data bindings are
                 // visible here.
                 let ready = close_declared_extents(esm_file, |mp| {
-                    earthsci_ast::load_path_with_options(path, mp).map_err(|e| {
-                        format!("re-loading with the discovered source extents: {e}")
-                    })
+                    earthsci_ast::load_path_with_options(path, mp)
+                        .map_err(|e| format!("re-loading with the discovered source extents: {e}"))
                 });
                 let (esm_file, providers) = match ready {
                     Ok(pair) => pair,
@@ -4484,7 +4493,7 @@ mod tests {
             ("coupling", TEMPLATE_COUPLING),
         ] {
             let content = template.replace("{name}", "demo_project");
-            let esm_file = load_string(&content)
+            let esm_file = earthsci_ast::load_string(&content)
                 .unwrap_or_else(|e| panic!("template '{name}' does not load: {e}"));
             let result = validate(&esm_file);
             assert!(

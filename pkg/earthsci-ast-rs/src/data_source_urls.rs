@@ -154,10 +154,7 @@ pub(crate) fn resolve_data_source_urls(
     doc: &mut Value,
     base_dir: &Path,
 ) -> Result<(), DiagnosticError> {
-    let Some(sources) = doc
-        .get_mut("data_sources")
-        .and_then(Value::as_object_mut)
-    else {
+    let Some(sources) = doc.get_mut("data_sources").and_then(Value::as_object_mut) else {
         return Ok(());
     };
     for (name, entry) in sources.iter_mut() {
@@ -270,7 +267,11 @@ mod tests {
         for t in ["./a?b.nc", "./a#b.nc"] {
             let e = resolve_source_url(t, Path::new("/a/b")).expect_err("must refuse");
             assert_eq!(e.code, codes::DATA_SOURCE_URL_UNRESOLVED);
-            assert!(e.message.contains(t), "must name the template: {}", e.message);
+            assert!(
+                e.message.contains(t),
+                "must name the template: {}",
+                e.message
+            );
         }
     }
 

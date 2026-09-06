@@ -92,9 +92,21 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
     let cases: [(&str, RefusedBy, serde_json::Value); 9] = [
         // Stripped as a value-invention producer: the observed never reaches
         // the evaluator, and the runner reports the missing observed.
-        ("skolem", ValueInvention, json!({ "op": "skolem", "args": ["row"] })),
-        ("rank", EvaluabilityGate, json!({ "op": "rank", "args": ["row"] })),
-        ("distinct", EvaluabilityGate, json!({ "op": "distinct", "args": ["row"] })),
+        (
+            "skolem",
+            ValueInvention,
+            json!({ "op": "skolem", "args": ["row"] }),
+        ),
+        (
+            "rank",
+            EvaluabilityGate,
+            json!({ "op": "rank", "args": ["row"] }),
+        ),
+        (
+            "distinct",
+            EvaluabilityGate,
+            json!({ "op": "distinct", "args": ["row"] }),
+        ),
         // Refused by the VI materializer (an arg-witness needs one output index).
         (
             "argmin",
@@ -108,9 +120,21 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
             json!({ "op": "argmax", "args": [], "arg": "i",
                     "ranges": { "i": [1, 3] }, "expr": "row" }),
         ),
-        ("ic", EvaluabilityGate, json!({ "op": "ic", "args": ["row"] })),
-        ("enum", EvaluabilityGate, json!({ "op": "enum", "args": ["colors", "red"] })),
-        ("table_lookup", EvaluabilityGate, json!({ "op": "table_lookup", "args": [] })),
+        (
+            "ic",
+            EvaluabilityGate,
+            json!({ "op": "ic", "args": ["row"] }),
+        ),
+        (
+            "enum",
+            EvaluabilityGate,
+            json!({ "op": "enum", "args": ["colors", "red"] }),
+        ),
+        (
+            "table_lookup",
+            EvaluabilityGate,
+            json!({ "op": "table_lookup", "args": [] }),
+        ),
         (
             "apply_expression_template",
             EvaluabilityGate,
@@ -145,7 +169,10 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
         let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
         assert_eq!(results.len(), 1, "`{op}`: one assertion, got {results:?}");
         let r = &results[0];
-        assert!(!r.passed, "`{op}` has no evaluation rule; it must not answer");
+        assert!(
+            !r.passed,
+            "`{op}` has no evaluation rule; it must not answer"
+        );
         assert!(
             !r.message.is_empty(),
             "`{op}` must fail with a message an author can act on"
