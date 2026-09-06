@@ -177,6 +177,36 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
     expect(f.index_sets['meshB.x'].size).toBe(8)
   })
 
+  it("import_rename_integral_axis: rename carries an integral rule's var + bounds (§9.7.7)", () => {
+    // The §9.7.7 occurrence list for an `integral` rewrite rule: the rename must
+    // rewrite the AXIS-NAMING scalar fields of the match — the integration
+    // variable `var` AND a bare-axis-name `lower`/`upper` bound — alongside
+    // `wrt`/`dim`. Otherwise the renamed instance keeps matching the library's
+    // own axis, never fires on the consumer's renamed one, and the integral
+    // survives lowering (unlowered_operator).
+    const d = expandRaw(conf('import_rename_integral_axis', 'fixture.esm')) as any
+    expect(canonEqs(d)).toEqual(
+      canonEqs(golden(conf('import_rename_integral_axis', 'expanded.esm'))),
+    )
+    // (the fixture's prose mentions the op by name, so match the op FIELD)
+    expect(JSON.stringify(d.models)).not.toContain('"op":"integral"')
+    // Each instance lowered on its OWN axis at its OWN cell measure: the rename
+    // carried `var`/`upper` per edge, so col's rule fired on lev, row's on lat.
+    for (const [name, axis, n] of [
+      ['Q', 'lev', 4],
+      ['P', 'lat', 3],
+    ] as const) {
+      const agg = definingRhs(d.models.Column, name)
+      expect(agg.op).toBe('aggregate')
+      expect(agg.ranges.i).toEqual({ from: axis })
+      expect(agg.ranges.j).toEqual({ from: axis })
+      expect(agg.expr.args[1]).toEqual({ op: '/', args: [1, n] })
+    }
+    const f = loadPath(conf('import_rename_integral_axis', 'fixture.esm')) as any
+    expect(f.index_sets.lev.size).toBe(4)
+    expect(f.index_sets.lat.size).toBe(3)
+  })
+
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {
     // A where shape naming a set the library never declares survives the rename
     // as spelled and is rejected at rule registration (esm-spec §9.6.6).
