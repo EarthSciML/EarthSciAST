@@ -157,10 +157,15 @@ end
 #                 positional rename-walk branch: apply-template `name` maps
 #                 through `tplmap`; a `where` OBJECT's §9.6.1 `shape` entries
 #                 map through `isetmap` via `_rename_where`.)
-#   :axis       — scalar value NAMES an index set / axis (`wrt`, `dim`): the
-#                 rename walk maps it through `isetmap`; also opaque to
-#                 metaparameter substitution (an axis name is never an
-#                 integer-valued metaparameter reference).
+#   :axis       — scalar value NAMES an index set / axis (`wrt`, `dim`, and
+#                 `integral`'s `var`): the rename walk maps it through
+#                 `isetmap`; also opaque to metaparameter substitution (an axis
+#                 name is never an integer-valued metaparameter reference).
+#   :bound      — an ordinary EXPRESSION position that may ALSO hold a bare axis
+#                 name (`integral`'s `lower`/`upper`, esm-spec §4.2): the rename
+#                 walk maps it through `isetmap` only when the string names a
+#                 renamed index set, and it stays open to metaparameter
+#                 substitution and to `varmap` like any other expression.
 #   :registry   — closed-registry id / literal enum: copied verbatim by the
 #                 rename walk only.
 #   :positional — no derived-set membership; handled by a dedicated branch in
@@ -183,6 +188,18 @@ const _STRUCTURAL_FIELDS = (
     "where"                       => :protected,
     "wrt"                         => :axis,
     "dim"                         => :axis,
+    # `integral`'s integration variable (esm-spec §4.2) is an axis NAME too —
+    # the same kind of axis-naming scalar as `wrt`/`dim`, so an imported
+    # `integral` rewrite rule follows its axis under rename exactly as a `D`
+    # rule does, and a bound metaparameter of the same name never rewrites it.
+    "var"                         => :axis,
+    # `integral`'s BOUNDS (esm-spec §4.2) are full Expression positions — a
+    # numeric literal, a parameter reference, an AST subtree — so they stay
+    # variable-reference positions for `varmap`; only a bare string naming a
+    # RENAMED index set (the cumulative form `"upper": "x"`) is an axis
+    # occurrence and follows the rename (§9.7.7).
+    "lower"                       => :bound,
+    "upper"                       => :bound,
     "op"                          => :registry,
     "id"                          => :registry,
     "expect_cadence"              => :registry,
@@ -210,6 +227,13 @@ const _META_SUBST_SKIP_KEYS = Set{String}(
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).
 const _RENAME_AXIS_KEYS = Set{String}(
     k for (k, kind) in _STRUCTURAL_FIELDS if kind === :axis)
+
+# Expression-position fields that ALSO admit a bare axis name (`integral`'s
+# `lower`/`upper`): the index-set rename applies only when the string names a
+# renamed index set; anything else stays an ordinary variable-reference
+# position.
+const _RENAME_BOUND_KEYS = Set{String}(
+    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :bound)
 
 # Object keys whose values are never variable-reference positions for the
 # rename walk: the metaparameter skip set plus the remaining scalar structural
@@ -644,7 +668,8 @@ end
 One transitive-substitution pass over an imported declaration (esm-spec
 §9.7.7): `varmap` (renamed open metaparameters + rebound free names) rewrites
 bare strings in variable-reference positions; `isetmap` rewrites index-set
-reference positions (`{"from": …}` values, the `wrt`/`dim` axis fields, and the
+reference positions (`{"from": …}` values, the `wrt`/`dim`/`var` axis fields, a
+bare-axis-name `integral` `lower`/`upper` bound, and the
 `where.*.shape` match-scoping index-set names, in `body` and `match` alike);
 `tplmap` rewrites `apply_expression_template.name`. Structural scalar fields
 (`_RENAME_PROTECTED_KEYS`) and bound-index lists (range `of`) are never
@@ -685,6 +710,9 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
                 out[ks] = get(isetmap, string(v), string(v))
             elseif ks in _RENAME_AXIS_KEYS && v isa AbstractString
                 out[ks] = get(isetmap, string(v), string(v))
+            elseif ks in _RENAME_BOUND_KEYS && v isa AbstractString &&
+                   haskey(isetmap, string(v))
+                out[ks] = isetmap[string(v)]
             elseif ks == "name" && is_apply && v isa AbstractString
                 out[ks] = get(tplmap, string(v), string(v))
             elseif ks == "where" && _is_object(v)
@@ -805,7 +833,7 @@ Apply one import edge's `prefix` / `rename` / `rebind` (esm-spec §9.7.7) to
 the target's SURVIVING export scope — templates after `only`, all index sets,
 and metaparameters still open after this edge's `bindings` — transitively
 through every occurrence inside the surviving declarations (index-set
-references in `from`/`wrt`/`dim` and registry `of` lists, open-metaparameter
+references in `from`/`wrt`/`dim`/`var` and registry `of` lists, open-metaparameter
 names in expression positions and structural integer sites, keyed-factor and
 other free names in variable-reference positions and registry
 `offsets`/`values`, `apply_expression_template.name` references). Runs after

@@ -239,6 +239,24 @@ rule register; the §9.6.3 equal-priority tie breaks by the §9.7.4 effective
 order (DFS post-order over the edges), so the first instance wins:
 `y = 6 * x`, and the registry carries `a.cells` (6) and `b.cells` (9).
 
+### `import_rename_integral_axis/` (expanded.esm)
+
+The §9.7.7 occurrence list for an `integral` rewrite rule.
+`column_integral_1d.esm` is a generic cumulative-integral family
+(metaparameter `N`, index set `x`, cell measure `dx`, and a `where`-constrained
+rule matching `{op: "integral", args: ["f"], var: "x", lower: 0, upper: "x"}`
+that lowers to the §4.3.1 prefix reduction). `fixture.esm` imports it twice —
+`prefix: "col"` + `rename: {"x": "lev"}` (`N = 4`) and `prefix: "row"` +
+`rename: {"x": "lat"}` (`N = 3`) — and writes both integrals in the *renamed*
+vocabulary (`var: "lev"` / `var: "lat"`), the only vocabulary a consumer of the
+library knows. The golden shows the rename carrying the match's axis-naming
+scalar fields — the integration variable `var` AND the bare-axis-name `upper`
+bound — in lockstep with the index-set declaration, the `where` shape, and the
+body's range `from`s, so each instance fires only on its own axis at its own
+cell measure (`1 / 4` on `lev`, `1 / 3` on `lat`). Without that rewrite the
+instances still match `var: "x"`, neither fires, and both integrals survive
+lowering as `unlowered_operator`.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`
@@ -343,3 +361,21 @@ INTACT and each test KEEPS its import field (form C survives `parse → emit`).
 Each test runs as an independent per-test ephemeral build in which the leaf's
 derivative is lowered under that test's grid; the persisted component is never
 mutated (the Julia reference runs this through `run_pde_tests`).
+
+### `inject_agnostic_aggregate/` (load-time acceptance — §9.7.10 / §6.6.6, issue #185)
+
+`fixture.esm` is an agnostic PDE leaf that declares NO `index_sets` of its own
+and whose `aggregate` `ranges` name `{ "from": "cells" }` — a set that arrives
+only when a grid library is injected into this component's scope (form A, B or
+C above). The contract is **load-time acceptance**: `validate()` MUST NOT emit
+`undefined_index_set` here, because the effective registry (§9.7.5) is not
+knowable until the component's template scope closes (§9.7.4). This mirrors
+§9.6.1, where `template_constraint_unknown_index_set` does not run for a library
+file validated standalone. Every binding asserts the acceptance; the typo case
+stays covered by `tests/invalid/aggregate/undeclared_from_name.esm`, which
+*does* declare a registry and ranges over a name absent from it, and by the
+evaluating bindings' resolvers, which still reject a name left unresolved once
+injection has run (`E_REF_UNDECLARED_INDEX_SET` and peers). Like every §6.6.6
+leaf the fixture is un-runnable in isolation, so it deliberately lives here
+rather than under `tests/valid/`, whose corpus sweeps require every fixture to
+resolve standalone.

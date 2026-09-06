@@ -110,8 +110,9 @@ fn run_model_test(
         ..Default::default()
     };
     let params: HashMap<String, f64> = HashMap::new();
-    let initial_conditions: HashMap<String, f64> =
-        t.initial_conditions.as_ref().cloned().unwrap_or_default();
+    // Scalar entries only: this category's fixtures carry no inline array data
+    // (esm-spec §6.6.2), and the canonical `u0` channel is keyed by f64.
+    let initial_conditions: HashMap<String, f64> = t.scalar_initial_conditions();
     let sol = match earthsci_ast::esm_problem(
         file,
         (t.time_span.start, t.time_span.end),

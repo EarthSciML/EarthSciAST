@@ -83,20 +83,18 @@ fn build_bindings(model: &Model, t: &ModelTest) -> HashMap<String, f64> {
         if matches!(
             var.var_type,
             VariableType::Parameter | VariableType::Unknown
-        ) && let Some(d) = var.default
+        ) && let Some(d) = var.default_scalar()
         {
             bindings.insert(vname.clone(), d);
         }
     }
-    if let Some(ic) = &t.initial_conditions {
-        for (k, v) in ic {
-            bindings.insert(k.clone(), *v);
-        }
+    // Scalar bindings only: a unit assertion is a scalar check, so an entry
+    // carrying inline array data (esm-spec §6.6.2) has no place in this scope.
+    for (k, v) in t.scalar_initial_conditions() {
+        bindings.insert(k, v);
     }
-    if let Some(po) = &t.parameter_overrides {
-        for (k, v) in po {
-            bindings.insert(k.clone(), *v);
-        }
+    for (k, v) in t.scalar_parameter_overrides() {
+        bindings.insert(k, v);
     }
     bindings
 }

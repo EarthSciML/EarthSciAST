@@ -1817,7 +1817,7 @@ Parameter value fields:
 
 | Field | Description |
 |---|---|
-| `default` | The parameter's constant value. Mutually exclusive with `distribution`. |
+| `default` | The parameter's constant value. Mutually exclusive with `distribution`. For a **shaped** variable (see `shape` below) it may instead be **inline array data** — see *Inline array data* under the arrayed-variable fields. |
 | `distribution` | Draw the value from `normal`, `lognormal`, or `uniform` instead of fixing it. Univariate when the location parameter is a number, multivariate when it is an array — in which case `cov` gives the full covariance matrix and the parameter's `shape` must agree. With no `update`, the value is drawn **once at setup** (uncertainty quantification, ensembles); with `update.kind: "wiener"` it is redrawn **every step** with √dt scaling (a stochastic process). |
 | `update` | When the parameter refreshes and what from (§5.4). |
 
@@ -1827,6 +1827,29 @@ Optional arrayed-variable fields:
 |---|---|
 | `shape` | Ordered list of index-set names (keys in the document-scoped `index_sets` registry) the variable is arrayed over. Omitted or null means the variable is scalar. Index expressions into the variable (`index`, `aggregate` ranges) resolve against these sets. The names are also what an **array-level expression** aligns its operands by: in `D(dp) ~ w2 * z1` the operands are matched to `dp`'s axes by index-set name and replicated along the axes they do not declare, and an operand carrying an index set `dp` is not shaped over is rejected (`array_shape_mismatch`). See Section 4.3.4. |
 | `location` | Optional advisory placement tag for a staggered quantity (e.g., `"cell_center"`, `"edge_normal"`, `"x_face"`, `"vertex"`). Metadata only — the index set a quantity lives on is given by `shape`. Omitted means no explicit placement. |
+
+**Inline array data.** A shaped variable's `default` is a **number**, or a
+**row-major nested JSON array** carrying the whole field:
+
+```json
+"theta0": { "type": "parameter", "units": "K", "shape": ["lev"],
+            "default": [300.0, 301.5, 303.2, 305.0] }
+```
+
+Each axis of the nesting is one axis of `shape`, outermost first, so
+`data[i][j]` is the element at `(i, j)`. The array MUST match the declared
+`shape` after metaparameter folding; a wrong extent, a wrong rank, or a ragged
+array (sibling axes of different lengths) is a **load-time error**, the same
+convention `from_file` reference data follows (§6.6.5 convention 3). A
+**scalar** on a shaped variable keeps its broadcast meaning — the one value
+applies to every element — so nothing about existing documents changes.
+
+Inline array data is **build-time constant data**: it is fixed at load, so a
+binding MAY bind it through whatever channel it already uses for constant
+arrays rather than through its scalar parameter vector. A test supplies the same
+union through `parameter_overrides` / `initial_conditions` (§6.6.2), which is
+what lets a column-physics component carry its profiles per regime without one
+generated document per regime.
 
 Precision:
 
@@ -2090,12 +2113,28 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 |---|---|---|
 | `id` | ✓ | Identifier unique within this component's `tests` array. |
 | `description` | | Human-readable description of what this test verifies. |
-| `initial_conditions` | | Initial-value overrides for unknowns, keyed by local variable name. Variables not listed fall back to their declared `default`. |
-| `parameter_overrides` | | Parameter value overrides, keyed by local parameter name. |
+| `initial_conditions` | | Initial-value overrides for unknowns, keyed by local variable name. Variables not listed fall back to their declared `default`. A **shaped** unknown's value may be inline array data (see below). |
+| `parameter_overrides` | | Parameter value overrides, keyed by local parameter name. A **shaped** parameter's value may be inline array data (see below). |
 | `time_span` | ✓ | `{start, end}` — simulation time interval in the component's time units. |
 | `tolerance` | | Test-level default tolerance; see Section 6.6.4. |
 | `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this test runs (§6.6.6, §9.7.10). |
 | `assertions` | ✓ | Array of scalar checks; must contain at least one. |
+
+**Shaped values.** An `initial_conditions` or `parameter_overrides` value is a **number**, or — for a variable whose `shape` is non-empty — a **row-major nested JSON array** carrying the whole field. The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**; this is the same convention `from_file` reference data already follows (§6.6.5 convention 3). A **scalar** on a shaped variable keeps its broadcast meaning: the one value applies to every element. The same union applies to a shaped variable's declared `default` (§6.3).
+
+This is what lets a column-physics test supply its inputs. The inputs of such a component *are* columns — θ, q_v, u, v, p, dz, K profiles — and the instantaneous-derivative test shape (observed tendencies asserted at `time: 0`) needs them as `parameter_overrides` / `initial_conditions` of one shared model, per regime, not as one generated document per regime.
+
+```json
+{
+  "id": "stable_regime",
+  "time_span": { "start": 0, "end": 1 },
+  "parameter_overrides": { "theta0": [300.0, 301.5, 303.2, 305.0] },
+  "initial_conditions":  { "u":      [  2.0,   3.5,   4.1,   4.4] },
+  "assertions": [
+    { "variable": "u", "time": 0, "coords": { "lev": 1 }, "expected": 2.0 }
+  ]
+}
+```
 
 **Override-key resolution.** `parameter_overrides` and `initial_conditions` are keyed by **local** name, but a runtime resolves them against a **flattened** system, in which every variable has been renamed after its owning component (`M.pert_amp`). A binding MUST resolve each key against the flattened names by this precedence, stopping at the first rule that applies:
 
@@ -2185,7 +2224,7 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 - an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`. For a field shaped over index sets (§5.2) the dimension names are the index-set names of the asserted variable's declared `shape`, each bound at every grid point to the **1-based position along that axis** — the same index space `coords` reads under convention 1 — so `index(table, lev)` reads a per-cell entry of a lookup array and `sin(π (x − ½) / N)` is the cell-centre analytic form, with no explicit gather. A reference that mentions a dimension name free is evaluated per cell exactly as if wrapped in an `aggregate` whose output indices are the dimension names in shape order; a reference that mentions none — a literal, a parameter expression, or an `aggregate` that already produces the whole field under its own loop symbols (including one that rebinds a dimension name as its own loop symbol) — is evaluated as written; or
 - `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
-**Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, and a coordinate-expression `ic` (§11.4.1) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
+**Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, a coordinate-expression `ic` (§11.4.1), and an `ic` seeded from a state-free array observed (§11.4) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
 
 Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x,0) = sin(π x)` and zero-Dirichlet BCs has analytic solution `u(x,t) = exp(−α π² t) · sin(π x)`. The corresponding L2-error assertion is:
 
@@ -2228,6 +2267,8 @@ A reusable PDE leaf is written against the operator sugar (`grad`, `div`, `lapla
 ```
 
 The target is implicit — the enclosing model/reaction system, exactly as the assertion target is (§6.6). The injected rule lowers the component's rewrite-targets in the **per-test ephemeral build** (§9.7.10 timing): the resulting spatial field is collapsed to a scalar via `coords` or `reduce` at the assertion `time` and checked by the §6.6.5 machinery. Because each test carries its own list and runs as an independent build, one suite may exercise the component under several schemes (central vs. upwind, a convergence sweep over `bindings`) with no conflict between tests and no edit to the component. `bindings` close the library's grid-size metaparameters, which must agree with the index-set sizes the component's variables are shaped over (an inconsistency is the ordinary `template_import_index_set_conflict` / shape error at the build). Unlike the component's own `expression_template_imports` (§9.7.6), a test's list is authored per-run configuration and **does** survive `parse → emit` (§9.7.10 round-trip); the enclosing component round-trips with its operator sugar intact.
+
+**Such a leaf declares no `index_sets` of its own.** The grid is what the injected library brings, so the leaf's variable `shape` entries and its `aggregate` `ranges` `{"from": NAME}` both name sets that reach the effective registry (§9.7.5) only once the component's template scope closes (§9.7.4) — and a leaf that declared them locally could not be rebound to a second grid at all (`template_import_index_set_conflict`), destroying the convergence sweep this section exists to allow. Loading or validating such a document standalone therefore MUST NOT reject an index-set name it does not declare: `undefined_index_set` is deferred exactly as §9.6.1 defers `template_constraint_unknown_index_set` for a standalone library file. A name still unresolved after injection remains an error at the build, so a typo is still caught.
 
 ### 6.7 Analyses
 
@@ -3853,6 +3894,7 @@ The import-renaming RFC adds (see `docs/content/rfcs/template-import-renaming.md
 - `import_rename_two_instances/` — one grid-family library imported twice under prefixes `fine`/`coarse` at N = 16/8; transitive rename through index sets, ranges, and match `wrt` (§9.7.7).
 - `import_rebind_keyed_factors/` — an MPAS-style ragged keyed-factor rule with its factor contract rebound to the consumer's `meshA_*` arrays (§9.7.7).
 - `import_rename_diamond/` — identical renamed edges dedupe; a differently-renamed edge registers distinctly; the equal-priority tie between two axis-less rule instances is pinned by the §9.7.4 order (§9.7.7).
+- `import_rename_integral_axis/` — one cumulative-`integral` rule library instantiated twice (prefix `col`/`row`, rename `x` → `lev`/`lat`, N = 4/3); transitive rename through the match's `var` and bare-axis-name `upper` bound, so each instance fires only on its own axis (§9.7.7).
 
 The match-scoping RFC adds (see `docs/content/rfcs/match-pattern-scoping-constraints.md`):
 
@@ -4067,7 +4109,7 @@ A library's declared names are generic by design — a grid family declares inde
 
 **Transitivity (normative occurrence sites).** A rename rewrites the declaration key AND every reference to the old name inside the surviving imported declarations:
 
-- *index set*: registry key; `of` parent lists of ragged/derived index-set definitions; `{"from": <name>}` references wherever the form is admitted; and the `wrt`/`dim` axis scalar fields of Expression nodes in template `body` **and `match`** — so a rule matching `D(f, wrt: "x")` imported under `prefix: "fine"` becomes an instance matching `D(f, wrt: "fine.x")`, firing only on its own axis. Template `params` shadow coincident names exactly as in §9.6.1.
+- *index set*: registry key; `of` parent lists of ragged/derived index-set definitions; `{"from": <name>}` references wherever the form is admitted; and the axis-naming scalar fields of Expression nodes in template `body` **and `match`** — `wrt`, `dim`, and `integral`'s integration variable `var` (§4.2), plus an `integral` `lower`/`upper` bound whose value is a **bare string naming a renamed index set** (the cumulative form `"upper": "x"`; a bound that is a literal, a parameter reference, or any other expression is an ordinary expression position and is left to the metaparameter/rebind substitution). So a rule matching `D(f, wrt: "x")` imported under `prefix: "fine"` becomes an instance matching `D(f, wrt: "fine.x")`, firing only on its own axis — and, identically, a rule matching `integral(f, var: "x", lower: 0, upper: "x")` imported under `rename: {"x": "lev"}` becomes an instance matching `integral(f, var: "lev", lower: 0, upper: "lev")`, so a discretization library that ships an `integral` rule family is instantiable per axis exactly as a `D` rule family is. Template `params` shadow coincident names exactly as in §9.6.1.
 - *metaparameter*: declaration key; every bare-string occurrence in expression positions of template bodies/matches (the §9.7.6 variable-reference surface syntax, param-shadowed); and names inside metaparameter expressions in the structural integer sites (index-set `size`, `aggregate` dense `ranges`, `makearray` `regions`). Later binding sites (deeper edges, loader API, defaults) close the metaparameter under its new name.
 - *template*: scope key; `apply_expression_template.name` references in the surviving bodies (in practice already inlined by the target's own §9.7.3 composition, but bindings that compose lazily MUST rewrite them).
 
@@ -4736,10 +4778,11 @@ The RHS is an ordinary Expression:
 - **uniform value** → a constant: `ic(u) ~ 0.0`.
 - **closed-form field** → a coordinate expression whose free symbols are **spatial coordinate names** (`x`, `y`, `z`, `lon`, `lat`, `lev` — not necessarily the index-set key, which may be a bare index like `i`): `ic(u) ~ 0.2 * x`, evaluated at every grid point. Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).
 - **externally-supplied field** → a reference to a loaded variable.
+- **state-free array observed** → a reference to an observed whose defining expression closes over parameters, inline `const` data and other state-free observeds — no state, no `t`. Such a field is resolvable **before the simulation runs**, which is exactly the build-time evaluation scope §6.6.5 already defines, so a binding resolves it through the same evaluator it reaches from the coordinate-expression and analytic-`reference` positions. `ic(u) ~ theta0`, where `theta0` is a `const` gather or a shaped parameter's inline column (§6.3), is the column-physics case: the initial profile is data the document carries, not a closed-form function of the coordinates.
 
 A 0-D component's `ic` RHS is a scalar; a PDE component's may be a coordinate expression. Every ODE state SHOULD have exactly one `ic` equation; a missing one defaults to the variable's declared `default`.
 
-**Run-time overrides.** A test or analysis MAY override the *scalar* initial value of an unknown for one run via `test.initial_conditions` / `analysis.initial_state` (a `{var: number}` map, §6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model.
+**Run-time overrides.** A test or analysis MAY override the initial value of an unknown for one run via `test.initial_conditions` / `analysis.initial_state` (§6.6 / §6.7) — this overrides the `ic` equation's value for that run without changing the model. The value is a number, or — for a **shaped** unknown — a row-major nested JSON array matching its declared `shape` (§6.6.2).
 
 #### 11.4.1 Scoped-reference ICs (reaction-system species and cross-component ICs)
 

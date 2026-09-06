@@ -20,6 +20,7 @@ import numpy as np
 
 from .errors import AmbiguousParameterError, UnknownParameterError
 from .numpy_interpreter import _require_real
+from .sympy_bridge import SimulationError
 
 # Optional scipy import - only needed for actual simulation.
 #
@@ -472,19 +473,24 @@ def _dotted_suffix_hit(known: Iterable[str], key: str) -> str | None:
     return None
 
 
-def _resolve_override(
+def resolve_override_raw(
     name: str,
     overrides: dict[str, Any],
     default: Any,
     known: Iterable[str] | None = None,
-) -> float:
-    """Resolve a parameter / initial-condition value against caller overrides.
+) -> Any:
+    """The value :func:`_resolve_override` resolves, BEFORE the ``float`` cast.
 
     Precedence: a caller override wins — the dot-namespaced ``name`` first, then
     its bare trailing segment, then a MORE-qualified key that RESOLVES to
     ``name`` under rule 2 of :func:`check_parameter_override_keys`
-    (``Outer.M.A`` for the name ``M.A``) — otherwise the declared ``default``
-    when numeric, otherwise ``0.0``. Always returned as ``float``.
+    (``Outer.M.A`` for the name ``M.A``) — otherwise the declared ``default``.
+    Returns the value exactly as authored, so a caller that supports shaped data
+    (esm-spec §6.3 / §6.6.2: a row-major nested JSON array on a SHAPED
+    variable's ``default``, ``parameter_overrides`` or ``initial_conditions``)
+    can route a list to its array channel instead of forcing it through
+    ``float``. ``None`` when neither an override nor a declared default supplies
+    a value.
 
     Rule 2 is applied FORWARD — key to the one name it designates — exactly as
     Julia's ``_canonicalize_override_keys`` and Rust's
@@ -505,21 +511,101 @@ def _resolve_override(
     """
     bare = name.rsplit(".", 1)[-1]
     if name in overrides:
-        value = overrides[name]
-    elif bare in overrides:
-        value = overrides[bare]
-    else:
-        # `name` is always in the view, so a caller that passes a partial
-        # `known` cannot make its own name unresolvable.
-        names = {name} if known is None else set(known) | {name}
-        longer = sorted(
-            k for k in overrides if k not in names and _dotted_suffix_hit(names, k) == name
+        return overrides[name]
+    if bare in overrides:
+        return overrides[bare]
+    # `name` is always in the view, so a caller that passes a partial `known`
+    # cannot make its own name unresolvable.
+    names = {name} if known is None else set(known) | {name}
+    longer = sorted(k for k in overrides if k not in names and _dotted_suffix_hit(names, k) == name)
+    if longer:
+        # Two distinct more-qualified keys designating one name is a caller
+        # oddity, not a build fault; take the lexicographically first so the
+        # choice does not depend on `dict` insertion order.
+        return overrides[longer[0]]
+    return default
+
+
+def is_inline_array_value(value: Any) -> bool:
+    """Whether a resolved ``default`` / override value is INLINE ARRAY data —
+    a row-major nested JSON array (esm-spec §6.3, §6.6.2) rather than a scalar.
+
+    ``list``/``tuple`` only: the wire form is JSON, so authored array data is
+    always a list. A NumPy array supplied programmatically counts too; a string
+    (a scoped reference) never does.
+    """
+    if isinstance(value, (list, tuple)):
+        return True
+    return isinstance(value, np.ndarray) and value.ndim > 0
+
+
+def coerce_inline_array(
+    name: str, value: Any, shape: tuple[int, ...] | None, *, origin: str
+) -> np.ndarray:
+    """Turn one authored row-major nested JSON array into its dense NumPy array,
+    validating it against the variable's declared ``shape`` (esm-spec §6.3 /
+    §6.6.2).
+
+    ``shape`` is the declared shape resolved to integer extents after
+    metaparameter folding, or ``None`` when the caller could not resolve it (a
+    derived index set that has not materialized) — the value is then accepted as
+    authored. A ragged array, a non-numeric leaf, or a shape mismatch is a
+    LOAD-TIME error, mirroring the ``from_file`` convention of §6.6.5 ("a
+    row-major nested JSON array exactly matching the field's shape.
+    Implementations MUST validate the shape and reject mismatches").
+
+    ``origin`` names the position for the diagnostic (``"default"``,
+    ``"parameter_overrides"``, ``"initial_conditions"``).
+    """
+    try:
+        arr = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise SimulationError(
+            f"{origin}[{name}]: inline array data must be a row-major nested JSON "
+            f"array of numbers with equal-length axes (esm-spec §6.3) ({exc})"
+        ) from exc
+    if arr.dtype != np.float64 or arr.ndim == 0:
+        raise SimulationError(
+            f"{origin}[{name}]: inline array data must be a row-major nested JSON "
+            f"array of numbers with equal-length axes (esm-spec §6.3)"
         )
-        if longer:
-            # Two distinct more-qualified keys designating one name is a caller
-            # oddity, not a build fault; take the lexicographically first so the
-            # choice does not depend on `dict` insertion order.
-            value = overrides[longer[0]]
-        else:
-            value = float(default) if isinstance(default, (int, float)) else 0.0
+    if shape is not None and tuple(arr.shape) != tuple(shape):
+        raise SimulationError(
+            f"{origin}[{name}]: inline array data has shape {tuple(arr.shape)}, which "
+            f"does not match the declared shape {tuple(shape)} (esm-spec §6.6.2 — the "
+            f"array MUST match the variable's declared shape after metaparameter "
+            f"folding)"
+        )
+    return arr
+
+
+def _resolve_override(
+    name: str,
+    overrides: dict[str, Any],
+    default: Any,
+    known: Iterable[str] | None = None,
+) -> float:
+    """Resolve a parameter / initial-condition value against caller overrides.
+
+    Precedence: a caller override wins — the dot-namespaced ``name`` first, then
+    its bare trailing segment, then a MORE-qualified key that resolves to
+    ``name`` under rule 2 of :func:`check_parameter_override_keys` — otherwise
+    the declared ``default`` when numeric, otherwise ``0.0``. Always returned as
+    ``float``. See :func:`resolve_override_raw` for the precedence itself and
+    for what ``known`` is.
+
+    INLINE ARRAY data (esm-spec §6.3 / §6.6.2) is a hard error here rather than a
+    ``TypeError`` out of ``float``: a shaped value belongs on the caller's ARRAY
+    channel (:func:`coerce_inline_array`), and a pathway with no array channel —
+    the scalar SymPy one — must say so plainly instead of failing on the cast.
+    """
+    value = resolve_override_raw(name, overrides, default, known)
+    if is_inline_array_value(value):
+        raise SimulationError(
+            f"{name!r} carries inline ARRAY data (esm-spec §6.3 / §6.6.2), which this "
+            f"pathway cannot bind: a nested-array `default` / `parameter_overrides` / "
+            f"`initial_conditions` value requires the array simulation pathway."
+        )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        value = 0.0
     return float(value)
