@@ -2226,9 +2226,7 @@ fn expr_reads_self(expr: &Expr, name: &str) -> bool {
     let Expr::Operator(node) = expr else {
         return false;
     };
-    if node.op == "index"
-        && matches!(node.args.first(), Some(Expr::Variable(v)) if v == name)
-    {
+    if node.op == "index" && matches!(node.args.first(), Some(Expr::Variable(v)) if v == name) {
         return true;
     }
     node.args.iter().any(|a| expr_reads_self(a, name))
@@ -2549,7 +2547,10 @@ impl JoinGate {
     /// agree on the match sets agree on the order.
     fn selectivity_cmp(&self, other: &JoinGate) -> std::cmp::Ordering {
         let (a1, s1) = (self.index.len() as i128, (self.n_src * self.n_tgt) as i128);
-        let (a2, s2) = (other.index.len() as i128, (other.n_src * other.n_tgt) as i128);
+        let (a2, s2) = (
+            other.index.len() as i128,
+            (other.n_src * other.n_tgt) as i128,
+        );
         (a1 * s2)
             .cmp(&(a2 * s1))
             .then_with(|| self.clause_ix.cmp(&other.clause_ix))
@@ -3230,17 +3231,7 @@ fn drive_partner_restricted(
                 for i in 0..parts.len() {
                     let v = parts[i];
                     set_bind(&mut ctx.loop_binds, &contract_names[d], v);
-                    drive_partner_restricted(
-                        spec,
-                        srcs,
-                        gate,
-                        p,
-                        q,
-                        bound_is_src,
-                        d + 1,
-                        acc,
-                        ctx,
-                    );
+                    drive_partner_restricted(spec, srcs, gate, p, q, bound_is_src, d + 1, acc, ctx);
                 }
             }
             // Phase 1 already restricted this dim; walk the intersection of the
@@ -4613,13 +4604,69 @@ mod evaluability_gate_tests {
     #[test]
     fn the_core_minus_evaluable_gap_is_exactly_nine_ops() {
         const CORE: &[&str] = &[
-            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
-            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
-            "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=",
-            ">", ">=", "and", "or", "not", "D", "ic", "Pre", "const", "true", "fn", "enum",
-            "table_lookup", "apply_expression_template", "aggregate", "makearray", "index",
-            "broadcast", "reshape", "transpose", "concat", "skolem", "rank", "distinct",
-            "argmin", "argmax", "intersect_polygon", "polygon_intersection_area",
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "neg",
+            "exp",
+            "log",
+            "ln",
+            "log10",
+            "sqrt",
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "atan2",
+            "min",
+            "max",
+            "ifelse",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "and",
+            "or",
+            "not",
+            "D",
+            "ic",
+            "Pre",
+            "const",
+            "true",
+            "fn",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "aggregate",
+            "makearray",
+            "index",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "intersect_polygon",
+            "polygon_intersection_area",
         ];
         for op in CORE {
             assert!(

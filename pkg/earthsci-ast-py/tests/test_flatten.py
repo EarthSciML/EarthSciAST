@@ -2,6 +2,7 @@
 
 import pytest
 
+from earthsci_ast.display import to_ascii
 from earthsci_ast.flatten import (
     ConflictingDerivativeError,
     _namespace_expr,
@@ -277,6 +278,104 @@ def test_flatten_operator_compose_var_placeholder_expansion():
     rhs_strs = [e.rhs_str for e in chem_eqs]
     assert any("Chem.A" in r and "grad" in r for r in rhs_strs)
     assert any("Chem.B" in r and "grad" in r for r in rhs_strs)
+
+
+def test_flatten_operator_compose_chained_with_operator_as_a():
+    """Chained compose entries over one state, with the OPERATOR as A, keep merging.
+
+    Issue #173. `Sink` and `Src` each author `D(Chem.X, t)` directly -- B's
+    variable under A's authorship, which §4.7.1 permits and `reseact.esm` is
+    built on. Entry 1 consumes Chem's own equation and the sum lands in the
+    component bag of `Sink`; unless step 4's attribution rule relocates it to
+    `Chem`, entry 2 walks `Src` and `Chem`, sees no equation for `Chem.O3`, and
+    merges nothing -- leaving TWO equations claiming `D(Chem.O3, t)` and a
+    ConflictingDerivativeError for a document that is spec-valid.
+
+    Independent of the shared corpus on purpose: the corpus is GENERATED from
+    this binding, so a regression here would rewrite the expected answer rather
+    than fail against it.
+    """
+    chem = Model(
+        name="Chem",
+        variables={
+            "O3": ModelVariable(type="unknown"),
+            "NO": ModelVariable(type="unknown"),
+            "k1": ModelVariable(type="parameter", default=0.1),
+            "k2": ModelVariable(type="parameter", default=0.2),
+        },
+        equations=[
+            Equation(
+                lhs=ExprNode(op="D", args=["O3"], wrt="t"),
+                rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["k1"]), "O3"]),
+            ),
+            Equation(
+                lhs=ExprNode(op="D", args=["NO"], wrt="t"),
+                rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["k2"]), "NO"]),
+            ),
+        ],
+    )
+    sink = Model(
+        name="Sink",
+        variables={"kd": ModelVariable(type="parameter", default=0.01)},
+        equations=[
+            Equation(
+                lhs=ExprNode(op="D", args=["Chem.O3"], wrt="t"),
+                rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["kd"]), "Chem.O3"]),
+            ),
+            Equation(
+                lhs=ExprNode(op="D", args=["Chem.NO"], wrt="t"),
+                rhs=ExprNode(op="*", args=[ExprNode(op="-", args=["kd"]), "Chem.NO"]),
+            ),
+        ],
+    )
+    src = Model(
+        name="Src",
+        variables={"e": ModelVariable(type="parameter", default=2.0)},
+        equations=[Equation(lhs=ExprNode(op="D", args=["Chem.O3"], wrt="t"), rhs="e")],
+    )
+    adv = Model(
+        name="Adv",
+        variables={"wind": ModelVariable(type="parameter", default=3.0)},
+        equations=[
+            Equation(
+                lhs=ExprNode(op="D", args=["_var"], wrt="t"),
+                rhs=ExprNode(
+                    op="*",
+                    args=[
+                        ExprNode(op="-", args=["wind"]),
+                        ExprNode(op="grad", args=["_var"]),
+                    ],
+                ),
+            )
+        ],
+    )
+
+    flat = flatten(
+        _empty_file(
+            models={"Chem": chem, "Sink": sink, "Src": src, "Adv": adv},
+            coupling=[
+                OperatorComposeCoupling(systems=["Sink", "Chem"]),
+                OperatorComposeCoupling(systems=["Src", "Chem"]),
+                OperatorComposeCoupling(systems=["Chem", "Adv"], lifting="pointwise"),
+            ],
+        )
+    )
+
+    # ONE equation per species, every chained contribution in its RHS. The
+    # POSITIONS are the merge trail: each species trails to the entry that
+    # merged it LAST, so NO (entry 1) comes ahead of O3 (entry 2).
+    assert [(to_ascii(eq.lhs), to_ascii(eq.rhs)) for eq in flat.equations] == [
+        (
+            "D(Chem.NO)/Dt",
+            "(-Sink.kd) * Chem.NO + (-Chem.k2) * Chem.NO + (-Adv.wind) * grad(Chem.NO)",
+        ),
+        (
+            "D(Chem.O3)/Dt",
+            "Src.e + (-Sink.kd) * Chem.O3 + (-Chem.k1) * Chem.O3 + (-Adv.wind) * grad(Chem.O3)",
+        ),
+    ]
+    assert sorted(flat.state_variables) == ["Chem.NO", "Chem.O3"]
+    assert not flat.algebraic_variables
 
 
 # ----------------------------------------------------------------------------
