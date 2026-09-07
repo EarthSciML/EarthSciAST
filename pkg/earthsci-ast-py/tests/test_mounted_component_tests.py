@@ -53,4 +53,4 @@ def test_the_mount_does_not_carry_the_leafs_tests():
     assert esm_file.models["Decay"].tests == []
     # The mount is otherwise a faithful splice.
     assert "u" in esm_file.models["Decay"].variables
-    assert [t.id for t in esm_file.models["Forcing"].tests] == ["forcing_holds_its_rate"]
+    assert [t.id for t in esm_file.models["Forcing"].tests] == ["forcing_accumulates_its_rate"]

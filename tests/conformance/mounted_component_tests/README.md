@@ -25,12 +25,12 @@ reaches anyway, so nothing goes unasserted.
 | File | Role |
 |---|---|
 | `fixtures/leaf.esm` | `Decay`: `du/dt = −k·u` with `k` defaulting to 1, plus its own inline test asserting `u(1) = 1/e`. Passes standalone. |
-| `fixtures/assembly.esm` | Mounts `leaf.esm` as `Decay` by a top-level `models` `{ref}`, adds its own `Forcing` component, and couples `Forcing.rate → Decay.k` (`param_to_var`), so the mounted leaf runs at `k = 5`. |
+| `fixtures/assembly.esm` | Mounts `leaf.esm` as `Decay` by a top-level `models` `{ref}`, adds its own `Forcing` component, and couples `Forcing.rate → Decay.k` (`param_to_var`), so the mounted leaf runs at `k = 5`. `Forcing` also integrates `rate` into a differential state `accumulated`, which is what its own assertion samples — an algebraic-only unknown is not samplable as a scalar state in every binding. |
 
 The coupling is what makes the pair a *gate* rather than a smoke test: with the
 mounted tests re-run, `u(1) = exp(−5) ≈ 0.0067` against an expected `exp(−1) ≈
 0.368` — a failure two orders of magnitude wide, which no tolerance hides. The
-assembly's own test (`Forcing.forcing_holds_its_rate`) is the control: it must
+assembly's own test (`Forcing.forcing_accumulates_its_rate`) is the control: it must
 still run, so a binding cannot pass by refusing to run anything.
 
 ## What each binding asserts

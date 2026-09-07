@@ -49,6 +49,6 @@ _mct_run(name) = run_pde_tests(joinpath(_MCT_DIR, name);
         @test isempty(file.models["Decay"].tests)
         # The mount is otherwise a faithful splice.
         @test haskey(file.models["Decay"].variables, "u")
-        @test [t.id for t in file.models["Forcing"].tests] == ["forcing_holds_its_rate"]
+        @test [t.id for t in file.models["Forcing"].tests] == ["forcing_accumulates_its_rate"]
     end
 end
