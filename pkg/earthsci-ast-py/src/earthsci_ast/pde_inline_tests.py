@@ -1233,7 +1233,10 @@ def run_inline_tests(
 
     ``options_for`` is the seam for site-specific policy. It is called once
     per resolved document — with the document's path when it came from one,
-    else the :class:`EsmFile` — and returns an :class:`InlineTestOptions`
+    else the :class:`EsmFile`, and BEFORE the document is loaded, so a
+    basename-keyed callback is asked about an unreadable file too and wants a
+    default rather than a lookup error — and returns an
+    :class:`InlineTestOptions`
     whose non-``None`` fields override the arguments above for that document
     (or ``None`` to change nothing). It exists so that a corpus gate's
     basename-keyed tables — a stiff-solver map, a ``cse`` allowlist, an

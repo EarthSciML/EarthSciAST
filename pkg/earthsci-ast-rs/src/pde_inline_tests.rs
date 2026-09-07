@@ -2019,7 +2019,8 @@ fn load_failure_result(path: &Path, message: String) -> PdeAssertionResult {
 ///
 /// A document that fails to load contributes one ERROR row naming the path and
 /// the run continues, so one unreadable file cannot cost the run every other
-/// file's verdicts.
+/// file's verdicts. `options_for` is consulted BEFORE the load, so it is asked
+/// about the unreadable file too and wants a default rather than a panic.
 ///
 /// What stays with the CALLER, deliberately: per-file process isolation and
 /// memory limits, JUnit emission, summary formatting, and root discovery. A

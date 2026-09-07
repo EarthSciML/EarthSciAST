@@ -1550,7 +1550,9 @@ directory when the document came from a path, else the working directory.
 
 `options_for` is the seam for site-specific policy. It is called once per
 resolved document — with the document's path when it came from one, else the
-`EsmFile` — and returns an [`InlineTestOptions`](@ref) whose non-`nothing`
+`EsmFile`, and BEFORE the document is loaded, so a basename-keyed callback is
+asked about an unreadable file too and wants a default rather than an indexing
+error — and returns an [`InlineTestOptions`](@ref) whose non-`nothing`
 fields override the keywords above for that document (or `nothing` to change
 nothing). It exists so that a corpus gate's basename-keyed tables — a
 stiff-solver map, an initial-condition seed — can stay in the gate instead of

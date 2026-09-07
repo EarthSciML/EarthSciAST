@@ -573,9 +573,13 @@ end
         write(joinpath(tmp, "a.esm"), JSON3.write(_pit_ramp_doc(3.0)))
         write(joinpath(tmp, "b.esm"), JSON3.write(_pit_ramp_doc(7.0)))
         seeds = Dict("a.esm" => 3.0, "b.esm" => 7.0)
+        # `options_for` is consulted BEFORE the document is loaded, so it is
+        # asked about the unreadable file too; a corpus callback keyed on
+        # basenames therefore needs a default, not an indexing error.
         options_for = path -> InlineTestOptions(
             alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
-            parameter_overrides=Dict{String,Any}("T" => seeds[basename(path)]))
+            parameter_overrides=Dict{String,Any}(
+                "T" => get(seeds, basename(path), 1.0)))
         # A DIRECTORY expands to the .esm files under it, sorted.
         results = run_inline_tests(tmp; options_for=options_for)
         @test length(results) == 2
