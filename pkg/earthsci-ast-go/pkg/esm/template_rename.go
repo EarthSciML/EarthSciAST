@@ -616,3 +616,184 @@ func checkRenameFreshness(scope *templateScope, free, bound, paramsAll map[strin
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set renaming")
+// ---------------------------------------------------------------------------
+
+// mountRenameWalk is one index-set substitution pass, IN PLACE, over a fully
+// resolved mounted document (esm-spec §4.7 "Mount-edge index-set renaming",
+// transitivity list).
+//
+// Deliberately NOT renameWalk: that walk is written for template and index-set
+// DECLARATIONS, where `from` only ever occurs as a range reference and every
+// bare string is a variable-reference position. A mount carries a whole
+// component, where `from` also names a data source (`Parameter.update.from`), a
+// coupling endpoint (`variable_map.from`) and a connector endpoint, and where
+// `shape` lists, `Assertion.coords` keys and `DataSourceSelectAxis.gated_by`
+// name axes no declaration walk ever sees. So this walk touches ONLY positions
+// that are index-set names BY POSITION and never rewrites a bare string on its
+// own account — a name it does not recognise is left exactly as spelled.
+func mountRenameWalk(x any, m map[string]string) {
+	switch v := x.(type) {
+	case []any:
+		for _, e := range v {
+			mountRenameWalk(e, m)
+		}
+	case map[string]any:
+		// An ExpressionNode is identified by its `op`; only there are
+		// wrt/dim/var, the `integral` bounds and `ranges` axis positions
+		// (esm-spec §4.2 / §4.3.1).
+		_, isNode := v["op"].(string)
+		if isNode {
+			for k := range renameAxisKeys {
+				if s, ok := v[k].(string); ok {
+					if n, hit := m[s]; hit {
+						v[k] = n
+					}
+				}
+			}
+			for k := range renameBoundKeys {
+				if s, ok := v[k].(string); ok {
+					if n, hit := m[s]; hit {
+						v[k] = n
+					}
+				}
+			}
+			if ranges, ok := v["ranges"].(map[string]any); ok {
+				for _, rv := range ranges {
+					// `{"from": <index set>}`; a range's own `of` is a list of
+					// BOUND SYMBOLS, never index-set names.
+					ro, ok := rv.(map[string]any)
+					if !ok {
+						continue
+					}
+					if s, ok := ro["from"].(string); ok {
+						if n, hit := m[s]; hit {
+							ro["from"] = n
+						}
+					}
+				}
+			}
+		} else if shape, ok := v["shape"].([]any); ok {
+			// ModelVariable/Parameter `shape` and a `where` constraint's `shape`
+			// are ordered index-set names; an ExpressionNode `shape` (reshape's
+			// target extents) and a FunctionTable `shape` are integers, so the
+			// isNode guard plus the string test cover both.
+			for i, e := range shape {
+				if s, ok := e.(string); ok {
+					if n, hit := m[s]; hit {
+						shape[i] = n
+					}
+				}
+			}
+		}
+		// DataSourceSelectAxis.gated_by names a `kind: "derived"` set.
+		if s, ok := v["gated_by"].(string); ok {
+			if n, hit := m[s]; hit {
+				v["gated_by"] = n
+			}
+		}
+		// Assertion.coords KEYS are spatial index-set names (esm-spec §6.6.5).
+		if coords, ok := v["coords"].(map[string]any); ok {
+			renamedAny := false
+			for k := range coords {
+				if _, hit := m[k]; hit {
+					renamedAny = true
+					break
+				}
+			}
+			if renamedAny {
+				out := make(map[string]any, len(coords))
+				for k, cv := range coords {
+					out[isetRenamed(k, m)] = cv
+				}
+				v["coords"] = out
+			}
+		}
+		for _, k := range sortedKeys(v) {
+			mountRenameWalk(v[k], m)
+		}
+	}
+}
+
+// applyMountIndexSetRename applies a mount edge's `index_set_rename` to a FULLY
+// RESOLVED mounted document, in place (esm-spec §4.7 "Mount-edge index-set
+// renaming").
+//
+// Runs at pipeline step 2: after the referenced document has resolved as a
+// complete document (its own imports, this edge's `bindings` and §9.7.10
+// injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its
+// `index_sets` merge into the mounting registry — so the map's KEYS speak the
+// mounted document's own post-resolution vocabulary, exactly as §9.7.7's
+// `rename` speaks the import target's export vocabulary.
+//
+// An absent, nil or empty map is the identity and leaves view untouched, which
+// is what makes the field purely additive.
+func applyMountIndexSetRename(view map[string]any, renameRaw any, where string) error {
+	if renameRaw == nil {
+		return nil
+	}
+	requested, err := nameMap(renameRaw, "index_set_rename", where)
+	if err != nil {
+		return err
+	}
+
+	isets, _ := view["index_sets"].(map[string]any)
+	declared := sortedKeys(isets)
+
+	// Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
+	for _, key := range sortedKeys(requested) {
+		if _, ok := isets[key]; !ok {
+			listed := "none"
+			if len(declared) > 0 {
+				listed = strings.Join(declared, ", ")
+			}
+			return newETErr(CodeSubsystemIndexSetRenameUnknownName,
+				fmt.Sprintf("%s: `index_set_rename` names index set '%s', which the resolved mounted document does not declare (it declares: %s). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 \"Mount-edge index-set renaming\")", where, key, listed))
+		}
+	}
+
+	// Identity entries are no-ops; everything else must land on a distinct name.
+	changed := map[string]string{}
+	for o, n := range requested {
+		if o != n {
+			changed[o] = n
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, name := range declared {
+		final := isetRenamed(name, changed)
+		if _, dup := seen[final]; dup {
+			return newETErr(CodeTemplateImportRenameCollision,
+				fmt.Sprintf("%s: `index_set_rename` maps two index sets onto '%s'; post-rename names must be distinct within one mount edge (esm-spec §4.7 / §9.7.7)", where, final))
+		}
+		seen[final] = struct{}{}
+	}
+
+	mountRenameWalk(view, changed)
+
+	// Re-key the registry last, rewriting each ragged/derived `of` parent list
+	// (an index-set-name list — unlike a range's `of`, which the walk
+	// deliberately leaves alone).
+	if isets != nil {
+		renamed := make(map[string]any, len(isets))
+		for name, decl := range isets {
+			if d, ok := decl.(map[string]any); ok {
+				if of, ok := d["of"].([]any); ok {
+					for i, e := range of {
+						if s, ok := e.(string); ok {
+							of[i] = isetRenamed(s, changed)
+						}
+					}
+				}
+			}
+			renamed[isetRenamed(name, changed)] = decl
+		}
+		view["index_sets"] = renamed
+	}
+	return nil
+}

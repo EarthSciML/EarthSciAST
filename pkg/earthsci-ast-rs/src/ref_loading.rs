@@ -134,6 +134,24 @@ pub fn resolve_subsystem_refs_with_metaparameters(
     walk_top_level(value, base_path, &mut visited, &root_meta)
 }
 
+/// A one-line rendering of an index-set declaration for the collision message
+/// — `kind=interval, size=59` — so the diagnostic names both definitions rather
+/// than only the axis they disagree about. Mirrors the Julia `_index_set_show`.
+fn show_index_set(decl: &Value) -> String {
+    let Some(obj) = decl.as_object() else {
+        return decl.to_string();
+    };
+    let parts: Vec<String> = ["kind", "size", "members", "of", "offsets", "values", "from_faq"]
+        .iter()
+        .filter_map(|k| obj.get(*k).map(|v| format!("{k}={v}")))
+        .collect();
+    if parts.is_empty() {
+        decl.to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
 /// Merge a referenced subsystem file's top-level `index_sets` into the
 /// importing document's `registry` (esm-spec §4.7). Deep-equal redeclaration is
 /// idempotent; a non-deep-equal collision is `subsystem_index_set_conflict`.
@@ -150,11 +168,18 @@ fn merge_subsystem_index_sets(
                 return Err(err(
                     codes::SUBSYSTEM_INDEX_SET_CONFLICT,
                     format!(
-                        "index set '{n}' from subsystem ref \
-                         '{ref_str}' collides with a non-deep-equal declaration in the importing \
-                         document. A referenced subsystem file's top-level index_sets merge into \
-                         the importing document's registry; deep-equal redeclaration is \
-                         idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)."
+                        "index set '{n}' from subsystem ref '{ref_str}' ({}) collides with a \
+                         non-deep-equal declaration already in the importing document's registry \
+                         ({}) — contributed by the document's own `index_sets` or by an earlier \
+                         mount. A referenced subsystem file's top-level index_sets merge into the \
+                         importing document's registry; deep-equal redeclaration is idempotent, a \
+                         size/kind disagreement is a load-time error (esm-spec §4.7). If the two \
+                         are genuinely different axes that happen to share a name, rename one at \
+                         its mount edge with `index_set_rename` (esm-spec §4.7 \"Mount-edge \
+                         index-set renaming\"), e.g. \
+                         {{\"ref\": \"{ref_str}\", \"index_set_rename\": {{\"{n}\": \"{n}_2\"}}}}.",
+                        show_index_set(decl),
+                        show_index_set(existing),
                     ),
                 ));
             }
@@ -753,6 +778,19 @@ fn resolve_value(
                 crate::lower_expression_templates::expand(&mut resolved)?;
                 parsed = resolved;
             }
+            // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2.
+            // The referenced document has now resolved in its OWN scope — its
+            // imports, this edge's `bindings` and injection, its metaparameter
+            // close and fold, the §9.6.3 fixpoint — so its `index_sets` are the
+            // post-resolution vocabulary the edge's `index_set_rename` speaks.
+            // Before its own nested mounts resolve: each nested edge renames
+            // what IT contributes, at its own edge. Absent or empty ⇒ identity,
+            // so an edge that does not use the field resolves exactly as before.
+            crate::template_imports::apply_mount_index_set_rename(
+                &mut parsed,
+                obj,
+                &format!("subsystem ref '{ref_str}'"),
+            )?;
             Ok(())
         })();
         if let Err(e) = edge_result {

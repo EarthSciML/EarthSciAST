@@ -1603,6 +1603,8 @@ def _load_ref_data(
     injected_imports: list[Any] | None = None,
     loader_metaparameters: dict[str, int] | None = None,
     parent_metaparameters: dict[str, int] | None = None,
+    index_set_rename: Any = None,
+    rename_where: str = "mount edge",
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1735,6 +1737,18 @@ def _load_ref_data(
     ref_data = lower_expression_templates(ref_data)
     ref_data = expand_document(ref_data)
 
+    # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+    # referenced document has now resolved in its OWN scope — its imports, this
+    # edge's `bindings` and injection, its metaparameter close and fold, the
+    # §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
+    # the edge's `index_set_rename` speaks. Before its own nested mounts
+    # resolve: each nested edge renames what IT contributes, at its own edge.
+    # Absent or empty => identity, so an edge that does not use the field
+    # resolves exactly as before.
+    from .template_imports import apply_mount_index_set_rename
+
+    apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
+
     return ref_data, new_base
 
 
@@ -1795,12 +1809,17 @@ def _merge_subsystem_index_sets(
                     "subsystem_index_set_conflict",
                     f"index set '{n}' from subsystem ref '{ref}' "
                     f"({_index_set_show(decl)}) collides with a non-deep-equal "
-                    "declaration in the importing document "
-                    f"({_index_set_show(registry[n])}). A referenced subsystem "
-                    "file's top-level index_sets merge into the importing "
-                    "document's registry; deep-equal redeclaration is "
-                    "idempotent, a size/kind disagreement is a load-time error "
-                    "(esm-spec §4.7).",
+                    "declaration already in the importing document's registry "
+                    f"({_index_set_show(registry[n])}) — contributed by the "
+                    "document's own `index_sets` or by an earlier mount. A "
+                    "referenced subsystem file's top-level index_sets merge into "
+                    "the importing document's registry; deep-equal redeclaration "
+                    "is idempotent, a size/kind disagreement is a load-time error "
+                    "(esm-spec §4.7). If the two are genuinely different axes "
+                    "that happen to share a name, rename one at its mount edge "
+                    'with `index_set_rename` (esm-spec §4.7 "Mount-edge '
+                    'index-set renaming"), e.g. '
+                    f'{{"ref": "{ref}", "index_set_rename": {{"{n}": "{n}_2"}}}}.',
                 )
         else:
             registry[n] = decl
@@ -1877,7 +1896,13 @@ def _resolve_subsystems_generic(
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
                 ref_data, new_base = _load_ref_data(
-                    ref_str, base_path, bindings, "subsystem", injected
+                    ref_str,
+                    base_path,
+                    bindings,
+                    "subsystem",
+                    injected,
+                    index_set_rename=sub_value.get("index_set_rename"),
+                    rename_where=f"subsystem ref '{ref_str}'",
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2128,6 +2153,8 @@ def resolve_model_refs(
             injected,
             loader_metaparameters=loader_metaparameters,
             parent_metaparameters=parent_metaparameters,
+            index_set_rename=model_value.get("index_set_rename"),
+            rename_where=f"top-level model ref '{ref_str}'",
         )
 
         parsed = _parse_esm_data(ref_data)

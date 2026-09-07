@@ -84,6 +84,27 @@ func indexSetDeepEqual(a, b IndexSet) bool {
 	return err1 == nil && err2 == nil && bytes.Equal(ab, bb)
 }
 
+// showIndexSet renders an index-set declaration on one line —
+// `kind=interval, size=59` — so the §4.7 collision diagnostic names both
+// definitions rather than only the axis they disagree about. Mirrors the Julia
+// `_index_set_show` and the Python `_index_set_show`.
+func showIndexSet(s IndexSet) string {
+	parts := []string{fmt.Sprintf("kind=%s", s.Kind)}
+	if s.Size != nil {
+		parts = append(parts, fmt.Sprintf("size=%d", *s.Size))
+	}
+	if len(s.Members) > 0 {
+		parts = append(parts, fmt.Sprintf("members=%v", s.Members))
+	}
+	if len(s.Of) > 0 {
+		parts = append(parts, fmt.Sprintf("of=%v", s.Of))
+	}
+	if s.FromFAQ != nil {
+		parts = append(parts, fmt.Sprintf("from_faq=%s", *s.FromFAQ))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // mergeSubsystemIndexSets merges a referenced subsystem file's (already
 // metaparameter-folded) top-level `index_sets` into the importing document's
 // registry (esm-spec §4.7, mirroring the §9.7.5 template-import merge).
@@ -108,7 +129,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 		if existing, has := registry[n]; has {
 			if !indexSetDeepEqual(existing, decl) {
 				return newETErr(CodeSubsystemIndexSetConflict,
-					fmt.Sprintf("index set '%s' from subsystem ref '%s' collides with a non-deep-equal declaration in the importing document (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7)", n, ref))
+					fmt.Sprintf("index set '%s' from subsystem ref '%s' (%s) collides with a non-deep-equal declaration already in the importing document's registry (%s) — contributed by the document's own `index_sets` or by an earlier mount (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7). If the two are genuinely different axes that happen to share a name, rename one at its mount edge with `index_set_rename` (esm-spec §4.7 \"Mount-edge index-set renaming\"), e.g. {\"ref\": \"%s\", \"index_set_rename\": {\"%s\": \"%s_2\"}}", n, ref, showIndexSet(decl), showIndexSet(existing), ref, n, n))
 			}
 			continue
 		}
@@ -256,6 +277,21 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// image) component, so its surviving references and per-component
 		// registries are resolved away here.
 		expandDocument(view)
+
+		// esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+		// referenced document has now resolved in its OWN scope — its imports,
+		// this edge's `bindings` and injection, its metaparameter close and
+		// fold, the §9.6.3 fixpoint — so its `index_sets` are the
+		// post-resolution vocabulary the edge's `index_set_rename` speaks.
+		// Before its own nested mounts resolve: each nested edge renames what IT
+		// contributes, at its own edge. Absent or empty => identity, so an edge
+		// that does not use the field resolves exactly as before.
+		if m, ok := value.(map[string]any); ok {
+			if err := applyMountIndexSetRename(view, m["index_set_rename"],
+				fmt.Sprintf("subsystem ref %q", ref)); err != nil {
+				return err
+			}
+		}
 
 		// esm-spec §4.7: the mounted file's document-scoped index_sets (already
 		// metaparameter-folded) merge into the importing document's registry, so

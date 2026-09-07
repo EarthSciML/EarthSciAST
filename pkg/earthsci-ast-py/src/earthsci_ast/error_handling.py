@@ -186,6 +186,10 @@ TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name"
 TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision"
 TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid"
 
+# Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set
+# renaming"): the mount-edge mirror of `template_import_rename_unknown_name`.
+SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name"
+
 # Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
 # is RETIRED in 1.0.0: a data source is not a component, so it can no longer be
 # an injection target at all and needs no diagnostic of its own -- such a key
