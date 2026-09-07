@@ -103,7 +103,7 @@ It does not cover the two cases that matter:
 
 | # | Change | Where |
 |---|---|---|
-| A | **`index_set_rename`** on a mount edge — an optional `{old: new}` map on `$defs/SubsystemRef`, which is the schema shape of **both** the §4.7 `subsystems.<k> = {ref}` edge and the top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount. Applied at load to the fully-resolved mounted document, before its `index_sets` merge into the mounting document's registry. | schema + §4.7 |
+| A | **`index_set_rename`** on a mount edge — an optional `{old: new}` map on `$defs/SubsystemRef`, which is the schema shape of **both** the §4.7 `subsystems.<k> = {ref}` edge and the top-level `models.<k>` / `reaction_systems.<k>` `{ref}` mount. Applied at load to the fully-resolved mounted document, before its `index_sets` merge into the mounting document's registry. Normative and implemented at the §4.7 subsystem edge in all five bindings; at a top-level model-ref mount it follows that form's index-set merge, which is not yet uniform (§4.11). | schema + §4.7 |
 | B | **Transitivity list** (normative occurrence sites) for a mount-edge index-set rename — a superset of §9.7.7's, because a mount carries a whole component and not just declarations: it adds `shape`, `Assertion.coords` keys, and `DataSourceSelectAxis.gated_by`. | §4.7 |
 | C | **One new diagnostic**, `subsystem_index_set_rename_unknown_name`; the three §9.7.7 rename diagnostics (`template_import_rename_invalid`, `template_import_rename_collision`) are reused verbatim. | §9.6.6 |
 | D | **Sharper `subsystem_index_set_conflict` / `template_import_index_set_conflict` text**: name both contributors, both definitions, and the remedy. Independent of A–C and useful even if A–C never ship. | all bindings |
@@ -162,6 +162,16 @@ leaf itself imported a grid library under `prefix: "g"`, its document-visible ax
 and the mount writes `{"g.lev": "soil.lev"}`. This is the same "target's export vocabulary"
 rule §9.7.7 states for import edges, and it is the only rule under which the mount edge is
 writable without reading the leaf's transitive import closure.
+
+Renaming is **per edge**: step 2 covers what *this* referenced document declares and imports,
+and an axis reaching the registry through a mount *nested inside* the referenced document is
+renamed (or not) at that nested edge, by its own `index_set_rename`. This is not a limitation
+dressed up as a rule — it is what keeps the semantics binding-independent. The bindings
+already disagree about whether a nested mount's axes land in the leaf's registry (Rust, Go,
+Julia) or go straight to the root's (Python); making an outer rename responsible for inner
+contributions would inherit that disagreement. Per-edge renaming composes down the reference
+DAG by composition of the maps, never by cascade, and no binding has to decide whose edge a
+nested contribution belongs to.
 
 ### 3.3 Domain: index sets only
 
@@ -348,25 +358,49 @@ not messages.
 
 Stated plainly, because the change touches the load pipeline:
 
-1. **Whether every binding's rename walk covers sites 7–9.** The existing §9.7.7 walkers were
-   written for declarations, not components, so `shape`, `Assertion.coords` and `gated_by`
-   are new work in all five. A walker that misses one produces a *loud* failure
-   (`undefined_index_set` / `array_shape_mismatch`), not a silent wrong answer — but a
-   binding could still diverge from the others on which loud failure it gives.
-2. **The two mount forms resolve at different times in different bindings.** At a §4.7
-   subsystem edge every binding resolves the leaf as a complete document at the mount. At a
-   **top-level** `models.<k>` `{ref}` mount, Rust and Julia deliberately *defer* the leaf's
-   `expression_template_imports` to the root template pass (so loader-API metaparameters
-   reach the leaf document-wide), while Python resolves at the mount. §3.2 requires
-   resolution-then-rename, so a renamed top-level mount must become a closed build boundary
-   in the deferring bindings. That is an opt-in fork (no field ⇒ no change), but it is a fork,
-   and it overlaps #198 item 3, which is changing exactly that merge.
-3. **Interaction with an inline test's ephemeral build (§9.7.10 timing regime 2).** A test's
+1. **Only targeted tests were run.** The shared fixtures and the five per-binding regression
+   tests pass, and Go `build`+`vet`, Rust `cargo check --lib` and TS `tsc --noEmit` are clean,
+   but neither `scripts/test-conformance.sh` nor any binding's full suite was run locally
+   (CI does that). The most likely place for a surprise is a fixture that already carried a
+   `shape` / `coords` key the new walk now visits — it should be inert there (the walk only
+   rewrites names present in a non-empty rename map, and every existing fixture's map is
+   absent), but "should be inert" is an argument, not a test run.
+2. **A rename walk that misses an occurrence site fails loudly, not silently.** Sites 7–9 are
+   new work in all five bindings. A miss surfaces as `undefined_index_set` /
+   `array_shape_mismatch` at the site that names the stale axis, never as a silently
+   mis-sized array — but two bindings could still disagree about *which* loud failure they
+   give for the same document.
+3. **The two mount forms resolve at different times in different bindings** (§4.11). At a
+   §4.7 subsystem edge every binding resolves the leaf as a complete document at the mount,
+   which is what makes this change uniform there. The top-level `models.<k>` `{ref}` form
+   does not have that property today, so the field's reach at that form is not yet uniform,
+   and #198 item 3 is changing exactly that merge.
+4. **Interaction with an inline test's ephemeral build (§9.7.10 timing regime 2).** A test's
    injection rebuilds the enclosing component per test; a mount rename belongs to the
    composed document and should be invisible to a leaf's own tests run standalone. Believed
    fine (the ephemeral build starts from the persisted component, which the mount never
    mutates on disk) but not exercised by a fixture here, and #198 item 2 is separately
    re-litigating when a mounted leaf's tests run at all.
+
+### 4.11 Where the field reaches today, per binding
+
+`$defs/SubsystemRef` is the schema shape of both mount forms, so the field is *spellable* at
+both. What it *does* at the top-level `models.<k>` `{ref}` form follows that form's index-set
+merge, which the five bindings do not implement alike — a pre-existing divergence that is
+#198 item 3's subject, not this RFC's:
+
+| Binding | §4.7 subsystem edge | Top-level `models.<k>` `{ref}` mount |
+|---|---|---|
+| Julia | implemented | mount exists, but it splices the leaf raw and **drops** its `index_sets`, deferring the leaf's `expression_template_imports` to the root pass — no merge, so nothing to rename |
+| Rust | implemented | same deferral as Julia |
+| Python | implemented | **implemented** — both forms share `_load_ref_data`, which already resolves the leaf fully at the mount and merges its `index_sets` |
+| TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately) |
+| Go | implemented | the form does not exist |
+
+The honest summary: this RFC makes the mechanism uniform at the edge where the merge itself
+is uniform, and Python gets the top-level form for free because its two mount forms are one
+code path. Bringing Julia/Rust/TS/Go's top-level form up to the same line is item 3's work,
+and the field needs nothing further once that lands.
 
 ---
 
@@ -437,11 +471,16 @@ breaks URL refs and offers no per-name control.
    §9.7.2's bare `rename`. Reusing `rename` on `SubsystemRef` would read symmetrically but
    would imply the §9.7.7 domain (templates ∪ index sets ∪ open metaparameters), only one
    third of which crosses a mount. Recommendation: keep `index_set_rename`.
-2. **Does this land on the top-level `models.<k>` `{ref}` mount in the same wave?**
-   Schema-wise it is free (both forms are `$defs/SubsystemRef`). Semantically it requires the
-   deferring bindings (Rust, Julia) to treat a *renamed* top-level mount as a closed build
-   boundary (§4.10 note 2), which overlaps #198 item 3. Recommendation: sequence it after item
-   3 lands, so one PR owns the top-level merge.
+2. **How does the top-level `models.<k>` `{ref}` mount get there?** (§4.11.) Schema-wise the
+   field is already free at that form, and Python honours it today. The other four need item
+   3's decision first: either the deferring bindings (Julia, Rust) resolve a mounted leaf as a
+   closed build boundary the way the subsystem edge does — which costs them the loader-API
+   metaparameters reaching a mounted leaf document-wide — or the top-level merge is defined
+   some other way. That is a real trade-off and it is item 3's to make, not this RFC's.
+   **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts (they
+   are pushed there by #198 item 1, since `variable_map` cannot reach into a subsystem), so
+   `index_set_rename` unblocks them under Python today and under the Rust CLI only once item
+   3 lands.
 3. **Mount-relative node `id`s** (§4.6) — required before "one component mounted twice" works
    for a leaf that assigns `id`s. Separate change, separate RFC.
 4. **A `rebind` counterpart** for ragged keyed factors at a mount edge (§4.7). Needs a
@@ -460,27 +499,54 @@ breaks URL refs and offers no per-name control.
 | `template_import_rename_collision` (reused) | Two keys of one edge map onto one target name. |
 | `subsystem_index_set_conflict` (text sharpened) | Now names **both** contributors (the mounting document, or the earlier mount, and this mount), both definitions, and points at `index_set_rename`. |
 
-## 8. Conformance fixtures
+## 8. Fixtures
 
-- `tests/conformance/subsystem_refs/mount_rename_two_columns/` — the #198 reproducer: a
-  59-layer column and a 4-layer column over one `column_nonuniform_1d`-shaped grid library,
-  mounted into one document, the second under `index_set_rename: {"lev": "soil_lev"}`; the
-  golden pins the merged registry `{lev: 59, soil_lev: 4}` and the renamed `shape`s, ranges
-  and rule instances inside the mounted component.
-- `tests/invalid/template_imports/mount_rename_unknown_index_set.esm` (+ `expected_errors.json`,
-  `resolver_only`) — `subsystem_index_set_rename_unknown_name`.
-- `tests/invalid/template_imports/mount_rename_collision.esm` — two keys onto one target,
-  `template_import_rename_collision`.
+Shared corpus (every `.esm` under `tests/valid/**` and `tests/invalid/**` is swept by
+`scripts/conformance_corpus.py` in all five bindings):
 
-## 9. Porting checklist
+- `tests/valid/mount_rename_column_grid.esm` — a `column_nonuniform_1d`-shaped template
+  library declaring the generic axis `lev` sized by an open `NLEV`.
+- `tests/valid/mount_rename_atm_column.esm` (`NLEV = 59`) and
+  `tests/valid/mount_rename_soil_column.esm` (`NLEV = 4`) — two components that independently
+  spell their axis `lev`; each loads standalone.
+- `tests/valid/mount_rename_two_columns.esm` — the #198 item 4 reproducer with the fix
+  applied: the soil mount carries `index_set_rename: {"lev": "soil_lev"}` and the merged
+  registry holds **both** `lev` (59) and `soil_lev` (4).
+- `tests/invalid/template_imports/mount_rename_unknown_index_set.esm` (+
+  `expected_errors.json`, `resolver_only`) — `subsystem_index_set_rename_unknown_name`.
+
+Per-binding regression tests (`mount_index_set_rename` / `mount-index-set-rename` in each
+package) pin three things: the collision still fires without the field, the rename rewrites
+the registry key **and** the mounted component's variable `shape` and aggregate `{"from"}`
+range while leaving the sibling mount untouched, and an unknown key is a loud load error.
+
+A post-lowering `expanded.esm` golden under `tests/conformance/` was deliberately **not**
+added: the fixture's value is the registry and the mounted component's spelling, both of which
+the per-binding tests assert directly, and a new golden would need the generator script run
+across bindings this PR does not otherwise touch.
+
+## 9. Porting checklist (done in all five)
 
 Per binding, at the single point where a mount edge merges the referenced document's
 top-level `index_sets` into the mounting registry:
 
 1. Read and validate `index_set_rename` off the edge (string→string object; dotted-identifier
-   targets; distinct targets).
+   targets; distinct targets) — reuse the existing §9.7.7 `name_map` so the grammar
+   diagnostics are shared.
 2. Check every key against the **resolved** mounted document's `index_sets` keys.
-3. Apply one simultaneous substitution over the §3.4 sites of the resolved mounted document —
-   reusing the existing §9.7.7 rename walk for sites 1–6 and adding 7–9.
+3. Apply one simultaneous substitution over the §3.4 sites of the resolved mounted document.
+   Note the walk is a NEW one, not the §9.7.7 declaration walk: in a whole component `from`
+   also names a data source (`Parameter.update.from`), a coupling endpoint
+   (`variable_map.from`) and a connector endpoint, so the mount walk keys off *position*
+   (an `op`-bearing node's `ranges`) rather than the bare `from` key, and never rewrites a
+   bare string on its own account.
 4. Merge under the post-rename names, unchanged.
 5. Drive the shared fixtures.
+
+Landing points: Rust `template_imports.rs::apply_mount_index_set_rename` called from
+`ref_loading.rs::resolve_value`; Python `template_imports.apply_mount_index_set_rename`
+called from `parse._load_ref_data`; Julia `template_imports.jl::apply_mount_index_set_rename`
+called from `resolve.jl::_lower_and_coerce`; TypeScript
+`template-imports.ts::applyMountIndexSetRename` called from `ref-loading.ts::resolveRefDocument`;
+Go `template_rename.go::applyMountIndexSetRename` called from
+`subsystem_ref.go::resolveSubsystemMap`.

@@ -1311,6 +1311,14 @@
       }
     },
     {
+      "name": "code_subsystem_index_set_rename_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnknownName"
+      }
+    },
+    {
       "name": "code_subsystem_ref_is_coupling_library",
       "kind": "constant",
       "tier": "extension",
