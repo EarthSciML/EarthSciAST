@@ -223,7 +223,7 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-    _apply_operator_compose!(equations, entry, states, observeds, owners)
+    _apply_operator_compose!(equations, entry, states, observeds, owners; component_order)
 
 Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
 `"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
@@ -231,7 +231,17 @@ Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
 (step 3), each B equation is then matched to A's equation for the same
 dependent variable — directly, through the `translate` map (step 2), or by the
 bare-name fallback — and a matched pair is summed as `rhs_A + factor * rhs_B`
-(step 4). A B equation that matches nothing survives unchanged (step 5).
+(step 4). A B equation that matches nothing survives unchanged (step 5) — and,
+since this issue, is REPORTED: an entry that merges nothing at all, or only some
+of what B authored, emits `operator_compose_no_merge` /
+`operator_compose_partial_merge`, and refuses outright when the entry declares
+`require_match`. Preserving an unmatched equation quietly is what made
+"merged everything" and "merged nothing" the same observable outcome.
+
+`component_order` is the document's component order (models then reaction
+systems, as collected); the bare-name fallback resolves the surviving spelling
+against it rather than against `systems[1]` — see
+[`_bare_name_owner_wins`](@ref).
 
 Six properties here are load-bearing, and each of them has a way of failing
 SILENTLY — which is the one outcome a coupling mis-specification must not have:
@@ -297,7 +307,8 @@ function _apply_operator_compose!(equations::Vector{Equation},
                                   entry::CouplingOperatorCompose,
                                   states::OrderedDict{String, ModelVariable},
                                   observeds::OrderedDict{String, ModelVariable},
-                                  owners::Vector{String})
+                                  owners::Vector{String};
+                                  component_order::Vector{String}=String[])
     length(entry.systems) >= 2 || return
     a_name = entry.systems[1]
     b_names = Set{String}(entry.systems[2:end])
@@ -368,16 +379,26 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # B's dependent variable ⇒ A's, for every match that RENAMED it. Ordered so
     # the retarget/prune below is deterministic.
     merged_away = OrderedDict{String, String}()
+    # The subset of `merged_away` the BARE-NAME fallback produced. Its surviving
+    # spelling is settled by ownership below, not by which side was `systems[1]`.
+    bare_matches = OrderedDict{String, String}()
+    # §4.7.1 step 5's merge tally: how many equations the operator side authored
+    # that COULD match, and which of them did not. An equation with no extractable
+    # dependent variable is not a contribution and is exempt by construction.
+    authored = 0
+    unmatched = String[]
     for (i, eq) in enumerate(expanded)
         new_owners[i] in b_names || continue
         b_dep = lhs_dependent_variable(eq.lhs)
         b_dep === nothing && continue
+        authored += 1
 
         # §4.7.1 step 3 lists the match kinds in PRECEDENCE order and the order
         # is load-bearing (see the docstring): DIRECT, then TRANSLATION, then
         # the bare-name fallback.
         target = b_dep
         factor = 1.0
+        is_bare_match = false
         if haskey(a_index, b_dep)
             # DIRECT match — tried first; `target` is already right.
         elseif haskey(inv_translate, b_dep)
@@ -392,11 +413,15 @@ function _apply_operator_compose!(equations::Vector{Equation},
                 a_dep === nothing && continue
                 if endswith(a_dep, "." * short)
                     target = a_dep
+                    is_bare_match = true
                     break
                 end
             end
         end
-        haskey(a_index, target) || continue
+        if !haskey(a_index, target)
+            push!(unmatched, b_dep)
+            continue
+        end
 
         rhs_b = eq.rhs
         if target != b_dep
@@ -409,12 +434,28 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # identity, which is why it is guarded rather than unconditional.
             rhs_b = _rename_variable(rhs_b, b_dep, target)
             merged_away[b_dep] = target
+            is_bare_match && (bare_matches[b_dep] = target)
         end
         if factor != 1.0
             rhs_b = OpExpr("*", ASTExpr[NumExpr(factor), rhs_b])
         end
         push!(get!(extra, a_index[target], ASTExpr[]), rhs_b)
         consumed[i] = true
+    end
+
+    _report_operator_compose_merge(entry, a_name, entry.systems[2], authored, unmatched)
+
+    # §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+    # asserts that A's `x` and B's `x` are one state under two spellings; the
+    # surviving spelling is the OWNER's, not `systems[1]`'s, so that flipping the
+    # entry's argument order cannot change which state name — and therefore which
+    # initial condition — comes out the far side.
+    inverted = OrderedDict{String, String}()
+    for (b_dep, target) in bare_matches
+        if _bare_name_owner_wins(component_order, b_dep, target)
+            inverted[target] = b_dep
+            delete!(merged_away, b_dep)
+        end
     end
 
     if !isempty(extra)
@@ -434,6 +475,10 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # derivative three stages later in the tree walk instead of a merge
             # here.
             dep = lhs_dependent_variable(eq.lhs)
+            # Under an inverted bare-name match this equation's dependent
+            # variable is about to become the owner's spelling, so attribute it
+            # to the owner rather than to the name that is going away.
+            dep = dep === nothing ? nothing : get(inverted, dep, dep)
             dep === nothing || (new_owners[j] = _component_root(dep))
         end
     end
@@ -449,13 +494,18 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # §4.7.1 step 4, the merged-away name (see the docstring). Retarget FIRST,
     # then prune: a reference rewritten after its declaration is gone is a
     # reference to nothing, and the retarget is what makes the prune safe.
-    if !isempty(merged_away)
+    # `inverted` rides along in the same pass because it is the same operation
+    # pointed the other way — the loser of an ownership decision is merged away
+    # exactly like the loser of a translation match.
+    renames = isempty(inverted) ? merged_away :
+              OrderedDict{String, String}(merge(merged_away, inverted))
+    if !isempty(renames)
         for (i, eq) in enumerate(expanded)
-            expanded[i] = Equation(_rename_variables(eq.lhs, merged_away),
-                                   _rename_variables(eq.rhs, merged_away);
+            expanded[i] = Equation(_rename_variables(eq.lhs, renames),
+                                   _rename_variables(eq.rhs, renames);
                                    _comment=eq._comment)
         end
-        for gone in keys(merged_away)
+        for gone in keys(renames)
             delete!(states, gone)
             delete!(observeds, gone)
         end
@@ -463,6 +513,85 @@ function _apply_operator_compose!(equations::Vector{Equation},
 
     empty!(equations); append!(equations, expanded)
     empty!(owners);    append!(owners, new_owners)
+    return
+end
+
+"""
+    _bare_name_owner_wins(component_order, b_dep, target) -> Bool
+
+Does the `systems[2]` spelling own the state a bare-name match unified
+(esm-libraries-spec §4.7.1 step 3)?
+
+A DIRECT match needs no decision (the two names are equal) and a `translate`
+match is the author naming the surviving spelling explicitly. The BARE-NAME
+fallback is the one that has to choose, and choosing `systems[1]` — what this
+binding did before — makes an `operator_compose` entry mean different things in
+its two argument orders: flipping `systems` silently swapped which state name,
+and which INITIAL CONDITION, survived.
+
+Ownership follows the variable's own namespace, the direction step 4's
+merged-equation reattribution (`_component_root`) already reaches in. Both
+candidates are self-consistent under that reading — `A.x` is A's and `B.x` is
+B's — so the tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4
+already makes normative for the flattened system. The state belongs to the
+component that declares it first, in either argument order.
+
+A candidate whose leading segment names no component of this document is not a
+component-owned state, so there is nothing to compare and the incumbent
+(`systems[1]`'s spelling) stands.
+"""
+function _bare_name_owner_wins(component_order::Vector{String},
+                               b_dep::AbstractString,
+                               target::AbstractString)::Bool
+    b_owner = _component_root(b_dep)
+    a_owner = _component_root(target)
+    b_owner == a_owner && return false
+    bi = findfirst(==(b_owner), component_order)
+    ai = findfirst(==(a_owner), component_order)
+    (bi === nothing || ai === nothing) && return false
+    return bi < ai
+end
+
+"""
+    _report_operator_compose_merge(entry, a_name, b_name, authored, unmatched)
+
+Report an `operator_compose` entry that merged nothing, or only some of what the
+operator side authored (esm-libraries-spec §4.7.1 step 5).
+
+Preserving an unmatched equation is correct — an operator system may legitimately
+contribute states of its own — but preserving it SILENTLY leaves "merged
+everything" and "merged nothing" indistinguishable, and both wrong outcomes
+reachable from a document that is spec-valid and loads clean.
+
+Severity is a warning by default and an error under `require_match`, decided on
+evidence rather than taste: measured over this repository's own corpus, nineteen
+`operator_compose` entries merge zero equations today and one merges partially,
+and every one of them is spec-valid under step 5 (a transport operator whose only
+equation defines its own wind field, for instance). A hard error would reject
+documents the format grants. `require_match: true` is the author's opt-in to say
+that THIS entry's equations are contributions and a non-match is a defect.
+"""
+function _report_operator_compose_merge(entry::CouplingOperatorCompose,
+                                        a_name::AbstractString,
+                                        b_name::AbstractString,
+                                        authored::Int,
+                                        unmatched::Vector{String})
+    (authored == 0 || isempty(unmatched)) && return
+    merged = authored - length(unmatched)
+    where = "operator_compose($(a_name) + $(b_name))"
+    names = join(unmatched, ", ")
+    if entry.require_match
+        throw(OperatorComposeRequireMatchError(
+            "operator_compose_require_match_unmatched: $(where) declares " *
+            "`require_match` and merged $(merged) of $(authored) equations " *
+            "'$(b_name)' authored; no equation of '$(a_name)' matches: $(names)"))
+    end
+    code = merged == 0 ? "operator_compose_no_merge" : "operator_compose_partial_merge"
+    @warn "$(code): $(where) merged $(merged) of $(authored) equations " *
+          "'$(b_name)' authored; unmatched dependent variable(s): $(names). " *
+          "The unmatched equations are preserved unchanged (esm-libraries-spec " *
+          "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
+          "`require_match: true` on the entry if they were meant to be contributions."
     return
 end
 

@@ -1138,6 +1138,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             systems=coupling_data.get("systems", []),
             translate=coupling_data.get("translate", {}),
             lifting=coupling_data.get("lifting"),
+            require_match=bool(coupling_data.get("require_match", False)),
         )
 
     if coupling_type == CouplingType.COUPLE:

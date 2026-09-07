@@ -857,7 +857,15 @@ type OperatorComposeCoupling struct {
 	Systems     [2]string      `json:"systems"`
 	Translate   map[string]any `json:"translate,omitempty"`
 	Lifting     *string        `json:"lifting,omitempty"`
-	Description *string        `json:"description,omitempty"`
+	// RequireMatch (esm-libraries-spec §4.7.1 step 5) declares that the
+	// Systems[1] equations are CONTRIBUTIONS and every one of them must land on
+	// an equation of Systems[0]. An unmatched one is then
+	// CodeOperatorComposeRequireMatchUnmatched instead of the decoupled equation
+	// step 5 otherwise preserves in silence. `omitempty` keeps the schema
+	// default out of the emitted document, so a fixture that never mentions it
+	// round-trips byte-identically.
+	RequireMatch bool    `json:"require_match,omitempty"`
+	Description  *string `json:"description,omitempty"`
 }
 
 func (o OperatorComposeCoupling) CouplingType() string { return o.Type }

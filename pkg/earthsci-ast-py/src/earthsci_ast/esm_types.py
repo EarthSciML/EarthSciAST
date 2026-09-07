@@ -985,6 +985,12 @@ class OperatorComposeCoupling(BaseCouplingEntry):
     # flattener array-ify each merged reaction+operator state ODE onto the grid
     # (per-cell reaction evaluation). None ⇒ no lift (0-D / already-array system).
     lifting: str | None = None
+    # esm-libraries-spec §4.7.1 step 5. ``True`` declares that the ``systems[1]``
+    # equations are CONTRIBUTIONS and every one of them must land on an equation
+    # of ``systems[0]``; an unmatched one is then a hard refusal instead of the
+    # silently preserved decoupled equation step 5 otherwise produces. Default
+    # ``False`` — existing documents are unaffected.
+    require_match: bool = False
 
 
 @dataclass

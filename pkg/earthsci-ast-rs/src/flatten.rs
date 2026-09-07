@@ -237,6 +237,29 @@ pub enum FlattenError {
     )]
     CoupleMultiplicativeNoTendency { target: String },
 
+    /// An `operator_compose` entry declared `require_match: true` and one of
+    /// `systems[1]`'s equations found no equation of `systems[0]` to land on
+    /// (esm-libraries-spec §4.7.1 step 5).
+    ///
+    /// Step 5 otherwise preserves an unmatched equation unchanged, which makes
+    /// "merged everything" and "merged nothing" the same observable outcome;
+    /// `require_match` is the author's opt-in to tell them apart. A PARTIAL
+    /// match raises too — there is no "some is enough" reading an author could
+    /// rely on: the seven-of-twelve-species case is exactly the defect the flag
+    /// exists to catch.
+    #[error(
+        "operator_compose_require_match_unmatched: operator_compose({a} + {b}) declares \
+         `require_match` and merged {merged} of {authored} equations '{b}' authored; no equation \
+         of '{a}' matches: {unmatched}"
+    )]
+    OperatorComposeRequireMatchUnmatched {
+        a: String,
+        b: String,
+        merged: usize,
+        authored: usize,
+        unmatched: String,
+    },
+
     /// A model subsystem that structurally declares itself a [`DataSource`] —
     /// it carries the discriminating `kind` / `source` keys — failed to
     /// deserialize as one. Distinguished from a nested model or a
@@ -2044,10 +2067,11 @@ fn apply_coupling_entry(
         CouplingEntry::OperatorCompose {
             systems,
             translate,
+            require_match,
             description,
             ..
         } => {
-            apply_operator_compose(systems, translate.as_ref(), per_system)?;
+            apply_operator_compose(systems, translate.as_ref(), *require_match, per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -2329,7 +2353,12 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
 ///    direct or placeholder match the two names are already equal, so the
 ///    rewrite is the identity.
 /// 5. **Preserve unmatched equations** — a B equation with no A counterpart
-///    stays in B's block, in place and unchanged.
+///    stays in B's block, in place and unchanged, and is REPORTED: an entry that
+///    merges nothing at all, or only some of what B authored, prints
+///    `operator_compose_no_merge` / `operator_compose_partial_merge`, and fails
+///    outright when the entry declares `require_match`. Preserving an unmatched
+///    equation quietly is what made "merged everything" and "merged nothing" the
+///    same observable outcome.
 ///
 /// This function previously merged only equations whose dependent variable was
 /// byte-identical across two blocks. Because flattening namespaces every
@@ -2339,6 +2368,7 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
 fn apply_operator_compose(
     systems: &[String],
     translate: Option<&serde_json::Value>,
+    require_match: bool,
     per_system: &mut [SystemBlock],
 ) -> Result<(), FlattenError> {
     if systems.len() < 2 {
@@ -2384,16 +2414,26 @@ fn apply_operator_compose(
     // B equation has been matched — relocating an equation mid-loop would
     // invalidate it.
     let mut merged_positions: HashSet<usize> = HashSet::new();
+    // The subset of `merged_away` the BARE-NAME fallback produced. Its surviving
+    // spelling is settled by ownership below, not by which side was `systems[0]`.
+    let mut bare_matches: IndexMap<String, String> = IndexMap::new();
+    // Step 5's merge tally: how many equations the operator side authored that
+    // COULD match (one with no extractable dependent variable is not a
+    // contribution and is exempt by construction), and which of them did not.
+    let mut authored = 0_usize;
+    let mut unmatched: Vec<String> = Vec::new();
     for b_eq in b_equations {
         let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
             surviving.push(b_eq);
             continue;
         };
+        authored += 1;
 
         // Step 3, in precedence order: direct, then translation, then the
         // bare-name fallback.
         let mut target = b_dep.clone();
         let mut factor = 1.0_f64;
+        let mut is_bare_match = false;
         if a_index.contains_key(&b_dep) {
             // Direct match: `target` is already right.
         } else if let Some((a_name, f)) = translate.get(&b_dep) {
@@ -2404,11 +2444,13 @@ fn apply_operator_compose(
             let suffix = format!(".{short}");
             if let Some(hit) = a_index.keys().find(|k| k.ends_with(&suffix)) {
                 target = hit.clone();
+                is_bare_match = true;
             }
         }
 
         // Step 5: no counterpart in A, so the equation stays in B untouched.
         let Some(&i) = a_index.get(&target) else {
+            unmatched.push(b_dep);
             surviving.push(b_eq);
             continue;
         };
@@ -2440,10 +2482,48 @@ fn apply_operator_compose(
         per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
         merged_positions.insert(i);
         if target != b_dep {
+            if is_bare_match {
+                bare_matches.insert(b_dep.clone(), target.clone());
+            }
             merged_away.insert(b_dep, target);
         }
     }
     per_system[b_idx].equations = surviving;
+
+    report_operator_compose_merge(
+        &systems[0],
+        &systems[1],
+        require_match,
+        authored,
+        &unmatched,
+    )?;
+
+    // §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+    // asserts that A's `x` and B's `x` are one state under two spellings; the
+    // surviving spelling is the OWNER's, not `systems[0]`'s, so that flipping
+    // the entry's argument order cannot change which state name — and therefore
+    // which INITIAL CONDITION — comes out the far side.
+    let mut inverted: IndexMap<String, String> = IndexMap::new();
+    for (b_dep, target) in &bare_matches {
+        if bare_name_owner_wins(per_system, b_dep, target) {
+            inverted.insert(target.clone(), b_dep.clone());
+            merged_away.shift_remove(b_dep);
+        }
+    }
+    if !inverted.is_empty() {
+        // Retarget BEFORE the reattribution: the reattribution reads each merged
+        // equation's dependent variable to decide whose block it belongs in, and
+        // after this rewrite that variable is the owner's spelling. Running it
+        // first would file the merged tendency under the name that just went away.
+        retarget_merged_names(per_system, &inverted);
+        for gone in inverted.keys() {
+            let owner = gone.split_once('.').map(|(head, _)| head).unwrap_or(gone);
+            if let Some(block) = per_system.iter_mut().find(|b| b.name == owner) {
+                block.state_vars.shift_remove(gone);
+                block.observed_vars.shift_remove(gone);
+            }
+        }
+    }
 
     reattribute_merged_equations(a_idx, &merged_positions, per_system);
 
@@ -2469,6 +2549,94 @@ fn apply_operator_compose(
         }
     }
 
+    Ok(())
+}
+
+/// Does the `systems[1]` spelling own the state a bare-name match unified?
+/// (esm-libraries-spec §4.7.1 step 3.)
+///
+/// A DIRECT match needs no decision (the two names are equal) and a `translate`
+/// match is the author naming the surviving spelling explicitly. The BARE-NAME
+/// fallback is the one that has to choose, and choosing `systems[0]` — what this
+/// binding did before — makes an `operator_compose` entry mean different things
+/// in its two argument orders: flipping `systems` silently swapped which state
+/// name, and which INITIAL CONDITION, came out the far side.
+///
+/// Ownership follows the variable's own namespace, the direction step 4's
+/// merged-equation reattribution already reaches in. Both candidates are
+/// self-consistent under that reading — `A.x` is A's and `B.x` is B's — so the
+/// tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4 already makes
+/// normative for the flattened system, and which `per_system` is already in.
+/// The state belongs to the component that declares it first, in either
+/// argument order.
+///
+/// A candidate whose leading segment names no block of this document is not a
+/// component-owned state, so there is nothing to compare and the incumbent
+/// (`systems[0]`'s spelling) stands.
+fn bare_name_owner_wins(per_system: &[SystemBlock], b_dep: &str, target: &str) -> bool {
+    let b_owner = b_dep.split_once('.').map(|(h, _)| h).unwrap_or(b_dep);
+    let a_owner = target.split_once('.').map(|(h, _)| h).unwrap_or(target);
+    if b_owner == a_owner {
+        return false;
+    }
+    let (Some(bi), Some(ai)) = (
+        per_system.iter().position(|b| b.name == b_owner),
+        per_system.iter().position(|b| b.name == a_owner),
+    ) else {
+        return false;
+    };
+    bi < ai
+}
+
+/// Report an `operator_compose` entry that merged nothing, or only some of what
+/// the operator side authored (esm-libraries-spec §4.7.1 step 5).
+///
+/// Preserving an unmatched equation is correct — an operator system may
+/// legitimately contribute states of its own — but preserving it SILENTLY leaves
+/// "merged everything" and "merged nothing" indistinguishable, and both wrong
+/// outcomes reachable from a document that is spec-valid and loads clean.
+///
+/// Severity is a warning by default and an error under `require_match`, decided
+/// on evidence rather than taste: measured over this repository's own corpus,
+/// nineteen `operator_compose` entries merge zero equations today and one merges
+/// partially, and every one is spec-valid under step 5 (a transport operator
+/// whose only equation defines its own wind field, for instance). A hard error
+/// would reject documents the format grants.
+///
+/// The warning goes to stderr, the same channel `pushdown_rewrite`'s residual
+/// diagnostics use; the `require_match` case is a real error and is returned.
+fn report_operator_compose_merge(
+    a: &str,
+    b: &str,
+    require_match: bool,
+    authored: usize,
+    unmatched: &[String],
+) -> Result<(), FlattenError> {
+    if authored == 0 || unmatched.is_empty() {
+        return Ok(());
+    }
+    let merged = authored - unmatched.len();
+    let names = unmatched.join(", ");
+    if require_match {
+        return Err(FlattenError::OperatorComposeRequireMatchUnmatched {
+            a: a.to_string(),
+            b: b.to_string(),
+            merged,
+            authored,
+            unmatched: names,
+        });
+    }
+    let code = if merged == 0 {
+        "operator_compose_no_merge"
+    } else {
+        "operator_compose_partial_merge"
+    };
+    eprintln!(
+        "warning: {code}: operator_compose({a} + {b}) merged {merged} of {authored} equations \
+         '{b}' authored; unmatched dependent variable(s): {names}. The unmatched equations are \
+         preserved unchanged (esm-libraries-spec §4.7.1 step 5), so they integrate DECOUPLED from \
+         '{a}'. Set `require_match: true` on the entry if they were meant to be contributions."
+    );
     Ok(())
 }
 

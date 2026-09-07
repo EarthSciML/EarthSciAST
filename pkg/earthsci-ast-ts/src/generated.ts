@@ -1531,6 +1531,10 @@ export interface CouplingOperatorCompose {
     [k: string]: TranslateTarget;
   };
   /**
+   * Declare that the `systems[1]` equations are CONTRIBUTIONS: every one of them whose LHS names a dependent variable MUST match an equation of `systems[0]` (esm-libraries-spec §4.7.1 step 5). An unmatched equation is then `operator_compose_require_match_unmatched`, a hard refusal at flatten, instead of the decoupled equation step 5 otherwise preserves in silence. A PARTIAL match fails too — there is no 'some is enough' reading. Default false, which preserves step 5's behaviour and reports the shortfall as `operator_compose_no_merge` / `operator_compose_partial_merge` instead.
+   */
+  require_match?: boolean;
+  /**
    * Strategy for mapping between 0D and spatial systems.
    */
   lifting?: "pointwise" | "broadcast" | "mean" | "integral";

@@ -981,6 +981,10 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
             result["translate"] = coupling.translate
         if coupling.lifting is not None:
             result["lifting"] = coupling.lifting
+        # Emitted only when SET: `false` is the schema default, and writing it
+        # out would make every existing fixture fail the round-trip contract.
+        if coupling.require_match:
+            result["require_match"] = True
 
     elif isinstance(coupling, CouplingCouple):
         result["type"] = "couple"

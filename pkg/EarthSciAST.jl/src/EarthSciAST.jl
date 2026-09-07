@@ -209,6 +209,7 @@ export
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,
     DomainExtentMismatchError, SliceOutOfDomainError, CyclicPromotionError,
+    OperatorComposeRequireMatchError,
     # System types
     Domain, Reference, Metadata, EsmFile,
     FunctionTable, FunctionTableAxis,

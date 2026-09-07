@@ -134,6 +134,23 @@ export class CoupleMultiplicativeNoTendencyError extends FlattenError {
 }
 
 /**
+ * An `operator_compose` entry declared `require_match: true` and one of
+ * `systems[1]`'s equations found no equation of `systems[0]` to land on
+ * (esm-libraries-spec §4.7.1 step 5).
+ *
+ * Step 5 otherwise preserves an unmatched equation unchanged, which makes
+ * "merged everything" and "merged nothing" the same observable outcome;
+ * `require_match` is the author's opt-in to tell them apart. A PARTIAL match
+ * throws too — there is no "some is enough" reading an author could rely on.
+ */
+export class OperatorComposeRequireMatchError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED)
+    this.name = 'OperatorComposeRequireMatchError'
+  }
+}
+
+/**
  * An `identity`-transform `variable_map` bridges two variables whose declared,
  * non-empty units differ (esm-libraries-spec §4.7.6). `conversion_factor` and
  * `param_to_var` are exempt: the first declares the conversion explicitly, the
@@ -1260,7 +1277,12 @@ function expandOperatorComposePlaceholders(
 /**
  * Merge B's equations into A by matching dependent variables (esm-spec §4.7.1):
  * for each B equation with LHS `D(x, t)`, find A's equation with the same LHS
- * (translation-aware) and SUM their RHS. Unmatched B equations survive unchanged.
+ * (translation-aware) and SUM their RHS. Unmatched B equations survive unchanged
+ * — and, since issue #195, are REPORTED: an entry that merges nothing at all, or
+ * only some of what B authored, emits `operator_compose_no_merge` /
+ * `operator_compose_partial_merge`, and throws outright when the entry declares
+ * `require_match`. Preserving an unmatched equation quietly is what made
+ * "merged everything" and "merged nothing" the same observable outcome.
  */
 function applyOperatorCompose(
   components: Record<string, ComponentSystem>,
@@ -1283,17 +1305,27 @@ function applyOperatorCompose(
   const survivingB: FlattenedEquation[] = []
   // `bDep -> targetDep` for every match that RENAMED the dependent variable.
   const mergedAway: Record<string, string> = {}
+  // The subset of `mergedAway` the BARE-NAME fallback produced. Its surviving
+  // spelling is settled by ownership below, not by which side was `systems[0]`.
+  const bareMatches: Record<string, string> = {}
   // Positions in `a.equations` this entry merged INTO, for the reattribution
   // below. Collected rather than acted on in place because `aIndex` indexes
   // `a.equations` POSITIONALLY and stays live until the last B equation has been
   // matched — relocating an equation mid-loop would invalidate it.
   const mergedPositions = new Set<number>()
+  // §4.7.1 step 5's merge tally. `authored` counts the B equations that COULD
+  // match (one with no extractable dependent variable is not a contribution and
+  // is exempt by construction); `unmatched` records the ones that did not, in
+  // document order, because naming them is what turns the diagnostic into a fix.
+  let authored = 0
+  const unmatched: string[] = []
   for (const bEq of b.equations) {
     const bDep = lhsDependentVar(bEq.lhs)
     if (bDep === undefined) {
       survivingB.push(bEq)
       continue
     }
+    authored += 1
 
     // Resolve A's target for this dependent variable. §4.7.1 step 3 lists the
     // match kinds in PRECEDENCE order: DIRECT first, then TRANSLATION, then the
@@ -1307,6 +1339,7 @@ function applyOperatorCompose(
     // `_var` explicitly asks for something automatic, and MUST stay harmless.
     let targetDep = bDep
     let factor = 1
+    let isBareMatch = false
     if (Object.prototype.hasOwnProperty.call(aIndex, bDep)) {
       // Direct match — `targetDep` is already right.
     } else if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
@@ -1319,6 +1352,7 @@ function applyOperatorCompose(
       for (const ad of Object.keys(aIndex)) {
         if (ad.endsWith(`.${short}`)) {
           targetDep = ad
+          isBareMatch = true
           break
         }
       }
@@ -1344,12 +1378,45 @@ function applyOperatorCompose(
         sourceSystem: aEq.sourceSystem,
       }
       mergedPositions.add(i)
-      if (targetDep !== bDep) mergedAway[bDep] = targetDep
+      if (targetDep !== bDep) {
+        mergedAway[bDep] = targetDep
+        if (isBareMatch) bareMatches[bDep] = targetDep
+      }
     } else {
+      unmatched.push(bDep)
       survivingB.push(bEq)
     }
   }
   b.equations = survivingB
+
+  reportOperatorComposeMerge(entry, systems[0], systems[1], authored, unmatched)
+
+  // §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+  // asserts that A's `x` and B's `x` are one state under two spellings; the
+  // surviving spelling is the OWNER's, not `systems[0]`'s, so that flipping the
+  // entry's argument order cannot change which state name — and therefore which
+  // INITIAL CONDITION — comes out the far side.
+  const inverted: Record<string, string> = {}
+  for (const [bDep, targetDep] of Object.entries(bareMatches)) {
+    if (bareNameOwnerWins(components, bDep, targetDep)) {
+      inverted[targetDep] = bDep
+      delete mergedAway[bDep]
+    }
+  }
+  if (Object.keys(inverted).length > 0) {
+    // Retarget BEFORE the reattribution: the reattribution reads each merged
+    // equation's dependent variable to decide whose bag it belongs in, and after
+    // this rewrite that variable is the owner's spelling. Running it first would
+    // file the merged tendency under the name that just went away.
+    retargetMergedNames(components, inverted)
+    for (const gone of Object.keys(inverted)) {
+      const owner = components[gone.slice(0, gone.indexOf('.'))]
+      if (owner !== undefined) {
+        delete owner.stateVars[gone]
+        delete owner.observed[gone]
+      }
+    }
+  }
 
   // `a === b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
   // and which has just rebound the one shared array out from under
@@ -1430,6 +1497,92 @@ function applyOperatorCompose(
  * An equation whose dependent variable names no component of this document stays
  * where it is; there is no bag to move it to.
  */
+/**
+ * Does the `systems[1]` spelling own the state a bare-name match unified?
+ * (esm-libraries-spec §4.7.1 step 3.)
+ *
+ * A DIRECT match needs no decision (the two names are equal) and a `translate`
+ * match is the author naming the surviving spelling explicitly. The BARE-NAME
+ * fallback is the one that has to choose, and choosing `systems[0]` — what this
+ * binding did before — makes an `operator_compose` entry mean different things
+ * in its two argument orders: flipping `systems` silently swapped which state
+ * name, and which INITIAL CONDITION, came out the far side.
+ *
+ * Ownership follows the variable's own namespace, the direction step 4's
+ * merged-equation reattribution already reaches in. Both candidates are
+ * self-consistent under that reading — `A.x` is A's and `B.x` is B's — so the
+ * tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4 already makes
+ * normative for the flattened system. The state belongs to the component that
+ * declares it first, in either argument order.
+ *
+ * A candidate whose leading segment names no component of this document is not a
+ * component-owned state, so there is nothing to compare and the incumbent
+ * (`systems[0]`'s spelling) stands.
+ */
+function bareNameOwnerWins(
+  components: Record<string, ComponentSystem>,
+  bDep: string,
+  targetDep: string,
+): boolean {
+  const bOwner = bDep.slice(0, bDep.indexOf('.'))
+  const aOwner = targetDep.slice(0, targetDep.indexOf('.'))
+  if (bOwner === aOwner) return false
+  const order = Object.keys(components)
+  const bi = order.indexOf(bOwner)
+  const ai = order.indexOf(aOwner)
+  if (bi < 0 || ai < 0) return false
+  return bi < ai
+}
+
+/**
+ * Report an `operator_compose` entry that merged nothing, or only some of what
+ * the operator side authored (esm-libraries-spec §4.7.1 step 5).
+ *
+ * Preserving an unmatched equation is correct — an operator system may
+ * legitimately contribute states of its own — but preserving it SILENTLY leaves
+ * "merged everything" and "merged nothing" indistinguishable, and both wrong
+ * outcomes reachable from a document that is spec-valid and loads clean.
+ *
+ * Severity is a warning by default and an error under `require_match`, decided
+ * on evidence rather than taste: measured over this repository's own corpus,
+ * nineteen `operator_compose` entries merge zero equations today and one merges
+ * partially, and every one is spec-valid under step 5 (a transport operator
+ * whose only equation defines its own wind field, for instance). A hard error
+ * would reject documents the format grants.
+ */
+function reportOperatorComposeMerge(
+  entry: CouplingEntry,
+  aName: string,
+  bName: string,
+  authored: number,
+  unmatched: string[],
+): void {
+  if (authored === 0 || unmatched.length === 0) return
+  const merged = authored - unmatched.length
+  const where = `operator_compose(${aName} + ${bName})`
+  const names = unmatched.join(', ')
+  const requireMatch =
+    (entry as unknown as { require_match?: boolean }).require_match === true
+  if (requireMatch) {
+    throw new OperatorComposeRequireMatchError(
+      `${ERROR_CODES.OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED}: ${where} declares ` +
+        `\`require_match\` and merged ${merged} of ${authored} equations '${bName}' ` +
+        `authored; no equation of '${aName}' matches: ${names}`,
+    )
+  }
+  const code =
+    merged === 0
+      ? ERROR_CODES.OPERATOR_COMPOSE_NO_MERGE
+      : ERROR_CODES.OPERATOR_COMPOSE_PARTIAL_MERGE
+  console.warn(
+    `${code}: ${where} merged ${merged} of ${authored} equations '${bName}' authored; ` +
+      `unmatched dependent variable(s): ${names}. The unmatched equations are ` +
+      `preserved unchanged (esm-libraries-spec §4.7.1 step 5), so they integrate ` +
+      `DECOUPLED from '${aName}'. Set \`require_match: true\` on the entry if they ` +
+      `were meant to be contributions.`,
+  )
+}
+
 function reattributeMergedEquations(
   components: Record<string, ComponentSystem>,
   aName: string,

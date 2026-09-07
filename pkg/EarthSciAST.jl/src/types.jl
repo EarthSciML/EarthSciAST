@@ -1617,9 +1617,18 @@ struct CouplingOperatorCompose <: CouplingEntry
     translate::Union{Dict{String,Any},Nothing}
     description::Union{String,Nothing}
     lifting::Union{String,Nothing}
+    # esm-libraries-spec §4.7.1 step 5: `true` declares that `systems[2]`'s
+    # equations are CONTRIBUTIONS and every one of them must land on an equation
+    # of `systems[1]`. An unmatched one is then a hard refusal
+    # (`OperatorComposeRequireMatchError`) instead of the decoupled equation
+    # step 5 otherwise preserves in silence. Default `false` — existing
+    # documents are unaffected.
+    require_match::Bool
 
-    CouplingOperatorCompose(systems::Vector{String}; translate=nothing, description=nothing, lifting=nothing) =
-        new(systems, translate, description, lifting)
+    CouplingOperatorCompose(systems::Vector{String}; translate=nothing,
+                            description=nothing, lifting=nothing,
+                            require_match::Bool=false) =
+        new(systems, translate, description, lifting, require_match)
 end
 
 """
@@ -2771,6 +2780,11 @@ const RECORD_FIELD_TABLES = (
         (f = :translate,   wire = "translate",   kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :lifting,     wire = "lifting",     kind = :string, mode = :opt, emit = :nonnothing),
+        # esm-libraries-spec §4.7.1 step 5. `false` is the schema default and is
+        # NOT written back out — emitting it would put a key on every existing
+        # fixture and break the load-preservation round trip.
+        (f = :require_match, wire = "require_match", kind = :bool,
+         mode = :default, default = false, emit = :nondefault),
     )),
     (T = :CouplingCouple, fn = :couple, tag = "couple", rows = (
         (f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,

@@ -30,6 +30,28 @@ function Base.showerror(io::IO, e::ConflictingDerivativeError)
 end
 
 """
+    OperatorComposeRequireMatchError
+
+Raised when an `operator_compose` entry declares `require_match: true` and one of
+`systems[2]`'s equations found no equation of `systems[1]` to land on
+(esm-libraries-spec §4.7.1 step 5).
+
+Step 5 otherwise preserves an unmatched equation unchanged, which makes "merged
+everything" and "merged nothing" the same observable outcome; `require_match` is
+the author's opt-in to tell them apart. A PARTIAL match raises too — there is no
+"some is enough" reading an author could rely on.
+
+Fields:
+- `details::String`: the entry, the merge tally, and the unmatched dependent
+  variables.
+"""
+struct OperatorComposeRequireMatchError <: EarthSciASTError
+    details::String
+end
+Base.showerror(io::IO, e::OperatorComposeRequireMatchError) =
+    print(io, "OperatorComposeRequireMatchError: ", e.details)
+
+"""
     DimensionPromotionError
 
 Raised during flatten when a variable or equation cannot be promoted from

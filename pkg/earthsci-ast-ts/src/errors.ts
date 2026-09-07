@@ -56,6 +56,23 @@ export const ERROR_CODES = {
   //   case a corresponding meaning. Raised from flatten.ts as
   //   CoupleMultiplicativeNoTendencyError.
   COUPLE_MULTIPLICATIVE_NO_TENDENCY: 'couple_multiplicative_no_tendency',
+  // `operator_compose_no_merge` / `operator_compose_partial_merge` —
+  //   WARNING-level (esm-libraries-spec §4.7.1 step 5). An `operator_compose`
+  //   entry merged NONE, or only SOME, of the equations `systems[1]` authored.
+  //   Step 5 preserves an unmatched equation unchanged, which is correct — an
+  //   operator may legitimately contribute states of its own — but preserving it
+  //   SILENTLY made "merged everything" and "merged nothing" the same observable
+  //   outcome. These stay warnings rather than errors because the shipped corpus
+  //   contains spec-valid documents that zero-merge on purpose; an author who
+  //   means "these are contributions" says so with `require_match`.
+  OPERATOR_COMPOSE_NO_MERGE: 'operator_compose_no_merge',
+  OPERATOR_COMPOSE_PARTIAL_MERGE: 'operator_compose_partial_merge',
+  // `operator_compose_require_match_unmatched` — an `operator_compose` entry
+  //   declared `require_match: true` and one of `systems[1]`'s equations found
+  //   no equation of `systems[0]` to land on. A PARTIAL match fails too: there
+  //   is no "some is enough" reading an author could rely on. Raised from
+  //   flatten.ts as OperatorComposeRequireMatchError.
+  OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED: 'operator_compose_require_match_unmatched',
   // `relational_node_in_continuous` — a relational / value-invention
   //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
   //   reads a declared STATE variable, so the cadence partition would class the

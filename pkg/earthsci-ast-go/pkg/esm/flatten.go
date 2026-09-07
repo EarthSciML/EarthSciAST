@@ -1408,12 +1408,21 @@ func expandOperatorComposePlaceholders(components map[string]*componentSystem, e
 // applyOperatorCompose merges B's equations into A by matching dependent
 // variables (esm-spec §4.7.1): for each B equation with LHS `D(x, t)`, find A's
 // equation with the same dependent variable (translation-aware) and SUM the two
-// right-hand sides. Unmatched B equations survive unchanged.
-func applyOperatorCompose(components map[string]*componentSystem, entry OperatorComposeCoupling) {
+// right-hand sides. Unmatched B equations survive unchanged -- and are REPORTED:
+// an entry that merges nothing at all, or only some of what B authored, emits
+// operator_compose_no_merge / operator_compose_partial_merge, and fails outright
+// when the entry declares RequireMatch. Preserving an unmatched equation quietly
+// is what made "merged everything" and "merged nothing" the same observable
+// outcome.
+//
+// `order` is the document's component order; the bare-name fallback resolves its
+// surviving spelling against it rather than against Systems[0]. See
+// bareNameOwnerWins.
+func applyOperatorCompose(components map[string]*componentSystem, order []string, entry OperatorComposeCoupling) error {
 	a, aok := components[entry.Systems[0]]
 	b, bok := components[entry.Systems[1]]
 	if !aok || !bok {
-		return
+		return nil
 	}
 	translate := buildTranslateMap(entry)
 
@@ -1442,12 +1451,22 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	// equation has been matched -- relocating an equation mid-loop would
 	// invalidate it.
 	mergedPositions := map[int]bool{}
+	// The subset of mergedAway the BARE-NAME fallback produced. Its surviving
+	// spelling is settled by ownership below, not by which side was Systems[0].
+	bareMatches := map[string]string{}
+	var bareMatchOrder []string
+	// §4.7.1 step 5's merge tally: how many equations the operator side authored
+	// that COULD match (one with no extractable dependent variable is not a
+	// contribution and is exempt by construction), and which of them did not.
+	authored := 0
+	var unmatched []string
 	for _, bEq := range b.equations {
 		bDep := lhsDependentVar(bEq.LHS)
 		if bDep == "" {
 			surviving = append(surviving, bEq)
 			continue
 		}
+		authored++
 		// esm-libraries-spec §4.7.1 step 3 lists the match kinds in precedence
 		// order: DIRECT first, then TRANSLATION, then the bare-name fallback.
 		// Direct-first is load-bearing, not cosmetic: placeholder expansion has
@@ -1459,6 +1478,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 		// `translate: {"A.x": "B._var"}` redundancy invariant, esm-spec §10.2).
 		targetDep := bDep
 		factor := 1.0
+		isBareMatch := false
 		_, direct := aIndex[bDep]
 		t, hasTranslation := translate[bDep]
 		switch {
@@ -1475,12 +1495,14 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			for _, ad := range aOrder {
 				if strings.HasSuffix(ad, "."+short) {
 					targetDep = ad
+					isBareMatch = true
 					break
 				}
 			}
 		}
 		i, ok := aIndex[targetDep]
 		if !ok {
+			unmatched = append(unmatched, bDep)
 			surviving = append(surviving, bEq)
 			continue
 		}
@@ -1510,9 +1532,53 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 				mergedAwayOrder = append(mergedAwayOrder, bDep)
 			}
 			mergedAway[bDep] = targetDep
+			if isBareMatch {
+				if _, seen := bareMatches[bDep]; !seen {
+					bareMatchOrder = append(bareMatchOrder, bDep)
+				}
+				bareMatches[bDep] = targetDep
+			}
 		}
 	}
 	b.equations = surviving
+
+	if err := reportOperatorComposeMerge(entry, authored, unmatched); err != nil {
+		return err
+	}
+
+	// §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+	// asserts that A's `x` and B's `x` are one state under two spellings; the
+	// surviving spelling is the OWNER's, not Systems[0]'s, so that flipping the
+	// entry's argument order cannot change which state name -- and therefore
+	// which INITIAL CONDITION -- comes out the far side.
+	inverted := map[string]string{}
+	var invertedOrder []string
+	for _, bDep := range bareMatchOrder {
+		targetDep := bareMatches[bDep]
+		if bareNameOwnerWins(order, bDep, targetDep) {
+			inverted[targetDep] = bDep
+			invertedOrder = append(invertedOrder, targetDep)
+			delete(mergedAway, bDep)
+			mergedAwayOrder = removeString(mergedAwayOrder, bDep)
+		}
+	}
+	if len(inverted) > 0 {
+		// Retarget BEFORE the reattribution: the reattribution reads each merged
+		// equation's dependent variable to decide whose bag it belongs in, and
+		// after this rewrite that variable is the owner's spelling. Running it
+		// first would file the merged tendency under the name that just went away.
+		retargetMergedNames(components, inverted)
+		for _, gone := range invertedOrder {
+			owner := gone
+			if head, _, found := strings.Cut(gone, "."); found {
+				owner = head
+			}
+			if oc, ok := components[owner]; ok {
+				oc.stateVars.remove(gone)
+				oc.observed.remove(gone)
+			}
+		}
+	}
 
 	// `a == b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
 	// and which has just rebound the one shared slice out from under
@@ -1542,6 +1608,119 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			b.observed.remove(gone)
 		}
 	}
+	return nil
+}
+
+// removeString returns xs without the first occurrence of s, preserving order.
+func removeString(xs []string, s string) []string {
+	for i, x := range xs {
+		if x == s {
+			return append(xs[:i:i], xs[i+1:]...)
+		}
+	}
+	return xs
+}
+
+// bareNameOwnerWins reports whether the Systems[1] spelling owns the state a
+// bare-name match unified (esm-libraries-spec §4.7.1 step 3).
+//
+// A DIRECT match needs no decision (the two names are equal) and a `translate`
+// match is the author naming the surviving spelling explicitly. The BARE-NAME
+// fallback is the one that has to choose, and choosing Systems[0] -- what this
+// binding did before -- makes an operator_compose entry mean different things in
+// its two argument orders: flipping `systems` silently swapped which state name,
+// and which INITIAL CONDITION, came out the far side.
+//
+// Ownership follows the variable's own namespace, the direction step 4's
+// merged-equation reattribution already reaches in. Both candidates are
+// self-consistent under that reading -- `A.x` is A's and `B.x` is B's -- so the
+// tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4 already makes
+// normative for the flattened system. The state belongs to the component that
+// declares it first, in either argument order.
+//
+// A candidate whose leading segment names no component of this document is not a
+// component-owned state, so there is nothing to compare and the incumbent
+// (Systems[0]'s spelling) stands.
+func bareNameOwnerWins(order []string, bDep, targetDep string) bool {
+	bOwner, aOwner := bDep, targetDep
+	if head, _, found := strings.Cut(bDep, "."); found {
+		bOwner = head
+	}
+	if head, _, found := strings.Cut(targetDep, "."); found {
+		aOwner = head
+	}
+	if bOwner == aOwner {
+		return false
+	}
+	bi, ai := -1, -1
+	for i, name := range order {
+		if name == bOwner && bi < 0 {
+			bi = i
+		}
+		if name == aOwner && ai < 0 {
+			ai = i
+		}
+	}
+	if bi < 0 || ai < 0 {
+		return false
+	}
+	return bi < ai
+}
+
+// reportOperatorComposeMerge reports an operator_compose entry that merged
+// nothing, or only some of what the operator side authored (esm-libraries-spec
+// §4.7.1 step 5).
+//
+// Preserving an unmatched equation is correct -- an operator system may
+// legitimately contribute states of its own -- but preserving it SILENTLY leaves
+// "merged everything" and "merged nothing" indistinguishable, and both wrong
+// outcomes reachable from a document that is spec-valid and loads clean.
+//
+// Severity is a warning by default and an error under RequireMatch, decided on
+// evidence rather than taste: measured over this repository's own corpus,
+// nineteen operator_compose entries merge zero equations today and one merges
+// partially, and every one is spec-valid under step 5 (a transport operator
+// whose only equation defines its own wind field, for instance). A hard error
+// would reject documents the format grants.
+//
+// The warning goes through couplingWarnf, a package-level hook so a test can
+// observe what a caller would see on stderr.
+func reportOperatorComposeMerge(entry OperatorComposeCoupling, authored int, unmatched []string) error {
+	if authored == 0 || len(unmatched) == 0 {
+		return nil
+	}
+	a, b := entry.Systems[0], entry.Systems[1]
+	merged := authored - len(unmatched)
+	names := strings.Join(unmatched, ", ")
+	if entry.RequireMatch {
+		return &StructuralError{
+			Path: "/coupling",
+			Code: CodeOperatorComposeRequireMatchUnmatched,
+			Message: fmt.Sprintf("%s: operator_compose(%s + %s) declares `require_match` and "+
+				"merged %d of %d equations %q authored; no equation of %q matches: %s",
+				CodeOperatorComposeRequireMatchUnmatched, a, b, merged, authored, b, a, names),
+		}
+	}
+	code := CodeOperatorComposePartialMerge
+	if merged == 0 {
+		code = CodeOperatorComposeNoMerge
+	}
+	couplingWarnf("%s: operator_compose(%s + %s) merged %d of %d equations %q authored; "+
+		"unmatched dependent variable(s): %s. The unmatched equations are preserved unchanged "+
+		"(esm-libraries-spec §4.7.1 step 5), so they integrate DECOUPLED from %q. Set "+
+		"`require_match: true` on the entry if they were meant to be contributions.",
+		code, a, b, merged, authored, b, names, a)
+	return nil
+}
+
+// couplingWarnf is the warning channel for the WARNING-level coupling
+// diagnostics of esm-libraries-spec §4.7.1 step 5. This package has no logger
+// and Flatten's signature carries no diagnostic slot, so the finding goes to
+// stderr -- and through a package-level variable rather than a direct
+// fmt.Fprintf, so a test can observe what a caller would see. A diagnostic
+// nothing can assert on is a diagnostic that rots.
+var couplingWarnf = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 }
 
 // reattributeMergedEquations moves each freshly merged equation into its
@@ -2069,7 +2248,9 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 
 	for _, oc := range composes {
 		expandOperatorComposePlaceholders(components, oc)
-		applyOperatorCompose(components, oc)
+		if err := applyOperatorCompose(components, order, oc); err != nil {
+			return err
+		}
 	}
 	for _, cp := range couples {
 		if err := applyCouple(components, order, cp); err != nil {

@@ -467,6 +467,13 @@ impl std::fmt::Display for VariableMapTransform {
     }
 }
 
+/// `skip_serializing_if` for a schema-defaulted `false` flag: the key is emitted
+/// only when the author actually set it, so a document that never mentions it
+/// round-trips byte-identically.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Coupling entry with discriminated union based on type field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -489,6 +496,15 @@ pub enum CouplingEntry {
         /// merged 0-D equations as-is.
         #[serde(skip_serializing_if = "Option::is_none")]
         lifting: Option<String>,
+        /// esm-libraries-spec §4.7.1 step 5: `true` declares that the
+        /// `systems[1]` equations are CONTRIBUTIONS and every one of them must
+        /// land on an equation of `systems[0]`. An unmatched one is then
+        /// [`FlattenError::OperatorComposeRequireMatchUnmatched`] instead of the
+        /// decoupled equation step 5 otherwise preserves in silence. `false` is
+        /// the schema default and is NOT written back out — emitting it would
+        /// put a key on every existing fixture and break load preservation.
+        #[serde(default, skip_serializing_if = "is_false")]
+        require_match: bool,
         /// Optional description
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
