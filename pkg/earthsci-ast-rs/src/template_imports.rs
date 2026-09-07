@@ -62,11 +62,23 @@ const LIBRARY_FORBIDDEN_KEYS: [&str; 5] = [
     "domain",
 ];
 
-/// Keys whose VALUES are never expression positions: metaparameter names are
-/// substituted as bare variable-reference strings, so structural string
-/// fields must not be rewritten. Template `params` shadowing is handled
-/// separately in [`substitute_metaparams_decl`].
-const META_SUBST_SKIP_KEYS: [&str; 14] = [
+// ---------------------------------------------------------------------------
+// Canonical structural-field table
+// ---------------------------------------------------------------------------
+// The ONE registry of raw-JSON object keys whose VALUES are structural — never
+// ordinary expression positions — for the two load-time rewrite passes in this
+// module (metaparameter substitution, esm-spec §9.7.6, and the import-edge
+// rename walk, esm-spec §9.7.7). The two predicates below are DERIVED from it;
+// nothing else hand-maintains key membership. Mirrors `_STRUCTURAL_FIELDS` in
+// the Julia reference (`EarthSciAST.jl/src/template_imports.jl`) kind for kind.
+//
+// NEW Expression structural fields MUST be registered here with the right kind,
+// or metaparameter substitution / import-edge renaming will rewrite their string
+// values as if they were variable references.
+
+/// Opaque to metaparameter substitution AND copied verbatim by the rename walk.
+/// `name` and `where` additionally get a positional rename-walk branch.
+const PROTECTED_KEYS: [&str; 11] = [
     "metadata",
     "params",
     "type",
@@ -74,13 +86,6 @@ const META_SUBST_SKIP_KEYS: [&str; 14] = [
     "kind",
     "description",
     "name",
-    // `wrt`/`dim` name an AXIS / index set (a structural namespace), never an
-    // expression position — both axis-name fields are protected identically
-    // (Julia reference: axis fields ⊂ `_META_SUBST_SKIP_KEYS`).
-    "wrt",
-    "dim",
-    // `integral`'s integration variable (esm-spec §4.2) is an axis NAME too.
-    "var",
     "expression_template_imports",
     "metaparameters",
     "only",
@@ -90,27 +95,28 @@ const META_SUBST_SKIP_KEYS: [&str; 14] = [
 ];
 
 /// Scalar Expression-node fields whose string value names an AXIS / index set
-/// (rewritten by the index-set rename map, param-shadowed like §9.6.1). `var`
-/// is `integral`'s integration variable (esm-spec §4.2) — the same kind of
-/// axis-naming scalar as `wrt`/`dim`, so an imported `integral` rewrite rule
-/// follows its axis under rename exactly as a `D` rule does.
+/// (rewritten by the index-set rename map, param-shadowed like §9.6.1), and
+/// opaque to metaparameter substitution — an axis name is never an
+/// integer-valued metaparameter reference. `var` is `integral`'s integration
+/// variable (esm-spec §4.2) — the same kind of axis-naming scalar as
+/// `wrt`/`dim` (§4.9.1), so an imported `integral` rewrite rule follows its axis
+/// under rename exactly as a `D` rule does.
 const RENAME_AXIS_KEYS: [&str; 3] = ["wrt", "dim", "var"];
 
-/// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
-/// Expression positions — a numeric literal, a parameter reference, an AST
-/// subtree — so they stay variable-reference positions for `varmap`; only a
-/// bare string naming a RENAMED index set (the cumulative form
-/// `"upper": "x"`) is an axis occurrence and follows the rename (§9.7.7).
-const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
+/// NODE-HEADER fields: they describe the Expression node itself rather than
+/// parameterizing whatever op it carries — `op` (which operator this node IS),
+/// `id` (this node's identity) and `expect_cadence` (an assertion about this
+/// node). None is an expression position (esm-spec §9.7.6), so a metaparameter
+/// that happens to share a name with an operator — `max`, say — must not rewrite
+/// `{"op": "max", …}` into `{"op": 3, …}`, which then dies in the typed load
+/// with a raw "cannot unmarshal number into `op`" rather than a diagnostic.
+/// Opaque to substitution AND copied verbatim by the rename walk.
+const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 
-/// The remaining scalar structural ExpressionNode fields (beyond
-/// [`META_SUBST_SKIP_KEYS`]) whose values are never variable-reference
-/// positions for the §9.7.7 rename walk: `op`, closed-registry ids, literal
-/// enums. `from`, `wrt`/`dim`, apply-`name`, and `of` are handled positionally.
-const RENAME_EXTRA_PROTECTED_KEYS: [&str; 12] = [
-    "op",
-    "id",
-    "expect_cadence",
+/// Closed-registry ids / literal enums PARAMETERIZING the node's op: copied
+/// verbatim by the §9.7.7 rename walk only. `from`, `wrt`/`dim`, apply-`name`,
+/// and `of` are handled positionally.
+const REGISTRY_KEYS: [&str; 9] = [
     "reduce",
     "semiring",
     "manifold",
@@ -122,11 +128,30 @@ const RENAME_EXTRA_PROTECTED_KEYS: [&str; 12] = [
     "from_faq",
 ];
 
+/// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
+/// Expression positions — a numeric literal, a parameter reference, an AST
+/// subtree — so they stay variable-reference positions for `varmap`; only a
+/// bare string naming a RENAMED index set (the cumulative form
+/// `"upper": "x"`) is an axis occurrence and follows the rename (§9.7.7).
+const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
+
+/// True when object key `k`'s VALUE is never an expression position:
+/// metaparameter names are substituted as bare variable-reference strings, so
+/// structural string fields must not be rewritten. Template `params` shadowing
+/// is handled separately in [`substitute_metaparams_decl`].
+///
+/// All five bindings MUST agree on this predicate — a divergence is silent until
+/// a document happens to name a metaparameter after a structural field's value
+/// (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+fn is_meta_subst_skipped(k: &str) -> bool {
+    PROTECTED_KEYS.contains(&k) || RENAME_AXIS_KEYS.contains(&k) || NODE_HEADER_KEYS.contains(&k)
+}
+
 /// True when object key `k` is a structural scalar field the §9.7.7 rename walk
-/// must never rewrite (`_RENAME_PROTECTED_KEYS` in the Julia reference:
-/// [`META_SUBST_SKIP_KEYS`] ∪ [`RENAME_EXTRA_PROTECTED_KEYS`]).
+/// must never rewrite (`_RENAME_PROTECTED_KEYS` in the Julia reference: the
+/// metaparameter skip set ∪ [`REGISTRY_KEYS`]).
 fn is_rename_protected(k: &str) -> bool {
-    META_SUBST_SKIP_KEYS.contains(&k) || RENAME_EXTRA_PROTECTED_KEYS.contains(&k)
+    is_meta_subst_skipped(k) || REGISTRY_KEYS.contains(&k)
 }
 
 use crate::diagnostic::{codes, err};
@@ -263,14 +288,14 @@ fn collect_metaparam_decls(
 
 /// Substitute closed metaparameter names — appearing as bare strings, the
 /// variable-reference surface syntax — with their bound VALUES, everywhere
-/// except the [`META_SUBST_SKIP_KEYS`] structural fields (esm-spec §9.7.6:
+/// except the [`is_meta_subst_skipped`] structural fields (esm-spec §9.7.6:
 /// expression-position substitution; no folding here). A bound value is
 /// usually an integer literal (`Value::from(i64)`), but at an import edge it
 /// may be a symbolic metaparameter expression (`{op, args}` over the
 /// importer's still-open names) spliced in for a deferred fold at the
 /// importer's close (esm-spec §9.7.6 binding value flow, site 1).
 /// Hand-rolled rather than `crate::json_visit`: descent is key-dependent
-/// (the `META_SUBST_SKIP_KEYS` entries are copied verbatim, not walked).
+/// (the [`is_meta_subst_skipped`] entries are copied verbatim, not walked).
 fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
     match x {
         Value::String(s) => match values.get(s) {
@@ -285,7 +310,7 @@ fn substitute_metaparams(x: &Value, values: &BTreeMap<String, Value>) -> Value {
         Value::Object(obj) => {
             let mut out = Map::new();
             for (k, v) in obj {
-                if META_SUBST_SKIP_KEYS.contains(&k.as_str()) {
+                if is_meta_subst_skipped(k.as_str()) {
                     out.insert(k.clone(), v.clone());
                 } else {
                     out.insert(k.clone(), substitute_metaparams(v, values));

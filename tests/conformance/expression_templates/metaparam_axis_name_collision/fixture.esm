@@ -1,0 +1,44 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "metaparam_axis_name_collision",
+    "description": "esm-spec 9.7.6: metaparameter substitution rewrites EXPRESSION positions ONLY. Four metaparameters are spelled exactly like the structural string field standing beside them in the same node - `lev` like the `dim` / `wrt` / `var` axis names (9.7.7, 4.9.1, 4.2), `max` like an operator name, `flux` like a node `id`, `continuous` like an `expect_cadence` enum value - and every one of the four ALSO occurs as a bare string in a genuine expression position. The golden pins the split: each `args` occurrence closes to its integer default (4 / 3 / 7 / 5) and each structural field survives verbatim. A binding whose substitution walk is per-NODE rather than per-FIELD corrupts the structural field; a binding whose skip set is too broad fails to close the expression position beside it."
+  },
+  "metaparameters": {
+    "lev": { "type": "integer", "default": 4, "description": "spelled like the `dim` / `wrt` / `var` axis name" },
+    "max": { "type": "integer", "default": 3, "description": "spelled like the `max` operator name" },
+    "flux": { "type": "integer", "default": 7, "description": "spelled like the `id` of the node it sits on" },
+    "continuous": { "type": "integer", "default": 5, "description": "spelled like an `expect_cadence` enum value" }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "c": { "type": "unknown", "units": "1", "default": 0.5, "description": "the integrated state" },
+        "g": { "type": "unknown", "units": "1", "description": "axis-field carrier: dim, wrt, var" },
+        "s": { "type": "unknown", "units": "1", "description": "registry-field carrier: op, id, expect_cadence" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
+          "rhs": { "op": "max", "args": ["c", "max"], "id": "flux", "expect_cadence": "continuous" }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "op": "+",
+            "args": [
+              { "op": "grad", "args": ["c"], "dim": "lev" },
+              { "op": "D", "args": ["c"], "wrt": "lev" },
+              { "op": "integral", "args": ["c"], "var": "lev", "lower": 0, "upper": 1 },
+              "lev"
+            ]
+          }
+        },
+        {
+          "lhs": "s",
+          "rhs": { "op": "+", "args": ["continuous", "flux"] }
+        }
+      ]
+    }
+  }
+}

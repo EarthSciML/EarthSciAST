@@ -166,8 +166,16 @@ end
 #                 walk maps it through `isetmap` only when the string names a
 #                 renamed index set, and it stays open to metaparameter
 #                 substitution and to `varmap` like any other expression.
-#   :registry   — closed-registry id / literal enum: copied verbatim by the
-#                 rename walk only.
+#   :node       — a NODE-HEADER field: it describes the Expression node itself
+#                 rather than parameterizing whatever op the node carries —
+#                 `op` (which operator this node IS), `id` (this node's
+#                 identity) and `expect_cadence` (an assertion about this
+#                 node). None is an expression position (esm-spec §9.7.6), so
+#                 like `:protected`/`:axis` these are opaque to metaparameter
+#                 substitution AND copied verbatim by the rename walk.
+#   :registry   — closed-registry id / literal enum PARAMETERIZING the node's
+#                 op (`reduce`, `semiring`, `fn`, `table`, …): copied verbatim
+#                 by the rename walk only.
 #   :positional — no derived-set membership; handled by a dedicated branch in
 #                 `_rename_walk` / `_collect_ref_names!`: `from` ({from:
 #                 <indexSet>} references map through `isetmap`) and `of`
@@ -200,9 +208,15 @@ const _STRUCTURAL_FIELDS = (
     # occurrence and follows the rename (§9.7.7).
     "lower"                       => :bound,
     "upper"                       => :bound,
-    "op"                          => :registry,
-    "id"                          => :registry,
-    "expect_cadence"              => :registry,
+    # Node-header fields: an operator NAME is not an expression position
+    # (esm-spec §9.7.6), so a metaparameter that happens to share a name with an
+    # operator — `max`, say — must not rewrite `{"op": "max", …}` into
+    # `{"op": 3, …}`, which then dies in the typed load with a raw "cannot
+    # unmarshal number into `op`" instead of a diagnostic. `id` and
+    # `expect_cadence` are the same kind of node-level annotation.
+    "op"                          => :node,
+    "id"                          => :node,
+    "expect_cadence"              => :node,
     "reduce"                      => :registry,
     "semiring"                    => :registry,
     "manifold"                    => :registry,
@@ -220,8 +234,13 @@ const _STRUCTURAL_FIELDS = (
 # substituted as bare variable-reference strings, so structural string fields
 # must not be rewritten. Template `params` shadowing is handled separately in
 # `_substitute_metaparams_decl`.
+#
+# All five bindings MUST hold the SAME set here — a divergence is silent until a
+# document happens to name a metaparameter after a structural field's value
+# (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
 const _META_SUBST_SKIP_KEYS = Set{String}(
-    k for (k, kind) in _STRUCTURAL_FIELDS if kind === :protected || kind === :axis)
+    k for (k, kind) in _STRUCTURAL_FIELDS
+    if kind === :protected || kind === :axis || kind === :node)
 
 # Scalar Expression-node fields whose string value names an AXIS / index set
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).
@@ -241,7 +260,7 @@ const _RENAME_BOUND_KEYS = Set{String}(
 # `wrt`/`dim`, apply-`name`, and `of` are handled positionally in the walk.
 const _RENAME_PROTECTED_KEYS = Set{String}(
     k for (k, kind) in _STRUCTURAL_FIELDS
-    if kind === :protected || kind === :axis || kind === :registry)
+    if kind === :protected || kind === :axis || kind === :node || kind === :registry)
 
 """
     _substitute_metaparams(x, values)

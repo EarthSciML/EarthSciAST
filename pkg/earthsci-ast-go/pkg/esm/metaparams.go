@@ -79,32 +79,81 @@ func collectMetaparamDecls(raw map[string]any, origin string, order []string) (*
 	return out, nil
 }
 
+// ---------------------------------------------------------------------------
+// Canonical structural-field table
+// ---------------------------------------------------------------------------
+// The ONE registry of raw-JSON object keys whose VALUES are structural — never
+// ordinary expression positions — for the two load-time rewrite passes
+// (metaparameter substitution, esm-spec §9.7.6, here; the import-edge rename
+// walk, esm-spec §9.7.7, in template_rename.go). The skip/protect sets are
+// DERIVED from it; nothing else hand-maintains key membership. Mirrors
+// `_STRUCTURAL_FIELDS` in the Julia reference
+// (`EarthSciAST.jl/src/template_imports.jl`) kind for kind.
+//
+// NEW Expression structural fields MUST be registered here with the right kind,
+// or metaparameter substitution / import-edge renaming will rewrite their string
+// values as if they were variable references.
+
+// protectedKeys: opaque to metaparameter substitution AND copied verbatim by the
+// rename walk. `name` and `where` additionally get a positional rename-walk
+// branch. `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
+// NAMES, a structural namespace — never expression positions.
+var protectedKeys = []string{
+	"metadata", "params", "type", "units", "kind", "description", "name",
+	"expression_template_imports", "metaparameters", "only", "where",
+}
+
+// axisKeys: the scalar value NAMES an index set / axis, so the rename walk maps
+// it through isetmap and metaparameter substitution never touches it — an axis
+// name is not an integer-valued metaparameter reference. `wrt`/`dim` name a
+// spatial coordinate (esm-spec §4.9.1) and `var` is `integral`'s integration
+// variable (§4.2), the same kind of axis-naming scalar.
+var axisKeys = []string{"wrt", "dim", "var"}
+
+// nodeHeaderKeys: fields describing the Expression node ITSELF rather than
+// parameterizing whatever op it carries — `op` (which operator this node IS),
+// `id` (this node's identity) and `expect_cadence` (an assertion about this
+// node). None is an expression position (esm-spec §9.7.6). Omitting `op` meant a
+// metaparameter that happens to share a name with an operator rewrote the
+// operator itself: with `max` bound to 3, {"op":"max", …} became {"op":3, …} and
+// the document died in LoadString with a raw "cannot unmarshal number into
+// ExprNode.op" instead of a diagnostic (audit G12).
+var nodeHeaderKeys = []string{"op", "id", "expect_cadence"}
+
+// registryKeys: closed-registry ids / literal enums PARAMETERIZING the node's
+// op. Copied verbatim by the §9.7.7 rename walk only.
+var registryKeys = []string{
+	"reduce", "semiring", "manifold", "fn", "table", "side", "attrs",
+	"members", "from_faq",
+}
+
+// boundKeys: `integral` bound fields (esm-spec §4.2). Unlike `var` these are
+// full Expression positions — a numeric literal, a parameter reference, an AST
+// subtree — so they stay variable-reference positions for `varmap`; only a bare
+// string naming a RENAMED index set (the cumulative form `"upper": "x"`) is an
+// axis occurrence and follows the rename (§9.7.7).
+var boundKeys = []string{"lower", "upper"}
+
+// keySet unions the named key groups into a lookup set.
+func keySet(groups ...[]string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, g := range groups {
+		for _, k := range g {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
 // metaSubstSkipKeys: keys whose VALUES are never expression positions —
 // metaparameter names are substituted as bare variable-reference strings, so
 // structural string fields must not be rewritten. Template `params` shadowing
 // is handled separately in substituteMetaparamsDecl.
-var metaSubstSkipKeys = map[string]struct{}{
-	"metadata": {}, "params": {}, "type": {}, "units": {}, "kind": {},
-	"description": {}, "name": {}, "wrt": {},
-	// `integral`'s integration variable (esm-spec §4.2) is an axis NAME, never
-	// an expression position — a bound metaparameter of the same name must not
-	// rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)
-	"var":                         {},
-	"expression_template_imports": {}, "metaparameters": {}, "only": {},
-	// `where` match-scoping constraints (esm-spec §9.6.1) carry index-set
-	// NAMES, a structural namespace — never expression positions.
-	"where": {},
-	// `op` is the OPERATOR NAME slot — the most structural string field there
-	// is. Omitting it meant a metaparameter that happens to share a name with an
-	// operator rewrote the operator itself: with `max` bound to 3,
-	// {"op":"max", …} became {"op":3, …}, and the document then died in
-	// LoadString with a raw "cannot unmarshal number into ExprNode.op" instead of
-	// a diagnostic (audit G12).
-	"op": {},
-	// `id` / `expect_cadence` are likewise structural annotations on an
-	// ExpressionNode, not expression positions.
-	"id": {}, "expect_cadence": {},
-}
+//
+// All five bindings MUST hold the SAME set here — a divergence is silent until a
+// document happens to name a metaparameter after a structural field's value
+// (tests/conformance/expression_templates/metaparam_axis_name_collision).
+var metaSubstSkipKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys)
 
 // substituteMetaparams substitutes bound metaparameter names — appearing as
 // bare strings, the variable-reference surface syntax — with their bound
