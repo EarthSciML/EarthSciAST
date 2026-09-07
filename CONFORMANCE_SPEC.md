@@ -4300,17 +4300,41 @@ trigger the wrap. (Julia's general-purpose `free_variables` reports `wrt`, and
 adds it after binder subtraction; the predicate this rule pins is the narrower
 `_mentions_free` / `mentions_free`, which does not.)
 
-**A dimension name the parameter scope also binds is a FAULT.** "Nothing that
-evaluated before evaluates differently" holds only with this clause. Where a
-reference mentions free a name that is BOTH a dimension of the asserted field
-and a parameter in the build-time scope the reference is evaluated against
-(flattened parameter names plus their unambiguous bare aliases), the wrap would
-shadow the parameter with the cell's 1-based index: the same reference, a
-different number, no diagnostic — the §5.14 / §5.23 failure class. One name
-meaning two things in one scope is an ill-formed document, so a binding MUST
-reject it with an error naming the clashing name, rather than silently choosing
-either meaning. A reference that does NOT mention the name is unaffected, as is
-a gather that rebinds it as its own loop symbol.
+**A dimension name the build-time scope already binds is a FAULT.** "Nothing
+that evaluated before evaluates differently" holds only with this clause. Where
+a reference mentions free a name that is BOTH a dimension of the asserted field
+and a name the build-time scope it is evaluated against already binds, the wrap
+would shadow that other meaning with the cell's 1-based index: the same
+reference, a different number, no diagnostic — the §5.14 / §5.23 failure class.
+One name meaning two things in one scope is an ill-formed document, so a binding
+MUST reject it with an error naming the clashing name, rather than silently
+choosing either meaning. A reference that does NOT mention the name is
+unaffected, as is a gather that rebinds it as its own loop symbol.
+
+**The clash scope is the WHOLE build-time scope, in two halves.** esm-spec
+§6.6.5 names them, and a binding assembles both before calling
+`bind_dimension_names`:
+
+1. the resolved SCALAR PARAMETERS — `BuildInspection.params`, flattened names
+   plus their unambiguous bare aliases (`param_scope_with_aliases`); and
+2. the build-time ARRAY names — a materialized state-free array observed, an
+   inline `const` array, a shaped parameter's inline column, a provider- or
+   loader-injected input field — likewise with their unambiguous bare aliases
+   (`array_scope_names` in Rust, `_array_scope_names` in Julia and Python, which
+   apply the SAME alias rule so an ambiguous bare tail is in neither half).
+
+The array half is what keeps the three on one rule, and checking only the
+parameter half was a live divergence (issue #226). Julia hands its cellwise
+evaluator the build's `const_arrays`, so a const array named after a shape index
+set — an array `lev` over the index set `lev` — is a name the reference could
+already read there, and the wrap rebound it to the cell index in silence; Python
+and Rust have no const-array-by-name channel in this position and merely
+wrapped. Erroring in Julia alone would have reintroduced the divergence #202
+closed, so the rule is the same in all three and each supplies what its
+inspection carries: Julia `const_arrays` + `setup_arrays`, Python the same two,
+Rust `setup_arrays` (its `BuildInspection` has no `const_arrays` field). Which
+names a build carries in each half is an implementation matter; that the clash
+is checked against **all** of them is the contract.
 
 #### 5.30.1 Gate
 
@@ -4348,6 +4372,14 @@ The scope clash: **Julia** `test/pde_inline_tests_test.jl`
 **Python**
 `tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
 **Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+Its ARRAY half is gated beside it, one test each — **Julia**
+`test/pde_inline_tests_test.jl` (the `lev` block), **Python**
+`tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_a_build_array_binds`,
+**Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_a_build_array_binds`
+— each pinning the flattened name, its unambiguous bare alias, that an AMBIGUOUS
+bare tail is in neither half, and that a non-mention and a rebinding gather are
+untouched. Neither clause is expressible as a passing shared fixture: the fixture
+would have to be a document every binding REJECTS.
 
 ### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
 
@@ -4361,8 +4393,29 @@ Rust while Python and Julia, whose builds are always flattened to `M.sub.A`,
 took it as an exact hit — a cross-binding divergence on the same document and
 the same test. Rule 2 now tries every dotted suffix of the key, **most-qualified
 first**, and binds the longest one that is a name; the trailing segment is the
-last one tried. Rule 3 is unchanged and still bare-only, so `Missing.solo` stays
-unknown.
+last one tried.
+
+**Rule 3 is the same relationship read the other way.** Rule 2 covers a key
+LONGER than the name it designates; rule 3 covers a key SHORTER than it, and it
+was bare-only, which left the mirror-image divergence open (issue #227). Against
+the FLATTENED build Python and Julia always produce, a mounted subsystem's
+parameter is `P.sub.g`, and the key `sub.g` is a suffix of a known name rather
+than having a known name as its suffix: rule 2 drops leading segments of the KEY
+(`sub.g` → `g`, not a name there) and rule 3 refused a dotted key, so the same
+authored override ran in Rust — whose single-model array build carries it as
+`sub.g` outright, an exact hit — and raised `UnknownParameterError` in the other
+two. Rule 3 now reads "the key is a dotted suffix of exactly ONE flattened
+name", of which the bare trailing segment is the shortest case
+(`dotted_suffixes` in Rust, `dotted_suffixes` in Python, `_dotted_suffixes` in
+Julia, all enumerating the same list longest-first). A suffix carried by two or
+more names is AMBIGUOUS and names every candidate — `dup.k` for `Left.dup.k` and
+`Right.dup.k` is refused exactly as the shared local name `gain` is — never
+tie-broken by depth, document order or anything else.
+
+Neither widening discards a qualifier, which is what keeps `Missing.solo`
+unknown: rule 2 validates every segment it drops (below), and rule 3 drops
+nothing at all — no flattened name ends with `.Missing.solo`. `Missing.sub.g` is
+unknown for the same reason even though `sub.g` resolves.
 
 **The guard: leading segments are VALIDATED.** The prefix rule 2 drops is a §4.6
 qualifier, and every segment of it MUST name a component or subsystem the
@@ -4385,6 +4438,16 @@ then an exact hit; it fires only inside a binding that keeps a model's own names
 and is gated there by each binding's `P.sub.g` subsystem-override test
 (Rust `self_qualified_subsystem_reference_and_override_spellings`, Python
 `test_subsystem_parameter_override_in_every_spelling`).
+
+Rule 3's positive path IS expressible there, precisely because the fixture
+flattens, and the fixture now pins it: `Left` mounts a subsystem `sub` carrying
+`g`, so the three authored spellings `Left.sub.g` (rule 1), `sub.g` (rule 3) and
+`g` (rule 3) must all bind `Left.sub.g` and produce the SAME trajectory at
+`t = 1`. `g` alone is the control — a binding that resolves it and not `sub.g`
+has implemented the trailing segment, not the rule. Both components also mount a
+subsystem `dup` carrying `k`, so `dup.k` and `k` are both **ambiguous** over
+`Left.dup.k` / `Right.dup.k`, and `Missing.sub.g` is **unknown**: the widened
+rule must not become a suffix-match on the key's own tail.
 
 **Key collisions.** Widening rule 2 also made it possible for TWO distinct keys
 to designate ONE build name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
