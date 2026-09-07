@@ -1453,18 +1453,28 @@ scope (esm-spec §9.7.10 form A — assembler-chosen discretization for a mounte
 PDE leaf); they are threaded into the referenced document's load and consumed by
 the §9.6.3 fixpoint, so a resolved subsystem round-trips as the lowered inline
 component and the field does not survive `parse → emit`.
+`index_set_rename` translates the mounted document's index-set names into the
+mounting document's vocabulary at load (esm-spec §4.7 "Mount-edge index-set
+renaming") — the §9.7.7 renaming mechanism at a component-mount edge, restricted
+to index sets. Like the two fields above it is consumed at the mount and does not
+survive `parse → emit`.
 """
 struct SubsystemRef <: SubsystemNode
     ref::String
     bindings::Dict{String,Int}
     expression_template_imports::Vector{Any}
+    index_set_rename::Union{Nothing,OrderedDict{String,String}}
 end
 
+SubsystemRef(ref::AbstractString, bindings::AbstractDict, injected::AbstractVector) =
+    SubsystemRef(String(ref),
+                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings),
+                 Any[e for e in injected], nothing)
 SubsystemRef(ref::AbstractString, bindings::AbstractDict) =
     SubsystemRef(String(ref),
-                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings), Any[])
+                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings), Any[], nothing)
 SubsystemRef(ref::AbstractString) =
-    SubsystemRef(String(ref), Dict{String,Int}(), Any[])
+    SubsystemRef(String(ref), Dict{String,Int}(), Any[], nothing)
 
 """
     Model

@@ -214,6 +214,11 @@ function _serialize_subsystem(v)::Dict{String,Any}
         isempty(v.expression_template_imports) ||
             (out["expression_template_imports"] =
                 [_to_native_json(e) for e in v.expression_template_imports])
+        # Mount-edge index-set renaming (esm-spec §4.7): same fate — it survives
+        # only while the ref is unresolved.
+        (v.index_set_rename === nothing || isempty(v.index_set_rename)) ||
+            (out["index_set_rename"] =
+                Dict{String,Any}(k => n for (k, n) in v.index_set_rename))
         return out
     else
         return serialize_model(v)

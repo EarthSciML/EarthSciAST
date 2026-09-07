@@ -1857,3 +1857,161 @@ function apply_scope_injections(raw, injected)
     _apply_coupling_injections!(root)
     return root
 end
+
+# ---------------------------------------------------------------------------
+# Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set renaming")
+# ---------------------------------------------------------------------------
+
+"""
+    _mount_rename_walk!(x, m)
+
+One index-set substitution pass, IN PLACE, over a fully resolved mounted
+document (esm-spec §4.7 "Mount-edge index-set renaming", transitivity list).
+
+Deliberately NOT [`_rename_walk`](@ref): that walk is written for template and
+index-set DECLARATIONS, where `from` only ever occurs as a range reference and
+every bare string is a variable-reference position. A mount carries a whole
+component, where `from` also names a data source (`Parameter.update.from`), a
+coupling endpoint (`variable_map.from`) and a connector endpoint, and where
+`shape` lists, `Assertion.coords` keys and `DataSourceSelectAxis.gated_by` name
+axes no declaration walk ever sees. So this walk touches ONLY positions that are
+index-set names BY POSITION and never rewrites a bare string on its own account —
+a name it does not recognise is left exactly as spelled.
+
+`x` must already be a mutable native tree (`_to_ordered`).
+"""
+function _mount_rename_walk!(x, m::AbstractDict{String,String})
+    if _is_array(x)
+        for e in x
+            _mount_rename_walk!(e, m)
+        end
+        return x
+    end
+    _is_object(x) || return x
+
+    # An ExpressionNode is identified by its `op`; only there are wrt/dim/var,
+    # the `integral` bounds and `ranges` axis positions (esm-spec §4.2 / §4.3.1).
+    is_node = get(x, "op", nothing) isa AbstractString
+    if is_node
+        for k in Iterators.flatten((_RENAME_AXIS_KEYS, _RENAME_BOUND_KEYS))
+            v = get(x, k, nothing)
+            if v isa AbstractString && haskey(m, String(v))
+                x[k] = m[String(v)]
+            end
+        end
+        ranges = get(x, "ranges", nothing)
+        if _is_object(ranges)
+            for (_, rv) in pairs(ranges)
+                # `{"from": <index set>}`; a range's own `of` is a list of BOUND
+                # SYMBOLS, never index-set names.
+                _is_object(rv) || continue
+                frm = get(rv, "from", nothing)
+                if frm isa AbstractString && haskey(m, String(frm))
+                    rv["from"] = m[String(frm)]
+                end
+            end
+        end
+    else
+        # `ModelVariable`/`Parameter` `shape` and a `where` constraint's `shape`
+        # are ordered index-set names; an ExpressionNode `shape` (`reshape`'s
+        # target extents) and a `FunctionTable` `shape` are integers, so the
+        # `is_node` guard plus the string test cover both.
+        shape = get(x, "shape", nothing)
+        if _is_array(shape)
+            x["shape"] = Any[e isa AbstractString ? get(m, String(e), e) : e for e in shape]
+        end
+    end
+
+    # `DataSourceSelectAxis.gated_by` names a `kind: "derived"` set.
+    gated = get(x, "gated_by", nothing)
+    if gated isa AbstractString && haskey(m, String(gated))
+        x["gated_by"] = m[String(gated)]
+    end
+
+    # `Assertion.coords` KEYS are spatial index-set names (esm-spec §6.6.5).
+    coords = get(x, "coords", nothing)
+    if _is_object(coords) && any(haskey(m, String(k)) for k in keys(coords))
+        renamed = OrderedDict{String,Any}()
+        for (k, v) in pairs(coords)
+            renamed[get(m, String(k), String(k))] = v
+        end
+        x["coords"] = renamed
+    end
+
+    for (_, v) in pairs(x)
+        _mount_rename_walk!(v, m)
+    end
+    return x
+end
+
+"""
+    apply_mount_index_set_rename(doc, rename_raw, where) -> native tree
+
+Apply a mount edge's `index_set_rename` to a FULLY RESOLVED mounted document
+(esm-spec §4.7 "Mount-edge index-set renaming"), returning a mutable native tree.
+
+Runs at pipeline step 2: after the referenced document has resolved as a complete
+document (its own imports, this edge's `bindings` and §9.7.10 injection, its
+metaparameter close and the §9.6.3 fixpoint) and BEFORE its `index_sets` merge
+into the mounting registry — so the map's KEYS speak the mounted document's own
+post-resolution vocabulary, exactly as §9.7.7's `rename` speaks the import
+target's export vocabulary.
+
+An absent (`nothing`) or empty map is the identity, which is what makes the field
+purely additive.
+"""
+function apply_mount_index_set_rename(doc, rename_raw, where::AbstractString)
+    (rename_raw === nothing || !_is_object(doc)) && return doc
+    requested = _name_map(rename_raw, "index_set_rename", where)
+
+    isets = _get_field(doc, :index_sets, nothing)
+    declared = _is_object(isets) ? String[string(k) for k in keys(isets)] : String[]
+
+    # Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
+    for key in keys(requested)
+        key in declared || throw(ExpressionTemplateError(
+            ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
+            "$(where): `index_set_rename` names index set '$(key)', which the " *
+            "resolved mounted document does not declare (it declares: " *
+            "$(isempty(declared) ? "none" : join(declared, ", "))). Keys speak the " *
+            "MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 " *
+            "\"Mount-edge index-set renaming\")"))
+    end
+
+    # Identity entries are no-ops; everything else must land on a distinct name.
+    changed = OrderedDict{String,String}(o => n for (o, n) in requested if o != n)
+    isempty(changed) && return doc
+    finals = String[]
+    for name in declared
+        final = get(changed, name, name)
+        final in finals && throw(ExpressionTemplateError(
+            ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+            "$(where): `index_set_rename` maps two index sets onto '$(final)'; " *
+            "post-rename names must be distinct within one mount edge " *
+            "(esm-spec §4.7 / §9.7.7)"))
+        push!(finals, final)
+    end
+
+    root = _to_ordered(doc)::OrderedDict{String,Any}
+    _mount_rename_walk!(root, changed)
+
+    # Re-key the registry last, preserving declaration order, and rewrite each
+    # ragged/derived `of` parent list (an index-set-name list — unlike a range's
+    # `of`, which the walk deliberately leaves alone).
+    sets = get(root, "index_sets", nothing)
+    if _is_object(sets)
+        renamed = OrderedDict{String,Any}()
+        for (name, decl) in pairs(sets)
+            if _is_object(decl)
+                of = get(decl, "of", nothing)
+                if _is_array(of)
+                    decl["of"] = Any[e isa AbstractString ? get(changed, String(e), e) : e
+                                     for e in of]
+                end
+            end
+            renamed[get(changed, string(name), string(name))] = decl
+        end
+        root["index_sets"] = renamed
+    end
+    return root
+end

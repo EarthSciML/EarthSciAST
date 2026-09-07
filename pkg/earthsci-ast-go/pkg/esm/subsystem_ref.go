@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // ResolveSubsystemRefs walks all subsystem maps in models and reaction systems,

@@ -234,7 +234,9 @@ walk itself with a shared cycle-detection set.
 """
 function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                      injected_imports::AbstractVector=Any[])::EsmFile
+                      injected_imports::AbstractVector=Any[],
+                      index_set_rename=nothing,
+                      rename_where::AbstractString="mount edge")::EsmFile
     # v0.4.0 expression_templates / apply_expression_template are
     # rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version
     # gate). Surfaced before schema validation so the user sees the
@@ -268,7 +270,9 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
 
     return _lower_and_coerce(raw_data, base_path;
                              metaparameters=metaparameters,
-                             injected_imports=injected_imports)
+                             injected_imports=injected_imports,
+                             index_set_rename=index_set_rename,
+                             rename_where=rename_where)
 end
 
 """
@@ -298,7 +302,9 @@ discretization.
 """
 function _lower_and_coerce(raw_data, base_path::AbstractString;
                            metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                           injected_imports::AbstractVector=Any[])::EsmFile
+                           injected_imports::AbstractVector=Any[],
+                           index_set_rename=nothing,
+                           rename_where::AbstractString="mount edge")::EsmFile
     # Snapshot the top-level DECLARATIONS verbatim, BEFORE any lowering touches
     # them. Option A expands call sites; it does not delete declarations (esm-spec
     # §9.6.4 rule 5), and a pure template library must round-trip to itself — but
@@ -318,6 +324,20 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
                                           metaparameters=metaparameters)
     lowered_src = resolved === nothing ? machinery_input : resolved
     loaded = lower_expression_templates(lowered_src)
+    # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+    # referenced document has now resolved in its OWN scope — its imports, this
+    # edge's `bindings` and injection, its metaparameter close and fold, the
+    # §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
+    # the edge's `index_set_rename` speaks. Applied here, BEFORE the per-component
+    # registries are materialized and stripped, so a mounted rule instance's
+    # `wrt` / `where` `shape` follow the axis. Before the leaf's own nested mounts
+    # resolve, too: each nested edge renames what IT contributes, at its own edge.
+    # `nothing` / empty ⇒ identity, so an edge that does not use the field
+    # resolves exactly as before.
+    machinery_ran = loaded !== lowered_src
+    if index_set_rename !== nothing
+        loaded = apply_mount_index_set_rename(loaded, index_set_rename, rename_where)
+    end
     # esm-spec §9.6.4 Option B: `lower_expression_templates` PRESERVES surviving
     # `apply_expression_template` references and per-component registries.
     #   * Default (fast path): references survive into the typed IR. The
@@ -330,7 +350,7 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     #     `ESS_STENCIL_DISABLE` and the differential-test baseline (gate d).
     comp_tpls = nothing
     esm_stamp = nothing
-    if loaded !== lowered_src
+    if machinery_ran
         # Template machinery ran: `loaded` is the fresh rewritten native root
         # (the no-machinery fast path returns its input BY IDENTITY).
         if _template_ref_disabled()
@@ -915,11 +935,17 @@ function _merge_subsystem_index_sets!(registry::AbstractDict{String,IndexSet},
                 throw(ExpressionTemplateError(ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
                     "index set '$(n)' from subsystem ref '$(ref)' " *
                     "($(_index_set_show(decl))) collides with a non-deep-equal " *
-                    "declaration in the importing document " *
-                    "($(_index_set_show(registry[n]))). A referenced subsystem " *
-                    "file's top-level index_sets merge into the importing " *
-                    "document's registry; deep-equal redeclaration is idempotent, " *
-                    "a size/kind disagreement is a load-time error (esm-spec §4.7)."))
+                    "declaration already in the importing document's registry " *
+                    "($(_index_set_show(registry[n]))) — contributed by the " *
+                    "document's own `index_sets` or by an earlier mount. A " *
+                    "referenced subsystem file's top-level index_sets merge into " *
+                    "the importing document's registry; deep-equal redeclaration " *
+                    "is idempotent, a size/kind disagreement is a load-time error " *
+                    "(esm-spec §4.7). If the two are genuinely different axes that " *
+                    "happen to share a name, rename one at its mount edge with " *
+                    "`index_set_rename` (esm-spec §4.7 \"Mount-edge index-set " *
+                    "renaming\"), e.g. {\"ref\": \"$(ref)\", " *
+                    "\"index_set_rename\": {\"$(n)\": \"$(n)_2\"}}."))
         else
             registry[n] = decl
         end
@@ -948,7 +974,9 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
     # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
     loaded = _load_ref(ref.ref, base_path, visited;
                        metaparameters=ref.bindings,
-                       injected_imports=ref.expression_template_imports)
+                       injected_imports=ref.expression_template_imports,
+                       index_set_rename=ref.index_set_rename,
+                       rename_where="subsystem ref '$(ref.ref)'")
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
     if n_models != 1
         throw(SubsystemRefError(
@@ -993,7 +1021,9 @@ Load a referenced ESM file from a local path or URL, with circular reference det
 """
 function _load_ref(ref::String, base_path::String, visited::Set{String};
                    metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                   injected_imports::AbstractVector=Any[])::EsmFile
+                   injected_imports::AbstractVector=Any[],
+                   index_set_rename=nothing,
+                   rename_where::AbstractString="mount edge")::EsmFile
     # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
     ref = _expand_ref_env(ref)
     # Normalize the reference for cycle detection
@@ -1010,10 +1040,14 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
             # was itself loaded from a URL: resolve against the URL base
             # (`canonical` is exactly the joined, normalized URL).
             return _load_remote_ref(canonical, visited; metaparameters=metaparameters,
-                                    injected_imports=injected_imports)
+                                    injected_imports=injected_imports,
+                                    index_set_rename=index_set_rename,
+                                    rename_where=rename_where)
         else
             return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters,
-                                   injected_imports=injected_imports)
+                                   injected_imports=injected_imports,
+                                   index_set_rename=index_set_rename,
+                                   rename_where=rename_where)
         end
     catch e
         if e isa SubsystemRefError || e isa ExpressionTemplateError
@@ -1162,7 +1196,9 @@ Load a locally referenced ESM file.
 """
 function _load_local_ref(ref::String, base_path::String, visited::Set{String};
                          metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                         injected_imports::AbstractVector=Any[])::EsmFile
+                         injected_imports::AbstractVector=Any[],
+                         index_set_rename=nothing,
+                         rename_where::AbstractString="mount edge")::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
 
     if !isfile(resolved_path)
@@ -1188,7 +1224,9 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     ref_base = dirname(resolved_path)
     file = _load_parsed(_read_json_document(content); base_path=ref_base,
                         metaparameters=metaparameters,
-                        injected_imports=injected_imports)
+                        injected_imports=injected_imports,
+                        index_set_rename=index_set_rename,
+                        rename_where=rename_where)
 
     # Recursively resolve refs in the loaded file, relative to its own directory
     _resolve_refs_in_file!(file, ref_base, visited)
@@ -1207,7 +1245,9 @@ mirroring `_load_local_ref`'s dirname anchoring; cycle detection carries
 """
 function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
                           metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                          injected_imports::AbstractVector=Any[])::EsmFile
+                          injected_imports::AbstractVector=Any[],
+                          index_set_rename=nothing,
+                          rename_where::AbstractString="mount edge")::EsmFile
     local content::String
     try
         content = _fetch_url(url)
@@ -1240,7 +1280,9 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     # folds into the single component's scope before resolution.
     url_base = _url_dirname(url)
     file = _lower_and_coerce(raw_data, url_base; metaparameters=metaparameters,
-                             injected_imports=injected_imports)
+                             injected_imports=injected_imports,
+                             index_set_rename=index_set_rename,
+                             rename_where=rename_where)
 
     # Nested subsystem refs inside the remote document resolve against the
     # same URL base (relative refs join onto the URL; absolute URLs and the

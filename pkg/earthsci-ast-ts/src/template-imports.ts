@@ -2121,3 +2121,139 @@ export function applyScopeInjections(
   applyCouplingInjections(root)
   return root
 }
+
+// ---------------------------------------------------------------------------
+// Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set renaming")
+// ---------------------------------------------------------------------------
+
+/**
+ * One index-set substitution pass, IN PLACE, over a fully resolved mounted
+ * document (esm-spec §4.7 "Mount-edge index-set renaming", transitivity list).
+ *
+ * Deliberately NOT `renameWalk`: that walk is written for template and
+ * index-set DECLARATIONS, where `from` only ever occurs as a range reference
+ * and every bare string is a variable-reference position. A mount carries a
+ * whole component, where `from` also names a data source
+ * (`Parameter.update.from`), a coupling endpoint (`variable_map.from`) and a
+ * connector endpoint, and where `shape` lists, `Assertion.coords` keys and
+ * `DataSourceSelectAxis.gated_by` name axes no declaration walk ever sees. So
+ * this walk touches ONLY positions that are index-set names BY POSITION and
+ * never rewrites a bare string on its own account — a name it does not
+ * recognise is left exactly as spelled.
+ */
+function mountRenameWalk(x: unknown, m: Record<string, string>): void {
+  if (Array.isArray(x)) {
+    for (const e of x) mountRenameWalk(e, m)
+    return
+  }
+  if (!isObject(x)) return
+  const obj = x as Record<string, unknown>
+
+  // An ExpressionNode is identified by its `op`; only there are wrt/dim/var,
+  // the `integral` bounds and `ranges` axis positions (esm-spec §4.2 / §4.3.1).
+  const isNode = typeof obj.op === 'string'
+  if (isNode) {
+    for (const k of [...RENAME_AXIS_KEYS, ...RENAME_BOUND_KEYS]) {
+      const v = obj[k]
+      if (typeof v === 'string' && v in m) obj[k] = m[v]
+    }
+    const ranges = obj.ranges
+    if (isObject(ranges)) {
+      for (const rv of Object.values(ranges as Record<string, unknown>)) {
+        // `{"from": <index set>}`; a range's own `of` is a list of BOUND
+        // SYMBOLS, never index-set names.
+        if (!isObject(rv)) continue
+        const ro = rv as Record<string, unknown>
+        if (typeof ro.from === 'string' && ro.from in m) ro.from = m[ro.from]
+      }
+    }
+  } else if (Array.isArray(obj.shape)) {
+    // ModelVariable/Parameter `shape` and a `where` constraint's `shape` are
+    // ordered index-set names; an ExpressionNode `shape` (reshape's target
+    // extents) and a FunctionTable `shape` are integers, so the `isNode` guard
+    // plus the string test cover both.
+    obj.shape = (obj.shape as unknown[]).map((e) => (typeof e === 'string' && e in m ? m[e] : e))
+  }
+
+  // `DataSourceSelectAxis.gated_by` names a `kind: "derived"` set.
+  if (typeof obj.gated_by === 'string' && obj.gated_by in m) obj.gated_by = m[obj.gated_by]
+
+  // `Assertion.coords` KEYS are spatial index-set names (esm-spec §6.6.5).
+  const coords = obj.coords
+  if (isObject(coords)) {
+    const centries = Object.entries(coords as Record<string, unknown>)
+    if (centries.some(([k]) => k in m)) {
+      obj.coords = Object.fromEntries(centries.map(([k, v]) => [k in m ? m[k] : k, v]))
+    }
+  }
+
+  for (const v of Object.values(obj)) mountRenameWalk(v, m)
+}
+
+/**
+ * Apply a mount edge's `index_set_rename` to a FULLY RESOLVED mounted document,
+ * in place (esm-spec §4.7 "Mount-edge index-set renaming").
+ *
+ * Runs at pipeline step 2: after the referenced document has resolved as a
+ * complete document (its own imports, this edge's `bindings` and §9.7.10
+ * injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its
+ * `index_sets` merge into the mounting registry — so the map's KEYS speak the
+ * mounted document's own post-resolution vocabulary, exactly as §9.7.7's
+ * `rename` speaks the import target's export vocabulary.
+ *
+ * An absent, null or empty map is the identity and leaves `doc` untouched,
+ * which is what makes the field purely additive.
+ */
+export function applyMountIndexSetRename(doc: unknown, renameRaw: unknown, where: string): void {
+  if (renameRaw === undefined || renameRaw === null || !isObject(doc)) return
+  const requested = nameMap(renameRaw, 'index_set_rename', where)
+
+  const root = doc as Record<string, unknown>
+  const isets = isObject(root.index_sets) ? (root.index_sets as Record<string, unknown>) : {}
+  const declared = Object.keys(isets)
+
+  // Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
+  for (const key of Object.keys(requested)) {
+    if (!Object.prototype.hasOwnProperty.call(isets, key)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
+        `${where}: \`index_set_rename\` names index set '${key}', which the resolved mounted document does not declare (it declares: ${declared.length > 0 ? declared.join(', ') : 'none'}). Keys speak the MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 "Mount-edge index-set renaming")`,
+      )
+    }
+  }
+
+  // Identity entries are no-ops; everything else must land on a distinct name.
+  const changed: Record<string, string> = {}
+  for (const [o, n] of Object.entries(requested)) if (o !== n) changed[o] = n
+  if (Object.keys(changed).length === 0) return
+  const finals = new Set<string>()
+  for (const name of declared) {
+    const final = name in changed ? changed[name] : name
+    if (finals.has(final)) {
+      throw new EsmMachineryError(
+        ERROR_CODES.TEMPLATE_IMPORT_RENAME_COLLISION,
+        `${where}: \`index_set_rename\` maps two index sets onto '${final}'; post-rename names must be distinct within one mount edge (esm-spec §4.7 / §9.7.7)`,
+      )
+    }
+    finals.add(final)
+  }
+
+  mountRenameWalk(root, changed)
+
+  // Re-key the registry last, preserving declaration order, and rewrite each
+  // ragged/derived `of` parent list (an index-set-name list — unlike a range's
+  // `of`, which the walk deliberately leaves alone).
+  const renamed: Record<string, unknown> = {}
+  for (const [name, decl] of Object.entries(isets)) {
+    if (isObject(decl)) {
+      const d = decl as Record<string, unknown>
+      if (Array.isArray(d.of)) {
+        d.of = (d.of as unknown[]).map((e) =>
+          typeof e === 'string' && e in changed ? changed[e] : e,
+        )
+      }
+    }
+    renamed[name in changed ? changed[name] : name] = decl
+  }
+  root.index_sets = renamed
+}

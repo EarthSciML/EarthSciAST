@@ -220,6 +220,7 @@ export const ERROR_CODES = {
   // ---- subsystem refs (ref-loading.ts; EsmMachineryError codes raised
   //      while resolving `subsystem` references / library detection) ----
   SUBSYSTEM_INDEX_SET_CONFLICT: 'subsystem_index_set_conflict',
+  SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME: 'subsystem_index_set_rename_unknown_name',
   SUBSYSTEM_REF_IS_COUPLING_LIBRARY: 'subsystem_ref_is_coupling_library',
   SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY: 'subsystem_ref_is_template_library',
 

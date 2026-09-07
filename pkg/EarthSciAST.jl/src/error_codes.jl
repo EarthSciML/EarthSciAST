@@ -176,6 +176,11 @@ const ERROR_CODES = (
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library",
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library",
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict",
+    # A mount edge's `index_set_rename` names an index set the RESOLVED mounted
+    # document does not declare (esm-spec §4.7 "Mount-edge index-set
+    # renaming") — the mount-edge mirror of
+    # `template_import_rename_unknown_name`.
+    SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name",
 
     # ── Enum lowering (esm-spec §9.3; registered_functions.jl, raised as
     #    `EnumLoweringError`). The two `unknown_*` values are the ones the
