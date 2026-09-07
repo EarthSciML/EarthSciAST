@@ -255,6 +255,81 @@ def test_tolerance_precedence_and_isapprox_semantics():
     assert not _check_assertion(2.0, 2.0000001, 0.0, 0.0)
 
 
+def test_relative_bound_is_symmetric_in_actual_and_expected():
+    """esm-spec §6.6.3: the relative bound scales by ``max(|actual|,
+    |expected|)`` — the larger of the two magnitudes — NOT by ``|expected|``
+    alone.
+
+    §6.6.3 used to state both readings: the normative box (and the schema's
+    ``Tolerance`` description) gave the ``|expected|``-only denominator while
+    the finiteness rationale further down the same section reasoned from
+    ``max(|inf|, |expected|)``. All three executing bindings implemented the
+    symmetric one; EarthSciML/EarthSciAST#193 settled the spec as symmetric.
+
+    Their VERDICTS disagree only inside ``rtol*|e| < |a − e| <= rtol*|a|``,
+    which needs an overshoot (``|actual| > |expected|``) whose margin is itself
+    of order ``rtol``. Everywhere else ``max(|a|, |e|) == |e|`` or the
+    difference falls on the same side of both bounds, which is why the
+    divergence went unnoticed: every pre-existing tolerance case in every
+    binding gets the same verdict under both readings, and the
+    ``assertion_nonfinite`` category compares verdicts on non-finite actuals.
+    Reverting ``_check_assertion`` to the ``|expected|`` denominator must turn
+    this red.
+    """
+    # The discriminator (issue #193): the symmetric scale is 1.6, not 1.0.
+    #   symmetric:  0.6 <= 0.5 * max(1.6, 1.0) = 0.8  -> PASS
+    #   |expected|: 0.6 <= 0.5 * 1.0           = 0.5  -> FAIL
+    assert _check_assertion(1.6, 1.0, 0.5, 0.0)
+    # Past the symmetric bound too, so both readings agree again.
+    assert not _check_assertion(3.0, 1.0, 0.5, 0.0)
+
+    # Symmetry as the property, not just the one case: swapping the arguments
+    # cannot change the verdict. Under an |expected|-only denominator the first
+    # pair below disagrees with itself reversed.
+    for a, e in ((1.6, 1.0), (1.0, 1.6), (3.0, 1.0), (1.0, 3.0), (-2.0, -1.2)):
+        assert _check_assertion(a, e, 0.5, 0.0) == _check_assertion(e, a, 0.5, 0.0)
+
+    # No epsilon floor, and none permitted: the bound is a product, not a
+    # quotient, so expected == 0 needs no protection. It reads |a| <= rel*|a|,
+    # which a nonzero actual clears only at rel >= 1 — a purely relative
+    # tolerance says nothing about how close to zero is close enough.
+    assert not _check_assertion(1.0, 0.0, 0.5, 0.0)
+    assert _check_assertion(1.0, 0.0, 1.0, 0.0)
+    assert _check_assertion(1.0, 0.0, 0.0, 1.0)  # an abs bound is the way to spell it
+    assert _check_assertion(0.0, 0.0, 0.0, 0.0)  # exact-equality clause
+
+    # Zero ACTUAL against a nonzero expected — the mirror of the case above.
+    # Here the symmetric scale IS |e|, so both readings agree; it is pinned
+    # because the other one-sided reading (scale by |actual| alone) would make
+    # the bound zero and reject every inexact match.
+    assert not _check_assertion(0.0, 1.0, 0.5, 0.0)
+    assert _check_assertion(0.0, 1.0, 1.0, 0.0)
+
+    # OPPOSITE SIGNS. rel >= 1 is vacuous only for a pair that shares a sign;
+    # across a sign change the bound still bites, which is why §6.6.3 says
+    # rel >= 1 is not a substitute for an abs bound at expected == 0.
+    assert not _check_assertion(1.0, -1.0, 1.0, 0.0)
+    assert _check_assertion(-1.0, 1.0, 2.0, 0.0)
+
+    # NON-FINITE actuals. The symmetric scale is precisely what makes the
+    # finiteness clause load-bearing: |inf − e| <= rel*max(inf, |e|) is
+    # inf <= inf, so the bound ALONE would pass every expected value
+    # (§6.6.3; the assertion_nonfinite category, CONFORMANCE_SPEC §5.20).
+    assert not _check_assertion(math.inf, 1.0, 0.5, 0.0)
+    assert not _check_assertion(-math.inf, 1.0, 0.5, 0.0)
+    assert not _check_assertion(math.nan, 1.0, 0.5, 0.0)
+    assert _check_assertion(math.inf, math.inf, 0.5, 0.0)  # same infinity
+    assert not _check_assertion(math.inf, -math.inf, 0.5, 0.0)
+
+    # abs/rel interaction, both directions. An abs bound never narrows what rel
+    # already admits — the predicate takes the MAX of the two — so a tiny abs
+    # must not turn the overshoot case red:
+    assert _check_assertion(1.6, 1.0, 0.5, 1e-12)
+    # and abs admits what the symmetric rel rejects (same inputs as the
+    # `not _check_assertion(3.0, 1.0, 0.5, 0.0)` rejection above):
+    assert _check_assertion(3.0, 1.0, 0.5, 2.5)
+
+
 # ---------------------------------------------------------------------------
 # run_inline_tests end-to-end (coordinate-expression ic + reductions)
 # ---------------------------------------------------------------------------
@@ -273,6 +348,172 @@ def test_run_inline_tests_decay_field():
     assert by_idx[3].passed and abs(by_idx[3].actual) < 1e-9
     assert all(r.reduce in ("L2_error", "mean") for r in results)
     assert all(r.model == "M" and r.test_id == "decay" for r in results)
+
+
+def _free_x_cos() -> dict:
+    """cos(pi (x - 1/2)/N) with the dimension name ``x`` FREE (esm-spec §6.6.5)."""
+    return {
+        "op": "cos",
+        "args": [
+            {
+                "op": "*",
+                "args": [math.pi, {"op": "/", "args": [{"op": "-", "args": ["x", 0.5]}, N]}],
+            }
+        ],
+    }
+
+
+def test_bind_dimension_names_wraps_only_a_free_mention():
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.inline_tests import bind_dimension_names
+
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["x"]) is lit
+    free = ExprNode(op="+", args=["x", 1])
+    wrapped = bind_dimension_names(free, ["x"])
+    assert isinstance(wrapped, ExprNode) and wrapped.op == "aggregate"
+    assert wrapped.output_idx == ["x"]
+    assert wrapped.ranges == {"x": {"from": "x"}}
+    assert wrapped.expr is free
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
+    )
+    assert bind_dimension_names(bound, ["x"]) is bound
+    integ = ExprNode(
+        op="integral", args=[ExprNode(op="*", args=[2, "x"])], var="x", lower=0, upper=1
+    )
+    assert bind_dimension_names(integ, ["x"]) is integ
+    # A `wrt` is a differentiation TARGET, not a free read of the enclosing
+    # scope, so it does not trigger the wrap (the Julia and Rust predicates
+    # ignore `wrt` too).
+    deriv = ExprNode(op="D", args=["u"], wrt="x")
+    assert bind_dimension_names(deriv, ["x"]) is deriv
+    assert bind_dimension_names(free, []) is free
+
+
+def test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter():
+    """A dimension name the parameter scope ALSO binds is a fault, not a silent
+    rebinding: wrapping would shadow the parameter with the cell index, so a
+    reference that used to read the parameter would quietly return a different
+    number. One name, two meanings, one scope — ill-formed."""
+    import pytest
+
+    from earthsci_ast.esm_types import ExprNode
+    from earthsci_ast.inline_tests import bind_dimension_names
+
+    free = ExprNode(op="+", args=["x", 1])
+    with pytest.raises(RuntimeError, match="parameter in scope"):
+        bind_dimension_names(free, ["x"], {"x": 3.0})
+    # No mention of the clashing name: unaffected.
+    lit = ExprNode(op="*", args=[2.0, "k"])
+    assert bind_dimension_names(lit, ["x"], {"x": 3.0}) is lit
+    # A gather that rebinds `x` itself keeps working.
+    bound = ExprNode(
+        op="aggregate", args=[], output_idx=["x"], ranges={"x": {"from": "x"}}, expr=free
+    )
+    assert bind_dimension_names(bound, ["x"], {"x": 3.0}) is bound
+    # And with no scope supplied the wrap is unchanged.
+    assert bind_dimension_names(free, ["x"]).op == "aggregate"
+
+
+def test_reference_binds_the_field_dimension_names():
+    """esm-spec §6.6.5: the analytic cell-centre form with ``x`` free, a table
+    lookup by ``x``, and a gather that REBINDS ``x`` as its own loop symbol
+    (which must not be wrapped again) all read the same field."""
+    table = [math.cos(math.pi * (i - 0.5) / N) for i in range(1, N + 1)]
+    doc = _decay_doc()
+    doc["models"]["M"]["tests"][0]["assertions"] = [
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "L2_error",
+            "reference": _free_x_cos(),
+        },
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "Linf_error",
+            "reference": {
+                "op": "index",
+                "args": [{"op": "const", "args": [], "value": table}, "x"],
+            },
+        },
+        {
+            "variable": "u",
+            "time": 0.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-12},
+            "reduce": "L2_error",
+            "reference": {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": ["x"],
+                "ranges": {"x": {"from": "x"}},
+                "expr": _free_x_cos(),
+            },
+        },
+        {
+            "variable": "u",
+            "time": 1.0,
+            "expected": 0.0,
+            "tolerance": {"abs": 1e-8},
+            "reduce": "L2_error",
+            "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, _free_x_cos()]},
+        },
+    ]
+    results = run_inline_tests(
+        load_string(json.dumps(doc)), model_name="M", method="LSODA", rtol=1e-12, atol=1e-14
+    )
+    assert len(results) == 4
+    for r in results:
+        assert r.passed, f"assertion {r.assertion_idx}: {r.message}"
+
+
+def test_subsystem_parameter_override_in_every_spelling():
+    """esm-spec §4.6 / §6.6.2: inside ``P``, ``P.sub.g`` is the fully qualified
+    spelling of the mounted subsystem parameter; it resolves in an equation and
+    as an override key in every spelling (``P.sub.g``, ``sub.g``, ``g``)."""
+    doc = _decay_doc()
+    doc["models"]["P"] = doc["models"].pop("M")
+    doc["models"]["P"]["subsystems"] = {
+        "sub": {
+            "variables": {"g": {"type": "parameter", "units": "1", "default": 9.81}},
+            "equations": [],
+        }
+    }
+    doc["models"]["P"]["variables"]["gg"] = {"type": "unknown", "units": "1"}
+    doc["models"]["P"]["equations"].append({"lhs": "gg", "rhs": "P.sub.g"})
+
+    def gg(want: float) -> list:
+        return [{"variable": "gg", "time": 0.0, "expected": want, "tolerance": {"rel": 1e-12}}]
+
+    span = {"start": 0.0, "end": 1.0}
+    doc["models"]["P"]["tests"] = [
+        {"id": "default", "time_span": span, "assertions": gg(9.81)},
+        {
+            "id": "qualified",
+            "time_span": span,
+            "parameter_overrides": {"P.sub.g": 1.5},
+            "assertions": gg(1.5),
+        },
+        {
+            "id": "relative",
+            "time_span": span,
+            "parameter_overrides": {"sub.g": 2.5},
+            "assertions": gg(2.5),
+        },
+        {"id": "bare", "time_span": span, "parameter_overrides": {"g": 3.5}, "assertions": gg(3.5)},
+    ]
+    results = run_inline_tests(
+        load_string(json.dumps(doc)), model_name="P", method="LSODA", rtol=1e-12, atol=1e-14
+    )
+    assert len(results) == 4
+    for r in results:
+        assert r.passed, f"test {r.test_id}: {r.message}"
 
 
 def _array_observed_doc() -> dict:

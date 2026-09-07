@@ -1008,6 +1008,70 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
     return 0
 end
 
+# Whether `name` occurs FREE in `expr`: as a variable reference not bound by an
+# enclosing `aggregate` / `arrayop` / `makearray` loop symbol (`output_idx`, a
+# `ranges` key) or an `integral`'s integration variable. A binder shadows the
+# name for its whole subtree.
+#
+# Deliberately NOT `free_variables`: that function also reports a node's `wrt`,
+# the symbol a derivative differentiates WITH RESPECT TO. `wrt` is a
+# differentiation target named by the node, not a value read from the enclosing
+# scope, and it is added AFTER binder subtraction — so a reference containing
+# `deriv(u, wrt: "x")` would be wrapped here but by neither the Rust
+# `mentions_free` nor the Python `_mentions_free`, which ignore `wrt`. That is
+# exactly the kind of cross-binding divergence CONFORMANCE_SPEC §5.30 exists to
+# close. Mirrors those two functions.
+_mentions_free(::ASTExpr, ::AbstractString) = false
+_mentions_free(expr::VarExpr, name::AbstractString) = expr.name == name
+function _mentions_free(expr::OpExpr, name::AbstractString)::Bool
+    String(name) in _bound_symbols(expr) && return false
+    return any(c -> _mentions_free(c, name), child_exprs(expr))
+end
+
+"""
+    bind_dimension_names(expr, dims, scope=Dict{String,Float64}()) -> ASTExpr
+
+esm-spec §6.6.5: an inline `reference`'s free variables are the domain DIMENSION
+NAMES. For a field shaped over index sets those are the asserted variable's
+`shape` entries, each bound at every grid point to the 1-based position along
+its axis — the same index space `coords` reads (convention 1) — so
+`index(table, lev)` reads the cell's entry of a lookup array and
+`sin(pi * (x - 0.5) / N)` is the cell-centre analytic form, with no explicit
+gather. A reference that mentions a dimension name FREE (`_mentions_free`, for
+which every binder's own loop symbols shadow it) is turned into the whole field
+by wrapping it in an `aggregate` whose output indices ARE the dimension names
+(in shape order, each ranging over its index set); one that mentions none — a
+literal, a parameter expression, or an `aggregate` that already produces the
+field under its own loop symbols — is returned untouched, so nothing that
+evaluated before evaluates differently. Mirrors the Python / Rust
+`bind_dimension_names`.
+
+`scope` is the reference's build-time parameter scope (flattened names plus
+their unambiguous bare aliases). "Nothing that evaluated before evaluates
+differently" holds only because a dimension name that `scope` ALSO binds is
+rejected here: wrapping would silently shadow the parameter with the cell's
+index — the same expression, a different number, no diagnostic. One name
+meaning two things in one scope is an ill-formed document, so it is a fault.
+"""
+function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString},
+                              scope::AbstractDict=Dict{String,Float64}())::ASTExpr
+    isempty(dims) && return expr
+    mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
+    isempty(mentioned) && return expr
+    clash = findfirst(d -> haskey(scope, d), mentioned)
+    clash === nothing || throw(InlineTestError(
+        "inline `reference` mentions '$(mentioned[clash])', which is both a dimension " *
+        "of the asserted field and a parameter in scope. esm-spec §6.6.5 binds a free " *
+        "dimension name to the cell's 1-based position, which would shadow the " *
+        "parameter. Rename one of them, or gather explicitly with " *
+        "`aggregate(i from $(mentioned[clash]); …)`."))
+    names = String[String(d) for d in dims]
+    return OpExpr("aggregate", ASTExpr[];
+                  output_idx=Any[names...],
+                  ranges=Dict{String,Any}(d => IndexSetRef(d) for d in names),
+                  expr_body=expr)
+end
+
 # The asserted variable's declared spatial shape (ordered index-set names).
 # Errors when the variable is missing or scalar — a `coords` assertion is
 # ill-formed on a 0-D variable per esm-spec §6.6.5.
@@ -1228,10 +1292,18 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         if a.reference isa ASTExpr
             # Model parameters (load-time constants) are in scope for a §6.6.5
             # analytic `reference`; state is not. `insp.params` carries the
-            # build's resolved scalar params (override-or-default).
-            ref = evaluate_cellwise(a.reference, cell_tuples;
-                                    const_arrays=insp.const_arrays,
-                                    params=_param_scope_with_aliases(insp.params))
+            # build's resolved scalar params (override-or-default). The field's
+            # dimension names are in scope too, bound per cell
+            # (`bind_dimension_names`).
+            dims = try
+                _variable_shape(eval_file, String(mname), String(a.variable))
+            catch err
+                err isa InlineTestError ? String[] : rethrow()
+            end
+            scope = _param_scope_with_aliases(insp.params)
+            ref = evaluate_cellwise(bind_dimension_names(a.reference, dims, scope),
+                                    cell_tuples;
+                                    const_arrays=insp.const_arrays, params=scope)
         elseif a.reference isa AbstractDict &&
                string(get(a.reference, "type", "")) == "from_file"
             ref = _from_file_reference(a.reference, resolved_base, cell_tuples)

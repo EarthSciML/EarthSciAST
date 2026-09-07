@@ -7,7 +7,12 @@ use std::collections::HashMap;
 /// Either or both of `abs` / `rel` may be set. An assertion passes when any
 /// set bound is satisfied:
 /// `|actual - expected| <= abs`  OR
-/// `|actual - expected| / max(|expected|, epsilon) <= rel`.
+/// `|actual - expected| <= rel * max(|actual|, |expected|)`.
+///
+/// The relative bound is SYMMETRIC in `actual` and `expected` — its scale is
+/// the larger of the two magnitudes, not `|expected|` alone (Julia `isapprox`;
+/// esm-spec §6.6.3). `inline_tests::check_assertion` carries the full
+/// predicate, whose finiteness clause precedes the tolerance test.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tolerance {
