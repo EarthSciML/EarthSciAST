@@ -572,6 +572,13 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // Phase 5b: pointwise spatial lift (esm-spec §10.5).
     maybe_apply_pointwise_lift(file, &mut parts, &loaded_producers)?;
 
+    // Phase 5b′: resolve a right-hand-side STRUCTURAL time derivative of an ODE
+    // unknown to the tendency the flattened system defines for it. Runs after
+    // the lift so it sees the equations the lift produced, and after reaction
+    // lowering (phase 1) so a mechanism's mass-action tendency is available to
+    // a sibling model's scoped `D(Chem.O3, t)`.
+    resolve_rhs_time_derivatives(&mut parts.equations);
+
     // Phase 5c: the §6.3.1 SUBSET maps, re-derived over the FINISHED system so
     // they see the equations coupling and the pointwise lift actually produced
     // rather than the ones the document declared. Each is a subset of the map
@@ -1384,6 +1391,139 @@ fn maybe_apply_pointwise_lift(
         )?;
     }
     Ok(())
+}
+
+/// Is `node` the STRUCTURAL time derivative — `D` with `wrt: "t"` or no `wrt`
+/// at all (esm-spec §4.2: an absent `wrt` MEANS `t`), applied to a single
+/// operand?
+///
+/// The complement of [`crate::op_registry::is_rewrite_target_derivative`],
+/// which is the SPATIAL tier: a `D` whose `wrt` names an axis, lowered to a
+/// stencil by a discretization rule and never evaluated.
+fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
+    node.op == "D"
+        && node.args.len() == 1
+        && !crate::op_registry::is_rewrite_target_derivative(node)
+}
+
+/// Phase 5b′ of [`flatten`]: rewrite every right-hand-side STRUCTURAL time
+/// derivative of an ODE unknown into that unknown's TENDENCY — the right-hand
+/// side of its own `D(x)/dt ~ f` equation.
+///
+/// `D` on an equation's LEFT-hand side is structural: it is what makes the
+/// equation differential, and system assembly consumes it. On a RIGHT-hand
+/// side there is no such consumer, and the evaluators had no value to give:
+/// the scalar interpreter, the array evaluator and the tape lowerer each
+/// answered `D(anything) = 0` "for parity" with one another. That is a silent
+/// wrong answer, not a missing feature — an observed written
+/// `dxdt ~ D(x, t)`, the standard shape for asserting a species tendency at
+/// `t = 0` (esm-spec §6.6.2 "instantaneous-derivative test shape"), read as
+/// exactly `0` and its inline test graded a configuration the model never
+/// computed.
+///
+/// The value is not the runner's to invent: `D(x, t)` where `x` is an unknown
+/// with a differential equation ALREADY has a defining expression in this very
+/// system, so resolving it is an ordinary AST substitution over the canonical
+/// flattened form — the same layer that qualifies names, applies coupling and
+/// lowers a reaction network to its mass-action ODEs. Doing it here is what
+/// lets `D(Chem.O3, t)` in a sibling model resolve to the mechanism's tendency
+/// (esm-spec §7.4) without either runner learning anything about reactions,
+/// and it keeps both Rust runners (and every other `FlattenedSystem` consumer)
+/// answering alike by construction.
+///
+/// Scope, deliberately narrow:
+///
+/// * only `args[0]` that is a bare variable REFERENCE naming a key of the
+///   tendency table (i.e. an unknown carrying `D(x)/dt ~ f`) is resolved;
+/// * `D` of an OBSERVED or a PARAMETER, and `D` of a compound expression, are
+///   left exactly as authored — resolving those is symbolic differentiation,
+///   which this format does not define;
+/// * a SPATIAL `D` (`wrt` naming an axis) is untouched: it is a rewrite target
+///   for a discretization rule (§9.6.8), and the `unlowered_operator` gate
+///   still owns it;
+/// * left-hand sides are never rewritten.
+///
+/// A tendency may itself name another state's derivative
+/// (`D(lai)/dt ~ sla · D(biomass)/dt`, `tests/end_to_end/land_atmosphere_hydrology.esm`),
+/// so substitution recurses; `active` carries the chain being expanded and a
+/// self- or mutually-referential definition stops there with the node left as
+/// authored rather than expanding forever.
+fn resolve_rhs_time_derivatives(equations: &mut [Equation]) {
+    // The tendency table: `x` -> the RHS of its `D(x)/dt ~ …` equation.
+    let mut tendency: HashMap<String, Expr> = HashMap::new();
+    for eq in equations.iter() {
+        if let Expr::Operator(node) = &eq.lhs
+            && is_structural_time_derivative(node)
+            && let Some(Expr::Variable(name)) = node.args.first()
+        {
+            tendency.insert(name.clone(), eq.rhs.clone());
+        }
+    }
+    if tendency.is_empty() {
+        return;
+    }
+    for eq in equations.iter_mut() {
+        // While expanding the RHS of `D(x)/dt` itself, `x`'s tendency is the
+        // very thing being defined and so is not available to substitute into.
+        let mut active: Vec<String> = match &eq.lhs {
+            Expr::Operator(node) if is_structural_time_derivative(node) => {
+                match node.args.first() {
+                    Some(Expr::Variable(name)) => vec![name.clone()],
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        if !contains_resolvable_time_derivative(&eq.rhs, &tendency) {
+            continue;
+        }
+        eq.rhs = substitute_time_derivatives(&eq.rhs, &tendency, &mut active);
+    }
+}
+
+/// Does `expr` carry a structural `D` over a variable the tendency table can
+/// answer? Checked before rebuilding so a document with no such node — every
+/// document that had none before this phase existed — keeps its equations
+/// untouched rather than being cloned through [`substitute_time_derivatives`].
+fn contains_resolvable_time_derivative(expr: &Expr, tendency: &HashMap<String, Expr>) -> bool {
+    let Expr::Operator(node) = expr else {
+        return false;
+    };
+    if is_structural_time_derivative(node)
+        && matches!(node.args.first(), Some(Expr::Variable(name)) if tendency.contains_key(name))
+    {
+        return true;
+    }
+    node.any_child(&mut |child| contains_resolvable_time_derivative(child, tendency))
+}
+
+/// The rewrite [`resolve_rhs_time_derivatives`] documents, over one expression.
+fn substitute_time_derivatives(
+    expr: &Expr,
+    tendency: &HashMap<String, Expr>,
+    active: &mut Vec<String>,
+) -> Expr {
+    let Expr::Operator(node) = expr else {
+        return expr.clone();
+    };
+    if is_structural_time_derivative(node)
+        && let Some(Expr::Variable(name)) = node.args.first()
+        && let Some(rhs) = tendency.get(name)
+    {
+        if active.iter().any(|n| n == name) {
+            // A cycle: leave the node as authored. It reaches the runner's
+            // `D` fallback exactly as it did before, rather than being
+            // expanded without end here.
+            return expr.clone();
+        }
+        active.push(name.clone());
+        let out = substitute_time_derivatives(rhs, tendency, active);
+        active.pop();
+        return out;
+    }
+    Expr::operator(node.map_children(&mut |child| {
+        substitute_time_derivatives(child, tendency, active)
+    }))
 }
 
 /// Flatten a single [`Model`] as a convenience wrapper around [`flatten`].

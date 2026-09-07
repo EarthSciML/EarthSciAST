@@ -1005,15 +1005,12 @@ fn push_test_error(
     results: &mut Vec<PdeAssertionResult>,
     model_name: &str,
     t: &crate::types::ModelTest,
-    model: &Model,
+    component_tolerance: Option<&Tolerance>,
     message: &str,
 ) {
     for (i, a) in t.assertions.iter().enumerate() {
-        let (rtol, atol) = resolve_tolerance(
-            model.tolerance.as_ref(),
-            t.tolerance.as_ref(),
-            a.tolerance.as_ref(),
-        );
+        let (rtol, atol) =
+            resolve_tolerance(component_tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
         results.push(PdeAssertionResult {
             model: model_name.to_string(),
             test_id: t.id.clone(),
@@ -1461,7 +1458,17 @@ fn build_for_test(
     }
 }
 
-/// Run every inline test of one model, appending per-assertion results.
+/// Run every inline test of one COMPONENT, appending per-assertion results.
+///
+/// The component is named, never handed over: esm-spec §7.2 gives a
+/// `reaction_system` the same `tests` / `tolerance` fields a `model` has, with
+/// "semantics, field shape, and tolerance resolution identical to §6.6", so the
+/// only things this function needs from the owner are the test list and the
+/// component-level tolerance. Everything else it already resolves through
+/// `file` + `component_name` (the build is `esm_problem` over the WHOLE
+/// document either way — reaction systems reach it as their mass-action ODEs,
+/// esm-spec §7.4). Taking `&Model` here is what confined the runner to
+/// `models` and left `reaction_systems[].tests` silently undiscovered.
 ///
 /// `test_filter`, when given, selects the tests to RUN by the same
 /// `id.contains(needle)` predicate the CLI's `--filter` used to apply to the
@@ -1482,10 +1489,11 @@ fn build_for_test(
 // move the same values behind one more name without making any of them
 // optional.
 #[allow(clippy::too_many_arguments)]
-fn run_model_tests(
+fn run_component_tests(
     file: &EsmFile,
     model_name: &str,
-    model: &Model,
+    tests: &[crate::types::ModelTest],
+    component_tolerance: Option<&Tolerance>,
     index_sets: &HashMap<String, IndexSet>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
@@ -1493,9 +1501,6 @@ fn run_model_tests(
     test_filter: Option<&str>,
     results: &mut Vec<PdeAssertionResult>,
 ) {
-    let Some(tests) = &model.tests else {
-        return;
-    };
     let mut memo: Option<BuiltModel> = None;
     for t in tests {
         if test_filter.is_some_and(|needle| !t.id.contains(needle)) {
@@ -1520,7 +1525,7 @@ fn run_model_tests(
         let run_index_sets: &HashMap<String, IndexSet> =
             cached.index_sets.as_ref().unwrap_or(index_sets);
         if let Built::TestError(msg) = &cached.built {
-            push_test_error(results, model_name, t, model, msg);
+            push_test_error(results, model_name, t, component_tolerance, msg);
             continue;
         }
 
@@ -1607,11 +1612,8 @@ fn run_model_tests(
             }
         });
         for (i, a) in t.assertions.iter().enumerate() {
-            let (rtol, atol) = resolve_tolerance(
-                model.tolerance.as_ref(),
-                t.tolerance.as_ref(),
-                a.tolerance.as_ref(),
-            );
+            let (rtol, atol) =
+                resolve_tolerance(component_tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
                 Ok(sol) => eval_assertion(
@@ -1679,8 +1681,13 @@ fn run_model_tests(
 /// [`run_pde_tests_with_base_dir`] to anchor at the .esm file's directory).
 /// An assertion with neither `coords` nor `reduce` samples a scalar state.
 /// Mirrors the Julia binding's `run_pde_tests` 1:1 (tolerances per §6.6.4;
-/// the pass predicate is Julia `isapprox`). Models iterate in sorted name
-/// order for deterministic output.
+/// the pass predicate is Julia `isapprox`).
+///
+/// Both TEST-BEARING COMPONENT KINDS are enumerated: `models` first, then
+/// `reaction_systems` (esm-spec §7.2 — a reaction system's `tests` have
+/// "semantics, field shape, and tolerance resolution identical to Section
+/// 6.6"), each in sorted name order for deterministic output. `model_name`
+/// selects by component name across both kinds.
 pub fn run_pde_tests(
     file: &EsmFile,
     model_name: Option<&str>,
@@ -1760,27 +1767,28 @@ pub fn run_pde_tests_filtered(
     test_filter: Option<&str>,
 ) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
-    let Some(models) = &file.models else {
-        return results;
-    };
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
         .clone()
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let mut names: Vec<&String> = models.keys().collect();
-    names.sort();
-    for mname in names {
+    // esm-spec §6.6 / §7.2: a test lives inside its parent COMPONENT, and both
+    // component kinds carry one. Models first, then reaction systems, each in
+    // sorted name order — a total order over the document, so the report is
+    // deterministic and a name that exists in both kinds still runs once per
+    // owner.
+    for (cname, tests, tolerance) in test_bearing_components(file) {
         if let Some(selected) = model_name
-            && selected != mname
+            && selected != cname
         {
             continue;
         }
-        run_model_tests(
+        run_component_tests(
             file,
-            mname,
-            &models[mname],
+            cname,
+            tests,
+            tolerance,
             &index_sets,
             opts,
             base_dir,
@@ -1790,6 +1798,43 @@ pub fn run_pde_tests_filtered(
         );
     }
     results
+}
+
+/// Every component of `file` that declares inline tests, as
+/// `(name, tests, component-level tolerance)`.
+///
+/// esm-spec §7.2 gives a `reaction_system` a `tests` field whose "semantics,
+/// field shape, and tolerance resolution are identical to Section 6.6", so a
+/// runner that enumerates only `models` reports "no inline tests found" for a
+/// document whose tests are all on a mechanism — which is what the shipped
+/// `tests/simulation/autocatalytic_reaction.esm` and EarthSciModels'
+/// `superfast.esm` are. Models come first, then reaction systems, each sorted
+/// by name.
+fn test_bearing_components(
+    file: &EsmFile,
+) -> Vec<(&str, &[crate::types::ModelTest], Option<&Tolerance>)> {
+    let mut out: Vec<(&str, &[crate::types::ModelTest], Option<&Tolerance>)> = Vec::new();
+    if let Some(models) = &file.models {
+        let mut names: Vec<&String> = models.keys().collect();
+        names.sort();
+        for name in names {
+            let m = &models[name];
+            if let Some(tests) = m.tests.as_ref().filter(|t| !t.is_empty()) {
+                out.push((name.as_str(), tests.as_slice(), m.tolerance.as_ref()));
+            }
+        }
+    }
+    if let Some(systems) = &file.reaction_systems {
+        let mut names: Vec<&String> = systems.keys().collect();
+        names.sort();
+        for name in names {
+            let rs = &systems[name];
+            if let Some(tests) = rs.tests.as_ref().filter(|t| !t.is_empty()) {
+                out.push((name.as_str(), tests.as_slice(), rs.tolerance.as_ref()));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
