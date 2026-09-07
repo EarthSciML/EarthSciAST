@@ -355,6 +355,12 @@ A species with `constant: true` is a RESERVOIR (§7.4): it is held fixed, so no
 concentration to every rate law it appears in. It is therefore skipped as an
 equation TARGET only — it stays in `species` so `mass_action_rate` keeps
 reading it as a substrate/product factor.
+
+A species that appears in NO reaction likewise gets no equation. Its rate is the
+empty sum, and emitting `D(X, t) = 0` for it would make it a differential unknown
+that never moves; esm-spec §6.3.1 classifies by COMPLEMENT, so leaving the
+equation out is what makes it the ALGEBRAIC unknown it is. See the comment at the
+skip below.
 """
 function lower_reactions_to_equations(reactions::Vector{Reaction},
                                       species::Vector{Species})::Vector{Equation}
@@ -383,7 +389,6 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # mass-action contribution to the OTHER species' rates is untouched —
         # `mass_action_rate` reads it from `species` either way.
         species[i].constant === true && continue
-        lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
         terms = ASTExpr[]
         for (j, rxn) in enumerate(reactions)
             stoich = S[i, j]
@@ -398,13 +403,21 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
                     ASTExpr[NumExpr(Float64(stoich)), rate_expr]))
             end
         end
-        rhs = if isempty(terms)
-            NumExpr(0.0)
-        elseif length(terms) == 1
-            terms[1]
-        else
-            OpExpr("+", terms)
-        end
+        # A species with NO net contribution from any reaction gets NO equation,
+        # rather than a vacuous `D(X, t) = 0`. The empty sum is zero, so emitting
+        # it is defensible arithmetic — but esm-spec §6.3.1 classifies by
+        # COMPLEMENT, and the two readings give the species different roles: with
+        # the equation it is a differential unknown that never moves, without it
+        # an unknown no equation names, i.e. ALGEBRAIC. §6.3.1 is the operative
+        # rule and the second is its answer.
+        #
+        # This is also what the other four bindings do (Python `reactions.py`,
+        # Rust `reactions.rs`, Go `flatten.go`, TypeScript `flatten.ts`); Julia
+        # emitting the zero was a 4-1 outlier, and the divergence was recorded in
+        # `flatten_conformance_test.jl`'s `_FC_DIVERGENCES` until this changed.
+        isempty(terms) && continue
+        lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
+        rhs = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
         push!(equations, Equation(lhs, rhs))
     end
 
