@@ -96,14 +96,74 @@ func (e *CoupleMultiplicativeNoTendencyError) DiagnosticCode() string {
 	return CodeCoupleMultiplicativeNoTendency
 }
 
+// OperatorComposeNoMergeError reports that an `operator_compose` entry merged
+// NOTHING (esm-libraries-spec §4.7.1 step 5).
+//
+// Such an entry is indistinguishable from one that is not there: the operator
+// integrates a private, decoupled system from its own defaults, the other system
+// receives no contribution at all, and the only evidence is a state count one
+// too high. That is the one outcome a coupling mis-specification must not have,
+// so it is refused rather than reported.
+//
+// An operator that genuinely contributes only states of its own — a transport
+// operator whose single equation defines its own wind field, say — says so with
+// `require_match: false`, and is then permitted.
+type OperatorComposeNoMergeError struct {
+	// A and B are the entry's two systems, Systems[0] and Systems[1].
+	A, B string
+	// Unmatched names the dependent variables that found no counterpart, in
+	// document order.
+	Unmatched []string
+	Message   string
+}
+
+func (e *OperatorComposeNoMergeError) Error() string {
+	return fmt.Sprintf("[%s] %s", CodeOperatorComposeNoMerge, e.Message)
+}
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *OperatorComposeNoMergeError) DiagnosticCode() string {
+	return CodeOperatorComposeNoMerge
+}
+
+// OperatorComposeAmbiguousBareNameError reports that the bare-name fallback
+// would unify two STATE variables and the document has not said which spelling
+// survives (esm-libraries-spec §4.7.1 step 3).
+//
+// The fallback binds `A.x` to `B.x` on the strength of a shared local name
+// alone. When both are states, each carries its own INITIAL CONDITION, and the
+// merge has to delete one of them — so the choice decides which IC the flattened
+// system integrates from. Nothing in the document expresses that choice, and
+// picking one silently is how flipping the entry's `systems` order came to
+// change the answer.
+//
+// A match where only ONE side is a state is NOT ambiguous: the other carries no
+// initial condition, so the state is the owner and the merge renames onto it.
+type OperatorComposeAmbiguousBareNameError struct {
+	// A and B are the entry's two systems, Systems[0] and Systems[1].
+	A, B string
+	// BDep and TargetDep are the two spellings the fallback tried to unify.
+	BDep, TargetDep string
+	Message         string
+}
+
+func (e *OperatorComposeAmbiguousBareNameError) Error() string {
+	return fmt.Sprintf("[%s] %s", CodeOperatorComposeAmbiguousBareName, e.Message)
+}
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *OperatorComposeAmbiguousBareNameError) DiagnosticCode() string {
+	return CodeOperatorComposeAmbiguousBareName
+}
+
 // OperatorComposeRequireMatchError reports that an `operator_compose` entry
 // declared `require_match: true` and one of Systems[1]'s equations found no
 // equation of Systems[0] to land on (esm-libraries-spec §4.7.1 step 5).
 //
-// Step 5 otherwise preserves an unmatched equation unchanged, which makes
-// "merged everything" and "merged nothing" the same observable outcome;
-// `require_match` is the author's opt-in to tell them apart. A PARTIAL match
-// fails too — there is no "some is enough" reading an author could rely on.
+// Step 5 otherwise preserves an unmatched equation unchanged, and a PARTIAL
+// shortfall is only a warning by default; `require_match` is the author's opt-in
+// to make it fatal. A PARTIAL match fails here — there is no "some is enough"
+// reading an author could rely on.
 type OperatorComposeRequireMatchError struct {
 	// A and B are the entry's two systems, Systems[0] and Systems[1].
 	A, B string
@@ -1582,7 +1642,11 @@ func applyOperatorCompose(components map[string]*componentSystem, order []string
 	var invertedOrder []string
 	for _, bDep := range bareMatchOrder {
 		targetDep := bareMatches[bDep]
-		if bareNameOwnerWins(order, bDep, targetDep) {
+		owner, err := bareNameOwner(components, entry, bDep, targetDep)
+		if err != nil {
+			return err
+		}
+		if owner == bDep {
 			inverted[targetDep] = bDep
 			invertedOrder = append(invertedOrder, targetDep)
 			delete(mergedAway, bDep)
@@ -1648,8 +1712,24 @@ func removeString(xs []string, s string) []string {
 	return xs
 }
 
-// bareNameOwnerWins reports whether the Systems[1] spelling owns the state a
-// bare-name match unified (esm-libraries-spec §4.7.1 step 3).
+// isStateVar reports whether dep is a STATE variable of the (partly flattened)
+// component tables. A state is the thing that carries an initial condition,
+// which is the whole of what a bare-name match decides between; an observed
+// carries none.
+func isStateVar(components map[string]*componentSystem, dep string) bool {
+	root := dep
+	if head, _, found := strings.Cut(dep, "."); found {
+		root = head
+	}
+	comp, ok := components[root]
+	if !ok {
+		return false
+	}
+	return comp.stateVars.has(dep)
+}
+
+// bareNameOwner returns which spelling owns the quantity a bare-name match
+// unified (esm-libraries-spec §4.7.1 step 3).
 //
 // A DIRECT match needs no decision (the two names are equal) and a `translate`
 // match is the author naming the surviving spelling explicitly. The BARE-NAME
@@ -1659,39 +1739,39 @@ func removeString(xs []string, s string) []string {
 // and which INITIAL CONDITION, came out the far side.
 //
 // Ownership follows the variable's own namespace, the direction step 4's
-// merged-equation reattribution already reaches in. Both candidates are
-// self-consistent under that reading -- `A.x` is A's and `B.x` is B's -- so the
-// tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4 already makes
-// normative for the flattened system. The state belongs to the component that
-// declares it first, in either argument order.
+// merged-equation reattribution already reaches in. The merge deletes one of the
+// two names, so the question is which of them the flattened system keeps:
 //
-// A candidate whose leading segment names no component of this document is not a
-// component-owned state, so there is nothing to compare and the incumbent
-// (Systems[0]'s spelling) stands.
-func bareNameOwnerWins(order []string, bDep, targetDep string) bool {
-	bOwner, aOwner := bDep, targetDep
-	if head, _, found := strings.Cut(bDep, "."); found {
-		bOwner = head
-	}
-	if head, _, found := strings.Cut(targetDep, "."); found {
-		aOwner = head
-	}
-	if bOwner == aOwner {
-		return false
-	}
-	bi, ai := -1, -1
-	for i, name := range order {
-		if name == bOwner && bi < 0 {
-			bi = i
+//   - BOTH ARE STATES -- each carries its own initial condition, and nothing in
+//     the document says which one the merged tendency should integrate from.
+//     Refused, because deciding it here is exactly the silent choice issue #195
+//     is about. The author says what they mean with `translate`, which names the
+//     surviving spelling outright, or with `require_match`.
+//   - EXACTLY ONE IS A STATE -- the other carries no initial condition, so there
+//     is nothing to lose by renaming onto the state. That one is the owner, in
+//     either argument order.
+//   - NEITHER IS -- no initial condition is at stake either way; the incumbent
+//     (Systems[0]'s spelling) stands, as before.
+func bareNameOwner(components map[string]*componentSystem, entry OperatorComposeCoupling,
+	bDep, targetDep string) (string, error) {
+	bState := isStateVar(components, bDep)
+	aState := isStateVar(components, targetDep)
+	if bState && aState {
+		a, b := entry.Systems[0], entry.Systems[1]
+		return "", &OperatorComposeAmbiguousBareNameError{
+			A: a, B: b, BDep: bDep, TargetDep: targetDep,
+			Message: fmt.Sprintf("operator_compose(%s + %s) matched %q to %q on their "+
+				"shared local name alone, but BOTH are state variables and the merge keeps "+
+				"only one. Each carries its own initial condition, so the choice decides "+
+				"which the flattened system integrates from, and the document does not "+
+				"express it. Name the surviving spelling with a `translate` entry "+
+				"({%q: %q}), or rename one of them.", a, b, bDep, targetDep, targetDep, bDep),
 		}
-		if name == aOwner && ai < 0 {
-			ai = i
-		}
 	}
-	if bi < 0 || ai < 0 {
-		return false
+	if bState {
+		return bDep, nil
 	}
-	return bi < ai
+	return targetDep, nil
 }
 
 // reportOperatorComposeMerge reports an operator_compose entry that merged
@@ -1703,12 +1783,24 @@ func bareNameOwnerWins(order []string, bDep, targetDep string) bool {
 // "merged everything" and "merged nothing" indistinguishable, and both wrong
 // outcomes reachable from a document that is spec-valid and loads clean.
 //
-// Severity is a warning by default and an error under RequireMatch, decided on
-// evidence rather than taste: measured over this repository's own corpus,
-// nineteen operator_compose entries merge zero equations today and one merges
-// partially, and every one is spec-valid under step 5 (a transport operator
-// whose only equation defines its own wind field, for instance). A hard error
-// would reject documents the format grants.
+// RequireMatch is TRI-STATE, and the three states are three different things an
+// author can mean:
+//
+//	require_match | zero merged                                | some but not all
+//	--------------+--------------------------------------------+----------------------
+//	nil           | CodeOperatorComposeNoMerge (ERROR)         | partial-merge warning
+//	true          | CodeOperatorComposeRequireMatchUnmatched (ERROR), both cases
+//	false         | permitted, silently                        | permitted, silently
+//
+// ZERO merged is an error by default because such an entry is indistinguishable
+// from an entry that is not there: the operator integrates a private decoupled
+// system from its own defaults and the mechanism gets nothing. PARTIAL stays a
+// warning because an operator may legitimately contribute states of its own
+// alongside the ones it does merge, and the format cannot tell the two apart.
+//
+// `require_match: false` is the explicit opt-out -- the author declaring a
+// standalone-contributing operator. It is a DECLARATION, not a default: an
+// absent flag means "I have not said", which is why it is the case that errors.
 //
 // The warning goes through couplingWarnf, a package-level hook so a test can
 // observe what a caller would see on stderr.
@@ -1716,10 +1808,15 @@ func reportOperatorComposeMerge(entry OperatorComposeCoupling, authored int, unm
 	if authored == 0 || len(unmatched) == 0 {
 		return nil
 	}
+	// The author has declared a standalone-contributing operator. Nothing to
+	// report: an unmatched equation is what they said to expect.
+	if entry.RequireMatch != nil && !*entry.RequireMatch {
+		return nil
+	}
 	a, b := entry.Systems[0], entry.Systems[1]
 	merged := authored - len(unmatched)
 	names := strings.Join(unmatched, ", ")
-	if entry.RequireMatch {
+	if entry.RequireMatch != nil && *entry.RequireMatch {
 		return &OperatorComposeRequireMatchError{
 			A: a, B: b, Unmatched: unmatched,
 			Message: fmt.Sprintf("operator_compose(%s + %s) declares `require_match` and "+
@@ -1727,15 +1824,23 @@ func reportOperatorComposeMerge(entry OperatorComposeCoupling, authored int, unm
 				a, b, merged, authored, b, a, names),
 		}
 	}
-	code := CodeOperatorComposePartialMerge
 	if merged == 0 {
-		code = CodeOperatorComposeNoMerge
+		return &OperatorComposeNoMergeError{
+			A: a, B: b, Unmatched: unmatched,
+			Message: fmt.Sprintf("operator_compose(%s + %s) merged NONE of the %d equations "+
+				"%q authored; no equation of %q matches: %s. The entry is indistinguishable "+
+				"from one that is not there -- %q would integrate decoupled from its own "+
+				"defaults and %q would receive no contribution. If %q really does contribute "+
+				"only states of its own, declare it with `require_match: false` on this entry.",
+				a, b, authored, b, a, names, b, a, b),
+		}
 	}
 	couplingWarnf("%s: operator_compose(%s + %s) merged %d of %d equations %q authored; "+
 		"unmatched dependent variable(s): %s. The unmatched equations are preserved unchanged "+
 		"(esm-libraries-spec §4.7.1 step 5), so they integrate DECOUPLED from %q. Set "+
-		"`require_match: true` on the entry if they were meant to be contributions.",
-		code, a, b, merged, authored, b, names, a)
+		"`require_match: true` if they were meant to be contributions, or `require_match: "+
+		"false` if they were not.",
+		CodeOperatorComposePartialMerge, a, b, merged, authored, b, names, a)
 	return nil
 }
 

@@ -2,10 +2,10 @@ package esm
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -16,56 +16,65 @@ import (
 //
 // Three things are pinned, and they are distinct:
 //
-//  1. The merge TALLY is reported — operator_compose_no_merge when nothing
-//     landed, operator_compose_partial_merge when only some did, both naming the
-//     unmatched dependent variables. Step 5 still preserves the equations; it is
-//     no longer SILENT about doing so, because silence made "merged everything"
-//     and "merged nothing" the same observable outcome.
-//  2. `require_match: true` promotes either to a hard refusal, and a PARTIAL
-//     match refuses exactly as a zero match does. require_match_satisfied is the
-//     non-vacuity anchor that keeps the flag from being simply always-fatal.
-//  3. The BARE-NAME fallback's surviving spelling follows the state's OWNER (the
-//     component declared first), not Systems[0] — so an entry means the same
-//     thing in either argument order.
+//  1. An entry that merges NOTHING is operator_compose_no_merge, a hard refusal:
+//     such an entry is indistinguishable from one that is not there. A PARTIAL
+//     merge stays a warning, because an operator may legitimately contribute
+//     states of its own alongside the ones it does merge.
+//  2. RequireMatch is TRI-STATE and nil is not false -- nil means "the author has
+//     not said" (zero-merge refuses), true makes ANY shortfall fatal, false
+//     DECLARES a standalone-contributing operator and silences both. Each state
+//     has a non-vacuity anchor, so a binding cannot pass by being uniformly
+//     strict or uniformly lax.
+//  3. A bare-name match that would unify two STATES is
+//     operator_compose_ambiguous_bare_name, a refusal: each carries its own
+//     initial condition and the merge keeps one, which is exactly the silent
+//     choice that made the `systems` order matter. Where only one side is a state
+//     the match is unambiguous and the state owns the quantity.
 //
 // Like override_key_diagnostics this category carries no golden: it compares
-// DIAGNOSTIC OUTCOMES, so this binding asserts its own idiomatic surface — the
-// couplingWarnf hook and *OperatorComposeRequireMatchError.
+// DIAGNOSTIC OUTCOMES, so this binding asserts its own idiomatic surface -- the
+// couplingWarnf hook and the three error types.
 
 type ocMergeCase struct {
 	ID               string   `json:"id"`
 	Path             string   `json:"path"`
 	Outcome          string   `json:"outcome"`
 	Code             string   `json:"code"`
+	RequireMatch     any      `json:"require_match"`
 	Merged           int      `json:"merged"`
 	Authored         int      `json:"authored"`
 	Unmatched        []string `json:"unmatched"`
+	Unified          []string `json:"unified"`
 	StateVariables   []string `json:"state_variables"`
-	ModelsDeclared   []string `json:"models_declared"`
 	Systems          []string `json:"systems"`
 	SurvivingState   string   `json:"surviving_state"`
 	SurvivingDefault *float64 `json:"surviving_default"`
 }
 
 type ocMergeManifest struct {
-	Category         string            `json:"category"`
-	BindingsRequired []string          `json:"bindings_required"`
-	Codes            map[string]string `json:"codes"`
-	Cases            []ocMergeCase     `json:"cases"`
+	BindingsRequired  []string          `json:"bindings_required"`
+	Codes             map[string]string `json:"codes"`
+	DiagnosticSurface struct {
+		Errors map[string]map[string]string `json:"errors"`
+	} `json:"diagnostic_surface"`
+	Cases []ocMergeCase `json:"cases"`
 }
 
-func ocMergeCategoryDir(t *testing.T) string {
+// ocMergeErrorForCode is the refusal each code maps to in THIS binding --
+// asserted against the manifest's Go column rather than assumed.
+var ocMergeErrorForCode = map[string]error{
+	CodeOperatorComposeNoMerge:               &OperatorComposeNoMergeError{},
+	CodeOperatorComposeRequireMatchUnmatched: &OperatorComposeRequireMatchError{},
+	CodeOperatorComposeAmbiguousBareName:     &OperatorComposeAmbiguousBareNameError{},
+}
+
+func loadOCMergeManifest(t *testing.T) (ocMergeManifest, string) {
 	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	return filepath.Join(repoRoot, "tests", "conformance", "operator_compose_merge")
-}
-
-func loadOCMergeManifest(t *testing.T) (ocMergeManifest, string) {
-	t.Helper()
-	dir := ocMergeCategoryDir(t)
+	dir := filepath.Join(repoRoot, "tests", "conformance", "operator_compose_merge")
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		// A missing manifest is a hard failure, not a skip: the manifest IS the
@@ -117,6 +126,25 @@ func flattenCapturingWarnings(t *testing.T, path string) (*FlattenedSystem, []st
 	return flat, captured, ferr
 }
 
+func TestOperatorComposeMergeManifestCoversThisBinding(t *testing.T) {
+	manifest, _ := loadOCMergeManifest(t)
+	if manifest.Codes[CodeOperatorComposePartialMerge] != "warning" {
+		t.Errorf("partial merge must be a warning, manifest says %q",
+			manifest.Codes[CodeOperatorComposePartialMerge])
+	}
+	for code, proto := range ocMergeErrorForCode {
+		if manifest.Codes[code] != "error" {
+			t.Errorf("%s must be an error, manifest says %q", code, manifest.Codes[code])
+		}
+		// The manifest names an error type per binding per code; reading Go's
+		// column back keeps the record from drifting away from the code.
+		want := "*esm." + reflect.TypeOf(proto).Elem().Name()
+		if got := manifest.DiagnosticSurface.Errors[code]["go"]; got != want {
+			t.Errorf("%s: manifest records Go type %q, want %q", code, got, want)
+		}
+	}
+}
+
 func TestOperatorComposeMergeManifestOutcomes(t *testing.T) {
 	manifest, dir := loadOCMergeManifest(t)
 	for _, tc := range manifest.Cases {
@@ -125,16 +153,29 @@ func TestOperatorComposeMergeManifestOutcomes(t *testing.T) {
 
 			switch tc.Outcome {
 			case "refused":
-				var target *OperatorComposeRequireMatchError
-				if !errors.As(err, &target) {
-					t.Fatalf("expected *OperatorComposeRequireMatchError, got %v", err)
+				proto, ok := ocMergeErrorForCode[tc.Code]
+				if !ok {
+					t.Fatalf("manifest names an unknown code %q", tc.Code)
 				}
-				if target.DiagnosticCode() != tc.Code {
-					t.Errorf("code = %q, want %q", target.DiagnosticCode(), tc.Code)
+				if err == nil {
+					t.Fatalf("expected %T, got a clean flatten", proto)
 				}
-				for _, name := range tc.Unmatched {
-					if !strings.Contains(target.Message, name) {
-						t.Errorf("the refusal must NAME %q; got %q", name, target.Message)
+				// The CONCRETE type is the contract, not merely "some error":
+				// the three refusals have three different fixes, so a binding
+				// that collapsed them would still let a caller route wrong.
+				if reflect.TypeOf(err) != reflect.TypeOf(proto) {
+					t.Fatalf("expected %T, got %T: %v", proto, err, err)
+				}
+				coded, ok := err.(interface{ DiagnosticCode() string })
+				if !ok {
+					t.Fatalf("%T carries no DiagnosticCode", err)
+				}
+				if coded.DiagnosticCode() != tc.Code {
+					t.Errorf("code = %q, want %q", coded.DiagnosticCode(), tc.Code)
+				}
+				for _, name := range append(append([]string{}, tc.Unmatched...), tc.Unified...) {
+					if !strings.Contains(err.Error(), name) {
+						t.Errorf("the refusal must NAME %q; got %q", name, err.Error())
 					}
 				}
 				return
@@ -157,6 +198,10 @@ func TestOperatorComposeMergeManifestOutcomes(t *testing.T) {
 				}
 				// The tally and the unmatched names are what make the
 				// diagnostic actionable; a code with no names is a shrug.
+				tally := fmt.Sprintf("merged %d of %d equations", tc.Merged, tc.Authored)
+				if !strings.Contains(warns[0], tally) {
+					t.Errorf("missing tally %q in %q", tally, warns[0])
+				}
 				for _, name := range tc.Unmatched {
 					if !strings.Contains(warns[0], name) {
 						t.Errorf("the diagnostic must NAME %q; got %q", name, warns[0])
@@ -175,26 +220,61 @@ func TestOperatorComposeMergeManifestOutcomes(t *testing.T) {
 					t.Errorf("state variables = %v, want %v", got, tc.StateVariables)
 				}
 			}
+			if tc.SurvivingState != "" {
+				v, ok := flat.Lookup(tc.SurvivingState)
+				if !ok {
+					t.Fatalf("surviving state %q is absent", tc.SurvivingState)
+				}
+				def, ok := toFloat64(v.Default)
+				if !ok || def != *tc.SurvivingDefault {
+					t.Errorf("surviving default = %v, want %v", v.Default, *tc.SurvivingDefault)
+				}
+			}
 		})
 	}
 }
 
-// TestOperatorComposeBareNameSurvivesUnderItsOwnersSpelling is issue #195's
-// Symptom 1 in the form that fails under the old rule: two fixtures with
-// identical models in identical declaration order, differing ONLY in the
-// `systems` array's order, must agree on the surviving state and its initial
-// condition. The tendency is arithmetically identical either way, so that name
-// and that default are the entire observable difference — which is why they are
-// compared between the two RUNS rather than only against the manifest's recorded
-// values: this fails on disagreement even if both were re-recorded.
-func TestOperatorComposeBareNameSurvivesUnderItsOwnersSpelling(t *testing.T) {
+// TestOperatorComposeRequireMatchTruthTableIsCovered checks that every cell of
+// the tri-state table the manifest records has a case. The table is the whole of
+// require_match's meaning, and its three states are three different things an
+// author can mean; a column with no case is a column a binding could get wrong
+// without failing anything.
+func TestOperatorComposeRequireMatchTruthTableIsCovered(t *testing.T) {
+	manifest, _ := loadOCMergeManifest(t)
+	covered := map[string]bool{}
+	for _, c := range manifest.Cases {
+		covered[fmt.Sprintf("%v|%s", c.RequireMatch, c.Outcome)] = true
+	}
+	for _, want := range []string{
+		"absent|refused", "absent|warning", "absent|clean",
+		"true|refused", "true|clean",
+		"false|clean",
+	} {
+		if !covered[want] {
+			t.Errorf("the require_match truth table has no case for %q", want)
+		}
+	}
+	if covered["false|refused"] {
+		t.Error("`require_match: false` declares that unmatched equations are expected; " +
+			"nothing under it may refuse")
+	}
+}
+
+// TestOperatorComposeFlippingSystemsChangesNothingObservable is issue #195's
+// Symptom 1 in the form that fails under the old rule: two PAIRS of fixtures,
+// each differing ONLY in the `systems` array's order, must agree. The tendency is
+// arithmetically identical either way, so the surviving name and default (or the
+// refusal) are the entire observable difference -- compared between the two RUNS
+// rather than against the manifest, so this fails on disagreement even if both
+// were re-recorded.
+func TestOperatorComposeFlippingSystemsChangesNothingObservable(t *testing.T) {
 	manifest, dir := loadOCMergeManifest(t)
 	byID := map[string]ocMergeCase{}
 	for _, c := range manifest.Cases {
 		byID[c.ID] = c
 	}
 
-	surviving := func(id string) (string, float64) {
+	outcome := func(id string) string {
 		t.Helper()
 		tc, ok := byID[id]
 		if !ok {
@@ -202,46 +282,61 @@ func TestOperatorComposeBareNameSurvivesUnderItsOwnersSpelling(t *testing.T) {
 		}
 		flat, _, err := flattenCapturingWarnings(t, filepath.Join(dir, tc.Path))
 		if err != nil {
-			t.Fatalf("%s: %v", id, err)
+			return fmt.Sprintf("%T", err)
 		}
-		if len(flat.StateVariables) != 1 {
-			t.Fatalf("%s: expected one surviving state, got %d", id, len(flat.StateVariables))
+		parts := make([]string, 0, len(flat.StateVariables))
+		for _, v := range flat.StateVariables {
+			parts = append(parts, fmt.Sprintf("%s=%v", v.Name, v.Default))
 		}
-		v := flat.StateVariables[0]
-		// The INITIAL CONDITION is half of what used to change with argument
-		// order, so a state that reached here without one is a failure, not a
-		// case to skip.
-		def, ok := toFloat64(v.Default)
-		if !ok {
-			t.Fatalf("%s: surviving state %q lost its default (%v)", id, v.Name, v.Default)
-		}
-		return v.Name, def
+		return strings.Join(parts, ",")
 	}
 
-	aName, aDefault := surviving("owner_rename_operator_first")
-	bName, bDefault := surviving("owner_rename_mechanism_listed_first")
-	if aName != bName || aDefault != bDefault {
-		t.Errorf("flipping `systems` changed the surviving state: %s@%v vs %s@%v",
-			aName, aDefault, bName, bDefault)
+	for _, pair := range [][2]string{
+		{"ambiguous_bare_name", "ambiguous_bare_name_flipped"},
+		{"owner_rename_state_wins_observed_first", "owner_rename_state_wins_state_first"},
+	} {
+		a, b := byID[pair[0]], byID[pair[1]]
+		if len(a.Systems) != 2 || a.Systems[0] != b.Systems[1] || a.Systems[1] != b.Systems[0] {
+			t.Fatalf("%s/%s must differ ONLY in `systems` order", pair[0], pair[1])
+		}
+		if got, want := outcome(pair[0]), outcome(pair[1]); got != want {
+			t.Errorf("flipping `systems` changed the outcome: %s gave %q, %s gave %q",
+				pair[0], got, pair[1], want)
+		}
 	}
+}
 
-	// The companion, and what keeps the above from being trivial: the same
-	// `systems` order with the models declared the other way round must produce
-	// the OTHER name. A binding that hard-coded either answer fails one of these.
-	cName, cDefault := surviving("owner_rename_mechanism_declared_first")
-	if cName == aName {
-		t.Errorf("declaration order must decide the surviving spelling; both gave %s", cName)
-	}
-	if cName != "Chem.O3" || cDefault != 30.0 {
-		t.Errorf("mechanism-declared-first surviving state = %s@%v, want Chem.O3@30", cName, cDefault)
+// TestOperatorComposeAmbiguityIsNotABlanketBan pins the two ways out of an
+// ambiguous bare-name match. Without it a binding could pass every refusal by
+// refusing the whole bare-name fallback.
+func TestOperatorComposeAmbiguityIsNotABlanketBan(t *testing.T) {
+	_, dir := loadOCMergeManifest(t)
+	for _, tc := range []struct {
+		fixture string
+		state   string
+		def     float64
+	}{
+		{"ambiguous_resolved_by_translate.esm", "Chem.O3", 30.0},
+		{"owner_rename_state_wins_observed_first.esm", "Sink.O3", 40.0},
+	} {
+		flat, _, err := flattenCapturingWarnings(t, filepath.Join(dir, "fixtures", tc.fixture))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.fixture, err)
+		}
+		if len(flat.StateVariables) != 1 || flat.StateVariables[0].Name != tc.state {
+			t.Fatalf("%s: states = %v, want [%s]", tc.fixture, flat.StateVariables, tc.state)
+		}
+		if def, ok := toFloat64(flat.StateVariables[0].Default); !ok || def != tc.def {
+			t.Errorf("%s: default = %v, want %v", tc.fixture, flat.StateVariables[0].Default, tc.def)
+		}
 	}
 }
 
 // TestOperatorComposeRequireMatchRoundTrips pins that `require_match` reaches the
-// emitted document — a flag that silently vanished on save would make the
-// refusal unreproducible from the file the author kept — and that the schema
-// DEFAULT is not written out, which would put a key on every existing fixture
-// and break load preservation.
+// emitted document. The flag is TRI-STATE, so an explicit false must survive --
+// dropping it as "the default" would silently re-arm the zero-merge refusal on
+// every document that opted out -- and an ABSENT flag must stay absent, for the
+// same reason in the other direction.
 func TestOperatorComposeRequireMatchRoundTrips(t *testing.T) {
 	_, dir := loadOCMergeManifest(t)
 	emitted := func(name string) map[string]any {
@@ -271,9 +366,12 @@ func TestOperatorComposeRequireMatchRoundTrips(t *testing.T) {
 	}
 
 	if got := emitted("require_match_unmatched.esm")["require_match"]; got != true {
-		t.Errorf("require_match did not survive the round trip: %v", got)
+		t.Errorf("an explicit `true` did not survive the round trip: %v", got)
 	}
-	if _, present := emitted("no_merge.esm")["require_match"]; present {
-		t.Error("the `false` default must NOT be emitted")
+	if got, present := emitted("no_merge_declared.esm")["require_match"]; !present || got != false {
+		t.Errorf("an explicit `false` did not survive the round trip: %v (present=%v)", got, present)
+	}
+	if _, present := emitted("partial_merge.esm")["require_match"]; present {
+		t.Error("an ABSENT flag must stay absent")
 	}
 }
