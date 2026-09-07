@@ -1,0 +1,150 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_require_match_partial",
+    "description": "esm-libraries-spec 4.7.1 step 5: a PARTIAL match fails under `require_match` exactly as a zero match does. There is no 'some is enough' reading an author could rely on -- an operator that reaches seven of twelve species and silently misses five is the defect the flag exists to catch. Same document as `partial_merge.esm`, with the flag set; flatten REFUSES.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "operator-compose-require-match",
+      "merge-intent"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 5.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "CO": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 100.0,
+          "description": "Declared so `Sink.CO` below is a name the document carries. The mechanism has no CO, so the operator's CO tendency lands nowhere."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "CO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "CO"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "require_match": true
+    }
+  ]
+}

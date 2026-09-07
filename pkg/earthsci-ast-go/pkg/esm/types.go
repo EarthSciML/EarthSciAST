@@ -853,10 +853,10 @@ type CouplingEntry interface {
 
 // OperatorComposeCoupling represents operator composition
 type OperatorComposeCoupling struct {
-	Type        string         `json:"type"` // "operator_compose"
-	Systems     [2]string      `json:"systems"`
-	Translate   map[string]any `json:"translate,omitempty"`
-	Lifting     *string        `json:"lifting,omitempty"`
+	Type      string         `json:"type"` // "operator_compose"
+	Systems   [2]string      `json:"systems"`
+	Translate map[string]any `json:"translate,omitempty"`
+	Lifting   *string        `json:"lifting,omitempty"`
 	// RequireMatch (esm-libraries-spec §4.7.1 step 5) declares that the
 	// Systems[1] equations are CONTRIBUTIONS and every one of them must land on
 	// an equation of Systems[0]. An unmatched one is then

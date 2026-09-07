@@ -162,6 +162,35 @@ const (
 	// identity, so an additive term against an absent tendency simply becomes
 	// the tendency. There is no multiplicative identity that would do the same.
 	CodeCoupleMultiplicativeNoTendency = "couple_multiplicative_no_tendency"
+
+	// CodeOperatorComposeNoMerge and CodeOperatorComposePartialMerge are
+	// WARNING-level (esm-libraries-spec §4.7.1 step 5): an `operator_compose`
+	// entry merged NONE, or only SOME, of the equations Systems[1] authored.
+	//
+	// Step 5 preserves an unmatched equation unchanged, which is correct — an
+	// operator may legitimately contribute states of its own — but preserving it
+	// SILENTLY made "merged everything" and "merged nothing" the same observable
+	// outcome, and both wrong outcomes reachable from a document that is
+	// spec-valid and loads clean.
+	//
+	// These stay WARNINGS rather than errors on measured evidence: 19
+	// `operator_compose` entries in this repository's own corpus merge zero
+	// equations today and one merges partially, and every one of them is
+	// spec-valid under step 5 (a transport operator whose only equation defines
+	// its own wind field, for instance). A hard error would reject documents the
+	// format grants. An author who means "these are contributions" says so with
+	// `require_match`.
+	CodeOperatorComposeNoMerge      = "operator_compose_no_merge"
+	CodeOperatorComposePartialMerge = "operator_compose_partial_merge"
+
+	// CodeOperatorComposeRequireMatchUnmatched: an `operator_compose` entry
+	// declared `require_match: true` and one of Systems[1]'s equations found no
+	// equation of Systems[0] to land on (esm-libraries-spec §4.7.1 step 5). A
+	// PARTIAL match fails too: there is no "some is enough" reading an author
+	// could rely on — the seven-of-twelve-species case is exactly the defect the
+	// flag exists to catch. Refused at FLATTEN, not at validate: the document is
+	// schema-valid and structurally valid, and only the merge knows the answer.
+	CodeOperatorComposeRequireMatchUnmatched = "operator_compose_require_match_unmatched"
 )
 
 // --- Diagnostic codes: §4.7 subsystem refs. Shared with the structural

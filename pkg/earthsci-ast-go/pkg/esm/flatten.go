@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -93,6 +94,32 @@ func (e *CoupleMultiplicativeNoTendencyError) Error() string {
 // DiagnosticCode returns the stable diagnostic code (DiagnosticError).
 func (e *CoupleMultiplicativeNoTendencyError) DiagnosticCode() string {
 	return CodeCoupleMultiplicativeNoTendency
+}
+
+// OperatorComposeRequireMatchError reports that an `operator_compose` entry
+// declared `require_match: true` and one of Systems[1]'s equations found no
+// equation of Systems[0] to land on (esm-libraries-spec §4.7.1 step 5).
+//
+// Step 5 otherwise preserves an unmatched equation unchanged, which makes
+// "merged everything" and "merged nothing" the same observable outcome;
+// `require_match` is the author's opt-in to tell them apart. A PARTIAL match
+// fails too — there is no "some is enough" reading an author could rely on.
+type OperatorComposeRequireMatchError struct {
+	// A and B are the entry's two systems, Systems[0] and Systems[1].
+	A, B string
+	// Unmatched names the dependent variables that found no counterpart, in
+	// document order.
+	Unmatched []string
+	Message   string
+}
+
+func (e *OperatorComposeRequireMatchError) Error() string {
+	return fmt.Sprintf("[%s] %s", CodeOperatorComposeRequireMatchUnmatched, e.Message)
+}
+
+// DiagnosticCode returns the stable diagnostic code (DiagnosticError).
+func (e *OperatorComposeRequireMatchError) DiagnosticCode() string {
+	return CodeOperatorComposeRequireMatchUnmatched
 }
 
 // DimensionPromotionError reports that a variable or equation cannot be
@@ -1693,12 +1720,11 @@ func reportOperatorComposeMerge(entry OperatorComposeCoupling, authored int, unm
 	merged := authored - len(unmatched)
 	names := strings.Join(unmatched, ", ")
 	if entry.RequireMatch {
-		return &StructuralError{
-			Path: "/coupling",
-			Code: CodeOperatorComposeRequireMatchUnmatched,
-			Message: fmt.Sprintf("%s: operator_compose(%s + %s) declares `require_match` and "+
+		return &OperatorComposeRequireMatchError{
+			A: a, B: b, Unmatched: unmatched,
+			Message: fmt.Sprintf("operator_compose(%s + %s) declares `require_match` and "+
 				"merged %d of %d equations %q authored; no equation of %q matches: %s",
-				CodeOperatorComposeRequireMatchUnmatched, a, b, merged, authored, b, a, names),
+				a, b, merged, authored, b, a, names),
 		}
 	}
 	code := CodeOperatorComposePartialMerge
