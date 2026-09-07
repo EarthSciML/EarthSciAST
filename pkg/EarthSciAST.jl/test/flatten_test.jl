@@ -733,7 +733,11 @@ end
         @test flat isa FlattenedSystem
         doc = E.flattened_to_esm(flat)
         @test doc["esm"] == E.SCHEMA_VERSION
-        @test E.SCHEMA_VERSION == "1.0.0"
+        # The literal is the point: it pins that the reconstituted document is
+        # stamped with the format version this binding implements, and it is
+        # expected to be updated by hand on each format bump. 1.0.0 -> 1.1.0
+        # with the top-level `solver` block (esm-spec §2.2).
+        @test E.SCHEMA_VERSION == "1.1.0"
     end
 
     @testset "Flatten valid fixtures smoke test" begin

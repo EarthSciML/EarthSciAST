@@ -161,8 +161,8 @@ fn discrete_materialize_trajectory_matches_golden() {
     let params: HashMap<String, f64> = HashMap::new();
     let base_opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 1_000_000,
         saveat: None,
         ..Default::default()

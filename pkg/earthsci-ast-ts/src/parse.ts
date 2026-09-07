@@ -21,6 +21,7 @@ import {
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
+import { normalizeEmptySolver, rejectSolverPreV11 } from './solver.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
@@ -464,6 +465,22 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // expression_templates, metaparameters) are rejected when the file
   // declares esm < 0.8.0 (esm-spec §9.6.5).
   rejectTemplateImportsPreV08(validationView)
+
+  // Step 2d: the top-level `solver` block is rejected when the file declares
+  // esm < 1.1.0 (esm-spec §2.2.4). Before schema validation for the same reason
+  // as the gates above: the version hint beats a generic "extra property"
+  // error.
+  rejectSolverPreV11(validationView)
+  // Then §2.2's one normalization — an EMPTY block means what absence means, so
+  // it is dropped here rather than surviving to emit. Applied to BOTH views for
+  // the same reason `resolveDataSourceUrls` is: in canonical mode
+  // `validationView` is a separate stripped copy, and the `EsmFile` is built out
+  // of `data`.
+  const solverNormalized = normalizeEmptySolver(data)
+  if (solverNormalized !== null) {
+    data = solverNormalized
+    validationView = canonical ? (normalizeEmptySolver(validationView) ?? validationView) : data
+  }
 
   // Step 3: Schema validation
   if (options?.assumeValid !== true) {
