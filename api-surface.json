@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 853,
+    "symbols": 857,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 298,
+      "julia": 299,
       "typescript": 231,
       "python": 243,
-      "rust": 329,
-      "go": 384
+      "rust": 331,
+      "go": 386
     },
     "by_tier": {
-      "extension": 590,
-      "stable": 263
+      "extension": 593,
+      "stable": 264
     }
   },
   "planned": [
@@ -3929,6 +3929,15 @@
       }
     },
     {
+      "name": "inline_test_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "InlineTestOptions",
+        "rust": "InlineTestOptions"
+      }
+    },
+    {
       "name": "inline_value",
       "kind": "type",
       "tier": "extension",
@@ -5980,36 +5989,44 @@
       }
     },
     {
-      "name": "run_pde_tests",
+      "name": "run_inline_tests",
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "julia": "run_pde_tests",
-        "rust": "run_pde_tests"
+        "julia": "run_inline_tests",
+        "rust": "run_inline_tests"
       }
     },
     {
-      "name": "run_pde_tests_with_base_dir",
+      "name": "run_inline_tests_filtered",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_base_dir"
+        "rust": "run_inline_tests_filtered"
       }
     },
     {
-      "name": "run_pde_tests_with_providers",
+      "name": "run_inline_tests_paths",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_providers"
+        "rust": "run_inline_tests_paths"
       }
     },
     {
-      "name": "run_pde_tests_filtered",
+      "name": "run_inline_tests_with_base_dir",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_filtered"
+        "rust": "run_inline_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "run_inline_tests_with_providers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_inline_tests_with_providers"
       }
     },
     {

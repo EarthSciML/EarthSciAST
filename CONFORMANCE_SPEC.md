@@ -2578,7 +2578,7 @@ configuration.
 #### 5.14.1 What is compared
 
 Each in-scope binding runs the fixture's inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — the three tests differ *only* in their
 `parameter_overrides`, so the pair is the identity.
@@ -2703,7 +2703,7 @@ both ranks and is the reference binding.
 #### 5.16.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator and compares every
+inline-test runner (`run_inline_tests`) with the pinned integrator and compares every
 assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)`.
 
@@ -3280,7 +3280,7 @@ because every other fixture's actuals are finite.
 #### 5.20.2 What is compared
 
 Each in-scope binding runs the fixture's inline test through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator, and for each
+inline-test runner (`run_inline_tests`) with the pinned integrator, and for each
 `(test_id, assertion_idx)` the manifest's `cases` entry declares:
 
 | Field | Contract |
@@ -3512,7 +3512,7 @@ laundered answer would have gone green on the defect.
 
 Rust drives it on both routes in
 `pkg/earthsci-ast-rs/tests/undeclared_operand_gate.rs` — the per-step route
-(`run_pde_tests`), the build pipeline (`build_pipeline: true`, which needs no
+(`run_inline_tests`), the build pipeline (`build_pipeline: true`, which needs no
 data reader linked and reaches the identical code an ingest reaches), a
 cross-route assertion that both name the same operand in the same words, and the
 resolver-level backstop with its non-vacuity twin.
@@ -4098,7 +4098,7 @@ asserted at `time: 0`) needs them on one shared model.
 #### 5.28.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — each fixture's tests differ *only* in their inline
 array data, so the pair is the identity.

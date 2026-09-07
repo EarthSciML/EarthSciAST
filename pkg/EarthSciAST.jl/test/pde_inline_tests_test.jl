@@ -488,3 +488,130 @@ end
     @test results[6].actual < 1e-12
     @test results[7].actual < 1e-12
 end
+
+# ---------------------------------------------------------------------------
+# Issue #194 — reaction-system coverage and the per-document options hook
+# ---------------------------------------------------------------------------
+
+# A first-order decay written as a REACTION SYSTEM: A → B at rate k·[A], so
+# A(t) = e^{-kt} and B(t) = 1 − e^{-kt} exactly.
+#
+# `reaction_systems` carries the same `tests` member `models` does (esm-spec
+# §6.6), and this runner iterated `models` alone until issue #194 — so every
+# assertion of a chemical mechanism was skipped, and skipped SILENTLY, since a
+# component that produced no rows is indistinguishable in the result list from
+# one that was never looked at.
+_pit_reaction_decay_doc() = Dict{String,Any}(
+    "esm" => "1.0.0",
+    "metadata" => Dict("name" => "inline_test_reaction_system"),
+    "reaction_systems" => Dict{String,Any}("Decay" => Dict{String,Any}(
+        "species" => Dict{String,Any}(
+            "A" => Dict("units" => "mol/mol", "default" => 1.0),
+            "B" => Dict("units" => "mol/mol", "default" => 0.0)),
+        "parameters" => Dict{String,Any}(
+            "k" => Dict("units" => "1/s", "default" => 1.0)),
+        "reactions" => Any[Dict{String,Any}(
+            "id" => "R1",
+            "substrates" => Any[Dict("species" => "A", "stoichiometry" => 1)],
+            "products" => Any[Dict("species" => "B", "stoichiometry" => 1)],
+            "rate" => "k")],
+        "tests" => Any[Dict{String,Any}(
+            "id" => "decays",
+            "time_span" => Dict("start" => 0.0, "end" => 1.0),
+            "assertions" => Any[
+                Dict{String,Any}("variable" => "A", "time" => 1.0,
+                                 "expected" => exp(-1.0),
+                                 "tolerance" => Dict("rel" => 1e-6)),
+                Dict{String,Any}("variable" => "B", "time" => 1.0,
+                                 "expected" => 1.0 - exp(-1.0),
+                                 "tolerance" => Dict("rel" => 1e-6))])])))
+
+@testset "run_inline_tests covers reaction_systems (#194)" begin
+    file = load_string(JSON3.write(_pit_reaction_decay_doc()))
+    results = run_inline_tests(file; alg=OrdinaryDiffEqTsit5.Tsit5(),
+                               reltol=1e-12, abstol=1e-14)
+    # Two assertions, both from a component that is NOT a `models` entry.
+    @test length(results) == 2
+    @test all(r -> r.model == "Decay", results)
+    @test all(r -> r.container_kind === :reaction_system, results)
+    @test [r.variable for r in results] == ["A", "B"]
+    @test isapprox(results[1].actual, exp(-1.0); rtol=1e-6)
+    @test isapprox(results[2].actual, 1.0 - exp(-1.0); rtol=1e-6)
+    @test all(r -> r.passed, results)
+end
+
+# `D(y)/dt = T` from y(0) = 0, so y(1) = T exactly whatever T is. The
+# assertion's `expected` is therefore a direct read-out of the T the run
+# actually used — which is what makes it a probe for where an override came
+# from.
+function _pit_ramp_doc(expected::Float64; test_overrides=nothing)
+    test = Dict{String,Any}(
+        "id" => "ramp",
+        "time_span" => Dict("start" => 0.0, "end" => 1.0),
+        "assertions" => Any[Dict{String,Any}(
+            "variable" => "y", "time" => 1.0, "expected" => expected,
+            "tolerance" => Dict("rel" => 1e-9))])
+    test_overrides === nothing || (test["parameter_overrides"] = test_overrides)
+    Dict{String,Any}(
+        "esm" => "1.0.0",
+        "metadata" => Dict("name" => "ramp"),
+        "models" => Dict{String,Any}("M" => Dict{String,Any}(
+            "variables" => Dict{String,Any}(
+                "T" => Dict("type" => "parameter", "units" => "1", "default" => 1.0),
+                "y" => Dict("type" => "unknown", "units" => "1", "default" => 0.0)),
+            "equations" => Any[Dict{String,Any}(
+                "lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                "rhs" => "T")],
+            "tests" => Any[test])))
+end
+
+@testset "run_inline_tests options_for is consulted per document (#194)" begin
+    # The issue's key ask: site policy lives in the CALLER. Two documents in one
+    # directory, each needing a different parameter, and one callback that knows
+    # which is which — with nothing document-specific reaching the runner.
+    mktempdir() do tmp
+        write(joinpath(tmp, "a.esm"), JSON3.write(_pit_ramp_doc(3.0)))
+        write(joinpath(tmp, "b.esm"), JSON3.write(_pit_ramp_doc(7.0)))
+        seeds = Dict("a.esm" => 3.0, "b.esm" => 7.0)
+        options_for = path -> InlineTestOptions(
+            alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
+            parameter_overrides=Dict{String,Any}("T" => seeds[basename(path)]))
+        # A DIRECTORY expands to the .esm files under it, sorted.
+        results = run_inline_tests(tmp; options_for=options_for)
+        @test length(results) == 2
+        @test isapprox(results[1].actual, 3.0; rtol=1e-9)
+        @test isapprox(results[2].actual, 7.0; rtol=1e-9)
+        @test all(r -> r.passed, results)
+
+        # Without the callback both documents run at T's default of 1.0 and
+        # both assertions fail — the callback is load-bearing, not decorative.
+        bare = run_inline_tests(tmp; alg=OrdinaryDiffEqTsit5.Tsit5(),
+                                reltol=1e-12, abstol=1e-14)
+        @test !any(r -> r.passed, bare)
+
+        # One bad file must not cost a corpus run every other file's verdicts —
+        # and must not vanish either, which is indistinguishable from a pass.
+        write(joinpath(tmp, "bad.esm"), "{ not json")
+        batch = run_inline_tests(tmp; options_for=options_for)
+        load_rows = filter(r -> r.test_id == "<load>", batch)
+        @test length(load_rows) == 1
+        @test endswith(load_rows[1].file, "bad.esm")
+        @test !load_rows[1].passed
+        @test occursin("load failed", load_rows[1].message)
+        @test count(r -> r.passed, batch) == 2
+    end
+end
+
+@testset "run_inline_tests seed yields to the test's own override (#194)" begin
+    # A seed supplies what the document left unsaid; it never overrules what the
+    # document said. The test names T=5 and the caller seeds T=99, so y(1) = 5.
+    file = load_string(JSON3.write(
+        _pit_ramp_doc(5.0; test_overrides=Dict{String,Any}("T" => 5.0))))
+    results = run_inline_tests([file];
+        options_for = _doc -> InlineTestOptions(
+            alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14,
+            parameter_overrides=Dict{String,Any}("T" => 99.0)))
+    @test length(results) == 1
+    @test isapprox(results[1].actual, 5.0; rtol=1e-9)
+    @test results[1].passed
+end

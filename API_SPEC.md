@@ -1045,6 +1045,7 @@ reading that as a gap.
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
 | `init` | function | – | – | `init` | `init` | – |
+| `inline_test_options` | type | `InlineTestOptions` | – | – | `InlineTestOptions` | – |
 | `integrator` | type | – | – | `Integrator` | `Integrator` | – |
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
@@ -1068,7 +1069,7 @@ reading that as a gap.
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
 | `remake` | function | – | – | `remake` | `remake` | – |
 | `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
-| `run_pde_tests` | function | `run_pde_tests` | – | – | `run_pde_tests` | – |
+| `run_inline_tests` | function | `run_inline_tests` | – | – | `run_inline_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |

@@ -3056,4 +3056,190 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    // -----------------------------------------------------------------
+    // Issue #194: reaction-system coverage and the per-document options hook
+    // -----------------------------------------------------------------
+
+    /// A first-order decay written as a REACTION SYSTEM: A → B at rate k·[A],
+    /// so A(t) = e^{-kt} and B(t) = 1 − e^{-kt} exactly.
+    ///
+    /// `reaction_systems` carries the same `tests` member `models` does
+    /// (esm-spec §6.6), and this runner iterated `models` alone until issue
+    /// #194 — so every assertion of a chemical mechanism was skipped, and
+    /// skipped SILENTLY, since a component that produced no rows is
+    /// indistinguishable in the result list from one that was never looked at.
+    fn reaction_decay_doc() -> serde_json::Value {
+        json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "inline_test_reaction_system"},
+            "reaction_systems": {"Decay": {
+                "species": {
+                    "A": {"units": "mol/mol", "default": 1.0},
+                    "B": {"units": "mol/mol", "default": 0.0},
+                },
+                "parameters": {"k": {"units": "1/s", "default": 1.0}},
+                "reactions": [{
+                    "id": "R1",
+                    "substrates": [{"species": "A", "stoichiometry": 1}],
+                    "products": [{"species": "B", "stoichiometry": 1}],
+                    "rate": "k",
+                }],
+                "tests": [{
+                    "id": "decays",
+                    "time_span": {"start": 0.0, "end": 1.0},
+                    "assertions": [
+                        {"variable": "A", "time": 1.0,
+                         "expected": std::f64::consts::E.recip(),
+                         "tolerance": {"rel": 1e-6}},
+                        {"variable": "B", "time": 1.0,
+                         "expected": 1.0 - std::f64::consts::E.recip(),
+                         "tolerance": {"rel": 1e-6}},
+                    ],
+                }],
+            }},
+        })
+    }
+
+    #[test]
+    fn run_inline_tests_covers_reaction_systems() {
+        let file = load_string(&reaction_decay_doc().to_string()).expect("doc loads");
+        let results = run_inline_tests(&file, None, &tight_opts());
+        // Two assertions, both from a component that is NOT a `models` entry.
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(results.iter().all(|r| r.model == "Decay"));
+        assert_eq!(
+            results.iter().map(|r| r.variable.as_str()).collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+        assert!(
+            results.iter().all(|r| r.passed),
+            "{:?}",
+            results
+                .iter()
+                .map(|r| (r.variable.clone(), r.message.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// `D(y)/dt = T` from `y(0) = 0`, so `y(1) = T` exactly whatever `T` is.
+    /// The assertion's `expected` is therefore a direct read-out of the `T` the
+    /// run actually used — which is what makes it a probe for where an override
+    /// came from.
+    fn ramp_doc(expected: f64, test_overrides: Option<serde_json::Value>) -> serde_json::Value {
+        let mut test = json!({
+            "id": "ramp",
+            "time_span": {"start": 0.0, "end": 1.0},
+            "assertions": [{"variable": "y", "time": 1.0,
+                            "expected": expected, "tolerance": {"rel": 1e-9}}],
+        });
+        if let Some(ov) = test_overrides {
+            test["parameter_overrides"] = ov;
+        }
+        json!({
+            "esm": "1.0.0",
+            "metadata": {"name": "ramp"},
+            "models": {"M": {
+                "variables": {
+                    "T": {"type": "parameter", "units": "1", "default": 1.0},
+                    "y": {"type": "unknown", "units": "1", "default": 0.0},
+                },
+                "equations": [{"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": "T"}],
+                "tests": [test],
+            }},
+        })
+    }
+
+    fn write_doc(dir: &Path, name: &str, doc: &serde_json::Value) {
+        std::fs::write(dir.join(name), doc.to_string()).expect("fixture written");
+    }
+
+    /// The issue's key ask: site policy lives in the CALLER. Two documents in
+    /// one directory, each needing a different parameter, and one callback that
+    /// knows which is which — with nothing document-specific reaching this
+    /// module.
+    #[test]
+    fn run_inline_tests_paths_consults_options_for_per_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(dir.path(), "a.esm", &ramp_doc(3.0, None));
+        write_doc(dir.path(), "b.esm", &ramp_doc(7.0, None));
+
+        let options_for = |path: &Path| {
+            let seed = match path.file_name().and_then(|n| n.to_str()) {
+                Some("a.esm") => 3.0,
+                _ => 7.0,
+            };
+            InlineTestOptions {
+                solve: tight_opts(),
+                parameter_overrides: HashMap::from([(
+                    "T".to_string(),
+                    InlineValue::Scalar(seed),
+                )]),
+                ..Default::default()
+            }
+        };
+        // A DIRECTORY expands to the .esm files under it, sorted.
+        let results = run_inline_tests_paths(&[dir.path()], &options_for);
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!((results[0].actual.expect("a actual") - 3.0).abs() <= 1e-9 * 3.0);
+        assert!((results[1].actual.expect("b actual") - 7.0).abs() <= 1e-9 * 7.0);
+        assert!(results.iter().all(|r| r.passed), "{results:?}");
+
+        // Without the seeds both documents run at T's default of 1.0 and both
+        // assertions fail — so the callback is load-bearing, not decorative.
+        let bare = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            ..Default::default()
+        });
+        assert!(bare.iter().all(|r| !r.passed), "{bare:?}");
+    }
+
+    /// A seed supplies what the document left unsaid; it never overrules what
+    /// the document said. The test names `T = 5` and the caller seeds
+    /// `T = 99`, so `y(1)` must be 5.
+    #[test]
+    fn run_inline_tests_paths_seed_yields_to_the_tests_own_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(
+            dir.path(),
+            "seeded.esm",
+            &ramp_doc(5.0, Some(json!({"T": 5.0}))),
+        );
+        let results = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            parameter_overrides: HashMap::from([("T".to_string(), InlineValue::Scalar(99.0))]),
+            ..Default::default()
+        });
+        assert_eq!(results.len(), 1, "{results:?}");
+        let actual = results[0].actual.expect("actual recorded");
+        assert!((actual - 5.0).abs() <= 1e-9 * 5.0, "actual {actual}, want 5");
+        assert!(results[0].passed, "{}", results[0].message);
+    }
+
+    /// One bad file must not cost a corpus run every other file's verdicts —
+    /// and must not vanish either, which would be indistinguishable from a
+    /// pass.
+    #[test]
+    fn run_inline_tests_paths_records_an_unreadable_document_as_a_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_doc(dir.path(), "good.esm", &ramp_doc(1.0, None));
+        std::fs::write(dir.path().join("bad.esm"), "{ not json").expect("bad fixture");
+        let results = run_inline_tests_paths(&[dir.path()], &|_p| InlineTestOptions {
+            solve: tight_opts(),
+            ..Default::default()
+        });
+        assert_eq!(results.len(), 2, "{results:?}");
+        let load_row = results
+            .iter()
+            .find(|r| r.test_id == "<load>")
+            .expect("a <load> row for the unreadable document");
+        assert!(load_row.model.ends_with("bad.esm"), "{}", load_row.model);
+        assert!(!load_row.passed);
+        assert!(load_row.message.contains("load failed"), "{}", load_row.message);
+        let good = results
+            .iter()
+            .find(|r| r.test_id == "ramp")
+            .expect("the good document still ran");
+        assert!(good.passed, "{}", good.message);
+    }
 }
