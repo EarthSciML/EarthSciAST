@@ -90,21 +90,59 @@ class CoupleMultiplicativeNoTendencyError(FlattenError):
     code = "couple_multiplicative_no_tendency"
 
 
+class OperatorComposeNoMergeError(FlattenError):
+    """An ``operator_compose`` entry merged NOTHING (esm-libraries-spec §4.7.1 step 5).
+
+    An entry that matches nothing is indistinguishable from an entry that is not
+    there: the operator integrates a private, decoupled system from its own
+    defaults, the other system receives no contribution at all, and the only
+    evidence is a state count one too high. That is the one outcome a coupling
+    mis-specification must not have, so it is refused rather than reported.
+
+    An operator that genuinely contributes only states of its own -- a transport
+    operator whose single equation defines its own wind field, say -- says so
+    with ``require_match: false``, and is then permitted.
+    """
+
+    code = "operator_compose_no_merge"
+
+
 class OperatorComposeRequireMatchError(FlattenError):
     """An ``operator_compose`` entry declared ``require_match`` and did not match.
 
     esm-libraries-spec §4.7.1 step 5: ``require_match: true`` says the
     ``systems[1]`` equations are CONTRIBUTIONS and every one of them must land on
     an equation of ``systems[0]``. Step 5 otherwise preserves an unmatched
-    equation unchanged, which makes "merged everything" and "merged nothing"
-    the same observable outcome; this is the author's opt-in to tell them apart.
+    equation unchanged, and a PARTIAL shortfall is only a warning by default;
+    this is the author's opt-in to make it fatal.
 
-    A PARTIAL match raises too. There is no "some is enough" reading an author
+    A PARTIAL match raises here. There is no "some is enough" reading an author
     could rely on: the seven-of-twelve-species case is exactly the defect the
     flag exists to catch.
     """
 
     code = "operator_compose_require_match_unmatched"
+
+
+class OperatorComposeAmbiguousBareNameError(FlattenError):
+    """A bare-name match unified two STATES and the document did not say which survives.
+
+    esm-libraries-spec §4.7.1 step 3. The bare-name fallback binds ``A.x`` to
+    ``B.x`` on the strength of a shared local name alone. When both are state
+    variables, each carries its own INITIAL CONDITION, and the merge has to
+    delete one of them -- so the choice decides which IC the flattened system
+    integrates from. Nothing in the document expresses that choice, and picking
+    one silently is how flipping the entry's ``systems`` order came to change the
+    answer.
+
+    So it is refused. The author says what they mean with ``translate``, which
+    names the surviving spelling outright, or with ``require_match``.
+
+    A match where only ONE side is a state is NOT ambiguous: the other carries no
+    initial condition, so the state is the owner and the merge renames onto it.
+    """
+
+    code = "operator_compose_ambiguous_bare_name"
 
 
 class DimensionPromotionError(FlattenError):
@@ -1364,13 +1402,15 @@ def _apply_operator_compose(
     _report_operator_compose_merge(entry, a_name, b_name, authored, unmatched)
 
     # §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
-    # asserts that A's `x` and B's `x` are one state under two spellings; the
-    # surviving spelling is the owner's, not `systems[0]`'s, so that flipping the
-    # entry's argument order cannot change which state name -- and therefore
-    # which initial condition -- survives.
+    # asserts that A's `x` and B's `x` are one quantity under two spellings, and
+    # the merge has to delete one of them. When BOTH are states the document has
+    # not said which INITIAL CONDITION survives -- so that is refused rather than
+    # decided here. When only one is a state, that one is the owner and the merge
+    # renames onto it, in either argument order.
     inverted: dict[str, str] = {}
     for b_dep, target_dep in bare_matches.items():
-        if _bare_name_owner_wins(components, b_dep, target_dep):
+        owner = _bare_name_owner(components, entry, a_name, b_name, b_dep, target_dep)
+        if owner == b_dep:
             inverted[target_dep] = b_dep
             merged_away.pop(b_dep, None)
     if inverted:
@@ -1411,40 +1451,64 @@ def _apply_operator_compose(
             b.observed.pop(gone, None)
 
 
-def _bare_name_owner_wins(
+def _is_state(components: OrderedDict[str, _ComponentSystem], dep: str) -> bool:
+    """Is ``dep`` a STATE variable of the (partly flattened) component tables?
+
+    A state is the thing that carries an initial condition, which is the whole of
+    what a bare-name match decides between. An observed carries none.
+    """
+    comp = components.get(dep.split(".", 1)[0])
+    return comp is not None and dep in comp.state_vars
+
+
+def _bare_name_owner(
     components: OrderedDict[str, _ComponentSystem],
+    entry: OperatorComposeCoupling,
+    a_name: str,
+    b_name: str,
     b_dep: str,
     target_dep: str,
-) -> bool:
-    """Does the ``systems[1]`` spelling own the state a bare-name match unified?
+) -> str:
+    """Which spelling owns the quantity a bare-name match unified (§4.7.1 step 3)?
 
-    esm-libraries-spec §4.7.1 step 3. A DIRECT match needs no decision (the two
-    names are equal) and a ``translate`` match is the author naming the surviving
-    spelling explicitly. The BARE-NAME fallback is the one that has to choose,
-    and choosing ``systems[0]`` -- what this binding did before -- makes an
-    ``operator_compose`` entry mean different things in its two argument orders:
-    flipping ``systems`` silently swapped which state name, and which INITIAL
-    CONDITION, came out the far side.
+    A DIRECT match needs no decision (the two names are equal) and a ``translate``
+    match is the author naming the surviving spelling explicitly. The BARE-NAME
+    fallback is the one that has to choose, and choosing ``systems[0]`` -- what
+    this binding did before -- makes an ``operator_compose`` entry mean different
+    things in its two argument orders: flipping ``systems`` silently swapped which
+    state name, and which INITIAL CONDITION, came out the far side.
 
-    Ownership follows the variable's own namespace, which is the direction
-    §4.7.1 step 4's merged-equation reattribution already reaches in. Both
-    candidates are self-consistent under that reading -- ``A.x`` is A's and
-    ``B.x`` is B's -- so the tie is broken by DOCUMENT ORDER, the same order
-    §4.7.5 step 4 already makes normative for the flattened system. The state
-    belongs to the component that declares it first, in either argument order.
+    Ownership follows the variable's own namespace, the direction step 4's
+    merged-equation reattribution already reaches in. The merge deletes one of the
+    two names, so the question is which of them the flattened system keeps:
 
-    A candidate whose leading segment names no component of this document is not
-    a component-owned state, so there is nothing to compare and the incumbent
-    (``systems[0]``'s spelling) stands.
+    * **Both are STATES** -- each carries its own initial condition, and nothing
+      in the document says which one the merged tendency should integrate from.
+      Refused (:class:`OperatorComposeAmbiguousBareNameError`), because deciding
+      it here is exactly the silent choice issue #195 is about. The author says
+      what they mean with ``translate``, which names the surviving spelling
+      outright, or with ``require_match``.
+    * **Exactly one is a state** -- the other carries no initial condition, so
+      there is nothing to lose by renaming onto the state. That one is the owner,
+      in either argument order.
+    * **Neither is** -- no initial condition is at stake either way; the incumbent
+      (``systems[0]``'s spelling) stands, as before.
     """
-    b_owner = b_dep.split(".", 1)[0]
-    a_owner = target_dep.split(".", 1)[0]
-    if b_owner == a_owner:
-        return False
-    order = list(components)
-    if b_owner not in order or a_owner not in order:
-        return False
-    return order.index(b_owner) < order.index(a_owner)
+    b_state = _is_state(components, b_dep)
+    a_state = _is_state(components, target_dep)
+    if b_state and a_state:
+        raise OperatorComposeAmbiguousBareNameError(
+            f"operator_compose_ambiguous_bare_name: operator_compose({a_name} + "
+            f"{b_name}) matched {b_dep!r} to {target_dep!r} on their shared local "
+            f"name alone, but BOTH are state variables and the merge keeps only "
+            f"one. Each carries its own initial condition, so the choice decides "
+            f"which the flattened system integrates from, and the document does "
+            f"not express it. Name the surviving spelling with a `translate` "
+            f"entry ({{{target_dep!r}: {b_dep!r}}}), or rename one of them."
+        )
+    if b_state:
+        return b_dep
+    return target_dep
 
 
 def _report_operator_compose_merge(
@@ -1456,39 +1520,66 @@ def _report_operator_compose_merge(
 ) -> None:
     """Report an ``operator_compose`` entry that merged nothing, or only some.
 
-    esm-libraries-spec §4.7.1 step 5. Preserving an unmatched equation is
-    correct — an operator system may legitimately contribute states of its own —
-    but preserving it SILENTLY leaves "merged everything" and "merged nothing"
-    indistinguishable, and both wrong outcomes reachable from a document that is
+    esm-libraries-spec §4.7.1 step 5. Step 5 preserves an unmatched equation, and
+    preserving it SILENTLY is what left "merged everything" and "merged nothing"
+    indistinguishable -- both wrong outcomes reachable from a document that is
     spec-valid and loads clean.
 
-    Severity is a warning by default and an error under ``require_match``,
-    decided on evidence rather than taste: measured over this repository's own
-    corpus, nineteen ``operator_compose`` entries merge zero equations today and
-    one merges partially, and every one of them is spec-valid under step 5 (a
-    transport operator whose only equation defines its own wind field, for
-    instance). A hard error would reject documents the format grants.
-    ``require_match: true`` is the author's opt-in to say that THIS entry's
-    equations are contributions and a non-match is a defect.
+    ``require_match`` is TRI-STATE, and the three states are three different
+    things an author can mean:
+
+    ============== ================================ ==========================
+    ``require_match``  zero equations merged            some but not all merged
+    ============== ================================ ==========================
+    absent          ``operator_compose_no_merge``     ``operator_compose_partial_merge``
+                    -- **error**                      -- warning
+    ``true``        ``operator_compose_require_match_unmatched`` -- error (both cases)
+    ``false``       permitted, silently               permitted, silently
+    ============== ================================ ==========================
+
+    ZERO merged is an error by default because such an entry is indistinguishable
+    from an entry that is not there: the operator integrates a private decoupled
+    system from its own defaults and the mechanism gets nothing. PARTIAL stays a
+    warning because an operator may legitimately contribute states of its own
+    alongside the ones it does merge, and the format cannot tell the two apart.
+
+    ``require_match: false`` is the explicit opt-out -- the author declaring a
+    standalone-contributing operator. It is a DECLARATION, not a default: an
+    absent flag means "I have not said", which is why it is the case that errors.
     """
     if authored == 0 or not unmatched:
+        return
+    require_match = getattr(entry, "require_match", None)
+    if require_match is False:
+        # The author has declared a standalone-contributing operator. Nothing to
+        # report: an unmatched equation is what they said to expect.
         return
     where = f"operator_compose({a_name} + {b_name})"
     merged = authored - len(unmatched)
     names = ", ".join(unmatched)
-    if getattr(entry, "require_match", False):
+    if require_match is True:
         raise OperatorComposeRequireMatchError(
             f"operator_compose_require_match_unmatched: {where} declares "
             f"`require_match` and merged {merged} of {authored} equations "
             f"{b_name!r} authored; no equation of {a_name!r} matches: {names}"
         )
-    code = "operator_compose_no_merge" if merged == 0 else "operator_compose_partial_merge"
+    if merged == 0:
+        raise OperatorComposeNoMergeError(
+            f"operator_compose_no_merge: {where} merged NONE of the {authored} "
+            f"equations {b_name!r} authored; no equation of {a_name!r} matches: "
+            f"{names}. The entry is indistinguishable from one that is not there "
+            f"-- {b_name!r} would integrate decoupled from its own defaults and "
+            f"{a_name!r} would receive no contribution. If {b_name!r} really does "
+            f"contribute only states of its own, declare it with "
+            f"`require_match: false` on this entry."
+        )
     warnings.warn(
-        f"{code}: {where} merged {merged} of {authored} equations {b_name!r} "
-        f"authored; unmatched dependent variable(s): {names}. The unmatched "
-        f"equations are preserved unchanged (esm-libraries-spec §4.7.1 step 5), "
-        f"so they integrate DECOUPLED from {a_name!r}. Set `require_match: true` "
-        f"on the entry if they were meant to be contributions.",
+        f"operator_compose_partial_merge: {where} merged {merged} of {authored} "
+        f"equations {b_name!r} authored; unmatched dependent variable(s): {names}. "
+        f"The unmatched equations are preserved unchanged (esm-libraries-spec "
+        f"§4.7.1 step 5), so they integrate DECOUPLED from {a_name!r}. Set "
+        f"`require_match: true` if they were meant to be contributions, or "
+        f"`require_match: false` if they were not.",
         UserWarning,
         stacklevel=2,
     )

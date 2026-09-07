@@ -5,25 +5,26 @@ Drives the shared manifest at ``tests/conformance/operator_compose_merge/``
 
 Three things are pinned, and they are distinct:
 
-1. The merge TALLY is reported. ``operator_compose_no_merge`` when nothing
-   landed, ``operator_compose_partial_merge`` when only some did, both naming
-   the unmatched dependent variables. Step 5 still preserves the equations —
-   that half is unchanged — but it is no longer silent, because silence made
-   "merged everything" and "merged nothing" the same observable outcome.
-2. ``require_match: true`` promotes either to a hard refusal. A PARTIAL match
-   refuses exactly as a zero match does, and ``require_match_satisfied`` is the
-   non-vacuity anchor that keeps the flag from being simply always-fatal.
-3. The BARE-NAME fallback's surviving spelling follows the state's OWNER — the
-   component the document declares first — not ``systems[0]``. The
-   ``owner_rename_*`` trio pins that an entry means the same thing in either
-   argument order, which is the whole of issue #195's Symptom 1.
+1. An entry that merges NOTHING is ``operator_compose_no_merge``, a hard
+   refusal: such an entry is indistinguishable from one that is not there. A
+   PARTIAL merge stays a warning, because an operator may legitimately
+   contribute states of its own alongside the ones it does merge.
+2. ``require_match`` is TRI-STATE and absent is not ``false`` — absent means
+   "the author has not said" (zero-merge refuses), ``true`` makes ANY shortfall
+   fatal, ``false`` DECLARES a standalone-contributing operator and silences
+   both. Each state has a non-vacuity anchor, so a binding cannot pass by being
+   uniformly strict or uniformly lax.
+3. A bare-name match that would unify two STATES is
+   ``operator_compose_ambiguous_bare_name``, a refusal: each carries its own
+   initial condition and the merge keeps one, which is exactly the silent choice
+   that made the `systems` order matter. Where only one side is a state the
+   match is unambiguous and the state owns the quantity, in either order.
 
 Unlike the flatten corpus this category carries no golden: it compares
 DIAGNOSTIC OUTCOMES, so each binding asserts its own idiomatic channel (here
-``warnings.warn`` / :class:`OperatorComposeRequireMatchError`). The
-``owner_rename_*`` cases additionally pin two VALUES — the surviving state's
-name and its default — because those two, and nothing else, are what changed
-with argument order.
+``warnings.warn`` and the three :class:`FlattenError` subclasses). Cases that
+flatten cleanly additionally pin the surviving state's name and default, because
+those two — and nothing else — are what used to change with argument order.
 """
 
 from __future__ import annotations
@@ -35,10 +36,23 @@ import pytest
 from conftest import CONFORMANCE_DIR
 
 from earthsci_ast import flatten, load_path
-from earthsci_ast.flatten import OperatorComposeRequireMatchError
+from earthsci_ast.flatten import (
+    OperatorComposeAmbiguousBareNameError,
+    OperatorComposeNoMergeError,
+    OperatorComposeRequireMatchError,
+)
 
 CATEGORY_DIR = CONFORMANCE_DIR / "operator_compose_merge"
 MANIFEST_FILE = CATEGORY_DIR / "manifest.json"
+
+#: The refusal each code maps to in THIS binding. The manifest's
+#: `diagnostic_surface.errors` records the same mapping for every binding; this
+#: is the Python column, asserted rather than assumed.
+ERROR_FOR_CODE = {
+    "operator_compose_no_merge": OperatorComposeNoMergeError,
+    "operator_compose_require_match_unmatched": OperatorComposeRequireMatchError,
+    "operator_compose_ambiguous_bare_name": OperatorComposeAmbiguousBareNameError,
+}
 
 
 def _load_manifest() -> dict:
@@ -67,25 +81,34 @@ def test_the_manifest_is_not_empty():
     """A manifest that silently listed zero cases would make every parametrized
     test below vacuously green."""
     assert CASES, "the operator_compose_merge manifest recorded no cases"
-    assert set(MANIFEST["codes"]) == {
-        "operator_compose_no_merge",
-        "operator_compose_partial_merge",
-        "operator_compose_require_match_unmatched",
-    }
+    assert set(MANIFEST["codes"]) == set(ERROR_FOR_CODE) | {"operator_compose_partial_merge"}
+    assert MANIFEST["codes"]["operator_compose_partial_merge"] == "warning"
+    for code in ERROR_FOR_CODE:
+        assert MANIFEST["codes"][code] == "error"
+
+
+def test_the_binding_column_of_the_manifest_is_this_binding():
+    """The manifest names an error type per binding per code. Reading Python's
+    column back keeps the record from drifting away from the code silently."""
+    recorded = MANIFEST["diagnostic_surface"]["errors"]
+    for code, cls in ERROR_FOR_CODE.items():
+        assert recorded[code]["python"].endswith(cls.__name__)
+        assert cls.code == code
 
 
 @pytest.mark.parametrize("case", CASES, ids=IDS)
 def test_the_manifest_outcome_holds(case):
-    """Each case's recorded outcome — warning, refusal, or clean — is produced."""
+    """Each case's recorded outcome — refusal, warning, or clean — is produced."""
     outcome = case["outcome"]
     if outcome == "refused":
-        with pytest.raises(OperatorComposeRequireMatchError) as excinfo:
+        expected = ERROR_FOR_CODE[case["code"]]
+        with pytest.raises(expected) as excinfo:
             _flatten_capturing(case)
         message = str(excinfo.value)
         assert message.startswith(case["code"]), (
             f"{case['id']}: the refusal must lead with its machine-readable code"
         )
-        for name in case["unmatched"]:
+        for name in case.get("unmatched", []) + case.get("unified", []):
             assert name in message, f"{case['id']}: the refusal must NAME {name}"
         return
 
@@ -109,88 +132,95 @@ def test_the_manifest_outcome_holds(case):
 
     if "state_variables" in case:
         assert list(system.state_variables) == case["state_variables"]
+    if "surviving_state" in case:
+        assert system.state_variables[case["surviving_state"]].default == case["surviving_default"]
 
 
-@pytest.mark.parametrize(
-    "case",
-    [c for c in CASES if "surviving_state" in c],
-    ids=[c["id"] for c in CASES if "surviving_state" in c],
-)
-def test_the_bare_name_match_survives_under_its_owners_spelling(case):
-    """§4.7.1 step 3: the surviving spelling is the state OWNER's.
+def test_the_require_match_truth_table_is_covered():
+    """Every cell of the tri-state table the manifest records has a case.
 
-    The tendency is arithmetically identical whichever way the entry is written,
-    so the surviving NAME and its DEFAULT are the entire observable difference —
-    which is exactly why they are pinned here rather than left to the equation
-    comparison.
+    The table is the whole of `require_match`'s meaning, and its three states
+    are three different things an author can mean. A column with no case is a
+    column a binding could get wrong without failing anything.
     """
-    system, _ = _flatten_capturing(case)
-    assert list(system.state_variables) == [case["surviving_state"]]
-    assert system.state_variables[case["surviving_state"]].default == case["surviving_default"]
+    covered = {(str(c.get("require_match")), c["outcome"]) for c in CASES}
+    # absent: zero refuses, partial warns, satisfied is clean.
+    assert ("absent", "refused") in covered
+    assert ("absent", "warning") in covered
+    assert ("absent", "clean") in covered
+    # true: a shortfall refuses, a full match is clean.
+    assert ("True", "refused") in covered
+    assert ("True", "clean") in covered
+    # false: permitted, silently — the escape hatch the corpus documents use.
+    assert ("False", "clean") in covered
+    assert not any(k == ("False", "refused") for k in covered), (
+        "`require_match: false` is a declaration that unmatched equations are expected; "
+        "nothing under it may refuse"
+    )
 
 
 def test_flipping_the_systems_order_changes_nothing_observable():
     """Issue #195 Symptom 1, in the form that fails under the old rule.
 
-    Two fixtures with identical models in identical declaration order, differing
-    only in the `systems` array's order. Before the ownership rule these produced
-    different state names carrying different initial conditions — an argument
-    order choosing an IC, which no document author has reason to expect. Stated
-    as a comparison between the two runs rather than against the manifest's
-    recorded values, so it fails on DISAGREEMENT even if both were re-recorded.
+    Two pairs of fixtures, each pair differing ONLY in the `systems` array's
+    order. Before this change the AMBIGUOUS pair produced different state names
+    carrying different initial conditions — an argument order choosing an IC,
+    which no document author has reason to expect. Stated as a comparison
+    BETWEEN the two runs rather than against the manifest's recorded values, so
+    it fails on disagreement even if both were re-recorded.
     """
-    pair = [
-        next(c for c in CASES if c["id"] == "owner_rename_operator_first"),
-        next(c for c in CASES if c["id"] == "owner_rename_mechanism_listed_first"),
-    ]
-    assert pair[0]["models_declared"] == pair[1]["models_declared"], (
-        "the two fixtures must differ ONLY in `systems` order"
-    )
-    assert pair[0]["systems"] == list(reversed(pair[1]["systems"]))
+    by_id = {c["id"]: c for c in CASES}
 
-    surviving = []
-    for case in pair:
-        system, _ = _flatten_capturing(case)
-        assert len(system.state_variables) == 1
-        name, var = next(iter(system.state_variables.items()))
-        surviving.append((name, var.default))
-    assert surviving[0] == surviving[1], (
-        "flipping `systems` changed the surviving state or its initial condition"
-    )
+    def outcome_of(case):
+        try:
+            system, _ = _flatten_capturing(case)
+        except Exception as exc:  # noqa: BLE001 - the class IS the outcome
+            return (type(exc).__name__,)
+        return tuple(
+            (name, var.default) for name, var in system.state_variables.items()
+        )
+
+    for left, right in (
+        ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
+        ("owner_rename_state_wins_observed_first", "owner_rename_state_wins_state_first"),
+    ):
+        a, b = by_id[left], by_id[right]
+        assert a["systems"] == list(reversed(b["systems"])), (
+            f"{left}/{right} must differ ONLY in `systems` order"
+        )
+        assert outcome_of(a) == outcome_of(b), (
+            f"flipping `systems` changed the outcome between {left} and {right}"
+        )
 
 
-def test_declaration_order_decides_not_argument_order():
-    """The companion to the test above, and what keeps it from being trivial.
+def test_the_ambiguity_refusal_is_not_a_blanket_ban_on_bare_names():
+    """The two ways out of an ambiguous bare-name match both still work.
 
-    `owner_rename_mechanism_declared_first` lists the OPERATOR first in `systems`
-    exactly as `owner_rename_operator_first` does, and differs only in `models`
-    declaration order — so a binding that hard-coded either answer, or that kept
-    renaming onto `systems[0]`, fails one of the two.
+    `translate` names the surviving spelling outright; and a match where only one
+    side is a STATE is not ambiguous at all, because only one initial condition
+    is at stake. Without this a binding could pass every refusal by refusing the
+    whole bare-name fallback.
     """
-    a = next(c for c in CASES if c["id"] == "owner_rename_operator_first")
-    b = next(c for c in CASES if c["id"] == "owner_rename_mechanism_declared_first")
-    assert a["systems"] == b["systems"], "the two fixtures must share a `systems` order"
-    assert a["models_declared"] == list(reversed(b["models_declared"]))
+    by_id = {c["id"]: c for c in CASES}
+    resolved, _ = _flatten_capturing(by_id["ambiguous_resolved_by_translate"])
+    assert list(resolved.state_variables) == ["Chem.O3"]
+    assert resolved.state_variables["Chem.O3"].default == 30.0
 
-    sa, _ = _flatten_capturing(a)
-    sb, _ = _flatten_capturing(b)
-    assert list(sa.state_variables) != list(sb.state_variables), (
-        "declaration order must be what decides the surviving spelling"
-    )
-    assert list(sa.state_variables) == ["Sink.O3"]
-    assert list(sb.state_variables) == ["Chem.O3"]
+    owned, _ = _flatten_capturing(by_id["owner_rename_state_wins_observed_first"])
+    assert list(owned.state_variables) == ["Sink.O3"]
+    assert owned.state_variables["Sink.O3"].default == 40.0
 
 
-def test_require_match_survives_a_round_trip():
-    """`require_match` is a document field, so it must reach the emitted form —
-    a flag that silently vanished on save would make the refusal unreproducible
-    from the file the author kept."""
+def test_require_match_round_trips_including_an_explicit_false():
+    """`require_match` is TRI-STATE, so an explicit ``false`` must survive the
+    round trip — dropping it as "the default" would silently re-arm the
+    zero-merge refusal on every document that opted out. An ABSENT flag must
+    stay absent for the same reason, in the other direction."""
     from earthsci_ast import to_json
 
-    path = CATEGORY_DIR / "fixtures/require_match_unmatched.esm"
-    emitted = json.loads(to_json(load_path(str(path))))
-    assert emitted["coupling"][0]["require_match"] is True
-    # ... and the DEFAULT is not written out: emitting `false` everywhere would
-    # put a key on every existing fixture and break load preservation.
-    clean = json.loads(to_json(load_path(str(CATEGORY_DIR / "fixtures/no_merge.esm"))))
-    assert "require_match" not in clean["coupling"][0]
+    def emitted(name):
+        return json.loads(to_json(load_path(str(CATEGORY_DIR / "fixtures" / name))))
+
+    assert emitted("require_match_unmatched.esm")["coupling"][0]["require_match"] is True
+    assert emitted("no_merge_declared.esm")["coupling"][0]["require_match"] is False
+    assert "require_match" not in emitted("partial_merge.esm")["coupling"][0]

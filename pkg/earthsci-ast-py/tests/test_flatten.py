@@ -222,7 +222,17 @@ def test_flatten_independent_variables_pick_up_grad():
 
 
 def test_flatten_operator_compose_lhs_match_and_sum():
-    """Two systems with D(O3, t) on LHS should merge into one summed equation."""
+    """Two systems with D(O3, t) on LHS should merge into one summed equation.
+
+    The entry carries a ``translate`` map naming the surviving spelling. It has
+    to: `Chem.O3` and `Adv.O3` are two DECLARED STATES, the merge keeps one, and
+    binding them on their shared local name alone leaves the choice of which
+    unexpressed — which is `operator_compose_ambiguous_bare_name`
+    (esm-libraries-spec §4.7.1 step 3, issue #195). This test used to rely on the
+    bare-name fallback silently picking ``systems[0]``, which is exactly the
+    behaviour that made an `operator_compose` entry mean different things in its
+    two argument orders. What it ASSERTS is unchanged.
+    """
     chem_o3 = ModelVariable(type="unknown")
     chem_eq = Equation(
         lhs=ExprNode(op="D", args=["O3"], wrt="t"),
@@ -237,7 +247,9 @@ def test_flatten_operator_compose_lhs_match_and_sum():
     )
     adv = Model(name="Adv", variables={"O3": adv_o3}, equations=[adv_eq])
 
-    coupling = OperatorComposeCoupling(systems=["Chem", "Adv"])
+    coupling = OperatorComposeCoupling(
+        systems=["Chem", "Adv"], translate={"Chem.O3": "Adv.O3"}
+    )
     file = _empty_file(models={"Chem": chem, "Adv": adv}, coupling=[coupling])
 
     flat = flatten(file)

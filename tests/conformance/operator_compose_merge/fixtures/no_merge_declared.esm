@@ -1,17 +1,17 @@
 {
   "esm": "1.0.0",
   "metadata": {
-    "name": "operator_compose_owner_rename_mechanism_declared_first",
-    "description": "esm-libraries-spec 4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. `Sink` and `Chem` each declare a state named `O3` with a DIFFERENT default, and only the bare-name fallback binds them -- there is no `translate` map and neither writes the other's scoped name. The tendency is arithmetically the same whichever way the entry is written, so the ONLY observable difference used to be the surviving state's NAME and its INITIAL CONDITION, and before this rule flipping `systems` silently swapped both. The surviving spelling now follows the state's owner -- the component the DOCUMENT declares first -- so all three fixtures in this trio are decided by the `models` order and not by the coupling entry's argument order. The DECLARATION order is what decides, not the argument order: here the mechanism is declared first while the operator is still listed first in `systems`, and `Chem.O3` (default 30.0) survives. This is the reseact.esm shape -- an operator-first coupling entry over a mechanism declared above it -- and under the old rule the mechanism's states moved out from under every downstream reference to them.",
+    "name": "operator_compose_no_merge_declared",
+    "description": "esm-libraries-spec 4.7.1 step 5, the `require_match: false` OPT-OUT and the non-vacuity anchor for the zero-merge refusal. The same document as `no_merge.esm`, with the author DECLARING a standalone-contributing operator. A zero merge is then exactly what was asked for: the equations are preserved per step 5, `Sink.O3S` integrates on its own, and nothing is reported. This is how the nine corpus documents that legitimately compose an operator for its VARIABLES rather than its tendencies stay valid under the stricter default -- and without this case a binding that refused every zero merge unconditionally would pass `no_merge.esm`.",
     "authors": [
       "EarthSciAST"
     ],
     "tags": [
       "esm-libraries-spec-4.7.1",
       "operator-compose",
-      "bare-name-fallback",
+      "require-match-false",
       "merge-intent",
-      "owner-rename"
+      "non-vacuity"
     ]
   },
   "models": {
@@ -20,8 +20,7 @@
         "O3": {
           "type": "unknown",
           "units": "ppb",
-          "default": 30.0,
-          "description": "The MECHANISM's own spelling and its own initial condition."
+          "default": 30.0
         },
         "k": {
           "type": "parameter",
@@ -55,11 +54,11 @@
     },
     "Sink": {
       "variables": {
-        "O3": {
+        "O3S": {
           "type": "unknown",
           "units": "ppb",
           "default": 40.0,
-          "description": "The OPERATOR's own spelling and its own initial condition."
+          "description": "The species the mechanism does NOT carry. Nothing matches it."
         },
         "kd": {
           "type": "parameter",
@@ -72,7 +71,7 @@
           "lhs": {
             "op": "D",
             "args": [
-              "O3"
+              "O3S"
             ],
             "wrt": "t"
           },
@@ -85,7 +84,7 @@
                   "kd"
                 ]
               },
-              "O3"
+              "O3S"
             ]
           }
         }
@@ -96,9 +95,10 @@
     {
       "type": "operator_compose",
       "systems": [
-        "Sink",
-        "Chem"
-      ]
+        "Chem",
+        "Sink"
+      ],
+      "require_match": false
     }
   ]
 }

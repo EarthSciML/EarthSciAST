@@ -1,8 +1,8 @@
 {
   "esm": "1.0.0",
   "metadata": {
-    "name": "operator_compose_owner_rename_mechanism_listed_first",
-    "description": "esm-libraries-spec 4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. `Sink` and `Chem` each declare a state named `O3` with a DIFFERENT default, and only the bare-name fallback binds them -- there is no `translate` map and neither writes the other's scoped name. The tendency is arithmetically the same whichever way the entry is written, so the ONLY observable difference used to be the surviving state's NAME and its INITIAL CONDITION, and before this rule flipping `systems` silently swapped both. The surviving spelling now follows the state's owner -- the component the DOCUMENT declares first -- so all three fixtures in this trio are decided by the `models` order and not by the coupling entry's argument order. The flip of `owner_rename_operator_first.esm`: identical models in identical declaration order, with ONLY the `systems` array reversed. It must produce the SAME surviving state (`Sink.O3`) with the SAME default (40.0). Under the old rule it produced `Chem.O3` at 30.0 instead -- an argument order choosing an initial condition.",
+    "name": "operator_compose_ambiguous_bare_name",
+    "description": "esm-libraries-spec 4.7.1 step 3, the AMBIGUOUS bare-name match. `Sink` and `Chem` each declare a state named `O3` with a DIFFERENT default, and only the bare-name fallback binds them -- there is no `translate` map and neither writes the other's scoped name. The merge keeps ONE of the two names, so the choice decides which initial condition the flattened system integrates from, and the document does not express it. The tendency is arithmetically identical either way, which is why the old behaviour -- rename onto systems[0] -- was invisible: flipping `systems` silently swapped the surviving state and its IC and nothing downstream reported it. So the match is REFUSED. This is the issue's MinCapture document verbatim -- the operator listed first, which used to make `Sink.O3` (40.0) survive and discard the mechanism's 30.0. Paired with `ambiguous_bare_name_flipped.esm`, the same document with only `systems` reversed, which used to produce `Chem.O3` (30.0) instead and must now refuse identically.",
     "authors": [
       "EarthSciAST"
     ],
@@ -11,7 +11,7 @@
       "operator-compose",
       "bare-name-fallback",
       "merge-intent",
-      "owner-rename"
+      "ambiguous-bare-name"
     ]
   },
   "models": {
@@ -21,7 +21,7 @@
           "type": "unknown",
           "units": "ppb",
           "default": 40.0,
-          "description": "The OPERATOR's own spelling and its own initial condition."
+          "description": "The OPERATOR's spelling, and its own initial condition."
         },
         "kd": {
           "type": "parameter",
@@ -59,7 +59,7 @@
           "type": "unknown",
           "units": "ppb",
           "default": 30.0,
-          "description": "The MECHANISM's own spelling and its own initial condition."
+          "description": "The MECHANISM's spelling, and its own initial condition."
         },
         "k": {
           "type": "parameter",
@@ -96,8 +96,8 @@
     {
       "type": "operator_compose",
       "systems": [
-        "Chem",
-        "Sink"
+        "Sink",
+        "Chem"
       ]
     }
   ]

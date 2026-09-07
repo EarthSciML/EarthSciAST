@@ -3666,8 +3666,7 @@ export const schema: AnySchemaObject = {
         },
         "require_match": {
           "type": "boolean",
-          "default": false,
-          "description": "Declare that the `systems[1]` equations are CONTRIBUTIONS: every one of them whose LHS names a dependent variable MUST match an equation of `systems[0]` (esm-libraries-spec §4.7.1 step 5). An unmatched equation is then `operator_compose_require_match_unmatched`, a hard refusal at flatten, instead of the decoupled equation step 5 otherwise preserves in silence. A PARTIAL match fails too — there is no 'some is enough' reading. Default false, which preserves step 5's behaviour and reports the shortfall as `operator_compose_no_merge` / `operator_compose_partial_merge` instead."
+          "description": "The entry's MERGE INTENT (esm-libraries-spec §4.7.1 step 5). TRI-STATE: absent is NOT the same as `false`, which is why this property declares no default. ABSENT — the author has not said; an entry that merges NOTHING is then `operator_compose_no_merge`, a hard refusal at flatten (such an entry is indistinguishable from one that is not there: the operator would integrate a private decoupled system from its own defaults and the other system would receive no contribution), while a PARTIAL merge is a warning. `true` — the `systems[1]` equations are CONTRIBUTIONS and every one of them whose LHS names a dependent variable MUST match an equation of `systems[0]`; any shortfall, PARTIAL included, is `operator_compose_require_match_unmatched`. There is no 'some is enough' reading. `false` — a standalone-contributing operator, DECLARED: unmatched equations are expected, are preserved per step 5, and nothing is reported."
         },
         "lifting": {
           "type": "string",

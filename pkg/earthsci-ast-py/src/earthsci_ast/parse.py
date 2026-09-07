@@ -1138,7 +1138,14 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             systems=coupling_data.get("systems", []),
             translate=coupling_data.get("translate", {}),
             lifting=coupling_data.get("lifting"),
-            require_match=bool(coupling_data.get("require_match", False)),
+            # Tri-state: an absent key stays ``None``, so "the author has not
+            # said" stays distinguishable from an explicit ``false``
+            # (esm-libraries-spec §4.7.1 step 5).
+            require_match=(
+                bool(coupling_data["require_match"])
+                if "require_match" in coupling_data
+                else None
+            ),
         )
 
     if coupling_type == CouplingType.COUPLE:

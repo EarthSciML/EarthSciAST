@@ -1,7 +1,7 @@
 {
   "category": "operator_compose_merge",
-  "version": "1.0",
-  "description": "Cross-binding conformance for esm-libraries-spec §4.7.1 — what an `operator_compose` entry MERGED, and which spelling of a bare-name match SURVIVES. Step 5 used to make silence normative: an entry that merged everything and one that merged nothing produced the same observable outcome, so a document could integrate a private decoupled operator while the mechanism got no contribution at all, and the only evidence was a state count one too high. Three things are pinned here and they are DISTINCT. (1) The merge TALLY is reported: `operator_compose_no_merge` when nothing landed, `operator_compose_partial_merge` when only some did, both naming the unmatched dependent variables. These are WARNINGS, on measured evidence rather than taste — 19 entries in this repository's own corpus zero-merge today and 1 merges partially, every one of them spec-valid under step 5 (a transport operator whose only equation defines its own wind field has no tendency to contribute), so promoting them would reject documents the format grants. (2) `require_match: true` is the author's opt-in that promotes either to a hard refusal, `operator_compose_require_match_unmatched`; a PARTIAL match refuses exactly as a zero match does, and `require_match_satisfied` is the non-vacuity anchor proving the flag is not simply always-fatal. (3) The BARE-NAME fallback's surviving spelling follows the state's OWNER — the component the document declares first — not `systems[0]`; the `owner_rename_*` trio is what pins that an entry means the same thing in either argument order. Like `override_key_diagnostics`, this category compares DIAGNOSTIC OUTCOMES rather than numbers, so it carries no golden: each binding's own suite asserts its idiomatic warning channel and error type per case. The `owner_rename_*` cases additionally pin two VALUES — the surviving state's name and its default — because the whole defect is that those two, and nothing else, changed with argument order.",
+  "version": "2.0",
+  "description": "Cross-binding conformance for esm-libraries-spec §4.7.1 — what an `operator_compose` entry MERGED, and which spelling of a bare-name match SURVIVES. Step 5 used to make silence normative: an entry that merged everything and one that merged nothing produced the same observable outcome, so a document could integrate a private decoupled operator while the mechanism got no contribution at all, and the only evidence was a state count one too high. Three things are pinned here and they are DISTINCT. (1) An entry that merges NOTHING is `operator_compose_no_merge`, a hard REFUSAL: such an entry is indistinguishable from one that is not there. A PARTIAL merge stays a warning, `operator_compose_partial_merge`, because an operator may legitimately contribute states of its own alongside the ones it does merge and the format cannot tell the two apart. (2) `require_match` is TRI-STATE and absent is NOT `false`: absent means the author has not said (zero-merge refuses); `true` means the systems[1] equations are contributions and ANY shortfall — partial included — is `operator_compose_require_match_unmatched`; `false` is an explicit DECLARATION of a standalone-contributing operator, under which nothing is reported. Each of the three has a non-vacuity anchor here, so a binding cannot pass by being uniformly strict or uniformly lax. (3) A BARE-NAME match that would unify two STATES is `operator_compose_ambiguous_bare_name`, a refusal: each state carries its own initial condition, the merge keeps one, and the document has not said which — deciding it silently is exactly how flipping the `systems` order came to change the answer. Where only ONE side is a state the match is not ambiguous and the STATE owns the quantity, in either argument order; that residual branch is pinned too. Like `override_key_diagnostics`, this category compares DIAGNOSTIC OUTCOMES rather than numbers, so it carries no golden: each binding's own suite asserts its idiomatic warning channel and error type per case. Cases that flatten cleanly additionally pin the surviving state's NAME and DEFAULT, because those two — and nothing else — are what used to change with argument order.",
   "spec": "esm-libraries-spec §4.7.1 steps 3 and 5",
   "issue": "EarthSciML/EarthSciAST#195",
   "bindings_required": [
@@ -12,33 +12,82 @@
     "go"
   ],
   "diagnostic_surface": {
-    "_comment": "The idiomatic channel each binding reports a WARNING on, and the idiomatic error each raises for the `require_match` refusal. The TYPE and CHANNEL are per-language; the OUTCOME classification and the diagnostic CODE are the cross-binding contract. No binding's `flatten` signature carries a diagnostic slot, so the warning goes to whatever stream that language's callers already watch.",
+    "_comment": "The idiomatic channel each binding reports the one WARNING on, and the idiomatic error each raises for the three refusals. The TYPE and CHANNEL are per-language; the OUTCOME classification and the diagnostic CODE are the cross-binding contract. No binding's `flatten` signature carries a diagnostic slot, so the warning goes to whatever stream that language's callers already watch.",
     "warning_channel": {
-      "julia": "@warn (testable with @test_logs)",
+      "julia": "@warn (testable with Test.collect_test_logs)",
       "python": "warnings.warn(..., UserWarning) (testable with pytest.warns)",
       "typescript": "console.warn (testable by stubbing)",
       "rust": "eprintln!(\"warning: …\") — the pushdown_rewrite residual-diagnostic idiom — with the side-effect-free `capture_coupling_diagnostics` counterpart for tests",
       "go": "the package-level couplingWarnf hook, defaulting to os.Stderr"
     },
-    "require_match_error": {
-      "julia": "OperatorComposeRequireMatchError",
-      "python": "earthsci_ast.flatten.OperatorComposeRequireMatchError",
-      "typescript": "OperatorComposeRequireMatchError",
-      "rust": "FlattenError::OperatorComposeRequireMatchUnmatched",
-      "go": "*esm.OperatorComposeRequireMatchError"
+    "errors": {
+      "operator_compose_no_merge": {
+        "julia": "OperatorComposeNoMergeError",
+        "python": "earthsci_ast.flatten.OperatorComposeNoMergeError",
+        "typescript": "OperatorComposeNoMergeError",
+        "rust": "FlattenError::OperatorComposeNoMerge",
+        "go": "*esm.OperatorComposeNoMergeError"
+      },
+      "operator_compose_require_match_unmatched": {
+        "julia": "OperatorComposeRequireMatchError",
+        "python": "earthsci_ast.flatten.OperatorComposeRequireMatchError",
+        "typescript": "OperatorComposeRequireMatchError",
+        "rust": "FlattenError::OperatorComposeRequireMatchUnmatched",
+        "go": "*esm.OperatorComposeRequireMatchError"
+      },
+      "operator_compose_ambiguous_bare_name": {
+        "julia": "OperatorComposeAmbiguousBareNameError",
+        "python": "earthsci_ast.flatten.OperatorComposeAmbiguousBareNameError",
+        "typescript": "OperatorComposeAmbiguousBareNameError",
+        "rust": "FlattenError::OperatorComposeAmbiguousBareName",
+        "go": "*esm.OperatorComposeAmbiguousBareNameError"
+      }
     }
   },
   "codes": {
-    "operator_compose_no_merge": "warning",
+    "operator_compose_no_merge": "error",
     "operator_compose_partial_merge": "warning",
-    "operator_compose_require_match_unmatched": "error"
+    "operator_compose_require_match_unmatched": "error",
+    "operator_compose_ambiguous_bare_name": "error"
+  },
+  "require_match_truth_table": {
+    "_comment": "The tri-state, as a table. `absent` is a distinct state from `false`, which is why the schema declares no default for the property. Every cell is pinned by a case below.",
+    "absent": {
+      "zero merged": "operator_compose_no_merge (error)",
+      "some but not all merged": "operator_compose_partial_merge (warning)",
+      "all merged": "clean"
+    },
+    "true": {
+      "zero merged": "operator_compose_require_match_unmatched (error)",
+      "some but not all merged": "operator_compose_require_match_unmatched (error)",
+      "all merged": "clean"
+    },
+    "false": {
+      "zero merged": "clean",
+      "some but not all merged": "clean",
+      "all merged": "clean"
+    }
   },
   "cases": [
     {
       "id": "no_merge",
       "path": "fixtures/no_merge.esm",
-      "outcome": "warning",
+      "outcome": "refused",
       "code": "operator_compose_no_merge",
+      "require_match": "absent",
+      "merged": 0,
+      "authored": 1,
+      "unmatched": [
+        "Sink.O3S"
+      ],
+      "note": "The issue's Symptom 2, verbatim. The operator writes a species the mechanism does not carry, so the entry is indistinguishable from one that is not there: the operator would integrate a private decoupled decay from its own default and the mechanism would receive nothing. Refused at FLATTEN, not at validate: the document is schema-valid and structurally valid, and only the merge knows the answer. Same placement rule as coupling/couple_multiplicative_no_tendency.esm."
+    },
+    {
+      "id": "no_merge_declared",
+      "path": "fixtures/no_merge_declared.esm",
+      "outcome": "clean",
+      "code": null,
+      "require_match": false,
       "merged": 0,
       "authored": 1,
       "unmatched": [
@@ -48,13 +97,14 @@
         "Chem.O3",
         "Sink.O3S"
       ],
-      "note": "The issue's Symptom 2, verbatim. Two states where the author meant one; the operator integrates a private decoupled decay. Step 5 still preserves the equation — that half is unchanged — but it is no longer silent."
+      "note": "NON-VACUITY ANCHOR for the zero-merge refusal, and the escape hatch the nine annotated corpus documents use. Same document as `no_merge`, with the author DECLARING a standalone-contributing operator. Nothing is reported and step 5 preserves the equations. A binding that refused every zero merge unconditionally passes `no_merge` and fails here."
     },
     {
       "id": "partial_merge",
       "path": "fixtures/partial_merge.esm",
       "outcome": "warning",
       "code": "operator_compose_partial_merge",
+      "require_match": "absent",
       "merged": 1,
       "authored": 2,
       "unmatched": [
@@ -65,37 +115,40 @@
         "Chem.NO",
         "Sink.CO"
       ],
-      "note": "The seven-of-twelve-species shape reduced to one-of-two. `Chem.O3` gains the deposition term; the operator's CO tendency lands nowhere and survives decoupled."
+      "note": "The seven-of-twelve-species shape reduced to one-of-two. `Chem.O3` gains the deposition term; the operator's CO tendency lands nowhere and survives decoupled. A WARNING and not a refusal: unlike a zero merge, a partial merge is indistinguishable from an operator that legitimately contributes states of its own alongside the ones it does merge."
     },
     {
       "id": "require_match_unmatched",
       "path": "fixtures/require_match_unmatched.esm",
       "outcome": "refused",
       "code": "operator_compose_require_match_unmatched",
+      "require_match": true,
       "merged": 0,
       "authored": 1,
       "unmatched": [
         "Sink.O3S"
       ],
-      "note": "Same document as `no_merge`, with `require_match: true`. Refused at FLATTEN, not at validate: the document is schema-valid and structurally valid, and only the merge knows the answer. Same placement rule as coupling/couple_multiplicative_no_tendency.esm."
+      "note": "Same document as `no_merge`, with `require_match: true`. It refuses under either state, but with the code that says WHICH: the author declared an intent, so the fix is to correct the names rather than to add the declaration."
     },
     {
       "id": "require_match_partial",
       "path": "fixtures/require_match_partial.esm",
       "outcome": "refused",
       "code": "operator_compose_require_match_unmatched",
+      "require_match": true,
       "merged": 1,
       "authored": 2,
       "unmatched": [
         "Sink.CO"
       ],
-      "note": "A PARTIAL match refuses exactly as a zero match does. There is no 'some is enough' reading an author could rely on — an operator reaching seven of twelve species and silently missing five is the defect the flag exists to catch."
+      "note": "THE CASE `require_match: true` EXISTS FOR: a partial merge is only a warning by default, and this is the author saying it must not be. There is no 'some is enough' reading -- an operator that reaches seven of twelve species and silently misses five is the defect the flag catches."
     },
     {
       "id": "require_match_satisfied",
       "path": "fixtures/require_match_satisfied.esm",
       "outcome": "clean",
       "code": null,
+      "require_match": true,
       "merged": 1,
       "authored": 1,
       "unmatched": [],
@@ -103,68 +156,82 @@
         "Chem.O3",
         "Chem.NO"
       ],
-      "note": "NON-VACUITY ANCHOR. Without it, a binding that refused every `require_match` entry — or that warned on every compose — would pass every other case in this category."
+      "note": "NON-VACUITY ANCHOR for `require_match: true`. Without it, a binding that refused every `require_match` entry would pass both refusals above."
     },
     {
-      "id": "owner_rename_operator_first",
-      "path": "fixtures/owner_rename_operator_first.esm",
-      "outcome": "clean",
-      "code": null,
-      "models_declared": [
-        "Sink",
-        "Chem"
-      ],
+      "id": "ambiguous_bare_name",
+      "path": "fixtures/ambiguous_bare_name.esm",
+      "outcome": "refused",
+      "code": "operator_compose_ambiguous_bare_name",
+      "require_match": "absent",
       "systems": [
         "Sink",
         "Chem"
       ],
-      "surviving_state": "Sink.O3",
-      "surviving_default": 40.0,
-      "state_variables": [
+      "unified": [
+        "Chem.O3",
         "Sink.O3"
       ],
-      "note": "The issue's Symptom 1 document verbatim. `Sink` is declared first, so `Sink.O3` owns the unified state and its 40.0 is the surviving initial condition. Pairs with `owner_rename_mechanism_listed_first`, which is the SAME document with only `systems` reversed and MUST agree."
+      "note": "The issue's Symptom 1 document verbatim. Both `Sink.O3` and `Chem.O3` are states with their own defaults, the bare-name fallback binds them on a shared local name alone, and the merge keeps one -- so the choice decides which initial condition the system integrates from. Under the old behaviour this silently produced `Sink.O3` at 40.0."
     },
     {
-      "id": "owner_rename_mechanism_listed_first",
-      "path": "fixtures/owner_rename_mechanism_listed_first.esm",
-      "outcome": "clean",
-      "code": null,
-      "models_declared": [
-        "Sink",
-        "Chem"
-      ],
+      "id": "ambiguous_bare_name_flipped",
+      "path": "fixtures/ambiguous_bare_name_flipped.esm",
+      "outcome": "refused",
+      "code": "operator_compose_ambiguous_bare_name",
+      "require_match": "absent",
       "systems": [
         "Chem",
         "Sink"
       ],
-      "surviving_state": "Sink.O3",
-      "surviving_default": 40.0,
-      "state_variables": [
-        "Sink.O3"
+      "unified": [
+        "Sink.O3",
+        "Chem.O3"
       ],
-      "agrees_with": "owner_rename_operator_first",
-      "note": "THE ORDER-INDEPENDENCE PIN. Identical models in identical declaration order; ONLY the `systems` array is reversed. Before this change it produced `Chem.O3` at 30.0 instead — an argument order silently choosing which of two initial conditions survived. A binding that still renames onto `systems[0]` fails exactly here. The merged tendency is arithmetically identical in both fixtures; only the term ORDER differs, which §4.7.1 step 4 fixes as `rhs_A + factor * rhs_B` and this category does not pin."
+      "agrees_with": "ambiguous_bare_name",
+      "note": "THE ORDER-INDEPENDENCE PIN. Identical models in identical declaration order; ONLY the `systems` array is reversed. Under the old behaviour this produced `Chem.O3` at 30.0 while its twin produced `Sink.O3` at 40.0 -- an argument order silently choosing an initial condition. Both must now refuse, with the same code."
     },
     {
-      "id": "owner_rename_mechanism_declared_first",
-      "path": "fixtures/owner_rename_mechanism_declared_first.esm",
+      "id": "ambiguous_resolved_by_translate",
+      "path": "fixtures/ambiguous_resolved_by_translate.esm",
       "outcome": "clean",
       "code": null,
-      "models_declared": [
-        "Chem",
-        "Sink"
-      ],
-      "systems": [
-        "Sink",
-        "Chem"
-      ],
+      "require_match": "absent",
       "surviving_state": "Chem.O3",
       "surviving_default": 30.0,
       "state_variables": [
         "Chem.O3"
       ],
-      "note": "DECLARATION order decides, not argument order: the operator is still listed first in `systems`, but the mechanism is declared first and keeps its name and its 30.0. This is the reseact.esm shape — an operator-first coupling entry over a mechanism declared above it — where the old rule moved the mechanism's states out from under every downstream reference to them. It is also what makes the previous case non-trivial: the two differ only in `models` order, so a binding that hard-coded either answer fails one of them."
+      "note": "NON-VACUITY ANCHOR for the ambiguity refusal, and the documented FIX: the same document with a `translate` map naming the surviving spelling. A translation match is the author saying which name the quantity keeps, so nothing is guessed. A binding that refused every bare-name-shaped composition passes both refusals above and fails here."
+    },
+    {
+      "id": "owner_rename_state_wins_observed_first",
+      "path": "fixtures/owner_rename_state_wins_observed_first.esm",
+      "outcome": "clean",
+      "code": null,
+      "require_match": "absent",
+      "systems": [
+        "Diag",
+        "Sink"
+      ],
+      "surviving_state": "Sink.O3",
+      "surviving_default": 40.0,
+      "note": "The UNAMBIGUOUS bare-name match -- the residual case ownership still decides. `Diag.O3` is an observed (a bare-LHS equation defines it) and carries no initial condition; `Sink.O3` is a state and does. Only one IC is at stake, so the state owns the quantity and the observed name is retargeted onto it. Here the observed side is `systems[0]`, so the surviving spelling is NOT `systems[0]`'s -- this is the direction the old rule got wrong."
+    },
+    {
+      "id": "owner_rename_state_wins_state_first",
+      "path": "fixtures/owner_rename_state_wins_state_first.esm",
+      "outcome": "clean",
+      "code": null,
+      "require_match": "absent",
+      "systems": [
+        "Sink",
+        "Diag"
+      ],
+      "surviving_state": "Sink.O3",
+      "surviving_default": 40.0,
+      "agrees_with": "owner_rename_state_wins_observed_first",
+      "note": "The flip: the state side is `systems[0]`, so ownership and `systems[0]` agree and the merge is the identity. Same surviving state, same initial condition. The pair is the order-independence pin for the branch that is NOT refused."
     }
   ]
 }
