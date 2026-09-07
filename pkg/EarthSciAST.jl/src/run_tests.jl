@@ -543,11 +543,20 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                name::AbstractString, container,
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
+                               function_tables=nothing,
                                stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
     try
+        # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed
+        # functions, and nothing downstream of here speaks it — so it is lowered
+        # on the way INTO the build, never at load, where it would break the
+        # §9.5.4 round trip of the authored form. Lowering per CONTAINER (rather
+        # than per file) keeps the refusal §9.5.3a owes an unimplementable table
+        # attached to a build that actually happens: a container with no tests
+        # is never compiled, so it is never lowered.
+        lower_table_lookups!(container, function_tables)
         simp = compile(container, sys_name)
     catch err
         for t in container.tests
@@ -578,10 +587,15 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         return
     end
 
+    # The document's sampled-table registry (esm-spec §9.5), passed to each
+    # container build so its `table_lookup` nodes can be lowered there.
+    tables = esm_file.function_tables
+
     if esm_file.models !== nothing
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
+                                  function_tables=tables,
                                   stiff_files=stiff_files)
         end
     end
@@ -591,6 +605,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
+                                  function_tables=tables,
                                   stiff_files=stiff_files)
         end
     end

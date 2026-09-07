@@ -205,6 +205,26 @@ const ERROR_CODES = (
     INTERP_TABLE_NOT_CONST = "interp_table_not_const",
     INTERP_AXIS_NOT_CONST = "interp_axis_not_const",
 
+    # ── Sampled function tables (esm-spec §9.5.5; lower_table_lookup.jl, raised
+    #    as `TableLookupError`). The `table_lookup` → `interp.*` lowering is a
+    #    BUILD-time pass, so these are build diagnostics, not load ones — a
+    #    document carrying a malformed lookup still loads and still round-trips.
+    #    Added to all five bindings together, which is what a §9.5.5 code
+    #    family requires of this registry. ──────────────────────────────────
+    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table",
+    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch",
+    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range",
+    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch",
+    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch",
+    TABLE_AXIS_NAN = "table_axis_nan",
+    # esm-spec §9.5.3a: `out_of_bounds: "clamp"` is required of every binding
+    # and `"error"` is "conformant when implemented" (§9.5.1). This binding
+    # implements only the first, so a table declaring the second is REFUSED
+    # where it would otherwise lower — answering in the mode we happen to have
+    # rather than the one the author declared is a wrong number with nothing in
+    # the result to say so.
+    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported",
+
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:
     #    it is the uniform cross-binding wire code every implementation

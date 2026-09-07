@@ -281,6 +281,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+    # …and the same lowering on the path that EVALUATES a document (#188):
+    # the harness above does the lowering itself, so it cannot see whether the
+    # build front doors do.
+    include("function_tables_lowering_path_test.jl")
 
     # ---- Expression templates & scoped imports
     #      (src/lower_expression_templates.jl, template_imports.jl) ----

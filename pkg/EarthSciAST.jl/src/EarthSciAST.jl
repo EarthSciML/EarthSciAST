@@ -100,6 +100,11 @@ include("resolve.jl")
 include("coupling_imports.jl")
 # Expression operations, rendering, and tooling
 include("expression.jl")
+# esm-spec §9.5.3 `table_lookup` → `interp.*` lowering. A BUILD-time pass (see
+# the file header for why it deliberately is not a load-time one like the §9.3
+# enum lowering), so it sits with the expression rewrites and is called from the
+# build front doors in simulate.jl / the two inline-test runners.
+include("lower_table_lookup.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("display.jl")

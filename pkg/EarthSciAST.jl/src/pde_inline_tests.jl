@@ -1134,7 +1134,11 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
         "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
     f = load_string(JSON3.write(raw); base_path=String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
-    return f
+    # The ephemeral file is a BUILD input (and the file this test's §6.6.5
+    # `reference` expressions evaluate against), and the raw base may have come
+    # straight off disk — so it gets the same §9.5.3 lowering `run_pde_tests`
+    # gave the persisted one. In place: this file exists only for this test.
+    return lower_table_lookups!(f)
 end
 
 # Relative slack when matching an assertion's `time` against the solver's
@@ -1383,6 +1387,13 @@ function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
     file = input isa AbstractString ? load_path(String(input)) : input
     file isa EsmFile ||
         throw(ArgumentError("run_pde_tests expects a path or EsmFile, got $(typeof(input))"))
+    # esm-spec §9.5.3, at the build boundary rather than at load (§9.5.4 wants
+    # the authored form to round-trip). `esm_problem` lowers the flattened
+    # system it builds, but the file kept HERE is also an evaluated artifact:
+    # `_evaluate_assertion` reads a §6.6.5 `reference` expression straight off
+    # it. The pure form leaves a caller's `EsmFile` untouched, and returns it
+    # as-is — no copy — for the documents that declare no tables.
+    file = lower_table_lookups(file)
     resolved_base = base_dir !== nothing ? String(base_dir) :
         (input isa AbstractString ? dirname(abspath(String(input))) : pwd())
     results = PdeAssertionResult[]
