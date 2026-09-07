@@ -1107,7 +1107,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Volume | `L` `l` `mL` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
 | Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
-| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
+| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
