@@ -23,10 +23,16 @@
 # that is `@warn` (captured with `Test.collect_test_logs`) and
 # `OperatorComposeRequireMatchError`.
 
+# `using Test` MUST precede the testutils include: testutils.jl uses `@test_skip`
+# at top level, so `Test` has to be in scope in `Main` already. Including it
+# first only works when some earlier file in runtests.jl happened to import Test
+# — running this file standalone then fails with `UndefVarError: @test_skip`.
 using Test
 using EarthSciAST
 using JSON3
 using Logging
+
+include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _OCM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                           "operator_compose_merge")
