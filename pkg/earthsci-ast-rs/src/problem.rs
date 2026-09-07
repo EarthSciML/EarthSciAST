@@ -1844,7 +1844,8 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // default. Resolved once here, at the single point where the run's options
     // and the document meet, so every backend below sees concrete tolerances
     // and none of them has to know about the chain.
-    let (abstol, reltol) = crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
+    let (abstol, reltol) =
+        crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
 
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.

@@ -13,7 +13,11 @@ fn doc(solver: &str, esm: &str) -> String {
 
 #[test]
 fn a_declared_block_round_trips_verbatim() {
-    let f = load_string(&doc(r#""solver":{"stiffness":"high","abstol":1e-8},"#, "1.1.0")).unwrap();
+    let f = load_string(&doc(
+        r#""solver":{"stiffness":"high","abstol":1e-8},"#,
+        "1.1.0",
+    ))
+    .unwrap();
     let s = f.solver.as_ref().expect("block parsed");
     assert_eq!(s.stiffness.as_deref(), Some("high"));
     assert_eq!(s.abstol, Some(1e-8));
@@ -32,7 +36,10 @@ fn a_declared_block_round_trips_verbatim() {
 #[test]
 fn an_empty_block_normalizes_to_absence() {
     let f = load_string(&doc(r#""solver":{},"#, "1.1.0")).expect("an empty block is LEGAL");
-    assert!(f.solver.is_none(), "empty block must normalize away at load");
+    assert!(
+        f.solver.is_none(),
+        "empty block must normalize away at load"
+    );
 
     let out: serde_json::Value = serde_json::from_str(&to_json(&f).unwrap()).unwrap();
     assert!(out.get("solver").is_none(), "and must not reach emit");
@@ -92,7 +99,9 @@ fn a_typed_file_carries_its_block_onto_the_problem() {
         ProblemOptions::default(),
     )
     .expect("builds");
-    let s = prob.solver().expect("the typed file's block reached the problem");
+    let s = prob
+        .solver()
+        .expect("the typed file's block reached the problem");
     assert_eq!(s.abstol, Some(1e-8));
     assert_eq!(s.reltol, Some(1e-6));
 

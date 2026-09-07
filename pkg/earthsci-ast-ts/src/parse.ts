@@ -479,9 +479,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   const solverNormalized = normalizeEmptySolver(data)
   if (solverNormalized !== null) {
     data = solverNormalized
-    validationView = canonical
-      ? (normalizeEmptySolver(validationView) ?? validationView)
-      : data
+    validationView = canonical ? (normalizeEmptySolver(validationView) ?? validationView) : data
   }
 
   // Step 3: Schema validation

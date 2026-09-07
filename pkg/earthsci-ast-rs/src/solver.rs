@@ -84,7 +84,9 @@ pub fn resolve_tolerances(
 /// nothing set, and `parse -> emit` cannot disagree across bindings about
 /// whether `{}` survives. Not covered by `skip_serializing_if`: that is
 /// per-FIELD, so an empty `Solver` would still emit its enclosing `{}`.
-pub(crate) fn normalize_empty(solver: Option<crate::types::Solver>) -> Option<crate::types::Solver> {
+pub(crate) fn normalize_empty(
+    solver: Option<crate::types::Solver>,
+) -> Option<crate::types::Solver> {
     let s = solver?;
     if s.stiffness.is_none() && s.abstol.is_none() && s.reltol.is_none() && s.splitting.is_none() {
         return None;

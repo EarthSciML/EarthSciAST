@@ -20,9 +20,10 @@ describe('the document-scoped `solver` block (esm-spec §2.2)', () => {
     // not reach emit. Without the load-time step this binding would round-trip
     // `{}` verbatim (toJson serializes the whole document object) while Python
     // and Julia dropped it: five bindings disagreeing about one document.
-    const out = JSON.parse(
-      toJson(loadString(JSON.stringify({ ...base, solver: {} }))),
-    ) as Record<string, unknown>
+    const out = JSON.parse(toJson(loadString(JSON.stringify({ ...base, solver: {} })))) as Record<
+      string,
+      unknown
+    >
     expect('solver' in out).toBe(false)
   })
 
@@ -37,7 +38,7 @@ describe('the document-scoped `solver` block (esm-spec §2.2)', () => {
     expect('solver' in out).toBe(false)
   })
 
-  it('does not mutate the caller\'s own document object', () => {
+  it("does not mutate the caller's own document object", () => {
     // Regression: the normalization deleted the key IN PLACE, and for a
     // non-canonical object input the validation view IS the caller's object —
     // so loading a document silently altered it. Every other pre-validation

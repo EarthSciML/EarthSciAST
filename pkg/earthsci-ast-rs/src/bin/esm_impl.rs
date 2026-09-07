@@ -3835,10 +3835,16 @@ fn run_test(
                 // opinion), which is what lets a stiff document ask for its own
                 // integration accuracy without every invocation naming it.
                 let file_opts = earthsci_ast::SolveOptions {
-                    reltol: Some(reltol.or(esm_file.solver.as_ref().and_then(|s| s.reltol))
-                        .unwrap_or(TEST_RELTOL)),
-                    abstol: Some(abstol.or(esm_file.solver.as_ref().and_then(|s| s.abstol))
-                        .unwrap_or(TEST_ABSTOL)),
+                    reltol: Some(
+                        reltol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.reltol))
+                            .unwrap_or(TEST_RELTOL),
+                    ),
+                    abstol: Some(
+                        abstol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.abstol))
+                            .unwrap_or(TEST_ABSTOL),
+                    ),
                     ..opts.clone()
                 };
                 let results = earthsci_ast::run_pde_tests_filtered(

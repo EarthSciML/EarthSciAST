@@ -279,8 +279,7 @@ pub use types::{
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
     ReactionSystem, RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, TimeSpan,
-    Tolerance,
-    UnitConversion, UpdateValue, VariableMapTransform, VariableType,
+    Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
