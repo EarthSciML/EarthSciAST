@@ -368,6 +368,16 @@ pub struct FlattenMetadata {
     /// Whether the pipeline had to synthesize an implicit Interface because
     /// the source file didn't declare one. Always `false` at Rust Core tier.
     pub implicit_interface_inferred: bool,
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor it was folded into (issue #230).
+    ///
+    /// The flattener's own retarget ([`retarget_merged_names`]) reaches equation
+    /// ASTs; this is the map a CONSUMER that addresses a state by NAME needs — a
+    /// `parameter_overrides` / `initial_conditions` key, an output selection — to
+    /// resolve a spelling the merge moved out from under it. Empty for a
+    /// document with no renaming merge, which is the overwhelming majority.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub merged_variable_renames: IndexMap<String, String>,
 }
 
 /// Spec-compliant flattened coupled system (§4.7.5).
@@ -631,8 +641,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // consumer that needs a discretized system can demand one explicitly with
     // [`reject_unlowered_operators`].
 
-    // Phase 3: apply coupling rules, collecting rule descriptions.
-    let coupling_rules_applied = apply_coupling_entries(file, &mut per_system)?;
+    // Phase 3: apply coupling rules, collecting rule descriptions and the
+    // document-wide map of the state names the merges DELETED (issue #230).
+    let (coupling_rules_applied, merged_variable_renames) =
+        apply_coupling_entries(file, &mut per_system)?;
 
     // Phase 4: conflict detection after coupling.
     detect_conflicts(file, &per_system)?;
@@ -711,6 +723,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             coupling_rules_applied,
             dimension_promotions_applied: Vec::new(),
             implicit_interface_inferred: false,
+            merged_variable_renames,
         },
     })
 }
@@ -1122,10 +1135,16 @@ fn collect_component_systems(
 fn apply_coupling_entries(
     file: &EsmFile,
     per_system: &mut Vec<SystemBlock>,
-) -> Result<Vec<String>, FlattenError> {
+) -> Result<(Vec<String>, IndexMap<String, String>), FlattenError> {
     let mut coupling_rules_applied = Vec::new();
+    // The document-wide merge map: every state spelling an `operator_compose`
+    // renaming match has DELETED, mapped onto the survivor (issue #230). It
+    // accumulates across the rank-0 pass and is applied to the by-name endpoints
+    // of every entry that has not run yet, so an entry naming a merged-away
+    // spelling resolves to the survivor instead of dangling.
+    let mut merged_renames: IndexMap<String, String> = IndexMap::new();
     let Some(entries) = &file.coupling else {
-        return Ok(coupling_rules_applied);
+        return Ok((coupling_rules_applied, merged_renames));
     };
 
     // BY KIND, not by array position. §4.7.1 runs before §4.7.2 and §4.7.3 so
@@ -1152,12 +1171,101 @@ fn apply_coupling_entries(
                 continue;
             }
             let mut one = Vec::new();
-            apply_coupling_entry(entry, per_system, &mut one)?;
+            apply_coupling_entry(entry, per_system, &mut one, &mut merged_renames)?;
             descriptions[i] = one.into_iter().next();
         }
     }
     coupling_rules_applied.extend(descriptions.into_iter().flatten());
-    Ok(coupling_rules_applied)
+    Ok((coupling_rules_applied, merged_renames))
+}
+
+/// Fold a merge's fresh rename map into the running document-wide one.
+///
+/// Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+/// later one merges `A.x` onto `C.x`, a document that still names `B.x` must
+/// land on `C.x` — so the accumulated map's VALUES are retargeted through the
+/// new map before the new pairs are added.
+fn compose_renames(acc: &mut IndexMap<String, String>, next: IndexMap<String, String>) {
+    for survivor in acc.values_mut() {
+        if let Some(further) = next.get(survivor.as_str()) {
+            *survivor = further.clone();
+        }
+    }
+    acc.extend(next);
+}
+
+/// The survivor `name` resolves to, or `name` itself.
+fn resolve_renamed<'a>(name: &'a str, renames: &'a IndexMap<String, String>) -> &'a str {
+    renames.get(name).map(String::as_str).unwrap_or(name)
+}
+
+/// Rewrite a `couple` connector's by-name endpoints off names an earlier merge
+/// deleted (issue #230).
+///
+/// `operator_compose` entries run before `couple` and `variable_map` (§4.7.5
+/// step 3 ordering) and a renaming merge DELETES the spelling it consumed. The
+/// document-wide retarget ([`retarget_merged_names`]) reaches equation ASTs only
+/// — a connector's `from` / `to` is a plain scoped-reference STRING carried on
+/// the entry, so an entry that has not run yet can still name a state that has
+/// moved, and the connector then matches nothing and is dropped in SILENCE.
+///
+/// Returns a rewritten CLONE (borrowing the original when nothing changes), so
+/// the source document keeps what its author wrote.
+fn retarget_connector<'a>(
+    connector: &'a serde_json::Value,
+    renames: &IndexMap<String, String>,
+) -> std::borrow::Cow<'a, serde_json::Value> {
+    use std::borrow::Cow;
+    if renames.is_empty() {
+        return Cow::Borrowed(connector);
+    }
+    let Some(eqs) = connector.get("equations").and_then(|e| e.as_array()) else {
+        return Cow::Borrowed(connector);
+    };
+    let subs: HashMap<String, Expr> = renames
+        .iter()
+        .map(|(from, to)| (from.clone(), Expr::Variable(to.clone())))
+        .collect();
+    let mut changed = false;
+    let mut out_eqs = Vec::with_capacity(eqs.len());
+    for eq in eqs {
+        let mut eq = eq.clone();
+        if let Some(obj) = eq.as_object_mut() {
+            for side in ["from", "to"] {
+                let Some(name) = obj.get(side).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let survivor = resolve_renamed(name, renames);
+                if survivor != name {
+                    let survivor = survivor.to_string();
+                    obj.insert(side.to_string(), serde_json::Value::String(survivor));
+                    changed = true;
+                }
+            }
+            // The connector's own expression is carried on the ENTRY too, so
+            // the equation-AST retarget never saw it either.
+            if let Some(raw) = obj.get("expression") {
+                if let Ok(expr) = serde_json::from_value::<Expr>(raw.clone()) {
+                    let rewritten = crate::substitute::substitute(&expr, &subs);
+                    if rewritten != expr {
+                        if let Ok(v) = serde_json::to_value(&rewritten) {
+                            obj.insert("expression".to_string(), v);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        out_eqs.push(eq);
+    }
+    if !changed {
+        return Cow::Borrowed(connector);
+    }
+    let mut out = connector.clone();
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("equations".to_string(), serde_json::Value::Array(out_eqs));
+    }
+    Cow::Owned(out)
 }
 
 /// Phase 4 of [`flatten`]: conflict detection after coupling — every pair of
@@ -2115,6 +2223,7 @@ fn apply_coupling_entry(
     entry: &CouplingEntry,
     per_system: &mut Vec<SystemBlock>,
     coupling_rules_applied: &mut Vec<String>,
+    merged_renames: &mut IndexMap<String, String>,
 ) -> Result<(), FlattenError> {
     match entry {
         CouplingEntry::OperatorCompose {
@@ -2124,7 +2233,14 @@ fn apply_coupling_entry(
             description,
             ..
         } => {
-            apply_operator_compose(systems, translate.as_ref(), *require_match, per_system)?;
+            let made = apply_operator_compose(
+                systems,
+                translate.as_ref(),
+                *require_match,
+                per_system,
+                merged_renames,
+            )?;
+            compose_renames(merged_renames, made);
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -2143,7 +2259,11 @@ fn apply_coupling_entry(
             lifting: _,
             description,
         } => {
-            apply_couple(systems, connector, per_system)?;
+            // The connector's `from`/`to` are plain scoped-reference strings on
+            // the entry, so a spelling an earlier merge deleted has to be
+            // resolved here — nothing else reaches them (issue #230).
+            let connector = retarget_connector(connector, merged_renames);
+            apply_couple(systems, connector.as_ref(), per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -2160,8 +2280,20 @@ fn apply_coupling_entry(
             description,
         } => {
             match transform {
+                // Same by-name endpoints as the `couple` arm, and the sharper
+                // half of the reach gap: a `from` naming a merged-away state
+                // substitutes a DEAD name into every equation referencing the
+                // mapped parameter, rather than merely failing to match
+                // (issue #230). Only this arm substitutes, so only this arm
+                // resolves — the expression arm's `contains` check below reads
+                // the AUTHORED node, which still spells the authored `from`.
                 VariableMapTransform::Named(_) => {
-                    apply_variable_map(from, to, *factor, per_system);
+                    apply_variable_map(
+                        resolve_renamed(from, merged_renames),
+                        resolve_renamed(to, merged_renames),
+                        *factor,
+                        per_system,
+                    );
                 }
                 // Expression transform (esm-spec §10.4): no substitution —
                 // references to `to` stay intact and resolve to the observed
@@ -2423,18 +2555,19 @@ fn apply_operator_compose(
     translate: Option<&serde_json::Value>,
     require_match: Option<bool>,
     per_system: &mut [SystemBlock],
-) -> Result<(), FlattenError> {
+    renames: &IndexMap<String, String>,
+) -> Result<IndexMap<String, String>, FlattenError> {
     if systems.len() < 2 {
-        return Ok(());
+        return Ok(IndexMap::new());
     }
     let Some(a_idx) = per_system.iter().position(|b| b.name == systems[0]) else {
-        return Ok(());
+        return Ok(IndexMap::new());
     };
     let Some(b_idx) = per_system.iter().position(|b| b.name == systems[1]) else {
-        return Ok(());
+        return Ok(IndexMap::new());
     };
     if a_idx == b_idx {
-        return Ok(());
+        return Ok(IndexMap::new());
     }
 
     // Step 3's placeholder expansion, run first so the expanded equations are
@@ -2445,7 +2578,19 @@ fn apply_operator_compose(
     // NAMESPACED form first (`qualify_translate_endpoint`) — matching runs
     // against a flattened equation's namespaced dependent variable, so a bare
     // endpoint that is not qualified here can never match.
-    let translate = build_translate_map(translate, &systems[0], &systems[1]);
+    // Both endpoints are rewritten off names an earlier merge in this document
+    // already deleted: an earlier entry may have consumed either the A-side or
+    // the B-side spelling this one names (issue #230).
+    let translate: HashMap<String, (String, f64)> =
+        build_translate_map(translate, &systems[0], &systems[1])
+            .into_iter()
+            .map(|(b_name, (a_name, factor))| {
+                (
+                    resolve_renamed(&b_name, renames).to_string(),
+                    (resolve_renamed(&a_name, renames).to_string(), factor),
+                )
+            })
+            .collect();
 
     // Step 1: A's equations, indexed by dependent variable.
     let mut a_index: IndexMap<String, usize> = IndexMap::new();
@@ -2602,7 +2747,12 @@ fn apply_operator_compose(
         }
     }
 
-    Ok(())
+    // Everything this entry deleted, in one map, for the caller's running
+    // document-wide rename (issue #230). `inverted` rides along because it is
+    // the same operation pointed the other way — the loser of an ownership
+    // decision is merged away exactly like the loser of a translation match.
+    merged_away.extend(inverted);
+    Ok(merged_away)
 }
 
 thread_local! {
