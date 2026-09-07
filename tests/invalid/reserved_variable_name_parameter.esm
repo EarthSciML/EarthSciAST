@@ -1,0 +1,46 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ReservedVariableNameParameter",
+    "description": "A PARAMETER named `t` and a PARAMETER named `_var` — the two globally-scoped names of esm-spec §4.9.1, neither of which a declaration map may spell (§4.9.1.1). `t` here is the ERA5 short name for air temperature, which is how the collision reaches a real document: a forcing channel is named after its file variable and silently becomes the simulation clock. The model is algebraic on purpose, so the only findings are the two declarations — a time derivative would additionally divide by the shadowed `t` and add a dimensional finding that differs from binding to binding.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "validation",
+      "reserved-names",
+      "independent-variable"
+    ]
+  },
+  "models": {
+    "Ingest": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Equilibrium value"
+        },
+        "t": {
+          "type": "parameter",
+          "units": "K",
+          "default": 288.0,
+          "description": "Air temperature (ERA5 short name). RESERVED — this is the independent variable's name."
+        },
+        "_var": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "RESERVED — the §6.4 operator-model placeholder."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 1.0
+        }
+      ]
+    }
+  }
+}

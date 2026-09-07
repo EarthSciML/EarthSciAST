@@ -1705,6 +1705,77 @@ def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
         )
 
 
+def _reserved_declaration_names(data: dict[str, Any]) -> dict[str, str]:
+    """The names no declaration map may spell, mapped to WHY (esm-spec §4.9.1.1).
+
+    Two symbols, both of them GLOBALLY scoped: the document's independent
+    variable (``domain.independent_variable``, default ``"t"``) and the §6.4
+    operator placeholder. Same set the §4.3.1 ``reserved_index_symbol`` binder
+    rule uses -- stated in one place so the two rules cannot drift apart.
+
+    Spatial coordinate names are deliberately absent: ``x``, ``y``, ``lon`` are
+    coordinates only in a coordinate position (§11.4), and
+    ``tests/valid/units_dimensional_analysis.esm`` declares ``x`` as an ordinary
+    position variable.
+    """
+    domain = data.get("domain")
+    independent = "t"
+    if isinstance(domain, dict):
+        independent = str(domain.get("independent_variable") or "t")
+    return {independent: "independent_variable", "_var": "operator_placeholder"}
+
+
+def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -> None:
+    """``reserved_variable_name``: a declaration spelled with a globally-scoped
+    name (esm-spec §4.9.1.1).
+
+    The independent variable and ``_var`` are in scope in every model and are
+    resolved BY NAME, ahead of the declaration maps, so such a declaration is
+    unreachable -- it does not shadow the implicit symbol, the implicit symbol
+    shadows it. What that cost before the rejection existed is why it is a hard
+    error and not a lint (issue #200): the document VALIDATED, a bare build
+    reported the observed as having no defining expression, and a build with a
+    subsystem mounted handed every reader of ``t`` the simulation clock instead
+    -- ``log(t)`` was ``-inf`` at ``t = 0`` and every number downstream was
+    finite, plausible and wrong.
+
+    All three declaration maps are covered, because a species and a reaction
+    parameter become symbols of the derived ODE system exactly as a
+    ``variables`` entry does (§7.4).
+    """
+    reserved = _reserved_declaration_names(data)
+
+    def scan(container: dict[str, Any], pointer: str, owner: str, kind: str) -> None:
+        for name in container:
+            why = reserved.get(str(name))
+            if why is None:
+                continue
+            role = (
+                "the document's independent variable"
+                if why == "independent_variable"
+                else "the operator-model placeholder"
+            )
+            errors.append(
+                (
+                    f"{pointer}/{name}",
+                    f"{owner} declares a {kind} named '{name}', which is {role}",
+                    {"name": str(name), "reserved_as": why},
+                )
+            )
+
+    for mname, m in (data.get("models") or {}).items():
+        if isinstance(m, dict) and isinstance(m.get("variables"), dict):
+            scan(m["variables"], f"/models/{mname}/variables", f"Model '{mname}'", "variable")
+    for rname, rs in (data.get("reaction_systems") or {}).items():
+        if not isinstance(rs, dict):
+            continue
+        owner = f"Reaction system '{rname}'"
+        if isinstance(rs.get("species"), dict):
+            scan(rs["species"], f"/reaction_systems/{rname}/species", owner, "species")
+        if isinstance(rs.get("parameters"), dict):
+            scan(rs["parameters"], f"/reaction_systems/{rname}/parameters", owner, "parameter")
+
+
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
     """``event_affects_parameter``: an event ``affects`` LHS naming a PARAMETER.
 
@@ -2819,6 +2890,14 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
+    # A declaration spelled with a globally-scoped name (the independent
+    # variable, or `_var`) is unreachable: both resolve BY NAME ahead of the
+    # declaration maps, so every reader silently gets the implicit symbol
+    # instead of the declared quantity (issue #200).
+    collect(
+        "reserved_variable_name",
+        lambda sub: _check_reserved_declaration_names(data, sub),
+    )
     collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))

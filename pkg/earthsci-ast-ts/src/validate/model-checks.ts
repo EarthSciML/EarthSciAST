@@ -150,6 +150,68 @@ export function implicitNames(esmFile: EsmFile): Set<string> {
   return new Set<string>([independentVariableName(esmFile), ...SPATIAL_COORDINATE_NAMES])
 }
 
+/** Why a name is reserved, for the `reserved_variable_name` details payload. */
+type ReservedReason = 'independent_variable' | 'operator_placeholder'
+
+/**
+ * The names no declaration map may spell (spec §4.9.1.1).
+ *
+ * Two symbols, both GLOBALLY scoped: the document's independent variable and
+ * the §6.4 operator placeholder. Same set the §4.3.1 `reserved_index_symbol`
+ * binder rule uses, so the two rules cannot drift apart.
+ *
+ * Spatial coordinate names are deliberately NOT here. They resolve as
+ * coordinates only in a coordinate position (§11.4), and
+ * `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary
+ * position variable.
+ */
+export function reservedDeclarationNames(esmFile: EsmFile): Map<string, ReservedReason> {
+  return new Map<string, ReservedReason>([
+    [independentVariableName(esmFile), 'independent_variable'],
+    [OPERATOR_VAR_PLACEHOLDER, 'operator_placeholder'],
+  ])
+}
+
+/**
+ * `reserved_variable_name` for every key of one declaration map spelled with a
+ * globally-scoped name (spec §4.9.1.1).
+ *
+ * The independent variable and `_var` are in scope in every component and are
+ * resolved BY NAME, ahead of the declaration maps, so such a declaration is
+ * unreachable — it does not shadow the implicit symbol, the implicit symbol
+ * shadows it. That is why this is a hard error and not a lint (issue #200): the
+ * offending document VALIDATED, a bare build reported the observed as having no
+ * defining expression, and a build with a subsystem mounted handed every reader
+ * of `t` the simulation clock instead, so `log(t)` was `-inf` at `t = 0` and
+ * every number downstream was finite, plausible and wrong.
+ */
+export function validateReservedDeclarationNames(
+  declarations: Record<string, unknown> | undefined,
+  containerPath: string,
+  owner: string,
+  kind: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!declarations) return errors
+  const reserved = reservedDeclarationNames(esmFile)
+  for (const name of Object.keys(declarations)) {
+    const reason = reserved.get(name)
+    if (!reason) continue
+    const role =
+      reason === 'independent_variable'
+        ? "the document's independent variable"
+        : 'the operator-model placeholder'
+    errors.push({
+      path: `${containerPath}/${name}`,
+      code: ERROR_CODES.RESERVED_VARIABLE_NAME,
+      message: `${owner} declares a ${kind} named '${name}', which is ${role}`,
+      details: { name, reserved_as: reason },
+    })
+  }
+  return errors
+}
+
 /**
  * Check reference integrity for a model — across EVERY expression-bearing field,
  * not just `equations`.

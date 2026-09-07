@@ -822,6 +822,13 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// §6.3.1 derivation.
 	s.validateSystemKind(modelName, model, basePath)
 
+	// esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped name
+	// is unreachable — creditIndependentVariable above puts the independent
+	// variable into scope by NAME, ahead of the declaration map, so every reader
+	// gets the clock instead of the declared quantity (issue #200).
+	validateReservedDeclarationNames(s, model.Variables,
+		basePath+"/variables", fmt.Sprintf("Model '%s'", modelName), "variable")
+
 	for i, event := range model.DiscreteEvents {
 		event := event
 		eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
@@ -1587,6 +1594,63 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 	}
 }
 
+// reservedDeclarationNames maps every name a declaration map may NOT spell to
+// the reason it is reserved (esm-spec §4.9.1.1).
+//
+// Two symbols, both GLOBALLY scoped: the document's independent variable and
+// the §6.4 operator placeholder. Exactly the pair creditIndependentVariable and
+// the `_var` concession put into scope ahead of the declaration maps, and the
+// same set §4.3.1's `reserved_index_symbol` binder rule uses — stated once so
+// the rules cannot drift apart.
+//
+// Spatial coordinate names are deliberately NOT here: they are coordinates only
+// in a coordinate position (§11.4), and tests/valid/units_dimensional_analysis.esm
+// declares `x` as an ordinary position variable.
+func (s *structuralScan) reservedDeclarationNames() map[string]string {
+	indep := s.indep
+	if indep == "" {
+		indep = DefaultIndepVar
+	}
+	return map[string]string{
+		indep:                  "independent_variable",
+		operatorPlaceholderVar: "operator_placeholder",
+	}
+}
+
+// validateReservedDeclarationNames emits `reserved_variable_name` for every key
+// of one declaration map spelled with a globally-scoped name.
+//
+// The declaration does not shadow the implicit symbol — the implicit symbol
+// shadows it, so every reader of the name silently receives the simulation
+// clock (or the operand placeholder) instead of the declared quantity. It is a
+// free function rather than a method because Go methods cannot take type
+// parameters, and the three declaration maps hold three different value types.
+func validateReservedDeclarationNames[V any](
+	s *structuralScan, decls map[string]V, containerPath, owner, kind string,
+) {
+	reserved := s.reservedDeclarationNames()
+	for _, name := range sortedKeys(decls) {
+		why, ok := reserved[name]
+		if !ok {
+			continue
+		}
+		role := "the document's independent variable"
+		if why == "operator_placeholder" {
+			role = "the operator-model placeholder"
+		}
+		s.addErr(StructuralError{
+			Path: fmt.Sprintf("%s/%s", containerPath, name),
+			Code: ErrorReservedVariableName,
+			Message: fmt.Sprintf("%s declares a %s named '%s', which is %s",
+				owner, kind, name, role),
+			Details: map[string]any{
+				"name":        name,
+				"reserved_as": why,
+			},
+		})
+	}
+}
+
 // countDerivatives returns, per variable, how many time derivatives of it an
 // expression carries. It walks EVERY expression-bearing field (the shared
 // field-preserving walk), so it finds the `D` an array-form equation hides in an
@@ -1643,6 +1707,14 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	s.creditIndependentVariable(allVars)
 	s.creditCoordinateNames(allVars)
 	s.creditCallbackVariables(allVars, systemName)
+
+	// esm-spec §4.9.1.1, the same rule as for a model's `variables`: a species
+	// and a reaction parameter become symbols of the derived ODE system exactly
+	// as a `variables` entry does (§7.4), so all three declaration maps collide
+	// with the globally-scoped names identically.
+	owner := fmt.Sprintf("Reaction system '%s'", systemName)
+	validateReservedDeclarationNames(s, system.Species, basePath+"/species", owner, "species")
+	validateReservedDeclarationNames(s, system.Parameters, basePath+"/parameters", owner, "parameter")
 
 	for i, reaction := range system.Reactions {
 		reactionPath := fmt.Sprintf("%s/reactions/%d", basePath, i)

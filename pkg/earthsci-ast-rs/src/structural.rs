@@ -29,6 +29,20 @@ pub(crate) fn validate_model(
 ) {
     let ctx = ModelCtx::new(esm_file, model_name, model, system_refs);
 
+    // esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped name
+    // is unreachable — `ModelCtx::new` puts the independent variable and `_var`
+    // into scope BY NAME, ahead of the declaration map, so every reader of the
+    // name receives the implicit symbol instead of the declared quantity
+    // (issue #200).
+    check_reserved_declaration_names(
+        esm_file,
+        &model.variables,
+        &format!("/models/{model_name}/variables"),
+        &format!("Model '{model_name}'"),
+        "variable",
+        errors,
+    );
+
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
     ctx.check_initialization_equation_refs(errors);
@@ -796,6 +810,53 @@ fn independent_variable(esm_file: &EsmFile) -> String {
         .as_ref()
         .and_then(|d| d.independent_variable.clone())
         .unwrap_or_else(|| "t".to_string())
+}
+
+/// Why a name is reserved, for the `reserved_variable_name` details payload.
+fn reserved_declaration_reason(esm_file: &EsmFile, name: &str) -> Option<(&'static str, &'static str)> {
+    if name == independent_variable(esm_file) {
+        Some(("independent_variable", "the document's independent variable"))
+    } else if name == crate::flatten::VAR_PLACEHOLDER {
+        Some(("operator_placeholder", "the operator-model placeholder"))
+    } else {
+        None
+    }
+}
+
+/// `reserved_variable_name` for every key of one declaration map spelled with a
+/// globally-scoped name (esm-spec §4.9.1.1).
+///
+/// The independent variable and `_var` are in scope in every component and are
+/// resolved BY NAME ahead of the declaration maps — `ModelCtx::new` extends
+/// `defined_vars` with exactly these two — so the declaration is unreachable:
+/// the implicit symbol shadows it, not the other way round. Same reserved set as
+/// `parse::reject_reserved_index_symbols` uses for an `aggregate` binder,
+/// stated once per rule so the two cannot drift.
+///
+/// Findings are emitted in sorted key order: `variables` / `species` /
+/// `parameters` are `HashMap`s, which discard the authored key order at parse,
+/// so sorted is the only stable answer this binding can give.
+fn check_reserved_declaration_names<V>(
+    esm_file: &EsmFile,
+    declarations: &HashMap<String, V>,
+    container_path: &str,
+    owner: &str,
+    kind: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let mut names: Vec<&String> = declarations.keys().collect();
+    names.sort();
+    for name in names {
+        let Some((reason, role)) = reserved_declaration_reason(esm_file, name) else {
+            continue;
+        };
+        errors.push(StructuralError {
+            path: format!("{container_path}/{name}"),
+            code: StructuralErrorCode::ReservedVariableName,
+            message: format!("{owner} declares a {kind} named '{name}', which is {role}"),
+            details: serde_json::json!({ "name": name, "reserved_as": reason }),
+        });
+    }
 }
 
 /// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
@@ -2060,6 +2121,28 @@ pub(crate) fn validate_reaction_system(
 
     // Rate expressions can reference both parameters and species names.
     let defined_parameters: HashSet<String> = rs.parameters.keys().cloned().collect();
+
+    // esm-spec §4.9.1.1, the same rule as for a model's `variables`: a species
+    // and a reaction parameter become symbols of the derived ODE system exactly
+    // as a `variables` entry does (§7.4), so all three declaration maps collide
+    // with the globally-scoped names identically.
+    let owner = format!("Reaction system '{rs_name}'");
+    check_reserved_declaration_names(
+        esm_file,
+        &rs.species,
+        &format!("{rs_path}/species"),
+        &owner,
+        "species",
+        errors,
+    );
+    check_reserved_declaration_names(
+        esm_file,
+        &rs.parameters,
+        &format!("{rs_path}/parameters"),
+        &owner,
+        "parameter",
+        errors,
+    );
 
     // Check that all reaction references are defined
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {

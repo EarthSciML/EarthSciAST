@@ -877,3 +877,134 @@ func TestUnparseableUnitIsAHardError(t *testing.T) {
 	assert.True(t, sawHardError, "unparseable unit must be a hard unit_parse_error: %+v", result.StructuralErrors)
 	assert.False(t, result.Valid, "a file with an unreal unit is invalid")
 }
+
+// hasReservedError reports whether an ERROR-level structural error with the
+// given code sits at the given JSON Pointer. Peer of hasStructuralError in
+// units_fixtures_test.go, over the coded structural surface's error slice.
+func hasReservedError(errs []StructuralError, code, path string) bool {
+	for _, e := range errs {
+		if e.Code == code && e.Path == path && e.Level == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestReservedDeclarationNameIsRejected pins esm-spec §4.9.1.1: a DECLARATION
+// spelled with a globally-scoped name — the document's independent variable or
+// the §6.4 `_var` placeholder — is a hard `reserved_variable_name` error at the
+// offending key.
+//
+// The declaration never wins. creditIndependentVariable puts the independent
+// variable into scope BY NAME, ahead of the declaration maps, so the implicit
+// symbol shadows the declaration rather than the other way round: the reported
+// document (issue #200) validated clean, then handed every reader of `t` the
+// simulation clock in place of a fuel time-lag constant.
+func TestReservedDeclarationNameIsRejected(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "1.0.0",
+		Metadata: Metadata{Name: "FuelMoistureProbe"},
+		Models: map[string]Model{
+			"FuelMoisture": {
+				Variables: map[string]ModelVariable{
+					"m":    {Type: "unknown", Units: strPtr("1")},
+					"t":    {Type: "unknown", Units: strPtr("s")},
+					"_var": {Type: "parameter", Units: strPtr("1")},
+					"tau":  {Type: "parameter", Units: strPtr("s")},
+				},
+				Equations: []Equation{
+					{LHS: ExprNode{Op: "D", Args: []any{"m"}, Wrt: strPtr("t")}, RHS: "m"},
+					{LHS: "t", RHS: "tau"},
+				},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	assert.False(t, result.Valid, "a document declaring the independent variable is invalid")
+	assert.True(t,
+		hasReservedError(result.StructuralErrors, ErrorReservedVariableName, "/models/FuelMoisture/variables/t"),
+		"want reserved_variable_name @ /models/FuelMoisture/variables/t, got %+v",
+		result.StructuralErrors)
+	assert.True(t,
+		hasReservedError(result.StructuralErrors, ErrorReservedVariableName, "/models/FuelMoisture/variables/_var"),
+		"want reserved_variable_name @ /models/FuelMoisture/variables/_var, got %+v",
+		result.StructuralErrors)
+	for _, se := range result.StructuralErrors {
+		if se.Code == ErrorReservedVariableName && se.Path == "/models/FuelMoisture/variables/t" {
+			assert.Equal(t, "independent_variable", se.Details["reserved_as"])
+		}
+	}
+}
+
+// TestReservedDeclarationNameCoversReactionSystems pins that a species and a
+// reaction parameter are held to the same rule: both become symbols of the
+// derived ODE system exactly as a `variables` entry does (esm-spec §7.4).
+func TestReservedDeclarationNameCoversReactionSystems(t *testing.T) {
+	esmFile := &ESMFile{
+		ESM:      "1.0.0",
+		Metadata: Metadata{Name: "ReactionProbe"},
+		ReactionSystems: map[string]ReactionSystem{
+			"R": {
+				Species: map[string]Species{
+					"t": {Units: strPtr("mol/mol")},
+					"P": {Units: strPtr("mol/mol")},
+				},
+				Parameters: map[string]Parameter{"t": {Units: strPtr("K")}},
+				Reactions: []Reaction{{
+					ID:         "R1",
+					Substrates: []SubstrateProduct{{Species: "t", Stoichiometry: 1}},
+					Products:   []SubstrateProduct{{Species: "P", Stoichiometry: 1}},
+					Rate:       1.0,
+				}},
+			},
+		},
+	}
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	assert.True(t,
+		hasReservedError(result.StructuralErrors, ErrorReservedVariableName, "/reaction_systems/R/species/t"),
+		"want reserved_variable_name @ /reaction_systems/R/species/t, got %+v",
+		result.StructuralErrors)
+	assert.True(t,
+		hasReservedError(result.StructuralErrors, ErrorReservedVariableName, "/reaction_systems/R/parameters/t"),
+		"want reserved_variable_name @ /reaction_systems/R/parameters/t, got %+v",
+		result.StructuralErrors)
+}
+
+// TestReservedDeclarationNameFollowsTheDocument pins that the reserved set is
+// `domain.independent_variable`, not the literal "t". Renaming the independent
+// variable MOVES the rejection onto the new name and FREES `t`, which is then
+// an ordinary name — the same contract §4.3.1's `reserved_index_symbol` follows.
+func TestReservedDeclarationNameFollowsTheDocument(t *testing.T) {
+	build := func(declared string) *ESMFile {
+		return &ESMFile{
+			ESM:      "1.0.0",
+			Metadata: Metadata{Name: "Renamed"},
+			Domain:   &Domain{IndependentVariable: strPtr("s")},
+			Models: map[string]Model{
+				"M": {
+					SystemKind: strPtr(SystemKindNonlinear),
+					Variables: map[string]ModelVariable{
+						"y":      {Type: "unknown", Units: strPtr("1")},
+						declared: {Type: "parameter", Units: strPtr("K")},
+					},
+					Equations: []Equation{{LHS: "y", RHS: 1.0}},
+				},
+			},
+		}
+	}
+
+	renamed := ValidateStructuralWithCodes(build("s"))
+	assert.True(t,
+		hasReservedError(renamed.StructuralErrors, ErrorReservedVariableName, "/models/M/variables/s"),
+		"the rename must move the rejection onto 's': %+v", renamed.StructuralErrors)
+
+	freed := ValidateStructuralWithCodes(build("t"))
+	for _, se := range freed.StructuralErrors {
+		assert.NotEqual(t, ErrorReservedVariableName, se.Code,
+			"renaming the independent variable frees 't': %+v", freed.StructuralErrors)
+	}
+}

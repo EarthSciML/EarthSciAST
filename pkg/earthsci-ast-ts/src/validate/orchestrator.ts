@@ -41,6 +41,7 @@ import {
   validateAggregateJoinSides,
   validateAggregateIndexSets,
   validateRelationalNodesInContinuous,
+  validateReservedDeclarationNames,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateRecurrenceEquations } from '../recurrence.js'
@@ -185,6 +186,21 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       errors.push(...validateConversionFactorConsistency(model, modelPath))
       errors.push(...validateDefaultUnits(model, modelPath))
 
+      // esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped
+      // name — the independent variable, or the §6.4 `_var` placeholder — is
+      // unreachable: both resolve BY NAME ahead of the declaration map, so
+      // every reader silently receives the implicit symbol instead of the
+      // declared quantity (issue #200). Independent of coupling.
+      errors.push(
+        ...validateReservedDeclarationNames(
+          model.variables,
+          `${modelPath}/variables`,
+          `Model '${modelName}'`,
+          'variable',
+          esmFile,
+        ),
+      )
+
       // (F-6) Static `aggregate` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
       // naming an undeclared set, and a relational (value-invention) node that
@@ -234,6 +250,15 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
+          errors.push(
+            ...validateReservedDeclarationNames(
+              subsystem.variables,
+              `${subsystemPath}/variables`,
+              `Model '${subsystemName}'`,
+              'variable',
+              esmFile,
+            ),
+          )
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateJoinSides(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))
@@ -256,6 +281,27 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // `esmFile` lets a rate expression's SCOPED references (a cross-system
       // Arrhenius rate reading another model's temperature) resolve against the
       // whole document instead of being reported undefined.
+      // esm-spec §4.9.1.1, the same rule as for a model's `variables`: a
+      // species and a reaction parameter become symbols of the derived ODE
+      // system exactly as a `variables` entry does (§7.4), so all three
+      // declaration maps collide with the globally-scoped names identically.
+      errors.push(
+        ...validateReservedDeclarationNames(
+          reactionSystem.species,
+          `${systemPath}/species`,
+          `Reaction system '${systemName}'`,
+          'species',
+          esmFile,
+        ),
+        ...validateReservedDeclarationNames(
+          reactionSystem.parameters,
+          `${systemPath}/parameters`,
+          `Reaction system '${systemName}'`,
+          'parameter',
+          esmFile,
+        ),
+      )
+
       errors.push(...validateReactionConsistency(reactionSystem, systemPath, esmFile))
       // (h) A reaction system's constraint_equations and events are expression
       // positions too, and were never reference-checked.

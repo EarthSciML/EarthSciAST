@@ -1225,6 +1225,72 @@ Three classes of symbol are in scope in a model's expressions **without appearin
 | **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
 | **`_var`** | §6.4. The operator-model placeholder, substituted with each matching **ODE state** of the target system at `operator_compose` time — the set `ode_states` returns (§6.3.1), never the observed or algebraic unknowns. It is legal **wherever an ODE state is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a parameter update handler's `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
 
+##### 4.9.1.1 A DECLARATION MUST NOT spell one of them (`reserved_variable_name`)
+
+Two of those three symbols are **globally scoped**: the independent variable and
+`_var` are in scope in every model, resolved **by name**, everywhere. A
+declaration spelled with one of them therefore does not shadow the implicit
+symbol — the implicit symbol shadows *it*, and the declaration becomes
+unreachable. Declaring one is a **hard error** (`is_valid: false`), code
+`reserved_variable_name`.
+
+**The reserved set is `{ domain.independent_variable (default "t"), "_var" }`** —
+the same set §4.3.1's `reserved_index_symbol` binder rule follows, stated once so
+the two cannot drift. It follows the *document*: a file that renames its
+independent variable to `s` reserves `s` and **frees** `t`, which is then an
+ordinary name like any other. Spatial coordinate names are **not** in the set:
+`x`, `y`, `lon` resolve as coordinates only in a coordinate position (§11.4), and
+`tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position
+variable.
+
+**The rule covers the three declaration maps**, and reports at the offending key:
+
+| Site | Pointer |
+|---|---|
+| `models[M].variables` | `/models/<M>/variables/<name>` |
+| `reaction_systems[S].species` | `/reaction_systems/<S>/species/<name>` |
+| `reaction_systems[S].parameters` | `/reaction_systems/<S>/parameters/<name>` |
+
+All three declare symbols of the assembled system — a species and a reaction
+parameter become symbols of the derived ODE system exactly as a `variables` entry
+does (§7.4) — so all three collide identically.
+
+**Why a hard error and not a warning.** The three things this cost in practice
+are the whole argument, and the third is why the severity is not negotiable
+(reported as issue #200, from a WRF-Fire fuel-moisture component that declared
+its fuel time-lag constant as `t`):
+
+1. the document **validated**;
+2. built bare, the model reported the observed as having *no defining
+   expression* — a diagnostic about the wrong thing;
+3. built with a subsystem mounted, every equation that read `t` **silently
+   received the simulation time instead of the declared quantity**, so
+   `log(t)` was `-inf` at `t = 0` and every number downstream was finite,
+   plausible and wrong.
+
+Silence is the failure mode §4.8.4 and §4.9.5 already refuse to accept elsewhere,
+and it is deterministic and statically decidable here: the collision is visible in
+the declaration map alone. Nothing an author wants is lost by rejecting — a
+declared name is the author's free choice, so the fix is to spell it anything
+else.
+
+**Why the schema does not enforce it.** The reserved name is the *value of
+another field* (`domain.independent_variable`), which JSON Schema cannot
+express; a hard-coded `propertyNames: {not: {const: "t"}}` would reject a
+conforming document that renames its independent variable, and would be silent
+about the renamed one. A schema rejection would also pre-empt the check it
+replaces: a schema-invalid file never reaches structural validation
+(CONFORMANCE_SPEC §7.1.2), so the finding could not be pinned where it belongs.
+The rule is a structural check in every binding, and the schema is unchanged.
+
+Fixtures: `tests/invalid/reserved_variable_name_observed.esm` (the reported
+shape), `…_parameter.esm` (both reserved names, including the ERA5 short name
+`t` for air temperature — how this reaches a real document), `…_species.esm`
+(the two reaction maps), `…_renamed_independent.esm` and its valid twin
+`tests/valid/independent_variable_renamed.esm` (the reserved name follows
+`domain.independent_variable`; a binding that hard-codes `"t"` fails one of the
+two).
+
 #### 4.9.2 Scoped references are ARBITRARY DEPTH
 
 §4.6 defines a scoped reference as a dot path of unbounded length: `A.B.C.variable` walks `A` → `B` → `C`. A resolver MUST **walk** the path — take the last segment as the name and resolve the preceding segments one at a time against each parent's `subsystems` map.
@@ -4689,7 +4755,7 @@ The `domain` supports the following fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1). |
+| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`, §4.9.1.1), and no `aggregate` binder may bind it (`reserved_index_symbol`, §4.3.1). Renaming it moves both rules onto the new name and frees `t`. |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
 | `element_type` | | The precision the document is **evaluated in**: `"Float64"` (default) or `"Float32"`. See §11.3.1 — this is a semantic declaration, not a storage hint. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |
