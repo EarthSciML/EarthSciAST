@@ -1,0 +1,69 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "TableLookupObserved",
+    "description": "Inline-test fixture for the esm-spec §9.5.3 `table_lookup` lowering: `y` is an observed defined by a `table_lookup`, and `z` is the SAME lookup spelled in the hand-lowered `fn interp.linear(const data, const axis, x)` form. Both must evaluate to 25, so an unlowered `table_lookup` shows up as `y` failing while `z` passes.",
+    "authors": ["EarthSciML Authors and Contributors"],
+    "created": "2026-09-06T00:00:00Z"
+  },
+  "function_tables": {
+    "t_prof": {
+      "description": "Temperature vs. pressure level (synthetic, 1-D linear).",
+      "axes": [
+        { "name": "p", "units": "Pa", "values": [1.0, 2.0, 3.0, 4.0] }
+      ],
+      "interpolation": "linear",
+      "out_of_bounds": "clamp",
+      "data": [10.0, 20.0, 30.0, 40.0]
+    }
+  },
+  "models": {
+    "TableLookupObserved": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
+        "y": { "type": "unknown", "units": "1", "default": 0.0 },
+        "z": { "type": "unknown", "units": "1", "default": 0.0 },
+        "p": { "type": "parameter", "units": "Pa", "default": 2.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "const", "args": [], "value": 0.0 }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "t_prof",
+            "axes": { "p": "p" },
+            "args": []
+          }
+        },
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              { "op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0] },
+              { "op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0] },
+              "p"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "table_lookup_matches_hand_lowered",
+          "description": "p = 2.5 falls midway between knots 2 and 3, so both spellings must give 25.",
+          "parameter_overrides": { "p": 2.5 },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "y", "time": 0.0, "expected": 25.0 },
+            { "variable": "z", "time": 0.0, "expected": 25.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

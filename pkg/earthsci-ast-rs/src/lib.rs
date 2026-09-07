@@ -91,6 +91,7 @@ pub(crate) mod join;
 pub(crate) mod json_visit;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
+pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
 pub(crate) mod op_registry;
 pub(crate) mod parse;

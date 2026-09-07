@@ -135,6 +135,23 @@ pub enum CompileError {
         op: String,
     },
 
+    /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
+    /// `interp.linear` / `interp.bilinear` / `index` form — an unknown table,
+    /// an axis-key set that does not match the table's declared axes, an
+    /// out-of-range `output`, or a table whose `interpolation` and axis count
+    /// disagree.
+    ///
+    /// Raised by [`crate::lower_table_lookup`] during the build rather than by
+    /// the evaluator: `unevaluable_operator` would name `table_lookup` without
+    /// saying which of the §9.5.5 conditions the document actually trips.
+    #[error("{code}: {reason}")]
+    TableLookupLowering {
+        /// The esm-spec §9.5.5 diagnostic code.
+        code: &'static str,
+        /// What is wrong with this `table_lookup` (or the table it names).
+        reason: String,
+    },
+
     /// `domain.element_type` names a precision this evaluator does not have.
     ///
     /// Reported rather than defaulted to binary64: a document that asks for a
