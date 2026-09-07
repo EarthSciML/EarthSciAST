@@ -134,9 +134,34 @@ pub(super) fn lookup_variable(name: &str, ctx: &EvalCtx) -> Value {
             Value::Array(Box::new(a.clone()))
         };
     }
-    // NOTHING bound this name — not `t`, not a loop binder, not a state, not an
-    // observed, not a parameter, not a forcing channel. There is no further
-    // resolution scope to try, so the read cannot produce a value.
+    // Nothing produced a value for this name. Two very different defects reach
+    // this point and they MUST NOT be reported as one (issue #181).
+    //
+    // (1) The name IS declared by this model — a state, a parameter, or an
+    //     observed — but no value for it exists HERE. For an observed that
+    //     means its rule has not run: the materialization order stalled, which
+    //     is what a dependency cycle among observeds looks like from inside the
+    //     evaluator (esm-spec §4.9.6). Reporting it as unbound is a claim about
+    //     the DOCUMENT that this arm is not in a position to make, and it was
+    //     routinely false — the reported name was typically an observed that is
+    //     declared, defined and referenced perfectly well, and had nothing to
+    //     do with the cycle. Bisecting from that message costs an afternoon.
+    if ctx.declared.contains(name) {
+        latch_gather_fault(format!(
+            "E_TREEWALK_UNRESOLVED_ORDER: '{name}' IS declared in this model, but nothing had \
+             produced a value for it at the point this expression was evaluated. For an observed \
+             that means its defining rule had not run yet — the usual cause is a dependency \
+             cycle among observed variables, which no evaluation order satisfies (esm-spec \
+             §4.9.6). Run `esm validate`: it reports the cycle as `observed_cycle` and names the \
+             observeds on it. This is NOT an undeclared name — see E_TREEWALK_UNBOUND_NAME for \
+             that (CONFORMANCE_SPEC §5.23)."
+        ));
+        return Value::Scalar(f64::NAN);
+    }
+    // (2) NOTHING bound this name — not `t`, not a loop binder, not a state, not
+    // an observed, not a parameter, not a forcing channel, and the model does
+    // not declare it either. There is no further resolution scope to try, so the
+    // read cannot produce a value.
     //
     // FAIL CLOSED (CONFORMANCE_SPEC §5.23). Returning a bare `NaN` here is the
     // sentinel that F24 and F25 both rode: IEEE-754 `max`/`min` return the
@@ -1529,10 +1554,10 @@ thread_local! {
 /// Named for the first fault that used this channel
 /// (`E_TREEWALK_CONSTARRAY_OOB`); it now also carries
 /// `E_TREEWALK_RECUR_UNAVAILABLE` (CONFORMANCE_SPEC §5.19.4) and
-/// `E_TREEWALK_UNBOUND_NAME` (§5.23). All three are
-/// "fail closed, do not silently substitute a number" faults with the same
-/// drain sites, so they share one latch rather than adding a second one that a
-/// future drain site could forget.
+/// `E_TREEWALK_UNBOUND_NAME` / `E_TREEWALK_UNRESOLVED_ORDER` (§5.23). All of
+/// them are "fail closed, do not silently substitute a number" faults with the
+/// same drain sites, so they share one latch rather than adding a second one
+/// that a future drain site could forget.
 pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take())
 }
@@ -2194,6 +2219,7 @@ pub(crate) fn eval_observed_recurrence(
         forcing: &forcing,
         cse: None,
         const_arrays,
+        declared: empty_declared_names(),
     };
     let (shape, origin) = super::rhs::recur_frame(&lowered.ranges);
     let scope = RecurScope::new(name, shape, origin);
@@ -2273,6 +2299,9 @@ pub(crate) fn eval_expression_with_extents_and_consts_shared(
         // structural analysis over), so this path is unchanged.
         cse: None,
         const_arrays,
+        // No compiled model behind this entry point, so it vouches for no name
+        // (see [`EvalCtx::declared`]).
+        declared: empty_declared_names(),
     };
     let mut ctx = env.ctx(inputs);
     take_const_array_oob(); // discard any latch left by an earlier failed call
@@ -5046,5 +5075,66 @@ mod ragged_eval_tests {
             }
             Value::Scalar(s) => panic!("expected a [0, 3] array, got scalar {s}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The fault arm splits two very different defects — issue #181
+    // -----------------------------------------------------------------------
+
+    /// Resolve `name` against an evaluation whose maps are all empty and whose
+    /// DECLARED set is `declared`, and return the latched fault.
+    fn fault_for(name: &str, declared: &[&str]) -> String {
+        let empty_arrays = ArrMap::default();
+        let rings: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+        let forcing: RefCell<HashMap<String, ArrayD<f64>>> = RefCell::new(HashMap::new());
+        let declared: HashSet<String> = declared.iter().map(|s| (*s).to_string()).collect();
+        let env = EvalEnv {
+            state_arrays: &empty_arrays,
+            params: &[],
+            param_names: &[],
+            t: 0.0,
+            derived_rings: &rings,
+            derived_extents: empty_derived_extents(),
+            forcing: &forcing,
+            cse: None,
+            const_arrays: ConstArrayScope::empty(),
+            declared: &declared,
+        };
+        let ctx = env.ctx(&empty_arrays);
+        take_const_array_oob(); // discard anything an earlier test left
+        let _ = lookup_variable(name, &ctx);
+        take_const_array_oob().expect("an unresolvable read must latch a fault")
+    }
+
+    /// A name the model declares — an observed whose rule has not run — is NOT
+    /// unbound, and saying so was the defect: the message named a variable that
+    /// is declared, defined and referenced correctly, and said nothing about
+    /// the dependency cycle that actually stalled the walk.
+    #[test]
+    fn a_declared_name_with_no_value_is_not_reported_as_unbound() {
+        let msg = fault_for("in_pbl", &["in_pbl", "hpbl"]);
+        assert!(
+            msg.contains("E_TREEWALK_UNRESOLVED_ORDER") && msg.contains("in_pbl"),
+            "a declared name gets the order fault, naming itself: {msg}"
+        );
+        assert!(
+            !msg.contains("E_TREEWALK_UNBOUND_NAME: "),
+            "and MUST NOT be reported as bound by nothing: {msg}"
+        );
+        assert!(
+            msg.contains("observed_cycle"),
+            "and points at the check that names the real defect: {msg}"
+        );
+    }
+
+    /// The other half, unchanged: a name declared NOWHERE keeps the §5.23
+    /// diagnosis. Splitting the arm must not weaken the case it was written for.
+    #[test]
+    fn an_undeclared_name_still_reports_unbound() {
+        let msg = fault_for("undeclaredFloor", &["in_pbl", "hpbl"]);
+        assert!(
+            msg.contains("E_TREEWALK_UNBOUND_NAME") && msg.contains("undeclaredFloor"),
+            "a name nothing declares is still the §5.23 fault: {msg}"
+        );
     }
 }

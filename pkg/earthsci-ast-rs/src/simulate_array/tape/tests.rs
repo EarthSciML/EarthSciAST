@@ -1393,6 +1393,7 @@ fn export_demotion_skips_unread_publishes() {
             params: &param_vec,
             forcing: &compiled.forcing,
             t: 0.0,
+            declared: &compiled.declared_names,
         };
         super::exec::run_tape_call(
             ctx,

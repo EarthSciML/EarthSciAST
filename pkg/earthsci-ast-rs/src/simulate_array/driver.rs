@@ -114,6 +114,7 @@ impl ArrayCompiled {
                 params: &param_vec,
                 forcing: &self.forcing,
                 t,
+                declared: &self.declared_names,
             },
             &mut dy,
             force_scalar,
@@ -194,6 +195,7 @@ impl ArrayCompiled {
                 params: param_vec,
                 forcing: &self.forcing,
                 t,
+                declared: &self.declared_names,
             },
             dy,
             false,
@@ -644,6 +646,7 @@ impl ArrayCompiled {
             // structural analysis over).
             cse: None,
             const_arrays: &self.const_scope,
+            declared: &self.declared_names,
         };
         materialize_observeds_into(&mut static_obs, &cadence.static_rules, &env);
         drop(static_rings_cell);
@@ -695,6 +698,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: None,
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     // Build-time t0 snapshot: vectorized overlay (bit-identical).
                     force_scalar: false,
@@ -934,6 +938,11 @@ impl ArrayCompiled {
         let varying_rules_jac = continuous_rules.to_vec();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
+        // See [`EvalCtx::declared`] (issue #181): the declared-name set is a
+        // property of the compiled MODEL, so each RHS/Jacobian closure carries
+        // its own clone rather than borrowing `self`.
+        let declared = self.declared_names.clone();
+        let declared_jac = declared.clone();
 
         // Materialize the DISCRETE (segment-invariant) observeds ONCE for this
         // segment, on top of the CONST `static_obs`. The caller refreshed the
@@ -965,6 +974,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: None,
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     force_scalar: false,
                 },
@@ -1028,6 +1038,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_rhs,
                     t,
+                    declared: &declared,
                 },
                 dy_s,
                 false,
@@ -1076,6 +1087,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_jac,
                     t,
+                    declared: &declared_jac,
                 },
                 &mut f_y,
                 false,
@@ -1092,6 +1104,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_jac,
                     t,
+                    declared: &declared_jac,
                 },
                 &mut f_yp,
                 false,
@@ -1312,6 +1325,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: Some(&cse),
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     // Output-node observed snapshot: vectorized overlay.
                     force_scalar: false,
@@ -1425,6 +1439,7 @@ impl ArrayCompiled {
                             forcing: &self.forcing,
                             cse: Some(&cse),
                             const_arrays: &self.const_scope,
+                            declared: &self.declared_names,
                         },
                         force_scalar: false,
                     },

@@ -507,6 +507,53 @@ fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+/// The first cycle a sorted DFS closes over an observed adjacency map, as a
+/// path with its entry node repeated (`["a", "b", "a"]`). Same walk and same
+/// output shape as the validator's `observed_cycle` check and the array
+/// runtime's ordering sweep; see esm-spec §4.9.6.
+fn first_observed_cycle(
+    deps: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Vec<String> {
+    fn visit(
+        name: &str,
+        deps: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        state: &mut HashMap<String, u8>,
+        chain: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        match state.get(name).copied().unwrap_or(0) {
+            1 => {
+                let start = chain.iter().position(|c| c == name).unwrap_or(0);
+                let mut cycle: Vec<String> = chain[start..].to_vec();
+                cycle.push(name.to_string());
+                Some(cycle)
+            }
+            2 => None,
+            _ => {
+                state.insert(name.to_string(), 1);
+                chain.push(name.to_string());
+                if let Some(ds) = deps.get(name) {
+                    for d in ds {
+                        if let Some(cycle) = visit(d, deps, state, chain) {
+                            return Some(cycle);
+                        }
+                    }
+                }
+                chain.pop();
+                state.insert(name.to_string(), 2);
+                None
+            }
+        }
+    }
+    let mut state: HashMap<String, u8> = HashMap::new();
+    let mut chain: Vec<String> = Vec::new();
+    for name in deps.keys() {
+        if let Some(cycle) = visit(name, deps, &mut state, &mut chain) {
+            return cycle;
+        }
+    }
+    deps.keys().cloned().collect()
+}
+
 /// Dependency order over observed definitions: an observed follows every
 /// observed it names. A cycle is a malformed model and is a hard error.
 fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareError> {
@@ -530,9 +577,23 @@ fn observed_order(defs: &HashMap<String, Expr>) -> Result<Vec<String>, PrepareEr
             .cloned()
             .collect();
         if ready.is_empty() {
-            let mut rest: Vec<_> = pending.into_iter().collect();
-            rest.sort();
-            return Err(err(format!("cyclic observed dependency among {rest:?}")));
+            // Name the CYCLE, not the residue. "cyclic observed dependency
+            // among [a, b, c, d, e]" tells an author that five observeds are
+            // implicated and nothing about which edges close the loop; the
+            // whole value of this diagnostic is the path (esm-spec §4.9.6).
+            // Sorted roots and successors so the same cycle is named every run.
+            let mut stuck: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+                std::collections::BTreeMap::new();
+            for n in &pending {
+                stuck.insert(n.clone(), deps[n].iter().cloned().collect());
+            }
+            let cycle = first_observed_cycle(&stuck);
+            return Err(err(format!(
+                "observed_cycle: dependency cycle among observed variables: {}. Each is defined \
+                 in terms of the next, so no evaluation order satisfies every definition \
+                 (esm-spec §4.9.6). `esm validate` reports this cycle before any build.",
+                cycle.join(" -> ")
+            )));
         }
         ready.sort(); // deterministic tie-break
         for n in ready {
