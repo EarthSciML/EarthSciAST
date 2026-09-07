@@ -53,6 +53,44 @@ derivative, the composed system's derivative is the **sum** of theirs.
 
 The flattened system has one `O3` whose tendency is `-k·O3 + E`.
 
+Note that `Chemistry` and `Emissions` each declare their own `O3`, and only the
+**bare-name fallback** binds them. When that happens the surviving spelling is
+the state's **owner's** — the component the document declares first, here
+`Chemistry` — and *not* whichever component you happened to list first in
+`systems`. Flipping the `systems` order therefore cannot change which state name,
+or which initial condition, comes out the far side (esm-libraries-spec §4.7.1
+step 3).
+
+### `require_match`
+
+An `operator_compose` entry that matches **nothing** is indistinguishable from an
+entry that is not there: the operator integrates a private, decoupled system from
+its own defaults, the mechanism receives no contribution at all, and the only
+evidence is a state count one too high. So a library reports the shortfall —
+`operator_compose_no_merge` when nothing landed, `operator_compose_partial_merge`
+when only some did, both naming the unmatched dependent variables.
+
+Both are **warnings**, because an operator system may legitimately contribute
+states of its own — a transport operator whose only equation defines its own wind
+field has no tendency to give the mechanism, and composing it is still correct.
+
+When your operator's equations really are *contributions* and must land, say so:
+
+```json
+{
+  "type": "operator_compose",
+  "systems": ["Chemistry", "DepositionSink"],
+  "require_match": true
+}
+```
+
+Now an equation of `DepositionSink` that finds no counterpart in `Chemistry` is
+`operator_compose_require_match_unmatched`, a hard refusal at flatten, rather
+than a decoupled equation nobody notices. A **partial** match fails too: an
+operator that reaches seven of your twelve species and silently misses five is
+exactly what the flag exists to catch. The default is `false`, so existing
+documents are unaffected.
+
 ### `translate`
 
 When the two systems spell the same quantity differently, `translate` maps
