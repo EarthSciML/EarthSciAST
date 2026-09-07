@@ -444,9 +444,7 @@ def _subsystem_map_file(to_endpoint: str) -> EsmFile:
         equations=[Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs="gain")],
     )
     wrap = Model(name="Wrap", subsystems={"inner": inner})
-    vm = VariableMapCoupling(
-        from_var="Src.T", to_var=to_endpoint, transform="param_to_var"
-    )
+    vm = VariableMapCoupling(from_var="Src.T", to_var=to_endpoint, transform="param_to_var")
     return _empty_file(models={"Src": src, "Wrap": wrap}, coupling=[vm])
 
 
