@@ -60,16 +60,26 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
             );
         }
 
-        // Create equations
+        // Create equations: a CHAIN, not a ring. The `% equations_per_model`
+        // this replaces wrapped the last observed back to the first and closed a
+        // cycle in the observed dependency graph (esm-spec §4.9.6), which the
+        // `validate` benchmark below would now spend its time reporting instead
+        // of measuring the acyclic walk it exists to measure. Same variable
+        // count, same equation count, same shape per equation.
         for j in 0..equations_per_model {
             let var_name = format!("x{i}_{j}");
-            equations.push(earthsci_ast::Equation {
-                lhs: Expr::Variable(var_name),
-                rhs: bin_op(
+            let rhs = if j == 0 {
+                Expr::Variable("k".to_string())
+            } else {
+                bin_op(
                     "*",
                     Expr::Variable("k".to_string()),
-                    Expr::Variable(format!("x{}_{}", i, (j + 1) % equations_per_model)),
-                ),
+                    Expr::Variable(format!("x{}_{}", i, j - 1)),
+                )
+            };
+            equations.push(earthsci_ast::Equation {
+                lhs: Expr::Variable(var_name),
+                rhs,
             });
         }
 
