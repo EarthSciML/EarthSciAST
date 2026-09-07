@@ -3399,18 +3399,21 @@ fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, St
             Expr::Number(_) | Expr::Integer(_) => {}
         }
     }
-    let mut visit = |expr: &Expr| collect(expr, prefix.as_str(), model, &subsystems, &mut hits);
-    // The expression-bearing fields the array build compiles: every equation
-    // (both sides) and every variable's own expressions (a parameter
-    // `update`'s `when` / `expression`, esm 1.0.0).
-    for eq in &model.equations {
-        visit(&eq.lhs);
-        visit(&eq.rhs);
+    {
+        // Scoped so the closure's `&mut hits` borrow ends before the map is
+        // consumed below.
+        let mut visit = |expr: &Expr| collect(expr, prefix.as_str(), model, &subsystems, &mut hits);
+        // The expression-bearing fields the array build compiles: every equation
+        // (both sides) and every variable's own expressions (a parameter
+        // `update`'s `when` / `expression`, esm 1.0.0).
+        for eq in &model.equations {
+            visit(&eq.lhs);
+            visit(&eq.rhs);
+        }
+        for var in model.variables.values() {
+            var.for_each_expression(&mut visit);
+        }
     }
-    for var in model.variables.values() {
-        var.for_each_expression(&mut visit);
-    }
-    drop(visit);
     hits.into_iter().collect()
 }
 
