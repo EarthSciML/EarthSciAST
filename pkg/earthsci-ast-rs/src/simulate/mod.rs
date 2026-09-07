@@ -84,6 +84,7 @@ pub use resolve::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ExpressionNode;
 
     #[test]
     fn interpret_arithmetic() {
@@ -159,7 +160,13 @@ mod tests {
     /// Resolve a bare operator node against empty scopes — the one funnel every
     /// expression this interpreter evaluates passes through.
     fn resolve_it(expr: &Expr) -> Result<ResolvedExpr, CompileError> {
-        resolve_expr(expr, &HashMap::new(), &HashMap::new(), &HashMap::new(), None)
+        resolve_expr(
+            expr,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        )
     }
 
     /// A WELL-FORMED operator node for `op`: the minimum arity the registry
@@ -171,7 +178,7 @@ mod tests {
         let n = (0..=3)
             .find(|n| arity.admits(*n))
             .expect("some arity in 0..=3 is admitted");
-        Expr::Operator(Box::new(ExpressionNode {
+        Expr::Operator(std::sync::Arc::new(ExpressionNode {
             op: op.to_string(),
             args: (0..n).map(|_| Expr::Number(1.0)).collect(),
             // `broadcast`'s arithmetic is named by a sibling string, and
@@ -193,11 +200,51 @@ mod tests {
     #[test]
     fn every_registry_op_is_either_evaluable_or_gated() {
         for op in [
-            "+", "-", "*", "/", "^", "neg", "exp", "log", "sqrt", "min", "max", "ifelse", "and",
-            "or", "not", "atan2", "==", "!=", "<", "<=", ">", ">=", "D", "Pre", "const", "true",
-            "fn", "index", "aggregate", "makearray", "broadcast", "reshape", "transpose", "concat",
-            "skolem", "rank", "distinct", "argmin", "argmax", "ic", "enum", "table_lookup",
-            "apply_expression_template", "intersect_polygon", "polygon_intersection_area",
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "neg",
+            "exp",
+            "log",
+            "sqrt",
+            "min",
+            "max",
+            "ifelse",
+            "and",
+            "or",
+            "not",
+            "atan2",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "D",
+            "Pre",
+            "const",
+            "true",
+            "fn",
+            "index",
+            "aggregate",
+            "makearray",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "ic",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "intersect_polygon",
+            "polygon_intersection_area",
         ] {
             assert!(
                 crate::op_registry::is_core_op(op),
@@ -226,13 +273,69 @@ mod tests {
     #[test]
     fn the_scalar_evaluable_gap_is_pinned() {
         const CORE: &[&str] = &[
-            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
-            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
-            "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">",
-            ">=", "and", "or", "not", "D", "ic", "Pre", "const", "true", "fn", "enum",
-            "table_lookup", "apply_expression_template", "aggregate", "makearray", "index",
-            "broadcast", "reshape", "transpose", "concat", "skolem", "rank", "distinct", "argmin",
-            "argmax", "intersect_polygon", "polygon_intersection_area",
+            "+",
+            "-",
+            "*",
+            "/",
+            "^",
+            "neg",
+            "exp",
+            "log",
+            "ln",
+            "log10",
+            "sqrt",
+            "abs",
+            "sign",
+            "floor",
+            "ceil",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asinh",
+            "acosh",
+            "atanh",
+            "atan2",
+            "min",
+            "max",
+            "ifelse",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "and",
+            "or",
+            "not",
+            "D",
+            "ic",
+            "Pre",
+            "const",
+            "true",
+            "fn",
+            "enum",
+            "table_lookup",
+            "apply_expression_template",
+            "aggregate",
+            "makearray",
+            "index",
+            "broadcast",
+            "reshape",
+            "transpose",
+            "concat",
+            "skolem",
+            "rank",
+            "distinct",
+            "argmin",
+            "argmax",
+            "intersect_polygon",
+            "polygon_intersection_area",
         ];
         for op in CORE {
             assert!(
@@ -280,7 +383,7 @@ mod tests {
     #[test]
     fn a_nested_unevaluable_op_is_gated_too() {
         let inner = node_with_legal_arity("rank");
-        let outer = Expr::Operator(Box::new(ExpressionNode {
+        let outer = Expr::Operator(std::sync::Arc::new(ExpressionNode {
             op: "+".to_string(),
             args: vec![Expr::Number(1.0), inner],
             ..Default::default()

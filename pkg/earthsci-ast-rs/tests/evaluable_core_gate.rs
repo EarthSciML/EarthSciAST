@@ -30,6 +30,29 @@
 //! `the_true_literal_evaluates_to_one`). What this file asserts is what an
 //! AUTHOR sees: a document, through the public API, either answering or failing
 //! with a diagnostic.
+//!
+//! # The scalar half (issue #220)
+//!
+//! Everything above is about the ARRAY runtime. The SCALAR ODE interpreter
+//! (`Compiled::from_file` / `crate::simulate`) is the crate's other evaluator,
+//! and it had no such gate: its `eval_op` ended in `_ => f64::NAN`, so the same
+//! nine ops came back from it as a NUMBER. The author-visible difference was
+//! stark — the array runtime named the pipeline stage at fault, the scalar one
+//! reported `actual=NaN expected=25`.
+//!
+//! `resolve_expr` — the one funnel through which every expression that
+//! interpreter evaluates becomes a `ResolvedExpr` — now applies the scalar
+//! `is_evaluable_op` the same way stage (0) applies the array one, and the
+//! `NaN` backstop is an `unreachable!` matching the array evaluator's. The
+//! second half of this file asserts the resulting property: **no document both
+//! VALIDATES and silently returns NaN**, over the same op list.
+//!
+//! The scalar rule set is SMALLER than the array one, so the gate covers more
+//! than the nine: `const`, `neg`, `true` and the array/tensor + geometry ops
+//! have no scalar rule either and are refused by name rather than NaN'd. That
+//! wider gap is pinned by a unit test next to the oracle
+//! (`simulate::tests::the_scalar_evaluable_gap_is_pinned`); the nine are what
+//! this file carries, because they are the ops BOTH evaluators must refuse.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -37,6 +60,7 @@ use std::collections::HashMap;
 
 use earthsci_ast::{
     Compiled, EsmFile, SolveOptions, load_path, run_pde_tests, run_pde_tests_with_base_dir,
+    validate,
 };
 use serde_json::json;
 
@@ -221,4 +245,204 @@ fn an_ic_equation_lhs_still_builds() {
             &SolveOptions::default(),
         )
         .expect("and it still solves");
+}
+
+// ============================================================================
+// The scalar interpreter (issue #220)
+// ============================================================================
+
+/// A minimal PURELY SCALAR document — no `shape`, no array op, no bracketed
+/// variable name — whose observed `y` is defined by `body`, with an inline
+/// assertion on `y`.
+///
+/// Every one of those absences is load-bearing: `simulate::is_array_file`
+/// routes on exactly those signals, and a document carrying any of them would
+/// be answered by the ARRAY runtime, whose gate the first half of this file
+/// already covers. This shape is what reaches the SCALAR interpreter.
+fn scalar_probe(body: serde_json::Value) -> EsmFile {
+    serde_json::from_value(json!({
+        "esm": "1.0.0",
+        "metadata": { "name": "ScalarUnevaluableProbe" },
+        "models": { "M": {
+            "variables": {
+                "p": { "type": "parameter", "units": "1", "default": 2.0 },
+                "y": { "type": "unknown", "units": "1" },
+                "u": { "type": "unknown", "units": "1", "default": 1.0 }
+            },
+            "equations": [
+                { "lhs": { "op": "D", "args": ["u"], "wrt": "t" }, "rhs": "y" },
+                { "lhs": "y", "rhs": body }
+            ],
+            // A non-degenerate span: `y` is asserted at t=0, but the solver
+            // refuses a zero-width one, and the counterweight test below has to
+            // reach the solver to prove the gate let it through.
+            "tests": [ { "id": "probe", "time_span": { "start": 0.0, "end": 1.0 },
+                         "assertions": [ { "variable": "y", "time": 0.0,
+                                           "expected": 25.0 } ] } ]
+        }}
+    }))
+    .expect("typed document")
+}
+
+/// No document both VALIDATES and silently returns NaN — the scalar half of
+/// this file's invariant, over the same nine ops (issue #220).
+///
+/// Before the fix every one of these SIMULATED and answered `NaN`: the scalar
+/// `eval_op`'s backstop was `_ => f64::NAN`, and `resolve_expr` gated only the
+/// OPEN tier (`op_registry::check_node`), never the evaluable-core ops with no
+/// rule. The reported symptom was literally
+/// `actual=NaN expected=25 (rtol=0.000001, atol=0)` — a number, from a document
+/// the array runtime refused by name.
+///
+/// The two assertions that matter are the NaN one and the naming one. `passed`
+/// being false is not enough: a NaN never compares equal to 25, so a NaN'ing
+/// interpreter fails this assertion too — which is exactly why the bug survived
+/// until someone read the message.
+#[test]
+fn no_scalar_document_both_validates_and_returns_nan() {
+    /// Does the probe carrying this op pass structural validation? Recorded per
+    /// op rather than asserted uniformly, because one of the nine genuinely
+    /// cannot: `enum`'s operands are an enum NAME and a SYMBOL (esm-spec §9.3),
+    /// and the structural reference checker reads every bare string operand as
+    /// a variable reference, so `enum(colors, red)` is reported as two
+    /// undefined variables. That op therefore reaches an evaluator only from a
+    /// TYPED document — which is how the array half of this file builds all
+    /// nine — and the gate must still refuse it, so it stays in the list with
+    /// the validation half skipped rather than being dropped.
+    #[derive(PartialEq)]
+    enum Validates {
+        Yes,
+        NoBecauseSymbolOperands,
+    }
+    use Validates::*;
+
+    let cases: [(&str, Validates, serde_json::Value); 9] = [
+        ("skolem", Yes, json!({ "op": "skolem", "args": ["p"] })),
+        ("rank", Yes, json!({ "op": "rank", "args": ["p"] })),
+        ("distinct", Yes, json!({ "op": "distinct", "args": ["p"] })),
+        (
+            "argmin",
+            Yes,
+            json!({ "op": "argmin", "args": [], "arg": "i",
+                    "ranges": { "i": [1, 3] }, "expr": "p" }),
+        ),
+        (
+            "argmax",
+            Yes,
+            json!({ "op": "argmax", "args": [], "arg": "i",
+                    "ranges": { "i": [1, 3] }, "expr": "p" }),
+        ),
+        ("ic", Yes, json!({ "op": "ic", "args": ["p"] })),
+        (
+            "enum",
+            NoBecauseSymbolOperands,
+            json!({ "op": "enum", "args": ["colors", "red"] }),
+        ),
+        (
+            "table_lookup",
+            Yes,
+            json!({ "op": "table_lookup", "args": [] }),
+        ),
+        (
+            "apply_expression_template",
+            Yes,
+            json!({ "op": "apply_expression_template", "args": [], "name": "tmpl" }),
+        ),
+    ];
+
+    for (op, validates, body) in cases {
+        let file = scalar_probe(body);
+
+        // "VALIDATES" is half the claim, so it is checked rather than assumed:
+        // these are schema- and structurally-valid documents, which is what
+        // makes a silent NaN from one indefensible.
+        if validates == Yes {
+            let v = validate(&file);
+            assert!(
+                v.is_valid,
+                "`{op}`: the probe must VALIDATE for this test to say anything — {:?}",
+                v.structural_errors
+            );
+        }
+
+        let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
+        assert_eq!(results.len(), 1, "`{op}`: one assertion, got {results:?}");
+        let r = &results[0];
+
+        // (1) It must not answer with a NUMBER — least of all the NaN sentinel,
+        //     which is indistinguishable from a legitimate result and would
+        //     propagate into the solution.
+        assert!(
+            !matches!(r.actual, Some(v) if v.is_nan()),
+            "`{op}` has no scalar evaluation rule and must not evaluate to NaN; \
+             got actual={:?} message={}",
+            r.actual,
+            r.message
+        );
+        assert!(
+            r.actual.is_none(),
+            "`{op}` must fail to produce a value at all, got actual={:?}",
+            r.actual
+        );
+
+        // (2) It must say WHICH operator, in the same vocabulary the array
+        //     runtime uses, so one defect reads the same on both evaluators.
+        assert!(
+            r.message.contains("unevaluable_operator") && r.message.contains(op),
+            "`{op}` must be refused BY NAME with `unevaluable_operator`, got: {}",
+            r.message
+        );
+        assert!(!r.passed, "`{op}` must not pass");
+    }
+}
+
+/// The scalar gate reaches NESTED positions, not just a bare observed body: an
+/// unevaluable op buried in an otherwise ordinary arithmetic expression is
+/// refused too, because `resolve_expr` recurses through every operand before
+/// building the parent node.
+#[test]
+fn a_nested_unevaluable_op_is_refused_on_the_scalar_path() {
+    let file = scalar_probe(json!({
+        "op": "+",
+        "args": [
+            { "op": "*", "args": ["p", 2.0] },
+            { "op": "rank", "args": ["p"] }
+        ]
+    }));
+    let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
+    assert_eq!(results.len(), 1, "one assertion, got {results:?}");
+    let r = &results[0];
+    assert!(
+        !matches!(r.actual, Some(v) if v.is_nan()),
+        "a nested `rank` must not NaN the whole expression; got {:?}",
+        r.actual
+    );
+    assert!(
+        r.message.contains("unevaluable_operator") && r.message.contains("rank"),
+        "the nested op must be named, got: {}",
+        r.message
+    );
+}
+
+/// The counterweight, so the scalar gate cannot be widened into refusing work
+/// it can do: an ordinary scalar document still SIMULATES and answers. `D` on
+/// an equation LHS, `fn` through the closed-function registry, and a `Pre`
+/// operand are all evaluable-core ops the gate must let through.
+#[test]
+fn an_ordinary_scalar_document_still_answers() {
+    let file = scalar_probe(json!({
+        "op": "+",
+        "args": [
+            { "op": "*", "args": ["p", 10.0] },
+            { "op": "Pre", "args": [{ "op": "sqrt", "args": [25.0] }] }
+        ]
+    }));
+    let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
+    assert_eq!(results.len(), 1, "one assertion, got {results:?}");
+    let r = &results[0];
+    assert!(
+        r.passed,
+        "p*10 + Pre(sqrt(25)) = 25 must still evaluate: actual={:?} {}",
+        r.actual, r.message
+    );
 }

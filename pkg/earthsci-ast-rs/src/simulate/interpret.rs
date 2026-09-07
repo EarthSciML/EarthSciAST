@@ -80,9 +80,13 @@ fn eval_fn(
 ///
 /// On success returns `Ok(value)`. If `expr` references variable names that
 /// are not in `bindings` (and that aren't `t`), returns `Err(names)` listing
-/// each missing reference in encounter order. Math errors (division by zero,
-/// log of a non-positive number, unknown ops) propagate as `f64::NAN` or
-/// `±inf` in the `Ok` branch — that is the canonical runner's convention.
+/// each missing reference in encounter order. An operator this interpreter has
+/// no rule for is likewise an `Err` (a rendered
+/// [`CompileError::UnevaluableOperatorError`]) — it used to fold to `NaN` in
+/// the `Ok` branch, which is the defect issue #220 closed. Genuine MATH errors
+/// (division by zero, log of a non-positive number) still propagate as
+/// `f64::NAN` or `±inf` in the `Ok` branch: that is the canonical runner's
+/// convention, and the one case where a NaN really is the answer.
 pub fn fold_constant_expr(
     expr: &Expr,
     bindings: &HashMap<String, f64>,
