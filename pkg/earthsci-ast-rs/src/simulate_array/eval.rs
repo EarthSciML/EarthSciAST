@@ -5094,7 +5094,7 @@ mod unbound_name_fault_tests {
 
     use super::{lookup_variable, take_const_array_oob};
     use crate::aggregate::empty_derived_extents;
-    use crate::simulate_array::{ArrMap, ConstArrayScope, EvalEnv, empty_declared_names};
+    use crate::simulate_array::{ArrMap, ConstArrayScope, EvalEnv};
     use ndarray::ArrayD;
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
