@@ -1435,8 +1435,9 @@ snapshot resolved against `base_dir`). An assertion with neither `coords` nor
 `reduce` samples a scalar state. `base_dir` defaults to the .esm file's
 directory when `input` is a path, else the working directory.
 
-Tolerances resolve per esm-spec §6.6.4 (assertion > test > model > default
-`rel=1e-6`); the pass predicate is the same `isapprox` check `run_esm_tests`
+Tolerances resolve per esm-spec §6.6.4 — PER FIELD over the declared levels
+(assertion > test > model), then the default `rel=1e-6` if neither bound was
+declared at any of them; the pass predicate is the same `isapprox` check `run_esm_tests`
 uses, and the results are the same [`AssertionResult`](@ref) type the MTK
 runner produces — both runners are the SAME frame (`_run_test_frame!` in
 run_tests.jl) with different execution engines plugged in, so tolerance
