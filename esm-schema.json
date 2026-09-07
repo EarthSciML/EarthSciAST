@@ -2580,7 +2580,7 @@
     },
     "Tolerance": {
       "type": "object",
-      "description": "Numerical comparison tolerance. Any of abs/rel may be specified. If both are given, an assertion passes when either bound is satisfied: |actual - expected| <= abs  OR  |actual - expected| / max(|expected|, epsilon) <= rel.",
+      "description": "Numerical comparison tolerance. Any of abs/rel may be specified. If both are given, an assertion passes when either bound is satisfied: |actual - expected| <= abs  OR  |actual - expected| <= rel * max(|actual|, |expected|). The relative bound is SYMMETRIC -- it scales by the larger of the two magnitudes, not by |expected| alone (Julia `isapprox`; esm-spec 6.6.3). Finiteness is judged before tolerance: a non-finite actual fails against every finite expected, at every tolerance.",
       "additionalProperties": false,
       "properties": {
         "abs": {
@@ -2591,7 +2591,7 @@
         "rel": {
           "type": "number",
           "minimum": 0,
-          "description": "Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel."
+          "description": "Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone."
         }
       }
     },

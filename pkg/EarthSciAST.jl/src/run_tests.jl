@@ -251,6 +251,16 @@ end
 
 # The §6.6.3 pass predicate (exact when no tolerance is declared anywhere).
 #
+# The relative bound is SYMMETRIC in `actual` and `expected` — its scale is
+# `max(|a|, |e|)`, not `|e|` alone. §6.6.3 used to state both readings at once
+# (the normative box gave an `|expected|`-only denominator, the finiteness
+# rationale further down that same section reasoned from
+# `max(|Inf|, |expected|)`); #193 settled it as symmetric, which is what
+# `isapprox` had been doing all along. The verdicts differ only inside
+# `rtol*|e| < |a - e| <= rtol*|a|`, which needs an overshoot
+# (`|actual| > |expected|`) of order `rtol` —
+# `assertion_tolerance_symmetry_test.jl` pins that seam.
+#
 # `isapprox` is LOAD-BEARING and must not be inlined into the bare tolerance
 # bound. Its definition is
 #   x == y || (isfinite(x) && isfinite(y) && norm(x-y) <= max(atol, rtol*max(norm(x), norm(y))))

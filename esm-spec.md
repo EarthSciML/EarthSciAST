@@ -2321,10 +2321,22 @@ Assertions are stored **inline** only — there is no file-reference option. Tes
 An assertion passes when the computed value `actual` satisfies
 
 ```
-|actual - expected| ≤ abs    OR    |actual - expected| / max(|expected|, ε) ≤ rel
+|actual - expected| ≤ abs    OR    |actual - expected| ≤ rel · max(|actual|, |expected|)
 ```
 
-for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention. An implementation-defined small `ε` (e.g., `1e-300`) protects the relative check when `expected` is zero.
+equivalently, in the single-bound form the bindings implement:
+
+```
+|actual - expected| ≤ max(abs, rel · max(|actual|, |expected|))
+```
+
+for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention, and taking the `max` of the two bounds is the same statement.
+
+**The relative bound is symmetric in `actual` and `expected`.** Its scale is `max(|actual|, |expected|)` — the larger of the two magnitudes — not `|expected|` alone. This is Julia `isapprox`, and it is what every executing binding implements. The distinction is invisible whenever `|actual| ≤ |expected|` and only shows on an overshoot: at `expected = 1.0`, `actual = 1.6`, `rel = 0.5`, `abs = 0` the symmetric bound is `0.6 ≤ 0.5 · 1.6 = 0.8` — a **PASS**, where an `|expected|`-only denominator would give `0.6 ≤ 0.5` and FAIL. A conforming runtime MUST use the symmetric scale; an asymmetric one is a divergence, not a rounding difference.
+
+No `ε` floor is needed, and a conforming runtime MUST NOT introduce one: scaling by `rel · max(|actual|, |expected|, ε)` is a divergence. The bound is stated as a product rather than a quotient, so there is no division to protect — at `expected = 0` it reads `|actual| ≤ max(abs, rel · |actual|)`, which is well-defined for every `actual` (and trivially true at `actual = 0`, which the `actual == expected` clause below admits as well). A floor changes the answer exactly where it is least defensible: at `actual = 1e-320`, `expected = 0`, `rel = 0.5`, an `ε` of `1e-300` PASSES where the bound as stated FAILS, so a subnormal result would be graded differently by two runtimes that both claim to implement this section.
+
+A nonzero `actual` against a zero `expected` therefore needs an `abs` bound to pass — which is the intended reading: a purely relative tolerance carries no information about how close to zero is close enough. Note that `rel ≥ 1` also admits it, but only by making the bound vacuous: `|a − e| ≤ max(|a|, |e|)` holds for **every** pair that shares a sign (or has a zero on either side), so such an assertion is green whatever the model computes. It is not a substitute for an `abs` bound.
 
 **Finiteness is judged before tolerance.** The full pass predicate is
 
@@ -4234,6 +4246,8 @@ A top-level `metaparameters` object declares document-scoped named integers:
 `type` is required and MUST be `"integer"` (the only kind). A metaparameter name MUST NOT collide with any variable, parameter, species, or index-set name visible in the document (`metaparameter_name_conflict`); there is no shadowing.
 
 **Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
+
+**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. In particular the **axis-naming scalar fields** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through `isetmap` — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. A `where` match-scoping block is likewise structural (§9.6.1). This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, so a metaparameter and an axis may legally share a name in one document and the rule is reachable.
 
 **Binding sites and value flow.** Bindings flow down the reference DAG; open metaparameters flow up:
 
