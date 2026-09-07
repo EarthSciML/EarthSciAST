@@ -1133,20 +1133,23 @@ struct BuiltModel {
     built: Built,
 }
 
-/// Partition an override map into `(scalars, inline array data)` — the two
-/// value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
-/// `initial_conditions` entry.
+/// Partition an override map into `(scalars, document-channel values)` — the
+/// two value shapes esm-spec §6.6.2 admits for a `parameter_overrides` /
+/// `initial_conditions` entry, plus the keys `shaped` claims for the document
+/// channel whatever their own value shape (a shaped parameter, whose scalar is
+/// a §6.3 broadcast the scalar `p` vector cannot carry).
 fn split_inline_arrays(
     overrides: HashMap<String, InlineValue>,
+    shaped: impl Fn(&str) -> bool,
 ) -> (HashMap<String, f64>, HashMap<String, InlineValue>) {
     let mut scalars = HashMap::new();
     let mut arrays = HashMap::new();
     for (k, v) in overrides {
         match v.as_scalar() {
-            Some(x) => {
+            Some(x) if !shaped(&k) => {
                 scalars.insert(k, x);
             }
-            None => {
+            _ => {
                 arrays.insert(k, v);
             }
         }
@@ -1154,46 +1157,73 @@ fn split_inline_arrays(
     (scalars, arrays)
 }
 
+/// The NAMES of the model a (possibly dot-qualified) override key resolves
+/// against and of the key's LOCAL variable within it. `None` when no model of
+/// `file` declares it.
+fn resolve_override_target(file: &EsmFile, key: &str) -> Option<(String, String)> {
+    let models = file.models.as_ref()?;
+    // Longest dotted prefix that names a model wins, so `M.sub.p` binds
+    // `sub.p` inside `M` rather than a bare `p` anywhere.
+    let mut split: Option<(String, String)> = None;
+    let mut best = 0usize;
+    for (mname, model) in models.iter() {
+        if let Some(rest) = key.strip_prefix(&format!("{mname}."))
+            && mname.len() > best
+            && model.variables.contains_key(rest)
+        {
+            best = mname.len();
+            split = Some((mname.clone(), rest.to_string()));
+        }
+    }
+    split.or_else(|| {
+        models
+            .iter()
+            .find(|(_, m)| m.variables.contains_key(key))
+            .map(|(n, _)| (n.clone(), key.to_string()))
+    })
+}
+
 /// The model a (possibly dot-qualified) override key names, plus the key's
 /// LOCAL variable name within it. `None` when no model of `file` declares it.
 fn locate_override_target<'a>(file: &'a mut EsmFile, key: &str) -> Option<(&'a mut Model, String)> {
     // Resolve the (model, local name) pair against an IMMUTABLE view first, so
     // the single mutable borrow below is the one the caller keeps.
-    let target = {
-        let models = file.models.as_ref()?;
-        // Longest dotted prefix that names a model wins, so `M.sub.p` binds
-        // `sub.p` inside `M` rather than a bare `p` anywhere.
-        let mut split: Option<(String, String)> = None;
-        let mut best = 0usize;
-        for (mname, model) in models.iter() {
-            if let Some(rest) = key.strip_prefix(&format!("{mname}."))
-                && mname.len() > best
-                && model.variables.contains_key(rest)
-            {
-                best = mname.len();
-                split = Some((mname.clone(), rest.to_string()));
-            }
-        }
-        split.or_else(|| {
-            models
-                .iter()
-                .find(|(_, m)| m.variables.contains_key(key))
-                .map(|(n, _)| (n.clone(), key.to_string()))
-        })?
-    };
+    let target = resolve_override_target(file, key)?;
     let model = file.models.as_mut()?.get_mut(&target.0)?;
     Some((model, target.1))
 }
 
-/// Write each INLINE ARRAY parameter override onto the run document as that
+/// True iff `key` names a SHAPED parameter of `file`.
+///
+/// A shaped parameter's value lives on the document's own array channel
+/// whatever its VALUE shape, because esm-spec §6.3 gives a scalar on a shaped
+/// variable the broadcast meaning — one value over every element — which the
+/// positional scalar `p` vector cannot carry. So an override of one is bound by
+/// [`bind_array_parameters`] rather than split off as a `p` entry.
+fn names_shaped_parameter(file: &EsmFile, key: &str) -> bool {
+    let Some((mname, local)) = resolve_override_target(file, key) else {
+        return false;
+    };
+    file.models
+        .as_ref()
+        .and_then(|ms| ms.get(&mname))
+        .and_then(|m| m.variables.get(&local))
+        .is_some_and(|v| {
+            v.var_type == crate::types::VariableType::Parameter
+                && v.shape.as_ref().is_some_and(|s| !s.is_empty())
+        })
+}
+
+/// Write each SHAPED parameter override onto the run document as that
 /// parameter's `default` (esm-spec §6.6.2: an override supplies the value the
-/// declared default would otherwise supply).
+/// declared default would otherwise supply). The value is inline array data or
+/// a scalar; §6.3 gives both the same channel on a shaped variable.
 ///
 /// `file` is the EPHEMERAL run instance, never the persisted document, so this
 /// is a per-run binding and not an edit. The array compile then lowers the
 /// shaped parameter into its `const` observed
 /// ([`crate::simulate_array`]'s `lower_inline_array_parameters`), which is where
-/// the declared-shape check reports a mismatch.
+/// a scalar is broadcast and the declared-shape check reports a mismatch.
 fn bind_array_parameters(
     file: &mut EsmFile,
     arrays: &HashMap<String, InlineValue>,
@@ -1364,20 +1394,27 @@ fn build_for_test(
 
     let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
     let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
-    // Split each override map by VALUE SHAPE (esm-spec §6.6.2). A scalar goes
-    // on the canonical SciML `p` / `u0` channel unchanged; INLINE ARRAY DATA
-    // needs a channel that can carry a whole column:
+    // Split each override map by the channel that can carry it (esm-spec
+    // §6.6.2). A scalar goes on the canonical SciML `p` / `u0` channel
+    // unchanged; a whole column needs one that can hold it:
     //
-    //   * a shaped PARAMETER's column is written onto an EPHEMERAL copy of the
+    //   * a shaped PARAMETER's value is written onto an EPHEMERAL copy of the
     //     run document as that parameter's `default`, which the array compile
     //     then lowers into its `const` observed ([`lower_inline_array_parameters`]).
     //     The persisted document is untouched — this is the same ephemeral
-    //     instance a §9.7.10 discretization injection runs against;
+    //     instance a §9.7.10 discretization injection runs against. EVERY
+    //     override of a shaped parameter takes this route, scalar included: §6.3
+    //     makes a scalar on a shaped variable a BROADCAST over the whole grid,
+    //     which is what the lowering materializes and what the one-f64 `p` slot
+    //     cannot express;
     //   * a shaped UNKNOWN's profile is expanded into one `u0` entry per grid
     //     cell (`u[1]`, `u[2]`, …), the element names the state vector is keyed
-    //     by, so no new initial-condition channel is needed at all.
-    let (scalar_params, array_params) = split_inline_arrays(params);
-    let (scalar_ics, array_ics) = split_inline_arrays(ics);
+    //     by, so no new initial-condition channel is needed at all. A scalar `u0`
+    //     entry stays a scalar: the state vector's per-cell seeding already
+    //     broadcasts it.
+    let (scalar_params, array_params) =
+        split_inline_arrays(params, |k| names_shaped_parameter(run_file, k));
+    let (scalar_ics, array_ics) = split_inline_arrays(ics, |_| false);
     if !array_params.is_empty() {
         let mut owned = ephemeral.take().unwrap_or_else(|| file.clone());
         if let Err(e) = bind_array_parameters(&mut owned, &array_params) {
