@@ -1,0 +1,113 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "description": "esm-spec 9.7.6: metaparameter substitution rewrites EXPRESSION positions ONLY. Four metaparameters are spelled exactly like the structural string field standing beside them in the same node - `lev` like the `dim` / `wrt` / `var` axis names (9.7.7, 4.9.1, 4.2), `max` like an operator name, `flux` like a node `id`, `continuous` like an `expect_cadence` enum value - and every one of the four ALSO occurs as a bare string in a genuine expression position. The golden pins the split: each `args` occurrence closes to its integer default (4 / 3 / 7 / 5) and each structural field survives verbatim. A binding whose substitution walk is per-NODE rather than per-FIELD corrupts the structural field; a binding whose skip set is too broad fails to close the expression position beside it.",
+    "name": "metaparam_axis_name_collision"
+  },
+  "metaparameters": {
+    "continuous": {
+      "default": 5,
+      "description": "spelled like an `expect_cadence` enum value",
+      "type": "integer"
+    },
+    "flux": {
+      "default": 7,
+      "description": "spelled like the `id` of the node it sits on",
+      "type": "integer"
+    },
+    "lev": {
+      "default": 4,
+      "description": "spelled like the `dim` / `wrt` / `var` axis name",
+      "type": "integer"
+    },
+    "max": {
+      "default": 3,
+      "description": "spelled like the `max` operator name",
+      "type": "integer"
+    }
+  },
+  "models": {
+    "M": {
+      "equations": [
+        {
+          "lhs": {
+            "args": [
+              "c"
+            ],
+            "op": "D",
+            "wrt": "t"
+          },
+          "rhs": {
+            "args": [
+              "c",
+              3
+            ],
+            "expect_cadence": "continuous",
+            "id": "flux",
+            "op": "max"
+          }
+        },
+        {
+          "lhs": "g",
+          "rhs": {
+            "args": [
+              {
+                "args": [
+                  "c"
+                ],
+                "dim": "lev",
+                "op": "grad"
+              },
+              {
+                "args": [
+                  "c"
+                ],
+                "op": "D",
+                "wrt": "lev"
+              },
+              {
+                "args": [
+                  "c"
+                ],
+                "lower": 0,
+                "op": "integral",
+                "upper": 1,
+                "var": "lev"
+              },
+              4
+            ],
+            "op": "+"
+          }
+        },
+        {
+          "lhs": "s",
+          "rhs": {
+            "args": [
+              5,
+              7
+            ],
+            "op": "+"
+          }
+        }
+      ],
+      "variables": {
+        "c": {
+          "default": 0.5,
+          "description": "the integrated state",
+          "type": "unknown",
+          "units": "1"
+        },
+        "g": {
+          "description": "axis-field carrier: dim, wrt, var",
+          "type": "unknown",
+          "units": "1"
+        },
+        "s": {
+          "description": "registry-field carrier: op, id, expect_cadence",
+          "type": "unknown",
+          "units": "1"
+        }
+      }
+    }
+  }
+}

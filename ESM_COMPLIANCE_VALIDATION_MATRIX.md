@@ -1004,6 +1004,41 @@ capability and no binding is exempt.
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
 
 ### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+
+> **Metaparameter substitution is per-FIELD, and all five skip sets now agree
+> (2026-09-07, EXPR-09-E-008)**: §9.7.6 substitutes a bound metaparameter name
+> wherever it appears as a bare string in an EXPRESSION position — and a
+> structural string field of an Expression node is not one. Two families were
+> diverging in OPPOSITE directions, each invisible because no fixture named a
+> metaparameter after a structural field's value:
+>
+> - the **axis-naming scalars** `wrt` / `dim` (§4.9.1) / `integral`'s `var`
+>   (§4.2): Julia, Python, Rust and TypeScript all skipped `dim`, **Go alone did
+>   not**, so with `x` bound to 3 the node `{"op": "grad", "dim": "x"}` became
+>   `"dim": 3` in Go and stayed `"dim": "x"` everywhere else;
+> - the **node-header fields** `op` / `id` / `expect_cadence`: **Go alone**
+>   skipped them, so with `max` bound to 3 the node `{"op": "max", …}` stayed
+>   intact in Go and became `{"op": 3, …}` in the other four — which then died in
+>   the typed load with a raw "cannot unmarshal number into `op`" rather than a
+>   diagnostic (Go's audit note G12).
+>
+> Both are now fixed in the same direction: each binding derives its skip set
+> from ONE kind-tagged structural-field table (kinds `protected` / `axis` /
+> `node-header` / `registry` / `bound`, the same five in all five bindings), and
+> the metaparameter skip set is `protected ∪ axis ∪ node-header` — 17 keys,
+> identical everywhere. The §9.7.7 rename-protected set adds the
+> op-parameterizing `registry` ids, so rename behavior is unchanged. The shared
+> fixture `tests/conformance/expression_templates/metaparam_axis_name_collision`
+> pins all six fields plus a positive control in each node, so a future
+> divergence in either direction fails a golden rather than going quiet.
+>
+> **Still open, but CONSISTENT across all five bindings**: the remaining
+> `registry` fields (`reduce`, `semiring`, `manifold`, `fn`, `table`, `side`,
+> `attrs`, `members`, `from_faq`) are still substituted by every binding. None is
+> an expression position either, so a metaparameter named `sum` still corrupts
+> `{"op": "aggregate", "reduce": "sum"}` — identically in all five, so it is a
+> shared gap rather than a conformance divergence, and closing it is a separate
+> five-binding behavior change.
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
@@ -1013,7 +1048,7 @@ capability and no binding is exempt.
 | EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
 | EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
 | EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
-| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding. Substitution is per-FIELD: the **axis-naming scalars** `wrt`, `dim` (§4.9.1) and `integral`'s `var` (§4.2), and the **node-header fields** `op`, `id` and `expect_cadence`, are NOT expression positions and MUST be copied verbatim even when a bound metaparameter spells them exactly | esm-spec.md §9.7.6, §9.7.7 | `tests/conformance/expression_templates/metaparam_axis_name_collision/` | expression |
 | EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
 | EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |

@@ -296,6 +296,43 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test f.index_sets["b.cells"].size == 9
     end
 
+    @testset "metaparam_axis_name_collision: substitution is per-FIELD (§9.7.6)" begin
+        # §9.7.6 substitutes a bound metaparameter name only where it occurs as a
+        # bare string in an EXPRESSION position. The fixture names four
+        # metaparameters after the structural string field standing beside them —
+        # `lev` (the `dim`/`wrt`/`var` axis names), `max` (an operator name),
+        # `flux` (a node `id`) and `continuous` (an `expect_cadence` enum value) —
+        # and writes each one in an expression position too, so the golden pins
+        # both halves of the split at once.
+        @test _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm")) ==
+              _golden(conf("metaparam_axis_name_collision", "expanded.esm"))
+
+        d = _expand_raw(conf("metaparam_axis_name_collision", "fixture.esm"))
+        eqs = d["models"]["M"]["equations"]
+
+        # NODE-HEADER fields: an operator name is not an expression position, so
+        # `{"op": "max", …}` must NOT become `{"op": 3, …}` (which then dies in a
+        # typed load with a raw "cannot unmarshal number into op").
+        rhs0 = eqs[1]["rhs"]
+        @test rhs0["op"] == "max"
+        @test rhs0["id"] == "flux"
+        @test rhs0["expect_cadence"] == "continuous"
+        # …while the genuine expression position in the SAME node closes: the
+        # skip is per-KEY, not per-NODE.
+        @test rhs0["args"] == Any["c", 3]
+
+        # AXIS fields: `dim` / `wrt` / `var` name a spatial coordinate (§4.9.1,
+        # §4.2), never an expression position.
+        gargs = _defrhs(d, "M", "g")["args"]
+        @test gargs[1]["dim"] == "lev"
+        @test gargs[2]["wrt"] == "lev"
+        @test gargs[3]["var"] == "lev"
+        @test gargs[4] == 4          # …the expression position beside them closes
+
+        # And the two remaining collisions close in ordinary argument positions.
+        @test _defrhs(d, "M", "s")["args"] == Any[5, 7]
+    end
+
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
         problem = conf("metaparameter_resolutions", "problem.esm")
         fdef = EarthSciAST.load_path(problem)

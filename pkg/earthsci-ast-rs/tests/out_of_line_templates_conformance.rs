@@ -136,6 +136,11 @@ fn bridge_expand_equals_expanded_oracle() {
             "expanded.esm",
         ),
         (
+            "metaparam_axis_name_collision",
+            "fixture.esm",
+            "expanded.esm",
+        ),
+        (
             "per_variable_scheme_literal_args",
             "fixture.esm",
             "expanded.esm",

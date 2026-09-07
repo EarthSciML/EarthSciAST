@@ -257,6 +257,35 @@ cell measure (`1 / 4` on `lev`, `1 / 3` on `lat`). Without that rewrite the
 instances still match `var: "x"`, neither fires, and both integrals survive
 lowering as `unlowered_operator`.
 
+### `metaparam_axis_name_collision/` (expanded.esm)
+
+Metaparameter substitution is per-**FIELD**, not per-node (§9.7.6). An
+import-free single-model document declares four metaparameters spelled exactly
+like the structural string field standing beside them in the same node:
+
+| metaparameter | default | collides with |
+|---|---|---|
+| `lev` | 4 | the axis-naming scalars `dim` (§4.9.1), `wrt`, and `integral`'s `var` (§4.2) |
+| `max` | 3 | the `op` operator name |
+| `flux` | 7 | a node `id` |
+| `continuous` | 5 | an `expect_cadence` enum value |
+
+Each of the four ALSO appears as a bare string in a genuine expression position
+(an `args` entry), so the golden pins both halves of the split at once: every
+structural field survives verbatim while every `args` occurrence closes to its
+integer default (4 / 3 / 7 / 5). A binding whose substitution walk is per-NODE
+corrupts the structural field; a binding whose skip set is too broad fails to
+close the expression position sitting beside it in the same node.
+
+This is reachable in a legal document even though §9.7.6 forbids a metaparameter
+name colliding with a visible variable / parameter / species / index-set name: a
+`dim` value names a coordinate *structurally* (§4.9.1 clause ii) with no
+`index_sets` entry required, and an operator name is in no namespace that check
+covers at all. The fixture is the cross-binding gate for the two divergences
+recorded at `ESM_COMPLIANCE_VALIDATION_MATRIX.md` EXPR-09-E-008 — Go alone
+substituted `dim`, and the other four alone substituted `op` / `id` /
+`expect_cadence`.
+
 ## Flatten-time registry merge (esm-spec §9.6.4 rule 7 / §10.7)
 
 Every fixture here is consumed through the shared `flatten_template_registries`

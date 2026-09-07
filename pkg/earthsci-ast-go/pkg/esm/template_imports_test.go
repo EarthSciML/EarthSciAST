@@ -139,6 +139,9 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 		{"import_rebind_keyed_factors", "fixture.esm", "expanded.esm"},
 		{"import_rename_diamond", "fixture.esm", "expanded.esm"},
 		{"import_rename_integral_axis", "fixture.esm", "expanded.esm"},
+		// §9.7.6 substitution is per-FIELD: a metaparameter named after the
+		// structural string field beside it must not rewrite that field.
+		{"metaparam_axis_name_collision", "fixture.esm", "expanded.esm"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.group+"/"+tc.golden, func(t *testing.T) {
@@ -148,6 +151,79 @@ func TestTemplateImports_ConformanceGoldens(t *testing.T) {
 				t.Errorf("expanded form diverges from golden:\n got=%s\nwant=%s", got, want)
 			}
 		})
+	}
+}
+
+// TestTemplateImports_MetaparamSubstitutionIsPerField pins esm-spec §9.7.6
+// substitution as per-FIELD, not per-NODE, over the shared fixture.
+//
+// The fixture names four metaparameters after the structural string field
+// standing beside them — `lev` (the `dim`/`wrt`/`var` axis names), `max` (an
+// operator name), `flux` (a node `id`) and `continuous` (an `expect_cadence`
+// enum value) — and writes each one in an expression position too, so both
+// halves of the split are pinned at once. Go was the only binding that skipped
+// `op`/`id`/`expect_cadence` and the only one that did NOT skip `dim`; all five
+// now hold the same skip set.
+func TestTemplateImports_MetaparamSubstitutionIsPerField(t *testing.T) {
+	path := tiConfDir(t, "metaparam_axis_name_collision", "fixture.esm")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	out, err := resolveAndLowerJSON(string(data), filepath.Dir(path), nil)
+	if err != nil {
+		t.Fatalf("resolve+lower: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode expanded: %v", err)
+	}
+	eqs := doc["models"].(map[string]any)["M"].(map[string]any)["equations"].([]any)
+	defRHS := func(name string) map[string]any {
+		t.Helper()
+		for _, e := range eqs {
+			eq := e.(map[string]any)
+			if lhs, ok := eq["lhs"].(string); ok && lhs == name {
+				return eq["rhs"].(map[string]any)
+			}
+		}
+		t.Fatalf("no defining equation for %q", name)
+		return nil
+	}
+
+	// NODE-HEADER fields survive verbatim…
+	rhs0 := eqs[0].(map[string]any)["rhs"].(map[string]any)
+	for k, want := range map[string]string{
+		"op": "max", "id": "flux", "expect_cadence": "continuous",
+	} {
+		if rhs0[k] != want {
+			t.Errorf("%s = %#v; want %q — a node-header field is not an expression position",
+				k, rhs0[k], want)
+		}
+	}
+	// …while the genuine expression position in the SAME node closes: the skip
+	// is per-KEY, not per-NODE.
+	if args := rhs0["args"].([]any); len(args) != 2 || args[0] != "c" || args[1] != float64(3) {
+		t.Errorf("rhs.args = %#v; want [\"c\", 3]", rhs0["args"])
+	}
+
+	// AXIS fields name a spatial coordinate (§4.9.1, §4.2), never a value.
+	gargs := defRHS("g")["args"].([]any)
+	for i, k := range []string{"dim", "wrt", "var"} {
+		if got := gargs[i].(map[string]any)[k]; got != "lev" {
+			t.Errorf("g.args[%d].%s = %#v; want %q — an axis name is not an "+
+				"expression position", i, k, got, "lev")
+		}
+	}
+	if gargs[3] != float64(4) {
+		t.Errorf("g.args[3] = %#v; want 4 — the expression position beside the "+
+			"axis fields must still close", gargs[3])
+	}
+
+	// The two remaining collisions close in ordinary argument positions.
+	sargs := defRHS("s")["args"].([]any)
+	if len(sargs) != 2 || sargs[0] != float64(5) || sargs[1] != float64(7) {
+		t.Errorf("s.args = %#v; want [5, 7]", sargs)
 	}
 }
 

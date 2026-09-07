@@ -254,6 +254,46 @@ fn import_rename_integral_axis_matches_golden() {
     }
 }
 
+/// metaparam_axis_name_collision: §9.7.6 substitution is per-FIELD, not
+/// per-NODE. The fixture names four metaparameters after the structural string
+/// field standing beside them — `lev` (the `dim`/`wrt`/`var` axis names), `max`
+/// (an operator name), `flux` (a node `id`) and `continuous` (an
+/// `expect_cadence` enum value) — and writes each one in an expression position
+/// too, so both halves of the split are pinned at once.
+///
+/// Before the fix an operator name WAS an expression position here: with `max`
+/// bound to 3, `{"op": "max", …}` became `{"op": 3, …}` and the document then
+/// died in the typed load with a raw "cannot unmarshal number into `op`" rather
+/// than a diagnostic.
+#[test]
+fn metaparam_axis_name_collision_matches_golden() {
+    let d = expand_raw(&conf(&["metaparam_axis_name_collision", "fixture.esm"]));
+    assert_eq!(
+        d,
+        golden(&conf(&["metaparam_axis_name_collision", "expanded.esm"]))
+    );
+    let model = &d["models"]["M"];
+
+    // NODE-HEADER fields survive verbatim…
+    let rhs0 = &model["equations"][0]["rhs"];
+    assert_eq!(rhs0["op"], "max");
+    assert_eq!(rhs0["id"], "flux");
+    assert_eq!(rhs0["expect_cadence"], "continuous");
+    // …while the genuine expression position in the SAME node closes: the skip
+    // is per-KEY, not per-NODE.
+    assert_eq!(rhs0["args"], json!(["c", 3]));
+
+    // AXIS fields name a spatial coordinate (§4.9.1, §4.2), never a value.
+    let g = obs_def(model, "g");
+    assert_eq!(g["args"][0]["dim"], "lev");
+    assert_eq!(g["args"][1]["wrt"], "lev");
+    assert_eq!(g["args"][2]["var"], "lev");
+    assert_eq!(g["args"][3], 4);
+
+    // The two remaining collisions close in ordinary argument positions.
+    assert_eq!(obs_def(model, "s")["args"], json!([5, 7]));
+}
+
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the
 /// library never declares survives the rename as spelled and is rejected at rule
 /// registration — the fix does not paper over genuine typos.

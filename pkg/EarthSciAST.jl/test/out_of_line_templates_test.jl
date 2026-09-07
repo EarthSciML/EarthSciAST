@@ -70,6 +70,7 @@ end
             ("import_rename_two_instances", "fixture.esm", "expanded.esm"),
             ("import_smoke", "fixture.esm", "expanded.esm"),
             ("import_where_rename_two_instances", "fixture.esm", "expanded.esm"),
+            ("metaparam_axis_name_collision", "fixture.esm", "expanded.esm"),
             ("per_variable_scheme_literal_args", "fixture.esm", "expanded.esm"),
             ("scalar_field_param", "fixture.esm", "expanded.esm"),
             ("two_div_two_meshes", "fixture.esm", "expanded.esm"),
