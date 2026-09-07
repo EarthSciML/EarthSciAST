@@ -23,7 +23,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL, _check_assertion
 
 
 _FIXTURES_DIR = FIXTURES_ROOT / "fixtures" / "arrayop"
@@ -81,17 +81,13 @@ def _lookup_element(
 
 
 def _assertion_passes(actual: float, expected: float, rel: float, ab: float) -> bool:
-    """Apply the OR-of-two-bounds tolerance check from the schema."""
-    diff = abs(actual - expected)
-    if ab > 0 and diff <= ab:
-        return True
-    if rel > 0:
-        denom = max(abs(expected), 1e-12)
-        if diff / denom <= rel:
-            return True
-    if ab == 0 and rel == 0:
-        return diff == 0.0
-    return False
+    """esm-spec §6.6.3, through the binding's OWN predicate — the function
+    ``run_pde_tests`` calls. The hand-rolled body this replaces scaled the
+    relative bound by ``|expected|`` alone rather than
+    ``max(|actual|, |expected|)``, floored that scale at 1e-12 (§6.6.3 forbids
+    a floor), and had no finiteness guard, so a ±inf actual satisfied it
+    vacuously for every expectation."""
+    return _check_assertion(actual, expected, rel, ab)
 
 
 @pytest.mark.parametrize("fixture_path", _collect_fixtures(), ids=lambda p: p.name)

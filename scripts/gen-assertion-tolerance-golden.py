@@ -174,8 +174,7 @@ CASES = [
         0.0,
         0.0,
         0.0,
-        "IEEE-754: -0.0 == 0.0, so a signed zero is unaffected by the "
-        "predicate at any tolerance.",
+        "IEEE-754: -0.0 == 0.0, so a signed zero is unaffected by the predicate at any tolerance.",
     ),
     (
         "tiny_actual_against_zero_expected",
@@ -513,21 +512,23 @@ def main() -> None:
             "ANALYTIC — computed from the §6.6.3 rule written out longhand, not read "
             "off any binding. Regenerate with scripts/gen-assertion-tolerance-golden.py."
         ),
-        "encoding": {
-            "$comment": (
-                "JSON has no infinite or NaN literal, so `actual` and `expected` are "
-                "either a JSON number or one of exactly three strings. Nothing else "
-                "may appear, and no other field is ever a string; an adapter that "
-                "does not recognise one of the three MUST fail rather than skip."
-            ),
-            "non_finite": ["+inf", "-inf", "nan"],
-        },
+        "encoding_comment": (
+            "JSON has no infinite or NaN literal, so `actual` and `expected` are "
+            "either a JSON number or one of exactly three strings. Nothing else may "
+            "appear, and no other numeric field is ever a string; an adapter that "
+            "does not recognise one of the three MUST fail rather than skip."
+        ),
+        "encoding": {"non_finite": ["+inf", "-inf", "nan"]},
+        "readings_discriminated_comment": (
+            "How many cases change verdict under each known WRONG reading of §6.6.3. "
+            "A zero would mean the case list cannot see that defect; the generator "
+            "asserts every entry is nonzero. `asymmetric` scales by |expected| alone; "
+            "`sum_form` is numpy isclose's abs + rel*|expected|; `epsilon_floor` puts "
+            "a 1e-12 floor on the scale; `no_finiteness_guard` drops the finiteness "
+            "clause and treats two non-finite values as equal. Every value here is an "
+            "integer -- adapters read this object as a map of counts."
+        ),
         "readings_discriminated": {
-            "$comment": (
-                "How many cases change verdict under each known WRONG reading of "
-                "§6.6.3. A zero here would mean the case list cannot see that defect; "
-                "the generator asserts every entry is nonzero."
-            ),
             "asymmetric": discriminated["asymmetric"],
             "sum_form": discriminated["sum_form"],
             "epsilon_floor": discriminated["epsilon_floor"],

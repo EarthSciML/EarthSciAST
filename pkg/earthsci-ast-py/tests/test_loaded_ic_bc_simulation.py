@@ -43,6 +43,7 @@ pytest.importorskip("scipy")
 
 from earthsci_ast.flatten import flatten
 from earthsci_ast.parse import load_path
+from earthsci_ast.pde_inline_tests import _check_assertion
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 
 
@@ -137,16 +138,15 @@ def test_loaded_ic_bc_simulation_via_provider() -> None:
             expected = float(a["expected"])
             actual = float(np.interp(t_eval, result.t, result.y[idx]))
             rel, abs_ = _resolve_tol(model_tol, test_tol, a.get("tolerance"))
-            diff = abs(actual - expected)
-            if rel == 0.0 and abs_ == 0.0:
-                bound = 1e-6 * max(abs(expected), np.finfo(float).tiny)
-            else:
-                bound = abs_
-                if rel > 0:
-                    bound = max(bound, rel * max(abs(expected), np.finfo(float).tiny))
-            assert diff <= bound, (
+            # esm-spec §6.6.3 through the binding's OWN predicate, the one
+            # ``run_pde_tests`` uses. The hand-rolled bound this replaces scaled
+            # by ``|expected|`` alone, floored that scale at the smallest normal
+            # double (§6.6.3 forbids a floor), and substituted the §6.6.4
+            # implementation default when a document spelled BOTH bounds as
+            # zero — which is exact-equality mode, not "no bound".
+            assert _check_assertion(actual, expected, rel, abs_), (
                 f"{test['id']} var={local} t={t_eval}: actual={actual:g} "
-                f"expected={expected:g} diff={diff:g} bound={bound:g} "
+                f"expected={expected:g} diff={abs(actual - expected):g} "
                 f"(rel={rel}, abs={abs_})"
             )
             passed += 1

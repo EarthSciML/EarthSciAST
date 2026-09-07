@@ -29,7 +29,8 @@
 
 use earthsci_ast::Solution;
 use earthsci_ast::{
-    Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, load_string,
+    Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, check_assertion,
+    load_string,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -89,23 +90,6 @@ fn effective_tolerance(
         }
     }
     (1e-6, 0.0)
-}
-
-fn approximately_equal(actual: f64, expected: f64, rel: f64, abs: f64) -> bool {
-    if !actual.is_finite() && !expected.is_finite() {
-        return true;
-    }
-    let diff = (actual - expected).abs();
-    if diff <= abs {
-        return true;
-    }
-    if rel > 0.0 {
-        let scale = expected.abs().max(actual.abs());
-        if diff <= rel * scale {
-            return true;
-        }
-    }
-    false
 }
 
 /// Locate an assertion's variable in the solution, matching either the bare name
@@ -182,7 +166,7 @@ fn check_assertion(
         model.tolerance.as_ref(),
     );
     assert!(
-        approximately_equal(actual, a.expected, rel, abs),
+        check_assertion(actual, a.expected, rel, abs),
         "[{fixture}/{model_name}/{}] assertion failed: {} @ t={} expected {} got {} \
          (rel_tol={rel}, abs_tol={abs})",
         t.id,
