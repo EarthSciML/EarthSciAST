@@ -38,6 +38,19 @@ package esm
 //
 // `out_of_bounds: "error"` is REFUSED, not silently clamped — see
 // CodeTableOutOfBoundsUnsupported and esm-spec §9.5.3a.
+//
+// EVERYTHING HERE IS UNEXPORTED except the diagnostic codes. The lowering is an
+// implementation detail of evaluation, not a knob a caller reaches for: the
+// public surface of the fix is the two Evaluate methods, which hang off types
+// this package already exports. Every binding keeps its pass off the public
+// entry point for the same reason — Rust's is `pub(crate)`, and Julia's,
+// Python's and TypeScript's are absent from their module/package exports — so
+// Go declaring three extra symbols in api-surface.json would have been an
+// asymmetry produced by this package's surface test being the strictest, not by
+// a design decision. The codes stay public: a caller matching on an error
+// genuinely needs them, they are the cross-binding §9.5.5 vocabulary every
+// binding's registry now carries, and every other Code* constant here is
+// declared the same way.
 
 import (
 	"encoding/json"
@@ -46,25 +59,25 @@ import (
 	"strings"
 )
 
-// TableLookupError is raised by the §9.5.3 lowering. Code carries one of the
+// tableLookupError is raised by the §9.5.3 lowering. Code carries one of the
 // esm-spec §9.5.5 diagnostic codes (the Code* block in codes.go).
-type TableLookupError struct {
+type tableLookupError struct {
 	Code    string
 	Message string
 }
 
-func (e *TableLookupError) Error() string {
+func (e *tableLookupError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
 // DiagnosticCode returns the stable diagnostic code (DiagnosticError).
-func (e *TableLookupError) DiagnosticCode() string { return e.Code }
+func (e *tableLookupError) DiagnosticCode() string { return e.Code }
 
-func newTableLookupError(code, format string, a ...any) *TableLookupError {
-	return &TableLookupError{Code: code, Message: fmt.Sprintf(format, a...)}
+func newTableLookupError(code, format string, a ...any) *tableLookupError {
+	return &tableLookupError{Code: code, Message: fmt.Sprintf(format, a...)}
 }
 
-// LowerTableLookups returns a copy of file in which every `table_lookup` node
+// lowerTableLookups returns a copy of file in which every `table_lookup` node
 // has been rewritten to its esm-spec §9.5.3 closed-function form. The argument
 // is NOT modified, so the caller's document keeps the authored form §9.5.4
 // requires it to emit.
@@ -73,27 +86,33 @@ func newTableLookupError(code, format string, a ...any) *TableLookupError {
 // lookup, so it is returned AS IS — not even walked, and not cloned: there is
 // nothing to lower and nothing that could be observed through the alias.
 //
-// Returns a *TableLookupError naming the offending construct if any lookup
+// Returns a *tableLookupError naming the offending construct if any lookup
 // cannot be lowered; the returned document is nil in that case, so a caller
 // cannot mistake a partially-lowered value for a lowered one.
-func LowerTableLookups(file *ESMFile) (*ESMFile, error) {
+//
+// This is the DOCUMENT-level form the §9.5.6 conformance contract names ("the
+// materialized AST a binding produces from a `table_lookup`"), and the tests
+// are what read it; evaluation goes through lowerExprTableLookups one
+// expression at a time, because that is the granularity Evaluate works at.
+// Both drive the same node rewrite, so they cannot disagree.
+func lowerTableLookups(file *ESMFile) (*ESMFile, error) {
 	if file == nil || len(file.FunctionTables) == 0 {
 		return file, nil
 	}
 	out := cloneForExprLowering(file)
-	if err := LowerTableLookupsMut(out); err != nil {
+	if err := lowerTableLookupsMut(out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// LowerTableLookupsMut is LowerTableLookups applied IN PLACE.
+// lowerTableLookupsMut is lowerTableLookups applied IN PLACE.
 //
 // Idempotent: one pass leaves no `table_lookup` node behind, so a second finds
 // nothing to rewrite. On error the file is left PARTIALLY lowered — the pass
 // writes as it walks and does not roll back. A caller that cannot tolerate that
-// wants LowerTableLookups.
-func LowerTableLookupsMut(file *ESMFile) error {
+// wants lowerTableLookups.
+func lowerTableLookupsMut(file *ESMFile) error {
 	if file == nil || len(file.FunctionTables) == 0 {
 		return nil
 	}

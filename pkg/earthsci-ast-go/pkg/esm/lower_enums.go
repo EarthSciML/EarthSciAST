@@ -61,7 +61,7 @@ func LowerEnums(file *ESMFile) (*ESMFile, error) {
 // into — the models and reaction-systems maps, the equation / event / reaction
 // slices inside them, and the coupling slice — so that lowering the copy cannot
 // be observed through the original. It backs the PURE form of both lowering
-// passes (LowerEnums and LowerTableLookups).
+// passes (LowerEnums and lowerTableLookups).
 //
 // It is deliberately NOT a deep copy of the whole document: expression trees
 // are rewritten functionally (mapExprChildren allocates rather than mutating),

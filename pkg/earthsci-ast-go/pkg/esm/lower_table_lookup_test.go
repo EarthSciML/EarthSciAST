@@ -124,7 +124,7 @@ func loweredRHS(t *testing.T, src string, eqIdx int) Expression {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	lowered, err := LowerTableLookups(file)
+	lowered, err := lowerTableLookups(file)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -139,7 +139,7 @@ func refuseCode(t *testing.T, src string) string {
 		t.Fatalf("fixture must LOAD (esm-spec §9.5.3a / §9.5.5 raise at lowering, "+
 			"not at load): %v", err)
 	}
-	if _, err := LowerTableLookups(file); err != nil {
+	if _, err := lowerTableLookups(file); err != nil {
 		var de DiagnosticError
 		if !errors.As(err, &de) {
 			t.Fatalf("refusal must carry a §9.5.5 diagnostic code, got %T: %v", err, err)
@@ -238,11 +238,11 @@ func TestTableLookupLoweringIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	once, err := LowerTableLookups(file)
+	once, err := lowerTableLookups(file)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
-	twice, err := LowerTableLookups(once)
+	twice, err := lowerTableLookups(once)
 	if err != nil {
 		t.Fatalf("lower again: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestTableLookupLoweringLeavesATablelessDocumentAlone(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	before := jsonView(t, file.Models["M"].Equations[0].RHS)
-	lowered, err := LowerTableLookups(file)
+	lowered, err := lowerTableLookups(file)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestFunctionTablesInlineTestFixtureEvaluatesThroughTheLoweringPath(t *testi
 
 	// …and the lowered TREE is the hand-written one, so the agreement above is
 	// structural rather than a numeric coincidence.
-	lowered, err := LowerTableLookups(file)
+	lowered, err := lowerTableLookups(file)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -461,8 +461,8 @@ func TestFunctionTablesOutOfBoundsErrorFixtureLoadsButIsRefused(t *testing.T) {
 		}
 	}
 
-	_, err = LowerTableLookups(file)
-	assertRefused("LowerTableLookups", err)
+	_, err = lowerTableLookups(file)
+	assertRefused("lowerTableLookups", err)
 
 	rhs := file.Models["M"].Equations[0].RHS
 	_, err = file.Evaluate(rhs, map[string]float64{"p": 2.5})

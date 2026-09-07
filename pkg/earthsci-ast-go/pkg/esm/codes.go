@@ -403,7 +403,7 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
-// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, TableLookupError).
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError).
 // It lets a caller recover the stable diagnostic code from any of them
 // uniformly — errors.As(err, &de) then de.DiagnosticCode() — without switching
 // over the concrete types. All seven render Error() in the shared
@@ -422,5 +422,5 @@ var (
 	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
-	_ DiagnosticError = (*TableLookupError)(nil)
+	_ DiagnosticError = (*tableLookupError)(nil)
 )

@@ -4348,22 +4348,6 @@
       }
     },
     {
-      "name": "lower_table_lookups",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "LowerTableLookups"
-      }
-    },
-    {
-      "name": "lower_table_lookups_mut",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "go": "LowerTableLookupsMut"
-      }
-    },
-    {
       "name": "manifold",
       "kind": "type",
       "tier": "extension",
@@ -6850,14 +6834,6 @@
       "tier": "extension",
       "bindings": {
         "go": "SystemKindSDE"
-      }
-    },
-    {
-      "name": "table_lookup_error",
-      "kind": "error",
-      "tier": "extension",
-      "bindings": {
-        "go": "TableLookupError"
       }
     },
     {
