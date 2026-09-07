@@ -36,7 +36,7 @@ pub(crate) fn validate_model(
     // (issue #200).
     check_reserved_declaration_names(
         esm_file,
-        &model.variables,
+        model.variables.keys(),
         &format!("/models/{model_name}/variables"),
         &format!("Model '{model_name}'"),
         "variable",
@@ -813,9 +813,15 @@ fn independent_variable(esm_file: &EsmFile) -> String {
 }
 
 /// Why a name is reserved, for the `reserved_variable_name` details payload.
-fn reserved_declaration_reason(esm_file: &EsmFile, name: &str) -> Option<(&'static str, &'static str)> {
+fn reserved_declaration_reason(
+    esm_file: &EsmFile,
+    name: &str,
+) -> Option<(&'static str, &'static str)> {
     if name == independent_variable(esm_file) {
-        Some(("independent_variable", "the document's independent variable"))
+        Some((
+            "independent_variable",
+            "the document's independent variable",
+        ))
     } else if name == crate::flatten::VAR_PLACEHOLDER {
         Some(("operator_placeholder", "the operator-model placeholder"))
     } else {
@@ -833,18 +839,21 @@ fn reserved_declaration_reason(esm_file: &EsmFile, name: &str) -> Option<(&'stat
 /// `parse::reject_reserved_index_symbols` uses for an `aggregate` binder,
 /// stated once per rule so the two cannot drift.
 ///
-/// Findings are emitted in sorted key order: `variables` / `species` /
-/// `parameters` are `HashMap`s, which discard the authored key order at parse,
-/// so sorted is the only stable answer this binding can give.
-fn check_reserved_declaration_names<V>(
+/// Findings are emitted in sorted key order, matching the peer bindings: two of
+/// the five cannot reproduce the authored key order at all (Go decodes
+/// `variables` into a plain map and this crate's own typed layer sorts its
+/// unknowns for the same reason), so sorted is the ordering every binding can
+/// give. Takes the KEYS rather than the map so the three declaration maps —
+/// which are not all the same container type — share one implementation.
+fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
     esm_file: &EsmFile,
-    declarations: &HashMap<String, V>,
+    declarations: I,
     container_path: &str,
     owner: &str,
     kind: &str,
     errors: &mut Vec<StructuralError>,
 ) {
-    let mut names: Vec<&String> = declarations.keys().collect();
+    let mut names: Vec<&String> = declarations.into_iter().collect();
     names.sort();
     for name in names {
         let Some((reason, role)) = reserved_declaration_reason(esm_file, name) else {
@@ -2129,7 +2138,7 @@ pub(crate) fn validate_reaction_system(
     let owner = format!("Reaction system '{rs_name}'");
     check_reserved_declaration_names(
         esm_file,
-        &rs.species,
+        rs.species.keys(),
         &format!("{rs_path}/species"),
         &owner,
         "species",
@@ -2137,7 +2146,7 @@ pub(crate) fn validate_reaction_system(
     );
     check_reserved_declaration_names(
         esm_file,
-        &rs.parameters,
+        rs.parameters.keys(),
         &format!("{rs_path}/parameters"),
         &owner,
         "parameter",
