@@ -137,16 +137,18 @@ run_binding_suite() {
         return 0
     fi
 
-    local start
+    local start secs
     start=$(date +%s)
     log "Running $language test suite..."
     if "$@"; then
-        record_timing "suite:$language" "$(( $(date +%s) - start ))"
-        success "$language tests passed"
+        secs=$(( $(date +%s) - start ))
+        record_timing "suite:$language" "$secs"
+        success "$language tests passed (${secs}s)"
         return 0
     fi
-    record_timing "suite:$language (FAILED)" "$(( $(date +%s) - start ))"
-    error "$language tests failed"
+    secs=$(( $(date +%s) - start ))
+    record_timing "suite:$language (FAILED)" "$secs"
+    error "$language tests failed (${secs}s)"
     return 1
 }
 
@@ -768,14 +770,16 @@ declare -a FAILED_STAGES=()
 run_stage() {
     local name="$1"
     shift
-    local start
+    local start secs
     start=$(date +%s)
     if "$@"; then
-        record_timing "$name" "$(( $(date +%s) - start ))"
-        success "$name"
+        secs=$(( $(date +%s) - start ))
+        record_timing "$name" "$secs"
+        success "$name (${secs}s)"
     else
-        record_timing "$name (FAILED)" "$(( $(date +%s) - start ))"
-        error "$name FAILED"
+        secs=$(( $(date +%s) - start ))
+        record_timing "$name (FAILED)" "$secs"
+        error "$name FAILED (${secs}s)"
         FAILED_STAGES+=("$name")
     fi
 }
@@ -823,13 +827,17 @@ main() {
     declare -a failed_languages=()
 
     for lang in julia typescript python rust go; do
-        local lang_start
+        local lang_start lang_secs
         lang_start=$(date +%s)
         if "run_${lang}_tests"; then
-            record_timing "binding:$lang (suite+producer)" "$(( $(date +%s) - lang_start ))"
+            lang_secs=$(( $(date +%s) - lang_start ))
+            record_timing "binding:$lang (suite+producer)" "$lang_secs"
+            success "binding:$lang complete (${lang_secs}s)"
             successful_languages+=("$lang")
         else
-            record_timing "binding:$lang (suite+producer, FAILED)" "$(( $(date +%s) - lang_start ))"
+            lang_secs=$(( $(date +%s) - lang_start ))
+            record_timing "binding:$lang (suite+producer, FAILED)" "$lang_secs"
+            error "binding:$lang FAILED (${lang_secs}s)"
             failed_languages+=("$lang")
             FAILED_STAGES+=("binding:$lang")
         fi
