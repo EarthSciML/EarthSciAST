@@ -4384,7 +4384,7 @@ mod subsystem_ragged_and_inspection_tests {
         let sol = crate::problem::solve(&prob, &erk_opts()).expect("solves");
         let insp = prob.take_inspection();
         let ti = sol.time.len() - 1;
-        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
+        let cells = crate::inline_tests::state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), 2);
         let u1: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         assert!((u1[0] - 30.0).abs() < 1e-8, "u[1](1) = {} != 30", u1[0]);

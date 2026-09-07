@@ -325,7 +325,7 @@ function _pd_index_syms(e)
 end
 
 # SHARED linear-mat-vec body predicate — also reused by the wall2 Phase D BLAS
-# accelerator (`_evaluate_cellwise_blas`, pde_inline_tests.jl). Classify an
+# accelerator (`_evaluate_cellwise_blas`, inline_tests.jl). Classify an
 # aggregate BODY `A[c, out…] · E[c]` — a two-factor `⊗=·` product of a
 # rank-(1+|out|) array factor `A` subscripted `[c, out…]` (contracted index first,
 # then the output indices in order) and a rank-1 factor `E` subscripted `[c]` —

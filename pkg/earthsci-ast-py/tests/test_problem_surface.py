@@ -40,7 +40,7 @@ from earthsci_ast.problem import (
     solve_all,
     step,
 )
-from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
 from earthsci_ast.sympy_bridge import SimulationError
 
 pytest.importorskip("scipy")  # the solve() half of the surface needs the solver
@@ -109,7 +109,7 @@ def test_canonical_tolerance_defaults() -> None:
     gets when its author expressed no opinion about accuracy, and it should be a
     sane starting point rather than a silent decision to spend six orders of
     magnitude of extra work on their behalf. Tests that assert numbers pass
-    TEST_RELTOL / TEST_ABSTOL instead — see pde_inline_tests."""
+    TEST_RELTOL / TEST_ABSTOL instead — see inline_tests."""
     import inspect
 
     sig = inspect.signature(solve)

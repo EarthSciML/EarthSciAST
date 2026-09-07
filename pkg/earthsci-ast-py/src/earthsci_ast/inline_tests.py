@@ -1,6 +1,6 @@
-"""pde_inline_tests — the §6.6.5-capable inline-test runner over the NumPy
+"""inline_tests — the §6.6.5-capable inline-test runner over the NumPy
 simulation pathway (the Python mirror of the Julia binding's
-``pde_inline_tests.jl``).
+``inline_tests.jl``).
 
 A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
 field — ``reduce: L2_error | Linf_error`` against an analytic ``reference``
@@ -119,7 +119,7 @@ _CELL_NAME_RE = re.compile(r"^(.+)\[([0-9,]+)\]$")
 
 
 @dataclass
-class PdeAssertionResult:
+class AssertionResult:
     """Outcome of one §6.6.5 inline-test assertion evaluated through the
     NumPy simulation pathway. ``actual`` is the computed reduction value
     (``None`` when the simulation or reduction itself failed); ``message``
@@ -851,12 +851,12 @@ def _result(
     actual: float | None,
     passed: bool,
     message: str,
-) -> PdeAssertionResult:
-    """Build one :class:`PdeAssertionResult`, filling the assertion-identity
+) -> AssertionResult:
+    """Build one :class:`AssertionResult`, filling the assertion-identity
     fields (model / test / index / variable / time / reduce / expected) from
     the ``test`` + ``assertion`` and taking the outcome fields verbatim. The
     three result sites of :func:`run_inline_tests` share this shape."""
-    return PdeAssertionResult(
+    return AssertionResult(
         str(mname),
         test.id,
         idx,
@@ -988,7 +988,7 @@ def _run_document_tests(
     file: EsmFile,
     source: str | None,
     opts: _ResolvedOptions,
-    results: list[PdeAssertionResult],
+    results: list[AssertionResult],
 ) -> None:
     """Run one document's inline tests, appending to ``results``.
 
@@ -1127,7 +1127,7 @@ def _expand_inputs(inputs: Any) -> list[str | EsmFile]:
     return out
 
 
-def _load_failure_result(source: str, err: Exception) -> PdeAssertionResult:
+def _load_failure_result(source: str, err: Exception) -> AssertionResult:
     """The one ERROR row a document that could not be LOADED contributes to a
     batch.
 
@@ -1136,7 +1136,7 @@ def _load_failure_result(source: str, err: Exception) -> PdeAssertionResult:
     is indistinguishable from one that passed. So the failure becomes a row,
     the same way every other failure in this runner becomes a row. The shape
     mirrors the Julia binding's existing ``<parse>`` / ``<load>`` row."""
-    return PdeAssertionResult(
+    return AssertionResult(
         source,
         "<load>",
         0,
@@ -1200,11 +1200,11 @@ def run_inline_tests(
     base_dir: str | None = None,
     cse: bool = True,
     options_for: Callable[[Any], InlineTestOptions | None] | None = None,
-) -> list[PdeAssertionResult]:
+) -> list[AssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
     assertions) of the selected component(s) of ``inputs`` through the
     official NumPy simulation pathway, and return one
-    :class:`PdeAssertionResult` per assertion — carrying the ACTUAL reduction
+    :class:`AssertionResult` per assertion — carrying the ACTUAL reduction
     value alongside pass/fail, so conformance harnesses can record and
     cross-compare the numbers.
 
@@ -1252,7 +1252,7 @@ def run_inline_tests(
     batch = not isinstance(inputs, EsmFile) and not (
         isinstance(inputs, (str, os.PathLike)) and not os.path.isdir(os.fspath(inputs))
     )
-    results: list[PdeAssertionResult] = []
+    results: list[AssertionResult] = []
     for document in documents:
         override = options_for(document) if options_for is not None else None
         opts = _fold_options(
@@ -1282,7 +1282,7 @@ def run_inline_tests(
 
 __all__ = [
     "InlineTestOptions",
-    "PdeAssertionResult",
+    "AssertionResult",
     "SimulatedStates",
     "evaluate_cellwise",
     "field_reduce",

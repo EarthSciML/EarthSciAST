@@ -22,7 +22,7 @@
 //! Every assertion below names an expected value or an expected code. None
 //! asserts a bound, and none asserts merely that a run completed.
 
-use earthsci_ast::{PdeAssertionResult, SolveOptions, load_path, load_string, run_inline_tests};
+use earthsci_ast::{AssertionResult, SolveOptions, load_path, load_string, run_inline_tests};
 use serde_json::{Value, json};
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -31,7 +31,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-fn run_fixture(name: &str) -> Vec<PdeAssertionResult> {
+fn run_fixture(name: &str) -> Vec<AssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
     let results = run_inline_tests(&file, None, &SolveOptions::default());
     assert!(!results.is_empty(), "{name}: the fixture asserts nothing");

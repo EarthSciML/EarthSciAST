@@ -1,5 +1,5 @@
 # ===========================================================================
-# pde_inline_tests — the §6.6.5-capable inline-test runner over the tree-walk
+# inline_tests — the §6.6.5-capable inline-test runner over the tree-walk
 # simulation pathway (the PDE dual of run_tests.jl's MTK scalar runner).
 #
 # A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
@@ -69,38 +69,34 @@
 # ===========================================================================
 
 """
-    PdeTestError(msg)
+    InlineTestError(msg)
 
 A §6.6.5 inline-test evaluation failed: an ill-formed `coords` / `reduce`
 assertion, a `from_file` reference that is missing or shape-mismatched, an
 asserted variable with no field, or a per-test discretization injection
 (§9.7.10 form C) that could not build. `run_inline_tests` catches it per
-assertion and records the message on the failing [`PdeAssertionResult`](@ref).
+assertion and records the message on the failing [`AssertionResult`](@ref).
 """
-struct PdeTestError <: EarthSciASTError
+struct InlineTestError <: EarthSciASTError
     msg::String
 end
-Base.showerror(io::IO, e::PdeTestError) = print(io, "PdeTestError: ", e.msg)
+Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.msg)
 
-"""
-    PdeAssertionResult
-
-Alias of [`AssertionResult`](@ref) — the two inline-test runners share ONE
-result type (and one JUnit emitter). Kept as a name because `run_inline_tests`'
-results were historically a distinct struct; the old field spellings survive
-as virtual properties on `AssertionResult` (`r.model` ≡ `r.container_name`,
-`r.passed` ≡ `r.status == PASS`).
-
-For results produced by [`run_inline_tests`](@ref): `container_kind` is
-`:model` or `:reaction_system` after the component the test hangs off (both
-carry `tests`; see [`run_inline_tests`](@ref)), `file` is `""` for an assertion
-row (the runner is handed its documents rather than discovering them — pass
-`file=...` to [`write_junit_xml`](@ref) to label the batch) and the document's
-path on the `<load>` row a batch emits for an unreadable file, and
-`reduce`/`rtol`/`atol` carry the assertion's declared reduction and the
-resolved §6.6.4 tolerances.
-"""
-const PdeAssertionResult = AssertionResult
+# `PdeAssertionResult` used to be aliased here, back when this runner's results
+# were a distinct struct. Both inline-test runners have long shared ONE result
+# type — [`AssertionResult`](@ref), defined in run_tests.jl, with one JUnit
+# emitter — so the alias named nothing of its own, and its "Pde" was the same
+# too-narrow word this file's rename removed. Deleted rather than kept: a second
+# spelling for one type is exactly what makes a reader think there are two.
+#
+# For results this runner produces, `container_kind` is `:model` or
+# `:reaction_system` after the component the test hangs off (both carry
+# `tests`); `file` is `""` on an assertion row — the runner is handed its
+# documents rather than discovering them, so pass `file=...` to
+# [`write_junit_xml`](@ref) to label the batch — and is the document's path on
+# the `<load>` row a batch emits for an unreadable file; and `reduce` / `rtol` /
+# `atol` carry the assertion's declared reduction and the resolved §6.6.4
+# tolerances.
 
 # ============================================================
 # wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
@@ -1025,14 +1021,14 @@ function _variable_shape(file::EsmFile, mname::AbstractString,
         # a grid cell.
         file.reaction_systems !== nothing &&
             haskey(file.reaction_systems, String(mname)) &&
-            throw(PdeTestError(
+            throw(InlineTestError(
                 "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
-        throw(PdeTestError("model '$(mname)' not found"))
+        throw(InlineTestError("model '$(mname)' not found"))
     end
     v = get(model.variables, String(variable), nothing)
-    v === nothing && throw(PdeTestError(
+    v === nothing && throw(InlineTestError(
         "variable '$(variable)' is not declared in model '$(mname)'"))
-    (v.shape === nothing || isempty(v.shape)) && throw(PdeTestError(
+    (v.shape === nothing || isempty(v.shape)) && throw(InlineTestError(
         "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
     return String[String(s) for s in v.shape]
 end
@@ -1047,26 +1043,26 @@ function _coords_cell(coords::AbstractDict, shape::Vector{String},
                       index_sets::AbstractDict)::Vector{Int}
     for k in keys(coords)
         String(k) in shape ||
-            throw(PdeTestError("`coords` names unknown dimension '$(k)' " *
+            throw(InlineTestError("`coords` names unknown dimension '$(k)' " *
                   "(field dimensions: $(join(shape, ", ")))"))
     end
     cell = Int[]
     for s in shape
         iset = get(index_sets, s, nothing)
         (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            throw(PdeTestError("`coords` sampling requires interval index sets " *
+            throw(InlineTestError("`coords` sampling requires interval index sets " *
                   "with a declared size; '$(s)' is not one"))
         n = Int(iset.size)
         if haskey(coords, s)
             c = Float64(coords[s])
             idx = ceil(Int, c - 0.5)  # nearest index; exact ties round DOWN
             (1 <= idx <= n) ||
-                throw(PdeTestError("`coords` position $(c) along '$(s)' resolves " *
+                throw(InlineTestError("`coords` position $(c) along '$(s)' resolves " *
                       "to index $(idx), outside 1..$(n)"))
             push!(cell, idx)
         else
             n == 1 ||
-                throw(PdeTestError("`coords` leaves dimension '$(s)' unpinned " *
+                throw(InlineTestError("`coords` leaves dimension '$(s)' unpinned " *
                       "with $(n) samples; a strict subset pins only when every " *
                       "remaining dimension is singleton"))
             push!(cell, 1)
@@ -1083,15 +1079,15 @@ function _nested_at(data, cell::Vector{Int}, exts::Vector{Int})::Float64
     node = data
     for (d, i) in enumerate(cell)
         node isa AbstractVector ||
-            throw(PdeTestError("from_file reference shape mismatch along " *
+            throw(InlineTestError("from_file reference shape mismatch along " *
                   "dimension $(d): expected a nested array of length $(exts[d])"))
         length(node) == exts[d] ||
-            throw(PdeTestError("from_file reference shape mismatch along " *
+            throw(InlineTestError("from_file reference shape mismatch along " *
                   "dimension $(d): expected length $(exts[d]), found $(length(node))"))
         node = node[i]
     end
     (node isa Real && !(node isa Bool)) ||
-        throw(PdeTestError("from_file reference shape mismatch at cell " *
+        throw(InlineTestError("from_file reference shape mismatch at cell " *
               "[$(join(cell, ","))]: expected a number"))
     return Float64(node)
 end
@@ -1106,17 +1102,17 @@ function _from_file_reference(ref::AbstractDict, base_dir::AbstractString,
     fmt_raw = get(ref, "format", nothing)
     fmt = fmt_raw === nothing ? "json" : lowercase(String(fmt_raw))
     fmt == "json" ||
-        throw(PdeTestError("from_file reference format '$(fmt)' is not supported " *
+        throw(InlineTestError("from_file reference format '$(fmt)' is not supported " *
               "(v1 supports \"json\" only)"))
     path_raw = get(ref, "path", nothing)
-    path_raw === nothing && throw(PdeTestError("from_file reference is missing `path`"))
+    path_raw === nothing && throw(InlineTestError("from_file reference is missing `path`"))
     p = String(path_raw)
     resolved = isabspath(p) ? p : joinpath(String(base_dir), p)
     isfile(resolved) ||
-        throw(PdeTestError("from_file reference file not found: $(resolved)"))
+        throw(InlineTestError("from_file reference file not found: $(resolved)"))
     data = JSON3.read(read(resolved, String))
     isempty(cell_tuples) &&
-        throw(PdeTestError("from_file reference: field has no cells"))
+        throw(InlineTestError("from_file reference: field has no cells"))
     nd = length(cell_tuples[1])
     exts = Int[maximum(c[d] for c in cell_tuples) for d in 1:nd]
     return Float64[_nested_at(data, c, exts) for c in cell_tuples]
@@ -1156,7 +1152,7 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
         injected = true
         break
     end
-    injected || throw(PdeTestError(
+    injected || throw(InlineTestError(
         "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
     f = load_string(JSON3.write(raw); base_path=String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
@@ -1173,7 +1169,7 @@ const _SAVED_TIME_RTOL = 1e-9
 # ---------------------------------------------------------------------------
 # Per-assertion evaluation — the §6.6.5 scalar-selection / reduction machinery,
 # split out of `run_inline_tests` so the driver stays a flat loop. Returns the
-# scalar `actual`; throws [`PdeTestError`](@ref) on any spec-relevant failure
+# scalar `actual`; throws [`InlineTestError`](@ref) on any spec-relevant failure
 # (the driver records it as an `ERROR` result).
 # ---------------------------------------------------------------------------
 function _evaluate_assertion(a, sim, var_map::AbstractDict,
@@ -1182,12 +1178,12 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              resolved_base::AbstractString)::Float64
     ti = argmin(abs.(sim.t .- a.time))
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
-        throw(PdeTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
+        throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
     state = sim.u[ti]
 
     if a.coords === nothing && a.reduce === nothing
         slot = _scalar_slot(var_map, a.variable, String(mname))
-        slot == 0 && throw(PdeTestError("scalar state '$(a.variable)' not found"))
+        slot == 0 && throw(InlineTestError("scalar state '$(a.variable)' not found"))
         return state[slot]
     end
 
@@ -1215,14 +1211,14 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         state_scalars["t"] = Float64(sim.t[ti])
         obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
                               state_arrays=state_arrays, state_scalars=state_scalars)
-        obs === nothing && throw(PdeTestError(
+        obs === nothing && throw(InlineTestError(
             "array state '$(a.variable)' has no cells in var_map"))
         field, cell_tuples = obs
     end
 
     if coords_target !== nothing
         pos = findfirst(==(coords_target), cell_tuples)
-        pos === nothing && throw(PdeTestError("no grid sample at cell " *
+        pos === nothing && throw(InlineTestError("no grid sample at cell " *
             "[$(join(coords_target, ","))] of '$(a.variable)'"))
         return field[pos]
     end
@@ -1240,7 +1236,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                string(get(a.reference, "type", "")) == "from_file"
             ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
         else
-            throw(PdeTestError("unsupported `reference` shape $(typeof(a.reference))"))
+            throw(InlineTestError("unsupported `reference` shape $(typeof(a.reference))"))
         end
     end
     return field_reduce(a.reduce, field; reference=ref)
@@ -1520,11 +1516,11 @@ _opt_dict(o::InlineTestOptions, field::Symbol) =
     run_inline_tests(inputs; model_name=nothing, alg=nothing,
                      reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
                      base_dir=nothing, options_for=nothing)
-        -> Vector{PdeAssertionResult}
+        -> Vector{AssertionResult}
 
 Run every inline test (esm-spec §6.6, including the §6.6.5 PDE assertions) of
 the selected component(s) of `inputs` through the official tree-walk simulation
-pathway, and return one [`PdeAssertionResult`](@ref) per assertion — carrying
+pathway, and return one [`AssertionResult`](@ref) per assertion — carrying
 the ACTUAL reduction value alongside pass/fail, so conformance harnesses can
 record and cross-compare the numbers.
 
@@ -1590,7 +1586,7 @@ function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=noth
     documents = _expand_inputs(inputs)
     batch = !((inputs isa EsmFile) ||
               (inputs isa AbstractString && !isdir(String(inputs))))
-    results = PdeAssertionResult[]
+    results = AssertionResult[]
     for document in documents
         o = options_for === nothing ? nothing : options_for(document)
         (o === nothing || o isa InlineTestOptions) || throw(ArgumentError(

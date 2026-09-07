@@ -144,7 +144,7 @@ pub mod simulate_array;
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub(crate) mod pde_inline_tests;
+pub(crate) mod inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
@@ -324,8 +324,8 @@ pub use migration::get_supported_migration_targets;
 pub use compile_error::CompileError;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub use pde_inline_tests::{
-    BuildProviderFactory, InlineTestOptions, PdeAssertionResult, ephemeral_injected_file,
+pub use inline_tests::{
+    AssertionResult, BuildProviderFactory, InlineTestOptions, ephemeral_injected_file,
     evaluate_cellwise, field_reduce, run_inline_tests, run_inline_tests_filtered,
     run_inline_tests_paths, run_inline_tests_with_base_dir, run_inline_tests_with_providers,
     state_cells,

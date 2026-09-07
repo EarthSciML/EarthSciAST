@@ -1,6 +1,6 @@
-//! pde_inline_tests — the §6.6.5-capable inline-test runner over the
+//! inline_tests — the §6.6.5-capable inline-test runner over the
 //! vectorized array simulation pathway (the Rust mirror of the Julia
-//! binding's `pde_inline_tests.jl` and the Python `pde_inline_tests.py`).
+//! binding's `inline_tests.jl` and the Python `inline_tests.py`).
 //!
 //! NOTE: this is PRODUCT code, not Rust test code — the runner for tests
 //! embedded in ESM model files. The filename mirrors the sibling bindings'
@@ -189,10 +189,10 @@ pub const DEFAULT_REL_TOL: f64 = 1e-6;
 /// simulation pathway. `actual` is the computed reduction value (`None` when
 /// the simulation or reduction itself failed); `message` carries the diff or
 /// error text for non-passing results. Field-for-field identical to the
-/// Julia `PdeAssertionResult` / Python `PdeAssertionResult`, and
+/// Julia `AssertionResult` / Python `AssertionResult`, and
 /// `Serialize`-able so conformance runners can record it directly.
 #[derive(Debug, Clone, Serialize)]
-pub struct PdeAssertionResult {
+pub struct AssertionResult {
     /// Owning model name.
     pub model: String,
     /// The inline test's `id`.
@@ -928,7 +928,7 @@ fn eval_assertion(
 /// it is re-serialized from the loaded `file` (`base_dir` anchors the injected
 /// `ref`s). This is what lets one test suite exercise a discretization-agnostic
 /// PDE leaf under several schemes with no conflict between tests. Mirrors the
-/// Julia reference (`pde_inline_tests.jl` `_ephemeral_injected_file`).
+/// Julia reference (`inline_tests.jl` `_ephemeral_injected_file`).
 pub fn ephemeral_injected_file(
     file: &EsmFile,
     source_path: Option<&Path>,
@@ -1051,7 +1051,7 @@ fn assertion_observed_requests(
 /// assertion count equal to the number of assertions the document declares
 /// however the test failed.
 fn push_test_error(
-    results: &mut Vec<PdeAssertionResult>,
+    results: &mut Vec<AssertionResult>,
     model_name: &str,
     t: &crate::types::ModelTest,
     tolerance: Option<&Tolerance>,
@@ -1059,7 +1059,7 @@ fn push_test_error(
 ) {
     for (i, a) in t.assertions.iter().enumerate() {
         let (rtol, atol) = resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
-        results.push(PdeAssertionResult {
+        results.push(AssertionResult {
             model: model_name.to_string(),
             test_id: t.id.clone(),
             assertion_idx: i + 1,
@@ -1551,7 +1551,7 @@ fn run_component_tests(
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
     seeds: &InlineTestSeeds,
-    results: &mut Vec<PdeAssertionResult>,
+    results: &mut Vec<AssertionResult>,
 ) {
     let mut memo: Option<BuiltModel> = None;
     for t in tests {
@@ -1695,7 +1695,7 @@ fn run_component_tests(
                     (Some(actual), ok, msg)
                 }
             };
-            results.push(PdeAssertionResult {
+            results.push(AssertionResult {
                 model: model_name.to_string(),
                 test_id: t.id.clone(),
                 assertion_idx: i + 1,
@@ -1717,7 +1717,7 @@ fn run_component_tests(
 /// assertions) of the selected model(s) of `file` through the official
 /// simulation pathway ([`crate::simulate::simulate`], which routes
 /// array/spatial files to the vectorized array runtime), and return one
-/// [`PdeAssertionResult`] per assertion — carrying the ACTUAL reduction
+/// [`AssertionResult`] per assertion — carrying the ACTUAL reduction
 /// value alongside pass/fail, so conformance harnesses can record and
 /// cross-compare the numbers.
 ///
@@ -1740,7 +1740,7 @@ pub fn run_inline_tests(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     run_inline_tests_with_base_dir(file, model_name, opts, None)
 }
 
@@ -1754,7 +1754,7 @@ pub fn run_inline_tests_with_base_dir(
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     run_inline_tests_with_providers(file, model_name, opts, base_dir, None)
 }
 
@@ -1791,7 +1791,7 @@ pub fn run_inline_tests_with_providers(
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     run_inline_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
 }
 
@@ -1813,7 +1813,7 @@ pub fn run_inline_tests_filtered(
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     run_inline_tests_seeded(
         file,
         model_name,
@@ -1846,7 +1846,7 @@ fn run_inline_tests_seeded(
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
     seeds: &InlineTestSeeds,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     let mut results = Vec::new();
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
@@ -1985,8 +1985,8 @@ fn esm_files_under(dir: &Path) -> Vec<PathBuf> {
 /// SILENTLY either — a document that vanishes from the result list is
 /// indistinguishable from one that passed. So the failure becomes a row, the
 /// way every other failure in this runner becomes a row.
-fn load_failure_result(path: &Path, message: String) -> PdeAssertionResult {
-    PdeAssertionResult {
+fn load_failure_result(path: &Path, message: String) -> AssertionResult {
+    AssertionResult {
         model: path.display().to_string(),
         test_id: "<load>".to_string(),
         assertion_idx: 0,
@@ -2024,7 +2024,7 @@ fn load_failure_result(path: &Path, message: String) -> PdeAssertionResult {
 pub fn run_inline_tests_paths(
     paths: &[impl AsRef<Path>],
     options_for: &dyn Fn(&Path) -> InlineTestOptions,
-) -> Vec<PdeAssertionResult> {
+) -> Vec<AssertionResult> {
     let mut documents: Vec<PathBuf> = Vec::new();
     for p in paths {
         let p = p.as_ref();
@@ -3032,7 +3032,7 @@ mod tests {
     fn run_inline_tests_scalar_observed_tracks_parameter_overrides() {
         let file = load_string(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
         let results = run_inline_tests(&file, Some("M2"), &tight_opts());
-        let by_id: HashMap<&str, &PdeAssertionResult> =
+        let by_id: HashMap<&str, &AssertionResult> =
             results.iter().map(|r| (r.test_id.as_str(), r)).collect();
         assert_eq!(by_id.len(), 2, "expected the two M2 tests");
         let lo = by_id["t_lo"].actual.expect("t_lo actual recorded");

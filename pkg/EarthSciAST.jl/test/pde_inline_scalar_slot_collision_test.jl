@@ -1,5 +1,5 @@
 # Regression: model-qualified-first scalar-slot / array-cell resolution in the
-# §6.6.5 inline-test runner (pde_inline_tests.jl).
+# §6.6.5 inline-test runner (inline_tests.jl).
 #
 # Flattening qualifies every element with its owning model ("M1.k", "M2.k"), and
 # a coupled document routinely reuses the same BARE name across sibling

@@ -1,7 +1,7 @@
-# pde_inline_tests — §6.6.5 coords point-sampling, integral reduce, and
+# inline_tests — §6.6.5 coords point-sampling, integral reduce, and
 # from_file reference evaluation (the three formerly-unsupported features),
 # pinned to the cross-binding conventions shared 1:1 with the Python
-# (tests/test_pde_inline_tests.py) and Rust (src/pde_inline_tests.rs) suites:
+# (tests/test_inline_tests.py) and Rust (src/inline_tests.rs) suites:
 #
 # 1. `coords` values are positions in 1-based INDEX space (fractional
 #    allowed); sampling = nearest grid index, exact half-way ties round DOWN.
@@ -123,9 +123,9 @@ end
     @test length(results) == 3
     @test all(r -> !r.passed && r.actual === nothing, results)
     # Evaluation failures are ERROR (not FAIL) and surface the typed
-    # PdeTestError through showerror.
+    # InlineTestError through showerror.
     @test all(r -> r.status == EarthSciAST.ERROR, results)
-    @test occursin("PdeTestError", results[1].message)
+    @test occursin("InlineTestError", results[1].message)
     @test occursin("names unknown dimension 'y'", results[1].message)
     @test occursin("outside 1..8", results[2].message)
     @test occursin("resolves to index 0", results[2].message)
@@ -438,7 +438,7 @@ end
     @test results[1].actual < 1e-12
 end
 
-@testset "PdeAssertionResult status enum + JUnit emission" begin
+@testset "AssertionResult status enum + JUnit emission" begin
     # A doc with one passing and one failing assertion: statuses must be the
     # shared AssertionStatus values, `passed` must mirror `status == PASS`,
     # and the results must ride the same JUnit path as the MTK runner.

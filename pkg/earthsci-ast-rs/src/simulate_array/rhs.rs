@@ -1217,7 +1217,7 @@ mod elementwise_array_observed_tests {
         .and_then(|prob| crate::problem::solve(&prob, &erk()))
         .expect("simulates");
         let ti = sol.time.len() - 1;
-        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
+        let cells = crate::inline_tests::state_cells(&sol.state_variable_names, "psi", "M");
         assert_eq!(cells.len(), 3);
         let psi: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         let one_minus_em1 = 1.0 - (-1.0f64).exp();

@@ -610,7 +610,7 @@ Where:
 | BEHAV-12-007 | SHOULD: the filter is applied BEFORE anything is built or run, so narrowing to one test costs one test. Applied to an already-computed result vector it is useless — on `nr-logging-county` the pre-fix filtered run took 309.3 s / 326.2 s against 301.9 s / 306.6 s unfiltered (slower, within the spread), because all 29 builds had already run; selecting first, `esm test ./runs --filter <one of fifteen>` went 153.2 s / 156.9 s → 0.98 s / 0.97 s for the same rows | CONFORMANCE_SPEC.md §5.25.4 | Yes | performance |
 
 > **Binding status (2026-09-04)**: **Rust** implements all seven.
-> `pde_inline_tests.rs::BuildKey` is the four-field key (floats keyed by BIT PATTERN, so
+> `inline_tests.rs::BuildKey` is the four-field key (floats keyed by BIT PATTERN, so
 > two spellings of one value miss and rebuild rather than merging), compared exactly by a
 > ONE-SLOT memo in `run_model_tests`; -003 holds because only the build is memoised and
 > `solve` still runs per test; -004 is `EsmProblem::reset_inspection`, called before every

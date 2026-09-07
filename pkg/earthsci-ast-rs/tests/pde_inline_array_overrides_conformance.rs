@@ -20,7 +20,7 @@
 //! The Rust array runtime lowers a shaped parameter's inline column into the
 //! `const` observed channel (`simulate_array::lower_inline_array_parameters`),
 //! expands an array-valued `initial_conditions` entry into the per-cell `u0`
-//! keys (`pde_inline_tests::expand_array_initial_conditions`), and materializes
+//! keys (`inline_tests::expand_array_initial_conditions`), and materializes
 //! the state-free observeds an `ic` reads (`ArrayCompiled::ic_scope_defs`).
 //! This suite pins all three against the reference binding.
 

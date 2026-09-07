@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.pde_inline_tests import run_inline_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _ROOT = (
     Path(__file__).resolve().parents[3]

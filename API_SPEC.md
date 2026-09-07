@@ -1002,6 +1002,7 @@ reading that as a gap.
 | `apply_scope_injections` | function | – | `applyScopeInjections` | – | `apply_scope_injections` | – |
 | `apply_unit_conversion` | function | `apply_unit_conversion` / `apply_unit_conversion!` | – | `apply_unit_conversion` | – | – |
 | `area_tolerance_ok` | function | – | – | `area_tolerance_ok` | `area_tolerance_ok` | – |
+| `assertion_result` | type | `AssertionResult` | – | – | `AssertionResult` | – |
 | `build_unit_env` | function | – | – | – | `build_unit_env` | `BuildUnitEnv` |
 | `cadence` | type | – | – | – | `Cadence` | `Cadence` |
 | `callback_set` | type | – | – | `CallbackSet` | `CallbackSet` | – |
@@ -1061,7 +1062,6 @@ reading that as a gap.
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
 | `parse_unit_conversion` | function | `parse_unit_conversion` | – | `parse_unit_conversion` | – | – |
 | `partition` | type | – | – | `Partition` | `Partition` | – |
-| `pde_assertion_result` | type | `PdeAssertionResult` | – | – | `PdeAssertionResult` | – |
 | `plan_dimension_coordinates` | function | `plan_dimension_coordinates` | – | – | `plan_dimension_coordinates` | – |
 | `polygon_area` | function | – | – | `polygon_area` | `polygon_area` | – |
 | `product_matrix` | function | – | `productMatrix` | `product_matrix` | – | – |

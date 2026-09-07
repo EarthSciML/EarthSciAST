@@ -1,9 +1,9 @@
-"""Tests for the §6.6.5-capable inline-test runner (``pde_inline_tests``) and
+"""Tests for the §6.6.5-capable inline-test runner (``inline_tests``) and
 its supporting load/simulate capabilities: ``Assertion`` ``coords`` /
 ``reduce`` / ``reference`` parsing + serialization, coordinate-expression
 ``ic`` seeding through the NumPy interpreter, ``evaluate_cellwise``,
 ``field_reduce``, ``state_cells``, and ``run_inline_tests`` — the Python mirror
-of the Julia reference's ``pde_inline_tests.jl``."""
+of the Julia reference's ``inline_tests.jl``."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast.esm_types import ExprNode, Tolerance
 from earthsci_ast.parse import load_string
-from earthsci_ast.pde_inline_tests import (
+from earthsci_ast.inline_tests import (
     InlineTestOptions,
     _check_assertion,
     _resolve_tolerance,
@@ -475,7 +475,7 @@ def test_run_inline_tests_reports_failing_assertion_with_actual():
 
 def test_coordinate_expression_ic_seeds_grid(tmp_path):
     """The §11.4.1 case-3 seeding path in isolation: u(0) = cos(pi x_i)."""
-    from earthsci_ast.pde_inline_tests import simulate_states
+    from earthsci_ast.inline_tests import simulate_states
 
     f = load_string(json.dumps(_decay_doc()))
     sim = simulate_states(f, (0.0, 1.0), method="LSODA", rtol=1e-12, atol=1e-14, saveat=[0.0])
@@ -653,7 +653,7 @@ def _from_file_assert(ref, *, reduce="L2_error", abs_tol=1e-12):
 
 
 def test_from_file_reference_happy_path(tmp_path):
-    from earthsci_ast.pde_inline_tests import simulate_states
+    from earthsci_ast.inline_tests import simulate_states
 
     # The binding's own evaluated ic field, so the diff is exactly 0 (the
     # loaded array is used exactly like an evaluated reference field).

@@ -34,7 +34,7 @@ from earthsci_ast.numpy_interpreter import (
     ragged_factor_scope,
 )
 from earthsci_ast.parse import load_string
-from earthsci_ast.pde_inline_tests import run_inline_tests, simulate_states
+from earthsci_ast.inline_tests import run_inline_tests, simulate_states
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.simulation import BuildInspection
 

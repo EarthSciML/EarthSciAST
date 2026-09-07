@@ -35,7 +35,7 @@ from earthsci_ast.error_handling import (
 )
 from earthsci_ast.numpy_interpreter import EvalContext, NumpyInterpreterError, sweep_recurrence
 from earthsci_ast.parse import SchemaValidationError, load_path, load_string
-from earthsci_ast.pde_inline_tests import run_inline_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _RECURRENCE_DIR = FIXTURES_ROOT / "fixtures" / "recurrence"
 

@@ -1624,7 +1624,7 @@ def resolve_template_machinery(
 # each widens the target component's ``expression_template_imports`` in the
 # §9.7.10 merge order, so the ordinary import resolver + §9.6.3 fixpoint lower
 # the target's rewrite-targets with no engine change. Form C is applied by the
-# PDE test runner (``pde_inline_tests.py``) in a per-test ephemeral build.
+# PDE test runner (``inline_tests.py``) in a per-test ephemeral build.
 # Mirrors the Julia reference ``template_imports.jl`` injection section.
 # ===========================================================================
 

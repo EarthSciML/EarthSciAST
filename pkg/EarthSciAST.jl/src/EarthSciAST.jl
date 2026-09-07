@@ -136,7 +136,7 @@ include("value_invention.jl")
 include("pushdown_rewrite.jl")
 # Inline-test runners (spec §6.6; called as API by downstream model repos)
 include("run_tests.jl")
-include("pde_inline_tests.jl")
+include("inline_tests.jl")
 
 export
     # Root of the exception hierarchy (H-1): every exception this package
@@ -386,8 +386,9 @@ export
     esm_root, esm_path,
     discover_esm_files, run_esm_tests, write_junit_xml,
     # Inline-test runner (spec §6.6, incl. the §6.6.5 PDE assertion forms)
-    # over the tree-walk pathway
-    PdeAssertionResult, run_inline_tests, InlineTestOptions,
+    # over the tree-walk pathway. The results are the `AssertionResult`
+    # exported above — both runners have always shared the one type.
+    run_inline_tests, InlineTestOptions,
     evaluate_cellwise, field_reduce,
     # Closed function registry (esm-tzp / esm-4aw; esm-spec §9.2)
     evaluate_closed_function, evaluate_closed_function_ad,

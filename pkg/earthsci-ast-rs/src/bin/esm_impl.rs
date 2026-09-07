@@ -3384,7 +3384,7 @@ const TEST_ABSTOL: f64 = 1e-14;
 
 /// PASS / FAIL / ERROR — the tri-state verdict the Julia runner reports.
 ///
-/// [`earthsci_ast::PdeAssertionResult`] carries a two-state `passed: bool` and
+/// [`earthsci_ast::AssertionResult`] carries a two-state `passed: bool` and
 /// stays that way: it is `Serialize`d verbatim by `examples/pde_conformance.rs`
 /// as a payload an external runner consumes. The third state is RECOVERED from
 /// it instead. `run_inline_tests` sets `actual: Some(_)` exactly on the path that
@@ -3681,7 +3681,7 @@ fn data_source_providers(
 
 /// One assertion's outcome, tagged with the file it came from.
 ///
-/// The file is not part of [`earthsci_ast::PdeAssertionResult`] (the engine is
+/// The file is not part of [`earthsci_ast::AssertionResult`] (the engine is
 /// handed an already-loaded document), and a file that fails to LOAD produces
 /// a row with no assertion behind it at all — so the runner keeps its own row
 /// type rather than the library's.
