@@ -3819,7 +3819,40 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     # returns `nothing` and the einsum takes the existing affine / unroll path,
     # unchanged. Small reductions (< floor) also keep the existing path, so the vast
     # existing array-kernel test surface is byte-for-byte unaffected.
+    #
+    # PREEMPTION — which tier is cheaper is NOT a property of the equation alone.
+    # The two build costs are:
+    #
+    #   contraction loop   one resolve + `_compile` per OUTPUT CELL, each O(1) in
+    #                      the reduction length            →  O(#output cells)
+    #   unroll + affine    one resolve + `_compile` per STRUCTURAL GROUP over a
+    #                      body of ∏|k…| terms             →  O(#groups · ∏|k…|)
+    #
+    # Only the FIRST of those grows with the grid: `#groups` is a fact of the
+    # DOCUMENT (boundary classes, makearray regions), and `∏|k…|` a fact of the
+    # reduction, so the affine tier is the grid-independent one and the loop is
+    # not. Deciding the loop unconditionally — testing it BEFORE the affine block
+    # and gating that block on `!use_contraction_loop` — therefore hands the
+    # O(#cells) tier every reduction at or above the floor, INCLUDING the ones the
+    # affine tier would have compiled once for the whole array. On a transport
+    # model that is every plain column sum (`Σ_k dp[i,j,k]·f[i,j,k]·c[i,j,k]`, one
+    # output cell per COLUMN): 14 of them in ReSEACT, each re-resolved and
+    # re-compiled 18 721 times at 0.25°, for a build that is linear in the grid
+    # and O(1)-per-column IR that the affine tier would have built once.
+    #
+    # So the loop PREEMPTS the affine tier only when it is the cheaper of the two.
+    # `#groups ≥ 1` always, so `#output cells < ∏|k…|` is the most optimistic
+    # (single-group) form of "the unroll cannot be cheaper" — the loop keeps the
+    # equation whenever it holds, which is exactly the small-output / long-reduction
+    # shape the loop was added for (`contraction_loop_test.jl`'s 2×2 outputs over
+    # M² ∈ {16 … 1681} terms all still take it, byte for byte). When it does NOT
+    # hold the affine tier is OFFERED the equation first and the loop stays behind
+    # it as the fallback: a declined affine build lands on exactly the same
+    # `_NK_CONTRACTION_LOOP` per-cell path as before, so no equation loses the loop,
+    # and one that the affine tier accepts was never a candidate for a per-cell
+    # tier in the first place.
     use_contraction_loop = false
+    loop_preempts_affine = false
     if _contraction_loop_enabled() && !isempty(contract_names) &&
        agg_gates === nothing && agg_filter === nothing &&
        all(c -> c !== nothing, contract_const) &&
@@ -3835,6 +3868,8 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
             use_contraction_loop = _try_build_contraction_loop(probe, contract_names,
                 pranges, rhs_oplus, rhs_zerobar, array_var_info, var_map,
                 const_registry, pgather) !== nothing
+            n_out_cells = prod(length(r) for r in range_iters)
+            loop_preempts_affine = use_contraction_loop && n_out_cells < total_contract
         end
     end
 
@@ -3862,7 +3897,10 @@ function _compile_arrayop_equation!(percell_scalar, acc_kernels, scan_folds,
     scan_fold = nothing
     affine_kernels = nothing
     affine_first_try = false
-    if !_stencil_disabled() && !use_contraction_loop
+    # A viable contraction loop preempts this block only when it is the cheaper
+    # tier (see the PREEMPTION note above); otherwise it waits behind it as the
+    # fallback and `use_contraction_loop` is read again below, unchanged.
+    if !_stencil_disabled() && !loop_preempts_affine
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
         affine_body =
