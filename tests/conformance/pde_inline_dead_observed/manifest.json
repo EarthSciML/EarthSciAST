@@ -1,0 +1,64 @@
+{
+  "category": "pde_inline_dead_observed",
+  "version": "1.0",
+  "description": "Cross-binding conformance for §6.6.5 inline-test assertions on an array OBSERVED that NO LIVE EQUATION CONSUMES. An inline test's natural target is a quantity computed FOR the test — a tendency, a flux, a diagnostic — which by construction nothing else reads. The asserted `diag` is such a dead observed, and `chain` is a dead observed that reads another dead one. The Julia build published neither: the elementwise array-observed fold inlines such an observed into its readers and drops its equation, and a dead one has no readers to be inlined into, so `BuildInspection.observed_exprs` never carried it and every assertion failed with `array state '<name>' has no cells in var_map` — on a document whose defining equations Rust and Python both evaluate. Julia is the reference binding; its `run_pde_tests` minted golden/dead_observed.json, and the Rust (`esm test`) and Python (`run_pde_tests`) runners reproduce the same five actuals.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-11
+  },
+  "fixtures": [
+    {
+      "id": "dead_observed",
+      "path": "fixtures/dead_observed.esm",
+      "model": "M",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-6.6.5",
+        "array-observed",
+        "dead-observed",
+        "reduce-max",
+        "reduce-min",
+        "coords"
+      ],
+      "shape": {
+        "x": 4
+      },
+      "note": "The only state is `u`, integrated with a zero right-hand side, so the trajectory is constant and every assertion is exact at any time under any pinned solver family — a divergence here is a semantics divergence, never an integrator one.",
+      "assertions": [
+        { "test_id": "dead_observed", "assertion_idx": 1, "variable": "diag",  "reduce": "max", "expected": 8.0 },
+        { "test_id": "dead_observed", "assertion_idx": 2, "variable": "diag",  "reduce": "min", "expected": 2.0 },
+        { "test_id": "dead_observed", "assertion_idx": 3, "variable": "diag",  "coords": { "x": 3 }, "expected": 6.0 },
+        { "test_id": "dead_observed", "assertion_idx": 4, "variable": "chain", "reduce": "max", "expected": 12.0 },
+        { "test_id": "dead_observed", "assertion_idx": 5, "variable": "chain", "coords": { "x": 2 }, "expected": 6.0 }
+      ],
+      "golden": "golden/dead_observed.json"
+    }
+  ]
+}

@@ -37,3 +37,5 @@ Shared test fixtures in `tests/` (valid, invalid, conformance) ensure cross-lang
 - Follow conventional commits: `type(scope): description` (e.g. `feat(julia): add expression support`)
 - All implementations must conform to `esm-schema.json` and pass `./scripts/test-conformance.sh`
 - Follow each language's idiomatic style (see [CONTRIBUTING.md](CONTRIBUTING.md#language-specific-standards))
+
+Do not put "Co-Authored-By: Claude ..." in any commit messages. Claude is an LLM and LLMs cannot take responsibility for outputs, therefore they cannot be authors.

@@ -471,6 +471,73 @@ function _substitute_shared(e::ASTExpr, bindings::Dict{String,ASTExpr},
     return r
 end
 
+# ---- Index push-down: which operand of an `index` gather is ARRAY-valued? ----
+# Shared predicate of the two `index(<elementwise op>, k…)` push-down branches —
+# `_resolve_indices_op` (resolve.jl) and `_stencilize_index` (stencil.jl). Both
+# distribute a gather over an elementwise combination,
+#
+#     index(op(a, b, …), k…)  ->  op(index(a, k…), index(b, k…), …)
+#
+# and both need to know WHICH operands to wrap: an array-valued one is gathered,
+# a genuinely scalar one (a literal, a scalar parameter) broadcasts and must be
+# left alone. `is_array_leaf(name) -> Bool` is the caller's own array-VARIABLE
+# test (an array state slot, a forcing buffer, a const array), which is the only
+# part that differs between the two sites.
+#
+# An expression is array-valued here when it is
+#
+#   * an array PRODUCER node — a `makearray`, or an `aggregate`/`arrayop` that
+#     keeps at least one symbolic output index (a SCALAR reduction, whose
+#     `output_idx` is empty, produces a scalar and must NOT be gathered); or
+#   * a variable leaf the caller recognizes as an array; or
+#   * an ELEMENTWISE combination (`_is_scalar_op`) that is array-valued by this
+#     same rule at any depth.
+#
+# The last clause is the point. The two sites used to test only the IMMEDIATE
+# operands, so `index(1 + cos(pi*zc), j)` — the shape an elementwise-defined
+# array observed (`f = 1 + cos(pi*zc)`) takes once
+# `_fold_elementwise_array_observeds` inlines it into a reader that gathers it,
+# `index(f, j)` — matched nothing: `1` is a literal and `cos(pi*zc)` is neither a
+# producer node nor a variable, so no operand was wrapped, the gather was
+# dropped, and the array leaf `zc` survived bare into `_compile` as
+# `E_TREEWALK_UNBOUND_VARIABLE: zc` (issue #175). Recursing through elementwise
+# ops sees `zc` under the `cos`, wraps `cos(pi*zc)` whole, and the re-resolution
+# of `index(cos(pi*zc), j)` pushes the gather down the same way until it lands on
+# the leaf as `1 + cos(pi*index(zc, j))`. Distribution is exact for an
+# elementwise op, so this is the same value the explicit gather spelling would
+# have produced.
+#
+# IDENTITY-MEMOIZED over `OpExpr` (the ESS-0hh convention): the folded body is a
+# structurally-shared DAG, and `any` over a shared subtree would otherwise be
+# re-walked once per path. One memo per push-down decision — `is_array_leaf` is
+# fixed within it.
+# A const-array registry entry that holds exactly ONE element is a SCALAR field,
+# not a gatherable array: `_resolve_indices(::VarExpr)` const-folds a bare
+# reference to it to its literal value (the RFC pure-io-data-loaders §4.3 0-D
+# loader field). It must therefore stay OUT of an index push-down's leaf test —
+# wrapping it would gather a 1-element array at the enclosing loop's subscript
+# and read out of range for every cell but the first. A size-1 INDEX SET is the
+# same object and the same answer: its only legal subscript is 1, which is what
+# the const-fold already returns.
+_is_scalar_const_field(v) = v isa AbstractArray && length(v) == 1
+
+function _index_pushdown_arrayish(e::ASTExpr, is_array_leaf,
+                                  memo::IdDict{OpExpr,Bool}=IdDict{OpExpr,Bool}())::Bool
+    if e isa VarExpr
+        return is_array_leaf((e::VarExpr).name)
+    elseif e isa OpExpr
+        o = e::OpExpr
+        cached = get(memo, o, nothing)
+        cached === nothing || return cached::Bool
+        r = _is_array_producer(o) ||
+            (_is_scalar_op(o.op) &&
+             any(a -> _index_pushdown_arrayish(a, is_array_leaf, memo), o.args))
+        memo[o] = r
+        return r
+    end
+    return false
+end
+
 # ---- Elementwise array-observed fold (WS4: readable PDE-leaf decomposition) ----
 # Fold every ARRAY-shaped observed whose (already-discretization-lowered) defining
 # equation RHS is an ELEMENTWISE expression — top-level op in
