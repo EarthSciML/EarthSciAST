@@ -1142,9 +1142,7 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             # said" stays distinguishable from an explicit ``false``
             # (esm-libraries-spec §4.7.1 step 5).
             require_match=(
-                bool(coupling_data["require_match"])
-                if "require_match" in coupling_data
-                else None
+                bool(coupling_data["require_match"]) if "require_match" in coupling_data else None
             ),
         )
 

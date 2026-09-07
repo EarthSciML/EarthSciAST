@@ -176,9 +176,7 @@ def test_flipping_the_systems_order_changes_nothing_observable():
             system, _ = _flatten_capturing(case)
         except Exception as exc:  # noqa: BLE001 - the class IS the outcome
             return (type(exc).__name__,)
-        return tuple(
-            (name, var.default) for name, var in system.state_variables.items()
-        )
+        return tuple((name, var.default) for name, var in system.state_variables.items())
 
     for left, right in (
         ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
