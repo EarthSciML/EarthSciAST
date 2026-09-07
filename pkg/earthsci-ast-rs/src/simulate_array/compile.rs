@@ -3428,10 +3428,7 @@ fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, St
 /// diagnostic: a named error, not a wrong number. One pass rather than one per
 /// hit also stops an H-hit model from being rebuilt H times.
 fn resolve_self_qualified_references(model: &mut Model, hits: &[(String, String)]) {
-    let map: HashMap<&str, &str> = hits
-        .iter()
-        .map(|(q, l)| (q.as_str(), l.as_str()))
-        .collect();
+    let map: HashMap<&str, &str> = hits.iter().map(|(q, l)| (q.as_str(), l.as_str())).collect();
     let mut rewrite = |expr: &mut Expr| {
         *expr = rewrite_self_qualified(expr, &map);
     };
@@ -3468,7 +3465,7 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             let narrowed: Option<HashMap<&str, &str>> =
                 hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
                     hits.iter()
-                        .filter(|(q, l)| !binds(q) && !binds(l))
+                        .filter(|&(q, l)| !binds(q) && !binds(l))
                         .map(|(q, l)| (*q, *l))
                         .collect()
                 });
@@ -3486,7 +3483,7 @@ fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
             }
             Expr::operator(out)
         }
-        _ => expr.clone(),
+        Expr::Number(_) | Expr::Integer(_) => expr.clone(),
     }
 }
 
