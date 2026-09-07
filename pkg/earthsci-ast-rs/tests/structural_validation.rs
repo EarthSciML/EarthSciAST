@@ -1306,3 +1306,127 @@ fn test_f6_positive_controls_stay_valid() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// esm-spec §4.9.1.1 — a DECLARATION may not spell a globally-scoped name.
+//
+// The independent variable and the §6.4 `_var` placeholder are implicitly
+// declared in every component's expression scope (§4.9.1) and are resolved BY
+// NAME ahead of the declaration maps — `ModelCtx::new` extends `defined_vars`
+// with exactly these two — so a declaration spelled with one of them is
+// unreachable: the implicit symbol shadows it, not the other way round.
+//
+// Issue #200. The reported document VALIDATED; a bare build then reported the
+// observed as having no defining expression, and a build with a subsystem
+// mounted handed every reader of `t` the simulation clock, so `log(t)` was
+// `-inf` at `t = 0` and every number downstream was finite and plausible.
+//
+// The sibling rule for an `aggregate` BINDER is `reserved_index_symbol`
+// (tests/reserved_index_symbol.rs); both follow the same reserved set.
+// ---------------------------------------------------------------------------
+
+/// Every `reserved_variable_name` finding of a document, as `(path, reserved_as)`.
+fn reserved_findings(fixture: &str) -> Vec<(String, String)> {
+    let esm_file = load_string(fixture).expect("fixture must load: the rule is a TYPED check");
+    let mut out: Vec<(String, String)> = validate(&esm_file)
+        .structural_errors
+        .into_iter()
+        .filter(|e| matches!(e.code, StructuralErrorCode::ReservedVariableName))
+        .map(|e| {
+            (
+                e.path,
+                e.details["reserved_as"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The reported shape: an OBSERVED unknown named `t`.
+#[test]
+fn an_observed_named_after_the_independent_variable_is_rejected() {
+    let fixture = include_str!("../../../tests/invalid/reserved_variable_name_observed.esm");
+    assert_eq!(
+        reserved_findings(fixture),
+        vec![(
+            "/models/FuelMoisture/variables/t".to_string(),
+            "independent_variable".to_string()
+        )]
+    );
+    assert!(
+        !validate(&load_string(fixture).unwrap()).is_valid,
+        "a document declaring the independent variable is invalid"
+    );
+}
+
+/// Both globally-scoped names, in a model's `variables`.
+#[test]
+fn both_reserved_names_are_rejected_as_declarations() {
+    assert_eq!(
+        reserved_findings(include_str!(
+            "../../../tests/invalid/reserved_variable_name_parameter.esm"
+        )),
+        vec![
+            (
+                "/models/Ingest/variables/_var".to_string(),
+                "operator_placeholder".to_string()
+            ),
+            (
+                "/models/Ingest/variables/t".to_string(),
+                "independent_variable".to_string()
+            ),
+        ]
+    );
+}
+
+/// A species and a reaction parameter become symbols of the derived ODE system
+/// exactly as a `variables` entry does (§7.4), so both maps are covered.
+#[test]
+fn the_reaction_declaration_maps_are_covered() {
+    assert_eq!(
+        reserved_findings(include_str!(
+            "../../../tests/invalid/reserved_variable_name_species.esm"
+        ))
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect::<Vec<_>>(),
+        vec![
+            "/reaction_systems/RateConstants/parameters/t".to_string(),
+            "/reaction_systems/TracerDecay/species/t".to_string(),
+        ]
+    );
+}
+
+/// The reserved set FOLLOWS `domain.independent_variable`, exactly as
+/// `reserved_index_symbol` does. Renaming it moves the rejection onto the new
+/// name and FREES `t`, so a binding that hard-codes the literal `"t"` fails one
+/// of these two halves.
+#[test]
+fn the_rule_follows_the_documents_independent_variable() {
+    assert_eq!(
+        reserved_findings(include_str!(
+            "../../../tests/invalid/reserved_variable_name_renamed_independent.esm"
+        )),
+        vec![(
+            "/models/Renamed/variables/s".to_string(),
+            "independent_variable".to_string()
+        )]
+    );
+
+    let freed = include_str!("../../../tests/valid/independent_variable_renamed.esm");
+    assert!(reserved_findings(freed).is_empty());
+    assert!(
+        validate(&load_string(freed).unwrap()).is_valid,
+        "renaming the independent variable frees `t` for an ordinary declaration"
+    );
+}
+
+/// Spatial coordinate names are NOT reserved: `x` is a coordinate only in a
+/// coordinate position (§11.4), and this fixture declares it as a position.
+#[test]
+fn spatial_coordinate_names_are_not_reserved() {
+    let fixture = include_str!("../../../tests/valid/units_dimensional_analysis.esm");
+    assert!(reserved_findings(fixture).is_empty());
+    assert!(validate(&load_string(fixture).unwrap()).is_valid);
+}

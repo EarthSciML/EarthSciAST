@@ -901,6 +901,157 @@ class TestUnitFindingCodesAreDistinct:
         assert "unit_parse_error" not in codes, codes
 
 
+class TestReservedDeclarationNames:
+    """esm-spec §4.9.1.1 — a DECLARATION may not spell a globally-scoped name.
+
+    The independent variable and the §6.4 ``_var`` placeholder are in scope in
+    every component and are resolved BY NAME, ahead of the declaration maps, so
+    a declaration spelled with one of them is unreachable: the implicit symbol
+    shadows it, not the other way round. Issue #200 — a fuel time-lag constant
+    declared as ``t`` validated clean, then silently became the simulation
+    clock, so ``log(t)`` was ``-inf`` at ``t = 0``.
+    """
+
+    @staticmethod
+    def _reserved(result):
+        return [e for e in result.structural_errors if e.code == "reserved_variable_name"]
+
+    def test_observed_named_after_the_independent_variable_is_rejected(self):
+        """The reported shape: an unknown named ``t`` with a defining equation."""
+        content = json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "FuelMoisture"},
+                "models": {
+                    "P": {
+                        "variables": {
+                            "m": {"type": "unknown", "units": "1", "default": 0.1},
+                            "t": {"type": "unknown", "units": "s"},
+                            "tau": {"type": "parameter", "units": "s", "default": 3600.0},
+                        },
+                        "equations": [
+                            {
+                                "lhs": {"op": "D", "args": ["m"], "wrt": "t"},
+                                "rhs": {"op": "/", "args": [{"op": "-", "args": [0.3, "m"]}, "t"]},
+                            },
+                            {"lhs": "t", "rhs": "tau"},
+                        ],
+                    }
+                },
+            }
+        )
+        result = validate_text(content)
+        assert not result.is_valid
+        errors = self._reserved(result)
+        assert len(errors) == 1, [(e.code, e.path) for e in result.structural_errors]
+        assert errors[0].path == "/models/P/variables/t"
+        assert errors[0].details == {"name": "t", "reserved_as": "independent_variable"}
+
+    def test_operator_placeholder_declaration_is_rejected(self):
+        content = json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "PlaceholderDeclared"},
+                "models": {
+                    "M": {
+                        "variables": {
+                            "u": {"type": "unknown", "units": "1", "default": 0.0},
+                            "_var": {"type": "parameter", "units": "1", "default": 1.0},
+                        },
+                        "equations": [{"lhs": {"op": "D", "args": ["u"], "wrt": "t"}, "rhs": 0.0}],
+                    }
+                },
+            }
+        )
+        errors = self._reserved(validate_text(content))
+        assert [e.path for e in errors] == ["/models/M/variables/_var"]
+        assert errors[0].details["reserved_as"] == "operator_placeholder"
+
+    def test_reaction_species_and_parameters_are_covered(self):
+        """A species and a reaction parameter become symbols of the derived ODE
+        system exactly as a ``variables`` entry does (esm-spec §7.4)."""
+        content = json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "ReactionNamedT"},
+                "reaction_systems": {
+                    "R": {
+                        "species": {
+                            "t": {"units": "mol/mol", "default": 1e-9},
+                            "P": {"units": "mol/mol", "default": 0.0},
+                        },
+                        "parameters": {"t": {"units": "K", "default": 298.15}},
+                        "reactions": [
+                            {
+                                "id": "R1",
+                                "substrates": [{"species": "t", "stoichiometry": 1}],
+                                "products": [{"species": "P", "stoichiometry": 1}],
+                                "rate": 1.0,
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+        paths = sorted(e.path for e in self._reserved(validate_text(content)))
+        assert paths == [
+            "/reaction_systems/R/parameters/t",
+            "/reaction_systems/R/species/t",
+        ]
+
+    def test_the_rule_follows_domain_independent_variable(self):
+        """Renaming the independent variable MOVES the rejection and FREES ``t``.
+
+        A binding that hard-codes the literal ``"t"`` fails one half or the
+        other. Same contract §4.3.1's ``reserved_index_symbol`` follows.
+        """
+
+        def doc(declared):
+            return json.dumps(
+                {
+                    "esm": "1.0.0",
+                    "metadata": {"name": "Renamed"},
+                    "domain": {"independent_variable": "s"},
+                    "models": {
+                        "M": {
+                            "system_kind": "nonlinear",
+                            "variables": {
+                                "y": {"type": "unknown", "units": "1"},
+                                declared: {"type": "parameter", "units": "K", "default": 288.0},
+                            },
+                            "equations": [{"lhs": "y", "rhs": 1.0}],
+                        }
+                    },
+                }
+            )
+
+        renamed = self._reserved(validate_text(doc("s")))
+        assert [e.path for e in renamed] == ["/models/M/variables/s"]
+        assert self._reserved(validate_text(doc("t"))) == []
+
+    def test_spatial_coordinate_names_are_not_reserved(self):
+        """``x`` is a coordinate only in a coordinate position (§11.4);
+        ``tests/valid/units_dimensional_analysis.esm`` declares it as a
+        position."""
+        content = json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "CoordinateNamedVariable"},
+                "models": {
+                    "M": {
+                        "variables": {
+                            "x": {"type": "unknown", "units": "m", "default": 0.0},
+                            "v": {"type": "parameter", "units": "m/s", "default": 1.0},
+                        },
+                        "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "v"}],
+                    }
+                },
+            }
+        )
+        result = validate_text(content)
+        assert result.is_valid, [(e.code, e.path) for e in result.structural_errors]
+
+
 class TestReferenceIntegrityEveryExpressionBearingField:
     """esm-spec §4.9.5 / CONFORMANCE_SPEC §7.1.3 row (h).
 

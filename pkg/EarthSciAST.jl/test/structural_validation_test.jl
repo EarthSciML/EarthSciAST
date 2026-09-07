@@ -773,4 +773,78 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
     end
 
+    # esm-spec §4.9.1.1 — a DECLARATION may not spell a globally-scoped name.
+    #
+    # The independent variable and the §6.4 `_var` placeholder are implicitly
+    # declared in every component's expression scope (§4.9.1) and are resolved BY
+    # NAME ahead of the declaration maps, so a declaration spelled with one of
+    # them is unreachable: the implicit symbol shadows it, not the other way
+    # round. Issue #200 — a fuel time-lag constant declared as `t` validated
+    # clean, then silently became the simulation clock (`log(t) = -inf` at t=0).
+    @testset "reserved_variable_name (§4.9.1.1)" begin
+        _reserved(result) = filter(e -> e.error_type == "reserved_variable_name",
+                                   result.structural_errors)
+
+        @testset "an observed named after the independent variable is rejected" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                    "reserved_variable_name_observed.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test !result.is_valid
+                errs = _reserved(result)
+                @test length(errs) == 1
+                @test errs[1].path == "/models/FuelMoisture/variables/t"
+                @test errs[1].details["reserved_as"] == "independent_variable"
+            end
+        end
+
+        @testset "both globally-scoped names, and both reaction maps" begin
+            for (fixture, want) in (
+                    ("reserved_variable_name_parameter.esm",
+                     ["/models/Ingest/variables/_var", "/models/Ingest/variables/t"]),
+                    ("reserved_variable_name_species.esm",
+                     ["/reaction_systems/RateConstants/parameters/t",
+                      "/reaction_systems/TracerDecay/species/t"]))
+                fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid", fixture)
+                if _require_fixture(fixture_path)
+                    result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                    @test !result.is_valid
+                    @test sort(map(e -> e.path, _reserved(result))) == want
+                end
+            end
+        end
+
+        # The reserved set FOLLOWS `domain.independent_variable`, exactly as
+        # §4.3.1's `reserved_index_symbol` does. A binding that hard-codes the
+        # literal "t" fails one of these two halves.
+        @testset "the rule follows domain.independent_variable" begin
+            invalid_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                    "reserved_variable_name_renamed_independent.esm")
+            valid_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                                  "independent_variable_renamed.esm")
+            if _require_fixture(invalid_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(invalid_path))
+                @test map(e -> e.path, _reserved(result)) == ["/models/Renamed/variables/s"]
+            end
+            if _require_fixture(valid_path)
+                # The same rename FREES `t`, which is then an ordinary name.
+                result = EarthSciAST.validate(EarthSciAST.load_path(valid_path))
+                @test result.is_valid
+            end
+        end
+
+        # `x`/`y`/`lon` are coordinates only in a coordinate POSITION (§11.4), so
+        # a variable may be named after one — tests/valid/units_dimensional_analysis.esm
+        # declares `x` as a position.
+        @testset "spatial coordinate names are not reserved" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+                                    "units_dimensional_analysis.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test isempty(_reserved(result))
+                @test result.is_valid
+            end
+        end
+    end
+
 end
