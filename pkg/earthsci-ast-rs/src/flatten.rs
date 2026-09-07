@@ -3668,8 +3668,10 @@ mod tests {
         let rhs = &flat
             .equations
             .iter()
-            .find(|e| matches!(&e.lhs, Expr::Operator(n) if n.op == "D"
-                && n.args.first() == Some(&Expr::Variable("Wrap.inner.x".to_string()))))
+            .find(|e| {
+                matches!(&e.lhs, Expr::Operator(n) if n.op == "D"
+                && n.args.first() == Some(&Expr::Variable("Wrap.inner.x".to_string())))
+            })
             .expect("the nested ODE survives")
             .rhs;
         assert_eq!(*rhs, Expr::Variable("Src.T".to_string()));
