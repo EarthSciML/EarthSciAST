@@ -345,6 +345,23 @@ REFUSALS: list[dict[str, str]] = [
         ),
     },
     {
+        "fixture": "coupling/coupling_resolution_edge_cases.esm",
+        "error": "VariableMapUnresolvedEndpointError",
+        "reason": (
+            "EDGE CASE 10 of this catalogue maps `SingleVariableSystem.x` onto "
+            "`EmptySystem.nonexistent_param`, which the document declares nowhere. Every binding "
+            "used to flatten it CLEANLY with the entry silently dropped: the substitution runs "
+            "over a name nothing references and the promotion pops a key that is not there, so "
+            "the flattened system is indistinguishable from one where the coupling applied and "
+            "happened to have no effect. That is the failure mode issue #198 item 1 reports from "
+            "the other end -- a target that keeps its declared default, and (when it is the "
+            "SOURCE that resolves to nothing) consumers rewritten to a name no table binds, which "
+            "reads NaN at run time rather than raising. Same placement rule as "
+            "`couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at "
+            "FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
+        ),
+    },
+    {
         "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",
         "error": "ExpressionTemplateError",
         "reason": (

@@ -4251,6 +4251,11 @@
       "reason": "a `couple` connector applies `multiplicative` to `Surface.resistance`, a constant parameter with no `D(...)` tendency. esm-spec §10.3 and libraries §4.7.2 both define the transform against the target's EXISTING ODE RHS, so there is nothing to multiply. Four of five bindings used to drop the connector equation SILENTLY -- the document declared a coupling and the flattened system carried no trace of it. This case exists so `couple_multiplicative_no_tendency` cannot rot the way `operator_compose` did: every fixture that used the idiom was migrated to the §10.4 `variable_map` spelling, which left the diagnostic with no fixture at all. It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and structurally valid -- `tests/invalid/` means `validate()` must reject, and this document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
     },
     {
+      "fixture": "coupling/coupling_resolution_edge_cases.esm",
+      "error": "VariableMapUnresolvedEndpointError",
+      "reason": "EDGE CASE 10 of this catalogue maps `SingleVariableSystem.x` onto `EmptySystem.nonexistent_param`, which the document declares nowhere. Every binding used to flatten it CLEANLY with the entry silently dropped: the substitution runs over a name nothing references and the promotion pops a key that is not there, so the flattened system is indistinguishable from one where the coupling applied and happened to have no effect. That is the failure mode issue #198 item 1 reports from the other end -- a target that keeps its declared default, and (when it is the SOURCE that resolves to nothing) consumers rewritten to a name no table binds, which reads NaN at run time rather than raising. Same placement rule as `couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
+    },
+    {
       "fixture": "conformance/expression_templates/nonterminating_rewrite/fixture.esm",
       "error": "ExpressionTemplateError",
       "reason": "rejected at LOAD with rewrite_rule_nonterminating (esm-spec §9.6.3), so it never reaches step 4. Recorded so a binding that reaches flatten with this document knows its rewrite fixpoint is wrong, not its flatten."

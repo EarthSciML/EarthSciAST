@@ -89,6 +89,33 @@ class CoupleMultiplicativeNoTendencyError(FlattenError):
     code = "couple_multiplicative_no_tendency"
 
 
+class VariableMapUnresolvedEndpointError(FlattenError):
+    """A ``variable_map`` endpoint names nothing the flattened system carries.
+
+    esm-spec §4.6: a scoped reference walks EVERY dot-separated segment, so a
+    subsystem endpoint is spelled ``<Model>.<Subsystem>.<name>``. §10.4: the
+    entry binds ``to`` to ``from``, which presupposes that both resolve.
+
+    Both halves used to fail SILENTLY, and each fails differently. A ``to``
+    that resolves to no parameter is simply never promoted: the document
+    declares a coupling, the target keeps its declared default, and nothing
+    downstream can tell "applied" from "ignored". A ``from`` that resolves to
+    nothing is worse -- the substitution still runs, so every consumer of
+    ``to`` is rewritten to a name no table binds and the run yields NaN rather
+    than a diagnostic. Both are reported in issue #198 item 1.
+
+    Same reasoning as :class:`CoupleMultiplicativeNoTendencyError`: a coupling
+    mis-specification must not have the one outcome that looks like success.
+
+    Deliberately NOT re-exported from the package root and given no stable
+    ``code``: `api-surface.json` is the cross-binding record of what every
+    binding exports ("a symbol absent from this manifest MUST NOT be
+    exported"), and adding a name there is a five-binding contract change.
+    Callers catch :class:`FlattenError`, which IS exported, or import this
+    class from ``earthsci_ast.flatten``.
+    """
+
+
 class DimensionPromotionError(FlattenError):
     """A variable or equation cannot be promoted given the available Interfaces.
 
@@ -1797,6 +1824,54 @@ def _collect_components(
     return components, source_systems
 
 
+def _check_variable_map_endpoints(
+    esm_file: EsmFile,
+    components: OrderedDict[str, _ComponentSystem],
+    coupling_entries: list[CouplingEntry],
+) -> None:
+    """Preflight: every ``variable_map`` endpoint must name a state, parameter
+    or observed the collected system carries, under its FULL dot path.
+
+    This is the resolution half of the entry, and until it existed both halves
+    failed silently: :func:`_apply_variable_map` substitutes ``to`` -> ``from``
+    whether or not either name binds, and its promotion step ``pop``s ``to``
+    with a ``None`` default that was then discarded. An endpoint resolving to
+    nothing therefore produced a flattened system indistinguishable from one
+    where the coupling had been applied and had simply had no effect.
+
+    EXEMPTION: a ``from`` whose owning system is a top-level ``data_sources``
+    key. Such a producer is served through the runtime forcing seam rather than
+    as a declared variable, so it is legitimately absent from the tables (see
+    :func:`_apply_variable_map`, which records it as a loaded producer).
+
+    Deliberately NOT checked: whether a promoting transform's ``to`` is a
+    PARAMETER rather than an unknown. ``tests/valid/scoped_refs_coupling.esm``
+    maps ``param_to_var`` onto a declared unknown, and tightening that is a
+    separate question from whether the endpoint resolves at all.
+    """
+    declared: set[str] = set()
+    for comp in components.values():
+        declared |= set(comp.state_vars) | set(comp.parameters) | set(comp.observed)
+    loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
+    for entry in coupling_entries:
+        if not isinstance(entry, VariableMapCoupling):
+            continue
+        from_is_loaded = entry.from_var.split(".", 1)[0] in loader_names
+        for side, endpoint in (("from", entry.from_var), ("to", entry.to_var)):
+            if not endpoint or endpoint in declared:
+                continue
+            if side == "from" and from_is_loaded:
+                continue
+            raise VariableMapUnresolvedEndpointError(
+                f"variable_map({entry.from_var} -> {entry.to_var}): the "
+                f"'{side}' endpoint '{endpoint}' resolves to no variable, "
+                f"parameter or observed in the flattened system (esm-spec "
+                f"§4.6, §10.4). A scoped reference walks EVERY dot-separated "
+                f"segment, so a subsystem endpoint is spelled "
+                f"'<Model>.<Subsystem>.<name>'."
+            )
+
+
 def _apply_couplings(
     esm_file: EsmFile,
     components: OrderedDict[str, _ComponentSystem],
@@ -1812,6 +1887,11 @@ def _apply_couplings(
     under us. Provenance (operator applies, callbacks, coupling-rule
     descriptions) is recorded into ``metadata``.
     """
+    # Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
+    # `translate` merge (§10.2) legitimately consumes one of two spellings of a
+    # quantity, so checking after it ran would flag a well-formed endpoint.
+    _check_variable_map_endpoints(esm_file, components, coupling_entries)
+
     operator_compose_entries: list[OperatorComposeCoupling] = []
     couple_entries: list[CouplingCouple] = []
     var_map_entries: list[VariableMapCoupling] = []
