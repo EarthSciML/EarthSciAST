@@ -5,8 +5,10 @@ the flattened system is lowered to a lambdified SymPy RHS (via
 :func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated with
 :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and observed
 bindings are recovered along the output trajectory. This is the pathway used
-when the flattened system contains no array ops, no data-loader fields, and no
-top-level provider injections. It also owns :func:`_create_event_functions`,
+when the flattened system is scalar by BOTH of ``_choose_pathway``'s measures —
+no variable declares a resolvable ``shape`` (esm-spec §6.3) and no equation
+carries an array op — and has no data-loader fields and no top-level provider
+injections. It also owns :func:`_create_event_functions`,
 the scalar continuous-event helper that builds SciPy root-finding callbacks
 from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
 this module's API and :func:`earthsci_ast.problem.solve` routes to
@@ -310,7 +312,8 @@ def _simulate_scalar(
 
     See :func:`earthsci_ast.problem.esm_problem` / :func:`earthsci_ast.problem.solve`
     for the full argument contract; this is the pathway a EsmProblem routes to when
-    its system has no array ops, loader fields, or provider injections.
+    its system has no declared (resolvable) shapes, no array ops, no loader
+    fields, and no provider injections.
 
     ``prebuilt`` is the :class:`_ScalarRhsBuild` the EsmProblem compiled at
     construction; ``None`` compiles here (the SymPy lambdify is cached on the
