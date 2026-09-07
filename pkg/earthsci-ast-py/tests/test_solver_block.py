@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import earthsci_ast as esm
+from earthsci_ast.esm_types import EsmFile
 from earthsci_ast.serialize import to_json
 from earthsci_ast.solver import (
     DEFAULT_ABSTOL,
@@ -83,3 +84,60 @@ def test_stiffness_selects_the_integrator_but_only_for_high(tmp_path: Path) -> N
     assert _method_for(None, _load(no_block, tmp_path)) == DEFAULT_METHOD
     # An explicit caller argument still wins (§2.2.2 level 1).
     assert _method_for("LSODA", high) == "LSODA"
+
+
+def test_the_block_reaches_the_problem_on_an_ordinary_build(tmp_path: Path) -> None:
+    """Regression: ``solve()`` read the block off ``prob.doc``, which is populated
+    only on the ``pushdown_rewrite`` path — so the §2.2.2 chain was dead code for
+    every ordinary problem and the document's tolerances were silently ignored.
+
+    The block is now captured onto the EsmProblem at construction, from the TYPED
+    file, which every input carrier except a bare ``FlattenedSystem`` produces.
+    """
+    from earthsci_ast.problem import esm_problem, remake
+
+    f = _load(BASE, tmp_path)
+    prob = esm_problem(f, tspan=(0.0, 4.0))
+    assert prob.doc is None, "the ordinary path records no raw document"
+    assert prob.solver is not None
+    assert (prob.solver.abstol, prob.solver.reltol) == (1e-8, 1e-6)
+    assert resolve_tolerances(prob.solver) == (1e-8, 1e-6)
+
+    # A remade problem is the same document, so it keeps the block.
+    assert remake(prob, tspan=(0.0, 2.0)).solver is prob.solver
+
+    # And an empty block still normalizes away on that carrier.
+    empty = esm_problem(_load({**BASE, "solver": {}}, tmp_path), tspan=(0.0, 4.0))
+    assert empty.solver is None
+
+
+def test_inline_test_integration_tolerances_come_from_the_document(tmp_path: Path) -> None:
+    """§2.2.2: the runner's own TEST_* defaults sit at LEVEL 3, so a document
+    that declares ``solver.reltol`` displaces them; each field falls through
+    independently, and an explicit caller argument still wins.
+
+    ``or`` would have swallowed a declared ``0.0`` — a value the author SET —
+    which is why the chain tests ``is not None``.
+    """
+    from earthsci_ast.esm_types import Solver
+    from earthsci_ast.pde_inline_tests import (
+        TEST_ABSTOL,
+        TEST_RELTOL,
+        _integration_tolerances,
+    )
+
+    doc = _load(BASE, tmp_path)
+    assert _integration_tolerances(doc, None, None) == (1e-6, 1e-8)
+    assert _integration_tolerances(doc, 1e-13, 1e-15) == (1e-13, 1e-15)
+
+    only_reltol = _load({**BASE, "solver": {"reltol": 1e-9}}, tmp_path)
+    assert _integration_tolerances(only_reltol, None, None) == (1e-9, TEST_ABSTOL)
+
+    no_block = _load({k: v for k, v in BASE.items() if k != "solver"}, tmp_path)
+    assert _integration_tolerances(no_block, None, None) == (TEST_RELTOL, TEST_ABSTOL)
+
+    # A programmatically built file is never re-validated, so a declared 0.0
+    # reaches here. It must survive as the value it is, not be swapped for the
+    # runner default by a truthiness test.
+    zero = EsmFile(version="1.1.0", metadata=doc.metadata, solver=Solver(reltol=0.0))
+    assert _integration_tolerances(zero, None, None) == (0.0, TEST_ABSTOL)

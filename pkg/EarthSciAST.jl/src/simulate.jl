@@ -97,8 +97,16 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
     # it into the run doc below so `derive_output_meta` can emit CF coordinates.
     run_coordinates = nothing
+    # Same for the document-scoped `solver` block (esm-spec §2.2): it rides on
+    # `EsmFile`, not on `FlattenedSystem`, so `flattened_to_esm` cannot know
+    # about it. Captured here and re-attached below, which is what makes
+    # `_document_solver` — and therefore the whole §2.2.2 chain — reachable at
+    # all; without it the run doc never carries the key and the document's
+    # declared tolerances were silently dropped.
+    run_solver = nothing
     if input isa EsmFile
         run_coordinates = input.coordinates
+        run_solver = input.solver
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below. Under
@@ -135,6 +143,13 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # like `index_sets`, so it drops straight onto the run doc.
         run_coordinates !== nothing && !isempty(run_coordinates) &&
             (doc["coordinates"] = run_coordinates)
+        # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
+        # shape, which is what `_document_solver` coerces back. Document-scoped
+        # and un-namespaced, like `coordinates`.
+        if run_solver !== nothing
+            block = serialize_solver(run_solver)
+            isempty(block) || (doc["solver"] = block)
+        end
         return doc
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *

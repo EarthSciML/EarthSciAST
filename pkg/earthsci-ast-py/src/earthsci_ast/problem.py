@@ -55,7 +55,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import EsmFile
-from .solver import resolve_tolerances
+from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -123,18 +123,11 @@ __all__ = [
 #: (API_SPEC §4); this binding's ecosystem has no first-class algorithm object,
 #: so a SciPy method NAME is accepted, which §2.5.3 explicitly permits.
 DEFAULT_ALG = "LSODA"
-#: Canonical cross-binding tolerance defaults (API_SPEC §5.8): the same knobs
-#: under the same names produce comparable trajectories in Julia, Python and Rust.
-#:
-#: These are Julia's values, and they are LOOSER than what this binding used to
-#: default to (1e-10 / 1e-14). A default is what a document gets when its author
-#: has expressed no opinion about accuracy, so it is the cheapest of the three
-#: rather than the most accurate. A caller who needs tighter integration passes
-#: `reltol=` / `abstol=` -- and a TEST that asserts trajectory accuracy must do
-#: so, rather than lean on the default and thereby assert something about the
-#: library's default instead of about the model.
-DEFAULT_RELTOL = 1e-4
-DEFAULT_ABSTOL = 1e-6
+# `DEFAULT_RELTOL` / `DEFAULT_ABSTOL` are imported at the top of this module from
+# `solver.py`, which owns them because it also owns the §2.2.2 chain they sit at
+# the bottom of. A second copy here would let `solve()`'s signature and the
+# bottom of that chain drift apart. They stay importable from this module under
+# their historical names.
 
 
 def _discover_loader_extents(
@@ -336,6 +329,13 @@ class EsmProblem:
     providers: dict[str, Any] | None = None
     gated_provider_keys: list[str] = field(default_factory=list)
     doc: dict | None = None  # the (possibly rewritten) raw document
+    #: The document's §2.2 `solver` block, captured at construction. Kept as its
+    #: OWN field rather than read back out of :attr:`doc`, because ``doc`` is
+    #: only populated on the pushdown-rewrite path — reading the block from
+    #: there made the §2.2.2 chain dead code for every ordinary problem. ``None``
+    #: when the document declares no block, or when the problem was built from a
+    #: bare :class:`FlattenedSystem` (which carries no document at all).
+    solver: Any = None
     model_name: str | None = None
     metaparameters: dict[str, int] = field(default_factory=dict)
     sample_time: float = 0.0
@@ -660,6 +660,9 @@ def esm_problem(
         providers=dict(providers) if providers else None,
         gated_provider_keys=sorted(gated),
         doc=doc_for_record,
+        # esm-spec §2.2: the document's own solver hints, taken from the TYPED
+        # file, which every input carrier except a bare FlattenedSystem produces.
+        solver=getattr(file, "solver", None),
         model_name=model_name,
         metaparameters=dict(closed_metaparameters),
         sample_time=t0,
@@ -768,16 +771,13 @@ def solve(
         exception, so interactive workflows can branch on it; a dimensionality
         violation still raises.
     """
-    # esm-spec §2.2.2: caller > document `solver` block > binding default. Read
-    # from the raw document the EsmProblem carries, so the order holds however
-    # the problem was built.
-    abstol, reltol = resolve_tolerances(
-        (prob.doc or {}).get("solver") if isinstance(prob, EsmProblem) else None,
-        abstol=abstol,
-        reltol=reltol,
-    )
-
     if isinstance(prob, EnsembleProblem):
+        # `abstol` / `reltol` are forwarded UNRESOLVED — still `None` when the
+        # caller named nothing. Resolving here would turn "caller said nothing"
+        # into an explicit binding default at level 1 of the §2.2.2 chain, and
+        # each trajectory's own document could then never win. The recursive
+        # `solve()` on each member problem runs the chain against that member's
+        # document.
         return prob.solve(
             trajectories=trajectories,
             alg=alg,
@@ -787,6 +787,12 @@ def solve(
             callback=callback,
             maxiters=maxiters,
         )
+
+    # esm-spec §2.2.2: caller > document `solver` block > binding default. Read
+    # from the typed block the EsmProblem captured at construction, so the order
+    # holds however the problem was built (`prob.doc` is populated only on the
+    # pushdown-rewrite path).
+    abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
     if not SCIPY_AVAILABLE:
         return _failure_result(_scipy_missing_message("solve"))
 
@@ -989,6 +995,7 @@ def remake(
         providers=prob.providers,
         gated_provider_keys=list(prob.gated_provider_keys),
         doc=prob.doc,
+        solver=prob.solver,
         model_name=prob.model_name,
         metaparameters=dict(prob.metaparameters),
         sample_time=prob.sample_time,

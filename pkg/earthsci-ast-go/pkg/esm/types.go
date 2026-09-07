@@ -1179,8 +1179,11 @@ type ESMFile struct {
 	// hint the document knows about itself. Purely additive — presence changes
 	// no equations, no classification and no flattened system — which is why it
 	// is `omitempty`: materializing `"solver": {}` on every document without one
-	// would be noise, and an empty block is rejected by the schema anyway
-	// (minProperties 1), since it would be a second spelling of absence.
+	// would be noise. An empty block is LEGAL in the schema (§2.2) and means
+	// exactly what absence means, so `normalizeSolver` maps it to nil at decode
+	// — `omitempty` on a POINTER tests nil only, so without that a decoded
+	// `&Solver{}` would re-emit as `"solver": {}` while Python and Julia dropped
+	// it.
 	//
 	// Named SolverHints rather than Solver so the FIELD does not collide with
 	// the Solver TYPE in this package.

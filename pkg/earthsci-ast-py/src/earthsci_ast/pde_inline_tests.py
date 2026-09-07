@@ -136,6 +136,47 @@ def _method_for(method: str | None, file: EsmFile) -> str:
         return STIFF_METHOD
     return DEFAULT_METHOD
 
+
+def _integration_tolerances(
+    file: EsmFile, rtol: float | None, atol: float | None
+) -> tuple[float, float]:
+    """The INTEGRATION tolerances a run of ``file`` solves at (esm-spec §2.2.2).
+
+    Most-specific first:
+
+    1. An explicit ``rtol`` / ``atol`` from the caller — wins outright.
+    2. Otherwise this document's ``solver.reltol`` / ``solver.abstol``.
+    3. Otherwise this runner's :data:`TEST_RELTOL` / :data:`TEST_ABSTOL`.
+
+    The runner values sit at the BOTTOM of the chain — they are binding
+    defaults, not a caller's opinion — so a stiff document can ask for its own
+    integration accuracy without every caller naming it. They are still what an
+    assertion-bearing test gets by default, which is the property the comment on
+    ``TEST_RELTOL`` is about. The two resolve INDEPENDENTLY, so a document
+    declaring only ``reltol`` leaves ``atol`` on the runner default.
+
+    ``is not None``, never truthiness: ``0.0`` is a value the document SET, and
+    ``or`` would silently swap it for the runner default instead of letting the
+    integrator refuse it. The schema forbids a non-positive tolerance, but this
+    takes an ``EsmFile`` a caller may have built in memory and never re-validates
+    it.
+
+    Not :func:`~earthsci_ast.solver.resolve_tolerances` because that function's
+    level 3 is the ``solve()`` binding defaults; only the bottom of the chain
+    differs.
+
+    These are INTEGRATION tolerances. The tolerance each assertion is COMPARED
+    at is resolved separately (§6.6.4) and is untouched here.
+    """
+    solver = getattr(file, "solver", None)
+    doc_reltol = getattr(solver, "reltol", None)
+    doc_abstol = getattr(solver, "abstol", None)
+    return (
+        rtol if rtol is not None else (doc_reltol if doc_reltol is not None else TEST_RELTOL),
+        atol if atol is not None else (doc_abstol if doc_abstol is not None else TEST_ABSTOL),
+    )
+
+
 # Historical private spellings, kept so existing call sites keep working.
 _DEFAULT_SOLVER_RTOL = TEST_RELTOL
 _DEFAULT_SOLVER_ATOL = TEST_ABSTOL
@@ -655,13 +696,7 @@ def simulate_states(
     #
     # Note this is the INTEGRATION tolerance. The tolerance each assertion is
     # COMPARED at is resolved separately (§6.6.4) and is untouched here.
-    doc_solver = getattr(file, "solver", None)
-    eff_rtol = rtol if rtol is not None else (
-        getattr(doc_solver, "reltol", None) or TEST_RELTOL
-    )
-    eff_atol = atol if atol is not None else (
-        getattr(doc_solver, "abstol", None) or TEST_ABSTOL
-    )
+    eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
     result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")

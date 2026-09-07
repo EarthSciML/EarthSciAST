@@ -391,6 +391,15 @@ pub struct EsmProblem {
     pub(crate) inspect: bool,
     /// Callbacks declared on the EsmProblem (§2.5.4).
     pub(crate) callbacks: CallbackSet,
+    /// The document's §2.2 `solver` block, captured at construction.
+    ///
+    /// Its OWN field rather than a read-back out of `doc`, because `doc` is
+    /// `JsonValue::Null` whenever the problem was built from a typed
+    /// [`EsmFile`] and the build pipeline was not requested — which made the
+    /// §2.2.2 chain dead on exactly the paths a library caller uses. `None` when
+    /// the document declares no block, or when the problem was built from a bare
+    /// [`FlattenedSystem`], which carries no document at all.
+    pub(crate) solver: Option<crate::types::Solver>,
     /// Bound run-time providers, already CONST-materialized.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) refresh: Option<std::cell::RefCell<crate::provider::RefreshExecutor>>,
@@ -416,6 +425,14 @@ impl std::fmt::Debug for EsmProblem {
 }
 
 impl EsmProblem {
+    /// The document's §2.2 `solver` block, or `None` when it declares none.
+    ///
+    /// The middle level of the esm-spec §2.2.2 tolerance chain, captured at
+    /// construction so it holds however the problem was built.
+    pub fn solver(&self) -> Option<&crate::types::Solver> {
+        self.solver.as_ref()
+    }
+
     /// The integration interval.
     pub fn tspan(&self) -> (f64, f64) {
         self.tspan
@@ -992,6 +1009,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
 
     Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
+        solver: prob.solver.clone(),
         model_name: prob.model_name.clone(),
         precision: prob.precision.clone(),
         tspan,
@@ -1325,8 +1343,18 @@ pub fn esm_problem<'a>(
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
 
+    // esm-spec §2.2: the document's own solver hints. Read from whichever
+    // carrier survived to here — the raw JSON when there is one, else the typed
+    // file — so the §2.2.2 chain holds however the problem was built.
+    let doc_solver = match (owned_json.as_ref(), owned_file.as_ref()) {
+        (Some(raw), _) => document_solver(raw),
+        (None, Some(file)) => crate::solver::normalize_empty(file.solver.clone()),
+        (None, None) => None,
+    };
+
     let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
+        solver: doc_solver,
         model_name,
         precision: precision::Env::capture(),
         tspan,
@@ -1816,11 +1844,7 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // default. Resolved once here, at the single point where the run's options
     // and the document meet, so every backend below sees concrete tolerances
     // and none of them has to know about the chain.
-    let (abstol, reltol) = crate::resolve_tolerances(
-        document_solver(&prob.doc).as_ref(),
-        opts.abstol,
-        opts.reltol,
-    );
+    let (abstol, reltol) = crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
 
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
@@ -1845,14 +1869,18 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     }
 }
 
-/// The document's §2.2 `solver` block, read back from the raw document the
-/// [`EsmProblem`] carries.
+/// The document's §2.2 `solver` block, read out of a raw document.
 ///
-/// Read from the raw JSON rather than from a typed field so the chain holds
-/// however the problem was built — including the paths that construct one from
-/// a document that never went through the typed `EsmFile`.
+/// Used at CONSTRUCTION, for the input carriers that reach `esm_problem` as raw
+/// JSON (a path, a `Json` value, or a typed file the build pipeline
+/// re-serialized). The typed carriers read `EsmFile::solver` directly; either
+/// way the block lands on [`EsmProblem::solver`], which is what the §2.2.2
+/// chain consults at solve time.
 fn document_solver(doc: &JsonValue) -> Option<crate::Solver> {
-    serde_json::from_value(doc.get("solver")?.clone()).ok()
+    let block = doc.get("solver")?;
+    // §2.2: an EMPTY block means what absence means, so it normalizes away
+    // rather than becoming a `Solver` with nothing set.
+    crate::solver::normalize_empty(serde_json::from_value(block.clone()).ok()?)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

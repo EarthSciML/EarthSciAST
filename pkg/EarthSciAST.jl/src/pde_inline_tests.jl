@@ -1195,26 +1195,41 @@ resolution, the pass predicate, per-test wall-time accounting, and JUnit
 emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
 cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
 OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
-`reltol`/`abstol` default to the shared inline-test solver tolerances
-`DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+`reltol`/`abstol` resolve per esm-spec §2.2.2, most-specific first: an explicit
+argument here, then this document's `solver.reltol` / `solver.abstol` (§2.2),
+then the shared inline-test solver tolerances `DEFAULT_TEST_RELTOL` /
+`DEFAULT_TEST_ABSTOL`. Those runner defaults sit at the BOTTOM of the chain, so
+a document that declares its own integration accuracy gets it without every
+caller naming it. These are INTEGRATION tolerances and are a different quantity
+from the §6.6.4 assertion tolerance above.
 """
 function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
                        alg=nothing,
-                       reltol::Float64=DEFAULT_TEST_RELTOL,
-                       abstol::Float64=DEFAULT_TEST_ABSTOL,
+                       reltol::Union{Float64,Nothing}=nothing,
+                       abstol::Union{Float64,Nothing}=nothing,
                        base_dir::Union{Nothing,AbstractString}=nothing)
     file = input isa AbstractString ? load_path(String(input)) : input
     file isa EsmFile ||
         throw(ArgumentError("run_pde_tests expects a path or EsmFile, got $(typeof(input))"))
     resolved_base = base_dir !== nothing ? String(base_dir) :
         (input isa AbstractString ? dirname(abspath(String(input))) : pwd())
+    # esm-spec §2.2.2, most-specific first: an explicit `reltol` / `abstol` here
+    # wins, else this document's `solver` block, else the runner's own
+    # DEFAULT_TEST_*. `nothing` is what makes level 1 expressible -- a caller who
+    # named no tolerance is distinguishable from one who passed the default
+    # value, which is exactly the distinction the document sits in the middle
+    # of. INTEGRATION tolerances; the tolerance each assertion is COMPARED at
+    # (§6.6.4) resolves separately and is untouched here.
+    doc_reltol, doc_abstol = _test_integration_tolerances(file.solver)
+    eff_reltol = reltol === nothing ? doc_reltol : reltol
+    eff_abstol = abstol === nothing ? doc_abstol : abstol
     results = PdeAssertionResult[]
     file.models === nothing && return results
     for (mname, model) in file.models
         model_name !== nothing && String(mname) != String(model_name) && continue
         isempty(model.tests) && continue
         engine = SimulateTestEngine(file, input, String(mname),
-                                    resolved_base, alg, reltol, abstol)
+                                    resolved_base, alg, eff_reltol, eff_abstol)
         _run_test_frame!(results, engine, "", :model, String(mname),
                          model.tolerance, model.tests)
     end

@@ -72,3 +72,37 @@ fn tolerances_resolve_most_specific_first() {
         (DEFAULT_ABSTOL, 1e-9)
     );
 }
+
+/// Regression: the §2.2.2 chain must reach the INTEGRATOR, not just the helper.
+///
+/// `document_solver` used to read `EsmProblem::doc`, which is `JsonValue::Null`
+/// whenever the problem was built from a typed `EsmFile` and the build pipeline
+/// was not requested — so the whole chain was dead on exactly the path a library
+/// caller uses. The block is now captured onto the problem at construction from
+/// whichever carrier it arrived on.
+#[cfg(all(feature = "solve", not(target_arch = "wasm32")))]
+#[test]
+fn a_typed_file_carries_its_block_onto_the_problem() {
+    use earthsci_ast::{ProblemInput, ProblemOptions, esm_problem};
+
+    let f = load_string(&doc(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#, "1.1.0")).unwrap();
+    let prob = esm_problem(
+        ProblemInput::File(&f),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .expect("builds");
+    let s = prob.solver().expect("the typed file's block reached the problem");
+    assert_eq!(s.abstol, Some(1e-8));
+    assert_eq!(s.reltol, Some(1e-6));
+
+    // And an empty block still normalizes away on that carrier.
+    let empty = load_string(&doc(r#""solver":{},"#, "1.1.0")).unwrap();
+    let prob = esm_problem(
+        ProblemInput::File(&empty),
+        (0.0, 1.0),
+        ProblemOptions::default(),
+    )
+    .expect("builds");
+    assert!(prob.solver().is_none());
+}

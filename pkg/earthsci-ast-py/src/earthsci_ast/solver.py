@@ -26,7 +26,22 @@ __all__ = [
     "resolve_tolerances",
 ]
 
-#: Binding defaults (API_SPEC §5.8), the bottom of the §2.2.2 chain.
+#: Canonical cross-binding tolerance defaults (API_SPEC §5.8), and the bottom of
+#: the §2.2.2 chain: the same knobs under the same names produce comparable
+#: trajectories in Julia, Python and Rust.
+#:
+#: These are Julia's values, and they are LOOSER than what this binding used to
+#: default to (1e-10 / 1e-14). A default is what a document gets when its author
+#: has expressed no opinion about accuracy, so it is the cheapest of the three
+#: rather than the most accurate. A caller who needs tighter integration passes
+#: `reltol=` / `abstol=` -- and a TEST that asserts trajectory accuracy must do
+#: so, rather than lean on the default and thereby assert something about the
+#: library's default instead of about the model.
+#:
+#: They live HERE, in the lowest module of the two, so `solve()`'s signature and
+#: `resolve_tolerances`'s bottom-of-chain cannot drift apart; `problem.py`
+#: re-exports them under its historical names. Rust does the same in the other
+#: direction (`solver.rs` imports `simulate::DEFAULT_*`).
 DEFAULT_RELTOL = 1e-4
 DEFAULT_ABSTOL = 1e-6
 
@@ -97,10 +112,10 @@ def resolve_tolerances(
     else:
         doc_abstol = getattr(solver, "abstol", None) if solver is not None else None
         doc_reltol = getattr(solver, "reltol", None) if solver is not None else None
-    resolved_abstol = abstol if abstol is not None else (
-        doc_abstol if doc_abstol is not None else DEFAULT_ABSTOL
+    resolved_abstol = (
+        abstol if abstol is not None else (doc_abstol if doc_abstol is not None else DEFAULT_ABSTOL)
     )
-    resolved_reltol = reltol if reltol is not None else (
-        doc_reltol if doc_reltol is not None else DEFAULT_RELTOL
+    resolved_reltol = (
+        reltol if reltol is not None else (doc_reltol if doc_reltol is not None else DEFAULT_RELTOL)
     )
     return resolved_abstol, resolved_reltol

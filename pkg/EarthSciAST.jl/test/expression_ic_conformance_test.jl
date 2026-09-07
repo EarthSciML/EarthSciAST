@@ -27,10 +27,11 @@ const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
     # Julia parses the golden into an EsmFile (round-trip / evaluation deferred).
     file = ESS.load_path(path)
     @test file isa ESS.EsmFile
-    # The shared corpus is esm 1.0.0 throughout; the fixture's declared version
-    # is not what this case pins, so assert it tracks the format the binding
-    # targets rather than a frozen string.
-    @test file.esm == ESS.SCHEMA_VERSION
+    # The shared corpus is esm 1.0.0 throughout and is NOT restamped as the
+    # library advances (the 1.x line is additive, so an older minor stays
+    # loadable). Pinning SCHEMA_VERSION here only worked while the two
+    # coincided; what this case actually needs is that the golden LOADS.
+    @test file.esm == "1.0.0"
 
     # esm-spec v0.8.0 removed the domain-level `initial_conditions` block; the
     # expression IC is now carried by an `ic(u)` equation whose RHS is the

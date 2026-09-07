@@ -214,6 +214,29 @@ const _DEFAULT_REL_TOL = 1.0e-6
 const DEFAULT_TEST_RELTOL = 1e-10
 const DEFAULT_TEST_ABSTOL = 1e-12
 
+"""
+    _test_integration_tolerances(solver_hints) -> (reltol, abstol)
+
+The INTEGRATION tolerances an inline-test run solves at, esm-spec §2.2.2:
+the document's `solver.reltol` / `solver.abstol` when it declares them, else
+this runner's `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+
+The runner defaults sit at LEVEL 3 of the chain — they are binding defaults,
+not a caller's opinion — which is what makes a document's declared accuracy
+travel: without this, three bindings integrated the same document's inline
+tests at two different tolerances. The two resolve INDEPENDENTLY, so a document
+declaring only `reltol` leaves `abstol` on the runner default.
+
+NOT the tolerance an assertion is COMPARED at, which is §6.6.4's own chain
+([`_resolve_tolerance`](@ref)); the two never substitute for each other.
+"""
+function _test_integration_tolerances(solver_hints)
+    solver_hints === nothing && return (DEFAULT_TEST_RELTOL, DEFAULT_TEST_ABSTOL)
+    r = solver_hints.reltol === nothing ? DEFAULT_TEST_RELTOL : solver_hints.reltol
+    a = solver_hints.abstol === nothing ? DEFAULT_TEST_ABSTOL : solver_hints.abstol
+    return (Float64(r), Float64(a))
+end
+
 # Returns (rtol, atol) — the most-specific declared tolerance wins (spec
 # §6.6.4: assertion > test > model > default rel=1e-6).
 function _resolve_tolerance(model_tol, test_tol, assertion_tol)
@@ -492,6 +515,22 @@ struct MtkTestEngine
     solver::Any
     defaults_u0::Dict{Any,Float64}
     defaults_p::Dict{Any,Float64}
+    # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
+    # resolved against the document's `solver` block. The runner's own
+    # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
+    # defaults, not a caller's opinion -- so a document that declares
+    # `solver.reltol` displaces them and every binding runs its inline tests at
+    # one integration tolerance instead of at five different runner defaults.
+    # NOT the tolerance an assertion is COMPARED at (§6.6.4): that is
+    # `container.tolerance`, resolved on its own chain in `_run_test_frame!`.
+    reltol::Float64
+    abstol::Float64
+
+    MtkTestEngine(simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
+                  reltol::Float64=DEFAULT_TEST_RELTOL,
+                  abstol::Float64=DEFAULT_TEST_ABSTOL) =
+        new(simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
+            reltol, abstol)
 end
 
 function _engine_setup(e::MtkTestEngine, t)
@@ -513,8 +552,7 @@ function _engine_setup(e::MtkTestEngine, t)
             MTK.ODEProblem(e.simp, merged, tspan)
         end
         return MTK.SciMLBase.solve(prob, e.solver;
-                                    reltol=DEFAULT_TEST_RELTOL,
-                                    abstol=DEFAULT_TEST_ABSTOL)
+                                    reltol=e.reltol, abstol=e.abstol)
     catch err
         return "Solve setup failed: $(err)"
     end
@@ -558,7 +596,7 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
                                stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
-                               stiffness=nothing)
+                               stiffness=nothing, solver_hints=nothing)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
@@ -576,8 +614,11 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                         stiffness=stiffness)
     defaults_u0, defaults_p =
         _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
+    # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
+    # the runner's own defaults; each falls through independently.
+    reltol, abstol = _test_integration_tolerances(solver_hints)
     engine = MtkTestEngine(simp, sys_name, container_kind, solver,
-                           defaults_u0, defaults_p)
+                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol)
     _run_test_frame!(results, engine, path, container_kind, String(name),
                      container.tolerance, container.tests)
 end
@@ -603,7 +644,8 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
-                                  stiff_files=stiff_files, stiffness=stiffness)
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 
@@ -612,7 +654,8 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
-                                  stiff_files=stiff_files, stiffness=stiffness)
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 end

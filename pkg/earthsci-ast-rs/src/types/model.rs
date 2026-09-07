@@ -173,15 +173,6 @@ pub struct IndexSet {
     pub values: Option<String>,
 }
 
-/// One entry of the document-scoped [`EsmFile::coordinates`] registry
-/// (RFC streaming-output-sinks §8.3): marks an existing data array — or an
-/// inline literal vector — as a physical coordinate and attaches CF metadata.
-///
-/// Exactly one of `source` and `values` is present. The coordinate's shape
-/// comes from its source, so it is NOT attached to any single axis: that one
-/// rule covers rectilinear (1-D monotonic → CF *dimension* coordinate),
-/// unstructured (1-D over a shared dimension) and curvilinear (2-D `lat(y,x)`)
-/// grids, the latter two emitting CF *auxiliary* coordinates.
 /// Document-scoped, OPTIONAL solver hints (esm-spec §2.2).
 ///
 /// Numerics the document knows about ITSELF, which each binding maps to its own
@@ -221,6 +212,15 @@ pub struct Solver {
     pub splitting: Option<String>,
 }
 
+/// One entry of the document-scoped [`EsmFile::coordinates`] registry
+/// (RFC streaming-output-sinks §8.3): marks an existing data array — or an
+/// inline literal vector — as a physical coordinate and attaches CF metadata.
+///
+/// Exactly one of `source` and `values` is present. The coordinate's shape
+/// comes from its source, so it is NOT attached to any single axis: that one
+/// rule covers rectilinear (1-D monotonic → CF *dimension* coordinate),
+/// unstructured (1-D over a shared dimension) and curvilinear (2-D `lat(y,x)`)
+/// grids, the latter two emitting CF *auxiliary* coordinates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Coordinate {

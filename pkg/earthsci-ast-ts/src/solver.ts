@@ -75,8 +75,7 @@ export function resolveTolerances(
 }
 
 /**
- * Map a `solver` block with nothing set to absence (esm-spec §2.2), in place on
- * the raw document view.
+ * Map a `solver` block with nothing set to absence (esm-spec §2.2).
  *
  * `"solver": {}` is legal — every other optional top-level container admits an
  * empty object, and making this one the exception would be a rule with no
@@ -84,10 +83,21 @@ export function resolveTolerances(
  * normalized away AT LOAD. `toJson` serializes the whole document object, so
  * without this an empty block would survive `parse → emit` here while Python
  * and Julia dropped it: the five bindings disagreeing on one document.
+ *
+ * Returns a SHALLOW COPY without the key, or `null` when there is nothing to
+ * drop — the same shape as `resolveDataSourceUrls`, and for the same two
+ * reasons. Deleting in place would (a) mutate the caller's own object, since a
+ * non-canonical object input is passed through by reference, and (b) land on
+ * the wrong tree in canonical mode, where the validation view is a separate
+ * stripped copy from the document the `EsmFile` is built out of — so `{}` would
+ * survive to emit on exactly the path this normalization exists to make
+ * uniform.
  */
-export function normalizeEmptySolver(view: unknown): void {
-  if (!isObject(view)) return
+export function normalizeEmptySolver(view: unknown): Record<string, unknown> | null {
+  if (!isObject(view)) return null
   const solver = view.solver
-  if (!isObject(solver)) return
-  if (Object.keys(solver).length === 0) delete view.solver
+  if (!isObject(solver)) return null
+  if (Object.keys(solver).length > 0) return null
+  const { solver: _dropped, ...rest } = view
+  return rest
 }
