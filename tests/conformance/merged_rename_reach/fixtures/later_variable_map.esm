@@ -1,0 +1,149 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_rename_reaches_later_variable_map",
+    "description": "The sharper half of the same reach gap. A `translate` match merges `Sink.O3` onto `Chem.O3`, deleting `Sink.O3`; a LATER `variable_map` names `Sink.O3` as its `from`. `variable_map` entries run after `operator_compose` (esm-libraries-spec 4.7.5 step 3 ordering), and the entry's `from` is a plain scoped-reference STRING that the equation-AST retarget never reaches -- so the substitution injects the DEAD name into every equation referencing the mapped parameter. Unlike the `couple` case this does not fail quietly: it produces a flattened system whose `D(Consumer.y, t)` references a variable the system no longer declares, and the failure surfaces far downstream as an unbound variable at the build boundary. `Sink.O3` must resolve to `Chem.O3`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "esm-libraries-spec-4.7.5",
+      "operator-compose",
+      "merged-away-rename",
+      "coupling-endpoint",
+      "variable-map"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "The SURVIVING spelling: the `translate` key names it."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The MERGED-AWAY spelling, which the later `variable_map` still names."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Consumer": {
+      "variables": {
+        "bg": {
+          "type": "parameter",
+          "units": "ppb",
+          "default": 5.0,
+          "description": "The mapped parameter. Every reference to it becomes a reference to the `variable_map`'s `from`."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "bg",
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.O3": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`, retargeting it onto `Chem.O3`."
+    },
+    {
+      "type": "variable_map",
+      "from": "Sink.O3",
+      "to": "Consumer.bg",
+      "transform": "param_to_var",
+      "description": "Names the merged-away spelling as its source. Applied AFTER the compose, so it must resolve to `Chem.O3`."
+    }
+  ]
+}

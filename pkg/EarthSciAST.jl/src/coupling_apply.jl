@@ -306,8 +306,9 @@ function _apply_operator_compose!(equations::Vector{Equation},
                                   entry::CouplingOperatorCompose,
                                   states::OrderedDict{String, ModelVariable},
                                   observeds::OrderedDict{String, ModelVariable},
-                                  owners::Vector{String})
-    length(entry.systems) >= 2 || return
+                                  owners::Vector{String};
+                                  renames::AbstractDict=OrderedDict{String,String}())
+    length(entry.systems) >= 2 || return OrderedDict{String,String}()
     a_name = entry.systems[1]
     b_names = Set{String}(entry.systems[2:end])
     # `owners` is parallel to `equations` and records the COMPONENT THAT
@@ -332,7 +333,11 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # docstring). `systems[2]` is the system a bare VALUE belongs to; §10.2
     # spells the map over a two-system entry, so a further B system's variables
     # have to be written scoped to be nameable at all.
-    inv_translate = _inverse_translate(entry.translate, a_name, entry.systems[2])
+    # Both endpoints are rewritten off names an earlier merge in this document
+    # already deleted: an earlier entry may have consumed either the A-side or
+    # the B-side spelling this one names (issue #230).
+    inv_translate = _retarget_translate(
+        _inverse_translate(entry.translate, a_name, entry.systems[2]), renames)
 
     # Step 3: expand each `_var` template where it stands, so that a clone which
     # matches nothing keeps B's document position (step 5). Only a template
@@ -495,15 +500,15 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # `inverted` rides along in the same pass because it is the same operation
     # pointed the other way — the loser of an ownership decision is merged away
     # exactly like the loser of a translation match.
-    renames = isempty(inverted) ? merged_away :
-              OrderedDict{String, String}(merge(merged_away, inverted))
-    if !isempty(renames)
+    renames_made = isempty(inverted) ? merged_away :
+                   OrderedDict{String, String}(merge(merged_away, inverted))
+    if !isempty(renames_made)
         for (i, eq) in enumerate(expanded)
-            expanded[i] = Equation(_rename_variables(eq.lhs, renames),
-                                   _rename_variables(eq.rhs, renames);
+            expanded[i] = Equation(_rename_variables(eq.lhs, renames_made),
+                                   _rename_variables(eq.rhs, renames_made);
                                    _comment=eq._comment)
         end
-        for gone in keys(renames)
+        for gone in keys(renames_made)
             delete!(states, gone)
             delete!(observeds, gone)
         end
@@ -511,7 +516,102 @@ function _apply_operator_compose!(equations::Vector{Equation},
 
     empty!(equations); append!(equations, expanded)
     empty!(owners);    append!(owners, new_owners)
-    return
+    # Everything this entry DELETED, for the caller's running document-wide
+    # rename (issue #230). `inverted` is already folded in above: it is the same
+    # operation pointed the other way.
+    return renames_made
+end
+
+"""
+    _compose_renames!(acc, made) -> acc
+
+Fold a merge's fresh rename map into the running document-wide one (issue #230).
+
+Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
+on `C.x` — so the accumulated map's VALUES are retargeted through the new map
+before the new pairs are added.
+"""
+function _compose_renames!(acc::OrderedDict{String,String}, made::AbstractDict)
+    isempty(made) && return acc
+    for (gone, survivor) in acc
+        acc[gone] = get(made, survivor, survivor)
+    end
+    for (gone, survivor) in made
+        acc[gone] = survivor
+    end
+    return acc
+end
+
+"""
+    _retarget_translate(inv_translate, renames) -> Dict
+
+Rewrite a built (inverted, namespaced) `translate` map off names an earlier
+merge deleted. Both endpoints move, because either side's spelling may be the
+one an earlier entry consumed.
+"""
+function _retarget_translate(inv_translate::AbstractDict, renames::AbstractDict)
+    (isempty(renames) || isempty(inv_translate)) && return inv_translate
+    out = Dict{String, Tuple{String, Float64}}()
+    for (b_name, (a_name, factor)) in inv_translate
+        out[get(renames, b_name, b_name)] = (get(renames, a_name, a_name), factor)
+    end
+    return out
+end
+
+"""
+    _retarget_pending_entry(entry, renames) -> CouplingEntry
+
+Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+
+§4.7 applies every `operator_compose` before any `couple` or `variable_map`, and
+a renaming match DELETES the spelling it consumed. The document-wide retarget in
+[`_apply_operator_compose!`](@ref) rewrites the equation ASTs — but a connector's
+`from`/`to` and a `variable_map`'s `from`/`to` are plain scoped-reference STRINGS
+carried on the entry, which no AST walk reaches. An entry that has not run yet
+can therefore still name a state that has moved: the connector then matches
+nothing and is dropped in SILENCE, and a `variable_map` `from` substitutes a DEAD
+name into every equation referencing the mapped parameter.
+
+Returns a COPY; the source document keeps what its author wrote, so the
+round-trip is unaffected.
+"""
+_retarget_pending_entry(entry::CouplingEntry, renames::AbstractDict) = entry
+
+function _retarget_pending_entry(entry::CouplingCouple, renames::AbstractDict)
+    isempty(renames) && return entry
+    raw = get(entry.connector, "equations", nothing)
+    raw isa AbstractVector || return entry
+    rewritten = Any[_retarget_connector_equation(item, renames) for item in raw]
+    connector = Dict{String,Any}(entry.connector)
+    connector["equations"] = rewritten
+    return CouplingCouple(entry.systems, connector;
+                          description=entry.description, lifting=entry.lifting)
+end
+
+function _retarget_connector_equation(item, renames::AbstractDict)
+    item isa AbstractDict || return item
+    out = Dict{String,Any}(String(k) => v for (k, v) in item)
+    for side in ("from", "to")
+        name = get(out, side, nothing)
+        name isa AbstractString || continue
+        out[side] = get(renames, String(name), String(name))
+    end
+    expr = get(out, "expression", nothing)
+    expr isa ASTExpr && (out["expression"] = _rename_variables(expr, renames))
+    return out
+end
+
+function _retarget_pending_entry(entry::CouplingVariableMap, renames::AbstractDict)
+    isempty(renames) && return entry
+    transform = entry.transform isa ASTExpr ?
+        _rename_variables(entry.transform, renames) : entry.transform
+    return CouplingVariableMap(get(renames, entry.from, entry.from),
+                               get(renames, entry.to, entry.to),
+                               transform;
+                               factor=entry.factor,
+                               description=entry.description,
+                               lifting=entry.lifting)
 end
 
 """
