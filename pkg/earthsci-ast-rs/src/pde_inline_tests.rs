@@ -149,10 +149,6 @@ struct InlineTestSeeds {
 }
 
 impl InlineTestSeeds {
-    fn is_empty(&self) -> bool {
-        self.parameter_overrides.is_empty() && self.initial_conditions.is_empty()
-    }
-
     /// Lay `seed` under a test's `authored` map: the document is authoritative
     /// about its own test, so an authored key wins and the seed only supplies
     /// what the document left unsaid.
