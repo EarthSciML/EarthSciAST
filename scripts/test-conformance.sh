@@ -62,6 +62,48 @@ GO_OUTPUT="$OUTPUT_DIR/go"
 # unswept in every binding at once (audit F5).
 CORPUS_MANIFEST="$OUTPUT_DIR/corpus_manifest.json"
 
+# Whether to re-run each binding's OWN test suite before generating that
+# binding's conformance outputs. On by default, which is what a developer
+# running this script on a laptop wants: one command, everything checked.
+#
+# CI turns it OFF (`--skip-binding-suites`), because there the gate is already
+# satisfied — and satisfied MORE strongly than this script can satisfy it. The
+# `standard-conformance-testing` job carries
+# `needs: [julia-tests, typescript-tests, python-tests, rust-tests, go-tests]`,
+# so it does not start until all five suites have passed, each across its whole
+# version matrix (julia 1.10/1.11/1.12, node 20/22, python 3.9-3.12, rust
+# stable/beta/MSRV, go 1.21/1.22/1.23). Re-running them here repeated that work
+# at ONE pinned version apiece — strictly less coverage, for the entire cost.
+#
+# It was not a cheap duplicate, either: it is why this harness had never once
+# finished. Every execution died at the 45-minute wall, and the log of the last
+# one shows it still inside the FIRST of the five (`Pkg.test()`) 38.6 minutes
+# in, having produced no conformance output at all. See issue #224.
+#
+# NOTE the asymmetry this preserves: skipping the suite skips only the suite.
+# Every conformance PRODUCER below still runs, and a producer that fails still
+# fails the run. What is skipped is the part another job already did.
+SKIP_BINDING_SUITES="${ESM_CONFORMANCE_SKIP_BINDING_SUITES:-0}"
+
+# Per-stage wall-clock, printed as a table at the end of the run. The harness
+# had no timing breakdown, so "which stage eats the budget" could only be
+# guessed at from the log's own [HH:MM:SS] prefixes (issue #224).
+declare -a STAGE_TIMINGS=()
+
+usage() {
+    cat <<'USAGE'
+Usage: test-conformance.sh [--skip-binding-suites]
+
+  --skip-binding-suites   Do not re-run each binding's own test suite before
+                          generating its conformance outputs. Use this only
+                          where that gate is already satisfied — CI passes it
+                          because `needs:` holds the harness behind all five
+                          per-language jobs. Equivalent to setting
+                          ESM_CONFORMANCE_SKIP_BINDING_SUITES=1.
+  -h, --help              Show this message.
+USAGE
+}
+
 log() {
     echo -e "${BLUE}[$(date +'%H:%M:%S')]${NC} $1"
 }
@@ -76,6 +118,36 @@ success() {
 
 warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Record one stage's wall-clock for the end-of-run timing table.
+record_timing() {
+    STAGE_TIMINGS+=("$2	$1")
+}
+
+# Run one binding's OWN test suite, unless that gate has already been satisfied
+# upstream. See SKIP_BINDING_SUITES above for why CI skips it and why doing so
+# does not weaken the gate.
+run_binding_suite() {
+    local language="$1"
+    shift
+
+    if [ "$SKIP_BINDING_SUITES" = "1" ]; then
+        log "Skipping the $language test suite — already gated upstream (--skip-binding-suites)"
+        return 0
+    fi
+
+    local start
+    start=$(date +%s)
+    log "Running $language test suite..."
+    if "$@"; then
+        record_timing "suite:$language" "$(( $(date +%s) - start ))"
+        success "$language tests passed"
+        return 0
+    fi
+    record_timing "suite:$language (FAILED)" "$(( $(date +%s) - start ))"
+    error "$language tests failed"
+    return 1
 }
 
 # Clean and setup output directories
@@ -150,11 +222,7 @@ run_go_tests() {
 
     cd "$GO_DIR"
 
-    log "Running Go test suite..."
-    if go test ./...; then
-        success "Go tests passed"
-    else
-        error "Go tests failed"
+    if ! run_binding_suite "Go" go test ./...; then
         return 1
     fi
 
@@ -175,11 +243,7 @@ run_julia_tests() {
     cd "$JULIA_DIR"
 
     # First run the basic tests to ensure everything works
-    log "Running Julia test suite..."
-    if julia --project=. -e 'using Pkg; Pkg.test()'; then
-        success "Julia tests passed"
-    else
-        error "Julia tests failed"
+    if ! run_binding_suite "Julia" julia --project=. -e 'using Pkg; Pkg.test()'; then
         return 1
     fi
 
@@ -207,11 +271,7 @@ run_typescript_tests() {
     fi
 
     # Run the test suite
-    log "Running TypeScript test suite..."
-    if npm test -- --run; then
-        success "TypeScript tests passed"
-    else
-        error "TypeScript tests failed"
+    if ! run_binding_suite "TypeScript" npm test -- --run; then
         return 1
     fi
 
@@ -237,11 +297,7 @@ run_python_tests() {
     cd "$PYTHON_DIR"
 
     # Run pytest to verify implementation
-    log "Running Python test suite..."
-    if python3 -m pytest tests/ -v; then
-        success "Python tests passed"
-    else
-        error "Python tests failed"
+    if ! run_binding_suite "Python" python3 -m pytest tests/ -v; then
         return 1
     fi
 
@@ -263,11 +319,7 @@ run_rust_tests() {
     cd "$RUST_DIR"
 
     # Run cargo test
-    log "Running Rust test suite..."
-    if cargo test; then
-        success "Rust tests passed"
-    else
-        error "Rust tests failed"
+    if ! run_binding_suite "Rust" cargo test; then
         return 1
     fi
 
@@ -716,17 +768,48 @@ declare -a FAILED_STAGES=()
 run_stage() {
     local name="$1"
     shift
+    local start
+    start=$(date +%s)
     if "$@"; then
+        record_timing "$name" "$(( $(date +%s) - start ))"
         success "$name"
     else
+        record_timing "$name (FAILED)" "$(( $(date +%s) - start ))"
         error "$name FAILED"
         FAILED_STAGES+=("$name")
     fi
 }
 
+# Print every stage's wall-clock, slowest first. Without this the only way to
+# learn where a 45-minute run went was to diff the log's timestamp prefixes by
+# hand — and when the run is killed at the wall there is no summary at all
+# (issue #224). Printed before the pass/fail verdict so it survives either.
+print_timing_summary() {
+    if [ ${#STAGE_TIMINGS[@]} -eq 0 ]; then
+        return 0
+    fi
+    echo
+    log "Stage wall-clock, slowest first:"
+    printf '%s\n' "${STAGE_TIMINGS[@]}" | sort -rn | awk -F'\t' '{printf "  %6ds  %s\n", $1, $2}'
+}
+
 main() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --skip-binding-suites) SKIP_BINDING_SUITES=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) error "Unknown option: $1"; usage >&2; exit 2 ;;
+        esac
+        shift
+    done
+
     log "Starting cross-language conformance testing..."
     log "Project root: $PROJECT_ROOT"
+    if [ "$SKIP_BINDING_SUITES" = "1" ]; then
+        log "Per-binding test suites: SKIPPED (gated upstream). Producers still run."
+    else
+        log "Per-binding test suites: enabled"
+    fi
 
     setup_output_dirs
 
@@ -740,9 +823,13 @@ main() {
     declare -a failed_languages=()
 
     for lang in julia typescript python rust go; do
+        local lang_start
+        lang_start=$(date +%s)
         if "run_${lang}_tests"; then
+            record_timing "binding:$lang (suite+producer)" "$(( $(date +%s) - lang_start ))"
             successful_languages+=("$lang")
         else
+            record_timing "binding:$lang (suite+producer, FAILED)" "$(( $(date +%s) - lang_start ))"
             failed_languages+=("$lang")
             FAILED_STAGES+=("binding:$lang")
         fi
@@ -788,6 +875,8 @@ main() {
     run_stage "full-pipeline PDE producer (julia)" run_pde_pipeline_conformance_julia
     run_stage "full-pipeline PDE producer (rust)" run_pde_pipeline_conformance_rust
     run_stage "full-pipeline PDE producer (python)" run_pde_pipeline_conformance_python
+
+    print_timing_summary
 
     echo
     if [ ${#FAILED_STAGES[@]} -eq 0 ]; then
