@@ -242,7 +242,10 @@ def test_tolerance_precedence_and_isapprox_semantics():
     test_tol = Tolerance(rel=None, abs=1e-3)
     assertion_tol = Tolerance(rel=1e-6, abs=1e-9)
     assert _resolve_tolerance(model_tol, test_tol, assertion_tol) == (1e-6, 1e-9)
-    assert _resolve_tolerance(model_tol, test_tol, None) == (0.0, 1e-3)
+    # PER FIELD (§6.6.4): the test declares only ``abs``, so the model's ``rel``
+    # survives. This returned ``(0.0, 1e-3)`` before #228 — the test's block won
+    # wholesale and the model's relative bound vanished.
+    assert _resolve_tolerance(model_tol, test_tol, None) == (1e-2, 1e-3)
     assert _resolve_tolerance(model_tol, None, None) == (1e-2, 0.0)
     assert _resolve_tolerance(None, None, None) == (1e-6, 0.0)
     # Julia isapprox: |a-e| <= max(atol, rtol*max(|a|,|e|)).
