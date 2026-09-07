@@ -3321,6 +3321,29 @@ infinity matches and an opposite one does not. `bindings_required` is
 `["julia", "python", "rust"]`; Go and TypeScript are rewrite-only ports with no
 simulator and no assertion comparison, and are `scope_excluded` in the manifest.
 
+**What this category does not cover.** It compares *verdicts* on a non-finite
+actual, so it is blind to a divergence in the tolerance arithmetic itself: two
+bindings scaling the relative bound differently still agree that `Inf` fails.
+The one place the §6.6.3 bound has been ambiguous is the scale of its relative
+term — `max(|actual|, |expected|)` (symmetric, the settled reading) versus
+`|expected|` alone — and the two return different VERDICTS only inside the
+narrow band `rel · |expected| < |actual − expected| ≤ rel · |actual|`. Reaching
+it takes an OVERSHOOT (`|actual| > |expected|`) whose margin is itself of order
+`rel`. Overshoots on their own are ordinary — any integrator landing slightly
+above its expectation is one — but landing inside that band is not, and no
+fixture in this or any other category does: every fixture assertion in the
+corpus gets the same verdict under both readings, which is why the seam is
+invisible to fixtures however many are added. It is therefore pinned by a
+per-binding unit test rather than by a shared fixture:
+`assertion_tolerance_symmetry_test.jl` (Julia),
+`test_relative_bound_is_symmetric_in_actual_and_expected` (Python), and
+`relative_bound_is_symmetric_in_actual_and_expected` (Rust) each assert the same
+discriminating case and the same swap-invariance property. Promoting it to a
+shared category would need a fixture whose simulated actual reliably overshoots
+its expectation by a pinned margin, which the pinned-integrator contract does
+not currently give; the three unit tests are the interim gate, and they are
+named here so the gap is recorded rather than assumed covered.
+
 **All five bindings READ this manifest**, including the two that cannot execute
 it: `pkg/earthsci-ast-go/pkg/esm/assertion_nonfinite_scope_test.go` and
 `pkg/earthsci-ast-ts/src/assertion-nonfinite-scope.test.ts` each assert their own
@@ -4240,7 +4263,162 @@ the category pins them.
 
 **TypeScript**, **Go** — rewrite-only ports with no evaluator; no rows apply.
 
-### 5.30 A Scalar on a Shaped PARAMETER Broadcasts (normative)
+### 5.30 Inline-Test `reference` Scope: the Field's Dimension Names (normative)
+
+esm-spec §6.6.5 says an inline `reference` is "an `Expression` whose free
+variables are the domain dimension names". For a field shaped over index sets
+(§5.2) those names are the asserted variable's `shape` entries, and the section
+now says what they are bound to: at every grid point, the **1-based position
+along that axis** — the same index space a `coords` assertion reads under
+convention 1. So `sin(π (x − ½) / N)` is the cell-centre analytic reference of
+a field over `x`, and `index(table, lev)` reads the cell's entry of a lookup
+array, with no explicit gather.
+
+Every executing binding evaluated the reference as ONE build-time array
+expression (`evaluate_cellwise` → the build-time field evaluator) and sampled
+the result per cell, so a dimension name mentioned free was simply unbound —
+Rust `E_TREEWALK_UNBOUND_NAME: 'x'`, Python `Unresolved symbol: 'x'`, Julia
+`E_TREEWALK_UNBOUND_VARIABLE: x` — and authors had to spell every reference as
+an explicit `aggregate(i from x; …)` gather. That spelling is still admitted
+and still means what it meant.
+
+**The rule.** Before evaluation, a binding MUST bind the field's dimension names
+in the reference. The pinned mechanism is the same in all three bindings
+(`bind_dimension_names`): a reference that mentions a dimension name **free** —
+as a variable reference not bound by an enclosing `aggregate` / `arrayop` /
+`makearray` loop symbol or an `integral`'s integration variable — is wrapped in
+an `aggregate` whose `output_idx` ARE the dimension names in shape order, each
+ranging over its index set, and whose body is the reference; a reference that
+mentions none is passed through untouched. The wrap is capture-aware: a gather
+that rebinds a dimension name as its own loop symbol (`aggregate(x from x; …)`)
+mentions it bound, not free, and MUST NOT be wrapped a second time.
+
+A node's `wrt` — the symbol a derivative differentiates WITH RESPECT TO — is
+NOT a free mention. It is a target the node names, not a value read from the
+enclosing scope, so `deriv(u, wrt: "x")` inside a reference MUST NOT by itself
+trigger the wrap. (Julia's general-purpose `free_variables` reports `wrt`, and
+adds it after binder subtraction; the predicate this rule pins is the narrower
+`_mentions_free` / `mentions_free`, which does not.)
+
+**A dimension name the parameter scope also binds is a FAULT.** "Nothing that
+evaluated before evaluates differently" holds only with this clause. Where a
+reference mentions free a name that is BOTH a dimension of the asserted field
+and a parameter in the build-time scope the reference is evaluated against
+(flattened parameter names plus their unambiguous bare aliases), the wrap would
+shadow the parameter with the cell's 1-based index: the same reference, a
+different number, no diagnostic — the §5.14 / §5.23 failure class. One name
+meaning two things in one scope is an ill-formed document, so a binding MUST
+reject it with an error naming the clashing name, rather than silently choosing
+either meaning. A reference that does NOT mention the name is unaffected, as is
+a gather that rebinds it as its own loop symbol.
+
+#### 5.30.1 Gate
+
+`tests/conformance/pde_inline_reference_dimension_names/` holds the shared
+fixture and the Julia-minted goldens. One exact decay field
+`u(t) = e^{−t} cos(π (x − ½)/8)` is asserted through the free-name analytic
+form (at t = 0 and t = 1), a `const` table lookup indexed by the dimension name,
+the explicit gather, a gather that rebinds the dimension name as its own loop
+symbol, and a reference-free `mean`; all must agree on the golden actuals. A
+binding that leaves the name unbound fails the first three; one that wraps
+blindly fails the rebinding case.
+
+Per-binding runners: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_reference_dimension_names_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_pde_inline_reference_dimension_names_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_reference_dimension_names_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no inline-test runner and are `scope_excluded`.
+
+The two clauses above that a document cannot express as a passing fixture — a
+`wrt` that must not trigger the wrap, and the scope clash that must be a fault —
+are gated per binding on `bind_dimension_names` directly, one test each.
+
+The `wrt` clause: **Julia** `test/pde_inline_tests_test.jl`
+(`bind_dimension_names` wraps only a free mention), **Python**
+`tests/test_pde_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
+**Rust** `pde_inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
+The same three cases also pin the two other non-mentions the rule turns on: an
+`aggregate` that rebinds the dimension name, and an `integral` whose integration
+variable is it.
+
+The scope clash: **Julia** `test/pde_inline_tests_test.jl`
+(`bind_dimension_names` rejects a dimension the parameter scope binds),
+**Python**
+`tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
+**Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+
+### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
+
+esm-spec §6.6.2 rule 2 — a dotted key resolving to a shorter flattened name —
+used to try only the key's **trailing segment**. That covered `M.A` against a
+bare-named single-model build, but not the §4.6 fully-qualified spelling of a
+mounted subsystem parameter, `M.sub.A`, against a build that carries it as
+`sub.A` (the Rust single-model array build keeps a model's own names, and mounts
+a subsystem's variables under `<sub>.`): the key fell through to "unknown" in
+Rust while Python and Julia, whose builds are always flattened to `M.sub.A`,
+took it as an exact hit — a cross-binding divergence on the same document and
+the same test. Rule 2 now tries every dotted suffix of the key, **most-qualified
+first**, and binds the longest one that is a name; the trailing segment is the
+last one tried. Rule 3 is unchanged and still bare-only, so `Missing.solo` stays
+unknown.
+
+**The guard: leading segments are VALIDATED.** The prefix rule 2 drops is a §4.6
+qualifier, and every segment of it MUST name a component or subsystem the
+document declares. Without the check the widened rule is a silent typo swallower:
+`Doc.Left.solo` binds `Left.solo` where no `Doc` exists, and a mistyped
+`Missng.M.pert_amp` quietly drives `M.pert_amp` — an accepted override pointed at
+a name the author never wrote. A binding therefore carries the component /
+subsystem scope alongside the resolvable-name set (Rust `namespace_scope` on
+`Compiled::namespaces` / `ArrayCompiled::override_namespaces`, Python
+`namespace_scope` / `flat_namespace_scope`, Julia `_override_namespaces`); the
+scope is every namespace segment the build's own names carry, plus the enclosing
+model's name where the build does not qualify its variables with it, plus the
+contributing component systems.
+
+The `override_key_diagnostics` fixture pins the guard: its `Doc.Left.solo` case
+is **UNKNOWN**, not resolved — a deliberate reversal of the case as first
+committed. Rule 2's *positive* path is not expressible in that fixture, because
+every binding's `esm_problem` flattens and a key with real leading segments is
+then an exact hit; it fires only inside a binding that keeps a model's own names,
+and is gated there by each binding's `P.sub.g` subsystem-override test
+(Rust `self_qualified_subsystem_reference_and_override_spellings`, Python
+`test_subsystem_parameter_override_in_every_spelling`).
+
+**Key collisions.** Widening rule 2 also made it possible for TWO distinct keys
+to designate ONE build name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
+reaching `Left.solo`, or `A.M.g` and `B.M.g` both reaching `M.g`. That is a
+document authoring error and MUST be reported, naming the resolved variable and
+every colliding key. Only one of the two overrides can take effect, so settling
+it — by hash order, or by ranking the rules exact-before-bare-before-dotted —
+turns a diagnosable mistake into a wrong answer, and the ranking inverts §6.6.2's
+own rule-2-before-rule-3 order besides. An EXACT hit is never part of a
+collision: rule 1 identifies its variable outright, wins over any rule-2/rule-3
+claim on it, and those claims are discarded silently.
+
+The diagnostic is worded identically in all three bindings (Rust
+`SimulateError::CollidingParameterKeys` / `CollidingInitialConditionKeys`, Python
+`_collision_message` raising `AmbiguousParameterError`, Julia
+`_override_collision_message` raising `ArgumentError`):
+
+```
+parameter_overrides: 2 keys designate the parameter 'Left.solo' (Doc.Left.solo, solo). Supply exactly one override key per name (esm-spec §6.6.2).
+initial_conditions: 2 keys designate the state 'Left.x' (A.Left.x, B.Left.x). Supply exactly one override key per name (esm-spec §6.6.2).
+```
+
+Each binding pins that string verbatim in its own unit tests, which is what keeps
+the three from drifting; the shared conformance fixture drives one key per case
+and so does not exercise the collision.
+
+The same divergence had a second face: inside a single-model document, the
+fully-qualified reference `M.sub.g` in an EQUATION (esm-spec §4.6) resolved in
+Python and Julia and was unbound in Rust's single-model array build. Rust now
+brings a self-qualified reference (`<model>.<local>` where `<local>` is a
+declared variable or is rooted at a declared subsystem) back to the local
+spelling before the build; the multi-model and scalar paths were already right.
+
+### 5.32 A Scalar on a Shaped PARAMETER Broadcasts (normative)
 
 §5.28 governs the ARRAY arm of esm-spec §6.3 / §6.6.2's value union. This
 section governs the other arm — the one the spec added so that "nothing about
@@ -4277,7 +4455,7 @@ and bound on the array channel the binding already uses for a shaped parameter's
 inline column (§5.28.5), so the scalar and array spellings of §6.3 differ in what
 they *say* and never in what the runtime *does*.
 
-#### 5.30.1 What is compared
+#### 5.32.1 What is compared
 
 The in-scope bindings run the fixture's inline tests through their official
 inline-test runner (`run_pde_tests`) with the pinned integrator and compare every
@@ -4288,7 +4466,7 @@ assertion's ACTUAL against the Julia-minted golden, keyed by
 |------|------|------|
 | Assertion actual (vs golden) | 1e-9 | 1e-11 |
 
-#### 5.30.2 Non-vacuity
+#### 5.32.2 Non-vacuity
 
 `phi` integrates the broadcast parameter DIRECTLY, with no array operand anywhere
 in its right-hand side, and is asserted under both `reduce: "min"` and
@@ -4309,7 +4487,7 @@ the declared scalar, a SCALAR `parameter_overrides` value, and the ARRAY
 "treat every shaped parameter as array data" over-correction from breaking §5.28
 silently.
 
-#### 5.30.3 A scalar override takes the same channel
+#### 5.32.3 A scalar override takes the same channel
 
 esm-spec §6.6.2 puts an override in the same value union as the `default`, so a
 SCALAR `parameter_overrides` entry naming a shaped parameter MUST broadcast too —
@@ -4319,7 +4497,7 @@ routing is each binding's own (Julia broadcasts it in
 `input_arrays`; Rust binds it onto the ephemeral run document's `default`, which
 the array compile then lowers); the assertion actual is what conforms.
 
-#### 5.30.4 Gate
+#### 5.32.4 Gate
 
 Per-binding runners drive the fixture and gate every assertion actual against the
 committed golden: **Julia** —

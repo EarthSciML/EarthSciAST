@@ -51,6 +51,7 @@ from earthsci_ast.sympy_bridge import (
     _LAMBDIFY_MODULES,
     _ess_numeric_abs,
     _expr_to_sympy,
+    _lambdify,
 )
 
 
@@ -101,7 +102,10 @@ def test_a_structural_chemistry_shape_no_complex_decomposition():
     assert any(isinstance(s, _ess_numeric_abs) for s in sp.preorder_traversal(sym))
     assert all(not isinstance(s, sp.Abs) for s in sp.preorder_traversal(sym))
 
-    func = sp.lambdify((T_sym, N_sym), sym, modules=_LAMBDIFY_MODULES, cse=False)
+    # `_lambdify`, not `sp.lambdify`: the source assertions below describe the
+    # codegen production actually runs (every lambdify in this tier goes
+    # through `_EsmNumPyPrinter`), so a printer regression is caught here.
+    func = _lambdify((T_sym, N_sym), sym, modules=_LAMBDIFY_MODULES, cse=False)
     src = inspect.getsource(func)
     assert "real(" not in src
     assert "imag(" not in src
@@ -221,7 +225,7 @@ def test_c_pre_fix_regression_disconfirmation():
     # call resolved to numpy.abs at lambdify time.
     fixed = _ess_numeric_abs(krate)
     assert not _has_complex_atom(fixed)
-    fixed_func = sp.lambdify((T_sym, N_sym), fixed, modules=_LAMBDIFY_MODULES, cse=False)
+    fixed_func = _lambdify((T_sym, N_sym), fixed, modules=_LAMBDIFY_MODULES, cse=False)
     assert not _lambdified_source_has_complex(fixed_func)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
