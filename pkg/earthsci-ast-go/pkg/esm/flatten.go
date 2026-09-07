@@ -301,7 +301,10 @@ type FlattenedSystem struct {
 	// arrayed equations.
 	IndexSets []FlattenedIndexSet
 	// FunctionTables is the merged function-table registry; it resolves a
-	// surviving `table_lookup`.
+	// surviving `table_lookup`. Flattening deliberately does NOT lower those
+	// nodes (esm-spec §9.5.3 / §9.5.4 — see lower_table_lookup.go), so this
+	// registry is what makes them evaluable: (*FlattenedSystem).Evaluate lowers
+	// against it.
 	FunctionTables []FlattenedFunctionTable
 	// TemplateRegistry is the merged expression-template registry (esm-spec
 	// §9.6.4 rule 7, §10.7).

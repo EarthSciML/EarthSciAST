@@ -50,23 +50,25 @@ func LowerEnums(file *ESMFile) (*ESMFile, error) {
 	if file == nil {
 		return nil, nil
 	}
-	out := cloneForEnumLowering(file)
+	out := cloneForExprLowering(file)
 	if err := LowerEnumsMut(out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// cloneForEnumLowering copies exactly the containers LowerEnumsMut writes into
-// — the models and reaction-systems maps, the equation / event / reaction
+// cloneForExprLowering copies exactly the containers a mapFileExprs pass writes
+// into — the models and reaction-systems maps, the equation / event / reaction
 // slices inside them, and the coupling slice — so that lowering the copy cannot
-// be observed through the original.
+// be observed through the original. It backs the PURE form of both lowering
+// passes (LowerEnums and LowerTableLookups).
 //
 // It is deliberately NOT a deep copy of the whole document: expression trees
 // are rewritten functionally (mapExprChildren allocates rather than mutating),
 // and every other field is only read, so sharing them is safe and copying them
-// would be waste. A new mutation site in the pass needs a new clone site here.
-func cloneForEnumLowering(file *ESMFile) *ESMFile {
+// would be waste. A new mutation site in mapFileExprs needs a new clone site
+// here.
+func cloneForExprLowering(file *ESMFile) *ESMFile {
 	out := *file
 	if file.Models != nil {
 		out.Models = make(map[string]Model, len(file.Models))
@@ -156,178 +158,12 @@ func LowerEnumsMut(file *ESMFile) error {
 	if enums == nil {
 		enums = map[string]map[string]int{}
 	}
-	if file.Models != nil {
-		for name, m := range file.Models {
-			if err := lowerModelEnums(&m, enums); err != nil {
-				return err
-			}
-			file.Models[name] = m
-		}
-	}
-	if file.ReactionSystems != nil {
-		for name, rs := range file.ReactionSystems {
-			if err := lowerReactionSystemEnums(&rs, enums); err != nil {
-				return err
-			}
-			file.ReactionSystems[name] = rs
-		}
-	}
-	for i := range file.Coupling {
-		lowered, err := lowerCouplingEntryEnums(file.Coupling[i], enums)
-		if err != nil {
-			return err
-		}
-		file.Coupling[i] = lowered
-	}
-	return nil
-}
-
-func lowerModelEnums(m *Model, enums map[string]map[string]int) error {
-	// A variable's Expression-bearing positions are its parameter `update`
-	// rules (`when`, `expression`, `from.unit_conversion`); the observed
-	// `expression` field they replaced is gone in esm 1.0.0, and an observed
-	// unknown's defining expression is lowered below as an ordinary equation.
-	for name := range m.Variables {
-		v := m.Variables[name]
-		for _, site := range VariableExprSites(&v) {
-			lowered, err := lowerExprEnums(site.Expr, enums)
-			if err != nil {
-				return err
-			}
-			site.Set(lowered)
-		}
-		m.Variables[name] = v
-	}
-	for i := range m.Equations {
-		l, err := lowerExprEnums(m.Equations[i].LHS, enums)
-		if err != nil {
-			return err
-		}
-		r, err := lowerExprEnums(m.Equations[i].RHS, enums)
-		if err != nil {
-			return err
-		}
-		m.Equations[i].LHS = l
-		m.Equations[i].RHS = r
-	}
-	for i := range m.InitializationEquations {
-		l, err := lowerExprEnums(m.InitializationEquations[i].LHS, enums)
-		if err != nil {
-			return err
-		}
-		r, err := lowerExprEnums(m.InitializationEquations[i].RHS, enums)
-		if err != nil {
-			return err
-		}
-		m.InitializationEquations[i].LHS = l
-		m.InitializationEquations[i].RHS = r
-	}
-	if err := lowerDiscreteEventEnums(m.DiscreteEvents, enums); err != nil {
-		return err
-	}
-	return lowerContinuousEventEnums(m.ContinuousEvents, enums)
-}
-
-// lowerDiscreteEventEnums lowers `enum` ops in a discrete event's trigger
-// condition and affect right-hand sides. Events were skipped entirely by the
-// enum-lowering walk, so an `enum` in an event survived the pass — violating the
-// post-condition that no `enum` node remains after LowerEnums, and leaving the
-// `unknown_enum` / `unknown_enum_symbol` diagnostics dead in those positions
-// (audit G15).
-func lowerDiscreteEventEnums(events []DiscreteEvent, enums map[string]map[string]int) error {
-	for i := range events {
-		if events[i].Trigger.Expression != nil {
-			lowered, err := lowerExprEnums(events[i].Trigger.Expression, enums)
-			if err != nil {
-				return err
-			}
-			events[i].Trigger.Expression = lowered
-		}
-		if err := lowerAffectEnums(events[i].Affects, enums); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// lowerContinuousEventEnums lowers `enum` ops in a continuous event's root-find
-// conditions and both affect lists.
-func lowerContinuousEventEnums(events []ContinuousEvent, enums map[string]map[string]int) error {
-	for i := range events {
-		for j := range events[i].Conditions {
-			lowered, err := lowerExprEnums(events[i].Conditions[j], enums)
-			if err != nil {
-				return err
-			}
-			events[i].Conditions[j] = lowered
-		}
-		if err := lowerAffectEnums(events[i].Affects, enums); err != nil {
-			return err
-		}
-		if err := lowerAffectEnums(events[i].AffectNeg, enums); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// lowerAffectEnums lowers `enum` ops in the RHS of each affect equation. The LHS
-// is a variable NAME, not an expression, so it is left alone.
-func lowerAffectEnums(affects []AffectEquation, enums map[string]map[string]int) error {
-	for i := range affects {
-		lowered, err := lowerExprEnums(affects[i].RHS, enums)
-		if err != nil {
-			return err
-		}
-		affects[i].RHS = lowered
-	}
-	return nil
-}
-
-func lowerReactionSystemEnums(rs *ReactionSystem, enums map[string]map[string]int) error {
-	for i := range rs.Reactions {
-		r, err := lowerExprEnums(rs.Reactions[i].Rate, enums)
-		if err != nil {
-			return err
-		}
-		rs.Reactions[i].Rate = r
-	}
-	for i := range rs.ConstraintEquations {
-		l, err := lowerExprEnums(rs.ConstraintEquations[i].LHS, enums)
-		if err != nil {
-			return err
-		}
-		r, err := lowerExprEnums(rs.ConstraintEquations[i].RHS, enums)
-		if err != nil {
-			return err
-		}
-		rs.ConstraintEquations[i].LHS = l
-		rs.ConstraintEquations[i].RHS = r
-	}
-	if err := lowerDiscreteEventEnums(rs.DiscreteEvents, enums); err != nil {
-		return err
-	}
-	return lowerContinuousEventEnums(rs.ContinuousEvents, enums)
-}
-
-// lowerCouplingEntryEnums lowers enum ops inside a coupling entry's connector
-// equations, returning the (possibly updated) entry. Only CouplingCouple
-// entries carry connector equations; any other entry is returned unchanged.
-func lowerCouplingEntryEnums(ce CouplingEntry, enums map[string]map[string]int) (CouplingEntry, error) {
-	cc, ok := ce.(CouplingCouple)
-	if !ok {
-		return ce, nil
-	}
-	for i := range cc.Connector.Equations {
-		if cc.Connector.Equations[i].Expression != nil {
-			lowered, err := lowerExprEnums(cc.Connector.Equations[i].Expression, enums)
-			if err != nil {
-				return ce, err
-			}
-			cc.Connector.Equations[i].Expression = lowered
-		}
-	}
-	return cc, nil
+	// mapFileExprs enumerates the document's Expression-bearing positions once,
+	// for every lowering pass. Spelling that walk here is how an `enum` inside
+	// an EVENT came to survive the pass (audit G15).
+	return mapFileExprs(file, func(expr Expression) (Expression, error) {
+		return lowerExprEnums(expr, enums)
+	})
 }
 
 // lowerExprEnums recursively lowers `enum` ops to `const` integer nodes.
