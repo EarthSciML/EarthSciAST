@@ -53,6 +53,7 @@ from .simulation_common import (
     _retcode_for_error,
     _retcode_from_scipy,
     coerce_inline_array,
+    flat_namespace_scope,
     is_inline_array_value,
     resolve_override_raw,
     solve_ivp,
@@ -2389,9 +2390,15 @@ def _build_numpy_rhs(
     # the single name it designates, so a key that exactly names one parameter is
     # never also read as a more-qualified spelling of another.
     known_params = set(flat.parameters)
+    # esm-spec §6.6.2 rule 2 validates a key's LEADING segments against the
+    # document's component / subsystem scope, so a typo'd qualifier is reported
+    # rather than silently discarded down to a suffix match.
+    param_namespaces = flat_namespace_scope(flat)
     for pname, pvar in flat.parameters.items():
         bare = pname.rsplit(".", 1)[-1]
-        raw = resolve_override_raw(pname, parameters, pvar.default, known=known_params)
+        raw = resolve_override_raw(
+            pname, parameters, pvar.default, known=known_params, namespaces=param_namespaces
+        )
         if is_inline_array_value(raw):
             decl = getattr(pvar, "shape", None)
             want = (
@@ -2413,7 +2420,9 @@ def _build_numpy_rhs(
                 loader_arrays.setdefault(bare, arr)
                 param_array_names.add(bare)
             continue
-        val = _resolve_override(pname, parameters, pvar.default, known=known_params)
+        val = _resolve_override(
+            pname, parameters, pvar.default, known=known_params, namespaces=param_namespaces
+        )
         param_values[pname] = val
         param_values[bare] = val  # also expose via bare name
 

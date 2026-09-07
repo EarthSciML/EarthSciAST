@@ -4325,7 +4325,7 @@ The scope clash: **Julia** `test/pde_inline_tests_test.jl`
 `tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
 **Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
 
-### 5.31 Override Keys: the Longest Dotted Suffix (normative)
+### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
 
 esm-spec §6.6.2 rule 2 — a dotted key resolving to a shorter flattened name —
 used to try only the key's **trailing segment**. That covered `M.A` against a
@@ -4338,8 +4338,54 @@ took it as an exact hit — a cross-binding divergence on the same document and
 the same test. Rule 2 now tries every dotted suffix of the key, **most-qualified
 first**, and binds the longest one that is a name; the trailing segment is the
 last one tried. Rule 3 is unchanged and still bare-only, so `Missing.solo` stays
-unknown. The `override_key_diagnostics` fixture gains the resolved case
-`Doc.Left.solo` (binds `Left.solo`), gated by all three runners (§5.15).
+unknown.
+
+**The guard: leading segments are VALIDATED.** The prefix rule 2 drops is a §4.6
+qualifier, and every segment of it MUST name a component or subsystem the
+document declares. Without the check the widened rule is a silent typo swallower:
+`Doc.Left.solo` binds `Left.solo` where no `Doc` exists, and a mistyped
+`Missng.M.pert_amp` quietly drives `M.pert_amp` — an accepted override pointed at
+a name the author never wrote. A binding therefore carries the component /
+subsystem scope alongside the resolvable-name set (Rust `namespace_scope` on
+`Compiled::namespaces` / `ArrayCompiled::override_namespaces`, Python
+`namespace_scope` / `flat_namespace_scope`, Julia `_override_namespaces`); the
+scope is every namespace segment the build's own names carry, plus the enclosing
+model's name where the build does not qualify its variables with it, plus the
+contributing component systems.
+
+The `override_key_diagnostics` fixture pins the guard: its `Doc.Left.solo` case
+is **UNKNOWN**, not resolved — a deliberate reversal of the case as first
+committed. Rule 2's *positive* path is not expressible in that fixture, because
+every binding's `esm_problem` flattens and a key with real leading segments is
+then an exact hit; it fires only inside a binding that keeps a model's own names,
+and is gated there by each binding's `P.sub.g` subsystem-override test
+(Rust `self_qualified_subsystem_reference_and_override_spellings`, Python
+`test_subsystem_parameter_override_in_every_spelling`).
+
+**Key collisions.** Widening rule 2 also made it possible for TWO distinct keys
+to designate ONE build name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
+reaching `Left.solo`, or `A.M.g` and `B.M.g` both reaching `M.g`. That is a
+document authoring error and MUST be reported, naming the resolved variable and
+every colliding key. Only one of the two overrides can take effect, so settling
+it — by hash order, or by ranking the rules exact-before-bare-before-dotted —
+turns a diagnosable mistake into a wrong answer, and the ranking inverts §6.6.2's
+own rule-2-before-rule-3 order besides. An EXACT hit is never part of a
+collision: rule 1 identifies its variable outright, wins over any rule-2/rule-3
+claim on it, and those claims are discarded silently.
+
+The diagnostic is worded identically in all three bindings (Rust
+`SimulateError::CollidingParameterKeys` / `CollidingInitialConditionKeys`, Python
+`_collision_message` raising `AmbiguousParameterError`, Julia
+`_override_collision_message` raising `ArgumentError`):
+
+```
+parameter_overrides: 2 keys designate the parameter 'Left.solo' (Doc.Left.solo, solo). Supply exactly one override key per name (esm-spec §6.6.2).
+initial_conditions: 2 keys designate the state 'Left.x' (A.Left.x, B.Left.x). Supply exactly one override key per name (esm-spec §6.6.2).
+```
+
+Each binding pins that string verbatim in its own unit tests, which is what keeps
+the three from drifting; the shared conformance fixture drives one key per case
+and so does not exercise the collision.
 
 The same divergence had a second face: inside a single-model document, the
 fully-qualified reference `M.sub.g` in an EQUATION (esm-spec §4.6) resolved in

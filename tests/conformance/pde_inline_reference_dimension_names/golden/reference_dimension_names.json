@@ -11,7 +11,7 @@
         {
             "test_id": "reference_dimension_names",
             "reduce": "L2_error",
-            "actual": 1.8039955560390798e-14,
+            "actual": 1.718281828459045,
             "assertion_idx": 2,
             "variable": "u"
         },

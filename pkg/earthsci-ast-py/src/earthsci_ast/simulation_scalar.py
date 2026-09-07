@@ -36,6 +36,7 @@ from .simulation_common import (
     _resolve_override,
     _retcode_for_error,
     _retcode_from_scipy,
+    flat_namespace_scope,
     solve_ivp,
 )
 from .sympy_bridge import (
@@ -167,11 +168,16 @@ def _resolve_parameter_values(
     read as a more-qualified spelling of this one.
     """
     known = set(flat.parameters)
+    namespaces = flat_namespace_scope(flat)
     values: list[float] = []
     for pname in parameter_names:
         values.append(
             _resolve_override(
-                pname, parameter_overrides, flat.parameters[pname].default, known=known
+                pname,
+                parameter_overrides,
+                flat.parameters[pname].default,
+                known=known,
+                namespaces=namespaces,
             )
         )
     return values
@@ -249,9 +255,20 @@ def _build_scalar_rhs(
     }
     y0_list: list[float] = []
     known_states = set(flat.state_variables)
+    state_namespaces = flat_namespace_scope(flat)
     for name in state_names:
         default = eq_ics.get(name, flat.state_variables[name].default)
-        y0_list.append(_resolve_override(name, initial_conditions, default, known=known_states))
+        y0_list.append(
+            _resolve_override(
+                name,
+                initial_conditions,
+                default,
+                known=known_states,
+                namespaces=state_namespaces,
+                surface="initial_conditions",
+                kind="state",
+            )
+        )
     y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.

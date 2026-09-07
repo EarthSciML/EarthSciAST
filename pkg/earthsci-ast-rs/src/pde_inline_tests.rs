@@ -2439,6 +2439,18 @@ mod tests {
         for r in &results {
             assert!(r.passed, "test {}: {}", r.test_id, r.message);
         }
+
+        // esm-spec §6.6.2 rule 2 validates the LEADING segments: `Q` names no
+        // component or subsystem, so the key is rejected instead of being
+        // suffix-matched down onto `sub.g` and quietly driving it.
+        doc["models"]["P"]["tests"] = json!([
+            {"id": "typo", "time_span": {"start": 0.0, "end": 1.0},
+             "parameter_overrides": {"Q.sub.g": 1.5}, "assertions": assert_gg(1.5)},
+        ]);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("P"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "a typo'd qualifier must not resolve");
     }
 
     #[test]
