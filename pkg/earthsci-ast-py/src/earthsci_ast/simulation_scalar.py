@@ -44,6 +44,7 @@ from .sympy_bridge import (
     SimulationError,
     _compile_flat_rhs,
     _expr_to_sympy,
+    _lambdify,
 )
 
 
@@ -83,7 +84,7 @@ def _create_event_functions(
             var_names = [str(var) for var in variables]
 
             # Create lambda function
-            condition_func = sp.lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
+            condition_func = _lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
 
             # Check if we have direction-dependent affects
             has_affect_neg = event.affect_neg is not None and len(event.affect_neg) > 0
