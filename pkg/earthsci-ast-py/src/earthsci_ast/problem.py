@@ -85,6 +85,7 @@ from .simulation_common import (
     _retcode_for_error,
     _scipy_missing_message,
     check_parameter_override_keys,
+    flat_namespace_scope,
 )
 from .simulation_loaders import (
     LoaderProvider,
@@ -560,7 +561,7 @@ def esm_problem(
     # leaves every parameter at its default, so the author's binding does
     # nothing and the run still reports a verdict: a wrong answer, not a
     # missing one.
-    check_parameter_override_keys(flat.parameters, p)
+    check_parameter_override_keys(flat.parameters, p, flat_namespace_scope(flat))
 
     # ---- provider injection: eager CONST materialization; gated deferral ----
     merged: dict[str, Any] = {
@@ -930,7 +931,7 @@ def remake(
                 f"state vector. Build a new EsmProblem with "
                 f"esm_problem(..., metaparameters={{'{clash[0]}': ...}})."
             )
-        check_parameter_override_keys(prob.flat.parameters, p)
+        check_parameter_override_keys(prob.flat.parameters, p, flat_namespace_scope(prob.flat))
         # A gated provider's fetch was SLICED to the support set value-invention
         # derived from the parameters at construction. Substituting a parameter
         # can move that set, and re-fetching is exactly what remake must not do.
