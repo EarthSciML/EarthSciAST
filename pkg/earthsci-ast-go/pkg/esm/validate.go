@@ -1600,8 +1600,8 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 // Two symbols, both GLOBALLY scoped: the document's independent variable and
 // the §6.4 operator placeholder. Exactly the pair creditIndependentVariable and
 // the `_var` concession put into scope ahead of the declaration maps, and the
-// same set §4.3.1's `reserved_index_symbol` binder rule uses — stated once so
-// the rules cannot drift apart.
+// same set the sibling `reserved_index_symbol` binder rule uses — §4.9.1.1 is
+// its normative home, so the two rules cannot drift apart.
 //
 // Spatial coordinate names are deliberately NOT here: they are coordinates only
 // in a coordinate position (§11.4), and tests/valid/units_dimensional_analysis.esm

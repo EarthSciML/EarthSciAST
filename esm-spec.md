@@ -1234,11 +1234,14 @@ symbol — the implicit symbol shadows *it*, and the declaration becomes
 unreachable. Declaring one is a **hard error** (`is_valid: false`), code
 `reserved_variable_name`.
 
-**The reserved set is `{ domain.independent_variable (default "t"), "_var" }`** —
-the same set §4.3.1's `reserved_index_symbol` binder rule follows, stated once so
-the two cannot drift. It follows the *document*: a file that renames its
-independent variable to `s` reserves `s` and **frees** `t`, which is then an
-ordinary name like any other. Spatial coordinate names are **not** in the set:
+**The reserved set is `{ domain.independent_variable (default "t"), "_var" }`**,
+and this section is its normative home: the sibling `reserved_index_symbol`
+rule — which rejects an `aggregate` binder (a `ranges` key or an `output_idx`
+entry, §4.3.1) spelled with one of these names, for the same reason and with the
+same silent failure mode — uses **this** set, so the two cannot drift apart. It
+follows the *document*: a file that renames its independent variable to `s`
+reserves `s` and **frees** `t`, which is then an ordinary name like any other.
+Spatial coordinate names are **not** in the set:
 `x`, `y`, `lon` resolve as coordinates only in a coordinate position (§11.4), and
 `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position
 variable.
@@ -4755,7 +4758,7 @@ The `domain` supports the following fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`, §4.9.1.1), and no `aggregate` binder may bind it (`reserved_index_symbol`, §4.3.1). Renaming it moves both rules onto the new name and frees `t`. |
+| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`), and no `aggregate` binder may bind it (`reserved_index_symbol`). Both rules read their reserved set from §4.9.1.1, so renaming the independent variable moves both onto the new name and frees `t`. |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
 | `element_type` | | The precision the document is **evaluated in**: `"Float64"` (default) or `"Float32"`. See §11.3.1 — this is a semantic declaration, not a storage hint. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |

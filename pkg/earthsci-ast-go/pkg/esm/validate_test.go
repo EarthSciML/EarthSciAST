@@ -977,7 +977,8 @@ func TestReservedDeclarationNameCoversReactionSystems(t *testing.T) {
 // TestReservedDeclarationNameFollowsTheDocument pins that the reserved set is
 // `domain.independent_variable`, not the literal "t". Renaming the independent
 // variable MOVES the rejection onto the new name and FREES `t`, which is then
-// an ordinary name — the same contract §4.3.1's `reserved_index_symbol` follows.
+// an ordinary name — the same contract the sibling `reserved_index_symbol`
+// binder rule follows, both reading their reserved set from §4.9.1.1.
 func TestReservedDeclarationNameFollowsTheDocument(t *testing.T) {
 	build := func(declared string) *ESMFile {
 		return &ESMFile{

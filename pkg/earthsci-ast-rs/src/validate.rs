@@ -238,7 +238,8 @@ pub enum StructuralErrorCode {
     /// `t` the simulation clock, so `log(t)` was `-inf` at `t = 0` and every
     /// number downstream was finite, plausible and wrong.
     ///
-    /// Same reserved set as §4.3.1's `reserved_index_symbol`, and it follows the
+    /// Reserved set defined by §4.9.1.1, shared with the sibling
+    /// `reserved_index_symbol` binder rule, and it follows the
     /// document: renaming the independent variable moves the rejection onto the
     /// new name and frees `t`.
     ReservedVariableName,

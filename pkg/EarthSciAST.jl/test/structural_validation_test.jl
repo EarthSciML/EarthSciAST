@@ -815,7 +815,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
         end
 
         # The reserved set FOLLOWS `domain.independent_variable`, exactly as
-        # §4.3.1's `reserved_index_symbol` does. A binding that hard-codes the
+        # the sibling `reserved_index_symbol` rule does. A binding that hard-codes the
         # literal "t" fails one of these two halves.
         @testset "the rule follows domain.independent_variable" begin
             invalid_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",

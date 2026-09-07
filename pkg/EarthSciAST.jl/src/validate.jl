@@ -1052,8 +1052,9 @@ Every name a declaration map may NOT spell, mapped to the reason it is reserved
 (esm-spec §4.9.1.1).
 
 Two symbols, both GLOBALLY scoped: the document's independent variable and the
-§6.4 operator placeholder. The same set §4.3.1's `reserved_index_symbol` binder
-rule uses — stated once so the two rules cannot drift apart.
+§6.4 operator placeholder. §4.9.1.1 is the normative home of this set; the
+sibling `reserved_index_symbol` rule for an `aggregate` binder reads the same
+set, so the two cannot drift apart.
 
 Spatial coordinate names are deliberately absent: they resolve as coordinates
 only in a coordinate position (§11.4), and
