@@ -347,6 +347,120 @@ function _lower_broadcast_model(model::Model)::Model
                  system_kind=model.system_kind, reference=model.reference)
 end
 
+# ---- Indexed observed-LHS normalization (esm-spec §6.3.1) ---------------------
+# esm-spec §6.3.1 admits TWO LHS spellings for the equation that DEFINES an
+# unknown: bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, "which defines the whole
+# array `y`"). Both are normative and neither is restricted by rank — the spec is
+# explicit that the defining form is read through the LHS's BASE NAME, so "an
+# arrayed definition is observed exactly as its scalar counterpart is".
+#
+# Every downstream owner-bucket collector in this build, though, tests the
+# SYNTACTIC `eq.lhs isa VarExpr` — the WS4 elementwise fold, the promoted-arrayop
+# inline set (`_collect_array_inline_vars`), the bare-alias array registration,
+# the clip-ring discovery. An ARRAY-shaped observed written with the indexed
+# spelling therefore landed in no bucket at all and fell through to
+# `_partition_variables`' geometry-ring gate as
+# `E_TREEWALK_UNSUPPORTED_SHAPE: <name>` — a loud refusal of a document Rust and
+# Python both run (issue #232). The scalar case never showed it, because a scalar
+# observed has no `index` shell to write.
+#
+# Fix the SPELLING once, here, upstream of every classifier, rather than teaching
+# each bucket a second LHS form (and rather than widening the geometry-ring gate,
+# which would let the shape through with no owner). Recognised form:
+#
+#     aggregate{k… over R…}(index(V, k…))  ~  rhs
+#
+# where the shell's `output_idx` is exactly the identity gather's subscripts in
+# order, its `ranges` bind exactly those symbols, it carries no contraction or
+# gating clause (`filter` / `join` / `key` / `distinct`), and `V` is an
+# ARRAY-shaped OBSERVED unknown of this model whose declared rank matches. A
+# derivative LHS (`aggregate{k}(D(index(u,k)))`) has a `D` body, not an `index`
+# body, so the ODE partition is untouched; so is an ODE state, an algebraic
+# unknown, and any genuine expression LHS.
+#
+# The rewrite moves the frame from the LHS onto the RHS:
+#
+#   * the RHS mentions NO frame symbol — it is already the whole array
+#     (`aggregate{k}(2*u[k])`), so the LHS shell simply drops:  `V ~ rhs`;
+#   * the RHS mentions one — it is a PER-CELL body (`2*u[k]`), so it is wrapped
+#     in the LHS's own frame:  `V ~ aggregate{k… over R…}(rhs)`.
+#
+# Both spell the same array the indexed equation defined, in the bare form the
+# rest of the build already handles. `free_variables` does the binder
+# subtraction, so an RHS aggregate that binds `k` itself counts as closed.
+# Byte-identical (the ORIGINAL equations vector, by identity) for any model with
+# no indexed observed LHS.
+function _normalize_indexed_observed_lhs(eqs::Vector{Equation}, model::Model)
+    observed_here = Set{String}(observed_unknowns(model))
+    isempty(observed_here) && return eqs
+    out = nothing
+    for (i, eq) in enumerate(eqs)
+        rewritten = _rewrite_indexed_observed_lhs(eq, model, observed_here)
+        if rewritten === nothing
+            out === nothing || push!(out, eq)
+        else
+            out === nothing && (out = Equation[eqs[j] for j in 1:(i - 1)])
+            push!(out, rewritten)
+        end
+    end
+    return out === nothing ? eqs : out
+end
+
+# One equation of the above: the rewritten `V ~ …` equation, or `nothing` when
+# this LHS is not the indexed-observed spelling (leave it exactly as authored).
+function _rewrite_indexed_observed_lhs(eq::Equation, model::Model,
+                                       observed_here::Set{String})
+    lhs = eq.lhs
+    lhs isa OpExpr || return nothing
+    shell = lhs::OpExpr
+    # `arrayop` is the internal twin of the public `aggregate` spelling; both are
+    # addressing shells to `_lhs_unwrap`, so both normalize here.
+    (shell.op == "aggregate" || shell.op == "arrayop") || return nothing
+    # A shell that CONTRACTS or GATES is not pure addressing — it computes.
+    (shell.filter === nothing && shell.join === nothing && shell.key === nothing &&
+     shell.distinct !== true) || return nothing
+    body = shell.expr_body
+    body isa OpExpr || return nothing
+    gather = body::OpExpr
+    gather.op == "index" || return nothing
+    isempty(gather.args) && return nothing
+    head = gather.args[1]
+    head isa VarExpr || return nothing
+    name = (head::VarExpr).name
+    name in observed_here || return nothing
+    var = get(model.variables, name, nothing)
+    (var !== nothing && _is_array_shape(var.shape)) || return nothing
+    idx = shell.output_idx
+    idx === nothing && return nothing
+    syms = String[]
+    for x in idx
+        x isa AbstractString || return nothing      # a literal singleton axis
+        push!(syms, String(x))
+    end
+    isempty(syms) && return nothing                 # a SCALAR reduction, not a frame
+    length(syms) == length(var.shape) || return nothing
+    # The gather must be the IDENTITY on the frame: `index(V, k…)`, same symbols,
+    # same order. `index(V, k+1)` or a permutation writes something else.
+    length(gather.args) == length(syms) + 1 || return nothing
+    for (a, s) in zip(view(gather.args, 2:length(gather.args)), syms)
+        (a isa VarExpr && (a::VarExpr).name == s) || return nothing
+    end
+    ranges = shell.ranges
+    ranges === nothing && return nothing
+    length(ranges) == length(syms) || return nothing
+    all(s -> haskey(ranges, s), syms) || return nothing
+
+    rhs = eq.rhs
+    rhs_free = free_variables(rhs)
+    if any(s -> s in rhs_free, syms)
+        rhs = OpExpr("aggregate", ASTExpr[];
+                     output_idx=Any[s for s in syms],
+                     ranges=Dict{String,Any}(s => ranges[s] for s in syms),
+                     expr_body=rhs)
+    end
+    return Equation(VarExpr(name), rhs; _comment=eq._comment)
+end
+
 # ---- Whole-array declared-shape derivative lift -------------------------------
 # A declared array-shaped state may be integrated by a WHOLE-ARRAY equation
 # `D(SST) = <array-valued rhs>` (bare `VarExpr` LHS, no per-cell `index`). The

@@ -150,6 +150,17 @@ DiscreteMaterializer() =
 #     fixed point). It used to be gated on geometry, which left a non-geometry
 #     expression-defined observed unbound. Synthesis only ADDS equations for
 #     observeds lacking one, so equation-defined models stay byte-identical.
+#  1b. INDEXED OBSERVED-LHS NORMALIZATION (esm-spec §6.3.1): an observed's
+#     defining equation may name it BARE (`y ~ f(…)`) or INDEXED
+#     (`aggregate{k}(y[k]) ~ f(…)`); both spellings are normative and neither is
+#     restricted by rank. Every owner-bucket collector below tests the syntactic
+#     `eq.lhs isa VarExpr`, so an ARRAY-shaped observed written the indexed way
+#     matched none of them and hard-errored in `_partition_variables`
+#     (`E_TREEWALK_UNSUPPORTED_SHAPE`) on a document Rust and Python both run —
+#     issue #232. `_normalize_indexed_observed_lhs` rewrites the indexed spelling
+#     into the bare one ONCE, before any classifier reads an LHS, so exactly one
+#     form reaches the rest of the build. Must run BEFORE the WS4 fold and the
+#     inline-var collection, which are two of the buckets it feeds.
 #  2. ELEMENTWISE ARRAY-OBSERVED FOLD (WS4): fold every array-shaped observed
 #     whose lowered defining RHS is elementwise (a level-set's `U_n`, `S_n`, …)
 #     into its readers, so a discretization-agnostic PDE leaf can be authored
@@ -172,6 +183,7 @@ function _prepare_model_equations(model::Model)
     # (esm-spec §6.3), so there is no variable-level `expression` left to
     # synthesize an equation from — the list is already complete.
     equations = model.equations
+    equations = _normalize_indexed_observed_lhs(equations, model)
     equations, folded_array_obs = _fold_elementwise_array_observeds(equations, model)
     let var_shapes = Dict{String,Vector{String}}()
         for (n, v) in model.variables
