@@ -53,6 +53,7 @@ from .simulation_common import (
     _retcode_for_error,
     _retcode_from_scipy,
     coerce_inline_array,
+    dotted_suffixes,
     flat_namespace_scope,
     is_inline_array_value,
     resolve_override_raw,
@@ -2410,8 +2411,11 @@ def _build_numpy_rhs(
                 pname,
                 raw,
                 want,
+                # esm-spec §6.6.2 rule 3 admits EVERY dotted suffix of the
+                # flattened name, not just its trailing segment, so `sub.g`
+                # names `P.sub.g` as surely as `g` does.
                 origin="parameter_overrides"
-                if (pname in parameters or bare in parameters)
+                if (pname in parameters or any(s in parameters for s in dotted_suffixes(pname)))
                 else "default",
             )
             loader_arrays.setdefault(pname, arr)
