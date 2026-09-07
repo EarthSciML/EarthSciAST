@@ -44,6 +44,12 @@ pub(crate) fn validate_model(
     // time into plausible, zero-padded garbage.
     validate_array_broadcast_shapes(model_name, model, errors);
 
+    // An observed defined (transitively) in terms of itself has no evaluation
+    // order, and the equations alone decide it — esm-spec §4.9.6. Checked here,
+    // beside the other whole-model structural checks, so `esm validate` names
+    // the cycle instead of the build naming an innocent bystander (issue #181).
+    check_observed_dependency_cycle(model_name, model, esm_file, &ctx.class, errors);
+
     ctx.check_default_units_identity(errors);
     ctx.check_observed_definitions(&unit_env, errors, warnings);
     ctx.check_update_expression_refs(errors);
@@ -1400,6 +1406,183 @@ fn check_recurrence_equation(
                 return;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observed dependency cycles — esm-spec §4.9.6
+// ---------------------------------------------------------------------------
+
+/// The model's recurrence CANDIDATES: array-shaped unknowns whose own defining
+/// RHS reads them back through at least one `index` (esm-spec §4.3.1.1).
+///
+/// This is the predicate CONFORMANCE_SPEC §5.19.5 requires every check that
+/// would otherwise fire on the self-edge to be exempted by — *candidacy*, not
+/// the well-foundedness verdict. Gating on the verdict would let the cycle
+/// check fire on an ill-founded self-read and collapse the document to one
+/// cycle error, giving back exactly the named `recurrence_*` diagnosis the
+/// construct exists to produce. Gating on "is this a self-edge at all" is the
+/// mirror-image mistake and is just as wrong: it would swallow a scalar
+/// `x ~ x + 1` and a bare `s ~ s + 1`, which have no axis to fold along and can
+/// never be recurrences, and drop the cycle error they must keep getting.
+fn recurrence_candidate_vars(model: &crate::Model, esm_file: &EsmFile) -> HashSet<String> {
+    let array_shaped: HashSet<&str> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    let mut out = HashSet::new();
+    for equation in &model.equations {
+        let Some((var, _)) = recurrence_lhs_target(&equation.lhs) else {
+            continue;
+        };
+        if !array_shaped.contains(var) {
+            continue;
+        }
+        let mut env: Vec<(String, (i64, i64))> = Vec::new();
+        let mut reads: Vec<StructuralSelfRead> = Vec::new();
+        let mut bare = false;
+        collect_structural_self_reads(
+            &equation.rhs,
+            var,
+            esm_file,
+            &mut env,
+            false,
+            &mut reads,
+            &mut bare,
+        );
+        if !reads.is_empty() {
+            out.insert(var.to_string());
+        }
+    }
+    out
+}
+
+/// The observeds each observed's defining RHS names, as a sorted adjacency map.
+///
+/// Sorted (`BTreeMap`/`BTreeSet`) rather than hashed because the cycle the
+/// diagnostic NAMES is chosen by the traversal order, and a `HashMap` would
+/// hand a different member of the same cycle to two runs of the same binary.
+/// Binder symbols are subtracted first, so an `aggregate` range key that
+/// happens to share a name with an observed does not manufacture an edge.
+fn observed_dependency_graph(
+    class: &crate::classification::Classification,
+    candidates: &HashSet<String>,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let observed: HashSet<&str> = class
+        .observed_unknowns
+        .iter()
+        .map(String::as_str)
+        .collect();
+    class
+        .observed_definitions
+        .iter()
+        .map(|(name, rhs)| {
+            let mut free = HashSet::new();
+            collect_free_symbols(rhs, &mut free);
+            let mut bound = HashSet::new();
+            collect_bound_symbols(rhs, &mut bound);
+            let mut deps: std::collections::BTreeSet<String> = free
+                .into_iter()
+                .filter(|s| !bound.contains(s) && observed.contains(s.as_str()))
+                .collect();
+            // esm-spec §4.3.1.1: a well-founded causal self-read is an ORDERING
+            // within one variable, not a dependency between two, so `V → V` is
+            // dropped from this graph — for a CANDIDATE, and only for one.
+            if candidates.contains(name) {
+                deps.remove(name);
+            }
+            (name.clone(), deps)
+        })
+        .collect()
+}
+
+/// Reject a dependency cycle among a model's observed unknowns
+/// (esm-spec §4.9.6; issue #181).
+///
+/// An observed is *defined* by its equation's RHS, so the definitions induce a
+/// dependency graph over the observed names, and a cycle in it means no
+/// evaluation order satisfies every definition. That is decidable from the
+/// equations alone — no shapes, no values, no solver — which is why it is a
+/// hard error here rather than a surprise at build time. Before this check,
+/// `esm validate` accepted a cyclic document and the build reported
+/// `E_TREEWALK_UNBOUND_NAME` against whichever name its walk reached first
+/// *after* the cycle, which is generally an innocent one.
+///
+/// One cycle is reported per model (the first the sorted DFS closes), like
+/// [`check_circular_dependencies_in_models`]: a second cycle is usually the
+/// same defect seen from another entry point, and the author fixes them one at
+/// a time anyway.
+fn check_observed_dependency_cycle(
+    model_name: &str,
+    model: &crate::Model,
+    esm_file: &EsmFile,
+    class: &crate::classification::Classification,
+    errors: &mut Vec<StructuralError>,
+) {
+    if class.observed_definitions.is_empty() {
+        return;
+    }
+    let candidates = recurrence_candidate_vars(model, esm_file);
+    let deps = observed_dependency_graph(class, &candidates);
+
+    // Iterative-friendly tri-state DFS (0 = unseen, 1 = on stack, 2 = done),
+    // the same shape the template-body reference DAG uses in
+    // `lower_expression_templates::mirror::validate_template_body_references`.
+    fn visit(
+        name: &str,
+        deps: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+        state: &mut HashMap<String, u8>,
+        chain: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        match state.get(name).copied().unwrap_or(0) {
+            1 => {
+                let start = chain.iter().position(|c| c == name).unwrap_or(0);
+                let mut cycle: Vec<String> = chain[start..].to_vec();
+                cycle.push(name.to_string());
+                Some(cycle)
+            }
+            2 => None,
+            _ => {
+                state.insert(name.to_string(), 1);
+                chain.push(name.to_string());
+                if let Some(ds) = deps.get(name) {
+                    for d in ds {
+                        if let Some(cycle) = visit(d, deps, state, chain) {
+                            return Some(cycle);
+                        }
+                    }
+                }
+                chain.pop();
+                state.insert(name.to_string(), 2);
+                None
+            }
+        }
+    }
+
+    let mut state: HashMap<String, u8> = HashMap::new();
+    let mut chain: Vec<String> = Vec::new();
+    for name in deps.keys() {
+        let Some(cycle) = visit(name, &deps, &mut state, &mut chain) else {
+            continue;
+        };
+        errors.push(StructuralError {
+            path: format!("/models/{model_name}"),
+            code: StructuralErrorCode::ObservedCycle,
+            message: format!(
+                "Observed dependency cycle: {}. Each of these observed variables is defined \
+                 in terms of the next, so no evaluation order satisfies every definition \
+                 (esm-spec §4.9.6). Break the cycle by splitting one observed into a \
+                 pre-value and a post-value.",
+                cycle.join(" -> ")
+            ),
+            details: serde_json::json!({
+                "cycle": cycle,
+                "dependency_type": "observed_definitions",
+            }),
+        });
+        return;
     }
 }
 

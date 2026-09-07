@@ -66,6 +66,13 @@ const ERROR_CODES = (
     JOIN_SIDE_AMBIGUOUS = "join_side_ambiguous",
     JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol",
     NULL_REACTION = "null_reaction",
+    # esm-spec §4.9.6 (issue #181): a dependency cycle among a model's OBSERVED
+    # unknowns — each is defined by an equation whose RHS names the next, so no
+    # evaluation order satisfies every definition. Decidable from the equations
+    # alone, hence a HARD structural error in `validate()` rather than a
+    # surprise at build time; the self-edge of a §4.3.1.1 recurrence CANDIDATE
+    # is an ordering WITHIN one variable and is not one of these edges.
+    OBSERVED_CYCLE = "observed_cycle",
     # Causal self-reference (esm-spec §4.3.1.1, CONFORMANCE_SPEC §5.19.5).
     # A VALIDATION category, so both codes are owed by every binding whether or
     # not it evaluates array numerics: the pre-1.0 behaviour of an ill-founded

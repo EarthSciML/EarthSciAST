@@ -257,6 +257,24 @@ RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form"
 
 
 # ===========================================================================
+# Observed dependency cycle (esm-spec §4.9.6), reported by the structural
+# validator at `/models/<M>`.
+#
+# A cycle belongs to no single equation -- it is a property of the model's
+# observed-definition graph -- so it pins at the MODEL, exactly as
+# `equation_count_mismatch` does. It is distinct from `circular_dependency`,
+# which is a cycle among MODELS reached through scoped references.
+# ===========================================================================
+
+#: A cycle among one model's OBSERVED definitions: `V -> W` whenever `W` occurs
+#: free in `V`'s defining RHS and `W` is itself an observed of the same model.
+#: No evaluation order satisfies every definition, so the document is rejected
+#: in `validate` with the names on the cycle. The §4.3.1.1 recurrence SELF-EDGE
+#: is not one of these edges (see `RECURRENCE_NOT_WELLFOUNDED` above).
+OBSERVED_CYCLE = "observed_cycle"
+
+
+# ===========================================================================
 # The registry itself (API_SPEC.md §8 / H-2).
 #
 # `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code

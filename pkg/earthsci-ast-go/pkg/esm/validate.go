@@ -854,6 +854,15 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// rejection duty as the three executing ones, so this static check is the
 	// whole of the construct in Go. See validate_recurrence.go.
 	s.validateRecurrences(model, basePath)
+
+	// esm-spec §4.9.6 "An observed dependency cycle": the model's observed
+	// definitions induce a dependency graph over the observed names, and a cycle
+	// in it means no evaluation order satisfies every definition. Decidable from
+	// the equations alone, so it is a hard structural error here rather than
+	// something a build stumbles over and misattributes to an innocent name
+	// (issue #181). Runs AFTER validateRecurrences, whose §4.3.1.1 candidates own
+	// their self-edge. See validate_observed_cycle.go.
+	s.validateObservedCycles(modelName, model, basePath)
 }
 
 // validateExpressionVariables checks that every variable referenced in an

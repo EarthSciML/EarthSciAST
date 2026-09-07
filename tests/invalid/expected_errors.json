@@ -2930,5 +2930,16 @@
     "resolver_only": true,
     "resolver_error_code": "data_source_url_unresolved",
     "notes": "Resolver-level invalid (esm-spec §8.2.1). The document is SCHEMA-VALID — `url_template` is a bare string, so nothing in JSON Schema forbids a `${VAR}` in it — which is what makes this the resolver's rejection rather than a schema error. UNLIKE the other `resolver_only` pins, `is_valid` is false for EVERY binding: §8.2.1 resolution is REQUIRED of all five (it decides where a document's data comes from, and an optional capability there would make the same document resolve under one binding and not another), so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names the offending entry and template — the failure this replaces was an `io error at /${VAR}/x.parquet` that named neither. The portable spelling is tests/valid/data_source_relative_url.esm; the resolution rule itself is pinned across bindings by tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC §5.22)."
+  },
+  "observed_cycle_array_elementwise.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/YSU",
+        "code": "observed_cycle"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec §4.9.6 (issue #181). Three ARRAY observeds over one index set reading each other elementwise: gamfac -> hpbl -> wscale -> gamfac. The cycle is a function of the equations alone, so it is a HARD structural error in `validate` — not something a build discovers. The pin is the (code, path) pair only: a cycle belongs to no single equation, so it pins at the model (as `equation_count_mismatch` does), and the prose is deliberately NOT pinned across bindings (CONFORMANCE_SPEC §5.19.5) — what IS required of every binding's message is that it NAME the observeds on the cycle. `in_pbl` is a fourth observed, correct in every respect, that merely reads `hpbl`; it is the name the Rust build reported as E_TREEWALK_UNBOUND_NAME before this check existed, and it MUST NOT appear on the reported cycle. Companion: the recurrence self-edge is NOT one of these edges (tests/valid/recurrence_causal_self_reference.esm must still validate clean)."
   }
 }

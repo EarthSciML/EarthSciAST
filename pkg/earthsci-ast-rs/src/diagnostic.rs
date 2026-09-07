@@ -291,6 +291,11 @@ diagnostic_code_registry! {
     JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol";
     /// A null entry in a reaction list.
     NULL_REACTION = "null_reaction";
+    /// A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6):
+    /// `a` is defined in terms of `b`, `b` (transitively) in terms of `a`, so
+    /// no evaluation order satisfies both definitions. The self-edge of a
+    /// §4.3.1.1 recurrence CANDIDATE is not such an edge and is dropped.
+    OBSERVED_CYCLE = "observed_cycle";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
@@ -472,6 +477,7 @@ mod error_code_tests {
             "metaparameter_type_error",
             "metaparameter_unbound",
             "null_reaction",
+            "observed_cycle",
             "operator_variable_missing",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
@@ -531,6 +537,10 @@ mod error_code_tests {
         assert_eq!(
             StructuralErrorCode::ArrayShapeMismatch.to_string(),
             super::codes::ARRAY_SHAPE_MISMATCH
+        );
+        assert_eq!(
+            StructuralErrorCode::ObservedCycle.to_string(),
+            super::codes::OBSERVED_CYCLE
         );
     }
 }

@@ -30,7 +30,7 @@ import { isAffineTempUnit } from './unit-format.js'
 import { forEachExpressionScope } from '../traverse.js'
 import { documentDeclaredNames } from './coupling-checks.js'
 import { observedDefinitions } from '../classification.js'
-import { CadenceSeeder } from '../cadence.js'
+import { CadenceSeeder, CadenceCycleError } from '../cadence.js'
 
 /**
  * Check equation-unknown balance for a model (esm-spec §4.9.4).
@@ -1017,10 +1017,34 @@ export function validateRelationalNodesInContinuous(
   // DEFINING EQUATION resolves continuous. The 0.x code tested
   // `variable.type === 'state'`, which 1.0.0 does not declare, and which never
   // saw the observed case at all.
-  const seeder = new CadenceSeeder(model)
-  const continuousNames = new Set(
-    Object.keys(model.variables || {}).filter((name) => seeder.leaf(name) === 'continuous'),
-  )
+  //
+  // A model whose observed definitions contain a CYCLE has no cadence
+  // assignment at all — the chain `V -> W -> V` has no base case, so `leaf`
+  // raises rather than inventing one — and this check DECLINES to run there
+  // instead of guessing at a class. Nothing is lost by declining:
+  // `validateObservedCycles` reports the cycle itself as `observed_cycle` at
+  // the model, naming the observeds on it (esm-spec §4.9.6, issue #181), which
+  // is both a better diagnosis and the one the shared corpus pins.
+  //
+  // Catching here is what keeps that diagnosis reachable. `CadenceCycleError`
+  // extends `EsmDiagnosticError` directly rather than `EsmMachineryError`, so
+  // `loadErrorCode` has no arm for it: escaping this function, it reached the
+  // orchestrator's generic catch and collapsed the ENTIRE document into one
+  // `load_error` at the root path, discarding every other structural finding
+  // including the cycle report. The seeder still throws — a caller outside
+  // `validate()` asking for the cadence of a cyclic model deserves the
+  // exception — it is only this validator, which has a named check standing
+  // behind it, that absorbs it.
+  let continuousNames: Set<string>
+  try {
+    const seeder = new CadenceSeeder(model)
+    continuousNames = new Set(
+      Object.keys(model.variables || {}).filter((name) => seeder.leaf(name) === 'continuous'),
+    )
+  } catch (error) {
+    if (error instanceof CadenceCycleError) return errors
+    throw error
+  }
   if (continuousNames.size === 0) return errors
 
   forEachExpressionScope(model, modelPath, (scope) => {

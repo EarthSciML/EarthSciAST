@@ -223,6 +223,18 @@ pub enum StructuralErrorCode {
     /// decided here, because the alternative is a positional flatten that
     /// produces plausible, non-`NaN`, zero-padded garbage.
     ArrayShapeMismatch,
+    /// A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6):
+    /// each observed on the cycle is defined in terms of the next, so no
+    /// evaluation order satisfies every definition and the algebraic block is
+    /// not a substitutable one. Decidable from the equations alone, so it is
+    /// decided HERE — before a build reaches the cycle and reports whichever
+    /// name its walk happened to try next (issue #181).
+    ///
+    /// The self-edge of a §4.3.1.1 recurrence CANDIDATE is an ordering *within*
+    /// one variable, not a dependency between two, and is dropped
+    /// (CONFORMANCE_SPEC §5.19.5). Every other self-reference is a cycle of
+    /// length one and is reported here.
+    ObservedCycle,
 }
 
 use crate::diagnostic::codes;
@@ -259,6 +271,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UndefinedIndexSet => codes::UNDEFINED_INDEX_SET,
             Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
             Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,
+            Self::ObservedCycle => codes::OBSERVED_CYCLE,
         };
         write!(f, "{s}")
     }

@@ -224,6 +224,14 @@ _recur_findings(file) = [e for e in ESM_R.validate_recurrence_semantics(file)]
                     # at least one `index` self-read, well founded or not.
                     @test !("load_error" in codes)
                     @test !("circular_dependency" in codes)
+                    # `observed_cycle` (esm-spec §4.9.6) is the cycle check this
+                    # guard is actually about now that one exists inside
+                    # `validate()`: every case here is a recurrence CANDIDATE
+                    # (array-shaped, at least one `index` self-read), so its
+                    # self-edge is dropped from the observed dependency graph —
+                    # well founded or not. Gate that drop on the verdict instead
+                    # and all eight collapse to a one-node cycle here.
+                    @test !("observed_cycle" in codes)
                     hits = [e for e in res.structural_errors
                             if e.error_type == String(case.expected_code)]
                     @test length(hits) >= 1
