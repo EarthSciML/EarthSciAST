@@ -1,0 +1,16 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "SunLeaf",
+    "description": "Head of the coupling chain: publishes a surface temperature.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "models": {
+    "Sun": {
+      "variables": {
+        "T_surface": { "type": "unknown", "units": "K" }
+      },
+      "equations": [{ "lhs": "T_surface", "rhs": 163.0 }]
+    }
+  }
+}

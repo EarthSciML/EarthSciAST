@@ -1,0 +1,28 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ProbeChainConstAggregate",
+    "description": "Issue #207, the spelling that already WORKED: byte-for-byte the same chain as `probe_chain_const.esm`, mounting the leaf whose table is wrapped in an `aggregate` instead of being read as a bare `const` array. Its answer is the contrast that shows the two spellings must agree.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": { "tbl": { "kind": "interval", "size": 5 } },
+  "models": {
+    "Sun": { "ref": "./sun.esm" },
+    "Atm": { "ref": "./atm.esm" },
+    "Rtrn": { "ref": "./rtrn_aggregate.esm" }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Sun.T_surface",
+      "to": "Atm.T_in",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Atm.T",
+      "to": "Rtrn.T",
+      "transform": "param_to_var"
+    }
+  ]
+}

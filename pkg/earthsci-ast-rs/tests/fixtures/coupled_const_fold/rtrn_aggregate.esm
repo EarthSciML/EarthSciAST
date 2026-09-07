@@ -1,0 +1,55 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RtrnAggregateLeaf",
+    "description": "Identical to `rtrn_const.esm` except that the table is read through an `aggregate` wrapper — the spelling the issue #207 reporter found already worked. The two leaves are semantically the same table; only the fold timing differs, which is exactly what must not change the answer.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "models": {
+    "Rtrn": {
+      "variables": {
+        "T": { "type": "parameter", "default": 161.0 },
+        "totplnk_raw": { "type": "unknown", "shape": ["tbl"] },
+        "totplnk": { "type": "unknown", "shape": ["tbl"] },
+        "plnk": { "type": "unknown" },
+        "flux": { "type": "unknown" }
+      },
+      "equations": [
+        {
+          "lhs": "totplnk_raw",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [10.0, 20.0, 30.0, 40.0, 50.0]
+          }
+        },
+        {
+          "lhs": "totplnk",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "tbl" } },
+            "expr": { "op": "index", "args": ["totplnk_raw", "i"] }
+          }
+        },
+        {
+          "lhs": "plnk",
+          "rhs": {
+            "op": "index",
+            "args": ["totplnk", { "op": "-", "args": ["T", 159] }]
+          }
+        },
+        { "lhs": { "op": "D", "args": ["flux"], "wrt": "t" }, "rhs": 0.0 }
+      ],
+      "tests": [
+        {
+          "id": "coupled_temperature_picks_the_right_table_row",
+          "description": "Same numbers as the bare-`const` leaf: T = 163 gathers totplnk[4] = 40.",
+          "time_span": { "start": 0.0, "end": 0.0 },
+          "assertions": [{ "variable": "plnk", "time": 0.0, "expected": 40.0 }]
+        }
+      ]
+    }
+  }
+}
