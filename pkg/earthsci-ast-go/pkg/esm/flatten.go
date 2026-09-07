@@ -1436,6 +1436,12 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	// bDep -> targetDep for every match that RENAMED the dependent variable.
 	mergedAway := map[string]string{}
 	var mergedAwayOrder []string
+	// Positions in A's equation slice this entry merged INTO, for the
+	// reattribution below. Collected rather than acted on in place because
+	// aIndex indexes that slice POSITIONALLY and stays live until the last B
+	// equation has been matched -- relocating an equation mid-loop would
+	// invalidate it.
+	mergedPositions := map[int]bool{}
 	for _, bEq := range b.equations {
 		bDep := lhsDependentVar(bEq.LHS)
 		if bDep == "" {
@@ -1498,6 +1504,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			RHS:          addExprs(aEq.RHS, rhs),
 			SourceSystem: aEq.SourceSystem,
 		}
+		mergedPositions[i] = true
 		if targetDep != bDep {
 			if _, seen := mergedAway[bDep]; !seen {
 				mergedAwayOrder = append(mergedAwayOrder, bDep)
@@ -1506,6 +1513,15 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 		}
 	}
 	b.equations = surviving
+
+	// `a == b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
+	// and which has just rebound the one shared slice out from under
+	// mergedPositions. The reattribution would be the identity there anyway -- A
+	// and the variable owner are the same component -- so skip it rather than
+	// index a slice the positions no longer describe.
+	if a != b {
+		reattributeMergedEquations(components, entry.Systems[0], mergedPositions)
+	}
 
 	// §4.7.1 step 4, "the merged-away name does not survive": a RENAMING match
 	// (a translation match, or the bare-name fallback, which is a name-based
@@ -1525,6 +1541,86 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 			b.stateVars.remove(gone)
 			b.observed.remove(gone)
 		}
+	}
+}
+
+// reattributeMergedEquations moves each freshly merged equation into its
+// dependent variable's component.
+//
+// A composed tendency is no longer any single author's contribution, so
+// esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
+// dependent variable rather than to the `systems[0]` that happened to carry the
+// surviving equation. Where A already IS that system -- the ordinary
+// `["Chemistry", "Advection"]` spelling, and every fixture in the shared tree
+// before this one -- the move is the identity and nothing changes.
+//
+// Where it is NOT the identity is a document that CHAINS compose entries over
+// one state with the OPERATOR as A:
+//
+//	{"type": "operator_compose", "systems": ["Sink", "Chem"]}
+//	{"type": "operator_compose", "systems": ["Src",  "Chem"]}
+//	{"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}
+//
+// with Sink and Src authoring `D(Chem.X, t) = ...` directly. §4.7.1 permits it
+// and reseact.esm is built on it (deposition, then emission, then the transport
+// lift). Entry 1 consumes Chem's own equation and leaves the sum in the Sink
+// component; entry 2 then walks Src and Chem and cannot see it. Both the
+// composed tendency and Src's un-merged contribution reach assembleSystem, which
+// reports two systems defining Chem.O3 -- loud rather than corrupt, but the
+// document is spec-valid and must flatten. Relocating the merge to Chem is what
+// puts it back where the next entry looks for it, in either role.
+//
+// The component bag is this binding's analogue of the reference
+// implementation's per-equation owner (Julia coupling_apply.jl, the
+// `new_owners[j] = _component_root(dep)` line): which component's equation slice
+// an equation sits in is the only record of who authored it, and after
+// namespacing an operator's equation for a chemistry species is textually
+// indistinguishable from the chemistry component's own.
+//
+// POSITION. §4.7.5 step 4 makes document order normative, and a relocated
+// equation is APPENDED to the owner's slice rather than inserted at the slot of
+// the B equation it consumed. Appending is what reproduces the reference order:
+// each merge trails the ones before it, so a species whose chain ends at a later
+// entry ends up after one whose chain ended earlier -- Chem.NO (last merged by
+// entry 1) ahead of Chem.O3 (last merged by entry 2) in the document above.
+// Inserting at the consumed equation's slot instead would freeze both at Chem's
+// original declaration order and disagree with every other binding.
+//
+// An equation whose dependent variable names no component of this document stays
+// where it is; there is no bag to move it to.
+func reattributeMergedEquations(components map[string]*componentSystem, aName string, mergedPositions map[int]bool) {
+	if len(mergedPositions) == 0 {
+		return
+	}
+	a := components[aName]
+	var kept []FlattenedEquation
+	type relocation struct {
+		owner string
+		eq    FlattenedEquation
+	}
+	var moved []relocation
+	for i, eq := range a.equations {
+		owner := ""
+		if mergedPositions[i] {
+			if dep := lhsDependentVar(eq.LHS); dep != "" {
+				owner = dep
+				if root, _, found := strings.Cut(dep, "."); found {
+					owner = root
+				}
+			}
+		}
+		if _, ok := components[owner]; owner == "" || owner == aName || !ok {
+			kept = append(kept, eq)
+			continue
+		}
+		moved = append(moved, relocation{owner: owner, eq: eq})
+	}
+	if len(moved) == 0 {
+		return
+	}
+	a.equations = kept
+	for _, m := range moved {
+		components[m.owner].equations = append(components[m.owner].equations, m.eq)
 	}
 }
 

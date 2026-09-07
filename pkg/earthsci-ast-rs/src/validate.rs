@@ -850,7 +850,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
@@ -859,7 +859,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
-                default: Some(0.1),
+                default: Some(0.1.into()),
                 ..var(VariableType::Parameter, Some("1/s"))
             },
         );
@@ -987,7 +987,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
@@ -996,7 +996,7 @@ mod tests {
         variables.insert(
             "k".to_string(),
             ModelVariable {
-                default: Some(0.1),
+                default: Some(0.1.into()),
                 ..var(VariableType::Parameter, Some("1/s"))
             },
         );
@@ -1052,7 +1052,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
@@ -1062,7 +1062,7 @@ mod tests {
             "k".to_string(),
             ModelVariable {
                 default_units: None,
-                default: Some(0.1),
+                default: Some(0.1.into()),
                 ..var(VariableType::Parameter, Some("kg")) // mass units (incompatible)
             },
         );
@@ -1110,7 +1110,7 @@ mod tests {
         variables.insert(
             "position".to_string(),
             ModelVariable {
-                default: Some(0.0),
+                default: Some(0.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );
@@ -1119,7 +1119,7 @@ mod tests {
         variables.insert(
             "velocity".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Parameter, Some("m/s"))
             },
         );
@@ -1167,7 +1167,7 @@ mod tests {
         variables.insert(
             "x".to_string(),
             ModelVariable {
-                default: Some(1.0),
+                default: Some(1.0.into()),
                 ..var(VariableType::Unknown, Some("m"))
             },
         );

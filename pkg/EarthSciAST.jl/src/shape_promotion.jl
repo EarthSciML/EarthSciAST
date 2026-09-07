@@ -277,12 +277,28 @@ end
 # which may be dotted/namespaced. Each shape axis ranges over the index set it
 # names (`{from: …}`); dimension sizes are declared via `index_sets` since the
 # removal of the Domain.spatial spec, so the domain contributes none here.
+#
+# `bounds` replaces those index-set references with RESOLVED `[1, extent]`
+# literals, one per axis, for a caller lifting a body it is about to evaluate
+# rather than to store: the §6.6.5 assertion path
+# ([`_authored_observed_body`](@ref)) has the extents in hand and no index-set
+# registry at the evaluator. Everything else about the lift — the loop-name
+# convention, the §4.3.4 name alignment, the arrayop wrapper — MUST stay shared
+# with the build's own promotion, which is why this takes a keyword instead of
+# being copied.
 function _lift_to_arrayop(expr::ASTExpr, shape::Vector{String},
                           arrayvars::Set{String},
                           var_shapes::Dict{String,Vector{String}}=
-                              Dict{String,Vector{String}}())::OpExpr
-    loops = String["_p$(i-1)" for i in 1:length(shape)]
-    ranges = Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape))
+                              Dict{String,Vector{String}}();
+                          bounds::Union{Nothing,Vector{Int}}=nothing)::OpExpr
+    n = bounds === nothing ? length(shape) : length(bounds)
+    loops = String["_p$(i-1)" for i in 1:n]
+    ranges = bounds === nothing ?
+        Dict{String,Any}(loops[i] => IndexSetRef(shape[i]) for i in eachindex(shape)) :
+        Dict{String,Any}(loops[i] => Any[1, bounds[i]] for i in eachindex(bounds))
+    # `_AxisAlign` self-disables (`_usable_align`) when its axes are not
+    # positionally parallel to `loops`, so a shape/bounds length mismatch
+    # degrades to the historical positional gather rather than misaligning.
     body = _index_array_leaves(expr, arrayvars, loops;
                                align = _AxisAlign(shape, var_shapes))
     return OpExpr("arrayop", ASTExpr[];

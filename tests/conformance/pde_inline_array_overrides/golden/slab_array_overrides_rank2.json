@@ -1,0 +1,147 @@
+{
+    "fixture": "slab_array_overrides_rank2",
+    "assertions": [
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 1,
+            "variable": "a",
+            "reduce": null,
+            "actual": 1.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 2,
+            "variable": "a",
+            "reduce": null,
+            "actual": 2.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 3,
+            "variable": "a",
+            "reduce": null,
+            "actual": 3.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 4,
+            "variable": "a",
+            "reduce": null,
+            "actual": 4.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 5,
+            "variable": "a",
+            "reduce": null,
+            "actual": 5.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 6,
+            "variable": "a",
+            "reduce": null,
+            "actual": 6.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 7,
+            "variable": "b",
+            "reduce": null,
+            "actual": -1.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 8,
+            "variable": "b",
+            "reduce": null,
+            "actual": -2.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 9,
+            "variable": "b",
+            "reduce": null,
+            "actual": -3.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 10,
+            "variable": "b",
+            "reduce": null,
+            "actual": -4.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 11,
+            "variable": "b",
+            "reduce": null,
+            "actual": -5.0
+        },
+        {
+            "test_id": "rank2_declared_default",
+            "assertion_idx": 12,
+            "variable": "b",
+            "reduce": null,
+            "actual": -6.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 1,
+            "variable": "a",
+            "reduce": null,
+            "actual": 10.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 2,
+            "variable": "a",
+            "reduce": null,
+            "actual": 20.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 3,
+            "variable": "a",
+            "reduce": null,
+            "actual": 30.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 4,
+            "variable": "a",
+            "reduce": null,
+            "actual": 40.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 5,
+            "variable": "a",
+            "reduce": null,
+            "actual": 50.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 6,
+            "variable": "a",
+            "reduce": null,
+            "actual": 60.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 7,
+            "variable": "a",
+            "reduce": "max",
+            "actual": 60.0
+        },
+        {
+            "test_id": "rank2_override",
+            "assertion_idx": 8,
+            "variable": "b",
+            "reduce": "min",
+            "actual": -6.0
+        }
+    ],
+    "reference_binding": "julia",
+    "_comment": "Minted by the Julia reference binding's `run_pde_tests` (Tsit5, reltol=1e-12, abstol=1e-14) over fixtures/slab_array_overrides_rank2.esm. The 2x3 slab's axes have different extents and pairwise-distinct element values, so these actuals pin the ROW-MAJOR nesting order of esm-spec 6.6.2 element-for-element: a binding that read the authored array in column-major order, or flattened it against its own state-vector order, disagrees on every off-diagonal cell."
+}

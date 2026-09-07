@@ -1,0 +1,434 @@
+{
+    "esm": "1.0.0",
+    "metadata": {
+        "name": "pde_inline_array_overrides_rank2",
+        "description": "The RANK-2 half of the category: inline array data whose two axes have DIFFERENT extents (lev=2, col=3) and pairwise-distinct element values, so the row-major nesting order of esm-spec 6.6.2 is gated rather than assumed. A binding that reads the authored array in column-major order, or that flattens it against its own state-vector order, disagrees on every off-diagonal cell instead of coincidentally agreeing.",
+        "authors": [
+            "EarthSciAST"
+        ],
+        "tags": [
+            "pde-inline-test",
+            "esm-spec-6.3",
+            "esm-spec-6.6.2",
+            "esm-spec-11.4",
+            "inline-array-data",
+            "rank-2",
+            "row-major-nesting"
+        ]
+    },
+    "index_sets": {
+        "lev": {
+            "kind": "interval",
+            "size": 2
+        },
+        "col": {
+            "kind": "interval",
+            "size": 3
+        }
+    },
+    "models": {
+        "Slab": {
+            "tolerance": {
+                "abs": 1e-12,
+                "rel": 1e-09
+            },
+            "variables": {
+                "kprof": {
+                    "type": "parameter",
+                    "units": "1",
+                    "shape": [
+                        "lev",
+                        "col"
+                    ],
+                    "default": [
+                        [
+                            1.0,
+                            2.0,
+                            3.0
+                        ],
+                        [
+                            4.0,
+                            5.0,
+                            6.0
+                        ]
+                    ],
+                    "description": "A rank-2 shaped parameter whose `default` is inline array data; a test replaces the whole slab through parameter_overrides. Read ONLY by ic(a)."
+                },
+                "gathered": {
+                    "type": "unknown",
+                    "units": "1",
+                    "shape": [
+                        "lev",
+                        "col"
+                    ],
+                    "description": "A state-free rank-2 array observed (a const gather) used as an ic RHS (esm-spec 11.4)."
+                },
+                "a": {
+                    "type": "unknown",
+                    "units": "1",
+                    "shape": [
+                        "lev",
+                        "col"
+                    ],
+                    "description": "Seeded by ic(a) ~ kprof, so every cell reports the authored array element at its own (lev, col)."
+                },
+                "b": {
+                    "type": "unknown",
+                    "units": "1",
+                    "shape": [
+                        "lev",
+                        "col"
+                    ],
+                    "description": "Seeded by ic(b) ~ gathered -- the state-free-array-observed ic form, at rank 2."
+                }
+            },
+            "equations": [
+                {
+                    "lhs": "gathered",
+                    "rhs": {
+                        "op": "const",
+                        "args": [],
+                        "value": [
+                            [
+                                -1.0,
+                                -2.0,
+                                -3.0
+                            ],
+                            [
+                                -4.0,
+                                -5.0,
+                                -6.0
+                            ]
+                        ]
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "a"
+                        ]
+                    },
+                    "rhs": "kprof"
+                },
+                {
+                    "lhs": {
+                        "op": "ic",
+                        "args": [
+                            "b"
+                        ]
+                    },
+                    "rhs": "gathered"
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i",
+                            "j"
+                        ],
+                        "ranges": {
+                            "i": {
+                                "from": "lev"
+                            },
+                            "j": {
+                                "from": "col"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "a",
+                                        "i",
+                                        "j"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i",
+                            "j"
+                        ],
+                        "ranges": {
+                            "i": {
+                                "from": "lev"
+                            },
+                            "j": {
+                                "from": "col"
+                            }
+                        },
+                        "expr": 0
+                    }
+                },
+                {
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i",
+                            "j"
+                        ],
+                        "ranges": {
+                            "i": {
+                                "from": "lev"
+                            },
+                            "j": {
+                                "from": "col"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "b",
+                                        "i",
+                                        "j"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "i",
+                            "j"
+                        ],
+                        "ranges": {
+                            "i": {
+                                "from": "lev"
+                            },
+                            "j": {
+                                "from": "col"
+                            }
+                        },
+                        "expr": 0
+                    }
+                }
+            ],
+            "tests": [
+                {
+                    "id": "rank2_declared_default",
+                    "description": "No overrides: `kprof` takes its inline-array `default`. Every cell of the 2x3 slab is asserted, so the nesting order is pinned element-for-element rather than at a corner.",
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 1
+                            },
+                            "expected": 1.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 2
+                            },
+                            "expected": 2.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 3
+                            },
+                            "expected": 3.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 1
+                            },
+                            "expected": 4.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 2
+                            },
+                            "expected": 5.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 3
+                            },
+                            "expected": 6.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 1
+                            },
+                            "expected": -1.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 2
+                            },
+                            "expected": -2.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 3
+                            },
+                            "expected": -3.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 1
+                            },
+                            "expected": -4.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 2
+                            },
+                            "expected": -5.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 3
+                            },
+                            "expected": -6.0
+                        }
+                    ]
+                },
+                {
+                    "id": "rank2_override",
+                    "description": "The same component with the whole slab replaced through parameter_overrides. `b`'s const-gather ic is untouched and re-asserted, so an override that leaked into the build-time array scope fails here.",
+                    "parameter_overrides": {
+                        "kprof": [
+                            [
+                                10.0,
+                                20.0,
+                                30.0
+                            ],
+                            [
+                                40.0,
+                                50.0,
+                                60.0
+                            ]
+                        ]
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 1
+                            },
+                            "expected": 10.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 2
+                            },
+                            "expected": 20.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 1,
+                                "col": 3
+                            },
+                            "expected": 30.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 1
+                            },
+                            "expected": 40.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 2
+                            },
+                            "expected": 50.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2,
+                                "col": 3
+                            },
+                            "expected": 60.0
+                        },
+                        {
+                            "variable": "a",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 60.0
+                        },
+                        {
+                            "variable": "b",
+                            "time": 0.0,
+                            "reduce": "min",
+                            "expected": -6.0
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

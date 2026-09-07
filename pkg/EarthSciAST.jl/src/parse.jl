@@ -1252,6 +1252,13 @@ function _record_parse_expr(row, v)
         :(Vector{String}($v))
     elseif kind === :float_map
         :(Dict{String,Float64}(string(k) => Float64(x) for (k, x) in pairs($v)))
+    elseif kind === :value_map
+        # esm-spec §6.6.2: a value is a scalar or INLINE ARRAY DATA (a row-major
+        # nested JSON array for a shaped variable), coerced to Float64 / a dense
+        # Array{Float64,N} by `_coerce_inline_value`.
+        :(Dict{String,Any}(string(k) => _coerce_inline_value(x) for (k, x) in pairs($v)))
+    elseif kind === :inline_value
+        :(_coerce_inline_value($v))
     elseif kind === :str_keyed_copy
         :(Dict{String,Any}(string(k) => x for (k, x) in pairs($v)))
     elseif kind === :raw

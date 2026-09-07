@@ -392,8 +392,9 @@ fn test_model_tests_tolerance_round_trip() {
         t.initial_conditions
             .as_ref()
             .expect("initial conditions present")
-            .get("u[1]"),
-        Some(&1.0)
+            .get("u[1]")
+            .and_then(|v| v.as_scalar()),
+        Some(1.0)
     );
     assert_eq!(t.assertions.len(), 5);
     assert_eq!(t.assertions[0].variable, "u[1]");
