@@ -48,7 +48,7 @@ pub(crate) fn validate_model(
     // order, and the equations alone decide it — esm-spec §4.9.6. Checked here,
     // beside the other whole-model structural checks, so `esm validate` names
     // the cycle instead of the build naming an innocent bystander (issue #181).
-    check_observed_dependency_cycle(model_name, model, esm_file, &ctx.class, errors);
+    check_observed_dependency_cycle(model_name, model, &ctx.class, errors);
 
     ctx.check_default_units_identity(errors);
     ctx.check_observed_definitions(&unit_env, errors, warnings);
@@ -1425,7 +1425,7 @@ fn check_recurrence_equation(
 /// mirror-image mistake and is just as wrong: it would swallow a scalar
 /// `x ~ x + 1` and a bare `s ~ s + 1`, which have no axis to fold along and can
 /// never be recurrences, and drop the cycle error they must keep getting.
-fn recurrence_candidate_vars(model: &crate::Model, esm_file: &EsmFile) -> HashSet<String> {
+fn recurrence_candidate_vars(model: &crate::Model) -> HashSet<String> {
     let array_shaped: HashSet<&str> = model
         .variables
         .iter()
@@ -1437,26 +1437,52 @@ fn recurrence_candidate_vars(model: &crate::Model, esm_file: &EsmFile) -> HashSe
         let Some((var, _)) = recurrence_lhs_target(&equation.lhs) else {
             continue;
         };
-        if !array_shaped.contains(var) {
-            continue;
-        }
-        let mut env: Vec<(String, (i64, i64))> = Vec::new();
-        let mut reads: Vec<StructuralSelfRead> = Vec::new();
-        let mut bare = false;
-        collect_structural_self_reads(
-            &equation.rhs,
-            var,
-            esm_file,
-            &mut env,
-            false,
-            &mut reads,
-            &mut bare,
-        );
-        if !reads.is_empty() {
+        if array_shaped.contains(var) && has_index_self_read(&equation.rhs, var) {
             out.insert(var.to_string());
         }
     }
     out
+}
+
+/// Does `expr` gather `var` through at least one `index` node — the second half
+/// of the §4.3.1.1 candidacy predicate?
+///
+/// Deliberately its own walk rather than a call into
+/// [`collect_structural_self_reads`], because THE TWO WALKS MUST SEE THE SAME
+/// TREE. The edge set of the cycle graph comes from [`collect_free_symbols`],
+/// which descends the canonical child set (`ExpressionNode::for_each_child` —
+/// esm-spec §4.9.5 requires every Expression-valued field, `bindings` and
+/// `axes` included). `collect_structural_self_reads` descends the smaller set
+/// the recurrence LOWERING has to reason about, and says so: it skips
+/// `bindings` on the stated grounds that five bindings mirror that field set
+/// and §5.19.5 is exact agreement. Where the two disagree, a self-read is
+/// visible as an EDGE and invisible as a CANDIDATE — and a legal recurrence is
+/// reported as a cycle of length one.
+///
+/// That gap is reachable, not theoretical. `apply_expression_template` carries
+/// its call-site arguments in `bindings`, and from `esm: 0.9.0` a reference is
+/// preserved uninlined (§9.6.4 rule 2), so a self-read bound to a template
+/// parameter — `twice(v = s[k-1])`, which is
+/// `tests/fixtures/recurrence/09_recurrence_through_expression_template.esm` —
+/// reaches the validator still wrapped. Widening the WALK rather than the RULE
+/// is what keeps this faithful: the exemption is still "an array-shaped unknown
+/// with at least one `index` self-read in its own defining RHS", still gated on
+/// CANDIDACY and never on the well-foundedness verdict (CONFORMANCE_SPEC
+/// §5.19.5), and still narrower than "reads its own name" — a bare
+/// `s ~ s + 1` has no `index` read anywhere and stays a cycle of length one.
+/// Narrowing the EDGE walk instead would be wrong: a template binding naming a
+/// DIFFERENT observed is a real dependency once the application expands.
+/// Python resolves this the same way, for the same reason.
+fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
+    let crate::Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "index"
+        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+    {
+        return true;
+    }
+    node.any_child(&mut |child| has_index_self_read(child, var))
 }
 
 /// The observeds each observed's defining RHS names, as a sorted adjacency map.
@@ -1517,14 +1543,13 @@ fn observed_dependency_graph(
 fn check_observed_dependency_cycle(
     model_name: &str,
     model: &crate::Model,
-    esm_file: &EsmFile,
     class: &crate::classification::Classification,
     errors: &mut Vec<StructuralError>,
 ) {
     if class.observed_definitions.is_empty() {
         return;
     }
-    let candidates = recurrence_candidate_vars(model, esm_file);
+    let candidates = recurrence_candidate_vars(model);
     let deps = observed_dependency_graph(class, &candidates);
 
     // Iterative-friendly tri-state DFS (0 = unseen, 1 = on stack, 2 = done),

@@ -162,7 +162,14 @@ fn a_recurrence_candidate_self_edge_is_not_a_cycle() {
 fn no_valid_fixture_acquires_an_observed_cycle() {
     let mut checked = 0usize;
     let mut offenders: Vec<String> = Vec::new();
-    for dir in ["tests/valid", "lib"] {
+    // `tests/fixtures` is in the sweep on purpose: it holds
+    // `recurrence/09_recurrence_through_expression_template.esm`, whose self-read
+    // is bound to an `apply_expression_template` PARAMETER. From `esm: 0.9.0` a
+    // template reference survives to the validator uninlined, so that self-read
+    // is visible to the edge walk and — unless the candidacy walk descends
+    // `bindings` too — invisible to the exemption, which turns a legal
+    // recurrence into a length-one cycle. See `has_index_self_read`.
+    for dir in ["tests/valid", "tests/fixtures", "lib"] {
         let root = repo_root().join(dir);
         let mut stack = vec![root];
         while let Some(d) = stack.pop() {
