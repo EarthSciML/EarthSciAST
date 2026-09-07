@@ -295,6 +295,26 @@ impl ArrayCompiled {
         Ok(out)
     }
 
+    /// The component / subsystem names a rule-2 override key may spell in its
+    /// LEADING segments (esm-spec §6.6.2, §4.6).
+    ///
+    /// The namespace segments the build's own names carry cover a mounted
+    /// subsystem (`sub` in `sub.g`) and, on the `from_flattened` path, every
+    /// contributing component (`Left` in `Left.gain`). [`Self::namespace`]
+    /// supplies the one namespace the names CANNOT show: the enclosing model's
+    /// own, which the single-model path does not qualify its variables with —
+    /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
+    #[cfg(feature = "solve")]
+    fn override_namespaces(&self) -> std::collections::HashSet<String> {
+        crate::simulate::namespace_scope(
+            self.param_names
+                .iter()
+                .chain(self.scalar_state_names.iter())
+                .map(String::as_str),
+            self.namespace.as_deref(),
+        )
+    }
+
     /// Run the simulation.
     /// Validate override parameter names and build the positional param
     /// vector (override > variable default; a parameter with neither is an
@@ -308,8 +328,12 @@ impl ArrayCompiled {
         // `<namespace>.` prefix: rule 2 resolves `M.A` against a bare-named
         // single-model system, and rule 3 resolves the LOCAL `A` against a
         // flattening-qualified `M.A` — which the prefix strip could not do.
-        let params = crate::simulate::canonicalize_override_keys(&self.param_index, params)
-            .map_err(crate::simulate::param_key_error)?;
+        let params = crate::simulate::canonicalize_override_keys(
+            &self.param_index,
+            &self.override_namespaces(),
+            params,
+        )
+        .map_err(crate::simulate::param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -339,6 +363,7 @@ impl ArrayCompiled {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
             &self.scalar_state_index,
+            &self.override_namespaces(),
             initial_conditions,
         )
         .map_err(crate::simulate::ic_key_error)?;

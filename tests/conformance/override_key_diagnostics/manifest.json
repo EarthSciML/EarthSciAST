@@ -1,7 +1,7 @@
 {
     "category": "override_key_diagnostics",
     "version": "1.0",
-    "description": "Cross-binding conformance for esm-spec \u00a76.6.2 'Unrecognized override keys': every `parameter_overrides` key must designate exactly ONE parameter of the flattened system, and a key that designates none is an ERROR \u2014 not a silently-ignored no-op. Three outcomes are pinned, and they are DISTINCT: a key that resolves (exactly, or by the local spelling \u00a76.6 mandates) runs; a BARE key that is the local name of two or more parameters is AMBIGUOUS; anything else is UNKNOWN. Ambiguous is kept apart from unknown because the fixes differ \u2014 qualify the name versus correct it \u2014 and because silently binding one of two candidates would be a wrong answer rather than a missing one. Rust already raised `SimulateError::InvalidParameter` for the unknown case; Julia and Python silently ignored it, so an author's override did nothing and the run still reported a verdict. This category is what keeps the three from drifting apart again: unlike the other categories it compares DIAGNOSTIC OUTCOMES, not numbers, so it carries no golden \u2014 each binding's runner asserts its own idiomatic error type per case.",
+    "description": "Cross-binding conformance for esm-spec \u00a76.6.2 'Unrecognized override keys': every `parameter_overrides` key must designate exactly ONE parameter of the flattened system, and a key that designates none is an ERROR \u2014 not a silently-ignored no-op. Three outcomes are pinned, and they are DISTINCT: a key that resolves (exactly, or by the local spelling \u00a76.6 mandates) runs; a BARE key that is the local name of two or more parameters is AMBIGUOUS; anything else is UNKNOWN. Ambiguous is kept apart from unknown because the fixes differ \u2014 qualify the name versus correct it \u2014 and because silently binding one of two candidates would be a wrong answer rather than a missing one. Rust already raised `SimulateError::InvalidParameter` for the unknown case; Julia and Python silently ignored it, so an author's override did nothing and the run still reported a verdict. This category is what keeps the three from drifting apart again: unlike the other categories it compares DIAGNOSTIC OUTCOMES, not numbers, so it carries no golden \u2014 each binding's runner asserts its own idiomatic error type per case. NOTE on rule 2 (the dotted-suffix rule): every binding's `esm_problem` FLATTENS, so a key whose leading segments name real components is an exact hit here and rule 2's POSITIVE path is not expressible in a shared fixture \u2014 it fires only inside a binding that keeps a model's own names (Rust's single-model array build, which carries a mounted subsystem parameter as `sub.g`), and is gated there by each binding's `P.sub.g` subsystem-override test. What this category DOES pin about rule 2 is its GUARD: a key whose leading segments name no component or subsystem is UNKNOWN, never suffix-matched.",
     "reference_binding": "rust",
     "bindings_required": [
         "julia",
@@ -35,7 +35,8 @@
                 "parameter-overrides",
                 "override-key-diagnostics",
                 "ambiguous-local-name",
-                "unknown-override-key"
+                "unknown-override-key",
+                "rule-2-leading-segments"
             ],
             "parameters": [
                 "Left.gain",
@@ -68,6 +69,13 @@
                     }
                 },
                 {
+                    "key": "Doc.Left.solo",
+                    "value": 9.0,
+                    "outcome": "unknown",
+                    "rule": 5,
+                    "note": "A DOTTED key whose longest dotted suffix IS a parameter name (`Left.solo`), but whose LEADING SEGMENT names no component or subsystem of this document \u2014 there is no `Doc`. Rule 2 validates every segment it drops, so a mistyped qualifier is not silently discarded: `Missng.M.pert_amp` is reported instead of quietly driving `M.pert_amp`. This case USED TO RESOLVE, binding `Left.solo`; pinning it UNKNOWN is the deliberate behaviour change that makes a typo'd qualifier visible. The legitimate rule-2 spelling \u2014 the esm-spec \u00a74.6 fully-qualified `P.sub.g` against a build carrying `sub.g`, where `P` names the model and `sub` the mounted subsystem \u2014 is unaffected, because both leading segments name something real."
+                },
+                {
                     "key": "gain",
                     "value": 9.0,
                     "outcome": "ambiguous",
@@ -90,7 +98,7 @@
                     "value": 9.0,
                     "outcome": "unknown",
                     "rule": 5,
-                    "note": "A DOTTED key resolves only under rule 2, which needs its trailing segment to be a parameter name outright; here the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
+                    "note": "A DOTTED key resolves only under rule 2, which needs one of its dotted suffixes to be a parameter name outright; the only suffix here is `solo`, and the parameter is `Left.solo`, not `solo`, so rule 2 fails. Rule 3 is for BARE keys only, so the qualifier is never discarded and `Missing.solo` does not quietly become `Left.solo` \u2014 an author who names a component that does not exist is told so."
                 }
             ],
             "defaults_at_t1": {

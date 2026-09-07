@@ -1107,7 +1107,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Volume | `L` `l` `mL` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
 | Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
-| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
+| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
@@ -2208,17 +2208,20 @@ This is what lets a column-physics test supply its inputs. The inputs of such a 
 **Override-key resolution.** `parameter_overrides` and `initial_conditions` are keyed by **local** name, but a runtime resolves them against a **flattened** system, in which every variable has been renamed after its owning component (`M.pert_amp`). A binding MUST resolve each key against the flattened names by this precedence, stopping at the first rule that applies:
 
 1. **Exact hit** — the key is a flattened name.
-2. **Dotted key, unqualified target** — the key contains a `.` and its trailing segment is itself a flattened name. (This is what lets one authored test run against both a single-model system whose names are bare and its composed, qualified form.)
+2. **Dotted key, shorter target** — the key contains a `.` and one of its dotted suffixes (the key with one or more leading segments dropped) is itself a flattened name; the **longest** such suffix wins, the trailing segment being the last one tried. Every leading segment dropped along the way MUST name a **component or subsystem the document declares** — the dropped prefix is a §4.6 qualifier, not filler — so a key whose qualifier names nothing (`Doc.Left.solo` where there is no `Doc`, `Missng.M.pert_amp` where the component is `M`) does NOT resolve under this rule. (What the rule is for: one authored test running against both a single-model system whose names are bare and its composed, qualified form. `M.A` binds a bare `A`, and the §4.6 fully-qualified `M.sub.A` binds a mounted subsystem parameter a single-model build carries as `sub.A` — in both, `M` names the model and `sub` the subsystem.)
 3. **Bare key, unique local name** — the key contains no `.` and is the trailing segment of exactly **one** flattened name. This is the spelling this section mandates, and it is the rule that makes it work.
 
 A key that reaches none of the three is **unrecognized** and MUST be rejected — see below. Note that rule 3 is restricted to bare keys, so a qualified key naming a component that does not exist (`Missing.pert_amp` where the parameter is `M.pert_amp`) is unrecognized rather than being silently re-pointed at `M.pert_amp` by its trailing segment.
 
-**Unrecognized override keys.** A `parameter_overrides` or `initial_conditions` key that resolves to no variable under the rules above is an **error**. A conforming runtime MUST reject the run rather than ignore the key. Two cases are distinguished, because the author's remedy differs and so must the diagnostic:
+**Unrecognized override keys.** A `parameter_overrides` or `initial_conditions` key that resolves to no variable under the rules above is an **error**, and so is a *variable* that two keys both resolve to. A conforming runtime MUST reject the run rather than ignore the key or pick a winner. Three cases are distinguished, because the author's remedy differs and so must the diagnostic:
 
 | Case | Condition | Diagnostic MUST |
 |---|---|---|
 | **unknown** | The key matches no flattened name under any rule. | Name the offending key. Reporting the names the system does declare is RECOMMENDED. |
 | **ambiguous** | The key is bare and is the trailing segment of **two or more** flattened names — the same local name in two mounted components. | Name the offending key **and every candidate**, so the author can qualify it. It MUST be distinguishable from the unknown case; binding one candidate arbitrarily is NOT conforming. |
+| **colliding keys** | **Two or more** keys resolve to the **one** flattened name under rules 2 and 3 — a bare spelling beside a more-qualified one (`solo` and `Doc.Left.solo` both reaching `Left.solo`), or two more-qualified ones (`A.M.g` and `B.M.g` both reaching `M.g`). | Name the resolved variable **and every colliding key**. Only one of the overrides can take effect, so choosing between them — by insertion order, or by ranking the rules — produces a wrong answer rather than a missing one, and is NOT conforming. |
+
+An **exact hit (rule 1) is never part of a collision**: it identifies its variable outright, so it wins over any rule-2 or rule-3 claim on that same variable and those claims are discarded without a diagnostic. Only two or more NON-exact claims on one name collide.
 
 Silently ignoring an unrecognized key is specifically non-conforming. It produces a *wrong answer rather than a missing one*: the author writes an override, nothing happens, the run proceeds on the declared defaults, and — for a key inside an inline `test` — the runner still reports a pass/fail verdict for a configuration that was never actually exercised. The error type is language-idiomatic (an exception, a `Result` error, a returned diagnostic); the **classification** of each key is the cross-binding contract, gated by the `override_key_diagnostics` conformance category (CONFORMANCE_SPEC §5.15).
 
@@ -2240,10 +2243,22 @@ Assertions are stored **inline** only — there is no file-reference option. Tes
 An assertion passes when the computed value `actual` satisfies
 
 ```
-|actual - expected| ≤ abs    OR    |actual - expected| / max(|expected|, ε) ≤ rel
+|actual - expected| ≤ abs    OR    |actual - expected| ≤ rel · max(|actual|, |expected|)
 ```
 
-for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention. An implementation-defined small `ε` (e.g., `1e-300`) protects the relative check when `expected` is zero.
+equivalently, in the single-bound form the bindings implement:
+
+```
+|actual - expected| ≤ max(abs, rel · max(|actual|, |expected|))
+```
+
+for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention, and taking the `max` of the two bounds is the same statement.
+
+**The relative bound is symmetric in `actual` and `expected`.** Its scale is `max(|actual|, |expected|)` — the larger of the two magnitudes — not `|expected|` alone. This is Julia `isapprox`, and it is what every executing binding implements. The distinction is invisible whenever `|actual| ≤ |expected|` and only shows on an overshoot: at `expected = 1.0`, `actual = 1.6`, `rel = 0.5`, `abs = 0` the symmetric bound is `0.6 ≤ 0.5 · 1.6 = 0.8` — a **PASS**, where an `|expected|`-only denominator would give `0.6 ≤ 0.5` and FAIL. A conforming runtime MUST use the symmetric scale; an asymmetric one is a divergence, not a rounding difference.
+
+No `ε` floor is needed, and a conforming runtime MUST NOT introduce one: scaling by `rel · max(|actual|, |expected|, ε)` is a divergence. The bound is stated as a product rather than a quotient, so there is no division to protect — at `expected = 0` it reads `|actual| ≤ max(abs, rel · |actual|)`, which is well-defined for every `actual` (and trivially true at `actual = 0`, which the `actual == expected` clause below admits as well). A floor changes the answer exactly where it is least defensible: at `actual = 1e-320`, `expected = 0`, `rel = 0.5`, an `ε` of `1e-300` PASSES where the bound as stated FAILS, so a subnormal result would be graded differently by two runtimes that both claim to implement this section.
+
+A nonzero `actual` against a zero `expected` therefore needs an `abs` bound to pass — which is the intended reading: a purely relative tolerance carries no information about how close to zero is close enough. Note that `rel ≥ 1` also admits it, but only by making the bound vacuous: `|a − e| ≤ max(|a|, |e|)` holds for **every** pair that shares a sign (or has a zero on either side), so such an assertion is green whatever the model computes. It is not a substitute for an `abs` bound.
 
 **Finiteness is judged before tolerance.** The full pass predicate is
 
@@ -2290,10 +2305,12 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 
 `reference` may be:
 
-- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`; or
+- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`. For a field shaped over index sets (§5.2) the dimension names are the index-set names of the asserted variable's declared `shape`, each bound at every grid point to the **1-based position along that axis** — the same index space `coords` reads under convention 1 — so `index(table, lev)` reads a per-cell entry of a lookup array and `sin(π (x − ½) / N)` is the cell-centre analytic form, with no explicit gather. A reference that mentions a dimension name free is evaluated per cell exactly as if wrapped in an `aggregate` whose output indices are the dimension names in shape order; a reference that mentions none — a literal, a parameter expression, or an `aggregate` that already produces the whole field under its own loop symbols (including one that rebinds a dimension name as its own loop symbol) — is evaluated as written; or
 - `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
 **Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, a coordinate-expression `ic` (§11.4.1), and an `ic` seeded from a state-free array observed (§11.4) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
+
+Parameters and dimension names share that one scope, so a name MUST NOT be both. Where an inline `reference` mentions **free** a name that is both a dimension of the asserted field and a parameter in scope (a flattened parameter name or its unambiguous bare alias), binding the dimension name to the cell's 1-based position would shadow the parameter: the same expression, a different number, and no diagnostic. One name meaning two things in one scope is an ill-formed document, and an implementation MUST reject it with an error naming the clashing name rather than silently choosing either meaning. A reference that does not mention the name is unaffected, as is a gather that rebinds it as its own loop symbol. See CONFORMANCE_SPEC §5.30.
 
 Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x,0) = sin(π x)` and zero-Dirichlet BCs has analytic solution `u(x,t) = exp(−α π² t) · sin(π x)`. The corresponding L2-error assertion is:
 
@@ -4151,6 +4168,8 @@ A top-level `metaparameters` object declares document-scoped named integers:
 `type` is required and MUST be `"integer"` (the only kind). A metaparameter name MUST NOT collide with any variable, parameter, species, or index-set name visible in the document (`metaparameter_name_conflict`); there is no shadowing.
 
 **Admissible sites.** A *metaparameter expression* is an integer literal, a declared metaparameter name, or `{"op": <"+"|"-"|"*"|"/">, "args": [...]}` over metaparameter expressions (unary `-` allowed). Metaparameter expressions are admissible wherever the schema previously required a bare integer in a structural position: `index_sets.<name>.size` (interval kind), `aggregate` dense `ranges` tuple entries, `makearray` `regions` bound pairs, **and as an import-edge / subsystem-edge binding VALUE** (`expression_template_imports[k].bindings` / a §4.7 subsystem-ref `bindings`, below). These sites fold to concrete integers at load with exact 64-bit integer arithmetic; `/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`). A binding value's free names resolve in the **importing** document's metaparameter scope, so a child metaparameter may be *derived* from the importer's — e.g. a regridder mounted with `{"NTGT": {"op": "*", "args": ["NX", "NY"]}}` closes its target-cell count from the fire grid's `NX`/`NY` in one edge, which import renaming (name→name, §9.7.7) cannot express. In ordinary **expression positions**, a metaparameter name appears as a bare string (the variable-reference surface syntax) and is substituted as an integer literal at load; no folding happens in expression positions — `{"op": "/", "args": [360, "NLON"]}` becomes `{"op": "/", "args": [360, 144]}` and stays an AST division.
+
+**What is NOT an expression position (normative).** Substitution is per-FIELD, not per-node: a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly. In particular the **axis-naming scalar fields** — `wrt`, `dim` (§4.9.1), and `integral`'s integration variable `var` (§4.2), the same three the §9.7.7 rename walk rewrites through `isetmap` — name a spatial coordinate, so with `x` bound to 3 the node `{"op": "grad", "args": ["x"], "dim": "x"}` MUST become `{"op": "grad", "args": [3], "dim": "x"}`: the `args` occurrence folds and the `dim` occurrence does not. A `where` match-scoping block is likewise structural (§9.6.1). This asymmetry is easy to miss because a metaparameter may not collide with a visible variable, parameter, species, or index-set name — but a `dim` value names a coordinate *structurally* (§4.9.1 clause ii), with no `index_sets` entry required, so a metaparameter and an axis may legally share a name in one document and the rule is reachable.
 
 **Binding sites and value flow.** Bindings flow down the reference DAG; open metaparameters flow up:
 
