@@ -440,6 +440,22 @@ Outputs land in `conformance-results/`:
 
 The comparison step requires at least two passing language implementations; it is skipped otherwise with the message "Need at least 2 successful language implementations to perform comparison."
 
+By default this re-runs each binding's own test suite before generating that
+binding's conformance outputs, which is what you want on a laptop: one command,
+everything checked. Where the suites have ALREADY been run and passed — CI holds
+this job behind all five per-language jobs via `needs:` — skip the duplicate:
+
+```bash
+./scripts/test-conformance.sh --skip-binding-suites
+```
+
+That skips only the suite invocation. Every conformance producer still runs, and
+a producer that fails still fails the run. Do not pass it anywhere the suites
+have not actually been run: it removes a duplicate of the gate, not the gate.
+
+Each stage's wall-clock is printed as it finishes, and again as a slowest-first
+table at the end of the run.
+
 Debug a failing run with shell tracing:
 
 ```bash
