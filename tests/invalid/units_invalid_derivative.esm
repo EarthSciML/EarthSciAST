@@ -11,7 +11,7 @@
     "BadUnitsModel": {
       "variables": {
         "x": { "type": "unknown", "units": "m", "default": 0.0, "description": "Position" },
-        "mass":{ "type": "parameter", "units": "kg", "default": 5.0, "description": "Mass value (wrongly assigned to dx/dt)" }
+        "mass": { "type": "parameter", "units": "kg", "default": 5.0, "description": "Mass value (wrongly assigned to dx/dt)" }
       },
       "equations": [
         {
