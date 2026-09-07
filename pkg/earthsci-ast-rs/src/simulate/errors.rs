@@ -91,6 +91,25 @@ pub enum SimulateError {
         candidates: Vec<String>,
     },
 
+    /// Two or more NON-EXACT `parameter_overrides` keys designate the one
+    /// flattened parameter (esm-spec §6.6.2): a bare local spelling and a
+    /// more-qualified one (`solo` and `Doc.Left.solo` both landing on
+    /// `Left.solo`), or two more-qualified ones (`A.M.g` and `B.M.g` both
+    /// landing on `M.g`). The caller wrote two overrides and only one can take
+    /// effect, so picking a winner would be a wrong answer rather than a
+    /// missing one. An EXACT key is never part of a collision — it identifies
+    /// its parameter outright and wins over any suffix or bare claim on it.
+    #[error(
+        "parameter_overrides: {} keys designate the parameter '{name}' ({}). Supply exactly one override key per name (esm-spec §6.6.2).",
+        .keys.len(), .keys.join(", ")
+    )]
+    CollidingParameterKeys {
+        /// The flattened parameter every colliding key designates.
+        name: String,
+        /// The colliding keys, sorted.
+        keys: Vec<String>,
+    },
+
     /// The user supplied an initial condition for a name that is not a state
     /// variable, or a state variable has no initial value (no entry in
     /// `initial_conditions` and no `default` on the `ModelVariable`).
@@ -111,6 +130,20 @@ pub enum SimulateError {
         name: String,
         /// The qualified states that carry it.
         candidates: Vec<String>,
+    },
+
+    /// Two or more NON-EXACT `initial_conditions` keys designate the one state
+    /// element (esm-spec §6.6.2). The state-side counterpart of
+    /// [`SimulateError::CollidingParameterKeys`].
+    #[error(
+        "initial_conditions: {} keys designate the state '{name}' ({}). Supply exactly one override key per name (esm-spec §6.6.2).",
+        .keys.len(), .keys.join(", ")
+    )]
+    CollidingInitialConditionKeys {
+        /// The state element every colliding key designates.
+        name: String,
+        /// The colliding keys, sorted.
+        keys: Vec<String>,
     },
 
     /// An `ic(target)` field initial condition could not be resolved to a
