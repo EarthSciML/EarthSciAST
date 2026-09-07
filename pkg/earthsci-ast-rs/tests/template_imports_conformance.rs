@@ -332,7 +332,10 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
 
     // The mount is a real splice, not a surviving `{ref}` stub.
     let models = f.models.as_ref().expect("models");
-    assert!(models["M"].variables.contains_key("area"), "leaf spliced in");
+    assert!(
+        models["M"].variables.contains_key("area"),
+        "leaf spliced in"
+    );
 
     // A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
     // diagnostic the subsystems-edge form raises, not last-writer-wins.
