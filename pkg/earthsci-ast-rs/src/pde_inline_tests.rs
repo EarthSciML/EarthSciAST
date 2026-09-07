@@ -2873,7 +2873,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message
@@ -2897,7 +2898,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("expected a number"),
@@ -2917,7 +2919,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("file not found"),
@@ -2934,7 +2937,8 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r =
+            &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("format 'netcdf' is not supported"),
@@ -3110,7 +3114,10 @@ mod tests {
         assert_eq!(results.len(), 2, "{results:?}");
         assert!(results.iter().all(|r| r.model == "Decay"));
         assert_eq!(
-            results.iter().map(|r| r.variable.as_str()).collect::<Vec<_>>(),
+            results
+                .iter()
+                .map(|r| r.variable.as_str())
+                .collect::<Vec<_>>(),
             vec!["A", "B"]
         );
         assert!(
@@ -3172,10 +3179,7 @@ mod tests {
             };
             InlineTestOptions {
                 solve: tight_opts(),
-                parameter_overrides: HashMap::from([(
-                    "T".to_string(),
-                    InlineValue::Scalar(seed),
-                )]),
+                parameter_overrides: HashMap::from([("T".to_string(), InlineValue::Scalar(seed))]),
                 ..Default::default()
             }
         };
@@ -3213,7 +3217,10 @@ mod tests {
         });
         assert_eq!(results.len(), 1, "{results:?}");
         let actual = results[0].actual.expect("actual recorded");
-        assert!((actual - 5.0).abs() <= 1e-9 * 5.0, "actual {actual}, want 5");
+        assert!(
+            (actual - 5.0).abs() <= 1e-9 * 5.0,
+            "actual {actual}, want 5"
+        );
         assert!(results[0].passed, "{}", results[0].message);
     }
 
@@ -3236,7 +3243,11 @@ mod tests {
             .expect("a <load> row for the unreadable document");
         assert!(load_row.model.ends_with("bad.esm"), "{}", load_row.model);
         assert!(!load_row.passed);
-        assert!(load_row.message.contains("load failed"), "{}", load_row.message);
+        assert!(
+            load_row.message.contains("load failed"),
+            "{}",
+            load_row.message
+        );
         let good = results
             .iter()
             .find(|r| r.test_id == "ramp")

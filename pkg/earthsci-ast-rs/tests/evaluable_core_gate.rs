@@ -52,7 +52,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn a_true_body_counts_instead_of_panicking() {
     let path = fixture("semijoin_true_body.esm");
     let file = load_path(&path).expect("loads");
-    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {
         assert!(

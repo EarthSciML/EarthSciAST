@@ -366,7 +366,8 @@ fn unfiltered_entry_point_runs_everything() {
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results =
+        run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
     assert_eq!(results.len(), 2);
     assert_eq!(builds.get(), 1);
 }
