@@ -114,11 +114,11 @@ fn run_model_test(
         ),
     };
     for a in &t.assertions {
-        check_assertion(fixture_name, model_name, model, t, a, &sol);
+        check_one_assertion(fixture_name, model_name, model, t, a, &sol);
     }
 }
 
-fn check_assertion(
+fn check_one_assertion(
     fixture_name: &str,
     model_name: &str,
     model: &Model,

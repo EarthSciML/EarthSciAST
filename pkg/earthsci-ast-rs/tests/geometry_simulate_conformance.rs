@@ -147,11 +147,11 @@ fn run_model_test(fixture: &str, model_name: &str, file: &EsmFile, model: &Model
     .unwrap_or_else(|e| panic!("[{fixture}/{model_name}/{}] simulate failed: {e}", t.id));
 
     for a in &t.assertions {
-        check_assertion(fixture, model_name, model, t, a, &sol);
+        check_one_assertion(fixture, model_name, model, t, a, &sol);
     }
 }
 
-fn check_assertion(
+fn check_one_assertion(
     fixture: &str,
     model_name: &str,
     model: &Model,

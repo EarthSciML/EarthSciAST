@@ -13,8 +13,8 @@
 //! `pressure_drop` fix from gt-p3v — must cause this suite to fail.
 
 use earthsci_ast::{
-    EsmFile, Expr, Model, ModelTest, VariableType, check_assertion, fold_constant_expr, load_string,
-    resolve_tolerance,
+    EsmFile, Expr, Model, ModelTest, VariableType, check_assertion, fold_constant_expr,
+    load_string, resolve_tolerance,
 };
 use std::collections::HashMap;
 

@@ -1,5 +1,5 @@
 //! Rust adapter for the SHARED `assertion_tolerance` conformance category
-//! (CONFORMANCE_SPEC §5.30, `tests/conformance/assertion_tolerance/`).
+//! (CONFORMANCE_SPEC §5.32, `tests/conformance/assertion_tolerance/`).
 //!
 //! The category's subject is the esm-spec §6.6.3 pass predicate as a PURE
 //! FUNCTION of `(actual, expected, rel, abs)`. Every other assertion category
@@ -89,8 +89,14 @@ fn every_golden_case_matches_the_binding_predicate() {
         let expected = number(&case["expected"], id, "expected");
         let rel = case["rel"].as_f64().unwrap_or_else(|| panic!("{id}: rel"));
         let abs = case["abs"].as_f64().unwrap_or_else(|| panic!("{id}: abs"));
-        let want = case["passed"].as_bool().unwrap_or_else(|| panic!("{id}: passed"));
-        if want { n_pass += 1 } else { n_fail += 1 }
+        let want = case["passed"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("{id}: passed"));
+        if want {
+            n_pass += 1
+        } else {
+            n_fail += 1
+        }
 
         let got = check_assertion(actual, expected, rel, abs);
         if got != want {
