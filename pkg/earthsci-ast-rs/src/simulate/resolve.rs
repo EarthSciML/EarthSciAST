@@ -142,6 +142,32 @@ pub(super) fn resolve_expr(
                     CompileError::InvalidBroadcastFn { reason }
                 }
             })?;
+            // Then reject the evaluable-core ops that are legal in an AST but
+            // have NO rule in THIS interpreter — the scalar half of the array
+            // path's stage-(0) gate (`simulate_array::check_evaluable`, applied
+            // by `reject_unlowered_spatial_ops`). The registry check above only
+            // closes the OPEN tier; without this second layer an op the core
+            // admits but `eval_op` has no arm for fell through to its
+            // `_ => f64::NAN` backstop and came back as a NUMBER — silently,
+            // and indistinguishably from a legitimate result, which is exactly
+            // what `CompileError::UnevaluableOperatorError` exists to prevent
+            // (issue #220). Doing it HERE rather than in a separate pre-pass is
+            // deliberate: `resolve_expr` is the one funnel through which every
+            // expression this interpreter will ever evaluate becomes a
+            // `ResolvedExpr`, so nothing can reach `eval_op` around it — which
+            // is what lets `eval_op`'s backstop be `unreachable!` rather than a
+            // sentinel, as the array evaluator's already is.
+            //
+            // The `ic` operator needs no carve-out on this path (the array one
+            // has one): `flatten` routes an `ic(state) = rhs` equation into
+            // `FlattenedSystem::field_ics` as a bare `(target, rhs)` pair, and
+            // `classify_equations` only ever resolves an equation's RHS, so an
+            // `ic` NODE never reaches this function.
+            if !is_evaluable_op(&node.op) {
+                return Err(CompileError::UnevaluableOperatorError {
+                    op: node.op.clone(),
+                });
+            }
             // Under `element_type: "Float32"` (esm-spec §11.3), reject the ops
             // whose numeric work happens outside the shared scalar kernels and
             // therefore cannot honour the declared precision. The array path

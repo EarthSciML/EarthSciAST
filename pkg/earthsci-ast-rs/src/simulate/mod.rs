@@ -156,6 +156,142 @@ mod tests {
         assert_eq!(interpret(&e, &[-1.0], &[], &[], 0.0), 0.0);
     }
 
+    /// Resolve a bare operator node against empty scopes — the one funnel every
+    /// expression this interpreter evaluates passes through.
+    fn resolve_it(expr: &Expr) -> Result<ResolvedExpr, CompileError> {
+        resolve_expr(expr, &HashMap::new(), &HashMap::new(), &HashMap::new(), None)
+    }
+
+    /// A WELL-FORMED operator node for `op`: the minimum arity the registry
+    /// admits, plus the sidecar fields `op_registry::check_node` insists on for
+    /// the two ops whose operator is data. Both are supplied so the registry's
+    /// own checks cannot mask the evaluability check under test.
+    fn node_with_legal_arity(op: &str) -> Expr {
+        let arity = crate::op_registry::arity_of(op).expect("registry-legal op");
+        let n = (0..=3)
+            .find(|n| arity.admits(*n))
+            .expect("some arity in 0..=3 is admitted");
+        Expr::Operator(Box::new(ExpressionNode {
+            op: op.to_string(),
+            args: (0..n).map(|_| Expr::Number(1.0)).collect(),
+            // `broadcast`'s arithmetic is named by a sibling string, and
+            // `check_node` rejects a node without one before evaluability is
+            // ever consulted.
+            broadcast_fn: (op == "broadcast").then(|| "+".to_string()),
+            ..Default::default()
+        }))
+    }
+
+    /// `is_evaluable_op` must agree with `eval_op`'s arms for every op the
+    /// registry admits: any registry op NOT listed as evaluable must be
+    /// REJECTED by `resolve_expr`, so `eval_op`'s `unreachable!` backstop stays
+    /// unreachable. The array evaluator pins the same property next to its own
+    /// oracle (`simulate_array::eval`'s
+    /// `every_registry_op_is_either_evaluable_or_gated`); this is the scalar
+    /// half, and it is what makes the invariant structural rather than a
+    /// property of who happens to call in (issue #220).
+    #[test]
+    fn every_registry_op_is_either_evaluable_or_gated() {
+        for op in [
+            "+", "-", "*", "/", "^", "neg", "exp", "log", "sqrt", "min", "max", "ifelse", "and",
+            "or", "not", "atan2", "==", "!=", "<", "<=", ">", ">=", "D", "Pre", "const", "true",
+            "fn", "index", "aggregate", "makearray", "broadcast", "reshape", "transpose", "concat",
+            "skolem", "rank", "distinct", "argmin", "argmax", "ic", "enum", "table_lookup",
+            "apply_expression_template", "intersect_polygon", "polygon_intersection_area",
+        ] {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} is listed here but the registry does not carry it"
+            );
+            if is_evaluable_op(op) {
+                continue;
+            }
+            let err = resolve_it(&node_with_legal_arity(op))
+                .expect_err("an op with no rule must not resolve");
+            assert!(
+                matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == op),
+                "{op} is registry-legal and has no scalar rule, so it must be gated BY NAME: \
+                 {err:?}"
+            );
+        }
+    }
+
+    /// The §4.2 core set minus THIS evaluator's rules, pinned member by member
+    /// so a rule added or lost is a test diff and not a silent behaviour change.
+    ///
+    /// It is a superset of the array runtime's nine-op gap: the scalar
+    /// interpreter's values are `f64`, so the array/tensor and geometry ops are
+    /// unevaluable here too, as are `const`, `neg` and `true` — every one of
+    /// which used to come back from `eval_op` as a `NaN` NUMBER.
+    #[test]
+    fn the_scalar_evaluable_gap_is_pinned() {
+        const CORE: &[&str] = &[
+            "+", "-", "*", "/", "^", "neg", "exp", "log", "ln", "log10", "sqrt", "abs", "sign",
+            "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+            "asinh", "acosh", "atanh", "atan2", "min", "max", "ifelse", "==", "!=", "<", "<=", ">",
+            ">=", "and", "or", "not", "D", "ic", "Pre", "const", "true", "fn", "enum",
+            "table_lookup", "apply_expression_template", "aggregate", "makearray", "index",
+            "broadcast", "reshape", "transpose", "concat", "skolem", "rank", "distinct", "argmin",
+            "argmax", "intersect_polygon", "polygon_intersection_area",
+        ];
+        for op in CORE {
+            assert!(
+                crate::op_registry::is_core_op(op),
+                "{op} is listed here but the registry does not carry it"
+            );
+        }
+        let mut gap: Vec<&str> = CORE
+            .iter()
+            .copied()
+            .filter(|op| !is_evaluable_op(op))
+            .collect();
+        gap.sort_unstable();
+        assert_eq!(
+            gap,
+            vec![
+                "aggregate",
+                "apply_expression_template",
+                "argmax",
+                "argmin",
+                "broadcast",
+                "concat",
+                "const",
+                "distinct",
+                "enum",
+                "ic",
+                "index",
+                "intersect_polygon",
+                "makearray",
+                "neg",
+                "polygon_intersection_area",
+                "rank",
+                "reshape",
+                "skolem",
+                "table_lookup",
+                "transpose",
+                "true",
+            ]
+        );
+    }
+
+    /// The gate is not merely top-level: an unevaluable op NESTED inside an
+    /// otherwise-fine expression is still refused, because `resolve_expr`
+    /// recurses through every operand before building the parent node.
+    #[test]
+    fn a_nested_unevaluable_op_is_gated_too() {
+        let inner = node_with_legal_arity("rank");
+        let outer = Expr::Operator(Box::new(ExpressionNode {
+            op: "+".to_string(),
+            args: vec![Expr::Number(1.0), inner],
+            ..Default::default()
+        }));
+        let err = resolve_it(&outer).expect_err("a nested unevaluable op must not resolve");
+        assert!(
+            matches!(err, CompileError::UnevaluableOperatorError { op: ref got } if got == "rank"),
+            "{err:?}"
+        );
+    }
+
     #[test]
     fn topo_sort_empty_and_simple() {
         // No deps -> any order is fine, but length matches.
