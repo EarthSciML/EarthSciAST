@@ -4096,12 +4096,13 @@ consuming-equation-gated answers.
 ### 5.28 Inline Array Data for a Shaped Variable (normative)
 
 §5.14 governs which parameter VALUES the build-time scope sees when a run is an
-inline test. This section governs the value's **shape**. esm-spec §6.6.2
-("Shaped values") and §6.3 make a shaped variable's `default`, and a test's
-`parameter_overrides` / `initial_conditions` entry for one, either a **number**
-or a **row-major nested JSON array** matching the declared `shape` after
-metaparameter folding; esm-spec §11.4 additionally admits a **state-free array
-observed** as an `ic` right-hand side, which is the same §6.6.5 build-time
+inline test, and §5.27 governs which variables an assertion may READ out of it.
+This section governs the value going IN, and specifically its **shape**.
+esm-spec §6.6.2 ("Shaped values") and §6.3 make a shaped variable's `default`,
+and a test's `parameter_overrides` / `initial_conditions` entry for one, either
+a **number** or a **row-major nested JSON array** matching the declared `shape`
+after metaparameter folding; esm-spec §11.4 additionally admits a **state-free
+array observed** as an `ic` right-hand side, which is the same §6.6.5 build-time
 evaluator reached from one more position. The three simulation bindings —
 **Julia, Python, Rust** — must agree on the resulting assertion actuals. The
 shared **offline** fixtures live in
