@@ -214,6 +214,29 @@ const _DEFAULT_REL_TOL = 1.0e-6
 const DEFAULT_TEST_RELTOL = 1e-10
 const DEFAULT_TEST_ABSTOL = 1e-12
 
+"""
+    _test_integration_tolerances(solver_hints) -> (reltol, abstol)
+
+The INTEGRATION tolerances an inline-test run solves at, esm-spec §2.2.2:
+the document's `solver.reltol` / `solver.abstol` when it declares them, else
+this runner's `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+
+The runner defaults sit at LEVEL 3 of the chain — they are binding defaults,
+not a caller's opinion — which is what makes a document's declared accuracy
+travel: without this, three bindings integrated the same document's inline
+tests at two different tolerances. The two resolve INDEPENDENTLY, so a document
+declaring only `reltol` leaves `abstol` on the runner default.
+
+NOT the tolerance an assertion is COMPARED at, which is §6.6.4's own chain
+([`_resolve_tolerance`](@ref)); the two never substitute for each other.
+"""
+function _test_integration_tolerances(solver_hints)
+    solver_hints === nothing && return (DEFAULT_TEST_RELTOL, DEFAULT_TEST_ABSTOL)
+    r = solver_hints.reltol === nothing ? DEFAULT_TEST_RELTOL : solver_hints.reltol
+    a = solver_hints.abstol === nothing ? DEFAULT_TEST_ABSTOL : solver_hints.abstol
+    return (Float64(r), Float64(a))
+end
+
 # Returns (rtol, atol) — the most-specific declared tolerance wins (spec
 # §6.6.4: assertion > test > model > default rel=1e-6).
 function _resolve_tolerance(model_tol, test_tol, assertion_tol)
@@ -327,20 +350,34 @@ end
 
 _try_require(pkg::Base.PkgId) = get(Base.loaded_modules, pkg, nothing)
 
-# Default per-file stiff-solver override set: .esm basenames listed here are
-# integrated with the stiff Rosenbrock23 solver instead of the default
-# non-stiff Tsit5. This is a pragmatic library default for known-stiff shared
-# fixtures; callers override it per run via `run_esm_tests(...; stiff_files=…)`.
-# (Declaring stiffness in the .esm test metadata itself would be the right
-# long-term home, but that needs an esm-spec §6.6 change.)
+# FALLBACK per-file stiff-solver override set, for documents that do not
+# declare their own stiffness: .esm basenames listed here are integrated with
+# the stiff Rosenbrock23 solver instead of the default non-stiff Tsit5.
+# Callers override it per run via `run_esm_tests(...; stiff_files=…)`.
+#
+# A document should not need to be on this list. `solver.stiffness` (esm-spec
+# §2.2) is the declaration a document makes about ITSELF, and `_pick_solver`
+# consults it FIRST — which is the whole point of the block: a basename table
+# in one binding's runner cannot travel, so every other binding rediscovers a
+# stiff system the same way, as a hang or an overflow. This set remains for
+# documents that predate the block or decline to use it.
 const STIFF_SOLVER_OVERRIDE_FILENAMES = Set(["pollu.esm"])
 
 # Pick a solver: prefer Tsit5 (non-stiff, fast); fall back to Rosenbrock23.
-# `stiff_files` is the set of .esm basenames forced onto Rosenbrock23.
+#
+# `stiffness` is the document's own declaration (esm-spec §2.2, the `solver`
+# block) and is consulted FIRST: `"high"` selects the stiff Rosenbrock23. The
+# field is ADVISORY — this binding is free to ignore it, and does ignore
+# `"low"` / `"moderate"`, which say nothing Tsit5 does not already handle — but
+# acting on `"high"` is exactly what keeps a stiff document from being a hang.
+#
+# `stiff_files` is the FALLBACK: the set of .esm basenames forced onto
+# Rosenbrock23 when the document declares nothing.
 function _pick_solver(file::AbstractString="";
-                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                      stiffness=nothing)
     rb = _try_require(_ROSENBROCK_PKGID)
-    if rb !== nothing && basename(file) in stiff_files
+    if rb !== nothing && (stiffness == "high" || basename(file) in stiff_files)
         return (rb.Rosenbrock23(), :rosenbrock23)
     end
     tsit = _try_require(_TSIT5_PKGID)
@@ -488,6 +525,22 @@ struct MtkTestEngine
     solver::Any
     defaults_u0::Dict{Any,Float64}
     defaults_p::Dict{Any,Float64}
+    # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
+    # resolved against the document's `solver` block. The runner's own
+    # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
+    # defaults, not a caller's opinion -- so a document that declares
+    # `solver.reltol` displaces them and every binding runs its inline tests at
+    # one integration tolerance instead of at five different runner defaults.
+    # NOT the tolerance an assertion is COMPARED at (§6.6.4): that is
+    # `container.tolerance`, resolved on its own chain in `_run_test_frame!`.
+    reltol::Float64
+    abstol::Float64
+
+    MtkTestEngine(simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
+                  reltol::Float64=DEFAULT_TEST_RELTOL,
+                  abstol::Float64=DEFAULT_TEST_ABSTOL) =
+        new(simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
+            reltol, abstol)
 end
 
 function _engine_setup(e::MtkTestEngine, t)
@@ -509,8 +562,7 @@ function _engine_setup(e::MtkTestEngine, t)
             MTK.ODEProblem(e.simp, merged, tspan)
         end
         return MTK.SciMLBase.solve(prob, e.solver;
-                                    reltol=DEFAULT_TEST_RELTOL,
-                                    abstol=DEFAULT_TEST_ABSTOL)
+                                    reltol=e.reltol, abstol=e.abstol)
     catch err
         return "Solve setup failed: $(err)"
     end
@@ -553,7 +605,8 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                name::AbstractString, container,
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
-                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                               stiffness=nothing, solver_hints=nothing)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
@@ -567,11 +620,15 @@ function _run_container_tests!(results::Vector{AssertionResult},
         end
         return
     end
-    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files)
+    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files,
+                                        stiffness=stiffness)
     defaults_u0, defaults_p =
         _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
+    # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
+    # the runner's own defaults; each falls through independently.
+    reltol, abstol = _test_integration_tolerances(solver_hints)
     engine = MtkTestEngine(simp, sys_name, container_kind, solver,
-                           defaults_u0, defaults_p)
+                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol)
     _run_test_frame!(results, engine, path, container_kind, String(name),
                      container.tolerance, container.tests)
 end
@@ -588,11 +645,17 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         return
     end
 
+    # The document's own stiffness declaration (esm-spec §2.2), which
+    # `_pick_solver` prefers over the basename fallback set. Document-scoped,
+    # so it applies to every container in the file.
+    stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
+
     if esm_file.models !== nothing
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
-                                  stiff_files=stiff_files)
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 
@@ -601,7 +664,8 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
-                                  stiff_files=stiff_files)
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 end

@@ -132,8 +132,8 @@ fn ppm_problem_simulates_a_few_steps() {
     let file = load_at(n);
     let opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-8,
-        abstol: 1e-10,
+        reltol: Some(1e-8),
+        abstol: Some(1e-10),
         saveat: Some(vec![0.0, 0.005, 0.01]),
         ..Default::default()
     };

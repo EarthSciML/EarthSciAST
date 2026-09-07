@@ -414,6 +414,15 @@ Problem's output sinks around the run; a caller driving `init`/`step!` is outsid
 that bracket and MUST open and close them itself. A binding MUST document how,
 and MUST NOT leave a half-written sink as the failure mode for forgetting.
 
+**The document's numerics reach this path too.** `init` is an entry point that
+hands a document to an integrator, so it MUST resolve `abstol` / `reltol` on the
+esm-spec §2.2.2 chain — call site, then the document's `solver` block, then the
+binding default — exactly as `solve` does, and the integrator it returns carries
+the resolved values through `step!` and `solve!`. An `init` whose signature
+defaults to a concrete tolerance cannot express "the caller named no tolerance",
+and so silently pins the document's declaration out of reach; that state MUST be
+representable.
+
 #### 2.5.7 Accessing results by name
 
 A solution is indexed by **variable name**, not by position in the state vector.

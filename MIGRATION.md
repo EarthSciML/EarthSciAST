@@ -1130,6 +1130,77 @@ the documented path.
 
 ---
 
+## esm 1.1.0: the top-level `solver` block
+
+| Kind | What |
+|---|---|
+| `format` | **New optional top-level `solver` block** (esm-spec §2.2), and with it the format version moves to **`esm: 1.1.0`**. |
+| `new` | `Solver` type, `reject_solver_pre_v11`, `resolve_tolerances` in every binding. |
+| `semantics` | **Rust only:** `SolveOptions::abstol` / `reltol` are now `Option<f64>`. |
+
+**Nothing to migrate in your documents.** The block is optional and purely
+additive: a document that does not carry one validates, flattens, emits and
+integrates exactly as before. Existing documents keep declaring `esm: 1.0.0`
+and stay valid — bindings gate on the MAJOR version, and 1.0.0 remains on the
+additive line. You only need `esm: 1.1.0` if you want to write a `solver`
+block; carrying one under a lower declared version is rejected with
+`solver_version_too_old`.
+
+**What it is.** Numerics the document knows about *itself* — `stiffness`,
+`abstol`, `reltol`, `splitting` — which each binding maps to its own
+integrator. Every field is advisory: a binding may ignore any of them and still
+conform. Advisory governs the *mechanism*, never the *outcome*; the
+CONFORMANCE_SPEC §5.9 requirement to integrate and agree within the error band
+is untouched by this block. It is deliberately **not** a place for algorithm
+names (`BDF`, `Rosenbrock23`), binding-specific compile knobs, or a DAE
+declaration — see esm-spec §2.2.3.
+
+**Do not confuse `solver.abstol` with `tolerance.abs`.** They are different
+quantities on independent chains: `solver.abstol` is what the *integrator* is
+asked to hold, `tolerance` (§6.6.4) is what an *assertion* is compared at.
+Loosening the first makes assertions more likely to fail; loosening the second
+makes them easier to pass.
+
+### Rust: `SolveOptions` tolerances became `Option<f64>`
+
+This is the one row that fails to compile.
+
+```rust
+// before
+SolveOptions { abstol: 1e-8, reltol: 1e-6, ..Default::default() }
+// after
+SolveOptions { abstol: Some(1e-8), reltol: Some(1e-6), ..Default::default() }
+```
+
+`Default::default()` now leaves both `None`. That is the point: esm-spec §2.2.2
+resolves tolerances caller → document → binding default, and a concrete `f64`
+could not express "the caller has no opinion" — a caller who never touched the
+field was indistinguishable from one who set it to exactly `1e-6`, so the
+document could never win. The binding defaults are unchanged (`abstol` `1e-6`,
+`reltol` `1e-4`); read the effective value with `abstol_or_default()` /
+`reltol_or_default()`, or resolve the full chain with `resolve_tolerances`.
+
+Python's `solve` made the same move without breaking callers, since its
+`abstol=` / `reltol=` keywords simply default to `None` now. `init` /
+`Integrator` did the same, for the same reason: §2.2.2 resolves wherever a
+document is *integrated*, not at the `solve()` call site, so the stepping door
+has to be able to say "the caller named no tolerance" too. No signature breaks —
+but a stepping caller who relied on the old concrete defaults now gets the
+document's declared tolerances when it declares any, which is the point.
+
+### A bug this surfaced: the §9.6.4 rule-8 emit stamp
+
+Python stamped the *current* schema version onto any document whose emit
+carried a surviving template reference. Rule 8 says `esm: 0.9.0` **or later** —
+a floor, not an assignment — and Julia, TypeScript, Go and Rust all implemented
+the floor. The two readings agree only while the current version is the
+document's own, so the divergence was invisible at 1.0.0 and appeared the
+moment the format moved to 1.1.0: Python began stamping 1.0.0 documents up to
+1.1.0 on re-emit. Python now applies the floor like the other four. If you
+depended on the old behaviour to bump documents, do it explicitly.
+
+---
+
 # Part V — What did NOT change
 
 Listed because knowing the boundary is what stops you over-migrating.

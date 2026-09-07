@@ -4463,8 +4463,8 @@ mod subsystem_ragged_and_inspection_tests {
     fn erk_opts() -> SolveOptions {
         SolveOptions {
             alg: Alg::Erk,
-            reltol: 1e-10,
-            abstol: 1e-12,
+            reltol: Some(1e-10),
+            abstol: Some(1e-12),
             saveat: Some(vec![1.0]),
             ..Default::default()
         }

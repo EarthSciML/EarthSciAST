@@ -1,0 +1,38 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "solver_unknown_stiffness",
+    "description": "A `solver.stiffness` outside the closed enum (esm-spec \u00a72.2: `low` | `moderate` | `high`). The block is ADVISORY \u2014 a binding may ignore the value \u2014 but the SHAPE is normative (\u00a72.2.4 requirement 1): an unknown enum member is a validation failure, and being advisory does not excuse it. MUST be rejected."
+  },
+  "solver": {
+    "stiffness": "extreme"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

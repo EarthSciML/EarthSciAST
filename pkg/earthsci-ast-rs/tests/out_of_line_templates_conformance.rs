@@ -186,7 +186,11 @@ fn emit_materialized_registry_imports_gone_stencils_materialized() {
     );
     let doc: Value = serde_json::from_str(&s).unwrap();
     let adv = &doc["models"]["Advection"];
-    assert_eq!(doc["esm"], earthsci_ast::SCHEMA_VERSION); // rule 8 version stamp
+    // Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it only
+    // ever raises: the 1.0.0 source keeps 1.0.0 rather than being restamped to
+    // whatever the library currently implements. The literal is also what the
+    // byte comparison against `emitted.esm` two lines up already requires.
+    assert_eq!(doc["esm"], "1.0.0");
     assert!(adv.get("expression_template_imports").is_none()); // imports consumed
     let reg = adv["expression_templates"].as_object().unwrap();
     let keys: std::collections::HashSet<&str> = reg.keys().map(String::as_str).collect();

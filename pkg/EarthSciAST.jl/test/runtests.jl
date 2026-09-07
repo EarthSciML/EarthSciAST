@@ -21,6 +21,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")
+    include("solver_block_test.jl")
     include("classification_test.jl")
     include("parse_test.jl")
     # Version-marker migration (src/migration.jl, esm-libraries-spec §8.3) —

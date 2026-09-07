@@ -143,9 +143,14 @@ fn the_matrix_migration_pair_is_a_rewrite_not_an_automated_migration() {
         "the 0.0.5 source must be rejected by a 1.x loader"
     );
 
-    // The target is a document this library reads, and migrating it to the
-    // current schema is the identity no-op.
-    assert_eq!(target_version, SCHEMA_VERSION);
+    // The target is a document this library reads. It keeps the version it is
+    // NAMED for (1.0.0) rather than being restamped as the library advances —
+    // what matters is that it sits ON the additive line, i.e. that migrating it
+    // to the current schema is offered (a marker bump; the identity no-op when
+    // the two versions coincide). `assert_eq!(target_version, SCHEMA_VERSION)`
+    // asserted the restamping instead, and only agreed while the two were both
+    // 1.0.0.
+    assert!(!supported_migration_targets(target_version).is_empty());
     assert!(can_migrate(target_version, SCHEMA_VERSION));
     let target_file = load_string(MIGRATION_TARGET).expect("the 1.0.0 target loads");
     assert_eq!(

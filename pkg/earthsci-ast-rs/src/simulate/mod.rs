@@ -347,8 +347,8 @@ mod tests {
         // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
         // which is larger than the thing being measured.
         let opts = SolveOptions {
-            abstol: 1e-12,
-            reltol: 1e-10,
+            abstol: Some(1e-12),
+            reltol: Some(1e-10),
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
@@ -438,8 +438,8 @@ mod tests {
         // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
         // which is larger than the thing being measured.
         let opts = SolveOptions {
-            abstol: 1e-12,
-            reltol: 1e-10,
+            abstol: Some(1e-12),
+            reltol: Some(1e-10),
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };
@@ -858,8 +858,8 @@ mod tests {
         // `1e-6` and leave ~4.6e-6 of truncation error over this interval,
         // which is larger than the thing being measured.
         let opts = SolveOptions {
-            abstol: 1e-12,
-            reltol: 1e-10,
+            abstol: Some(1e-12),
+            reltol: Some(1e-10),
             saveat: Some(vec![0.0, 1.0]),
             ..Default::default()
         };

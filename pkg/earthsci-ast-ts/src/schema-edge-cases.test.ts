@@ -693,7 +693,12 @@ describe('Schema Edge Cases', () => {
 
     it('should handle version compatibility for minor version differences', () => {
       const minorVersionUpgrade = {
-        esm: '1.1.0', // Minor version upgrade within the supported major.
+        // A minor NEWER than the library. Was 1.1.0 until the `solver` block
+        // (esm-spec §2.2) took the library itself to 1.1.0, which made this an
+        // exact match and stopped it warning. 1.10.0 also keeps the numeric
+        // ordering honest — it is newer than 1.2.0, which a lexicographic
+        // compare gets backwards.
+        esm: '1.10.0',
         metadata: { name: 'test' },
         models: {
           test: {
@@ -710,7 +715,7 @@ describe('Schema Edge Cases', () => {
 
       // Load succeeds, with a forward-compatibility warning.
       const { result, warnings } = captureWarnings(() => loadDocument(minorVersionUpgrade))
-      expect(result.esm).toBe('1.1.0')
+      expect(result.esm).toBe('1.10.0')
       expect(result.metadata.name).toBe('test')
       expect(warnings.some((w) => w.includes('newer than'))).toBe(true)
     })
