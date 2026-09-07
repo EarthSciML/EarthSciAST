@@ -179,7 +179,9 @@ def test_the_chain_reaches_the_stepping_api_too(tmp_path: Path) -> None:
     assert (float(explicit._solver.rtol), float(explicit._solver.atol)) == (1e-11, 1e-12)
 
     # 3. Per field, with level 3 for whatever the document leaves unsaid.
-    only_reltol = esm_problem(_load({**BASE, "solver": {"reltol": 1e-9}}, tmp_path), tspan=(0.0, 4.0))
+    only_reltol = esm_problem(
+        _load({**BASE, "solver": {"reltol": 1e-9}}, tmp_path), tspan=(0.0, 4.0)
+    )
     partial = init(only_reltol)
     assert (partial.abstol, partial.reltol) == (DEFAULT_ABSTOL, 1e-9)
 

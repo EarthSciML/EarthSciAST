@@ -483,6 +483,7 @@ mod error_code_tests {
             "rewrite_rule_nonterminating",
             "searchsorted_nan_in_table",
             "searchsorted_non_monotonic",
+            "solver_version_too_old",
             "subsystem_index_set_conflict",
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
