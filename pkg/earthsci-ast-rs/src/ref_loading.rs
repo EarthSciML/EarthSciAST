@@ -141,10 +141,12 @@ fn show_index_set(decl: &Value) -> String {
     let Some(obj) = decl.as_object() else {
         return decl.to_string();
     };
-    let parts: Vec<String> = ["kind", "size", "members", "of", "offsets", "values", "from_faq"]
-        .iter()
-        .filter_map(|k| obj.get(*k).map(|v| format!("{k}={v}")))
-        .collect();
+    let parts: Vec<String> = [
+        "kind", "size", "members", "of", "offsets", "values", "from_faq",
+    ]
+    .iter()
+    .filter_map(|k| obj.get(*k).map(|v| format!("{k}={v}")))
+    .collect();
     if parts.is_empty() {
         decl.to_string()
     } else {

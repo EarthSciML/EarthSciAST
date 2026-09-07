@@ -957,12 +957,7 @@ fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
             {
                 let renamed: Map<String, Value> = coords
                     .iter()
-                    .map(|(k, v)| {
-                        (
-                            m.get(k).cloned().unwrap_or_else(|| k.clone()),
-                            v.clone(),
-                        )
-                    })
+                    .map(|(k, v)| (m.get(k).cloned().unwrap_or_else(|| k.clone()), v.clone()))
                     .collect();
                 *coords = renamed;
             }
@@ -1024,10 +1019,7 @@ pub(crate) fn apply_mount_index_set_rename(
     }
 
     // Identity entries are no-ops; everything else must land on a distinct name.
-    let changed: IndexMap<String, String> = requested
-        .into_iter()
-        .filter(|(o, n)| o != n)
-        .collect();
+    let changed: IndexMap<String, String> = requested.into_iter().filter(|(o, n)| o != n).collect();
     if changed.is_empty() {
         return Ok(());
     }

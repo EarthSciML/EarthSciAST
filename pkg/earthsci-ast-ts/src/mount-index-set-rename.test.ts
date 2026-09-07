@@ -49,8 +49,8 @@ describe('mount-edge index_set_rename (esm-spec §4.7)', () => {
 
   it('rejects a rename key the resolved mounted document does not declare', () => {
     // Renames never invent names — the §9.7.7 rule at a mount edge.
-    expect(() => loadResolved('invalid/template_imports/mount_rename_unknown_index_set.esm')).toThrow(
-      /subsystem_index_set_rename_unknown_name|celsl/,
-    )
+    expect(() =>
+      loadResolved('invalid/template_imports/mount_rename_unknown_index_set.esm'),
+    ).toThrow(/subsystem_index_set_rename_unknown_name|celsl/)
   })
 })

@@ -11,6 +11,7 @@ and §2.1 ``coordinates`` all resolve against the one registry), so the fix is
 not to re-scope it but to let the ASSEMBLER say "this mount's ``lev`` is not
 that mount's ``lev``" at the edge.
 """
+from __future__ import annotations
 
 import json
 import os

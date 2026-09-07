@@ -42,15 +42,48 @@ fn mount_rename_lets_two_columns_with_one_axis_name_coexist() {
         .expect("the merged registry survives the mount");
 
     assert_eq!(
-        sets.get("lev").and_then(|s| s.get("size")).and_then(|s| s.as_i64()),
+        sets.get("lev")
+            .and_then(|s| s.get("size"))
+            .and_then(|s| s.as_i64()),
         Some(59),
         "the un-renamed atmospheric mount keeps `lev` at its own size: {sets:?}"
     );
     assert_eq!(
-        sets.get("soil_lev").and_then(|s| s.get("size")).and_then(|s| s.as_i64()),
+        sets.get("soil_lev")
+            .and_then(|s| s.get("size"))
+            .and_then(|s| s.as_i64()),
         Some(4),
         "the renamed soil mount lands as `soil_lev`: {sets:?}"
     );
+}
+
+/// Every `shape` list in a rendered document, paired with the variable name it
+/// hangs off, so the assertion below does not depend on where this binding
+/// stores a mounted component (Rust namespaces the mount into the parent model
+/// rather than keeping a `subsystems` map on the typed `EsmFile`).
+fn shapes_by_variable(value: &serde_json::Value, out: &mut Vec<(String, Vec<String>)>) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            for (name, decl) in obj {
+                if let Some(shape) = decl.get("shape").and_then(|s| s.as_array()) {
+                    let axes: Vec<String> = shape
+                        .iter()
+                        .filter_map(|e| e.as_str().map(String::from))
+                        .collect();
+                    if !axes.is_empty() {
+                        out.push((name.clone(), axes));
+                    }
+                }
+                shapes_by_variable(decl, out);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                shapes_by_variable(v, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Transitivity (esm-spec §4.7): the rename rewrites the mounted component's
@@ -60,27 +93,37 @@ fn mount_rename_lets_two_columns_with_one_axis_name_coexist() {
 fn mount_rename_rewrites_shape_and_range_inside_the_mounted_component() {
     let path = fixture("valid/mount_rename_two_columns.esm");
     let file = load_path(&path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    let rendered = serde_json::to_string(&file).expect("document renders as JSON");
+    let value = serde_json::to_value(&file).expect("document renders as JSON");
 
-    assert!(
-        rendered.contains("soil_lev"),
-        "the renamed axis reaches the mounted component"
-    );
-    assert!(
-        !rendered.contains("\"Tsoil\",\"k\""),
-        "sanity: the soil equation survives the mount"
+    let mut shapes = Vec::new();
+    shapes_by_variable(&value, &mut shapes);
+
+    let soil = shapes
+        .iter()
+        .find(|(name, _)| name.ends_with("Tsoil"))
+        .unwrap_or_else(|| panic!("the soil unknown survives the mount: {shapes:?}"));
+    assert_eq!(
+        soil.1,
+        vec!["soil_lev".to_string()],
+        "the renamed soil axis reaches the mounted component's shape: {shapes:?}"
     );
 
-    let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-    let soil = value
-        .pointer("/models/Host/subsystems/Soil")
-        .or_else(|| value.pointer("/models/Host.Soil"))
-        .cloned()
-        .unwrap_or(value.clone());
-    let soil_text = soil.to_string();
+    let atm = shapes
+        .iter()
+        .find(|(name, _)| name.ends_with('T') && !name.ends_with("Tsoil"))
+        .unwrap_or_else(|| panic!("the atmospheric unknown survives the mount: {shapes:?}"));
+    assert_eq!(
+        atm.1,
+        vec!["lev".to_string()],
+        "the un-renamed atmospheric mount is untouched: {shapes:?}"
+    );
+
+    // The soil aggregate's `{"from"}` range follows the axis too, so the
+    // renamed axis appears at least twice outside the registry.
+    let rendered = value.to_string();
     assert!(
-        !soil_text.contains("\"lev\""),
-        "no bare `lev` survives inside the renamed soil mount: {soil_text}"
+        rendered.matches("soil_lev").count() >= 3,
+        "registry key + shape + range all spell the renamed axis: {rendered}"
     );
 }
 

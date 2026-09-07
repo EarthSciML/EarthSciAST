@@ -450,7 +450,9 @@ function resolveRefDocument(
   // apply the RFC §7.7 Expand-at-build strategy so the resolved subsystem is
   // the Option-A expanded image (bit-identical downstream behavior).
   const out =
-    resolved === null ? machineryInput : (expandDocument(lowerExpressionTemplates(resolved)) as EsmFile)
+    resolved === null
+      ? machineryInput
+      : (expandDocument(lowerExpressionTemplates(resolved)) as EsmFile)
   // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
   // referenced document has now resolved in its OWN scope — its imports, this
   // edge's `bindings` and injection, its metaparameter close and fold, the
