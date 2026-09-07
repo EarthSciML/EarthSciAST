@@ -542,10 +542,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,test]
 
+      # Build exactly what the harness RUNS, which is not what this step used
+      # to build. Every rust invocation in `test-conformance.sh` is a `cargo
+      # run` on the DEV profile with `--features conformance-adapters`; the
+      # release artifacts this step produced were used by nothing, at a
+      # measured 4m21s per run (#224). Dev is not the slow profile here:
+      # Cargo.toml pins `opt-level = 2` for this crate and its dependencies in
+      # the dev profile precisely so the conformance producers run fast.
       - name: Build Rust package
         working-directory: pkg/earthsci-ast-rs
         run: |
-          cargo build --release
+          cargo build --features conformance-adapters
 
       # Make scripts executable
       - name: Make conformance scripts executable

@@ -325,9 +325,17 @@ run_rust_tests() {
         return 1
     fi
 
-    # Generate conformance outputs
+    # Generate conformance outputs.
+    #
+    # `--features conformance-adapters` is not needed by `esm` itself (the
+    # feature only gates the three adapter BIN targets, and its one implied
+    # feature, `solve`, is already default). It is here so that every cargo
+    # invocation in this script shares ONE feature resolution: the determinism
+    # / cadence / PDE adapters below all pass it, and cargo caches builds per
+    # feature set, so without it the crate is compiled twice per run — once
+    # for this line and once for the first adapter (#224).
     log "Generating Rust conformance outputs..."
-    cargo run --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
+    cargo run --features conformance-adapters --bin esm -- conformance-test "$RUST_OUTPUT" "$CORPUS_MANIFEST"
 
     return $?
 }
