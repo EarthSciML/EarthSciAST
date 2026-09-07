@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 853,
+    "symbols": 859,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 298,
-      "typescript": 231,
-      "python": 243,
+      "julia": 299,
+      "typescript": 232,
+      "python": 244,
       "rust": 329,
-      "go": 384
+      "go": 390
     },
     "by_tier": {
-      "extension": 590,
-      "stable": 263
+      "extension": 595,
+      "stable": 264
     }
   },
   "planned": [
@@ -1252,6 +1252,30 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeMissingDataSourceURLTemplate"
+      }
+    },
+    {
+      "name": "code_operator_compose_no_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeNoMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_partial_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposePartialMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_require_match_unmatched",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeRequireMatchUnmatched"
       }
     },
     {
@@ -4791,6 +4815,17 @@
       }
     },
     {
+      "name": "operator_compose_require_match_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeRequireMatchError",
+        "julia": "OperatorComposeRequireMatchError",
+        "python": "OperatorComposeRequireMatchError",
+        "typescript": "OperatorComposeRequireMatchError"
+      }
+    },
+    {
       "name": "output_error",
       "kind": "error",
       "tier": "stable",
@@ -5989,6 +6024,14 @@
       }
     },
     {
+      "name": "run_pde_tests_filtered",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_pde_tests_filtered"
+      }
+    },
+    {
       "name": "run_pde_tests_with_base_dir",
       "kind": "function",
       "tier": "extension",
@@ -6002,14 +6045,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "run_pde_tests_with_providers"
-      }
-    },
-    {
-      "name": "run_pde_tests_filtered",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_pde_tests_filtered"
       }
     },
     {

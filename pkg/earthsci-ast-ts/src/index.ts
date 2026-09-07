@@ -281,6 +281,7 @@ export {
   FlattenError,
   ConflictingDerivativeError,
   CoupleMultiplicativeNoTendencyError,
+  OperatorComposeRequireMatchError,
   DomainUnitMismatchError,
   DimensionPromotionError,
 } from './flatten.js'

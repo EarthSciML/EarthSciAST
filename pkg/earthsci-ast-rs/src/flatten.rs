@@ -2552,6 +2552,53 @@ fn apply_operator_compose(
     Ok(())
 }
 
+thread_local! {
+    /// Active sink for [`capture_coupling_diagnostics`]. `None` — the default —
+    /// means the warnings go to stderr, which is what a caller sees.
+    static COUPLING_DIAGNOSTIC_SINK: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f`, collecting the WARNING-level coupling diagnostics it emits instead
+/// of printing them, and return them alongside its result.
+///
+/// The side-effect-free counterpart of the stderr stream, in the shape
+/// [`crate::pushdown_rewrite::pushdown_diagnostics`] established for the
+/// projection-pushdown residuals. It exists because a diagnostic nothing can
+/// assert on is a diagnostic that rots: the shared
+/// `tests/conformance/operator_compose_merge/` corpus compares diagnostic
+/// OUTCOMES, and without this the Rust adapter could check the `require_match`
+/// refusals but not the warnings they were promoted from.
+///
+/// The sink is thread-local, so concurrent test threads do not capture each
+/// other's findings, and it is restored on the way out even if `f` returns an
+/// error (`f` is not unwind-safe by contract — a panic inside it leaves the sink
+/// installed for that thread, which only affects a thread that is already
+/// unwinding).
+pub fn capture_coupling_diagnostics<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    COUPLING_DIAGNOSTIC_SINK.with(|sink| *sink.borrow_mut() = Some(Vec::new()));
+    let out = f();
+    let collected =
+        COUPLING_DIAGNOSTIC_SINK.with(|sink| sink.borrow_mut().take().unwrap_or_default());
+    (out, collected)
+}
+
+/// Emit one coupling warning: into the active capture sink if there is one,
+/// otherwise to stderr with the `warning: ` prefix `pushdown_rewrite` uses.
+fn emit_coupling_warning(message: String) {
+    let captured = COUPLING_DIAGNOSTIC_SINK.with(|sink| {
+        if let Some(buf) = sink.borrow_mut().as_mut() {
+            buf.push(message.clone());
+            true
+        } else {
+            false
+        }
+    });
+    if !captured {
+        eprintln!("warning: {message}");
+    }
+}
+
 /// Does the `systems[1]` spelling own the state a bare-name match unified?
 /// (esm-libraries-spec §4.7.1 step 3.)
 ///
@@ -2603,8 +2650,10 @@ fn bare_name_owner_wins(per_system: &[SystemBlock], b_dep: &str, target: &str) -
 /// whose only equation defines its own wind field, for instance). A hard error
 /// would reject documents the format grants.
 ///
-/// The warning goes to stderr, the same channel `pushdown_rewrite`'s residual
-/// diagnostics use; the `require_match` case is a real error and is returned.
+/// The warning goes through [`emit_coupling_warning`] — stderr, the same channel
+/// `pushdown_rewrite`'s residual diagnostics use, or the active
+/// [`capture_coupling_diagnostics`] sink; the `require_match` case is a real
+/// error and is returned.
 fn report_operator_compose_merge(
     a: &str,
     b: &str,
@@ -2631,12 +2680,12 @@ fn report_operator_compose_merge(
     } else {
         "operator_compose_partial_merge"
     };
-    eprintln!(
-        "warning: {code}: operator_compose({a} + {b}) merged {merged} of {authored} equations \
+    emit_coupling_warning(format!(
+        "{code}: operator_compose({a} + {b}) merged {merged} of {authored} equations \
          '{b}' authored; unmatched dependent variable(s): {names}. The unmatched equations are \
          preserved unchanged (esm-libraries-spec §4.7.1 step 5), so they integrate DECOUPLED from \
          '{a}'. Set `require_match: true` on the entry if they were meant to be contributions."
-    );
+    ));
     Ok(())
 }
 

@@ -17,7 +17,7 @@
       "julia": "@warn (testable with @test_logs)",
       "python": "warnings.warn(..., UserWarning) (testable with pytest.warns)",
       "typescript": "console.warn (testable by stubbing)",
-      "rust": "eprintln!(\"warning: …\") — the pushdown_rewrite residual-diagnostic idiom",
+      "rust": "eprintln!(\"warning: …\") — the pushdown_rewrite residual-diagnostic idiom — with the side-effect-free `capture_coupling_diagnostics` counterpart for tests",
       "go": "the package-level couplingWarnf hook, defaulting to os.Stderr"
     },
     "require_match_error": {
