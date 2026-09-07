@@ -855,7 +855,7 @@ mod tests {
             lifting: None,
             systems: vec!["system1".to_string(), "system2".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: Some("Test coupling".to_string()),
         };
 
@@ -887,7 +887,7 @@ mod tests {
             lifting: None,
             systems: vec!["system1".to_string(), "system2".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: None,
         };
 
@@ -922,7 +922,7 @@ mod tests {
                 lifting: None,
                 systems: vec!["system1".to_string(), "system2".to_string()],
                 translate: None,
-                require_match: false,
+                require_match: None,
                 description: Some("First coupling".to_string()),
             },
             CouplingEntry::VariableMap {
@@ -976,7 +976,7 @@ mod tests {
             lifting: None,
             systems: vec!["system1".to_string(), "system2".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: Some("Only coupling".to_string()),
         }]);
 
@@ -995,7 +995,7 @@ mod tests {
             lifting: None,
             systems: vec!["old_system1".to_string(), "old_system2".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: Some("Old coupling".to_string()),
         }]);
 
@@ -1043,7 +1043,7 @@ mod tests {
             lifting: None,
             systems: vec!["dummy".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: None,
         };
         let result = replace_coupling(&esm_file, 5, dummy_coupling);
@@ -1059,7 +1059,7 @@ mod tests {
             lifting: None,
             systems: vec!["dummy".to_string()],
             translate: None,
-            require_match: false,
+            require_match: None,
             description: None,
         };
         let result = replace_coupling(&empty_file, 0, dummy_coupling2);

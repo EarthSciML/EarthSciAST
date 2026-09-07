@@ -6,22 +6,25 @@
 //!
 //! Three things are pinned, and they are distinct:
 //!
-//! 1. The merge TALLY is reported — `operator_compose_no_merge` when nothing
-//!    landed, `operator_compose_partial_merge` when only some did, both naming
-//!    the unmatched dependent variables. Step 5 still preserves the equations;
-//!    it is no longer SILENT about doing so, because silence made "merged
-//!    everything" and "merged nothing" the same observable outcome.
-//! 2. `require_match: true` promotes either to a hard refusal, and a PARTIAL
-//!    match refuses exactly as a zero match does. `require_match_satisfied` is
-//!    the non-vacuity anchor that keeps the flag from being simply always-fatal.
-//! 3. The BARE-NAME fallback's surviving spelling follows the state's OWNER —
-//!    the component the document declares first — not `systems[0]`, so an entry
-//!    means the same thing in either argument order.
+//! 1. An entry that merges NOTHING is `operator_compose_no_merge`, a hard
+//!    refusal: such an entry is indistinguishable from one that is not there. A
+//!    PARTIAL merge stays a warning, because an operator may legitimately
+//!    contribute states of its own alongside the ones it does merge.
+//! 2. `require_match` is TRI-STATE and `None` is not `Some(false)` — absent means
+//!    "the author has not said" (zero-merge refuses), `true` makes ANY shortfall
+//!    fatal, `false` DECLARES a standalone-contributing operator and silences
+//!    both. Each state has a non-vacuity anchor, so a binding cannot pass by
+//!    being uniformly strict or uniformly lax.
+//! 3. A bare-name match that would unify two STATES is
+//!    `operator_compose_ambiguous_bare_name`, a refusal: each carries its own
+//!    initial condition and the merge keeps one, which is exactly the silent
+//!    choice that made the `systems` order matter. Where only one side is a state
+//!    the match is unambiguous and the state owns the quantity.
 //!
 //! Unlike the flatten corpus this category carries no golden: it compares
 //! DIAGNOSTIC OUTCOMES, so each binding asserts its own idiomatic surface. Here
-//! that is [`capture_coupling_diagnostics`] — the side-effect-free counterpart
-//! of the stderr warning stream — and `FlattenError::OperatorComposeRequireMatchUnmatched`.
+//! that is [`capture_coupling_diagnostics`] — the side-effect-free counterpart of
+//! the stderr warning stream — and the three `FlattenError` variants.
 
 use earthsci_ast::{
     FlattenError, FlattenedSystem, capture_coupling_diagnostics, flatten, load_path,
@@ -45,6 +48,30 @@ fn cases(m: &Value) -> &Vec<Value> {
     m["cases"].as_array().expect("`cases` is an array")
 }
 
+fn case_by_id(m: &Value, id: &str) -> Value {
+    cases(m)
+        .iter()
+        .find(|c| c["id"] == id)
+        .unwrap_or_else(|| panic!("manifest has no case {id}"))
+        .clone()
+}
+
+/// The diagnostic CODE a refusal carries. The three refusals have three
+/// different fixes, so collapsing them would still let a caller route wrong —
+/// this is what keeps the variant and the manifest's code in step.
+fn refusal_code(err: &FlattenError) -> &'static str {
+    match err {
+        FlattenError::OperatorComposeNoMerge { .. } => "operator_compose_no_merge",
+        FlattenError::OperatorComposeRequireMatchUnmatched { .. } => {
+            "operator_compose_require_match_unmatched"
+        }
+        FlattenError::OperatorComposeAmbiguousBareName { .. } => {
+            "operator_compose_ambiguous_bare_name"
+        }
+        other => panic!("not an operator_compose refusal: {other:?}"),
+    }
+}
+
 /// Flatten the fixture at `rel`, returning the result and only this category's
 /// diagnostics.
 fn flatten_capturing(rel: &str) -> (Result<FlattenedSystem, FlattenError>, Vec<String>) {
@@ -62,6 +89,22 @@ fn state_names(system: &FlattenedSystem) -> Vec<String> {
     system.state_variables.keys().cloned().collect()
 }
 
+/// The observable outcome of a fixture: the refusal's code, or the surviving
+/// states paired with their defaults. Compared BETWEEN two runs that must agree,
+/// rather than each against a recorded value.
+fn outcome_of(case: &Value) -> String {
+    let (result, _) = flatten_capturing(case["path"].as_str().expect("case path"));
+    match result {
+        Err(e) => refusal_code(&e).to_string(),
+        Ok(system) => system
+            .state_variables
+            .iter()
+            .map(|(n, v)| format!("{n}={:?}", v.default))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
+
 #[test]
 fn the_manifest_is_not_empty_and_covers_this_binding() {
     // A manifest that silently listed zero cases would make every assertion in
@@ -77,21 +120,23 @@ fn the_manifest_is_not_empty_and_covers_this_binding() {
         "rust is not in bindings_required; if this category stops covering Rust, \
          say so in scope_excluded rather than letting it drift"
     );
-    let mut codes: Vec<&str> = m["codes"]
-        .as_object()
-        .expect("`codes` is an object")
-        .keys()
-        .map(String::as_str)
-        .collect();
-    codes.sort_unstable();
-    assert_eq!(
-        codes,
-        [
-            "operator_compose_no_merge",
-            "operator_compose_partial_merge",
-            "operator_compose_require_match_unmatched",
-        ]
-    );
+    assert_eq!(m["codes"]["operator_compose_partial_merge"], "warning");
+    for code in [
+        "operator_compose_no_merge",
+        "operator_compose_require_match_unmatched",
+        "operator_compose_ambiguous_bare_name",
+    ] {
+        assert_eq!(m["codes"][code], "error", "{code} must be an error");
+        // The manifest names a variant per binding per code; reading Rust's
+        // column back keeps the record from drifting away from the code.
+        assert!(
+            m["diagnostic_surface"]["errors"][code]["rust"]
+                .as_str()
+                .expect("rust column")
+                .starts_with("FlattenError::"),
+            "{code}: the manifest must name Rust's FlattenError variant"
+        );
+    }
 }
 
 #[test]
@@ -104,22 +149,21 @@ fn the_manifest_outcomes_hold() {
 
         match case["outcome"].as_str().expect("case outcome") {
             "refused" => {
-                let err = result.expect_err(&format!("{id}: expected a refusal"));
-                let FlattenError::OperatorComposeRequireMatchUnmatched { ref unmatched, .. } = err
-                else {
-                    panic!("{id}: expected OperatorComposeRequireMatchUnmatched, got {err:?}");
-                };
+                let err = result
+                    .err()
+                    .unwrap_or_else(|| panic!("{id}: expected a refusal"));
+                let want = case["code"].as_str().expect("case code");
+                assert_eq!(refusal_code(&err), want, "{id}: wrong refusal variant");
                 let message = err.to_string();
                 assert!(
-                    message.starts_with(case["code"].as_str().expect("case code")),
+                    message.starts_with(want),
                     "{id}: the refusal must lead with its machine-readable code: {message}"
                 );
-                for name in case["unmatched"].as_array().expect("`unmatched`") {
-                    let name = name.as_str().expect("unmatched name");
-                    assert!(
-                        unmatched.contains(name),
-                        "{id}: the refusal must NAME {name}; got {unmatched}"
-                    );
+                for key in ["unmatched", "unified"] {
+                    for name in case[key].as_array().unwrap_or(&Vec::new()) {
+                        let name = name.as_str().expect("name");
+                        assert!(message.contains(name), "{id}: must NAME {name}: {message}");
+                    }
                 }
                 continue;
             }
@@ -185,90 +229,115 @@ fn check_states(id: &str, case: &Value, system: &FlattenedSystem) {
     }
 }
 
+/// Every cell of the tri-state table the manifest records has a case.
+///
+/// The table is the whole of `require_match`'s meaning, and its three states are
+/// three different things an author can mean. A column with no case is a column
+/// a binding could get wrong without failing anything.
+#[test]
+fn the_require_match_truth_table_is_covered() {
+    let m = manifest();
+    let covered: Vec<String> = cases(&m)
+        .iter()
+        .map(|c| {
+            format!(
+                "{}|{}",
+                match &c["require_match"] {
+                    Value::Bool(b) => b.to_string(),
+                    other => other.as_str().unwrap_or("?").to_string(),
+                },
+                c["outcome"].as_str().expect("outcome")
+            )
+        })
+        .collect();
+    for want in [
+        "absent|refused",
+        "absent|warning",
+        "absent|clean",
+        "true|refused",
+        "true|clean",
+        "false|clean",
+    ] {
+        assert!(
+            covered.iter().any(|c| c == want),
+            "the require_match truth table has no case for {want}"
+        );
+    }
+    assert!(
+        !covered.iter().any(|c| c == "false|refused"),
+        "`require_match: false` declares that unmatched equations are expected; \
+         nothing under it may refuse"
+    );
+}
+
 /// Issue #195 Symptom 1, in the form that fails under the old rule.
 ///
-/// Two fixtures with identical models in identical declaration order, differing
-/// ONLY in the `systems` array's order. The tendency is arithmetically identical
-/// either way, so the surviving NAME and its DEFAULT are the entire observable
-/// difference — compared between the two RUNS rather than only against the
-/// manifest, so this fails on disagreement even if both were re-recorded.
+/// Two PAIRS of fixtures, each differing ONLY in the `systems` array's order. The
+/// tendency is arithmetically identical either way, so the surviving name and
+/// default (or the refusal) are the entire observable difference — compared
+/// between the two RUNS rather than only against the manifest, so this fails on
+/// disagreement even if both were re-recorded.
 #[test]
 fn flipping_the_systems_order_changes_nothing_observable() {
     let m = manifest();
-    let by_id = |id: &str| -> Value {
-        cases(&m)
-            .iter()
-            .find(|c| c["id"] == id)
-            .unwrap_or_else(|| panic!("manifest has no case {id}"))
-            .clone()
-    };
-    let a = by_id("owner_rename_operator_first");
-    let b = by_id("owner_rename_mechanism_listed_first");
-    assert_eq!(
-        a["models_declared"], b["models_declared"],
-        "the two fixtures must differ ONLY in `systems` order"
-    );
-
-    let surviving = |case: &Value| -> (String, f64) {
-        let id = case["id"].as_str().expect("case id");
-        let (result, _) = flatten_capturing(case["path"].as_str().expect("case path"));
-        let system = result.unwrap_or_else(|e| panic!("{id}: {e}"));
-        let names = state_names(&system);
-        assert_eq!(
-            names.len(),
-            1,
-            "{id}: expected one surviving state, got {names:?}"
+    for (left, right) in [
+        ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
+        (
+            "owner_rename_state_wins_observed_first",
+            "owner_rename_state_wins_state_first",
+        ),
+    ] {
+        let a = case_by_id(&m, left);
+        let b = case_by_id(&m, right);
+        let (a_sys, mut b_sys) = (
+            a["systems"].as_array().expect("systems").clone(),
+            b["systems"].as_array().expect("systems").clone(),
         );
-        let default = system.state_variables[&names[0]]
-            .default
-            .as_ref()
-            .and_then(|d| d.as_scalar())
-            .unwrap_or_else(|| panic!("{id}: surviving state lost its default"));
-        (names[0].clone(), default)
-    };
-    assert_eq!(
-        surviving(&a),
-        surviving(&b),
-        "flipping `systems` changed the surviving state or its initial condition"
-    );
+        b_sys.reverse();
+        assert_eq!(
+            a_sys, b_sys,
+            "{left}/{right} must differ ONLY in `systems` order"
+        );
+        assert_eq!(
+            outcome_of(&a),
+            outcome_of(&b),
+            "flipping `systems` changed the outcome between {left} and {right}"
+        );
+    }
 }
 
-/// The companion to the test above, and what keeps it from being trivial: the
-/// same `systems` order with the models declared the other way round must
-/// produce the OTHER name. A binding that hard-coded either answer, or that kept
-/// renaming onto `systems[0]`, fails one of the two.
+/// The two ways out of an ambiguous bare-name match both still work: `translate`
+/// names the surviving spelling outright, and a match where only one side is a
+/// STATE is not ambiguous at all. Without this a binding could pass every refusal
+/// by refusing the whole bare-name fallback.
 #[test]
-fn declaration_order_decides_not_argument_order() {
+fn the_ambiguity_refusal_is_not_a_blanket_ban_on_bare_names() {
     let m = manifest();
-    let by_id = |id: &str| -> Value {
-        cases(&m)
-            .iter()
-            .find(|c| c["id"] == id)
-            .expect("case")
-            .clone()
-    };
-    let a = by_id("owner_rename_operator_first");
-    let b = by_id("owner_rename_mechanism_declared_first");
-    assert_eq!(
-        a["systems"], b["systems"],
-        "the two fixtures must share a `systems` order"
-    );
-
-    let names = |case: &Value| -> Vec<String> {
-        let (result, _) = flatten_capturing(case["path"].as_str().expect("case path"));
-        state_names(&result.expect("clean flatten"))
-    };
-    assert_eq!(names(&a), ["Sink.O3"]);
-    assert_eq!(names(&b), ["Chem.O3"]);
+    for (id, state, default) in [
+        ("ambiguous_resolved_by_translate", "Chem.O3", 30.0),
+        ("owner_rename_state_wins_observed_first", "Sink.O3", 40.0),
+    ] {
+        let case = case_by_id(&m, id);
+        let (result, _) = flatten_capturing(case["path"].as_str().expect("path"));
+        let system = result.unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(state_names(&system), [state], "{id}");
+        assert_eq!(
+            system.state_variables[state]
+                .default
+                .as_ref()
+                .and_then(|d| d.as_scalar()),
+            Some(default),
+            "{id}"
+        );
+    }
 }
 
-/// `require_match` is a document field, so it must reach the emitted form — a
-/// flag that silently vanished on save would make the refusal unreproducible
-/// from the file the author kept — and the schema DEFAULT must NOT be written
-/// out, which would put a key on every existing fixture and break load
-/// preservation.
+/// `require_match` is TRI-STATE, so an explicit `false` must survive the round
+/// trip — dropping it as "the default" would silently re-arm the zero-merge
+/// refusal on every document that opted out — and an ABSENT flag must stay
+/// absent, for the same reason in the other direction.
 #[test]
-fn require_match_survives_a_round_trip() {
+fn require_match_round_trips_including_an_explicit_false() {
     let emitted = |name: &str| -> Value {
         let path = category_dir().join("fixtures").join(name);
         let file = load_path(path.to_str().expect("path is UTF-8")).expect("fixture loads");
@@ -278,10 +347,15 @@ fn require_match_survives_a_round_trip() {
         emitted("require_match_unmatched.esm")["coupling"][0]["require_match"],
         true
     );
+    assert_eq!(
+        emitted("no_merge_declared.esm")["coupling"][0]["require_match"],
+        false,
+        "an explicit `false` must survive the round trip"
+    );
     assert!(
-        emitted("no_merge.esm")["coupling"][0]
+        emitted("partial_merge.esm")["coupling"][0]
             .get("require_match")
             .is_none(),
-        "the `false` default must NOT be emitted"
+        "an ABSENT flag must stay absent"
     );
 }

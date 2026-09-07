@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 859,
+    "symbols": 863,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 299,
-      "typescript": 232,
-      "python": 244,
-      "rust": 329,
-      "go": 390
+      "julia": 301,
+      "typescript": 234,
+      "python": 246,
+      "rust": 330,
+      "go": 393
     },
     "by_tier": {
-      "extension": 595,
-      "stable": 264
+      "extension": 597,
+      "stable": 266
     }
   },
   "planned": [
@@ -824,6 +824,14 @@
       }
     },
     {
+      "name": "capture_coupling_diagnostics",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "capture_coupling_diagnostics"
+      }
+    },
+    {
       "name": "check_dimensional_consistency",
       "kind": "function",
       "tier": "extension",
@@ -1252,6 +1260,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeMissingDataSourceURLTemplate"
+      }
+    },
+    {
+      "name": "code_operator_compose_ambiguous_bare_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeAmbiguousBareName"
       }
     },
     {
@@ -4807,11 +4823,33 @@
       }
     },
     {
+      "name": "operator_compose_ambiguous_bare_name_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeAmbiguousBareNameError",
+        "julia": "OperatorComposeAmbiguousBareNameError",
+        "python": "OperatorComposeAmbiguousBareNameError",
+        "typescript": "OperatorComposeAmbiguousBareNameError"
+      }
+    },
+    {
       "name": "operator_compose_coupling",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "go": "OperatorComposeCoupling"
+      }
+    },
+    {
+      "name": "operator_compose_no_merge_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeNoMergeError",
+        "julia": "OperatorComposeNoMergeError",
+        "python": "OperatorComposeNoMergeError",
+        "typescript": "OperatorComposeNoMergeError"
       }
     },
     {

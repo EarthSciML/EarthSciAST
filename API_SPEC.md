@@ -936,6 +936,8 @@ reading that as a gap.
 | `model` | type | `Model` | – | `Model` | `Model` | `Model` |
 | `model_variable` | type | `ModelVariable` | – | `ModelVariable` | `ModelVariable` | `ModelVariable` |
 | `observed_definitions` | function | `observed_definitions` | `observedDefinitions` | `observed_definitions` | `observed_definitions` | – |
+| `operator_compose_ambiguous_bare_name_error` | error | `OperatorComposeAmbiguousBareNameError` | `OperatorComposeAmbiguousBareNameError` | `OperatorComposeAmbiguousBareNameError` | – | `OperatorComposeAmbiguousBareNameError` |
+| `operator_compose_no_merge_error` | error | `OperatorComposeNoMergeError` | `OperatorComposeNoMergeError` | `OperatorComposeNoMergeError` | – | `OperatorComposeNoMergeError` |
 | `operator_compose_require_match_error` | error | `OperatorComposeRequireMatchError` | `OperatorComposeRequireMatchError` | `OperatorComposeRequireMatchError` | – | `OperatorComposeRequireMatchError` |
 | `parameter_update` | type | `ParameterUpdate` | – | `ParameterUpdate` | `ParameterUpdate` | `ParameterUpdate` |
 | `reaction` | type | `Reaction` | – | `Reaction` | `Reaction` | `Reaction` |
