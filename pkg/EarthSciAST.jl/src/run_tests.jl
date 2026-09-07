@@ -655,6 +655,41 @@ end
 run_esm_tests(roots::AbstractString...; kwargs...) =
     run_esm_tests(collect(String, roots); kwargs...)
 
+"""
+    _mounted_components(path) -> Vector{String}
+
+The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
+`"<k> ← <ref>"` strings in document order.
+
+Read from the raw file because a LOADED document no longer shows them: the mount
+splices the referenced leaf's model in under the same key (esm-spec §4.7 /
+§9.7.10), leaving nothing to distinguish it from a model the document wrote
+itself. The summary reports them so the §6.6 rule — a mount does not carry the
+mounted component's inline tests — is VISIBLE rather than silent.
+
+Best-effort: an unreadable or unparseable file yields nothing, because the run
+itself already reports that failure as a load ERROR row.
+"""
+function _mounted_components(path::AbstractString)
+    edges = String[]
+    raw = try
+        JSON3.read(read(path, String))
+    catch
+        return edges
+    end
+    (raw isa AbstractDict || raw isa JSON3.Object) || return edges
+    models = get(raw, :models, nothing)
+    models === nothing && return edges
+    for (name, entry) in pairs(models)
+        # The mount-edge shape `_inline_toplevel_model_refs!` recognises: a
+        # `ref` and no inline `variables`.
+        (entry isa AbstractDict || entry isa JSON3.Object) || continue
+        (haskey(entry, :ref) && !haskey(entry, :variables)) || continue
+        push!(edges, string(name, " ← ", entry[:ref]))
+    end
+    return edges
+end
+
 function _print_summary(io::IO, files::Vector{String},
                         results::Vector{AssertionResult},
                         base::AbstractString=esm_root())
@@ -664,6 +699,21 @@ function _print_summary(io::IO, files::Vector{String},
     println(io, "================ ESM inline-test summary ================")
     println(io, "Files discovered: ", length(files))
     println(io, "Assertions:       ", length(results))
+
+    # esm-spec §6.6: a mount does not carry the mounted component's inline
+    # tests. Naming the mount edges keeps that VISIBLE — the reader sees which
+    # components this run did not assert on, and where their assertions do run.
+    # Printed before the `isempty(results)` exit, so a document that is nothing
+    # but mounts and coupling still says so.
+    mounts = [(rel(f), edge) for f in files for edge in _mounted_components(f)]
+    if !isempty(mounts)
+        println(io, "Mounted:          ", length(mounts),
+                " (esm-spec §6.6 — a mounted component's inline tests are not run here; ",
+                "they run when its own file is a test target)")
+        for (f, edge) in mounts
+            println(io, "  - ", f, " :: ", edge)
+        end
+    end
 
     by_file = Dict{String,Vector{AssertionResult}}()
     for r in results

@@ -2152,6 +2152,14 @@ def resolve_model_refs(
 
         sub_model = next(iter(parsed.models.values()))
         sub_model.name = model_name
+        # esm-spec §6.6: inline tests do NOT cross a mount edge. They are
+        # assertions about the leaf under the leaf's OWN standalone conditions,
+        # and this document may couple it — replacing a parameter, reshaping it,
+        # feeding it another component's state — so re-running them here would
+        # check a claim the leaf's author never made. They run when the leaf's
+        # own file is the test target, which a directory-wide `esm test` reaches
+        # anyway.
+        sub_model.tests = []
         # Recursively resolve the spliced model's own subsystem refs, relative
         # to the referenced file's directory; nested subsystem index sets merge
         # into the importing document's registry (esm-spec §4.7).

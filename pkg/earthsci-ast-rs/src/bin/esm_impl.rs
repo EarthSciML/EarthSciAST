@@ -3743,6 +3743,41 @@ fn relative_to_cwd(path: &std::path::Path) -> String {
         .to_string()
 }
 
+/// The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
+/// `"<k> ← <ref>"` lines in document order.
+///
+/// Read from the raw file because a LOADED document no longer shows them: the
+/// mount splices the referenced leaf's model in under the same key (§4.7 /
+/// §9.7.10), leaving nothing to distinguish it from a model the document wrote
+/// itself. `esm test` reports them so the §6.6 rule — a mount does not carry the
+/// mounted component's inline tests — is VISIBLE rather than silent: the reader
+/// is told which components were not asserted on here, and where their own
+/// assertions live.
+///
+/// Best-effort: an unreadable or unparseable file yields nothing, because the
+/// run itself already reports that failure as a load ERROR row.
+fn mounted_components(path: &std::path::Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(models) = raw.get("models").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        // The mount-edge shape `inline_toplevel_model_refs` recognises: a `ref`
+        // and no inline `variables`.
+        .filter(|(_, m)| m.get("ref").is_some() && m.get("variables").is_none())
+        .map(|(k, m)| {
+            let target = m.get("ref").and_then(|v| v.as_str()).unwrap_or("<ref>");
+            format!("{k} ← {target}")
+        })
+        .collect()
+}
+
 fn run_test(
     paths: Vec<PathBuf>,
     model: Option<String>,
@@ -3880,6 +3915,31 @@ fn print_test_summary(files: &[PathBuf], rows: &[TestRow]) {
     println!("================ ESM inline-test summary ================");
     println!("Files discovered: {}", files.len());
     println!("Assertions:       {}", rows.len());
+
+    // esm-spec §6.6: a mount does not carry the mounted component's inline
+    // tests. Naming the mount edges keeps that VISIBLE — the reader sees which
+    // components this run did not assert on, and where their assertions do run —
+    // rather than losing them silently. Printed before the `rows.is_empty()`
+    // exit, so a document that is nothing but mounts and coupling still says so.
+    let mounts: Vec<(String, String)> = files
+        .iter()
+        .flat_map(|path| {
+            let file = relative_to_cwd(path);
+            mounted_components(path)
+                .into_iter()
+                .map(move |edge| (file.clone(), edge))
+        })
+        .collect();
+    if !mounts.is_empty() {
+        println!(
+            "Mounted:          {} (esm-spec §6.6 — a mounted component's inline tests are not \
+             run here; they run when its own file is a test target)",
+            mounts.len()
+        );
+        for (file, edge) in &mounts {
+            println!("  - {file} :: {edge}");
+        }
+    }
 
     if rows.is_empty() {
         println!("(no inline tests found)");

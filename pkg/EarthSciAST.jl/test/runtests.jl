@@ -264,6 +264,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("pde_inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
+    include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
     include("conformance_pde_inline_observed_rank2_test.jl")
     include("conformance_pde_inline_dead_observed_test.jl")
     include("conformance_elementwise_observed_gather_test.jl")
