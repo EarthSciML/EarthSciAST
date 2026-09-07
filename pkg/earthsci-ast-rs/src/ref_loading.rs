@@ -65,9 +65,11 @@ fn root_metaparameter_env(
 /// importing document's registry (esm-spec §4.7, mirroring the §9.7.5
 /// template-import merge): deep-equal redeclaration is idempotent, an absent
 /// name is added, and a non-deep-equal collision is `subsystem_index_set_conflict`.
-/// The merge is scoped to MODEL subsystems, matching the Julia resolver (a
-/// mounted mesh file whose axis size disagrees with the importer must fail at
-/// load rather than the importer silently winning).
+/// The merge is scoped to MODEL mounts, matching the Julia resolver (a mounted
+/// mesh file whose axis size disagrees with the importer must fail at load
+/// rather than the importer silently winning) — and it applies to BOTH model
+/// mount forms: a `subsystems.<k>` ref and a top-level `models.<k>` ref
+/// ([`inline_toplevel_model_refs`]) merge identically.
 ///
 /// # Arguments
 ///
@@ -311,9 +313,10 @@ fn walk_top_level(
     inline_toplevel_model_refs(obj, base_path, visited)?;
 
     // The importing document's index-set registry starts from its own
-    // top-level `index_sets`; model subsystem refs merge theirs into it
-    // (esm-spec §4.7). Reaction-system subsystem refs do NOT merge (Julia
-    // resolver scope), so they thread `None`.
+    // top-level `index_sets` — already carrying whatever the top-level model
+    // mounts above merged in, since they run first — and model subsystem refs
+    // merge theirs into it (esm-spec §4.7). Reaction-system subsystem refs do
+    // NOT merge (Julia resolver scope), so they thread `None`.
     let mut registry: Map<String, Value> = obj
         .get("index_sets")
         .and_then(|v| v.as_object())
@@ -356,6 +359,9 @@ fn walk_top_level(
 ///   subsystems) are absolutized against the LEAF's dir, and the edge's imports
 ///   against THIS document's dir, so both resolve after the model lands in a
 ///   parent whose directory differs;
+/// * the leaf's top-level `index_sets` merge into THIS document's registry under
+///   the §4.7 deep-equal-or-`subsystem_index_set_conflict` rule — the same merge
+///   a subsystem mount performs, so the two mount forms agree;
 /// * the leaf's `function_tables` / `data_sources` / `enums` are merged in
 ///   (parent wins on a key clash).
 ///
@@ -451,6 +457,26 @@ fn inline_toplevel_model_refs(
         // declares no sources, which is almost every leaf.
         crate::data_source_urls::resolve_data_source_urls(&mut comp, &leaf_dir)
             .map_err(|e| err(e.code, e.message))?;
+        // esm-spec §4.7 "Index-set merge": a top-level `models.<k>` mount edge
+        // merges the leaf's document-scoped `index_sets` into THIS document's
+        // registry, exactly as a subsystem mount does — the two mount forms are
+        // one mechanism at two attachment points, so an assembly may shape its
+        // coupling over the leaf's axes without redeclaring them. Deep-equal
+        // redeclaration is idempotent; a non-deep-equal collision is
+        // `subsystem_index_set_conflict`. Merged AFTER the component-of-component
+        // recursion above, so `comp`'s registry already carries whatever ITS own
+        // mounts brought in and the merge composes transitively. Unlike the
+        // by-name blocks below, the importer does NOT silently win a clash.
+        if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
+            && !loaded.is_empty()
+        {
+            let registry = obj
+                .entry("index_sets".to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(registry) = registry.as_object_mut() {
+                merge_subsystem_index_sets(registry, &loaded, ref_str)?;
+            }
+        }
         for blk in ["function_tables", "data_sources", "enums"] {
             let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
                 continue;

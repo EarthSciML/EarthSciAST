@@ -506,6 +506,32 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         @test mesh.index_sets["cells"].size == 5
     end
 
+    @testset "top-level ref mounts merge index_sets identically (§4.7)" begin
+        # esm-spec §4.7 "Two mount forms, one mechanism": the SAME leaf
+        # (subsystem_mesh_lib.esm) mounted through a TOP-LEVEL `models.M {ref}`
+        # instead of a `subsystems` entry must merge its axes the same way — the
+        # differential half of the testset above. Before this, the top-level
+        # inliner merged only function_tables/data_sources/enums and silently
+        # dropped the leaf's axes, so an assembly had to redeclare them.
+        dir = joinpath(repo_root, "tests", "fixtures", "toplevel_ref_index_sets")
+        f = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_merge.esm"))
+        @test f.index_sets["cells"].size == 5        # deep-equal redeclaration
+        @test f.index_sets["vertices"].size == 4     # merged in from the mesh file
+        # The mount is a real splice, not a surviving `{ref}` stub.
+        @test f.models["M"] isa EarthSciAST.Model
+        @test haskey(f.models["M"].variables, "q")
+        # A non-deep-equal collision is `subsystem_index_set_conflict` — the SAME
+        # diagnostic the subsystems-edge form raises, not last-writer-wins.
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "toplevel_ref_index_set_conflict.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == "subsystem_index_set_conflict"
+    end
+
     @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin
         # tests/valid/makearray_empty_region_min_extent.esm: a §9.6.8-style
         # discretized derivative whose interior region [2, N-1] folds to the
