@@ -2174,10 +2174,22 @@ Assertions are stored **inline** only — there is no file-reference option. Tes
 An assertion passes when the computed value `actual` satisfies
 
 ```
-|actual - expected| ≤ abs    OR    |actual - expected| / max(|expected|, ε) ≤ rel
+|actual - expected| ≤ abs    OR    |actual - expected| ≤ rel · max(|actual|, |expected|)
 ```
 
-for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention. An implementation-defined small `ε` (e.g., `1e-300`) protects the relative check when `expected` is zero.
+equivalently, in the single-bound form the bindings implement:
+
+```
+|actual - expected| ≤ max(abs, rel · max(|actual|, |expected|))
+```
+
+for the resolved absolute and relative tolerances. If both bounds are given, passing either is sufficient — the standard numerical convention, and taking the `max` of the two bounds is the same statement.
+
+**The relative bound is symmetric in `actual` and `expected`.** Its scale is `max(|actual|, |expected|)` — the larger of the two magnitudes — not `|expected|` alone. This is Julia `isapprox`, and it is what every executing binding implements. The distinction is invisible whenever `|actual| ≤ |expected|` and only shows on an overshoot: at `expected = 1.0`, `actual = 1.6`, `rel = 0.5`, `abs = 0` the symmetric bound is `0.6 ≤ 0.5 · 1.6 = 0.8` — a **PASS**, where an `|expected|`-only denominator would give `0.6 ≤ 0.5` and FAIL. A conforming runtime MUST use the symmetric scale; an asymmetric one is a divergence, not a rounding difference.
+
+No `ε` floor is needed, and a conforming runtime MUST NOT introduce one: scaling by `rel · max(|actual|, |expected|, ε)` is a divergence. The bound is stated as a product rather than a quotient, so there is no division to protect — at `expected = 0` it reads `|actual| ≤ max(abs, rel · |actual|)`, which is well-defined for every `actual` (and trivially true at `actual = 0`, which the `actual == expected` clause below admits as well). A floor changes the answer exactly where it is least defensible: at `actual = 1e-320`, `expected = 0`, `rel = 0.5`, an `ε` of `1e-300` PASSES where the bound as stated FAILS, so a subnormal result would be graded differently by two runtimes that both claim to implement this section.
+
+A nonzero `actual` against a zero `expected` therefore needs an `abs` bound to pass — which is the intended reading: a purely relative tolerance carries no information about how close to zero is close enough. Note that `rel ≥ 1` also admits it, but only by making the bound vacuous: `|a − e| ≤ max(|a|, |e|)` holds for **every** pair that shares a sign (or has a zero on either side), so such an assertion is green whatever the model computes. It is not a substitute for an `abs` bound.
 
 **Finiteness is judged before tolerance.** The full pass predicate is
 
