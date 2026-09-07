@@ -127,6 +127,32 @@ CASES: list[tuple[str, str, str]] = [
         "coupled_atmospheric_system",
         "end_to_end/coupled_atmospheric_system.esm",
     ),
+    # --- variable_map endpoints that reach INTO / OUT OF subsystems ----------
+    # Added 2026-09-06 with issue #198 item 1. EVERY `variable_map` above names
+    # two-segment endpoints (`Model.var`), so not one of them can tell a binding
+    # that resolves an endpoint by splitting on the FIRST dot from one that
+    # walks the whole §4.6 path -- and a wrapper model is exactly where the
+    # difference shows. This document pins the four shapes at once:
+    #
+    #   * INTO a parameter nested in a subsystem   (Wrapper.inner.gain);
+    #   * OUT OF a nested unknown                  (Wrapper.inner.tracer);
+    #   * OUT OF the wrapper's own observed, in a model that HAS subsystems
+    #     (Wrapper.exported), which is the shape where the mere presence of a
+    #     `subsystems` map was reported to break an otherwise two-segment edge;
+    #   * BETWEEN two subsystems of ONE parent     (inner.tracer -> sink.uptake),
+    #     the case that used to validate and then be silently dropped, leaving
+    #     the target at its declared default with nothing in the flattened
+    #     system to say the coupling was ever declared.
+    #
+    # Each mapped parameter is READ by an equation, so the substitution is
+    # observable in `equations` and not only in the parameter list: a binding
+    # that removes `Wrapper.inner.gain` without rewriting the reference to it
+    # records a dangling name here rather than `Source.drive`.
+    (
+        "coupled",
+        "variable_map_subsystem_endpoints",
+        "valid/variable_map_subsystem_endpoints.esm",
+    ),
     # --- operator_compose that actually COMPOSES -----------------------------
     # Added 2026-08-24. Until then EVERY coupled case above recorded an
     # operator_compose that matched nothing, because each named an operator model

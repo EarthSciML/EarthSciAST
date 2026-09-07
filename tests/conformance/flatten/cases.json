@@ -2063,6 +2063,170 @@
       "lifted_shapes": {}
     },
     {
+      "id": "variable_map_subsystem_endpoints",
+      "tier": "coupled",
+      "fixture": "valid/variable_map_subsystem_endpoints.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Source.drive",
+          "role": "state",
+          "units": "K",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Wrapper.inner.tracer",
+          "role": "state",
+          "units": "K",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "name": "Wrapper.sink.load",
+          "role": "state",
+          "units": "K",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "name": "Receiver.total",
+          "role": "state",
+          "units": "K",
+          "default": 0.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Receiver"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Source.ramp",
+          "role": "parameter",
+          "units": "K/s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Source"
+        },
+        {
+          "name": "Wrapper.inner.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "name": "Wrapper.sink.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "name": "Receiver.tau",
+          "role": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Receiver"
+        }
+      ],
+      "observed_variables": [
+        {
+          "name": "Wrapper.exported",
+          "role": "observed",
+          "units": "K",
+          "default": null,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Wrapper"
+        }
+      ],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 5,
+      "equations": [
+        {
+          "lhs": "D(Source.drive)/Dt",
+          "rhs": "Source.ramp",
+          "source_system": "Source"
+        },
+        {
+          "lhs": "Wrapper.exported",
+          "rhs": "2 * Wrapper.inner.tracer",
+          "source_system": "Wrapper"
+        },
+        {
+          "lhs": "D(Wrapper.inner.tracer)/Dt",
+          "rhs": "Source.drive / Wrapper.inner.tau",
+          "source_system": "Wrapper.inner"
+        },
+        {
+          "lhs": "D(Wrapper.sink.load)/Dt",
+          "rhs": "Wrapper.inner.tracer / Wrapper.sink.tau",
+          "source_system": "Wrapper.sink"
+        },
+        {
+          "lhs": "D(Receiver.total)/Dt",
+          "rhs": "(Wrapper.inner.tracer + Wrapper.exported) / Receiver.tau",
+          "source_system": "Receiver"
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": {
+        "independent_variable": null,
+        "element_type": null,
+        "array_type": null
+      },
+      "metadata": {
+        "source_systems": [
+          "Source",
+          "Wrapper",
+          "Receiver"
+        ],
+        "coupling_rules": [
+          "variable_map(Source.drive -> Wrapper.inner.gain, transform=param_to_var)",
+          "variable_map(Wrapper.inner.tracer -> Receiver.nested_in, transform=param_to_var)",
+          "variable_map(Wrapper.exported -> Receiver.wrapper_in, transform=param_to_var)",
+          "variable_map(Wrapper.inner.tracer -> Wrapper.sink.uptake, transform=param_to_var)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "minimal_chemistry",
       "tier": "operator_compose",
       "fixture": "valid/minimal_chemistry.esm",
