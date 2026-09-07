@@ -3387,7 +3387,7 @@ const TEST_ABSTOL: f64 = 1e-14;
 /// [`earthsci_ast::PdeAssertionResult`] carries a two-state `passed: bool` and
 /// stays that way: it is `Serialize`d verbatim by `examples/pde_conformance.rs`
 /// as a payload an external runner consumes. The third state is RECOVERED from
-/// it instead. `run_pde_tests` sets `actual: Some(_)` exactly on the path that
+/// it instead. `run_inline_tests` sets `actual: Some(_)` exactly on the path that
 /// got as far as comparing a number against the resolved tolerance, and
 /// `actual: None` on every path that failed before then — discretization
 /// injection, the problem build, the solve, the solver retcode, and assertion
@@ -3824,7 +3824,7 @@ fn run_test(
                 // rather than the whole document (it used to select rows out of
                 // an already-evaluated `Vec`). The surviving rows are the same
                 // either way: a result's `test_id` is its test's `id`.
-                let results = earthsci_ast::run_pde_tests_filtered(
+                let results = earthsci_ast::run_inline_tests_filtered(
                     &esm_file,
                     model.as_deref(),
                     &opts,

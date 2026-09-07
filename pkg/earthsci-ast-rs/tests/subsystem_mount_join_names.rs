@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use earthsci_ast::{SolveOptions, load_path, run_pde_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -42,7 +42,7 @@ fn fixture(name: &str) -> PathBuf {
 /// the `{"ref": "./join_leaf.esm"}` mount relative to the host document.
 fn assert_inline_tests_pass(path: &Path, expected: f64) {
     let file = load_path(path).unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
-    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results = run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(
         results.len(),
         1,

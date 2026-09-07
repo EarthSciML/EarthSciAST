@@ -39,7 +39,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use earthsci_ast::precision::{self, Precision};
-use earthsci_ast::{PdeAssertionResult, SolveOptions, load_path, run_pde_tests};
+use earthsci_ast::{PdeAssertionResult, SolveOptions, load_path, run_inline_tests};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,7 +49,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 fn run(name: &str) -> Vec<PdeAssertionResult> {
     let file = load_path(fixture(name)).expect("fixture parses");
-    run_pde_tests(&file, None, &SolveOptions::default())
+    run_inline_tests(&file, None, &SolveOptions::default())
 }
 
 /// The one assertion of the witness document, with its actual value.

@@ -23,8 +23,8 @@
 //! `rebuilds_when_*` test fails on both counts.
 
 use earthsci_ast::{
-    BuildProviderFactory, PdeAssertionResult, SolveOptions, load_string, run_pde_tests_filtered,
-    run_pde_tests_with_base_dir, run_pde_tests_with_providers,
+    BuildProviderFactory, PdeAssertionResult, SolveOptions, load_string, run_inline_tests_filtered,
+    run_inline_tests_with_base_dir, run_inline_tests_with_providers,
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
@@ -81,7 +81,7 @@ fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<PdeAssertionRes
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_pde_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
+    let results = run_inline_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
     (results, builds.get())
 }
 
@@ -260,7 +260,7 @@ fn rebuilds_when_expression_template_imports_differ() {
         let base = dir.path().join("model.esm");
         std::fs::write(&base, leaf_doc(tests).to_string()).expect("write model");
         let file = earthsci_ast::load_path(&base).expect("model loads");
-        run_pde_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
+        run_inline_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
     };
 
     let fwd = run(json!([two.clone(), three.clone()]));
@@ -349,8 +349,8 @@ fn filter_matching_nothing_builds_nothing() {
     assert_eq!(builds, 0);
 }
 
-/// The unfiltered entry points keep their meaning: `run_pde_tests_with_providers`
-/// is `run_pde_tests_filtered(.., None)`.
+/// The unfiltered entry points keep their meaning: `run_inline_tests_with_providers`
+/// is `run_inline_tests_filtered(.., None)`.
 #[test]
 fn unfiltered_entry_point_runs_everything() {
     let file = load_string(
@@ -366,7 +366,7 @@ fn unfiltered_entry_point_runs_everything() {
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_pde_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results = run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
     assert_eq!(results.len(), 2);
     assert_eq!(builds.get(), 1);
 }

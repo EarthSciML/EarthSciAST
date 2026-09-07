@@ -14,7 +14,7 @@ Python mirror of the Julia tree-walk seams (EarthSciAST.jl
    name wins, else the unique dot-suffix match at the shallowest namespace
    depth; a genuine ambiguity keeps the name bare so the standard
    unresolved-symbol error surfaces.
-3. ``run_pde_tests`` §6.6.5 assertions may target a state-free ARRAY OBSERVED
+3. ``run_inline_tests`` §6.6.5 assertions may target a state-free ARRAY OBSERVED
    (the observed-assertion form): the field is read from the inspection's
    setup arrays.
 """
@@ -34,7 +34,7 @@ from earthsci_ast.numpy_interpreter import (
     ragged_factor_scope,
 )
 from earthsci_ast.parse import load_string
-from earthsci_ast.pde_inline_tests import run_pde_tests, simulate_states
+from earthsci_ast.pde_inline_tests import run_inline_tests, simulate_states
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
 from earthsci_ast.simulation import BuildInspection
 
@@ -109,7 +109,7 @@ def test_ragged_offsets_resolve_through_factor_scope() -> None:
 
 # ---------------------------------------------------------------------------
 # End-to-end miniature: 2-cell ragged CSR document through simulate /
-# run_pde_tests (the MPAS keyed-factor wiring contract, in miniature).
+# run_inline_tests (the MPAS keyed-factor wiring contract, in miniature).
 # ---------------------------------------------------------------------------
 
 # Cell valences [2, 3] over 5 edges; edge weights w = [10, 20, 30, 40, 50].
@@ -234,11 +234,11 @@ def test_ragged_csr_simulation_namespaced_factors() -> None:
     np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
 
 
-def test_run_pde_tests_observed_array_assertions() -> None:
+def test_run_inline_tests_observed_array_assertions() -> None:
     """§6.6.5 assertions on a state-free ARRAY OBSERVED evaluate through the
     build-inspection setup arrays (max/min of `gathered`)."""
     file = load_string(json.dumps(_RAGGED_DOC))
-    results = run_pde_tests(file, model_name="Rag", method="LSODA", rtol=1e-10, atol=1e-12)
+    results = run_inline_tests(file, model_name="Rag", method="LSODA", rtol=1e-10, atol=1e-12)
     assert len(results) == 3
     for r in results:
         assert r.passed, f"{r.variable} {r.reduce}: {r.message}"

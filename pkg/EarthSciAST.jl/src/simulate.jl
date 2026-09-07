@@ -307,7 +307,7 @@ _compose_callbacks(cbs::AbstractVector) =
 
 # --------------------------------------------------------------------------- #
 # Internal solve bridge, for the CORE-RESIDENT callers that have to run a
-# problem themselves — today only the inline-test engine (`run_pde_tests`),
+# problem themselves — today only the inline-test engine (`run_inline_tests`),
 # which lives in this package and is handed an `alg` by its caller. It is NOT a
 # second public entry point beside `solve`: the extension implements it BY
 # calling `SciMLBase.solve(prob, alg; …)`, so there is exactly one solve path.

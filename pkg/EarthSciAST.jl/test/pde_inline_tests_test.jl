@@ -72,7 +72,7 @@ end
 
 _pit_load(doc) = _PIT_ESS.load_string(IOBuffer(JSON3.write(doc)))
 
-_pit_run(file; kwargs...) = run_pde_tests(file; model_name="M",
+_pit_run(file; kwargs...) = run_inline_tests(file; model_name="M",
     alg=OrdinaryDiffEqTsit5.Tsit5(), reltol=1e-12, abstol=1e-14, kwargs...)
 
 _pit_coords_assert(coords; time=0.0, expected=0.0, abs_tol=1e-9, var="u") =
@@ -223,7 +223,7 @@ _pit_from_file_assert(refdict; reduce="L2_error", abs_tol=1e-12) =
         write(prob, JSON3.write(doc))
 
         # Path input: base_dir defaults to the .esm file's directory.
-        results = run_pde_tests(prob; model_name="M",
+        results = run_inline_tests(prob; model_name="M",
                                 alg=OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol=1e-12, abstol=1e-14)
         @test length(results) == 2
@@ -425,7 +425,7 @@ end
 
 @testset "inline-Expression §6.6.5 reference loaded from file (parse fix)" begin
     # A JSON3-loaded inline reference is an `AbstractDict`; the pre-fix
-    # `coerce_assertion` misclassified it as `from_file` and `run_pde_tests`
+    # `coerce_assertion` misclassified it as `from_file` and `run_inline_tests`
     # rejected it ("unsupported `reference` shape Dict"). At t=0 the cos(pi x)
     # ic exactly equals the cos(pi x) analytic reference → relative L2 ≈ 0.
     file = _pit_load(_pit_decay_doc(Any[
@@ -473,7 +473,7 @@ end
     fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "spatial",
                        "pde_inline_assertions_exec.esm")
     @test isfile(fixture)
-    results = run_pde_tests(fixture; model_name="M",
+    results = run_inline_tests(fixture; model_name="M",
                             alg=OrdinaryDiffEqTsit5.Tsit5(),
                             reltol=1e-12, abstol=1e-14)
     @test length(results) == 7

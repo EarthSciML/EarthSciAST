@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.pde_inline_tests import run_inline_tests
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "scalar_ic"
 _MANIFEST = _ROOT / "manifest.json"
@@ -54,7 +54,7 @@ def test_scalar_ic_matches_golden(fixture: dict) -> None:
     golden = json.loads((_ROOT / fixture["golden"]).read_text())
     assert golden["reference_binding"] == "julia"
 
-    results = run_pde_tests(
+    results = run_inline_tests(
         str(esm_path),
         model_name=fixture["model"],
         method=integ["method"],

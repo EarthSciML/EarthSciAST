@@ -72,7 +72,7 @@ grows skip semantics.
 
 Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
 result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_pde_tests`](@ref) over the tree-walk solve engine;
+MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine;
 `PdeAssertionResult` is an alias of this type).
 
 `message` carries the diff or error text for non-`PASS` results.
@@ -208,7 +208,7 @@ discover_esm_files(; kwargs...) = discover_esm_files(DEFAULT_ROOTS; kwargs...)
 const _DEFAULT_REL_TOL = 1.0e-6
 
 # Tight solver tolerances for integrating inline tests, shared between the
-# MTK engine's per-test solve and `run_pde_tests`' keyword defaults
+# MTK engine's per-test solve and `run_inline_tests`' keyword defaults
 # (tree-walk path): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
 const DEFAULT_TEST_RELTOL = 1e-10
@@ -348,7 +348,7 @@ end
 #   engine            entry point       execution pathway
 #   ----------------  ----------------  ------------------------------------
 #   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
-#   SimulateTestEngine run_pde_tests    tree-walk esm_problem/solve + field lookup
+#   SimulateTestEngine run_inline_tests    tree-walk esm_problem/solve + field lookup
 #                     (pde_inline_tests.jl)
 #
 # The frame owns everything the two runners used to duplicate: the per-test /
@@ -733,7 +733,7 @@ assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
 
 `file`, when given, relabels every result's source file before grouping —
-used by [`run_pde_tests`](@ref) callers, whose results carry no per-assertion
+used by [`run_inline_tests`](@ref) callers, whose results carry no per-assertion
 source file (`r.file == ""`), to label the whole batch in the testcase
 classnames.
 """

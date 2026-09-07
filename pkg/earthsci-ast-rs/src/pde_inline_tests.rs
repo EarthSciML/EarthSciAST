@@ -34,7 +34,7 @@
 //!    per-cell measure cancels between numerator and denominator).
 //! 3. `from_file` references — `{type: "from_file", path, format?}`: `path`
 //!    resolves relative to the .esm file's directory (the
-//!    [`run_pde_tests_with_base_dir`] `base_dir`; [`run_pde_tests`] resolves
+//!    [`run_inline_tests_with_base_dir`] `base_dir`; [`run_inline_tests`] resolves
 //!    against the working directory); the default and only v1 `format` is
 //!    "json" — a row-major nested JSON array exactly matching the field's
 //!    shape (validated; mismatch is a clear error). The loaded array is used
@@ -51,12 +51,26 @@
 //!   absolute Linf, mean/max/min).
 //! - [`state_cells`] — (cell-index-tuple, state-row) pairs of one array
 //!   state, sorted by cell tuple.
-//! - [`run_pde_tests`] — run every inline test of the selected model(s);
-//!   returns per-assertion results carrying the ACTUAL reduction values
-//!   (conformance runners record these).
+//! - [`run_inline_tests`] — run every inline test of the selected
+//!   component(s) of one loaded document; returns per-assertion results
+//!   carrying the ACTUAL reduction values (conformance runners record these).
+//! - [`run_inline_tests_paths`] + [`InlineTestOptions`] — the corpus entry:
+//!   many documents by path, with a per-document options callback so that
+//!   site-specific policy (a stiff-solver map, an initial-condition seed)
+//!   stays with the caller.
+//!
+//! `models` and `reaction_systems` alike are run: the schema gives both the
+//! same `tests` member (esm-spec §6.6).
+//!
+//! This entry was called `run_pde_tests` until it grew the ability to run a
+//! whole corpus. The name was always too narrow — the §6.6.5 spatial
+//! reductions are one assertion FORM, and the same runner has always executed
+//! the plain pointwise assertions of an ODE document through the same body —
+//! so it is now `run_inline_tests`, with no deprecated alias (the old spelling
+//! is exactly the misunderstanding the rename exists to remove).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -73,7 +87,7 @@ use crate::simulate::{Solution, SolveOptions};
 /// rather than once per test. `Err` carries a message naming what could not be
 /// constructed; it is recorded as an assertion ERROR, never ignored.
 ///
-/// See [`run_pde_tests_with_providers`].
+/// See [`run_inline_tests_with_providers`].
 pub type BuildProviderFactory<'a> =
     dyn Fn() -> Result<Vec<(String, Box<dyn crate::prepare::PrepareProvider>)>, String> + 'a;
 
@@ -92,6 +106,15 @@ pub type BuildProviderFactory<'a> =
 /// that does not (already qualified, a scoped reference the prefix would double
 /// up, or simply wrong) passes through untouched, so the build reports on it
 /// exactly as it would have.
+///
+/// This is what makes the runner's answer differ from handing the authored map
+/// to the build raw and letting bare-name resolution find it. The scoped
+/// spelling is fully qualified, which is an EXACT hit under the forward,
+/// longest-dotted-suffix resolution of esm-spec §6.6.2 rule 2 — so the two
+/// rules agree here rather than compete, and the scoped one additionally
+/// survives a document where a sibling component declares the same bare name.
+/// A seed supplied by an [`InlineTestOptions`] is merged onto the authored map
+/// before this runs, so it is keyed and scoped by the same rule.
 fn scope_to_component(
     overrides: Option<&HashMap<String, InlineValue>>,
     model_name: &str,
@@ -113,6 +136,49 @@ fn scope_to_component(
         })
         .collect()
 }
+
+/// The caller-supplied override SEEDS of one document, laid beneath every
+/// test's own maps.
+///
+/// Empty for the four `&EsmFile` entry points, which take no seeds; filled
+/// from an [`InlineTestOptions`] by [`run_inline_tests_paths`].
+#[derive(Clone, Debug, Default)]
+struct InlineTestSeeds {
+    parameter_overrides: HashMap<String, InlineValue>,
+    initial_conditions: HashMap<String, InlineValue>,
+}
+
+impl InlineTestSeeds {
+    fn is_empty(&self) -> bool {
+        self.parameter_overrides.is_empty() && self.initial_conditions.is_empty()
+    }
+
+    /// Lay `seed` under a test's `authored` map: the document is authoritative
+    /// about its own test, so an authored key wins and the seed only supplies
+    /// what the document left unsaid.
+    ///
+    /// The merge happens BEFORE [`scope_to_component`], so a seed key and an
+    /// authored key naming the same variable collide on the one spelling.
+    /// Merging afterwards would instead hand the build both `T` and `M.T` —
+    /// two keys designating one parameter, with two values.
+    fn lay_under(
+        &self,
+        seed: &HashMap<String, InlineValue>,
+        authored: Option<&HashMap<String, InlineValue>>,
+    ) -> Option<HashMap<String, InlineValue>> {
+        if seed.is_empty() {
+            return authored.cloned();
+        }
+        let mut out = seed.clone();
+        if let Some(authored) = authored {
+            for (k, v) in authored {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        Some(out)
+    }
+}
+
 use crate::simulate_array::{BuildInspection, Value, eval_buildtime_field};
 use crate::types::{
     AssertionReference, EsmFile, Expr, FromFileReference, IndexSet, InlineValue, Model, Tolerance,
@@ -380,7 +446,7 @@ pub fn resolve_tolerance(
 
 /// Julia `isapprox` semantics: `actual == expected`, or both values FINITE and
 /// `|a − e| ≤ max(atol, rtol·max(|a|, |e|))` — the same pass predicate the
-/// Julia / Python `run_pde_tests` use (esm-spec §6.6.3, CONFORMANCE_SPEC §5.20).
+/// Julia / Python `run_inline_tests` use (esm-spec §6.6.3, CONFORMANCE_SPEC §5.20).
 ///
 /// **Finiteness is judged BEFORE tolerance**, and that clause is not a
 /// corollary of the bound — it contradicts it. With `actual = ±inf` both sides
@@ -992,15 +1058,11 @@ fn push_test_error(
     results: &mut Vec<PdeAssertionResult>,
     model_name: &str,
     t: &crate::types::ModelTest,
-    model: &Model,
+    tolerance: Option<&Tolerance>,
     message: &str,
 ) {
     for (i, a) in t.assertions.iter().enumerate() {
-        let (rtol, atol) = resolve_tolerance(
-            model.tolerance.as_ref(),
-            t.tolerance.as_ref(),
-            a.tolerance.as_ref(),
-        );
+        let (rtol, atol) = resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
         results.push(PdeAssertionResult {
             model: model_name.to_string(),
             test_id: t.id.clone(),
@@ -1322,6 +1384,7 @@ fn build_for_test(
     t: &crate::types::ModelTest,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
+    seeds: &InlineTestSeeds,
 ) -> BuiltModel {
     // esm-spec §9.7.10 form C: a test that injects a discretization runs
     // against an EPHEMERAL instance of this component with the test's
@@ -1362,8 +1425,10 @@ fn build_for_test(
     let mut ephemeral = ephemeral;
     let run_file: &EsmFile = ephemeral.as_ref().unwrap_or(file);
 
-    let params = scope_to_component(t.parameter_overrides.as_ref(), model_name, run_file);
-    let ics = scope_to_component(t.initial_conditions.as_ref(), model_name, run_file);
+    let seeded_params = seeds.lay_under(&seeds.parameter_overrides, t.parameter_overrides.as_ref());
+    let seeded_ics = seeds.lay_under(&seeds.initial_conditions, t.initial_conditions.as_ref());
+    let params = scope_to_component(seeded_params.as_ref(), model_name, run_file);
+    let ics = scope_to_component(seeded_ics.as_ref(), model_name, run_file);
     // Split each override map by VALUE SHAPE (esm-spec §6.6.2). A scalar goes
     // on the canonical SciML `p` / `u0` channel unchanged; INLINE ARRAY DATA
     // needs a channel that can carry a whole column:
@@ -1448,7 +1513,12 @@ fn build_for_test(
     }
 }
 
-/// Run every inline test of one model, appending per-assertion results.
+/// Run every inline test of one COMPONENT, appending per-assertion results.
+///
+/// Takes the component's `tests` and `tolerance` rather than a `&Model`,
+/// because esm-spec §6.6 hangs `tests` off `reaction_systems` too and both
+/// drive this one body — the document is flattened either way, and a species
+/// becomes an ordinary state.
 ///
 /// `test_filter`, when given, selects the tests to RUN by the same
 /// `id.contains(needle)` predicate the CLI's `--filter` used to apply to the
@@ -1464,25 +1534,29 @@ fn build_for_test(
 /// The memo cannot change an answer it does not also change without it: the
 /// key is compared exactly, the build is a pure function of the key plus the
 /// loop-invariant context above, and the solve still runs per test.
-// Nine parameters against clippy's seven. They are the loop-invariant context
+///
+/// The caller's `seeds` are part of that loop-invariant context: they come from
+/// one [`InlineTestOptions`] for the whole DOCUMENT and so are constant across
+/// the tests this loop memoises over. That is why they need not enter the
+/// [`BuildKey`] — a key hit within one call is a hit under the same seeds.
+// Ten parameters against clippy's seven. They are the loop-invariant context
 // the build memo keys on, described above; bundling them into a struct would
 // move the same values behind one more name without making any of them
 // optional.
 #[allow(clippy::too_many_arguments)]
-fn run_model_tests(
+fn run_component_tests(
     file: &EsmFile,
     model_name: &str,
-    model: &Model,
+    tests: &[crate::types::ModelTest],
+    tolerance: Option<&Tolerance>,
     index_sets: &HashMap<String, IndexSet>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
+    seeds: &InlineTestSeeds,
     results: &mut Vec<PdeAssertionResult>,
 ) {
-    let Some(tests) = &model.tests else {
-        return;
-    };
     let mut memo: Option<BuiltModel> = None;
     for t in tests {
         if test_filter.is_some_and(|needle| !t.id.contains(needle)) {
@@ -1500,6 +1574,7 @@ fn run_model_tests(
                 t,
                 base_dir,
                 build_providers,
+                seeds,
             ));
         }
         let cached = memo.as_ref().expect("just built");
@@ -1507,7 +1582,7 @@ fn run_model_tests(
         let run_index_sets: &HashMap<String, IndexSet> =
             cached.index_sets.as_ref().unwrap_or(index_sets);
         if let Built::TestError(msg) = &cached.built {
-            push_test_error(results, model_name, t, model, msg);
+            push_test_error(results, model_name, t, tolerance, msg);
             continue;
         }
 
@@ -1594,11 +1669,8 @@ fn run_model_tests(
             }
         });
         for (i, a) in t.assertions.iter().enumerate() {
-            let (rtol, atol) = resolve_tolerance(
-                model.tolerance.as_ref(),
-                t.tolerance.as_ref(),
-                a.tolerance.as_ref(),
-            );
+            let (rtol, atol) =
+                resolve_tolerance(tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
                 Ok(sol) => eval_assertion(
@@ -1663,34 +1735,34 @@ fn run_model_tests(
 /// `reduce` (error norms evaluate the `reference` — an analytic expression
 /// cellwise via [`evaluate_cellwise`], or a `{type: "from_file", path,
 /// format?}` JSON snapshot resolved against the working directory; use
-/// [`run_pde_tests_with_base_dir`] to anchor at the .esm file's directory).
+/// [`run_inline_tests_with_base_dir`] to anchor at the .esm file's directory).
 /// An assertion with neither `coords` nor `reduce` samples a scalar state.
-/// Mirrors the Julia binding's `run_pde_tests` 1:1 (tolerances per §6.6.4;
+/// Mirrors the Julia binding's `run_inline_tests` 1:1 (tolerances per §6.6.4;
 /// the pass predicate is Julia `isapprox`). Models iterate in sorted name
 /// order for deterministic output.
-pub fn run_pde_tests(
+pub fn run_inline_tests(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
 ) -> Vec<PdeAssertionResult> {
-    run_pde_tests_with_base_dir(file, model_name, opts, None)
+    run_inline_tests_with_base_dir(file, model_name, opts, None)
 }
 
-/// [`run_pde_tests`] with an explicit `base_dir` anchoring `from_file`
+/// [`run_inline_tests`] with an explicit `base_dir` anchoring `from_file`
 /// reference paths (esm-spec §6.6.5, pinned convention: relative to the .esm
 /// file's directory). `None` resolves relative paths against the working
 /// directory — callers that loaded the document from a path should pass that
 /// path's parent, matching the Julia / Python bindings' default.
-pub fn run_pde_tests_with_base_dir(
+pub fn run_inline_tests_with_base_dir(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
 ) -> Vec<PdeAssertionResult> {
-    run_pde_tests_with_providers(file, model_name, opts, base_dir, None)
+    run_inline_tests_with_providers(file, model_name, opts, base_dir, None)
 }
 
-/// [`run_pde_tests_with_base_dir`] with the document's `data_sources` actually
+/// [`run_inline_tests_with_base_dir`] with the document's `data_sources` actually
 /// INGESTED (esm-spec §8.9).
 ///
 /// A document whose parameters carry `update: {kind: "data", …}` reads its
@@ -1717,17 +1789,17 @@ pub fn run_pde_tests_with_base_dir(
 /// testable: `solve` reports [`crate::SimulateError::NotDynamic`], and the
 /// assertions are evaluated against the build's own products at the asserted
 /// times.
-pub fn run_pde_tests_with_providers(
+pub fn run_inline_tests_with_providers(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
     base_dir: Option<&Path>,
     build_providers: Option<&BuildProviderFactory<'_>>,
 ) -> Vec<PdeAssertionResult> {
-    run_pde_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
+    run_inline_tests_filtered(file, model_name, opts, base_dir, build_providers, None)
 }
 
-/// [`run_pde_tests_with_providers`] restricted to the tests whose `id` CONTAINS
+/// [`run_inline_tests_with_providers`] restricted to the tests whose `id` CONTAINS
 /// `test_filter`.
 ///
 /// The selection happens BEFORE anything is built or solved, which is the whole
@@ -1738,7 +1810,7 @@ pub fn run_pde_tests_with_providers(
 /// alike.
 ///
 /// `None` runs every test, and is what the three unfiltered entry points pass.
-pub fn run_pde_tests_filtered(
+pub fn run_inline_tests_filtered(
     file: &EsmFile,
     model_name: Option<&str>,
     opts: &SolveOptions,
@@ -1746,35 +1818,255 @@ pub fn run_pde_tests_filtered(
     build_providers: Option<&BuildProviderFactory<'_>>,
     test_filter: Option<&str>,
 ) -> Vec<PdeAssertionResult> {
+    run_inline_tests_seeded(
+        file,
+        model_name,
+        opts,
+        base_dir,
+        build_providers,
+        test_filter,
+        &InlineTestSeeds::default(),
+    )
+}
+
+/// [`run_inline_tests_filtered`] with the caller's override SEEDS — the one
+/// thing the four `&EsmFile` entry points cannot express and
+/// [`run_inline_tests_paths`] can.
+///
+/// Both kinds of test-bearing component run here: `models` first, then
+/// `reaction_systems`, each in sorted name order for deterministic output. The
+/// schema gives `reaction_systems` the same `tests` / `tolerance` members it
+/// gives `models` (esm-spec §6.6), and this runner iterated `models` alone
+/// until issue #194 — so a chemical mechanism's assertions were neither run nor
+/// reported, which is the silent half of a coverage gap: a component that
+/// produced no rows is indistinguishable in the result list from one that was
+/// never looked at.
+#[allow(clippy::too_many_arguments)]
+fn run_inline_tests_seeded(
+    file: &EsmFile,
+    model_name: Option<&str>,
+    opts: &SolveOptions,
+    base_dir: Option<&Path>,
+    build_providers: Option<&BuildProviderFactory<'_>>,
+    test_filter: Option<&str>,
+    seeds: &InlineTestSeeds,
+) -> Vec<PdeAssertionResult> {
     let mut results = Vec::new();
-    let Some(models) = &file.models else {
-        return results;
-    };
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
         .clone()
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let mut names: Vec<&String> = models.keys().collect();
-    names.sort();
-    for mname in names {
+
+    // (name, tests, tolerance) for every test-bearing component, models first.
+    let mut components: Vec<(&String, &Vec<crate::types::ModelTest>, Option<&Tolerance>)> =
+        Vec::new();
+    if let Some(models) = &file.models {
+        let mut names: Vec<&String> = models.keys().collect();
+        names.sort();
+        for name in names {
+            let m = &models[name];
+            if let Some(tests) = m.tests.as_ref() {
+                components.push((name, tests, m.tolerance.as_ref()));
+            }
+        }
+    }
+    if let Some(systems) = &file.reaction_systems {
+        let mut names: Vec<&String> = systems.keys().collect();
+        names.sort();
+        for name in names {
+            let rs = &systems[name];
+            if let Some(tests) = rs.tests.as_ref() {
+                components.push((name, tests, rs.tolerance.as_ref()));
+            }
+        }
+    }
+
+    for (name, tests, tolerance) in components {
         if let Some(selected) = model_name
-            && selected != mname
+            && selected != name.as_str()
         {
             continue;
         }
-        run_model_tests(
+        run_component_tests(
             file,
-            mname,
-            &models[mname],
+            name,
+            tests,
+            tolerance,
             &index_sets,
             opts,
             base_dir,
             build_providers,
             test_filter,
+            seeds,
             &mut results,
         );
+    }
+    results
+}
+
+/// Per-document overrides for [`run_inline_tests_paths`], returned by its
+/// `options_for` callback.
+///
+/// This record exists so that site-specific policy stays at the site. A CI gate
+/// over a model corpus routinely carries basename-keyed tables — a
+/// stiff-solver map, an initial-condition seed for the documents whose tests do
+/// not state one — and each of those is a reason the gate could not call the
+/// library entry and re-implemented esm-spec §6.6 instead. One callback absorbs
+/// all of them without this module learning anything about the corpus.
+///
+/// `initial_conditions` / `parameter_overrides` are SEEDS: they are laid
+/// BENEATH each test's own maps, so a test that states a value keeps it and a
+/// test that is silent gets the caller's. They are merged with the test's map
+/// before [`scope_to_component`] runs, and so are keyed and resolved exactly
+/// like a test's own keys — which is what makes the precedence well defined.
+///
+/// `base_dir` left `None` defaults to the document's own parent directory,
+/// which is what anchors a §6.6.5 `from_file` reference at the `.esm` file
+/// rather than at the process's working directory.
+///
+/// There is deliberately no `cse` field: unlike the Python binding, this
+/// crate's problem builder exposes no common-subexpression knob — its CSE is
+/// unconditional internal machinery — and a field that silently did nothing
+/// would be worse than its absence.
+#[derive(Clone, Default)]
+pub struct InlineTestOptions {
+    /// Run only this component of the document (`None` runs every one).
+    pub model_name: Option<String>,
+    /// Solver family and tolerances for this document.
+    pub solve: SolveOptions,
+    /// Directory anchoring `from_file` reference paths; `None` uses the
+    /// document's own parent.
+    pub base_dir: Option<PathBuf>,
+    /// Run only the tests whose `id` CONTAINS this needle.
+    pub test_filter: Option<String>,
+    /// Initial-condition seed, laid beneath each test's own map.
+    pub initial_conditions: HashMap<String, InlineValue>,
+    /// Parameter-override seed, laid beneath each test's own map.
+    pub parameter_overrides: HashMap<String, InlineValue>,
+}
+
+impl std::fmt::Debug for InlineTestOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InlineTestOptions")
+            .field("model_name", &self.model_name)
+            .field("solve", &self.solve)
+            .field("base_dir", &self.base_dir)
+            .field("test_filter", &self.test_filter)
+            .field("initial_conditions", &self.initial_conditions.len())
+            .field("parameter_overrides", &self.parameter_overrides.len())
+            .finish()
+    }
+}
+
+/// Every `.esm` document under `dir`, recursively, SORTED — a result list whose
+/// order depends on the filesystem is not comparable between two runs, let
+/// alone between two machines.
+fn esm_files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "esm") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The one ERROR row a document that could not be LOADED contributes to a run.
+///
+/// A corpus run must not lose a file to one bad document, and must not lose it
+/// SILENTLY either — a document that vanishes from the result list is
+/// indistinguishable from one that passed. So the failure becomes a row, the
+/// way every other failure in this runner becomes a row.
+fn load_failure_result(path: &Path, message: String) -> PdeAssertionResult {
+    PdeAssertionResult {
+        model: path.display().to_string(),
+        test_id: "<load>".to_string(),
+        assertion_idx: 0,
+        variable: String::new(),
+        time: f64::NAN,
+        reduce: None,
+        expected: f64::NAN,
+        actual: None,
+        rtol: 0.0,
+        atol: 0.0,
+        passed: false,
+        message: format!("load failed: {message}"),
+    }
+}
+
+/// Run the inline tests of every document in `paths`, asking `options_for` for
+/// each document's options.
+///
+/// This is the corpus entry: it takes PATHS rather than a loaded [`EsmFile`],
+/// because the thing a caller varies per document — the solver, the tolerances,
+/// an initial-condition seed — is keyed by the document, and a caller that had
+/// to load each file itself to get at that would be back to writing the loop
+/// this function is. A `paths` entry that is a DIRECTORY expands to the `.esm`
+/// files under it, recursively and sorted; results are concatenated in that
+/// order.
+///
+/// A document that fails to load contributes one ERROR row naming the path and
+/// the run continues, so one unreadable file cannot cost the run every other
+/// file's verdicts.
+///
+/// What stays with the CALLER, deliberately: per-file process isolation and
+/// memory limits, JUnit emission, summary formatting, and root discovery. A
+/// library should not impose a process model.
+pub fn run_inline_tests_paths(
+    paths: &[impl AsRef<Path>],
+    options_for: &dyn Fn(&Path) -> InlineTestOptions,
+) -> Vec<PdeAssertionResult> {
+    let mut documents: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        let p = p.as_ref();
+        if p.is_dir() {
+            documents.extend(esm_files_under(p));
+        } else {
+            documents.push(p.to_path_buf());
+        }
+    }
+    let mut results = Vec::new();
+    for path in documents {
+        let opts = options_for(&path);
+        let file = match crate::parse::load_path(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                results.push(load_failure_result(&path, e.to_string()));
+                continue;
+            }
+        };
+        // A `from_file` reference is anchored at the .esm file's own directory
+        // unless the caller says otherwise — the pinned cross-binding
+        // convention, and the same default the Julia and Python entries apply.
+        let base_dir = opts
+            .base_dir
+            .clone()
+            .or_else(|| path.parent().map(Path::to_path_buf));
+        let seeds = InlineTestSeeds {
+            parameter_overrides: opts.parameter_overrides.clone(),
+            initial_conditions: opts.initial_conditions.clone(),
+        };
+        results.extend(run_inline_tests_seeded(
+            &file,
+            opts.model_name.as_deref(),
+            &opts.solve,
+            base_dir.as_deref(),
+            None,
+            opts.test_filter.as_deref(),
+            &seeds,
+        ));
     }
     results
 }
@@ -2081,7 +2373,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("scalar-only doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(results[0].passed, "{}", results[0].message);
         assert_eq!(results[0].actual, Some(42.0));
@@ -2091,7 +2383,7 @@ mod tests {
         let mut wrong = doc.clone();
         wrong["models"]["ScalarOnly"]["tests"][0]["assertions"][0]["expected"] = json!(41.0);
         let file = load_string(&wrong.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert!(!results[0].passed);
         assert_eq!(results[0].actual, Some(42.0));
         assert!(
@@ -2136,7 +2428,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("ode doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(
@@ -2179,7 +2471,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("ScalarOnly"), &tight_opts());
+        let results = run_inline_tests(&file, Some("ScalarOnly"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
         assert_eq!(
@@ -2194,9 +2486,9 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_decay_field() {
+    fn run_inline_tests_decay_field() {
         let file = load_string(&decay_doc().to_string()).expect("decay doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(
             results.iter().map(|r| r.assertion_idx).collect::<Vec<_>>(),
             vec![1, 2, 3]
@@ -2223,7 +2515,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_reports_failing_assertion_with_actual() {
+    fn run_inline_tests_reports_failing_assertion_with_actual() {
         let mut doc = decay_doc();
         // An impossible expectation: the decayed field cannot still match
         // its initial state at t=1 to 1e-12.
@@ -2233,7 +2525,7 @@ mod tests {
              "reference": cos_pi_x()},
         ]);
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert!(!r.passed);
@@ -2327,7 +2619,7 @@ mod tests {
     #[test]
     fn array_observed_assertions_evaluate_directly() {
         let file = load_string(&observed_assert_doc().to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 5);
         // g = [1, 4, 9] (index arithmetic, exact) is STATE-FREE: max and min
         // pass with the exact reductions recorded.
@@ -2373,7 +2665,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_sampling_nearest_ties_down() {
+    fn run_inline_tests_coords_sampling_nearest_ties_down() {
         let u = |i: f64| (std::f64::consts::PI * (i - 0.5) / N as f64).cos();
         let mut doc = decay_doc_with(json!([
             coords_assert(json!({"x": 3}), 0.0, u(3.0)),
@@ -2391,7 +2683,7 @@ mod tests {
                 a
             });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 6);
         for r in &results {
             assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
@@ -2401,7 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_validation_rejections() {
+    fn run_inline_tests_coords_validation_rejections() {
         let file = load_string(
             &decay_doc_with(json!([
                 coords_assert(json!({"y": 1.0}), 0.0, 0.0),
@@ -2411,7 +2703,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(!r.passed);
@@ -2424,7 +2716,7 @@ mod tests {
     }
 
     #[test]
-    fn run_pde_tests_coords_on_scalar_variable_rejected() {
+    fn run_inline_tests_coords_on_scalar_variable_rejected() {
         // coords on a scalar (0-D) variable is ill-formed per §6.6.5.
         let doc = json!({
             "esm": "1.0.0",
@@ -2443,7 +2735,7 @@ mod tests {
             }},
         });
         let file = load_string(&doc.to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M"), &tight_opts());
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
         assert!(
@@ -2501,13 +2793,13 @@ mod tests {
     #[test]
     fn coords_strict_subset_requires_singleton_remainder() {
         let ok_file = load_string(&doc_2d(1).to_string()).expect("doc loads");
-        let ok = run_pde_tests(&ok_file, Some("M"), &tight_opts());
+        let ok = run_inline_tests(&ok_file, Some("M"), &tight_opts());
         assert_eq!(ok.len(), 1);
         assert!(ok[0].passed, "{}", ok[0].message);
         assert!((ok[0].actual.unwrap() - 1.0).abs() < 1e-8);
 
         let bad_file = load_string(&doc_2d(3).to_string()).expect("doc loads");
-        let bad = run_pde_tests(&bad_file, Some("M"), &tight_opts());
+        let bad = run_inline_tests(&bad_file, Some("M"), &tight_opts());
         assert_eq!(bad.len(), 1);
         assert!(!bad[0].passed);
         assert!(
@@ -2554,7 +2846,7 @@ mod tests {
         ]));
         let file = load_string(&doc.to_string()).expect("doc loads");
         let results =
-            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
+            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()));
         assert_eq!(results.len(), 2);
         // Identical evaluation machinery seeded the ic, so the diff is 0.
         for r in &results {
@@ -2580,7 +2872,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message
@@ -2604,7 +2896,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("expected a number"),
@@ -2624,7 +2916,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("file not found"),
@@ -2641,7 +2933,7 @@ mod tests {
             .to_string(),
         )
         .expect("doc loads");
-        let r = &run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
+        let r = &run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), Some(dir.path()))[0];
         assert!(!r.passed);
         assert!(
             r.message.contains("format 'netcdf' is not supported"),
@@ -2662,7 +2954,7 @@ mod tests {
         let text = std::fs::read_to_string(&fixture).expect("fixture reads");
         let file = load_string(&text).expect("fixture loads");
         let results =
-            run_pde_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
+            run_inline_tests_with_base_dir(&file, Some("M"), &tight_opts(), fixture.parent());
         assert_eq!(results.len(), 7);
         for r in &results {
             assert!(r.passed, "assertion {}: {}", r.assertion_idx, r.message);
@@ -2729,16 +3021,16 @@ mod tests {
     }
 
     /// Regression for the cross-binding scalar-observed slot-resolution bug
-    /// (mirror of the Python `test_run_pde_tests_scalar_observed_tracks_
+    /// (mirror of the Python `test_run_inline_tests_scalar_observed_tracks_
     /// parameter_overrides`). Each of M2's two tests overrides its own `T`, so
     /// a correct runner reads `M2.k = 5·T` (50, then 100) — distinct per test.
     /// The pre-fix single-pass `scalar_slot` returned the FIRST bare-`k` slot
     /// (`M1.k = 2·T = 20`) for every M2 assertion, so both tests read 20 and
     /// failed; the qualified-first two-pass resolver reads `M2.k`.
     #[test]
-    fn run_pde_tests_scalar_observed_tracks_parameter_overrides() {
+    fn run_inline_tests_scalar_observed_tracks_parameter_overrides() {
         let file = load_string(&scalar_observed_coupled_doc().to_string()).expect("doc loads");
-        let results = run_pde_tests(&file, Some("M2"), &tight_opts());
+        let results = run_inline_tests(&file, Some("M2"), &tight_opts());
         let by_id: HashMap<&str, &PdeAssertionResult> =
             results.iter().map(|r| (r.test_id.as_str(), r)).collect();
         assert_eq!(by_id.len(), 2, "expected the two M2 tests");

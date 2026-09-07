@@ -23,7 +23,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{Alg, SolveOptions, load_string, run_pde_tests_with_base_dir};
+use earthsci_ast::{Alg, SolveOptions, load_string, run_inline_tests_with_base_dir};
 use std::fs;
 use std::path::PathBuf;
 
@@ -84,7 +84,7 @@ fn nonfinite_actuals_fail_every_finite_expectation() {
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
-            run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 
         let cases = fx["cases"].as_array().expect("cases");
         assert_eq!(
