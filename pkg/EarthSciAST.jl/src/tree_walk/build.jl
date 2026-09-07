@@ -819,15 +819,26 @@ end
 # such a value into a dense `Array{Float64,N}`; these two stages route it to the
 # channel the build already reads it from.
 
-# Every SHAPED parameter whose resolved value is inline array data, merged into
+# Every SHAPED parameter whose resolved value the DOCUMENT supplies, merged into
 # the const-array registry. Precedence follows §6.6.2: an explicit
 # `parameter_overrides` entry wins over everything, then a caller-supplied
 # `const_arrays` entry (loaded data beats a document default), then the declared
 # `default`. Returns the ORIGINAL registry object when nothing was added, so a
 # document with no inline array data builds byte-identically.
+#
+# The value is inline array data, or a SCALAR — which esm-spec §6.3 gives the
+# same meaning, "the one value applies to every element" — BROADCAST over the
+# declared grid. The broadcast is what a shaped UNKNOWN's scalar `default`
+# already gets from `_build_u0` (one value into every cell of the state vector);
+# without it here, `_partition_variables` reaches a shaped parameter backed by
+# neither `const_arrays` nor `param_arrays` and throws
+# `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
+# (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
+# name, so the broadcast never displaces one.
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
-                                           index_sets::AbstractDict)
+                                           index_sets::AbstractDict;
+                                           param_arrays::AbstractDict=Dict{String,Any}())
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
@@ -839,10 +850,20 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
         elseif is_inline_array(v.default)
             v.default
         else
-            continue
+            # esm-spec §6.3 broadcast. Skipped when a live forcing buffer
+            # already carries the name, and when the shape does not resolve (an
+            # unmaterialized derived set has no extent to fill) — the build's own
+            # extent checks then report any real disagreement.
+            haskey(param_arrays, name) && continue
+            scalar = ov isa Number ? Float64(ov) :
+                     v.default isa Number ? Float64(v.default) : nothing
+            scalar === nothing && continue
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(scalar, Tuple(exts))
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            is_inline_array(ov) ? "parameter_overrides" : "default")
+                            ov === nothing ? "default" : "parameter_overrides")
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -3200,17 +3221,19 @@ function _build_evaluator_impl_inner(model::Model;
     # too, and a document whose parameters are already bare is unchanged.
     parameter_overrides = _normalize_param_override_keys(model, parameter_overrides)
     # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
-    # A SHAPED parameter whose value is authored as a row-major nested array —
-    # on its own `default`, or in the caller's `parameter_overrides` — is
-    # BUILD-TIME DATA, not a scalar `p` slot. Register it in the const-array
-    # registry, which is exactly the channel `_partition_variables` already
-    # requires an array-shaped parameter to be backed by; nothing else in the
-    # build then needs to know the column was authored inline rather than
-    # loaded. A shaped UNKNOWN's inline `initial_conditions` profile is expanded
-    # into the per-cell keys `_build_u0` seeds from. Both are no-ops (and the
-    # registries byte-identical) for a document that authors no array data.
+    # A SHAPED parameter whose value the document supplies — a row-major nested
+    # array on its own `default` or in the caller's `parameter_overrides`, or one
+    # SCALAR broadcast over the declared grid (§6.3) — is BUILD-TIME DATA, not a
+    # scalar `p` slot. Register it in the const-array registry, which is exactly
+    # the channel `_partition_variables` already requires an array-shaped
+    # parameter to be backed by; nothing else in the build then needs to know the
+    # column was authored inline rather than loaded. A shaped UNKNOWN's inline
+    # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
+    # seeds from. Both are no-ops (and the registries byte-identical) for a
+    # document that declares no shaped parameter.
     const_arrays = _register_inline_array_parameters(model, const_arrays,
-                                                     parameter_overrides, index_sets)
+                                                     parameter_overrides, index_sets;
+                                                     param_arrays=param_arrays)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
