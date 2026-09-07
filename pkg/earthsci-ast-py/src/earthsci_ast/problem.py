@@ -74,6 +74,7 @@ from .simulation_array import (
     _element_names,
     _fill_build_inspection,
     _NumpyRhsBuild,
+    _resolve_index_set_shape,
     _simulate_with_numpy,
 )
 from .simulation_common import (
@@ -686,8 +687,9 @@ def _choose_pathway(
     the NumPy interpreter and take precedence over the in-document data-loader
     seam (a document with both binds the injected arrays, as the pre-EsmProblem
     entry points did). ``loader_fields`` alone means cadence segmentation.
-    Otherwise an array op anywhere (including every discretized PDE) routes to
-    the NumPy interpreter, and a scalar-only system to the lambdified SymPy
+    Otherwise ARRAY-NESS routes to the NumPy interpreter — a DECLARED ``shape``
+    (esm-spec §6.3) or an array op anywhere (including every discretized PDE) —
+    and a system that is scalar by both measures goes to the lambdified SymPy
     pathway.
     """
     if discrete_providers:
@@ -696,9 +698,48 @@ def _choose_pathway(
         return "array"
     if flat.loader_fields:
         return "loaders"
+    if _declares_resolvable_shape(flat):
+        return "array"
     if any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations):
         return "array"
     return "scalar"
+
+
+def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
+    """Does any variable DECLARE an array shape this document can resolve?
+
+    esm-spec §6.3 makes ``shape`` — "the ordered list of index-set names the
+    variable is arrayed over" — the authoritative statement of array-ness; it
+    says nothing about how the defining equation happens to be spelled. Equation
+    content alone therefore under-reports: a bare whole-array ``D(theta) ~ 1``
+    over ``"shape": ["lev"]`` carries no ``index`` / ``aggregate`` / ``arrayop``
+    node anywhere, so :func:`_has_array_op` sees a scalar system and the state
+    reaches the SymPy pathway with no cells at all (issue #231). The
+    ``aggregate`` spelling of the SAME semantics routed to the array runtime,
+    which made the choice of spelling — not the model — decide the answer.
+
+    This mirrors ``_build_numpy_rhs``'s own declared-shape resolution (esm-spec
+    §11), including its fallback: a shape is only counted when every axis
+    RESOLVES against the document's ``index_sets`` registry to a concrete
+    extent. An unresolvable shape (an axis naming no registry entry, or a
+    ``derived`` set whose extent value-invention has not materialized yet) is
+    exactly the case where the array build would fall back to usage inference
+    and infer the same scalar, so routing on it would change the engine without
+    changing the answer.
+
+    Parameters as well as states: a shaped parameter carrying inline array data
+    (§6.3 "Inline array data") is array-valued whatever its consumers look like,
+    and the scalar pathway refuses to bind it.
+    """
+    for varmap in (flat.state_variables, flat.parameters, flat.observed_variables):
+        for var in varmap.values():
+            declared = getattr(var, "shape", None)
+            if not declared:
+                continue
+            resolved = _resolve_index_set_shape(list(declared), flat.index_sets)
+            if resolved:
+                return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
