@@ -1,0 +1,39 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_atm_column",
+    "description": "A 59-layer atmospheric column component: it imports ./mount_rename_column_grid.esm with NLEV = 59, so the library's generic axis `lev` reaches this document's registry as interval/59 and the model's unknown T is shaped over it. Mounted (with its 4-layer soil twin) by tests/valid/mount_rename_two_columns.esm. Loads standalone as an ordinary single-model document.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["index_sets", "mount", "column", "template_imports"]
+  },
+  "models": {
+    "AtmColumn": {
+      "expression_template_imports": [
+        { "ref": "./mount_rename_column_grid.esm", "bindings": { "NLEV": 59 } }
+      ],
+      "variables": {
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "shape": ["lev"],
+          "default": 273.0,
+          "description": "layer temperature"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Newtonian relaxation per layer: d(T_k)/dt = -T_k.",
+          "lhs": { "op": "D", "args": ["T"], "wrt": "t" },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": ["k"],
+            "args": ["T"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "*", "args": [-1.0, { "op": "index", "args": ["T", "k"] }] }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_column_grid",
+    "description": "A one-dimensional column-axis template library (esm-spec §9.7.1), the `column_nonuniform_1d` shape of the EqWeFiC report in issue #198 item 4: it declares the generic axis `lev` sized by the open metaparameter NLEV, plus one zero-parameter template. Two consuming components close NLEV differently (59 and 4) at their own import edges, which is what puts two different `lev` declarations on the road to one document-scoped registry. Loads standalone in the §9.6.4-rule-5 generic mode, with NLEV still open.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["index_sets", "metaparameters", "template_library", "column"]
+  },
+  "metaparameters": {
+    "NLEV": { "type": "integer", "default": 1, "description": "number of column layers" }
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": "NLEV" }
+  },
+  "expression_templates": {
+    "column_top": { "params": [], "body": "NLEV" }
+  }
+}

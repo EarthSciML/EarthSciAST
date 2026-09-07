@@ -1,0 +1,39 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_soil_column",
+    "description": "A 4-layer soil column component, the twin of tests/valid/mount_rename_atm_column.esm: it imports the SAME ./mount_rename_column_grid.esm with NLEV = 4, so its registry also spells the axis `lev` — interval/4 rather than interval/59. Mounting both into one document without a mount-edge rename is the subsystem_index_set_conflict of issue #198 item 4. Loads standalone as an ordinary single-model document.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["index_sets", "mount", "column", "template_imports"]
+  },
+  "models": {
+    "SoilColumn": {
+      "expression_template_imports": [
+        { "ref": "./mount_rename_column_grid.esm", "bindings": { "NLEV": 4 } }
+      ],
+      "variables": {
+        "Tsoil": {
+          "type": "unknown",
+          "units": "K",
+          "shape": ["lev"],
+          "default": 280.0,
+          "description": "soil layer temperature"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Newtonian relaxation per soil layer: d(Tsoil_k)/dt = -0.5 * Tsoil_k.",
+          "lhs": { "op": "D", "args": ["Tsoil"], "wrt": "t" },
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": ["k"],
+            "args": ["Tsoil"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "*", "args": [-0.5, { "op": "index", "args": ["Tsoil", "k"] }] }
+          }
+        }
+      ]
+    }
+  }
+}

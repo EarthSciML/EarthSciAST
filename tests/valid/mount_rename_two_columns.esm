@@ -1,0 +1,31 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_two_columns",
+    "description": "The issue #198 item 4 reproducer, with the fix applied (esm-spec §4.7 'Mount-edge index-set renaming'). The Host model mounts a 59-layer atmospheric column and a 4-layer soil column, both of which spell their axis `lev` because both import the same column-grid library at different NLEV. `index_sets` is a document-scoped registry, so without an edge rename the second mount is subsystem_index_set_conflict (tests/invalid/template_imports/subsystem_index_set_conflict.esm is the same failure on sizes). The soil mount therefore carries index_set_rename {lev: soil_lev}: after the referenced document resolves in its own scope, its axis, its variable `shape` and its aggregate `{from}` range are rewritten, and the merged registry holds BOTH lev (59) and soil_lev (4). The atmospheric mount carries no rename and is byte-identical to what it resolved to before the field existed.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "mount", "rename", "issue-198"]
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0, "description": "host scalar state" }
+      },
+      "equations": [
+        {
+          "_comment": "The host's own dynamics do not touch either column; the fixture pins the mount-edge rename.",
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] }
+        }
+      ],
+      "subsystems": {
+        "Atm": { "ref": "./mount_rename_atm_column.esm" },
+        "Soil": {
+          "ref": "./mount_rename_soil_column.esm",
+          "index_set_rename": { "lev": "soil_lev" }
+        }
+      }
+    }
+  }
+}
