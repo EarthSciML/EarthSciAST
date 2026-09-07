@@ -263,7 +263,9 @@ end
 # blocks — while the default is an advisory (SHOULD) runtime constant. Merging
 # it per-field would instead give every `abs`-only assertion in the corpus an
 # unasked-for 1e-6 relative bound.
-_resolve_tolerance_field(levels, field::Symbol) = begin
+
+# First DECLARED value of `field` walking outward, or `nothing`.
+function _resolve_tolerance_field(levels, field::Symbol)
     for candidate in levels
         candidate === nothing && continue
         v = getfield(candidate, field)
