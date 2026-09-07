@@ -331,6 +331,15 @@ type FlattenMetadata struct {
 	OperatorApplies []string
 	// Callbacks are the `callback` coupling entries, likewise.
 	Callbacks []string
+	// MergedVariableRenames maps every state spelling an `operator_compose`
+	// renaming match DELETED onto the survivor it was folded into (issue #230).
+	//
+	// The flattener's own retarget reaches equation ASTs; this is the map a
+	// CONSUMER that addresses a state by name needs — a parameter_overrides /
+	// initial_conditions key, an output selection — to resolve a spelling the
+	// merge moved out from under it. Nil for a document with no renaming merge,
+	// which is the overwhelming majority.
+	MergedVariableRenames map[string]string
 }
 
 // FlattenedSystem is a coupled system flattened into a single system — the
@@ -1505,13 +1514,117 @@ func expandOperatorComposePlaceholders(components map[string]*componentSystem, e
 // `order` is the document's component order; the bare-name fallback resolves its
 // surviving spelling against it rather than against Systems[0]. See
 // bareNameOwnerWins.
-func applyOperatorCompose(components map[string]*componentSystem, order []string, entry OperatorComposeCoupling) error {
+// composeRenames folds a merge's fresh rename map into the running
+// document-wide one.
+//
+// Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+// later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
+// on `C.x` — so the accumulated map's VALUES are retargeted through the new map
+// before the new pairs are added.
+func composeRenames(acc, next map[string]string) {
+	for gone, survivor := range acc {
+		if further, ok := next[survivor]; ok {
+			acc[gone] = further
+		}
+	}
+	for gone, survivor := range next {
+		acc[gone] = survivor
+	}
+}
+
+// retargetTranslateMap rewrites a built `translate` map off names an earlier
+// merge deleted. Both endpoints are rewritten: an earlier entry may have
+// consumed either the A-side or the B-side spelling this entry names (#230).
+func retargetTranslateMap(translate map[string]translateEntry, renames map[string]string) map[string]translateEntry {
+	if len(renames) == 0 || len(translate) == 0 {
+		return translate
+	}
+	out := make(map[string]translateEntry, len(translate))
+	for bName, te := range translate {
+		if survivor, ok := renames[te.target]; ok {
+			te.target = survivor
+		}
+		if survivor, ok := renames[bName]; ok {
+			bName = survivor
+		}
+		out[bName] = te
+	}
+	return out
+}
+
+// retargetPendingCouple rewrites a not-yet-applied `couple` entry's connector
+// endpoints off names an earlier merge deleted (issue #230).
+//
+// `operator_compose` runs before `couple` and `variable_map` (§4.7.5 step 3
+// ordering) and a renaming merge DELETES the spelling it consumed. The
+// document-wide retarget (retargetMergedNames) reaches equation ASTs only — a
+// connector's From/To is a plain scoped-reference STRING carried on the entry,
+// so an entry that has not run yet can still name a state that has moved, and
+// the connector then matches nothing and is dropped in SILENCE. The entry is
+// COPIED (the connector's equation slice included), so the source document keeps
+// what its author wrote.
+func retargetPendingCouple(entry CouplingCouple, renames map[string]string) CouplingCouple {
+	if len(renames) == 0 || len(entry.Connector.Equations) == 0 {
+		return entry
+	}
+	bindings := renameBindings(renames)
+	eqs := make([]ConnectorEquation, len(entry.Connector.Equations))
+	for i, ceq := range entry.Connector.Equations {
+		if survivor, ok := renames[ceq.From]; ok {
+			ceq.From = survivor
+		}
+		if survivor, ok := renames[ceq.To]; ok {
+			ceq.To = survivor
+		}
+		if ceq.Expression != nil {
+			ceq.Expression = substituteExpr(ceq.Expression, bindings)
+		}
+		eqs[i] = ceq
+	}
+	entry.Connector = Connector{Equations: eqs}
+	return entry
+}
+
+// retargetPendingVariableMap is retargetPendingCouple's `variable_map`
+// counterpart: From/To are the same kind of plain scoped-reference string, and a
+// From naming a merged-away state would substitute a DEAD name into every
+// equation referencing the mapped parameter.
+func retargetPendingVariableMap(entry VariableMapCoupling, renames map[string]string) VariableMapCoupling {
+	if len(renames) == 0 {
+		return entry
+	}
+	if survivor, ok := renames[entry.From]; ok {
+		entry.From = survivor
+	}
+	if survivor, ok := renames[entry.To]; ok {
+		entry.To = survivor
+	}
+	if entry.TransformIsExpression() {
+		entry.Transform = substituteExpr(entry.Transform, renameBindings(renames))
+	}
+	return entry
+}
+
+// renameBindings lifts a name -> name map into the name -> Expression form
+// substituteExpr takes.
+func renameBindings(renames map[string]string) map[string]Expression {
+	bindings := make(map[string]Expression, len(renames))
+	for from, to := range renames {
+		bindings[from] = to
+	}
+	return bindings
+}
+
+// applyOperatorCompose merges B's equations into A, returning every state
+// spelling the merge DELETED mapped onto the survivor it was folded into, for
+// the caller's running document-wide rename (issue #230).
+func applyOperatorCompose(components map[string]*componentSystem, order []string, entry OperatorComposeCoupling, renames map[string]string) (map[string]string, error) {
 	a, aok := components[entry.Systems[0]]
 	b, bok := components[entry.Systems[1]]
 	if !aok || !bok {
-		return nil
+		return nil, nil
 	}
-	translate := buildTranslateMap(entry)
+	translate := retargetTranslateMap(buildTranslateMap(entry), renames)
 
 	// Index A's equations by namespaced dependent variable, keeping insertion
 	// order so the fallback scan below is deterministic.
@@ -1630,7 +1743,7 @@ func applyOperatorCompose(components map[string]*componentSystem, order []string
 	b.equations = surviving
 
 	if err := reportOperatorComposeMerge(entry, authored, unmatched); err != nil {
-		return err
+		return nil, err
 	}
 
 	// §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
@@ -1644,7 +1757,7 @@ func applyOperatorCompose(components map[string]*componentSystem, order []string
 		targetDep := bareMatches[bDep]
 		owner, err := bareNameOwner(components, entry, bDep, targetDep)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if owner == bDep {
 			inverted[targetDep] = bDep
@@ -1699,7 +1812,19 @@ func applyOperatorCompose(components map[string]*componentSystem, order []string
 			b.observed.remove(gone)
 		}
 	}
-	return nil
+
+	// Everything this entry deleted, in one map, for the caller's running
+	// document-wide rename (issue #230). `inverted` rides along because it is
+	// the same operation pointed the other way -- the loser of an ownership
+	// decision is merged away exactly like the loser of a translation match.
+	made := make(map[string]string, len(mergedAway)+len(inverted))
+	for gone, survivor := range mergedAway {
+		made[gone] = survivor
+	}
+	for gone, survivor := range inverted {
+		made[gone] = survivor
+	}
+	return made, nil
 }
 
 // removeString returns xs without the first occurrence of s, preserving order.
@@ -2377,14 +2502,26 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		metadata.CouplingRules = append(metadata.CouplingRules, describeCoupling(entry, file, i))
 	}
 
+	// The document-wide merge map: every state spelling an `operator_compose`
+	// renaming match has DELETED, mapped onto the survivor (issue #230). It
+	// accumulates across the `operator_compose` pass and is applied to the
+	// by-name endpoints of every entry that has not run yet, so an entry naming
+	// a merged-away spelling resolves to the survivor instead of dangling.
+	mergedRenames := map[string]string{}
+
 	for _, oc := range composes {
 		expandOperatorComposePlaceholders(components, oc)
-		if err := applyOperatorCompose(components, order, oc); err != nil {
+		made, err := applyOperatorCompose(components, order, oc, mergedRenames)
+		if err != nil {
 			return err
 		}
+		composeRenames(mergedRenames, made)
+	}
+	if len(mergedRenames) > 0 {
+		metadata.MergedVariableRenames = mergedRenames
 	}
 	for _, cp := range couples {
-		if err := applyCouple(components, order, cp); err != nil {
+		if err := applyCouple(components, order, retargetPendingCouple(cp, mergedRenames)); err != nil {
 			return err
 		}
 	}
@@ -2393,7 +2530,7 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		loaderNames[k] = true
 	}
 	for _, vm := range varMaps {
-		if err := applyVariableMap(components, order, vm, loaderNames); err != nil {
+		if err := applyVariableMap(components, order, retargetPendingVariableMap(vm, mergedRenames), loaderNames); err != nil {
 			return err
 		}
 	}
