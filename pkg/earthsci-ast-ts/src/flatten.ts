@@ -1769,9 +1769,14 @@ function applyCouplings(
  * `param_to_var` onto a declared unknown, and tightening that is a separate
  * question from whether the endpoint resolves at all.
  *
- * Throws a bare `FlattenError` with its own code rather than a new exported
- * subclass: `api-surface.json` is the cross-binding record of what every
- * binding exports, and adding a name there is a five-binding contract change.
+ * Throws a bare `FlattenError` rather than a new exported subclass:
+ * `api-surface.json` is the cross-binding record of what every binding
+ * exports, and adding a name there is a five-binding contract change. The code
+ * is the EXISTING `unresolved_scoped_ref` — this is that condition, at the
+ * coupling-entry site (§7.1.2, §4.9.5) — not a new registry entry. It is also
+ * what `tests/coupling_libraries/expected_errors.json` already expects from
+ * flatten for a mis-bound coupling-library edge, whose expanded endpoint
+ * resolves to nothing for exactly this reason.
  */
 function checkVariableMapEndpoints(
   file: EsmFile,
@@ -1802,7 +1807,7 @@ function checkVariableMapEndpoints(
           'to no variable, parameter or observed in the flattened system (esm-spec §4.6, ' +
           '§10.4). A scoped reference walks EVERY dot-separated segment, so a subsystem ' +
           "endpoint is spelled '<Model>.<Subsystem>.<name>'.",
-        'variable_map_unresolved_endpoint',
+        'unresolved_scoped_ref',
       )
     }
   }
