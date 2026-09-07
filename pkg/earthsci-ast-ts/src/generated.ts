@@ -1040,7 +1040,7 @@ export interface TemplateImport {
   };
 }
 /**
- * Model-level default numerical tolerance for tests, used when a test or assertion does not provide its own.
+ * Model-level default numerical tolerance for tests. Resolution is PER FIELD (esm-spec 6.6.4): abs and rel each take their value from the innermost of assertion / test / model that declares that field, so a test or assertion that declares only one bound does not mask the other from here. An explicit 0 is a declaration ('no bound of this kind'), not an absence, and stops the fallthrough.
  */
 export interface Tolerance {
   /**
@@ -1103,7 +1103,7 @@ export interface TimeSpan {
   end: number;
 }
 /**
- * Test-level default tolerance applied to all assertions in this test that do not override it.
+ * Test-level default tolerance, merged PER FIELD (esm-spec 6.6.4): it supplies each of abs and rel that an assertion in this test does not declare, and falls through to the model-level default for each field it does not declare itself.
  */
 export interface Tolerance1 {
   /**
@@ -1116,7 +1116,7 @@ export interface Tolerance1 {
   rel?: number;
 }
 /**
- * Per-assertion tolerance override. If present, this takes precedence over the test-level and model-level defaults.
+ * Per-assertion tolerance override, merged PER FIELD over the test-level and model-level defaults (esm-spec 6.6.4): each of abs and rel that this object declares wins, and each it omits falls through independently. Declaring only abs here therefore keeps an outer rel rather than dropping it; write rel: 0 to mean 'no relative bound'.
  */
 export interface Tolerance2 {
   /**
@@ -1372,7 +1372,7 @@ export interface StoichiometryEntry {
   stoichiometry: number;
 }
 /**
- * System-level default numerical tolerance for tests, used when a test or assertion does not provide its own.
+ * System-level default numerical tolerance for tests. Resolution is PER FIELD (esm-spec 6.6.4): abs and rel each take their value from the innermost of assertion / test / system that declares that field, so a test or assertion that declares only one bound does not mask the other from here. An explicit 0 is a declaration ('no bound of this kind'), not an absence, and stops the fallthrough.
  */
 export interface Tolerance3 {
   /**

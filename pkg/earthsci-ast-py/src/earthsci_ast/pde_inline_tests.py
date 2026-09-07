@@ -773,20 +773,58 @@ def simulate_states(
     return SimulatedStates(times=times, states=states, var_map=var_map, problem=prob)
 
 
+def _resolve_tolerance_field(
+    levels: tuple[Tolerance | None, ...], field: str
+) -> float | None:
+    """First DECLARED value of ``field`` walking outward, or ``None``."""
+    for candidate in levels:
+        if candidate is None:
+            continue
+        value = getattr(candidate, field)
+        if value is not None:
+            return float(value)
+    return None
+
+
 def _resolve_tolerance(
     model_tol: Tolerance | None,
     test_tol: Tolerance | None,
     assertion_tol: Tolerance | None,
 ) -> tuple[float, float]:
-    """esm-spec §6.6.4 precedence: assertion > test > model > default
-    ``rel=1e-6`` (identical to the Julia run_tests reference)."""
-    for candidate in (assertion_tol, test_tol, model_tol):
-        if candidate is None:
-            continue
-        rel = 0.0 if candidate.rel is None else float(candidate.rel)
-        abs_ = 0.0 if candidate.abs is None else float(candidate.abs)
-        return (rel, abs_)
-    return (_DEFAULT_REL_TOL, 0.0)
+    """esm-spec §6.6.4, resolved PER FIELD across the three declared levels
+    (assertion > test > model), then the implementation default ``rel=1e-6`` if
+    neither bound was declared at any of them. Identical to the Julia
+    ``_resolve_tolerance`` reference and the Rust ``resolve_tolerance``.
+
+    The merge is per-field and NOT wholesale. A level that declares only
+    ``abs`` does not mask an outer level's ``rel``: with a model
+    ``{rel: 1e-6}`` and an assertion ``{abs: 1e-9}`` the resolved pair is
+    ``(1e-6, 1e-9)``, not ``(0, 1e-9)``. Returning the first non-``None`` block
+    whole — what this did before #228 — ran such an assertion with NO relative
+    bound at all, silently dropping a tolerance its author declared one level
+    up.
+
+    **Absent vs zero.** A field is absent when the key is missing or JSON-null
+    (the schema admits only a number, so ``null`` is non-conforming input
+    treated as absent); only an absent field falls through. An explicit ``0``
+    is a DECLARATION — "no bound of this kind" — and stops the fallthrough.
+    The recurrence fixtures pin exactness with a model-level
+    ``{rel: 0, abs: 0}`` (CONFORMANCE_SPEC §5.19), which treating ``0`` as
+    absent would silently replace with the 1e-6 default.
+
+    **The implementation default is terminal**, not a fourth merge level: it
+    applies only when levels 1-3 declared neither bound. §6.6.4's merge
+    sentence governs "each level [that] is a ``{abs?, rel?}`` object" — the
+    three document-level blocks — while the default is an advisory (SHOULD)
+    runtime constant. Merging it per-field would instead hand every
+    ``abs``-only assertion an unasked-for 1e-6 relative bound.
+    """
+    levels = (assertion_tol, test_tol, model_tol)
+    rel = _resolve_tolerance_field(levels, "rel")
+    abs_ = _resolve_tolerance_field(levels, "abs")
+    if rel is None and abs_ is None:
+        return (_DEFAULT_REL_TOL, 0.0)
+    return (0.0 if rel is None else rel, 0.0 if abs_ is None else abs_)
 
 
 def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -> bool:

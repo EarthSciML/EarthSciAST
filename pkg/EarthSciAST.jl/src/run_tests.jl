@@ -237,16 +237,46 @@ function _test_integration_tolerances(solver_hints)
     return (Float64(r), Float64(a))
 end
 
-# Returns (rtol, atol) — the most-specific declared tolerance wins (spec
-# §6.6.4: assertion > test > model > default rel=1e-6).
-function _resolve_tolerance(model_tol, test_tol, assertion_tol)
-    for candidate in (assertion_tol, test_tol, model_tol)
+# Returns (rtol, atol) — spec §6.6.4, resolved PER FIELD across the three
+# declared levels (assertion > test > model), then the implementation default
+# `rel = 1e-6` if neither bound was declared at any of them.
+#
+# The merge is per-field and NOT wholesale. A level that declares only `abs`
+# does not mask an outer level's `rel`: with a model `{rel: 1e-6}` and an
+# assertion `{abs: 1e-9}` the resolved pair is `(1e-6, 1e-9)`, not `(0, 1e-9)`.
+# Returning the first non-`nothing` block whole — what this did before #228 —
+# ran such an assertion with NO relative bound at all, silently dropping a
+# tolerance its author had declared one level up.
+#
+# ABSENT vs ZERO. A field is absent when the key is missing or JSON-null (the
+# schema admits only a number, so `null` is non-conforming input treated as
+# absent); only an absent field falls through. An explicit `0` is a
+# DECLARATION — "no bound of this kind" — and stops the fallthrough. That
+# distinction is load-bearing: the recurrence fixtures pin exactness with a
+# model-level `{rel: 0, abs: 0}` (CONFORMANCE_SPEC §5.19), and treating `0` as
+# absent would silently hand them the 1e-6 default.
+#
+# The implementation default is TERMINAL, not a fourth merge level: it applies
+# only when levels 1-3 declared neither bound. §6.6.4's merge sentence governs
+# "each level [that] is a `{abs?, rel?}` object" — the three document-level
+# blocks — while the default is an advisory (SHOULD) runtime constant. Merging
+# it per-field would instead give every `abs`-only assertion in the corpus an
+# unasked-for 1e-6 relative bound.
+_resolve_tolerance_field(levels, field::Symbol) = begin
+    for candidate in levels
         candidate === nothing && continue
-        rel = candidate.rel === nothing ? 0.0 : candidate.rel
-        atol = candidate.abs === nothing ? 0.0 : candidate.abs
-        return (Float64(rel), Float64(atol))
+        v = getfield(candidate, field)
+        v === nothing || return Float64(v)
     end
-    return (_DEFAULT_REL_TOL, 0.0)
+    return nothing
+end
+
+function _resolve_tolerance(model_tol, test_tol, assertion_tol)
+    levels = (assertion_tol, test_tol, model_tol)
+    rel = _resolve_tolerance_field(levels, :rel)
+    atol = _resolve_tolerance_field(levels, :abs)
+    (rel === nothing && atol === nothing) && return (_DEFAULT_REL_TOL, 0.0)
+    return (rel === nothing ? 0.0 : rel, atol === nothing ? 0.0 : atol)
 end
 
 # The §6.6.3 pass predicate (exact when no tolerance is declared anywhere).

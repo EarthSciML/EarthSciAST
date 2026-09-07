@@ -439,21 +439,46 @@ fn scalar_slot(element_names: &[String], variable: &str, model: &str) -> Option<
     None
 }
 
-/// esm-spec §6.6.4 precedence: assertion > test > model > default
-/// `rel=1e-6` (identical to the Julia / Python references). Returns
-/// `(rtol, atol)`; an unset bound within the winning tolerance is `0.0`.
+/// esm-spec §6.6.4, resolved PER FIELD across the three declared levels
+/// (assertion > test > model), then the implementation default `rel=1e-6` if
+/// neither bound was declared at any of them. Identical to the Julia
+/// `_resolve_tolerance` reference and the Python `_resolve_tolerance`. Returns
+/// `(rtol, atol)`.
+///
+/// The merge is per-field and NOT wholesale. A level that declares only `abs`
+/// does not mask an outer level's `rel`: with a model `{rel: 1e-6}` and an
+/// assertion `{abs: 1e-9}` the resolved pair is `(1e-6, 1e-9)`, not
+/// `(0, 1e-9)`. Returning the first `Some` block whole — what this did before
+/// #228 — ran such an assertion with NO relative bound at all, silently
+/// dropping a tolerance its author declared one level up.
+///
+/// **Absent vs zero.** A field is absent when the key is missing or JSON-null
+/// (the schema admits only a number, so `null` is non-conforming input treated
+/// as absent); only an absent field falls through. An explicit `0` is a
+/// DECLARATION — "no bound of this kind" — and stops the fallthrough. The
+/// recurrence fixtures pin exactness with a model-level `{rel: 0, abs: 0}`
+/// (CONFORMANCE_SPEC §5.19), which treating `0` as absent would silently
+/// replace with the 1e-6 default.
+///
+/// **The implementation default is terminal**, not a fourth merge level: it
+/// applies only when levels 1-3 declared neither bound. §6.6.4's merge
+/// sentence governs "each level [that] is a `{abs?, rel?}` object" — the three
+/// document-level blocks — while the default is an advisory (SHOULD) runtime
+/// constant. Merging it per-field would instead hand every `abs`-only
+/// assertion an unasked-for 1e-6 relative bound.
 pub fn resolve_tolerance(
     model_tol: Option<&Tolerance>,
     test_tol: Option<&Tolerance>,
     assertion_tol: Option<&Tolerance>,
 ) -> (f64, f64) {
-    match [assertion_tol, test_tol, model_tol]
-        .into_iter()
-        .flatten()
-        .next()
-    {
-        Some(candidate) => (candidate.rel.unwrap_or(0.0), candidate.abs.unwrap_or(0.0)),
-        None => (DEFAULT_REL_TOL, 0.0),
+    let levels = [assertion_tol, test_tol, model_tol];
+    let first =
+        |pick: fn(&Tolerance) -> Option<f64>| levels.iter().copied().flatten().find_map(pick);
+    let rel = first(|t| t.rel);
+    let atol = first(|t| t.abs);
+    match (rel, atol) {
+        (None, None) => (DEFAULT_REL_TOL, 0.0),
+        _ => (rel.unwrap_or(0.0), atol.unwrap_or(0.0)),
     }
 }
 
