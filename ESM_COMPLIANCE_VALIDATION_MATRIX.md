@@ -321,6 +321,7 @@ Where:
 | BEHAV-06-B-009 | A `coords` / `reduce` assertion MUST be answerable on a STATE-DEPENDENT array OBSERVED, not only on a state or a state-free one. Such a field is in NO build-time product (only state-free observeds are materialized at build) and is not a scalar output row either, so a binding must evaluate the observed's own expression AT THE SAMPLED STATE — §5.23's "a reference denotes its expansion", already applied to scalar observeds. All three executing bindings refused it with "array state '<v>' has no cells in var_map". Rust: FIXED — the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already emits as one row per cell. Python: FIXED — `observed_at_state` replays the observed driver on the trajectory sample. Julia: FIXED — `_state_scope` puts the solved state and `t` into the `evaluate_cellwise` scopes. Gate: `tests/conformance/pde_inline_observed_state_dependent/` (Julia/Python/Rust agree on the golden actuals; the same fixture's state-free `rate` keeps the build-materialized path pinned) | esm-spec.md §6.6.5, §5.23 | Yes | simulation |
 | BEHAV-06-B-010 | An array field read for an assertion MUST be the ASSERTED COMPONENT's, never a union across sibling components that reuse the bare name: the model-qualified element stem wins, with the bare-suffix match reached only when no qualified element exists (the array analog of the pointwise `scalar_slot` rule). A single-pass union splices every model's cells into one field — four components each declaring `w[x]` yield four cells at index `[1]`, so a `coords` sample silently reads whichever component sorts first, a `reduce` collapses over all of them, and a per-cell `reference` indexes past the end. Julia and Rust: already two-pass. Python (`state_cells`): FIXED. The same rule binds the OBSERVED field sources, which resolve a bare name by a unique `.<name>` suffix over the whole flattened build: the asserted component MUST declare the name as an observed of its own before either source is read (Rust `observed_field` and Julia `_observed_field` already did; Python's assertion path: FIXED — a document where only `M1` defined `g` answered an `M2` assertion on `g` with M1's field) | esm-spec.md §6.6, §6.6.5 | Yes | simulation |
 | BEHAV-06-B-011 | A `coords`/`reduce` assertion MUST be answerable on an array OBSERVED that NO LIVE EQUATION CONSUMES. An inline test's natural target is a quantity computed FOR the test — a tendency, a flux, a diagnostic — which by construction nothing else reads; §6.6.5 admits any shaped variable and §5.23 makes a reference denote its expansion, neither of them conditioned on the dynamics reading it. Julia: FIXED — its build inlines an elementwise array observed into its readers and DROPS the equation, so a dead one (no readers) reached neither `BuildInspection.observed_exprs` nor `observed_defs` and every assertion failed with `array state '<name>' has no cells in var_map`; `_observed_field` now falls back to the component's own defining equation, lowered to the same per-cell form and evaluated in the same build-time scope (and reads the const-array buffer for an observed the build materialized). Rust (requests the observed from the runtime) and Python (evaluates the ordered observed graph on demand) were already conforming. On Julia an author previously had to wire a diagnostic into the dynamics — changing the model — to make a test runnable. Gate: `tests/conformance/pde_inline_dead_observed/` (Julia/Python/Rust agree on the golden actuals), CONFORMANCE_SPEC §5.27.3. One diagnostic changes deliberately: a declared observed whose body cannot be evaluated at assertion time (it names something the document never declares, a provider array not yet fetched) now reaches the evaluator and reports `E_TREEWALK_UNBOUND_VARIABLE: <name>` instead of `array state '<v>' has no cells in var_map` — the same ERROR verdict, naming the unresolved operand rather than a state lookup that was never the point | esm-spec.md §6.6.5, §5.23 | Yes | simulation |
+| BEHAV-06-B-012 | The RELATIVE tolerance bound MUST scale by `max(\|actual\|, \|expected\|)` — the larger of the two magnitudes — not by `\|expected\|` alone, and a conforming runtime MUST NOT add an `ε` floor to that scale. §6.6.3 stated the rule three ways: the normative box and the schema's `Tolerance` description gave an `\|expected\|`-only DENOMINATOR with an `ε` floor, while the finiteness rationale in the same section reasoned from `max(\|∞\|, \|expected\|)`; all three executing bindings (Julia `isapprox`, Python `_check_assertion`, Rust `check_assertion`) implemented the symmetric form, so #193 settled the SPEC as symmetric and dropped the floor (with the bound written as a product there is no division to protect, and a floor diverges on subnormals: `a=1e-320, e=0, rel=0.5` passes with `ε=1e-300` and fails without). The verdicts differ only inside `rel·\|e\| < \|a−e\| ≤ rel·\|a\|` — an overshoot of order `rel` — which no fixture in any category reaches, so `assertion_nonfinite` cannot gate it. Gate: per-binding unit tests `assertion_tolerance_symmetry_test.jl` (Julia), `test_relative_bound_is_symmetric_in_actual_and_expected` (Python), `relative_bound_is_symmetric_in_actual_and_expected` (Rust); CONFORMANCE_SPEC §5.20 records why this is not a shared category. NOT YET GATED: the ~12 ad-hoc assertion evaluators in the bindings' own fixture harnesses still scale by `\|expected\|` and several carry `ε` floors (see #193 follow-up) | esm-spec.md §6.6.3, CONFORMANCE_SPEC §5.20 | Yes | unit (per-binding) |
 
 ### BEHAV-10-A: `join` Names Under Flattening (CONFORMANCE_SPEC §5.5.6)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -1004,6 +1005,50 @@ capability and no binding is exempt.
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
 
 ### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+
+> **`dim` is opaque to metaparameter substitution (2026-09-06, EXPR-09-E-008)**:
+> §9.7.6 substitutes a bound metaparameter name wherever it appears as a bare
+> string in an EXPRESSION position. The axis-naming scalar fields of an
+> Expression node are not expression positions — `dim` names a spatial
+> coordinate structurally (§4.9.1), exactly as `wrt` names one — so a
+> metaparameter that happens to share a name with an axis must not rewrite them
+> into integers. Julia, TypeScript, Python and Rust all skipped `dim`; **Go
+> alone did not**, so with `x` bound to 3 a node
+> `{"op": "grad", "args": ["c"], "dim": "x"}` became `"dim": 3` in Go and stayed
+> `"dim": "x"` everywhere else — a silent cross-binding divergence in the one
+> direction no fixture happened to cover. Fixed by adding `dim` to Go's
+> `metaSubstSkipKeys`, closing that asymmetry.
+>
+> The divergence was **reachable**, not latent. §9.7.6 forbids a metaparameter
+> name colliding with a visible variable / parameter / species / index-set name,
+> so the obvious repro (metaparameter `x` + index set `x`) never reaches
+> substitution — but §4.9.1 clause (ii) makes a `dim` value name a spatial
+> coordinate *structurally*, with no `index_sets` entry required, and a bare
+> coordinate is none of the four kinds that check covers. So one document may
+> legally declare metaparameter `lev` and write `dim: "lev"`, which is what
+> `TestTemplateImports_MetaparamDoesNotRewriteDimInDocument` drives through the
+> real load pipeline.
+>
+> Because Go's rename-walk protect set is DERIVED from that skip set, the §9.7.7
+> rename walk now also treats `dim` as protected — a STRING `dim` still renames,
+> since the walk tests its axis keys first, and a regression test pins that
+> ordering; a non-string `dim` (schema-invalid, but the walk runs at load, before
+> validation) is now copied verbatim instead of recursed, which is what the other
+> four bindings already do, since `dim` is in their rename-protected sets too.
+>
+> **Still open after this fix (opposite direction, EXPR-09-E-008).** The skip
+> sets are *not* yet identical. Go carries three entries the other four do not —
+> `op`, `id`, `expect_cadence` — so a metaparameter named after an operator or a
+> node id still diverges the other way: with `max` bound to 3,
+> `{"op": "max", …}` stays `"op": "max"` in Go and becomes `"op": 3` in Julia,
+> TypeScript, Python and Rust (the latter then dying in the typed load with a raw
+> "cannot unmarshal number into `ExprNode.op`" rather than a diagnostic — Go's
+> audit-G12 reason for adding it). §9.7.6 substitutes only in *expression
+> positions*, and an operator name is not one, so **Go's behavior is the correct
+> one and the other four need the three entries added**. That is a four-binding
+> behavior change and is deliberately NOT part of this Go-only fix; it needs its
+> own PR with a shared fixture.
+
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
@@ -1013,7 +1058,7 @@ capability and no binding is exempt.
 | EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
 | EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
 | EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
-| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding. The **axis-naming scalar fields** are NOT expression positions and MUST be skipped: `wrt`, `dim` (§4.9.1) and `integral`'s integration variable `var` (§4.2) name a spatial coordinate rather than referencing a value, so a metaparameter sharing an axis's name MUST NOT rewrite them | esm-spec.md §9.7.6, §9.7.7 | Yes | expression |
 | EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
 | EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
