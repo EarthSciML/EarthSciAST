@@ -273,6 +273,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("conformance_scalar_ic_test.jl")
+    include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
     include("conformance_override_key_diagnostics_test.jl")
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
