@@ -588,6 +588,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
         lifting: None,
         systems: vec!["A".to_string(), "B".to_string()],
         translate: None,
+        require_match: false,
         description: None,
     }];
 

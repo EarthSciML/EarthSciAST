@@ -23,7 +23,9 @@
 //! that is [`capture_coupling_diagnostics`] — the side-effect-free counterpart
 //! of the stderr warning stream — and `FlattenError::OperatorComposeRequireMatchUnmatched`.
 
-use earthsci_ast::{FlattenError, FlattenedSystem, capture_coupling_diagnostics, flatten, load_path};
+use earthsci_ast::{
+    FlattenError, FlattenedSystem, capture_coupling_diagnostics, flatten, load_path,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -122,14 +124,22 @@ fn the_manifest_outcomes_hold() {
                 continue;
             }
             "clean" => {
-                let system = result.unwrap_or_else(|e| panic!("{id}: expected a clean flatten: {e}"));
-                assert!(found.is_empty(), "{id}: expected no diagnostic, got {found:?}");
+                let system =
+                    result.unwrap_or_else(|e| panic!("{id}: expected a clean flatten: {e}"));
+                assert!(
+                    found.is_empty(),
+                    "{id}: expected no diagnostic, got {found:?}"
+                );
                 check_states(id, case, &system);
             }
             "warning" => {
-                let system =
-                    result.unwrap_or_else(|e| panic!("{id}: expected a warning, not a refusal: {e}"));
-                assert_eq!(found.len(), 1, "{id}: expected one diagnostic, got {found:?}");
+                let system = result
+                    .unwrap_or_else(|e| panic!("{id}: expected a warning, not a refusal: {e}"));
+                assert_eq!(
+                    found.len(),
+                    1,
+                    "{id}: expected one diagnostic, got {found:?}"
+                );
                 let message = &found[0];
                 assert!(
                     message.starts_with(case["code"].as_str().expect("case code")),
@@ -142,7 +152,10 @@ fn the_manifest_outcomes_hold() {
                     case["merged"].as_u64().expect("`merged`"),
                     case["authored"].as_u64().expect("`authored`")
                 );
-                assert!(message.contains(&tally), "{id}: missing tally {tally}: {message}");
+                assert!(
+                    message.contains(&tally),
+                    "{id}: missing tally {tally}: {message}"
+                );
                 for name in case["unmatched"].as_array().expect("`unmatched`") {
                     let name = name.as_str().expect("unmatched name");
                     assert!(message.contains(name), "{id}: must NAME {name}: {message}");
@@ -160,11 +173,13 @@ fn check_states(id: &str, case: &Value, system: &FlattenedSystem) {
         assert_eq!(state_names(system), expected, "{id}: state variables");
     }
     if let Some(name) = case["surviving_state"].as_str() {
-        let want = case["surviving_default"].as_f64().expect("`surviving_default`");
+        let want = case["surviving_default"]
+            .as_f64()
+            .expect("`surviving_default`");
         let got = system.state_variables[name]
             .default
             .as_ref()
-            .and_then(|d| d.as_f64())
+            .and_then(|d| d.as_scalar())
             .unwrap_or_else(|| panic!("{id}: surviving state {name} lost its default"));
         assert_eq!(got, want, "{id}: surviving default");
     }
@@ -199,11 +214,15 @@ fn flipping_the_systems_order_changes_nothing_observable() {
         let (result, _) = flatten_capturing(case["path"].as_str().expect("case path"));
         let system = result.unwrap_or_else(|e| panic!("{id}: {e}"));
         let names = state_names(&system);
-        assert_eq!(names.len(), 1, "{id}: expected one surviving state, got {names:?}");
+        assert_eq!(
+            names.len(),
+            1,
+            "{id}: expected one surviving state, got {names:?}"
+        );
         let default = system.state_variables[&names[0]]
             .default
             .as_ref()
-            .and_then(|d| d.as_f64())
+            .and_then(|d| d.as_scalar())
             .unwrap_or_else(|| panic!("{id}: surviving state lost its default"));
         (names[0].clone(), default)
     };
@@ -222,11 +241,18 @@ fn flipping_the_systems_order_changes_nothing_observable() {
 fn declaration_order_decides_not_argument_order() {
     let m = manifest();
     let by_id = |id: &str| -> Value {
-        cases(&m).iter().find(|c| c["id"] == id).expect("case").clone()
+        cases(&m)
+            .iter()
+            .find(|c| c["id"] == id)
+            .expect("case")
+            .clone()
     };
     let a = by_id("owner_rename_operator_first");
     let b = by_id("owner_rename_mechanism_declared_first");
-    assert_eq!(a["systems"], b["systems"], "the two fixtures must share a `systems` order");
+    assert_eq!(
+        a["systems"], b["systems"],
+        "the two fixtures must share a `systems` order"
+    );
 
     let names = |case: &Value| -> Vec<String> {
         let (result, _) = flatten_capturing(case["path"].as_str().expect("case path"));
@@ -248,7 +274,10 @@ fn require_match_survives_a_round_trip() {
         let file = load_path(path.to_str().expect("path is UTF-8")).expect("fixture loads");
         serde_json::to_value(&file).expect("the loaded file serializes")
     };
-    assert_eq!(emitted("require_match_unmatched.esm")["coupling"][0]["require_match"], true);
+    assert_eq!(
+        emitted("require_match_unmatched.esm")["coupling"][0]["require_match"],
+        true
+    );
     assert!(
         emitted("no_merge.esm")["coupling"][0]
             .get("require_match")

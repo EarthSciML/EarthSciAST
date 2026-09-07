@@ -731,6 +731,7 @@ mod coupling_field_tests {
             lifting: None,
             systems: vec!["sys1".to_string(), "sys2".to_string()],
             translate: None,
+            require_match: false,
             description: None,
         };
 
