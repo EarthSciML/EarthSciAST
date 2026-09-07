@@ -218,6 +218,41 @@ diagnostic_code_registry! {
     /// A reference to a symbol the named enum does not declare.
     UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol";
 
+    // ---- function tables: §9.5 `table_lookup` lowering
+    //      (`lower_table_lookup.rs`) ----
+    //
+    // The §9.5.5 subset this binding actually raises. Carried on
+    // `CompileError::TableLookupLowering` rather than `DiagnosticError`,
+    // because the lowering runs at BUILD (§9.5.4 requires the authored form
+    // to round-trip, so it cannot run at load) — but the CODES are the same
+    // cross-binding vocabulary either way, which is what this registry is.
+
+    /// `table_lookup.table` names an id the document's `function_tables`
+    /// block does not declare.
+    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table";
+    /// The key set of `table_lookup.axes` does not match the axis names the
+    /// referenced table declares (an extra key, a missing one, or a
+    /// positional `args` list where the axes map belongs).
+    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch";
+    /// `table_lookup.output` selects a row the table's leading `data`
+    /// dimension does not have, or a name its `outputs` list does not carry.
+    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range";
+    /// A table whose `interpolation` and axis count disagree (`linear` and
+    /// `nearest` require 1 axis, `bilinear` 2).
+    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch";
+    /// The nesting of `data` does not match the shape `axes` (and `outputs`,
+    /// when present) imply.
+    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch";
+    /// An axis's `values` carries a non-finite entry; §9.5.1 requires
+    /// strictly-increasing FINITE floats.
+    TABLE_AXIS_NAN = "table_axis_nan";
+    /// The referenced table declares `out_of_bounds: "error"`, which no
+    /// binding implements as of v1.0.0 (esm-spec §9.5.3a). Refused rather
+    /// than evaluated under `"clamp"`: answering in the mode the binding
+    /// happens to have, rather than the one the author declared, is a wrong
+    /// answer with nothing in the result to say so.
+    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported";
+
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
     //
     // `unresolved_subsystem_ref` and `ambiguous_subsystem_ref` are the
@@ -483,6 +518,13 @@ mod error_code_tests {
             "subsystem_index_set_conflict",
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
+            "table_axis_nan",
+            "table_data_shape_mismatch",
+            "table_interpolation_axes_mismatch",
+            "table_lookup_axis_name_mismatch",
+            "table_lookup_output_out_of_range",
+            "table_lookup_unknown_table",
+            "table_out_of_bounds_unsupported",
             "template_body_expansion_too_deep",
             "template_constraint_unknown_index_set",
             "template_import_cycle",

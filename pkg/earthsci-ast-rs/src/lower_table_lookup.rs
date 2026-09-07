@@ -25,30 +25,25 @@
 //! [`crate::registered_functions`] `interp.linear` / `interp.bilinear`
 //! implementations an author would have invoked by hand.
 //!
-//! **Not implemented:** `out_of_bounds: "error"`. The lowered `interp.*` form
-//! clamps, which is the v0.4.0 required behavior (`"error"` is "conformant when
-//! implemented", §9.5.1); a table declaring it is lowered to the clamping form
-//! like every other.
+//! **`out_of_bounds: "error"` is REFUSED, not silently clamped.** `"clamp"` is
+//! required of every binding and `"error"` is "conformant when implemented"
+//! (§9.5.1); this binding does not implement it, so §9.5.3a makes the lookup a
+//! `table_out_of_bounds_unsupported` error here rather than an `interp.*` tree
+//! that answers in a mode the author did not ask for. That would be the same
+//! defect as the one this module exists to fix: a wrong number with nothing in
+//! the result to say so.
 
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::compile_error::CompileError;
-use crate::types::{EsmFile, Expr, ExpressionNode, FunctionTable, FunctionTableAxis};
+use crate::diagnostic::codes;
+use crate::types::{
+    AssertionReference, EsmFile, Expr, ExpressionNode, FunctionTable, FunctionTableAxis, Model,
+};
 
 /// The op this pass consumes.
 const TABLE_LOOKUP: &str = "table_lookup";
-
-// esm-spec §9.5.5 diagnostic codes. Local `const`s rather than entries in
-// `crate::diagnostic::codes`: that registry is the CROSS-BINDING vocabulary
-// and its own docs require a code added there to be coordinated across all
-// five bindings, which no other binding emits yet.
-const UNKNOWN_TABLE: &str = "table_lookup_unknown_table";
-const AXIS_NAME_MISMATCH: &str = "table_lookup_axis_name_mismatch";
-const OUTPUT_OUT_OF_RANGE: &str = "table_lookup_output_out_of_range";
-const INTERPOLATION_AXES_MISMATCH: &str = "table_interpolation_axes_mismatch";
-const DATA_SHAPE_MISMATCH: &str = "table_data_shape_mismatch";
-const AXIS_NAN: &str = "table_axis_nan";
 
 fn err(code: &'static str, reason: impl Into<String>) -> CompileError {
     CompileError::TableLookupLowering {
@@ -97,6 +92,7 @@ pub(crate) fn lower_table_lookups(file: &mut EsmFile) -> Result<(), CompileError
     if let Some(models) = models.as_mut() {
         for model in models.values_mut() {
             *model = crate::substitute::map_exprs_in_model(model, &mut lower);
+            lower_model_remainder(model, &mut lower);
         }
     }
     if let Some(systems) = reaction_systems.as_mut() {
@@ -109,6 +105,54 @@ pub(crate) fn lower_table_lookups(file: &mut EsmFile) -> Result<(), CompileError
         Some(e) => Err(e),
         None => Ok(()),
     }
+}
+
+/// The expression positions of a [`Model`] that
+/// [`crate::substitute::map_exprs_in_model`] does NOT visit: the
+/// `initialization_equations`, each variable's `update` expressions, and the
+/// §6.6.5 inline-test assertion `reference`s.
+///
+/// They are here rather than folded into `map_exprs_in_model` deliberately:
+/// widening that function would silently widen every substitution caller with
+/// it, which is a separate change with separate consequences. What this pass
+/// needs is that no `table_lookup` reaches an evaluator, and each of these
+/// three IS reached — an IC equation by initial-condition assembly, an update
+/// expression by the refresh path, and an assertion `reference` by the
+/// inline-test runner's own error-norm evaluation (esm-spec §6.6.5), which
+/// runs OUTSIDE the problem build and so sees only what the runner lowered.
+fn lower_model_remainder(model: &mut Model, lower: &mut impl FnMut(&Expr) -> Expr) {
+    for eq in model.initialization_equations.iter_mut().flatten() {
+        eq.lhs = lower(&eq.lhs);
+        eq.rhs = lower(&eq.rhs);
+    }
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut |expr| *expr = lower(expr));
+    }
+    for test in model.tests.iter_mut().flatten() {
+        for assertion in &mut test.assertions {
+            if let Some(AssertionReference::Expression(expr)) = assertion.reference.as_mut() {
+                **expr = lower(expr);
+            }
+        }
+    }
+}
+
+/// `file` with every `table_lookup` lowered, or `None` when there is nothing
+/// to do (no `function_tables`) or the lowering fails.
+///
+/// The failure case returns `None` rather than the error on purpose. This is
+/// the inline-test runner's entry point, and the runner hands the document it
+/// gets back to [`crate::problem::esm_problem`], which lowers its own copy: a
+/// document that cannot be lowered is therefore passed through UNCHANGED and
+/// refused there, per assertion, in the runner's existing build-failure
+/// vocabulary. One diagnostic, from one place, instead of two spellings of the
+/// same refusal.
+pub(crate) fn lowered_copy(file: &EsmFile) -> Option<EsmFile> {
+    if file.function_tables.as_ref().is_none_or(|t| t.is_empty()) {
+        return None;
+    }
+    let mut owned = file.clone();
+    lower_table_lookups(&mut owned).ok().map(|()| owned)
 }
 
 /// Whether `expr` carries a `table_lookup` anywhere. The guard that keeps a
@@ -157,19 +201,35 @@ fn lower_node(
 ) -> Result<Expr, CompileError> {
     let table_id = node.table.as_deref().ok_or_else(|| {
         err(
-            UNKNOWN_TABLE,
+            codes::TABLE_LOOKUP_UNKNOWN_TABLE,
             "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)",
         )
     })?;
     let table = tables.get(table_id).ok_or_else(|| {
         err(
-            UNKNOWN_TABLE,
+            codes::TABLE_LOOKUP_UNKNOWN_TABLE,
             format!(
                 "`table_lookup` references table `{table_id}`, which the document's \
                  `function_tables` block does not declare"
             ),
         )
     })?;
+    // esm-spec §9.5.3a. `clamp` (the default) is exactly what `interp.linear`
+    // / `interp.bilinear` do at the ends, so the lowering IS the semantics
+    // there; `error` has no lowered form at all, and answering it with the
+    // clamping one would hand back a number the author did not ask for with
+    // nothing in the result to say so.
+    if table.out_of_bounds.as_deref() == Some("error") {
+        return Err(err(
+            codes::TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+            format!(
+                "table `{table_id}` declares `out_of_bounds: \"error\"`, which this binding does \
+                 not implement; only `\"clamp\"` (the default) is available, and answering an \
+                 `\"error\"` table under clamp semantics would be a silently different result \
+                 (esm-spec §9.5.3a)"
+            ),
+        ));
+    }
     let inputs = axis_inputs(node, table, table_id)?;
     let output = output_index(node, table, table_id)?;
     let data = output_slice(table, output, table_id)?;
@@ -208,7 +268,7 @@ fn lower_node(
             ..Default::default()
         })),
         _ => Err(err(
-            INTERPOLATION_AXES_MISMATCH,
+            codes::TABLE_INTERPOLATION_AXES_MISMATCH,
             format!(
                 "table `{table_id}` declares `interpolation: \"{kind}\"` over {} axes; \
                  `linear` and `nearest` require 1, `bilinear` requires 2 (esm-spec §9.5.1)",
@@ -228,7 +288,7 @@ fn axis_inputs(
 ) -> Result<Vec<Expr>, CompileError> {
     if !node.args.is_empty() {
         return Err(err(
-            AXIS_NAME_MISMATCH,
+            codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
             format!(
                 "`table_lookup` on table `{table_id}` carries {} positional `args`; the per-axis \
                  inputs live under `axes` and `args` MUST be empty (esm-spec §9.5.2)",
@@ -242,7 +302,7 @@ fn axis_inputs(
     for axis in &table.axes {
         let Some(input) = axes.and_then(|a| a.get(&axis.name)) else {
             return Err(err(
-                AXIS_NAME_MISMATCH,
+                codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
                 format!(
                     "`table_lookup` on table `{table_id}` supplies no input for its declared \
                      axis `{}`",
@@ -255,7 +315,7 @@ fn axis_inputs(
     if supplied != table.axes.len() {
         let declared: Vec<&str> = table.axes.iter().map(|a| a.name.as_str()).collect();
         return Err(err(
-            AXIS_NAME_MISMATCH,
+            codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
             format!(
                 "`table_lookup` on table `{table_id}` supplies {supplied} axis inputs but the \
                  table declares {} ({}); the key sets must match exactly (esm-spec §9.5.2)",
@@ -274,7 +334,7 @@ fn output_index(
     table: &FunctionTable,
     table_id: &str,
 ) -> Result<usize, CompileError> {
-    let out_of_range = |detail: String| err(OUTPUT_OUT_OF_RANGE, detail);
+    let out_of_range = |detail: String| err(codes::TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE, detail);
     match (&node.output, table.outputs.as_deref()) {
         (None, _) => Ok(0),
         (Some(Value::Number(n)), outputs) => {
@@ -338,7 +398,7 @@ fn output_slice<'a>(
         .and_then(|rows| rows.get(output))
         .ok_or_else(|| {
             err(
-                DATA_SHAPE_MISMATCH,
+                codes::TABLE_DATA_SHAPE_MISMATCH,
                 format!(
                     "table `{table_id}`: `data` has no row {output} for the selected output — its \
                      leading dimension must equal `len(outputs)` (esm-spec §9.5.1)"
@@ -351,7 +411,7 @@ fn output_slice<'a>(
 fn axis_const(axis: &FunctionTableAxis, table_id: &str) -> Result<Expr, CompileError> {
     let values = serde_json::to_value(&axis.values).map_err(|_| {
         err(
-            AXIS_NAN,
+            codes::TABLE_AXIS_NAN,
             format!(
                 "table `{table_id}`: axis `{}` carries a non-finite value; axis `values` must be \
                  strictly-increasing FINITE floats (esm-spec §9.5.1)",
@@ -510,17 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_output_is_a_named_diagnostic() {
-        let source = BILINEAR.replace("\"output\": 1,", "\"output\": 7,");
-        let mut file = load_string(&source).expect("loads");
-        let e = lower_table_lookups(&mut file).expect_err("output out of range");
-        assert!(
-            e.to_string().starts_with(OUTPUT_OUT_OF_RANGE),
-            "expected {OUTPUT_OUT_OF_RANGE}, got: {e}"
-        );
-    }
-
-    #[test]
     fn lowering_is_idempotent() {
         let mut file = load_string(FIXTURE).expect("loads");
         lower_table_lookups(&mut file).expect("lowers");
@@ -529,26 +578,62 @@ mod tests {
         assert_eq!(once, rhs(&file));
     }
 
+    /// `source` must LOAD (every §9.5.5 condition below is a build-time
+    /// refusal, not a schema error) and then be refused by the lowering with
+    /// the named code — not with a bare `unevaluable_operator`, and not with
+    /// a panic.
+    fn assert_refused_with(source: &str, code: &str) {
+        let mut file = load_string(source).expect("loads");
+        let e = lower_table_lookups(&mut file).expect_err("must be refused");
+        assert!(e.to_string().starts_with(code), "expected {code}, got: {e}");
+    }
+
+    #[test]
+    fn an_out_of_range_output_is_a_named_diagnostic() {
+        assert_refused_with(
+            &BILINEAR.replace("\"output\": 1,", "\"output\": 7,"),
+            codes::TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+        );
+    }
+
     #[test]
     fn an_unknown_table_is_a_named_diagnostic_not_a_panic() {
-        let source = FIXTURE.replace("\"table\": \"t_prof\"", "\"table\": \"nope\"");
-        let mut file = load_string(&source).expect("loads");
-        let e = lower_table_lookups(&mut file).expect_err("unknown table");
-        assert!(
-            e.to_string().starts_with(UNKNOWN_TABLE),
-            "expected {UNKNOWN_TABLE}, got: {e}"
+        assert_refused_with(
+            &FIXTURE.replace("\"table\": \"t_prof\"", "\"table\": \"nope\""),
+            codes::TABLE_LOOKUP_UNKNOWN_TABLE,
         );
     }
 
     #[test]
     fn a_misnamed_axis_is_a_named_diagnostic() {
-        let source = FIXTURE.replace("\"axes\": {\"p\": \"p\"}", "\"axes\": {\"q\": \"p\"}");
-        let mut file = load_string(&source).expect("loads");
-        let e = lower_table_lookups(&mut file).expect_err("axis mismatch");
-        assert!(
-            e.to_string().starts_with(AXIS_NAME_MISMATCH),
-            "expected {AXIS_NAME_MISMATCH}, got: {e}"
+        assert_refused_with(
+            &FIXTURE.replace("\"axes\": {\"p\": \"p\"}", "\"axes\": {\"q\": \"p\"}"),
+            codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
         );
+    }
+
+    /// esm-spec §9.5.3a: `out_of_bounds: "error"` is not implemented here, so
+    /// the lookup is REFUSED rather than answered under `"clamp"`.
+    #[test]
+    fn an_error_out_of_bounds_mode_is_refused_rather_than_clamped() {
+        assert_refused_with(
+            &FIXTURE.replace(
+                "\"interpolation\": \"linear\",",
+                "\"interpolation\": \"linear\", \"out_of_bounds\": \"error\",",
+            ),
+            codes::TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+        );
+    }
+
+    /// …and `"clamp"` — the mode every binding implements — still lowers.
+    #[test]
+    fn an_explicit_clamp_out_of_bounds_mode_still_lowers() {
+        let source = FIXTURE.replace(
+            "\"interpolation\": \"linear\",",
+            "\"interpolation\": \"linear\", \"out_of_bounds\": \"clamp\",",
+        );
+        let mut file = load_string(&source).expect("loads");
+        lower_table_lookups(&mut file).expect("clamp is implemented");
     }
 
     #[test]
