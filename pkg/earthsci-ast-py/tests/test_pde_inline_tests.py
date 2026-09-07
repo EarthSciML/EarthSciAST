@@ -264,10 +264,12 @@ def test_relative_bound_is_symmetric_in_actual_and_expected():
     ``max(|inf|, |expected|)``. All three executing bindings implemented the
     symmetric one; EarthSciML/EarthSciAST#193 settled the spec as symmetric.
 
-    The two readings disagree ONLY when ``|actual| > |expected|`` — an
-    overshoot. Everywhere else ``max(|a|, |e|) == |e|`` and they are the same
-    number, which is why the divergence went unnoticed: every pre-existing
-    tolerance case in every binding sits in the agreeing region, and the
+    Their VERDICTS disagree only inside ``rtol*|e| < |a − e| <= rtol*|a|``,
+    which needs an overshoot (``|actual| > |expected|``) whose margin is itself
+    of order ``rtol``. Everywhere else ``max(|a|, |e|) == |e|`` or the
+    difference falls on the same side of both bounds, which is why the
+    divergence went unnoticed: every pre-existing tolerance case in every
+    binding gets the same verdict under both readings, and the
     ``assertion_nonfinite`` category compares verdicts on non-finite actuals.
     Reverting ``_check_assertion`` to the ``|expected|`` denominator must turn
     this red.
@@ -294,9 +296,36 @@ def test_relative_bound_is_symmetric_in_actual_and_expected():
     assert _check_assertion(1.0, 0.0, 0.0, 1.0)  # an abs bound is the way to spell it
     assert _check_assertion(0.0, 0.0, 0.0, 0.0)  # exact-equality clause
 
-    # An abs bound never narrows what rel already admits: the predicate takes
-    # the MAX of the two bounds.
+    # Zero ACTUAL against a nonzero expected — the mirror of the case above.
+    # Here the symmetric scale IS |e|, so both readings agree; it is pinned
+    # because the other one-sided reading (scale by |actual| alone) would make
+    # the bound zero and reject every inexact match.
+    assert not _check_assertion(0.0, 1.0, 0.5, 0.0)
+    assert _check_assertion(0.0, 1.0, 1.0, 0.0)
+
+    # OPPOSITE SIGNS. rel >= 1 is vacuous only for a pair that shares a sign;
+    # across a sign change the bound still bites, which is why §6.6.3 says
+    # rel >= 1 is not a substitute for an abs bound at expected == 0.
+    assert not _check_assertion(1.0, -1.0, 1.0, 0.0)
+    assert _check_assertion(-1.0, 1.0, 2.0, 0.0)
+
+    # NON-FINITE actuals. The symmetric scale is precisely what makes the
+    # finiteness clause load-bearing: |inf − e| <= rel*max(inf, |e|) is
+    # inf <= inf, so the bound ALONE would pass every expected value
+    # (§6.6.3; the assertion_nonfinite category, CONFORMANCE_SPEC §5.20).
+    assert not _check_assertion(math.inf, 1.0, 0.5, 0.0)
+    assert not _check_assertion(-math.inf, 1.0, 0.5, 0.0)
+    assert not _check_assertion(math.nan, 1.0, 0.5, 0.0)
+    assert _check_assertion(math.inf, math.inf, 0.5, 0.0)  # same infinity
+    assert not _check_assertion(math.inf, -math.inf, 0.5, 0.0)
+
+    # abs/rel interaction, both directions. An abs bound never narrows what rel
+    # already admits — the predicate takes the MAX of the two — so a tiny abs
+    # must not turn the overshoot case red:
     assert _check_assertion(1.6, 1.0, 0.5, 1e-12)
+    # and abs admits what the symmetric rel rejects (same inputs as the
+    # `not _check_assertion(3.0, 1.0, 0.5, 0.0)` rejection above):
+    assert _check_assertion(3.0, 1.0, 0.5, 2.5)
 
 
 # ---------------------------------------------------------------------------

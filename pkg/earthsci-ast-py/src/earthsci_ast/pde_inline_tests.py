@@ -646,12 +646,13 @@ def _check_assertion(actual: float, expected: float, rtol: float, atol: float) -
     scale is ``max(|a|, |e|)``, the larger of the two magnitudes, not ``|e|``
     alone. §6.6.3 used to state both readings at once — the normative box gave
     an ``|expected|``-only denominator while the finiteness rationale further
-    down that same section reasoned from ``max(|inf|, |expected|)`` — and this function was written
-    against the second. EarthSciML/EarthSciAST#193 settled the spec as
-    symmetric, so the two now agree and this line is normative rather than
-    merely conventional. The readings differ only on an overshoot
-    (``|actual| > |expected|``); ``test_relative_bound_is_symmetric_in_actual_and_expected``
-    pins that seam.
+    down that same section reasoned from ``max(|inf|, |expected|)`` — and this
+    function was written against the second. EarthSciML/EarthSciAST#193 settled
+    the spec as symmetric, so the two now agree and this line is normative
+    rather than merely conventional. The verdicts differ only inside
+    ``rtol*|e| < |a − e| <= rtol*|a|``, which needs an overshoot
+    (``|actual| > |expected|``) of order ``rtol``;
+    ``test_relative_bound_is_symmetric_in_actual_and_expected`` pins that seam.
 
     **Finiteness is judged BEFORE tolerance**, and that clause is not a
     corollary of the bound — it contradicts it. With ``actual = ±inf`` both

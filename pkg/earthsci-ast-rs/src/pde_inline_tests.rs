@@ -387,10 +387,12 @@ pub fn resolve_tolerance(
 /// `max(|a|, |e|)`, the larger of the two magnitudes, not `|e|` alone. §6.6.3
 /// used to state both readings at once — the normative box gave an
 /// `|expected|`-only denominator while the finiteness rationale further down
-/// that same section reasoned from `max(|inf|, |expected|)` — and this function was written against the
-/// second. EarthSciML/EarthSciAST#193 settled the spec as symmetric, so the two
-/// now agree and this line is normative rather than merely conventional. The
-/// readings differ only on an overshoot (`|actual| > |expected|`);
+/// that same section reasoned from `max(|inf|, |expected|)` — and this
+/// function was written against the second. EarthSciML/EarthSciAST#193 settled
+/// the spec as symmetric, so the two now agree and this line is normative
+/// rather than merely conventional. The verdicts differ only inside
+/// `rtol*|e| < |a − e| <= rtol*|a|`, which needs an overshoot
+/// (`|actual| > |expected|`) of order `rtol`;
 /// `relative_bound_is_symmetric_in_actual_and_expected` pins that seam.
 ///
 /// **Finiteness is judged BEFORE tolerance**, and that clause is not a
@@ -2043,10 +2045,12 @@ mod tests {
     /// `max(|inf|, |expected|)`. All three executing bindings implemented the
     /// symmetric one; EarthSciML/EarthSciAST#193 settled the spec as symmetric.
     ///
-    /// The readings disagree ONLY when `|actual| > |expected|` — an overshoot.
-    /// Everywhere else `max(|a|, |e|) == |e|` and they are the same number,
-    /// which is why the divergence went unnoticed: every pre-existing tolerance
-    /// case in every binding sits in the agreeing region, and the
+    /// Their VERDICTS disagree only inside `rtol*|e| < |a − e| <= rtol*|a|`,
+    /// which needs an overshoot (`|actual| > |expected|`) whose margin is
+    /// itself of order `rtol`. Everywhere else `max(|a|, |e|) == |e|` or the
+    /// difference falls on the same side of both bounds, which is why the
+    /// divergence went unnoticed: every pre-existing tolerance case in every
+    /// binding gets the same verdict under both readings, and the
     /// `assertion_nonfinite` category compares verdicts on non-finite actuals.
     /// Reverting `check_assertion` to the `|expected|` denominator must turn
     /// this red.
@@ -2080,9 +2084,39 @@ mod tests {
         assert!(check_assertion(1.0, 0.0, 0.0, 1.0)); // an `abs` bound spells it
         assert!(check_assertion(0.0, 0.0, 0.0, 0.0)); // exact-equality clause
 
-        // An `abs` bound never narrows what `rel` already admits: the predicate
-        // takes the MAX of the two bounds.
+        // Zero ACTUAL against a nonzero expected — the mirror of the case
+        // above. Here the symmetric scale IS `|e|`, so both readings agree; it
+        // is pinned because the other one-sided reading (scale by `|actual|`
+        // alone) would make the bound zero and reject every inexact match.
+        assert!(!check_assertion(0.0, 1.0, 0.5, 0.0));
+        assert!(check_assertion(0.0, 1.0, 1.0, 0.0));
+
+        // OPPOSITE SIGNS. `rel >= 1` is vacuous only for a pair that shares a
+        // sign; across a sign change the bound still bites, which is why
+        // §6.6.3 says `rel >= 1` is not a substitute for an `abs` bound at
+        // `expected == 0`.
+        assert!(!check_assertion(1.0, -1.0, 1.0, 0.0));
+        assert!(check_assertion(-1.0, 1.0, 2.0, 0.0));
+
+        // NON-FINITE actuals. The symmetric scale is precisely what makes the
+        // finiteness clause load-bearing: `|inf − e| <= rel*max(inf, |e|)` is
+        // `inf <= inf`, so the bound ALONE would pass every expected value
+        // (§6.6.3; the `assertion_nonfinite` category, CONFORMANCE_SPEC §5.20).
+        assert!(!check_assertion(f64::INFINITY, 1.0, 0.5, 0.0));
+        assert!(!check_assertion(f64::NEG_INFINITY, 1.0, 0.5, 0.0));
+        assert!(!check_assertion(f64::NAN, 1.0, 0.5, 0.0));
+        // The SAME infinity matches through the equality clause; opposite ones
+        // do not.
+        assert!(check_assertion(f64::INFINITY, f64::INFINITY, 0.5, 0.0));
+        assert!(!check_assertion(f64::INFINITY, f64::NEG_INFINITY, 0.5, 0.0));
+
+        // abs/rel interaction, both directions. An `abs` bound never narrows
+        // what `rel` already admits — the predicate takes the MAX of the two —
+        // so a tiny `abs` must not turn the overshoot case red:
         assert!(check_assertion(1.6, 1.0, 0.5, 1e-12));
+        // and `abs` admits what the symmetric `rel` rejects (same inputs as the
+        // `!check_assertion(3.0, 1.0, 0.5, 0.0)` rejection above):
+        assert!(check_assertion(3.0, 1.0, 0.5, 2.5));
     }
 
     /// esm-spec §6.6.3: finiteness is judged BEFORE tolerance. Without the

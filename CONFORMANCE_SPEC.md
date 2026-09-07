@@ -3326,9 +3326,15 @@ actual, so it is blind to a divergence in the tolerance arithmetic itself: two
 bindings scaling the relative bound differently still agree that `Inf` fails.
 The one place the §6.6.3 bound has been ambiguous is the scale of its relative
 term — `max(|actual|, |expected|)` (symmetric, the settled reading) versus
-`|expected|` alone — and the two differ only on an OVERSHOOT, `|actual| >
-|expected|`, where no fixture in this or any other category lands. That seam is
-therefore pinned by a per-binding unit test rather than by a shared fixture:
+`|expected|` alone — and the two return different VERDICTS only inside the
+narrow band `rel · |expected| < |actual − expected| ≤ rel · |actual|`. Reaching
+it takes an OVERSHOOT (`|actual| > |expected|`) whose margin is itself of order
+`rel`. Overshoots on their own are ordinary — any integrator landing slightly
+above its expectation is one — but landing inside that band is not, and no
+fixture in this or any other category does: every fixture assertion in the
+corpus gets the same verdict under both readings, which is why the seam is
+invisible to fixtures however many are added. It is therefore pinned by a
+per-binding unit test rather than by a shared fixture:
 `assertion_tolerance_symmetry_test.jl` (Julia),
 `test_relative_bound_is_symmetric_in_actual_and_expected` (Python), and
 `relative_bound_is_symmetric_in_actual_and_expected` (Rust) each assert the same
