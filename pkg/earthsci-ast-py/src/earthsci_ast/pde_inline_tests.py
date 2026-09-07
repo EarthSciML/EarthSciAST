@@ -57,7 +57,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -259,8 +259,40 @@ def _mentions_free(expr: Expr, name: str) -> bool:
     return any(_mentions_free(child, name) for child in iter_children(expr))
 
 
+def _array_scope_names(*registries: Mapping[str, Any] | Iterable[str] | None) -> set[str]:
+    """The ARRAY half of the §6.6.5 build-time clash scope: every name the
+    build's array registries bind, plus each one's UNAMBIGUOUS bare alias.
+
+    The same alias rule :func:`_param_scope_with_aliases` applies to the scalar
+    half, and the rule under which a flattened ``M.table`` is readable as
+    ``table``. Accepts any number of name-keyed mappings (a
+    :class:`BuildInspection`'s ``const_arrays`` and ``setup_arrays``), so a
+    binding that keeps its build arrays in more than one registry passes all of
+    them. Mirrors the Julia ``_array_scope_names`` / Rust ``array_scope_names``.
+    """
+    names: set[str] = set()
+    for reg in registries:
+        if not reg:
+            continue
+        names.update(str(k) for k in reg)
+    counts: dict[str, int] = {}
+    for n in names:
+        bare = n.rsplit(".", 1)[-1]
+        if bare != n:
+            counts[bare] = counts.get(bare, 0) + 1
+    out = set(names)
+    for n in names:
+        bare = n.rsplit(".", 1)[-1]
+        if bare != n and counts[bare] == 1:
+            out.add(bare)
+    return out
+
+
 def bind_dimension_names(
-    expr: Expr, dims: Sequence[str], scope: Mapping[str, float] | None = None
+    expr: Expr,
+    dims: Sequence[str],
+    scope: Mapping[str, float] | None = None,
+    arrays: Collection[str] | None = None,
 ) -> Expr:
     """esm-spec §6.6.5: an inline ``reference``'s free variables are the
     domain DIMENSION NAMES. For a field shaped over index sets those are the
@@ -276,25 +308,39 @@ def bind_dimension_names(
     own loop symbols — is returned untouched, so nothing that evaluated before
     evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``.
 
-    ``scope`` is the reference's build-time parameter scope (flattened names
-    plus their unambiguous bare aliases). "Nothing that evaluated before
-    evaluates differently" holds only because a dimension name that scope ALSO
-    binds is rejected here: wrapping would silently shadow the parameter with
-    the cell's index — the same expression, a different number, no diagnostic.
-    One name meaning two things in one scope is an ill-formed document, so it
-    is a fault."""
+    "Nothing that evaluated before evaluates differently" holds only because a
+    dimension name the BUILD-TIME SCOPE ALREADY BINDS is rejected here: wrapping
+    would silently shadow that other meaning with the cell's index — the same
+    expression, a different number, no diagnostic. One name meaning two things
+    in one scope is an ill-formed document, so it is a fault. esm-spec §6.6.5
+    makes the clash scope the WHOLE build-time scope, in two halves:
+
+    * ``scope`` — the scalar parameter scope (flattened names plus their
+      unambiguous bare aliases, :func:`_param_scope_with_aliases`); and
+    * ``arrays`` — the build-time ARRAY names (:func:`_array_scope_names` over
+      a :class:`BuildInspection`'s ``const_arrays`` / ``setup_arrays``),
+      likewise with bare aliases.
+
+    The array half is what keeps the three bindings on one rule: Julia hands its
+    cellwise evaluator the build's ``const_arrays``, so an array named after a
+    shape index set is a name a reference could already read there, and a guard
+    that checked only the parameter half would let Julia rebind it to the cell
+    index in silence while Python and Rust merely wrapped (issue #226)."""
     dims = [str(d) for d in dims]
     mentioned = [d for d in dims if _mentions_free(expr, d)]
     if not mentioned:
         return expr
-    clash = next((d for d in mentioned if scope is not None and d in scope), None)
+    bound_params = scope or {}
+    bound_arrays = arrays or ()
+    clash = next((d for d in mentioned if d in bound_params or d in bound_arrays), None)
     if clash is not None:
+        kind = "a parameter" if clash in bound_params else "a build-time array"
         raise RuntimeError(
             f"inline `reference` mentions {clash!r}, which is both a dimension of the "
-            "asserted field and a parameter in scope. esm-spec §6.6.5 binds a free "
-            "dimension name to the cell's 1-based position, which would shadow the "
-            "parameter. Rename one of them, or gather explicitly with "
-            f"`aggregate(i from {clash}; …)`."
+            f"asserted field and a name the build-time scope already binds ({kind}). "
+            "esm-spec §6.6.5 binds a free dimension name to the cell's 1-based "
+            "position, which would shadow it. Rename one of them, or gather "
+            f"explicitly with `aggregate(i from {clash}; …)`."
         )
     return ExprNode(
         op="aggregate",
@@ -1019,8 +1065,17 @@ def _evaluate_assertion(
                         except RuntimeError:
                             dims = []
                         scope = _param_scope_with_aliases(insp.params)
+                        # The ARRAY half of the §6.6.5 clash scope: the three
+                        # bindings must reject the same documents, and Julia's
+                        # cellwise evaluator reads build arrays by name, so an
+                        # array named after a shape index set is a clash there
+                        # and must be one here too (issue #226).
+                        arrays = _array_scope_names(
+                            getattr(insp, "const_arrays", None),
+                            getattr(insp, "setup_arrays", None),
+                        )
                         ref = evaluate_cellwise(
-                            bind_dimension_names(a.reference, dims, scope),
+                            bind_dimension_names(a.reference, dims, scope, arrays),
                             cell_tuples,
                             index_sets=eval_file.index_sets,
                             params=scope,

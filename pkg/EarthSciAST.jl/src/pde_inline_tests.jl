@@ -1016,8 +1016,39 @@ function _mentions_free(expr::OpExpr, name::AbstractString)::Bool
     return any(c -> _mentions_free(c, name), child_exprs(expr))
 end
 
+# The ARRAY half of the §6.6.5 build-time clash scope: every name the build's
+# array registries bind, plus each one's UNAMBIGUOUS bare alias — the same alias
+# rule `_param_scope_with_aliases` applies to the scalar half, and the rule under
+# which a flattened `M.table` is readable as `table`. Accepts any number of
+# name-keyed collections (`insp.const_arrays`, `insp.setup_arrays`), so a binding
+# that keeps its build arrays in more than one registry passes all of them.
+# The Python (`_array_scope_names`) and Rust (`array_scope_names`) mirrors derive
+# the same set.
+function _array_scope_names(regs...)::Set{String}
+    names = Set{String}()
+    for r in regs
+        r === nothing && continue
+        for k in keys(r)
+            push!(names, String(k))
+        end
+    end
+    counts = Dict{String,Int}()
+    for n in names
+        b = _bare_param_name(n)
+        b == n && continue
+        counts[b] = get(counts, b, 0) + 1
+    end
+    out = copy(names)
+    for n in names
+        b = _bare_param_name(n)
+        (b != n && counts[b] == 1 && !(b in out)) && push!(out, b)
+    end
+    return out
+end
+
 """
-    bind_dimension_names(expr, dims, scope=Dict{String,Float64}()) -> ASTExpr
+    bind_dimension_names(expr, dims, scope=Dict{String,Float64}(),
+                         arrays=Set{String}()) -> ASTExpr
 
 esm-spec §6.6.5: an inline `reference`'s free variables are the domain DIMENSION
 NAMES. For a field shaped over index sets those are the asserted variable's
@@ -1034,24 +1065,36 @@ field under its own loop symbols — is returned untouched, so nothing that
 evaluated before evaluates differently. Mirrors the Python / Rust
 `bind_dimension_names`.
 
-`scope` is the reference's build-time parameter scope (flattened names plus
-their unambiguous bare aliases). "Nothing that evaluated before evaluates
-differently" holds only because a dimension name that `scope` ALSO binds is
-rejected here: wrapping would silently shadow the parameter with the cell's
-index — the same expression, a different number, no diagnostic. One name
-meaning two things in one scope is an ill-formed document, so it is a fault.
+"Nothing that evaluated before evaluates differently" holds only because a
+dimension name the BUILD-TIME SCOPE ALREADY BINDS is rejected here: wrapping
+would silently shadow that other meaning with the cell's index — the same
+expression, a different number, no diagnostic. One name meaning two things in
+one scope is an ill-formed document, so it is a fault. esm-spec §6.6.5 makes the
+clash scope the WHOLE build-time scope, in two halves:
+
+  * `scope` — the scalar parameter scope (flattened names plus their
+    unambiguous bare aliases, `_param_scope_with_aliases`); and
+  * `arrays` — the build-time ARRAY names (`_array_scope_names` over
+    `insp.const_arrays` / `insp.setup_arrays`), likewise with bare aliases.
+
+The array half is not decorative here: Julia hands `evaluate_cellwise` its
+`const_arrays`, so a `const` array named after a shape index set (an array `lev`
+over the index set `lev`) is a name the reference could already read, and
+checking only the parameter half would rebind it to the cell index in silence.
 """
 function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString},
-                              scope::AbstractDict=Dict{String,Float64}())::ASTExpr
+                              scope::AbstractDict=Dict{String,Float64}(),
+                              arrays=Set{String}())::ASTExpr
     isempty(dims) && return expr
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
-    clash = findfirst(d -> haskey(scope, d), mentioned)
+    clash = findfirst(d -> haskey(scope, d) || d in arrays, mentioned)
     clash === nothing || throw(PdeTestError(
         "inline `reference` mentions '$(mentioned[clash])', which is both a dimension " *
-        "of the asserted field and a parameter in scope. esm-spec §6.6.5 binds a free " *
-        "dimension name to the cell's 1-based position, which would shadow the " *
-        "parameter. Rename one of them, or gather explicitly with " *
+        "of the asserted field and a name the build-time scope already binds " *
+        "($(haskey(scope, mentioned[clash]) ? "a parameter" : "a build-time array")). " *
+        "esm-spec §6.6.5 binds a free dimension name to the cell's 1-based position, " *
+        "which would shadow it. Rename one of them, or gather explicitly with " *
         "`aggregate(i from $(mentioned[clash]); …)`."))
     names = String[String(d) for d in dims]
     return OpExpr("aggregate", ASTExpr[];
@@ -1279,7 +1322,12 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                 err isa PdeTestError ? String[] : rethrow()
             end
             scope = _param_scope_with_aliases(insp.params)
-            ref = evaluate_cellwise(bind_dimension_names(a.reference, dims, scope),
+            # The ARRAY half of the §6.6.5 clash scope: `evaluate_cellwise`
+            # binds `const_arrays` by name, so an array named after a shape
+            # index set is a name the reference could already read and the
+            # wrap would silently rebind it to the cell index (issue #226).
+            arrays = _array_scope_names(insp.const_arrays, insp.setup_arrays)
+            ref = evaluate_cellwise(bind_dimension_names(a.reference, dims, scope, arrays),
                                     cell_tuples;
                                     const_arrays=insp.const_arrays, params=scope)
         elseif a.reference isa AbstractDict &&
