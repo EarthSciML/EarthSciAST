@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use earthsci_ast::{
-    EsmFile, Expr, ExpressionNode, Metadata, Model, Reaction, ReactionSystem, Species,
+    EsmFile, Expr, ExpressionNode, InlineValue, Metadata, Model, Reaction, ReactionSystem, Species,
     StoichiometricEntry, load_string, performance::CompactExpr, stoichiometric_matrix, to_json,
     validate,
 };
@@ -33,7 +33,15 @@ use earthsci_ast::performance::ParallelEvaluator;
 #[cfg(feature = "simd")]
 use earthsci_ast::performance::simd_math;
 
-/// Create a test ESM file with varying complexity
+/// Create a test ESM file with varying complexity.
+///
+/// The fixture builders here spread `..Default::default()` rather than naming
+/// every field. Naming them all is what let this file drift out of compiling
+/// (#218): five structs gained a field apiece, and because `cargo test` does
+/// not build bench targets, nothing noticed. Spreading the default means a new
+/// OPTIONAL field no longer breaks the benches, while a new REQUIRED one (a
+/// type with no `Default`, like `Reaction` below) still does — which is the
+/// distinction worth keeping.
 fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
     let mut models = IndexMap::new();
 
@@ -49,13 +57,8 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
                 earthsci_ast::ModelVariable {
                     var_type: earthsci_ast::VariableType::Unknown,
                     units: Some("m/s".to_string()),
-                    default: Some(1.0),
-                    default_units: None,
-                    description: None,
-                    shape: None,
-                    location: None,
-                    distribution: None,
-                    update: None,
+                    default: Some(InlineValue::Scalar(1.0)),
+                    ..Default::default()
                 },
             );
         }
@@ -70,58 +73,30 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
                     Expr::Variable("k".to_string()),
                     Expr::Variable(format!("x{}_{}", i, (j + 1) % equations_per_model)),
                 ),
+                ..Default::default()
             });
         }
 
         let model = Model {
-            reference: None,
-            subsystems: None,
             name: Some(format!("model_{i}")),
             variables,
             equations,
-            description: None,
-            discrete_events: None,
-            continuous_events: None,
-            tolerance: None,
-            tests: None,
-            initialization_equations: None,
-            guesses: None,
-            system_kind: None,
+            ..Default::default()
         };
 
         models.insert(format!("model_{i}"), model);
     }
 
     EsmFile {
-        coordinates: None,
-        coupling_roles: None,
-        esm: "1.0.0".to_string(),
+        // `EsmFile::default()` sets `esm` to the current `SCHEMA_VERSION`,
+        // which is what the literal "1.0.0" here used to spell out by hand.
         metadata: Metadata {
             name: Some("benchmark_test".to_string()),
             description: Some("Benchmark test file".to_string()),
-            authors: None,
-            license: None,
-            created: None,
-            modified: None,
-            tags: None,
-            references: None,
-            system_class: None,
-            dae_info: None,
-            discretized_from: None,
-            x_esd: None,
+            ..Default::default()
         },
-        index_sets: None,
-        expression_templates: None,
-        metaparameters: None,
-        component_templates: None,
         models: Some(models),
-        reaction_systems: None,
-        data_sources: None,
-        operators: None,
-        enums: None,
-        coupling: None,
-        domain: None,
-        function_tables: None,
+        ..Default::default()
     }
 }
 
@@ -132,15 +107,7 @@ fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> Reac
 
     // Create species (keyed by name in the new schema)
     for i in 0..num_species {
-        species.insert(
-            format!("S{i}"),
-            Species {
-                units: None,
-                default: None,
-                description: None,
-                constant: None,
-            },
-        );
+        species.insert(format!("S{i}"), Species::default());
     }
 
     // Create reactions
@@ -169,14 +136,9 @@ fn create_test_reaction_system(num_species: usize, num_reactions: usize) -> Reac
     }
 
     ReactionSystem {
-        reference: None,
         species,
-        parameters: IndexMap::new(),
         reactions,
-        constraint_equations: None,
-        discrete_events: None,
-        continuous_events: None,
-        subsystems: None,
+        ..Default::default()
     }
 }
 
