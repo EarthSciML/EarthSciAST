@@ -1,0 +1,145 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_rename_reaches_later_coupling_entry",
+    "description": "esm-libraries-spec 4.7.1 step 4 / 4.7.5 step 3 ordering. A `translate` match merges `Sink.O3` onto `Chem.O3`, so `Sink.O3` is DELETED and every equation is rewritten off it. `operator_compose` entries run BEFORE `couple` entries, so the later `couple` entry -- which names `Sink.O3` as its connector target -- runs against a document in which that spelling no longer exists. The connector target is a plain scoped-reference STRING on the entry, which the equation-AST retarget never reaches, so before EarthSciML/EarthSciAST#230 the connector matched nothing and was dropped in SILENCE: the flattened tendency was arithmetically identical to a document with no `couple` entry at all. The merged-away name must resolve to the survivor, so `Emis.flux` lands in `D(Chem.O3, t)`. The `parameter_overrides` key on the inline test names the same dead spelling and must resolve the same way.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "esm-libraries-spec-4.7.5",
+      "operator-compose",
+      "merged-away-rename",
+      "coupling-endpoint"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0,
+          "description": "The SURVIVING spelling: the `translate` key names it."
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The MERGED-AWAY spelling: the `translate` value names it, and it does not survive the merge."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Emis": {
+      "variables": {
+        "E": {
+          "type": "parameter",
+          "units": "ppb/s",
+          "default": 2.0
+        },
+        "flux": {
+          "type": "unknown",
+          "units": "ppb/s",
+          "description": "The connector source. Its arrival in the merged tendency is what the fix is observable as."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "flux",
+          "rhs": "E"
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "translate": {
+        "Chem.O3": "Sink.O3"
+      },
+      "description": "Deletes `Sink.O3`, retargeting it onto `Chem.O3`."
+    },
+    {
+      "type": "couple",
+      "systems": [
+        "Emis",
+        "Sink"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "Emis.flux",
+            "to": "Sink.O3",
+            "transform": "additive"
+          }
+        ]
+      },
+      "description": "Names the merged-away spelling. Applied AFTER the compose, so it must resolve to `Chem.O3`."
+    }
+  ]
+}

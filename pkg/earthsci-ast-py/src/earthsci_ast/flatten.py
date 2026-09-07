@@ -23,6 +23,7 @@ from .esm_types import (
     ARRAY_OPS,
     AffectEquation,
     CallbackCoupling,
+    Connector,
     ContinuousEvent,
     CouplingCouple,
     CouplingEntry,
@@ -313,6 +314,14 @@ class FlattenMetadata:
     coupling_rules: list[str] = field(default_factory=list)
     operator_applies: list[str] = field(default_factory=list)
     callbacks: list[str] = field(default_factory=list)
+    # Every state spelling an ``operator_compose`` renaming match DELETED,
+    # mapped onto the survivor it was folded into (issue #230). The flattener's
+    # own retarget reaches equation ASTs; this is the map a CONSUMER that
+    # addresses a state by name needs -- a ``parameter_overrides`` /
+    # ``initial_conditions`` key, an output selection -- to resolve a spelling
+    # the merge moved out from under it. Empty for a document with no renaming
+    # merge, which is the overwhelming majority.
+    merged_variable_renames: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -1287,10 +1296,84 @@ def _build_translate_map(
     return out
 
 
+def _compose_renames(acc: dict[str, str], new: dict[str, str]) -> None:
+    """Fold a merge's fresh rename map into the running document-wide one.
+
+    Renames CHAIN. If an earlier ``operator_compose`` merged ``B.x`` onto
+    ``A.x`` and a later one merges ``A.x`` onto ``C.x``, a document that still
+    names ``B.x`` must land on ``C.x`` — so the accumulated map's VALUES are
+    retargeted through the new map before the new pairs are added.
+    """
+    for gone, survivor in acc.items():
+        acc[gone] = new.get(survivor, survivor)
+    acc.update(new)
+
+
+def _retarget_translate_map(
+    translate: dict[str, tuple[str, float]],
+    renames: dict[str, str],
+) -> dict[str, tuple[str, float]]:
+    """Rewrite a built ``translate`` map off names an earlier merge deleted.
+
+    Both endpoints are rewritten: an earlier entry may have consumed either the
+    A-side or the B-side spelling this entry names (issue #230).
+    """
+    if not renames:
+        return translate
+    return {
+        renames.get(b_name, b_name): (renames.get(a_name, a_name), factor)
+        for b_name, (a_name, factor) in translate.items()
+    }
+
+
+def _retarget_pending_entry(entry: CouplingEntry, renames: dict[str, str]) -> CouplingEntry:
+    """Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+
+    ``operator_compose`` runs before ``couple`` and ``variable_map`` (§4.7.5
+    step 3 ordering), and a renaming merge DELETES the spelling it consumed.
+    The document-wide retarget (:func:`_retarget_merged_names`) reaches equation
+    ASTs only — a connector's ``from``/``to`` and a ``variable_map``'s
+    ``from``/``to`` are plain scoped-reference STRINGS carried on the entry, so
+    an entry that has not run yet can still name a state that has moved.
+    Resolve those endpoints onto the surviving spelling rather than let them
+    dangle. The entry is COPIED: the source document keeps what its author
+    wrote, so the round-trip is unaffected.
+    """
+    if not renames:
+        return entry
+    if isinstance(entry, CouplingCouple):
+        if not entry.connector or not entry.connector.equations:
+            return entry
+        eqs = [
+            replace(
+                ceq,
+                from_var=renames.get(ceq.from_var, ceq.from_var),
+                to_var=renames.get(ceq.to_var, ceq.to_var),
+                expression=(
+                    substitute(ceq.expression, renames) if ceq.expression is not None else None
+                ),
+            )
+            for ceq in entry.connector.equations
+        ]
+        return replace(entry, connector=Connector(equations=eqs))
+    if isinstance(entry, VariableMapCoupling):
+        transform = entry.transform
+        if not isinstance(transform, str) and transform is not None:
+            transform = substitute(transform, renames)
+        return replace(
+            entry,
+            from_var=renames.get(entry.from_var, entry.from_var),
+            to_var=renames.get(entry.to_var, entry.to_var),
+            transform=transform,
+        )
+    return entry
+
+
 def _apply_operator_compose(
     components: OrderedDict[str, _ComponentSystem],
     entry: OperatorComposeCoupling,
-) -> None:
+    renames: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Merge B's equations into A by matching dependent variables.
 
     Per spec §4.7.1: for each B equation with LHS ``D(x, t)``, find A's
@@ -1307,16 +1390,21 @@ def _apply_operator_compose(
 
     The bare-name fallback resolves its surviving spelling by OWNERSHIP rather
     than by ``systems[0]``; see :func:`_bare_name_owner_wins`.
+
+    ``renames`` is the running document-wide merge map of the entries applied so
+    far; this entry's ``translate`` endpoints are resolved through it, and the
+    renames this entry itself makes are RETURNED so the caller can extend it
+    (issue #230).
     """
     if not entry.systems or len(entry.systems) < 2:
-        return
+        return {}
     a_name, b_name = entry.systems[0], entry.systems[1]
     if a_name not in components or b_name not in components:
-        return
+        return {}
     a = components[a_name]
     b = components[b_name]
 
-    translate = _build_translate_map(entry)
+    translate = _retarget_translate_map(_build_translate_map(entry), renames or {})
 
     # Index A's equations by namespaced dependent variable.
     a_index: dict[str, int] = {}
@@ -1449,6 +1537,12 @@ def _apply_operator_compose(
         for gone in merged_away:
             b.state_vars.pop(gone, None)
             b.observed.pop(gone, None)
+
+    # Everything this entry deleted, in one map, for the caller's running
+    # document-wide rename (issue #230). `inverted` is the same operation
+    # pointed the other way -- the loser of an ownership decision is merged away
+    # exactly like the loser of a translation match -- so it rides along.
+    return {**merged_away, **inverted}
 
 
 def _is_state(components: OrderedDict[str, _ComponentSystem], dep: str) -> bool:
@@ -2072,18 +2166,27 @@ def _apply_couplings(
             metadata.callbacks.append(entry.callback_id or "?")
         metadata.coupling_rules.append(_describe_coupling(entry))
 
+    # The document-wide merge map: every state spelling an `operator_compose`
+    # renaming match has DELETED, mapped onto the survivor (issue #230). It
+    # accumulates across the `operator_compose` pass and is applied to the
+    # by-name endpoints of every entry that has not run yet, so an entry naming
+    # a merged-away spelling resolves to the survivor instead of dangling.
+    merged_renames: dict[str, str] = {}
+
     for oc in operator_compose_entries:
         _expand_operator_compose_placeholders(components, oc)
-        _apply_operator_compose(components, oc)
+        _compose_renames(merged_renames, _apply_operator_compose(components, oc, merged_renames))
+
+    metadata.merged_variable_renames.update(merged_renames)
 
     for cp in couple_entries:
-        _apply_couple(components, cp)
+        _apply_couple(components, _retarget_pending_entry(cp, merged_renames))
 
     # Top-level data-source names — used to recognize a ``param_to_var`` whose
     # producer is a source-fed field, so a grid-shaped binding keeps its shape.
     loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
     for vm in var_map_entries:
-        _apply_variable_map(components, vm, loader_names)
+        _apply_variable_map(components, _retarget_pending_entry(vm, merged_renames), loader_names)
 
 
 def _assemble_system(
