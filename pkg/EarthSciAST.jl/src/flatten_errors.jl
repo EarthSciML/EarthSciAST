@@ -30,16 +30,42 @@ function Base.showerror(io::IO, e::ConflictingDerivativeError)
 end
 
 """
+    OperatorComposeNoMergeError
+
+Raised when an `operator_compose` entry merges NOTHING (esm-libraries-spec §4.7.1
+step 5).
+
+An entry that matches nothing is indistinguishable from an entry that is not
+there: the operator integrates a private, decoupled system from its own defaults,
+the other system receives no contribution at all, and the only evidence is a
+state count one too high. That is the one outcome a coupling mis-specification
+must not have, so it is refused rather than reported.
+
+An operator that genuinely contributes only states of its own — a transport
+operator whose single equation defines its own wind field, say — says so with
+`require_match: false`, and is then permitted.
+
+Fields:
+- `details::String`: the entry, the merge tally, and the unmatched dependent
+  variables.
+"""
+struct OperatorComposeNoMergeError <: EarthSciASTError
+    details::String
+end
+Base.showerror(io::IO, e::OperatorComposeNoMergeError) =
+    print(io, "OperatorComposeNoMergeError: ", e.details)
+
+"""
     OperatorComposeRequireMatchError
 
 Raised when an `operator_compose` entry declares `require_match: true` and one of
 `systems[2]`'s equations found no equation of `systems[1]` to land on
 (esm-libraries-spec §4.7.1 step 5).
 
-Step 5 otherwise preserves an unmatched equation unchanged, which makes "merged
-everything" and "merged nothing" the same observable outcome; `require_match` is
-the author's opt-in to tell them apart. A PARTIAL match raises too — there is no
-"some is enough" reading an author could rely on.
+Step 5 otherwise preserves an unmatched equation unchanged, and a PARTIAL
+shortfall is only a warning by default; `require_match` is the author's opt-in to
+make it fatal. A PARTIAL match raises here — there is no "some is enough" reading
+an author could rely on.
 
 Fields:
 - `details::String`: the entry, the merge tally, and the unmatched dependent
@@ -50,6 +76,33 @@ struct OperatorComposeRequireMatchError <: EarthSciASTError
 end
 Base.showerror(io::IO, e::OperatorComposeRequireMatchError) =
     print(io, "OperatorComposeRequireMatchError: ", e.details)
+
+"""
+    OperatorComposeAmbiguousBareNameError
+
+Raised when the bare-name fallback would unify two STATE variables and the
+document has not said which spelling survives (esm-libraries-spec §4.7.1 step 3).
+
+The fallback binds `A.x` to `B.x` on the strength of a shared local name alone.
+When both are states, each carries its own INITIAL CONDITION, and the merge has
+to delete one of them — so the choice decides which IC the flattened system
+integrates from. Nothing in the document expresses that choice, and picking one
+silently is how flipping the entry's `systems` order came to change the answer.
+
+So it is refused. The author says what they mean with `translate`, which names
+the surviving spelling outright, or with `require_match`.
+
+A match where only ONE side is a state is NOT ambiguous: the other carries no
+initial condition, so the state is the owner and the merge renames onto it.
+
+Fields:
+- `details::String`: the entry and the two spellings it tried to unify.
+"""
+struct OperatorComposeAmbiguousBareNameError <: EarthSciASTError
+    details::String
+end
+Base.showerror(io::IO, e::OperatorComposeAmbiguousBareNameError) =
+    print(io, "OperatorComposeAmbiguousBareNameError: ", e.details)
 
 """
     DimensionPromotionError

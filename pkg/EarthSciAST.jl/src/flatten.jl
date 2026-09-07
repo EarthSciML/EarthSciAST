@@ -842,8 +842,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         # Equations a previous coupling rule introduced belong to no component;
         # `_attribute_equations!` marks them so before the merge reads the vector.
         _attribute_equations!(eq_owners, equations, "")
-        _apply_operator_compose!(equations, entry, states, observeds, eq_owners;
-                                 component_order=source_systems)
+        _apply_operator_compose!(equations, entry, states, observeds, eq_owners)
     end
 
     for entry in file.coupling

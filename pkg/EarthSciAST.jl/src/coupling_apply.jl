@@ -223,7 +223,7 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-    _apply_operator_compose!(equations, entry, states, observeds, owners; component_order)
+    _apply_operator_compose!(equations, entry, states, observeds, owners)
 
 Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
 `"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
@@ -238,10 +238,9 @@ of what B authored, emits `operator_compose_no_merge` /
 `require_match`. Preserving an unmatched equation quietly is what made
 "merged everything" and "merged nothing" the same observable outcome.
 
-`component_order` is the document's component order (models then reaction
-systems, as collected); the bare-name fallback resolves the surviving spelling
-against it rather than against `systems[1]` — see
-[`_bare_name_owner_wins`](@ref).
+The bare-name fallback resolves its surviving spelling by OWNERSHIP rather than
+by `systems[1]`, and REFUSES the case where ownership is genuinely ambiguous —
+see [`_bare_name_owner`](@ref).
 
 Six properties here are load-bearing, and each of them has a way of failing
 SILENTLY — which is the one outcome a coupling mis-specification must not have:
@@ -307,8 +306,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
                                   entry::CouplingOperatorCompose,
                                   states::OrderedDict{String, ModelVariable},
                                   observeds::OrderedDict{String, ModelVariable},
-                                  owners::Vector{String};
-                                  component_order::Vector{String}=String[])
+                                  owners::Vector{String})
     length(entry.systems) >= 2 || return
     a_name = entry.systems[1]
     b_names = Set{String}(entry.systems[2:end])
@@ -452,7 +450,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # initial condition — comes out the far side.
     inverted = OrderedDict{String, String}()
     for (b_dep, target) in bare_matches
-        if _bare_name_owner_wins(component_order, b_dep, target)
+        if _bare_name_owner(states, entry, a_name, entry.systems[2], b_dep, target) == b_dep
             inverted[target] = b_dep
             delete!(merged_away, b_dep)
         end
@@ -517,39 +515,53 @@ function _apply_operator_compose!(equations::Vector{Equation},
 end
 
 """
-    _bare_name_owner_wins(component_order, b_dep, target) -> Bool
+    _bare_name_owner(states, entry, a_name, b_name, b_dep, target) -> String
 
-Does the `systems[2]` spelling own the state a bare-name match unified
-(esm-libraries-spec §4.7.1 step 3)?
+Which spelling owns the quantity a bare-name match unified (esm-libraries-spec
+§4.7.1 step 3)?
 
 A DIRECT match needs no decision (the two names are equal) and a `translate`
 match is the author naming the surviving spelling explicitly. The BARE-NAME
 fallback is the one that has to choose, and choosing `systems[1]` — what this
 binding did before — makes an `operator_compose` entry mean different things in
 its two argument orders: flipping `systems` silently swapped which state name,
-and which INITIAL CONDITION, survived.
+and which INITIAL CONDITION, came out the far side.
 
 Ownership follows the variable's own namespace, the direction step 4's
-merged-equation reattribution (`_component_root`) already reaches in. Both
-candidates are self-consistent under that reading — `A.x` is A's and `B.x` is
-B's — so the tie is broken by DOCUMENT ORDER, the same order §4.7.5 step 4
-already makes normative for the flattened system. The state belongs to the
-component that declares it first, in either argument order.
+merged-equation reattribution (`_component_root`) already reaches in. The merge
+deletes one of the two names, so the question is which of them survives:
 
-A candidate whose leading segment names no component of this document is not a
-component-owned state, so there is nothing to compare and the incumbent
-(`systems[1]`'s spelling) stands.
+  * **Both are STATES** — each carries its own initial condition, and nothing in
+    the document says which one the merged tendency should integrate from.
+    Refused ([`OperatorComposeAmbiguousBareNameError`](@ref)), because deciding
+    it here is exactly the silent choice issue #195 is about. The author says
+    what they mean with `translate`, which names the surviving spelling
+    outright, or with `require_match`.
+  * **Exactly one is a state** — the other carries no initial condition, so
+    there is nothing to lose by renaming onto the state. That one is the owner,
+    in either argument order.
+  * **Neither is** — no initial condition is at stake either way; the incumbent
+    (`systems[1]`'s spelling) stands, as before.
 """
-function _bare_name_owner_wins(component_order::Vector{String},
-                               b_dep::AbstractString,
-                               target::AbstractString)::Bool
-    b_owner = _component_root(b_dep)
-    a_owner = _component_root(target)
-    b_owner == a_owner && return false
-    bi = findfirst(==(b_owner), component_order)
-    ai = findfirst(==(a_owner), component_order)
-    (bi === nothing || ai === nothing) && return false
-    return bi < ai
+function _bare_name_owner(states::OrderedDict{String, ModelVariable},
+                          entry::CouplingOperatorCompose,
+                          a_name::AbstractString,
+                          b_name::AbstractString,
+                          b_dep::AbstractString,
+                          target::AbstractString)::String
+    b_state = haskey(states, b_dep)
+    a_state = haskey(states, target)
+    if b_state && a_state
+        throw(OperatorComposeAmbiguousBareNameError(
+            "operator_compose_ambiguous_bare_name: operator_compose($(a_name) + " *
+            "$(b_name)) matched '$(b_dep)' to '$(target)' on their shared local " *
+            "name alone, but BOTH are state variables and the merge keeps only " *
+            "one. Each carries its own initial condition, so the choice decides " *
+            "which the flattened system integrates from, and the document does " *
+            "not express it. Name the surviving spelling with a `translate` " *
+            "entry ({'$(target)': '$(b_dep)'}), or rename one of them."))
+    end
+    return b_state ? String(b_dep) : String(target)
 end
 
 """
@@ -558,18 +570,28 @@ end
 Report an `operator_compose` entry that merged nothing, or only some of what the
 operator side authored (esm-libraries-spec §4.7.1 step 5).
 
-Preserving an unmatched equation is correct — an operator system may legitimately
-contribute states of its own — but preserving it SILENTLY leaves "merged
-everything" and "merged nothing" indistinguishable, and both wrong outcomes
+Step 5 preserves an unmatched equation, and preserving it SILENTLY is what left
+"merged everything" and "merged nothing" indistinguishable — both wrong outcomes
 reachable from a document that is spec-valid and loads clean.
 
-Severity is a warning by default and an error under `require_match`, decided on
-evidence rather than taste: measured over this repository's own corpus, nineteen
-`operator_compose` entries merge zero equations today and one merges partially,
-and every one of them is spec-valid under step 5 (a transport operator whose only
-equation defines its own wind field, for instance). A hard error would reject
-documents the format grants. `require_match: true` is the author's opt-in to say
-that THIS entry's equations are contributions and a non-match is a defect.
+`require_match` is TRI-STATE, and the three states are three different things an
+author can mean:
+
+| `require_match` | zero merged                        | some but not all      |
+|:----------------|:-----------------------------------|:----------------------|
+| absent          | `operator_compose_no_merge` ERROR  | partial-merge warning |
+| `true`          | `operator_compose_require_match_unmatched` ERROR (both cases) ||
+| `false`         | permitted, silently                | permitted, silently   |
+
+ZERO merged is an error by default because such an entry is indistinguishable
+from an entry that is not there: the operator integrates a private decoupled
+system from its own defaults and the mechanism gets nothing. PARTIAL stays a
+warning because an operator may legitimately contribute states of its own
+alongside the ones it does merge, and the format cannot tell the two apart.
+
+`require_match: false` is the explicit opt-out — the author declaring a
+standalone-contributing operator. It is a DECLARATION, not a default: an absent
+flag means "I have not said", which is why it is the case that errors.
 """
 function _report_operator_compose_merge(entry::CouplingOperatorCompose,
                                         a_name::AbstractString,
@@ -577,21 +599,34 @@ function _report_operator_compose_merge(entry::CouplingOperatorCompose,
                                         authored::Int,
                                         unmatched::Vector{String})
     (authored == 0 || isempty(unmatched)) && return
+    # The author has declared a standalone-contributing operator. Nothing to
+    # report: an unmatched equation is what they said to expect.
+    entry.require_match === false && return
     merged = authored - length(unmatched)
     where = "operator_compose($(a_name) + $(b_name))"
     names = join(unmatched, ", ")
-    if entry.require_match
+    if entry.require_match === true
         throw(OperatorComposeRequireMatchError(
             "operator_compose_require_match_unmatched: $(where) declares " *
             "`require_match` and merged $(merged) of $(authored) equations " *
             "'$(b_name)' authored; no equation of '$(a_name)' matches: $(names)"))
     end
-    code = merged == 0 ? "operator_compose_no_merge" : "operator_compose_partial_merge"
-    @warn "$(code): $(where) merged $(merged) of $(authored) equations " *
-          "'$(b_name)' authored; unmatched dependent variable(s): $(names). " *
+    if merged == 0
+        throw(OperatorComposeNoMergeError(
+            "operator_compose_no_merge: $(where) merged NONE of the $(authored) " *
+            "equations '$(b_name)' authored; no equation of '$(a_name)' matches: " *
+            "$(names). The entry is indistinguishable from one that is not there " *
+            "— '$(b_name)' would integrate decoupled from its own defaults and " *
+            "'$(a_name)' would receive no contribution. If '$(b_name)' really does " *
+            "contribute only states of its own, declare it with " *
+            "`require_match: false` on this entry."))
+    end
+    @warn "operator_compose_partial_merge: $(where) merged $(merged) of $(authored) " *
+          "equations '$(b_name)' authored; unmatched dependent variable(s): $(names). " *
           "The unmatched equations are preserved unchanged (esm-libraries-spec " *
           "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
-          "`require_match: true` on the entry if they were meant to be contributions."
+          "`require_match: true` if they were meant to be contributions, or " *
+          "`require_match: false` if they were not."
     return
 end
 

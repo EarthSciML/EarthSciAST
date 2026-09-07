@@ -56,16 +56,20 @@ export const ERROR_CODES = {
   //   case a corresponding meaning. Raised from flatten.ts as
   //   CoupleMultiplicativeNoTendencyError.
   COUPLE_MULTIPLICATIVE_NO_TENDENCY: 'couple_multiplicative_no_tendency',
-  // `operator_compose_no_merge` / `operator_compose_partial_merge` —
-  //   WARNING-level (esm-libraries-spec §4.7.1 step 5). An `operator_compose`
-  //   entry merged NONE, or only SOME, of the equations `systems[1]` authored.
-  //   Step 5 preserves an unmatched equation unchanged, which is correct — an
-  //   operator may legitimately contribute states of its own — but preserving it
-  //   SILENTLY made "merged everything" and "merged nothing" the same observable
-  //   outcome. These stay warnings rather than errors because the shipped corpus
-  //   contains spec-valid documents that zero-merge on purpose; an author who
-  //   means "these are contributions" says so with `require_match`.
+  // `operator_compose_no_merge` — ERROR (esm-libraries-spec §4.7.1 step 5). An
+  //   `operator_compose` entry merged NONE of the equations `systems[1]`
+  //   authored, which makes it indistinguishable from an entry that is not
+  //   there: the operator integrates a private decoupled system from its own
+  //   defaults, the other system receives no contribution, and the only evidence
+  //   is a state count one too high. An operator that genuinely contributes only
+  //   states of its own declares that with `require_match: false` and is then
+  //   permitted. Raised from flatten.ts as OperatorComposeNoMergeError.
   OPERATOR_COMPOSE_NO_MERGE: 'operator_compose_no_merge',
+  // `operator_compose_partial_merge` — WARNING. Some but not all of
+  //   `systems[1]`'s equations landed. Unlike a zero merge this is
+  //   indistinguishable from an operator that legitimately contributes states of
+  //   its own ALONGSIDE the ones it does merge, so the format cannot call it a
+  //   defect; an author who knows better says so with `require_match`.
   OPERATOR_COMPOSE_PARTIAL_MERGE: 'operator_compose_partial_merge',
   // `operator_compose_require_match_unmatched` — an `operator_compose` entry
   //   declared `require_match: true` and one of `systems[1]`'s equations found
@@ -73,6 +77,15 @@ export const ERROR_CODES = {
   //   is no "some is enough" reading an author could rely on. Raised from
   //   flatten.ts as OperatorComposeRequireMatchError.
   OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED: 'operator_compose_require_match_unmatched',
+  // `operator_compose_ambiguous_bare_name` — the bare-name fallback (§4.7.1
+  //   step 3) would unify two STATE variables. Each carries its own INITIAL
+  //   CONDITION and the merge keeps only one, so the choice decides what the
+  //   flattened system integrates from — and the document, which bound them on a
+  //   shared local name alone, has not expressed it. Deciding it silently is how
+  //   flipping an entry's `systems` order came to change the answer. A match
+  //   where only ONE side is a state is not ambiguous: the state owns the
+  //   quantity. Raised from flatten.ts as OperatorComposeAmbiguousBareNameError.
+  OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME: 'operator_compose_ambiguous_bare_name',
   // `relational_node_in_continuous` — a relational / value-invention
   //   `aggregate` (`distinct: true` under `bool_and_or`) whose `key`/`expr`
   //   reads a declared STATE variable, so the cadence partition would class the
