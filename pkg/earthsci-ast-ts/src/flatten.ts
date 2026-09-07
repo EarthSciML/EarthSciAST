@@ -326,6 +326,17 @@ export interface FlattenMetadata {
   operatorApplies: string[]
   /** `callback` entries, recorded as opaque runtime references. */
   callbacks: string[]
+  /**
+   * Every state spelling an `operator_compose` renaming match DELETED, mapped
+   * onto the survivor it was folded into (issue #230).
+   *
+   * The flattener's own retarget reaches equation ASTs; this is the map a
+   * CONSUMER that addresses a state by name needs — a `parameter_overrides` /
+   * `initial_conditions` key, an output selection — to resolve a spelling the
+   * merge moved out from under it. Empty for a document with no renaming merge,
+   * which is the overwhelming majority.
+   */
+  mergedVariableRenames: Record<string, string>
 }
 
 /** A deferred `ic` equation (esm-spec §11.4.1): an initial condition, not dynamics. */
@@ -1324,17 +1335,93 @@ function expandOperatorComposePlaceholders(
  * `require_match`. Preserving an unmatched equation quietly is what made
  * "merged everything" and "merged nothing" the same observable outcome.
  */
+/**
+ * Fold a merge's fresh rename map into the running document-wide one.
+ *
+ * Renames CHAIN: if an earlier `operator_compose` merged `B.x` onto `A.x` and a
+ * later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
+ * on `C.x` — so the accumulated map's VALUES are retargeted through the new map
+ * before the new pairs are added.
+ */
+function composeRenames(acc: Record<string, string>, next: Record<string, string>): void {
+  for (const gone of Object.keys(acc)) acc[gone] = next[acc[gone]] ?? acc[gone]
+  Object.assign(acc, next)
+}
+
+/**
+ * Rewrite a built `translate` map off names an earlier merge deleted.
+ *
+ * Both endpoints are rewritten: an earlier entry may have consumed either the
+ * A-side or the B-side spelling this entry names (issue #230).
+ */
+function retargetTranslateMap(
+  translate: Record<string, [string, number]>,
+  renames: Record<string, string>,
+): Record<string, [string, number]> {
+  if (Object.keys(renames).length === 0) return translate
+  const out: Record<string, [string, number]> = {}
+  for (const [bName, [aName, factor]] of Object.entries(translate)) {
+    out[renames[bName] ?? bName] = [renames[aName] ?? aName, factor]
+  }
+  return out
+}
+
+/**
+ * Rewrite a not-yet-applied coupling entry's BY-NAME endpoints (issue #230).
+ *
+ * `operator_compose` runs before `couple` and `variable_map` (§4.7.5 step 3
+ * ordering) and a renaming merge DELETES the spelling it consumed. The
+ * document-wide retarget ({@link retargetMergedNames}) reaches equation ASTs
+ * only — a connector's `from`/`to` and a `variable_map`'s `from`/`to` are plain
+ * scoped-reference STRINGS carried on the entry, so an entry that has not run
+ * yet can still name a state that has moved. Resolve those endpoints onto the
+ * surviving spelling rather than let them dangle. The entry is COPIED, so the
+ * source document keeps what its author wrote.
+ */
+function retargetPendingEntry(
+  entry: CouplingEntry,
+  renames: Record<string, string>,
+): CouplingEntry {
+  if (Object.keys(renames).length === 0) return entry
+  const e = entry as unknown as Record<string, unknown>
+  const ren = (name: unknown): unknown =>
+    typeof name === 'string' ? (renames[name] ?? name) : name
+
+  if (entry.type === 'couple') {
+    const connector = e.connector as { equations?: unknown[] } | undefined
+    if (connector?.equations === undefined || connector.equations.length === 0) return entry
+    const equations = connector.equations.map((raw) => {
+      const ceq = raw as Record<string, unknown>
+      const out: Record<string, unknown> = { ...ceq, from: ren(ceq.from), to: ren(ceq.to) }
+      if (ceq.expression !== undefined) {
+        out.expression = substitute(ceq.expression as Expression, renames)
+      }
+      return out
+    })
+    return { ...e, connector: { ...connector, equations } } as unknown as CouplingEntry
+  }
+  if (entry.type === 'variable_map') {
+    const out: Record<string, unknown> = { ...e, from: ren(e.from), to: ren(e.to) }
+    if (e.transform !== undefined && typeof e.transform !== 'string') {
+      out.transform = substitute(e.transform as Expression, renames)
+    }
+    return out as unknown as CouplingEntry
+  }
+  return entry
+}
+
 function applyOperatorCompose(
   components: Record<string, ComponentSystem>,
   entry: CouplingEntry,
-): void {
+  renames: Record<string, string> = {},
+): Record<string, string> {
   const systems = (entry as unknown as { systems?: string[] }).systems
-  if (systems === undefined || systems.length < 2) return
+  if (systems === undefined || systems.length < 2) return {}
   const a = components[systems[0]]
   const b = components[systems[1]]
-  if (a === undefined || b === undefined) return
+  if (a === undefined || b === undefined) return {}
 
-  const translate = buildTranslateMap(entry)
+  const translate = retargetTranslateMap(buildTranslateMap(entry), renames)
 
   const aIndex: Record<string, number> = {}
   a.equations.forEach((eq, i) => {
@@ -1486,6 +1573,12 @@ function applyOperatorCompose(
       delete b.observed[gone]
     }
   }
+
+  // Everything this entry deleted, in one map, for the caller's running
+  // document-wide rename (issue #230). `inverted` rides along because it is the
+  // same operation pointed the other way — the loser of an ownership decision is
+  // merged away exactly like the loser of a translation match.
+  return { ...mergedAway, ...inverted }
 }
 
 /**
@@ -1967,14 +2060,25 @@ function applyCouplings(
     metadata.couplingRules.push(describeCoupling(entry))
   }
 
+  // The document-wide merge map: every state spelling an `operator_compose`
+  // renaming match has DELETED, mapped onto the survivor (issue #230). It
+  // accumulates across the `operator_compose` pass and is applied to the by-name
+  // endpoints of every entry that has not run yet, so an entry naming a
+  // merged-away spelling resolves to the survivor instead of dangling.
+  const mergedRenames: Record<string, string> = {}
+
   for (const oc of composes) {
     expandOperatorComposePlaceholders(components, oc)
-    applyOperatorCompose(components, oc)
+    composeRenames(mergedRenames, applyOperatorCompose(components, oc, mergedRenames))
   }
-  for (const cp of couples) applyCouple(components, cp)
+  Object.assign(metadata.mergedVariableRenames, mergedRenames)
+
+  for (const cp of couples) applyCouple(components, retargetPendingEntry(cp, mergedRenames))
 
   const loaderNames = new Set(Object.keys(file.data_sources ?? {}))
-  for (const vm of varMaps) applyVariableMap(components, vm, loaderNames)
+  for (const vm of varMaps) {
+    applyVariableMap(components, retargetPendingEntry(vm, mergedRenames), loaderNames)
+  }
 }
 
 /** Assemble the final system from the per-component pieces. */
@@ -2478,6 +2582,7 @@ export function flatten(file: EsmFile, options: FlattenOptions = {}): FlattenedS
     couplingRules: [],
     operatorApplies: [],
     callbacks: [],
+    mergedVariableRenames: {},
   }
 
   // 2. Resolve coupling entries into the per-component equation sets.
