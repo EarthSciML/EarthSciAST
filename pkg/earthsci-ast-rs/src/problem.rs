@@ -1836,16 +1836,43 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
     }
 }
 
-/// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
-/// extension-seam progress observer into the one per-step hook `run_solver`
-/// already drives.
-fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
-    // esm-spec §2.2.2: caller > the document's `solver` block > binding
-    // default. Resolved once here, at the single point where the run's options
-    // and the document meet, so every backend below sees concrete tolerances
-    // and none of them has to know about the chain.
+/// Run the esm-spec §2.2.2 tolerance chain against `prob`'s `solver` block and
+/// return `opts` with both tolerances made CONCRETE.
+///
+/// Caller > the document's `solver` block > binding default, per field. The
+/// chain belongs to "a document is being integrated", not to one entry point,
+/// so it is applied at BOTH doors a document can be integrated through: `solve`
+/// (via [`effective_options`]) and `init` (§2.5.6's stepping lifecycle). A
+/// stepping caller who names no tolerance must get the document's, exactly as a
+/// `solve` caller does.
+///
+/// **Idempotent**, which is what makes applying it at both doors safe: the
+/// result has `Some` in both slots, so a second pass resolves at level 1 to the
+/// same values. `init` relies on this — its `step` runs each segment through
+/// `solve`, which resolves again.
+///
+/// Deliberately does NOT touch callbacks. Callback folding is `solve`-only for
+/// the same reason: [`effective_options`] is *not* idempotent in that field
+/// (a second pass would wrap the already-wrapped observer and invoke every
+/// callback twice per step), so `init` must resolve tolerances without it.
+fn with_resolved_tolerances(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     let (abstol, reltol) =
         crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
+    SolveOptions {
+        abstol: Some(abstol),
+        reltol: Some(reltol),
+        ..opts.clone()
+    }
+}
+
+/// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
+/// extension-seam progress observer into the one per-step hook `run_solver`
+/// already drives, on top of the §2.2.2 tolerance chain.
+fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
+    // esm-spec §2.2.2, resolved once here — the single point where a `solve`
+    // run's options and the document meet — so every backend below sees
+    // concrete tolerances and none of them has to know about the chain.
+    let resolved = with_resolved_tolerances(prob, opts);
 
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
@@ -1854,19 +1881,13 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
         .clone()
         .unwrap_or_else(|| prob.callbacks.clone());
     if set.is_empty() {
-        return SolveOptions {
-            abstol: Some(abstol),
-            reltol: Some(reltol),
-            ..opts.clone()
-        };
+        return resolved;
     }
     let user = opts.progress.clone();
     let observer: ProgressFn = wrap_observer(set, user);
     SolveOptions {
-        abstol: Some(abstol),
-        reltol: Some(reltol),
         progress: Some(observer),
-        ..opts.clone()
+        ..resolved
     }
 }
 
@@ -1976,6 +1997,11 @@ pub enum StepStatus {
 ///
 /// The step grid is `opts.saveat` when the caller supplied one, else 100 evenly
 /// spaced points across `tspan`.
+///
+/// The esm-spec §2.2.2 tolerance chain runs HERE, not only at `solve`: the
+/// integrator this returns carries the document's `solver.abstol` / `reltol`
+/// whenever the caller named none, so stepping a document honours its declared
+/// numerics exactly as solving it does.
 #[cfg(feature = "solve")]
 pub fn init<'a>(
     prob: &'a EsmProblem,
@@ -2002,7 +2028,12 @@ pub fn init<'a>(
     };
     Ok(Integrator {
         prob,
-        opts: opts.clone(),
+        // esm-spec §2.2.2: caller > the document's `solver` block > binding
+        // default. Resolved once, at construction, so the integrator HOLDS the
+        // effective tolerances rather than leaving them to be rediscovered —
+        // and so `step`'s per-segment `solve` sees them as explicit call-site
+        // values (level 1) that resolve to themselves.
+        opts: with_resolved_tolerances(prob, opts),
         grid,
         next: 0,
         t: t0,
@@ -2123,4 +2154,100 @@ pub fn step(integrator: &mut Integrator<'_>) -> Result<StepStatus, SimulateError
 #[cfg(feature = "solve")]
 pub fn solve_to_completion(integrator: &mut Integrator<'_>) -> Result<Solution, SimulateError> {
     integrator.solve_to_completion()
+}
+
+// ===========================================================================
+// Unit tests
+// ===========================================================================
+
+/// The esm-spec §2.2.2 chain at the STEPPING door.
+///
+/// These live in-crate rather than in `tests/solver_block.rs` because what has
+/// to be pinned is that the resolved tolerances land ON the integrator — a
+/// private field. An observational test (does a looser tolerance change the
+/// trajectory?) would pass either way for a well-conditioned decay and is not
+/// the property; this is.
+#[cfg(all(test, feature = "solve", not(target_arch = "wasm32")))]
+mod stepping_tolerance_tests {
+    use super::*;
+    use crate::simulate::{DEFAULT_ABSTOL, DEFAULT_RELTOL};
+
+    fn doc(solver: &str) -> serde_json::Value {
+        serde_json::from_str(&format!(
+            r#"{{"esm":"1.1.0","metadata":{{"name":"T"}},{solver}"models":{{"M":{{
+                 "variables":{{"y":{{"type":"unknown","units":"m","default":1.0}}}},
+                 "equations":[{{"lhs":{{"op":"D","args":["y"],"wrt":"t"}},
+                                "rhs":{{"op":"neg","args":["y"]}}}}]}}}}}}"#
+        ))
+        .expect("fixture parses")
+    }
+
+    fn problem(solver: &str) -> EsmProblem {
+        let json = doc(solver);
+        esm_problem(
+            ProblemInput::Json(&json),
+            (0.0, 1.0),
+            ProblemOptions::default(),
+        )
+        .expect("builds")
+    }
+
+    /// A stepping caller who names no tolerance gets the DOCUMENT's, not the
+    /// binding default.
+    ///
+    /// `init` used to store the caller's `SolveOptions` verbatim. The effect was
+    /// MASKED in this binding — `step` remakes each segment and re-enters
+    /// `solve`, and `remake` carries `solver` across, so the chain still ran, one
+    /// layer down and once per segment. That is a coincidence of the current
+    /// segment-per-step implementation, not the contract: the integrator did not
+    /// hold the tolerances it was running at, and a step path that does not
+    /// re-enter `solve` would silently drop the document. §2.2.2 puts the
+    /// resolution at the DOOR, so this pins it at the door.
+    #[test]
+    fn init_resolves_the_documents_tolerances() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let integ = init(&prob, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.abstol, Some(1e-8));
+        assert_eq!(integ.opts.reltol, Some(1e-6));
+    }
+
+    /// Level 1 still wins: an explicitly-passed option beats the document.
+    #[test]
+    fn an_explicit_call_site_option_still_beats_the_document() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let opts = SolveOptions {
+            abstol: Some(1e-12),
+            reltol: Some(1e-11),
+            ..SolveOptions::default()
+        };
+        let integ = init(&prob, &opts).expect("init");
+        assert_eq!(integ.opts.abstol, Some(1e-12));
+        assert_eq!(integ.opts.reltol, Some(1e-11));
+    }
+
+    /// Per FIELD, and level 3 for whatever the document leaves unsaid.
+    #[test]
+    fn each_tolerance_falls_through_on_its_own() {
+        let only_reltol = problem(r#""solver":{"reltol":1e-9},"#);
+        let integ = init(&only_reltol, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.reltol, Some(1e-9));
+        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
+
+        let no_block = problem("");
+        let integ = init(&no_block, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
+        assert_eq!(integ.opts.reltol, Some(DEFAULT_RELTOL));
+    }
+
+    /// The chain is idempotent, which is what lets `init` and the per-segment
+    /// `solve` inside `step` both run it without the second pass changing the
+    /// answer or displacing the document.
+    #[test]
+    fn resolving_twice_is_resolving_once() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let once = with_resolved_tolerances(&prob, &SolveOptions::default());
+        let twice = with_resolved_tolerances(&prob, &once);
+        assert_eq!((twice.abstol, twice.reltol), (once.abstol, once.reltol));
+        assert_eq!((twice.abstol, twice.reltol), (Some(1e-8), Some(1e-6)));
+    }
 }

@@ -227,14 +227,31 @@ is the tolerance an assertion result is **compared at**. The `solver` block's
 `abstol` / `reltol` are the tolerances the **integrator** is asked to hold. They
 are different quantities, they resolve independently, and neither substitutes for
 the other. The distinct spellings — `{abs, rel}` against `abstol`/`reltol`, the
-latter exactly the `solve()` keyword names — are deliberate, so that a reader can
-tell at a glance which is meant.
+latter exactly the keyword names the integration entry points take — are
+deliberate, so that a reader can tell at a glance which is meant.
 
 **Resolution order for `abstol` / `reltol`**, most-specific first:
 
-1. An explicit argument at the `solve()` call site — it always wins.
+1. An explicit argument at the call site — it always wins.
 2. Otherwise, the document's `solver.abstol` / `solver.reltol`.
 3. Otherwise, the binding default (`reltol` `1e-4`, `abstol` `1e-6`).
+
+**The chain resolves wherever a document is integrated, not at one named
+function.** A binding MUST run it at *every* entry point that hands a document
+to an integrator: `solve()`, and equally the stepping lifecycle's `init()` —
+whose integrator then carries the resolved tolerances through `step!` and
+`solve!` (`esm-libraries-spec.md` §2.5.6). Resolving only at `solve()` makes one
+document integrate to two different accuracies depending on which door the
+caller came through, which is exactly what a document-scoped declaration exists
+to prevent. A binding that ships no integrator has nothing to resolve here.
+
+Two properties follow from level 1 being *an explicit argument* rather than *a
+value*. First, a binding MUST be able to tell "the caller named no tolerance"
+apart from "the caller passed the binding default"; an entry point whose
+signature defaults to a concrete number cannot, and the document could then
+never win. Second, resolving an already-resolved pair is a no-op, so a stepping
+implementation whose `step!` re-enters `solve()` per segment MAY run the chain
+again without the second pass displacing the document.
 
 An inline-test runner's own default tolerances (§6.6) sit at level 3: they are
 binding defaults, and a document that declares `solver.reltol` displaces them.

@@ -141,3 +141,69 @@ def test_inline_test_integration_tolerances_come_from_the_document(tmp_path: Pat
     # runner default by a truthiness test.
     zero = EsmFile(version="1.1.0", metadata=doc.metadata, solver=Solver(reltol=0.0))
     assert _integration_tolerances(zero, None, None) == (0.0, TEST_ABSTOL)
+
+
+def test_the_chain_reaches_the_stepping_api_too(tmp_path: Path) -> None:
+    """§2.2.2 applies wherever a document is INTEGRATED, not just at ``solve()``.
+
+    ``init`` / ``Integrator`` used to default ``abstol`` / ``reltol`` to the
+    concrete ``DEFAULT_*`` values, which occupies LEVEL 1 of the chain: a
+    stepping caller who named no tolerance was indistinguishable from one who
+    passed the binding default, so the document could never win and
+    ``solve(prob)`` honoured a declared ``abstol`` while ``init(prob)`` + ``step``
+    silently did not, on the same document.
+    """
+    from earthsci_ast.problem import esm_problem, init, step
+
+    prob = esm_problem(_load(BASE, tmp_path), tspan=(0.0, 4.0))
+
+    # 1. The document's tolerances reach the integrator.
+    integ = init(prob)
+    assert (integ.abstol, integ.reltol) == (1e-8, 1e-6)
+
+    # And they reach the SciPy solver OBJECT, not merely the wrapper's
+    # attributes. Asserted through RK45 because it is an `OdeSolver` subclass
+    # that keeps `rtol`/`atol` on itself; the default LSODA buries them in a
+    # Fortran integrator handle, which is not a contract worth pinning.
+    rk = init(prob, alg="RK45")
+    assert (float(rk._solver.rtol), float(rk._solver.atol)) == (1e-6, 1e-8)
+
+    # And they survive into stepping: `step` is what a driver actually calls.
+    step(integ)
+    assert integ.t > 0.0
+    assert (integ.abstol, integ.reltol) == (1e-8, 1e-6)
+
+    # 2. An explicit call-site argument still beats the document (level 1).
+    explicit = init(prob, alg="RK45", abstol=1e-12, reltol=1e-11)
+    assert (explicit.abstol, explicit.reltol) == (1e-12, 1e-11)
+    assert (float(explicit._solver.rtol), float(explicit._solver.atol)) == (1e-11, 1e-12)
+
+    # 3. Per field, with level 3 for whatever the document leaves unsaid.
+    only_reltol = esm_problem(_load({**BASE, "solver": {"reltol": 1e-9}}, tmp_path), tspan=(0.0, 4.0))
+    partial = init(only_reltol)
+    assert (partial.abstol, partial.reltol) == (DEFAULT_ABSTOL, 1e-9)
+
+    no_block = esm_problem(
+        _load({k: v for k, v in BASE.items() if k != "solver"}, tmp_path), tspan=(0.0, 4.0)
+    )
+    bare = init(no_block)
+    assert (bare.abstol, bare.reltol) == (DEFAULT_ABSTOL, DEFAULT_RELTOL)
+
+
+def test_a_declared_zero_abstol_is_not_swallowed_by_the_stepping_api(tmp_path: Path) -> None:
+    """The ``or`` trap, at the stepping door.
+
+    ``0.0`` is falsy, so ``abstol or DEFAULT_ABSTOL`` would silently replace a
+    value the author SET with the binding default. The chain tests
+    ``is not None``. The schema forbids a non-positive tolerance, so this state
+    is only reachable by building the block programmatically — which is exactly
+    why the guard has to live in the resolution and not in the validator.
+    """
+    from earthsci_ast.esm_types import Solver
+    from earthsci_ast.problem import esm_problem, init
+
+    prob = esm_problem(_load(BASE, tmp_path), tspan=(0.0, 4.0))
+    prob.solver = Solver(abstol=0.0)
+    integ = init(prob)
+    assert integ.abstol == 0.0
+    assert integ.reltol == DEFAULT_RELTOL

@@ -1181,7 +1181,12 @@ document could never win. The binding defaults are unchanged (`abstol` `1e-6`,
 `reltol_or_default()`, or resolve the full chain with `resolve_tolerances`.
 
 Python's `solve` made the same move without breaking callers, since its
-`abstol=` / `reltol=` keywords simply default to `None` now.
+`abstol=` / `reltol=` keywords simply default to `None` now. `init` /
+`Integrator` did the same, for the same reason: §2.2.2 resolves wherever a
+document is *integrated*, not at the `solve()` call site, so the stepping door
+has to be able to say "the caller named no tolerance" too. No signature breaks —
+but a stepping caller who relied on the old concrete defaults now gets the
+document's declared tolerances when it declares any, which is the point.
 
 ### A bug this surfaced: the §9.6.4 rule-8 emit stamp
 
