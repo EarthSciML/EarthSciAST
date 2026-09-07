@@ -307,6 +307,51 @@ end
         @test _uses_var(eq.rhs, "Source.value")
     end
 
+    @testset "7a. variable_map endpoints reach INTO a subsystem (esm-spec §4.6)" begin
+        # A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds
+        # the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.
+        # `to_endpoint` is spelled by the caller so a wrong path can be probed
+        # against the same document (issue #198 item 1).
+        function subsystem_map_file(to_endpoint::String; from_endpoint::String="Src.T")
+            inner = Model(
+                Dict{String, ModelVariable}(
+                    "gain" => ModelVariable(ParameterVariable, default=0.0),
+                    "x" => ModelVariable(UnknownVariable),
+                ),
+                [Equation(_deriv("x"), _V("gain"))])
+            wrap = Model(Dict{String, ModelVariable}(), Equation[],
+                         DiscreteEvent[], ContinuousEvent[],
+                         Dict{String, EarthSciAST.SubsystemNode}("inner" => inner))
+            src = Model(
+                Dict{String, ModelVariable}("T" => ModelVariable(UnknownVariable)),
+                [Equation(_deriv("T"), _N(1.0))])
+            return EarthSciAST.EsmFile("1.0.0",
+                EarthSciAST.Metadata("t7a"),
+                models=Dict("Src" => src, "Wrap" => wrap),
+                coupling=CouplingEntry[
+                    CouplingVariableMap(from_endpoint, to_endpoint, "param_to_var")])
+        end
+
+        # A `to` endpoint reaching INTO a subsystem resolves by its FULL dot
+        # path: the nested parameter is promoted away and the nested equation
+        # that read it now reads the source.
+        flat = flatten(subsystem_map_file("Wrap.inner.gain"))
+        @test !haskey(flat.parameters, "Wrap.inner.gain")
+        eq = _find_eq(flat, "Wrap.inner.x")
+        @test eq !== nothing
+        @test _uses_var(eq.rhs, "Src.T")
+
+        # The same edge with a MISSING segment resolves to nothing. It used to
+        # flatten cleanly with the coupling silently dropped -- the target kept
+        # its declared default and nothing downstream could tell "applied" from
+        # "ignored". The `from` half is the NaN case: the substitution runs
+        # regardless, so consumers read a name no table binds.
+        @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
+            subsystem_map_file("Wrap.gain"))
+        @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
+            subsystem_map_file("Wrap.inner.gain"; from_endpoint="Src.Nope.T"))
+    end
+
     @testset "7b. variable_map expression transform makes target an observed (esm-spec §10.4)" begin
         # Sink: parameter F_in (target), parameter offset, state u with du/dt = F_in.
         sink_vars = Dict{String, ModelVariable}(
