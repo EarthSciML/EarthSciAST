@@ -80,6 +80,25 @@ jobs:
   # Split out, the test jobs report test results and this job reports style.
   # It also de-duplicates work: rust lint ran 3x across its matrix, python 4x,
   # typescript 2x. Here each runs once.
+  #
+  # Every gate below carries `if: ${{ !cancelled() }}` so that ONE failing
+  # linter does not skip the ones after it. Steps run in sequence and a failed
+  # step normally short-circuits the rest, which meant a dirty `cargo fmt` --
+  # cosmetic and self-fixing -- silently skipped `cargo clippy`, eslint,
+  # prettier, gofmt, golangci-lint and the version-sync check: one reported
+  # failure, while three other languages' substantive linters and the
+  # cross-binding version check were never consulted at all (#217). The job
+  # still fails if any gate fails; it just consults all of them first, so one
+  # push surfaces every finding instead of one finding per round trip.
+  #
+  # `!cancelled()` rather than `always()`: this workflow sets
+  # `cancel-in-progress: true`, and `always()` would keep running lint steps
+  # through a cancellation instead of letting the superseded run stop.
+  #
+  # The `Setup *` / cache steps above deliberately have NO condition: those are
+  # infrastructure, and linting against a toolchain that failed to install
+  # produces noise, not signal. (A failure there still leaves the other
+  # languages' gates to run, since they carry the condition.)
   lint:
     name: Lint and format (all languages)
     runs-on: ubuntu-latest
@@ -126,9 +145,11 @@ jobs:
 
       # --- Python -------------------------------------------------------
       - name: Install ruff (pinned)
+        if: ${{ !cancelled() }}
         run: pip install "ruff==${RUFF_VERSION}"
 
       - name: ruff check / ruff format
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-py
         run: |
           # Config lives in the repo-root ruff.toml.
@@ -137,30 +158,43 @@ jobs:
 
       # --- Rust ---------------------------------------------------------
       - name: cargo fmt
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
         run: cargo fmt --all -- --check
 
       # Default features only, deliberately. `--all-features` (what this step
-      # used to say) does not COMPILE today, and has not for a long time -- the
-      # clippy step sat behind the rustfmt gate, so it has not actually run in
-      # CI for 40+ runs and the rot went unseen. Two separate blockers:
-      #   * `esio` pulls earthsciio 0.1 from crates.io, which has no
-      #     `DataSource`/`SourceTemporal` yet (same blocker as the python
-      #     bridge; needs the next EarthSciIO release).
-      #   * `performance` has ~14 call sites still passing `ExpressionNode`
-      #     where `Expr::Operator` now wants `Arc<ExpressionNode>`.
-      # Widen this back out once those are fixed, rather than leaving a gate
-      # that can never go green.
+      # used to say) did not COMPILE for a long time -- and because the clippy
+      # step sat behind the rustfmt gate (#217, fixed by the conditions on
+      # these steps), it did not actually run in CI for 40+ runs, so the rot
+      # went unseen. There were two blockers: `esio` against an earthsciio 0.1
+      # with no `DataSource`/`SourceTemporal`, and ~14 `performance` call sites
+      # passing `ExpressionNode` where `Expr::Operator` wanted
+      # `Arc<ExpressionNode>`.
+      #
+      # BOTH are now fixed -- `cargo check --all-features` builds clean, which
+      # is what the `rust-tests` matrix and the bench-check step below rely on.
+      # Widening this back out is therefore possible but is NOT a free change:
+      # `esio_provider` and `performance` have never once been linted, so it
+      # would surface a fresh backlog under `-D warnings`. Do it as its own
+      # change, with the findings triaged, rather than as a drive-by.
+      #
+      # Note also that `--all-targets` on the default feature set does NOT
+      # cover `benches/benchmarks.rs`: that target is `required-features =
+      # ["benchmarks"]`, which is off by default. The bench target's COMPILE is
+      # checked in `rust-tests` instead (#218).
       - name: cargo clippy
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-rs
         run: cargo clippy --all-targets -- -D warnings
 
       # --- TypeScript ---------------------------------------------------
       - name: Install TypeScript dependencies
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-ts
         run: npm ci
 
       - name: eslint / prettier
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-ts
         run: |
           npm run lint
@@ -168,6 +202,7 @@ jobs:
 
       # --- Go -----------------------------------------------------------
       - name: gofmt
+        if: ${{ !cancelled() }}
         working-directory: pkg/earthsci-ast-go
         run: |
           unformatted=$(gofmt -l .)
@@ -176,6 +211,7 @@ jobs:
           fi
 
       - name: golangci-lint (pinned)
+        if: ${{ !cancelled() }}
         uses: golangci/golangci-lint-action@v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
@@ -186,6 +222,7 @@ jobs:
       # mirrors with no manifest to derive from. v0.2.0 published with both
       # mirrors stale. Cheap to check, so check it on every run.
       - name: Version sync (all bindings)
+        if: ${{ !cancelled() }}
         run: ./scripts/check-version-sync.sh
 
   # Run each language's individual tests first.
@@ -400,6 +437,27 @@ jobs:
           else
             cargo test --verbose --all-features
           fi
+
+      # `cargo test` does NOT build bench targets -- that needs `--benches` or
+      # `--all-targets` -- so nothing above ever compiles benches/benchmarks.rs,
+      # and it silently drifted out of compiling as five structs gained fields
+      # (#218). Check-only: the point is that the benches still build against
+      # current types, not to spend CI minutes measuring.
+      #
+      # Skipped on the MSRV leg for the same reason the test step drops `esio`
+      # there: `--all-features` pulls earthsciio -> zarrs, whose own MSRV is
+      # 1.91. Benches are dev tooling and make no MSRV claim, so checking them
+      # on stable and beta is enough. `--all-features` (rather than just
+      # `--features benchmarks`) matches the test step above, so this step
+      # reuses that feature resolution instead of rebuilding the dependency
+      # graph under a second one.
+      #
+      # `!cancelled()` for the reason spelled out on the lint job: a failing
+      # test run must not silently skip this check, or a broken bench could
+      # hide behind an unrelated red suite -- which is how the drift got here.
+      - name: Build bench targets
+        if: ${{ !cancelled() && matrix.rust != '1.89.0' }}
+        run: cargo check --all-features --benches
 
       - name: Generate Rust documentation
         if: matrix.rust == 'stable'
