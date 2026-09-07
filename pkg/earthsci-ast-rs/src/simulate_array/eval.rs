@@ -5076,10 +5076,28 @@ mod ragged_eval_tests {
             Value::Scalar(s) => panic!("expected a [0, 3] array, got scalar {s}"),
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // The fault arm splits two very different defects — issue #181
-    // -----------------------------------------------------------------------
+#[cfg(test)]
+mod unbound_name_fault_tests {
+    //! `lookup_variable`'s final arm reports TWO different defects, and it must
+    //! not report them as one (issue #181).
+    //!
+    //! A name the model DECLARES — an observed whose rule has not run because
+    //! the materialization order stalled — resolves through the same arm as a
+    //! name declared nowhere at all. Reporting the first as
+    //! `E_TREEWALK_UNBOUND_NAME`, "bound by NOTHING in scope", is a claim about
+    //! the DOCUMENT that the evaluator is not in a position to make, and it was
+    //! routinely false: the name it landed on was an observed that is declared,
+    //! defined and referenced perfectly well, and the message said nothing about
+    //! the dependency cycle that actually stalled the walk (esm-spec §4.9.6).
+
+    use super::{lookup_variable, take_const_array_oob};
+    use crate::aggregate::empty_derived_extents;
+    use crate::simulate_array::{ArrMap, ConstArrayScope, EvalEnv, empty_declared_names};
+    use ndarray::ArrayD;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, HashSet};
 
     /// Resolve `name` against an evaluation whose maps are all empty and whose
     /// DECLARED set is `declared`, and return the latched fault.

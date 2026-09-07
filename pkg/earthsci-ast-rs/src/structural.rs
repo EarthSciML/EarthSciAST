@@ -1477,8 +1477,7 @@ fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
     let crate::Expr::Operator(node) = expr else {
         return false;
     };
-    if node.op == "index"
-        && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+    if node.op == "index" && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
     {
         return true;
     }
@@ -1496,11 +1495,7 @@ fn observed_dependency_graph(
     class: &crate::classification::Classification,
     candidates: &HashSet<String>,
 ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
-    let observed: HashSet<&str> = class
-        .observed_unknowns
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let observed: HashSet<&str> = class.observed_unknowns.iter().map(String::as_str).collect();
     class
         .observed_definitions
         .iter()
