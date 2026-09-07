@@ -1,0 +1,41 @@
+{
+  "category": "assertion_tolerance",
+  "version": "1.0",
+  "description": "Cross-binding conformance for the esm-spec §6.6.3 assertion PASS PREDICATE itself, as a pure function of (actual, expected, rel, abs). Every other assertion category is a simulation category: it computes an actual and then compares it, so the predicate is only ever exercised at whatever pairs the integrator happens to produce — and those all sit in the |actual| <= |expected| region where the symmetric bound rel*max(|a|,|e|) and the asymmetric bound rel*|e| compute the same number. The readings differ only on an OVERSHOOT, which no fixture in any category reaches. This category is DATA-ONLY for exactly that reason: it needs no integrator, so it can state the discriminating pairs directly, and it is the only thing in the suite that can see the seam. ±Inf and NaN are not JSON-representable, so `actual` and `expected` are either a JSON number or one of exactly three strings ('+inf', '-inf', 'nan').",
+  "reference_binding": "analytic",
+  "bindings_required": ["julia", "python", "rust", "typescript"],
+  "scope_excluded": {
+    "go": "no assertion predicate anywhere in the binding — Go parses a `tests` block as data and never compares an actual to an expectation, in production or in its own tests. Giving Go a predicate is what moves it into `bindings_required`; until then `assertion_tolerance_scope_test.go` asserts this exclusion."
+  },
+  "golden": "conformance/assertion_tolerance/golden/predicate_verdicts.json",
+  "generator": "scripts/gen-assertion-tolerance-golden.py",
+  "predicate": [
+    "pass(actual, expected, rel, abs) is:",
+    "  actual == expected",
+    "  OR (actual and expected are both FINITE",
+    "      AND NOT (rel == 0 AND abs == 0)",
+    "      AND |actual - expected| <= max(abs, rel * max(|actual|, |expected|)))"
+  ],
+  "contract": [
+    "For every entry in the golden's `cases`: feeding (`actual`, `expected`, `rel`, `abs`) to the binding's own assertion predicate — the SAME function its inline-test runner uses, not a re-derivation in the adapter — MUST return `passed`. This is a verdict comparison, not a numeric one: there is no tolerance on a boolean.",
+    "The relative bound MUST scale by `max(|actual|, |expected|)`. Scaling by `|expected|` alone is non-conforming, and so is `abs + rel*|expected|` (numpy `isclose` semantics), which is strictly more permissive than the `max` this spec takes.",
+    "A binding MUST NOT add an epsilon floor to that scale. The bound is a PRODUCT, so a zero `expected` needs no protection, and a floor diverges from the spec on subnormal actuals.",
+    "Finiteness is judged BEFORE tolerance, and `actual == expected` is judged before both. No `abs` or `rel` may admit a non-finite `actual`; the same infinity with the same sign matches, and opposite infinities and NaN-against-NaN do not.",
+    "`rel == 0 AND abs == 0` is EXACT-EQUALITY mode, not 'no bound'. A binding that substitutes its §6.6.4 implementation default when a document spells both as zero is non-conforming — the §6.6.4 default applies when tolerance is ABSENT, which the adapter never exercises because it passes both numbers explicitly."
+  ],
+  "non_vacuity": [
+    "The golden carries both verdicts (22 pass / 21 fail at v1.0), so a binding that answers a constant fails.",
+    "The golden's `readings_discriminated` block counts, per known WRONG reading, how many cases change verdict under it: `asymmetric` 6, `sum_form` 7, `epsilon_floor` 3, `no_finiteness_guard` 7. The generator ASSERTS every one of those is nonzero, so the case list cannot silently stop being able to see a defect. An adapter SHOULD read that block and fail if any entry is 0.",
+    "Every `pass` case that discriminates a reading is paired with a `fail` case in the same region (`overshoot_inside_symmetric_bound` with `overshoot_outside_the_symmetric_bound`, `max_not_sum_of_the_two_bounds` with `max_not_sum_control_that_still_passes`, the two zero-expected cases with `tiny_actual_against_zero_expected_rescued_by_abs`), so a binding cannot satisfy one half by loosening or tightening everything."
+  ],
+  "gate": {
+    "julia": "pkg/EarthSciAST.jl/test/assertion_tolerance_conformance_test.jl",
+    "python": "pkg/earthsci-ast-py/tests/test_assertion_tolerance_conformance.py",
+    "rust": "pkg/earthsci-ast-rs/tests/assertion_tolerance_conformance.rs",
+    "typescript": "pkg/earthsci-ast-ts/src/assertion-tolerance-conformance.test.ts",
+    "go": "pkg/earthsci-ast-go/pkg/esm/assertion_tolerance_scope_test.go"
+  },
+  "related": {
+    "assertion_nonfinite": "CONFORMANCE_SPEC §5.20 pins the same predicate's finiteness clause END-TO-END, through each binding's simulation runner on a document whose arithmetic overflows. That category proves the runner reaches the predicate; this one proves the predicate is right. Neither subsumes the other: §5.20 cannot state a discriminating overshoot (no integrator reliably produces one), and this category cannot prove any runner calls the function it tests."
+  }
+}

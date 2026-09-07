@@ -1,0 +1,469 @@
+{
+  "$comment": "GOLDEN for CONFORMANCE_SPEC §5.30 / esm-spec §6.6.3. Each case is a (actual, expected, rel, abs) tuple fed straight to the binding's own assertion predicate; `passed` is the required verdict. The verdicts are ANALYTIC — computed from the §6.6.3 rule written out longhand, not read off any binding. Regenerate with scripts/gen-assertion-tolerance-golden.py.",
+  "encoding": {
+    "$comment": "JSON has no infinite or NaN literal, so `actual` and `expected` are either a JSON number or one of exactly three strings. Nothing else may appear, and no other field is ever a string; an adapter that does not recognise one of the three MUST fail rather than skip.",
+    "non_finite": [
+      "+inf",
+      "-inf",
+      "nan"
+    ]
+  },
+  "readings_discriminated": {
+    "$comment": "How many cases change verdict under each known WRONG reading of §6.6.3. A zero here would mean the case list cannot see that defect; the generator asserts every entry is nonzero.",
+    "asymmetric": 6,
+    "sum_form": 7,
+    "epsilon_floor": 3,
+    "no_finiteness_guard": 7
+  },
+  "counts": {
+    "cases": 43,
+    "pass": 22,
+    "fail": 21
+  },
+  "cases": [
+    {
+      "id": "overshoot_inside_symmetric_bound",
+      "actual": 1.6,
+      "expected": 1.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The discriminating case. |a-e| = 0.6; the symmetric bound is 0.5*max(1.6, 1.0) = 0.8, the |expected|-only bound is 0.5. Every binding's own runner passes this; the ad-hoc harnesses failed it.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "overshoot_swapped_is_the_same_verdict",
+      "actual": 1.0,
+      "expected": 1.6,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Swap-invariance: the bound depends on the PAIR, not on which side is called expected. Same verdict as the case above."
+    },
+    {
+      "id": "overshoot_exactly_on_the_symmetric_bound",
+      "actual": 2.0,
+      "expected": 1.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": true,
+      "why": "|a-e| = 1.0 = 0.5*max(2.0, 1.0). The bound is inclusive, and both sides are exact in binary floating point, so no binding may round this the other way.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "overshoot_outside_the_symmetric_bound",
+      "actual": 2.1,
+      "expected": 1.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": false,
+      "why": "Symmetric is not vacuous: past 0.5*|a| it still fails."
+    },
+    {
+      "id": "overshoot_negative_mirror",
+      "actual": -1.6,
+      "expected": -1.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The seam case sign-mirrored: the bound is on magnitudes.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "max_not_sum_of_the_two_bounds",
+      "actual": 1.5,
+      "expected": 1.0,
+      "rel": 0.3,
+      "abs": 0.3,
+      "passed": false,
+      "why": "§6.6.3 takes the LARGER of the two bounds, not their sum. max(0.3, 0.3*1.5) = 0.45 < 0.5 = |a-e|, while numpy `isclose`'s atol + rtol*|e| = 0.6 admits it. This is the form #193 flagged.",
+      "discriminates": [
+        "sum_form"
+      ]
+    },
+    {
+      "id": "max_not_sum_control_that_still_passes",
+      "actual": 1.2,
+      "expected": 1.0,
+      "rel": 0.3,
+      "abs": 0.3,
+      "passed": true,
+      "why": "Control for the case above: a pair the max form admits on its own, so a binding cannot satisfy the previous case by rejecting everything."
+    },
+    {
+      "id": "both_zero",
+      "actual": 0.0,
+      "expected": 0.0,
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Equality answers it before any bound."
+    },
+    {
+      "id": "both_zero_at_zero_tolerance",
+      "actual": 0.0,
+      "expected": 0.0,
+      "rel": 0.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Exact-equality mode still passes an exact match."
+    },
+    {
+      "id": "negative_zero_against_zero",
+      "actual": -0.0,
+      "expected": 0.0,
+      "rel": 0.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "IEEE-754: -0.0 == 0.0, so a signed zero is unaffected by the predicate at any tolerance."
+    },
+    {
+      "id": "tiny_actual_against_zero_expected",
+      "actual": 1e-20,
+      "expected": 0.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": false,
+      "why": "The consequence §6.6.3 states outright: with the bound written as a PRODUCT, a nonzero actual against a zero expected needs `abs` (or rel >= 1). A harness with a 1e-12 floor on the scale passes it.",
+      "discriminates": [
+        "epsilon_floor"
+      ]
+    },
+    {
+      "id": "subnormal_actual_against_zero_expected",
+      "actual": 1e-320,
+      "expected": 0.0,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": false,
+      "why": "The same, at the magnitude where an implementation-defined epsilon floor is invisible to every other case: 1e-300, 1e-12 and f64::MIN_POSITIVE all rescue this, and the spec forbids all three.",
+      "discriminates": [
+        "epsilon_floor"
+      ]
+    },
+    {
+      "id": "tiny_actual_against_zero_expected_rescued_by_abs",
+      "actual": 1e-20,
+      "expected": 0.0,
+      "rel": 0.0,
+      "abs": 1e-09,
+      "passed": true,
+      "why": "`abs` is how a document expresses 'near zero'. Non-vacuity for the two cases above: they fail on the rule, not because zero expected always fails."
+    },
+    {
+      "id": "zero_expected_at_rel_one_is_vacuous",
+      "actual": 1.0,
+      "expected": 0.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "rel = 1 makes the symmetric bound |a-e| <= max(|a|,|e|), which every same-sign pair satisfies. Stated so the vacuity is a pinned property and not a surprise; the |expected|-only reading FAILS this.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "zero_expected_just_below_rel_one",
+      "actual": 1.0,
+      "expected": 0.0,
+      "rel": 0.999,
+      "abs": 0.0,
+      "passed": false,
+      "why": "One ulp of policy below the vacuity: the bound is 0.999 < 1.0."
+    },
+    {
+      "id": "zero_expected_negative_actual_at_rel_one",
+      "actual": -3.0,
+      "expected": 0.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Zero has no sign to disagree with, so the vacuity is two-sided.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "zero_actual_against_tiny_expected",
+      "actual": 0.0,
+      "expected": 1e-20,
+      "rel": 0.5,
+      "abs": 0.0,
+      "passed": false,
+      "why": "Mirror of the zero-expected case. Both readings agree here, which is exactly why an |expected|-only harness looked correct for years.",
+      "discriminates": [
+        "epsilon_floor"
+      ]
+    },
+    {
+      "id": "zero_actual_against_one_at_rel_one",
+      "actual": 0.0,
+      "expected": 1.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "|a-e| = 1.0 = 1.0*max(0, 1). Inclusive bound."
+    },
+    {
+      "id": "zero_actual_against_one_at_default_rel",
+      "actual": 0.0,
+      "expected": 1.0,
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": false,
+      "why": "A collapsed-to-zero actual must still fail at the §6.6.4 default."
+    },
+    {
+      "id": "opposite_signs_at_rel_one",
+      "actual": 1.0,
+      "expected": -1.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": false,
+      "why": "rel = 1 is vacuous only for same-sign pairs: |a-e| = 2 > 1 = max(|a|,|e|). A magnitude-only comparison would pass this."
+    },
+    {
+      "id": "opposite_signs_at_rel_two",
+      "actual": 1.0,
+      "expected": -1.0,
+      "rel": 2.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "rel = 2 is the point at which a sign flip becomes admissible."
+    },
+    {
+      "id": "opposite_signs_rescued_by_abs",
+      "actual": 1.0,
+      "expected": -1.0,
+      "rel": 0.0,
+      "abs": 2.0,
+      "passed": true,
+      "why": "`abs` does not care about sign."
+    },
+    {
+      "id": "opposite_signs_at_default_rel",
+      "actual": -1.0,
+      "expected": 1.0,
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": false,
+      "why": "A sign error is the plainest wrong answer there is."
+    },
+    {
+      "id": "positive_infinity_against_finite",
+      "actual": "+inf",
+      "expected": 42.0,
+      "rel": 1e-06,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "Finiteness is judged BEFORE tolerance: 1e300 is the widest `abs` a document can spell and it does not rescue an infinity.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "positive_infinity_against_largest_finite_double",
+      "actual": "+inf",
+      "expected": 1.7976931348623157e+308,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": false,
+      "why": "Not a magnitude test. The nearest finite double is still not close.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "negative_infinity_against_finite",
+      "actual": "-inf",
+      "expected": -5.0,
+      "rel": 1e-06,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "The sign agreeing does not make it finite.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "same_positive_infinity",
+      "actual": "+inf",
+      "expected": "+inf",
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The one case a non-finite value legitimately matches, reachable only through an API (JSON has no infinite literal)."
+    },
+    {
+      "id": "same_negative_infinity",
+      "actual": "-inf",
+      "expected": "-inf",
+      "rel": 0.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The equality clause fires before the zero-tolerance branch."
+    },
+    {
+      "id": "opposite_infinities_positive_actual",
+      "actual": "+inf",
+      "expected": "-inf",
+      "rel": 1000000.0,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "Same class, opposite sign: FAIL. A binding whose guard reads 'both non-finite => equal' passes this.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "opposite_infinities_negative_actual",
+      "actual": "-inf",
+      "expected": "+inf",
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": false,
+      "why": "The other direction of the same defect.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "nan_against_nan",
+      "actual": "nan",
+      "expected": "nan",
+      "rel": 1e-06,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "NaN is not equal to itself, so the equality clause does not fire and the finiteness clause rejects it. The 'both non-finite => equal' guard passes it.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "nan_actual_against_zero",
+      "actual": "nan",
+      "expected": 0.0,
+      "rel": 1e-06,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "Control: NaN already failed under the bound alone, because every IEEE-754 comparison with NaN is false."
+    },
+    {
+      "id": "nan_expected_against_finite_actual",
+      "actual": 0.0,
+      "expected": "nan",
+      "rel": 1e-06,
+      "abs": 1e+300,
+      "passed": false,
+      "why": "The expected side is guarded too."
+    },
+    {
+      "id": "finite_actual_against_infinite_expected",
+      "actual": 1e+300,
+      "expected": "+inf",
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": false,
+      "why": "An API-supplied infinite expectation is not met by any finite value.",
+      "discriminates": [
+        "no_finiteness_guard"
+      ]
+    },
+    {
+      "id": "rel_admits_what_abs_would_reject",
+      "actual": 1000001.0,
+      "expected": 1000000.0,
+      "rel": 0.001,
+      "abs": 1e-09,
+      "passed": true,
+      "why": "rel governs at large magnitude: max(1e-9, 1e-3*1000001) = 1000.001."
+    },
+    {
+      "id": "abs_admits_what_rel_would_reject",
+      "actual": 1.000002,
+      "expected": 1.0,
+      "rel": 1e-06,
+      "abs": 1e-05,
+      "passed": true,
+      "why": "abs governs at small magnitude: max(1e-5, ~1e-6) = 1e-5 >= 2e-6. The two previous cases are the OR in §6.6.3, one direction each."
+    },
+    {
+      "id": "neither_bound_admits",
+      "actual": 1000001.0,
+      "expected": 1000000.0,
+      "rel": 1e-09,
+      "abs": 1e-09,
+      "passed": false,
+      "why": "Both bounds present, both too tight. Non-vacuity for the pair above."
+    },
+    {
+      "id": "rel_only_just_inside",
+      "actual": 1.0000009,
+      "expected": 1.0,
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The §6.6.4 default tolerance, just inside."
+    },
+    {
+      "id": "rel_only_just_outside",
+      "actual": 1.000002,
+      "expected": 1.0,
+      "rel": 1e-06,
+      "abs": 0.0,
+      "passed": false,
+      "why": "The same pair one factor of two out: the default is a real bound."
+    },
+    {
+      "id": "zero_tolerance_rejects_a_near_miss",
+      "actual": 5.0,
+      "expected": 5.0000001,
+      "rel": 0.0,
+      "abs": 0.0,
+      "passed": false,
+      "why": "rel = abs = 0 is exact-equality mode, not 'no bound'. A harness that substitutes its own default rel when both are zero passes this."
+    },
+    {
+      "id": "zero_tolerance_accepts_an_exact_match",
+      "actual": 5.0,
+      "expected": 5.0,
+      "rel": 0.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Non-vacuity for the case above."
+    },
+    {
+      "id": "three_orders_of_magnitude_apart_at_rel_one",
+      "actual": 1000.0,
+      "expected": 1.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "The vacuity of rel >= 1 in its most alarming form: 1000 'equals' 1. Pinned deliberately — an author writing rel: 1 has written a test that cannot fail on a same-sign actual, and a binding must not quietly reinterpret that.",
+      "discriminates": [
+        "asymmetric",
+        "sum_form"
+      ]
+    },
+    {
+      "id": "three_orders_of_magnitude_apart_swapped",
+      "actual": 1.0,
+      "expected": 1000.0,
+      "rel": 1.0,
+      "abs": 0.0,
+      "passed": true,
+      "why": "Swap-invariance at the vacuous end. The |expected|-only reading also passes this one, which is what makes the unswapped case above the discriminating half of the pair."
+    }
+  ]
+}

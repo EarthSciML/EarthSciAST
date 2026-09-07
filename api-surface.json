@@ -91,17 +91,17 @@
     }
   },
   "counts": {
-    "symbols": 860,
+    "symbols": 862,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 302,
       "typescript": 235,
       "python": 247,
-      "rust": 332,
+      "rust": 334,
       "go": 388
     },
     "by_tier": {
-      "extension": 592,
+      "extension": 594,
       "stable": 268
     }
   },
@@ -821,6 +821,14 @@
         "julia": "CanonicalizeError",
         "rust": "CanonicalizeError",
         "typescript": "CanonicalizeError"
+      }
+    },
+    {
+      "name": "check_assertion",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "check_assertion"
       }
     },
     {
@@ -5894,6 +5902,14 @@
         "python": "resolve_template_machinery",
         "rust": "resolve_template_machinery",
         "typescript": "resolveTemplateMachinery"
+      }
+    },
+    {
+      "name": "resolve_tolerance",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "resolve_tolerance"
       }
     },
     {
