@@ -36,6 +36,7 @@ from .simulation_common import (
     _resolve_override,
     _retcode_for_error,
     _retcode_from_scipy,
+    flat_namespace_scope,
     solve_ivp,
 )
 from .sympy_bridge import (
@@ -43,6 +44,7 @@ from .sympy_bridge import (
     SimulationError,
     _compile_flat_rhs,
     _expr_to_sympy,
+    _lambdify,
 )
 
 
@@ -82,7 +84,7 @@ def _create_event_functions(
             var_names = [str(var) for var in variables]
 
             # Create lambda function
-            condition_func = sp.lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
+            condition_func = _lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
 
             # Check if we have direction-dependent affects
             has_affect_neg = event.affect_neg is not None and len(event.affect_neg) > 0
@@ -155,14 +157,30 @@ def _resolve_parameter_values(
 ) -> list[float]:
     """Resolve parameter values for a scalar solve() call.
 
-    Caller overrides win (dot-namespaced first, then bare name), then the
-    flattened parameter metadata default, then 0. The returned list is
-    aligned with ``parameter_names`` so it can be spliced into the
-    lambdified function's argument tuple.
+    Caller overrides win (dot-namespaced first, then bare name, then a
+    more-qualified key that resolves to this parameter), then the flattened
+    parameter metadata default, then 0. The returned list is aligned with
+    ``parameter_names`` so it can be spliced into the lambdified function's
+    argument tuple.
+
+    The WHOLE flattened parameter set is handed to each resolution, not just the
+    name being resolved: rule 2 of esm-spec §6.6.2 maps a key to the one name it
+    designates, so a key that exactly names another parameter must not also be
+    read as a more-qualified spelling of this one.
     """
+    known = set(flat.parameters)
+    namespaces = flat_namespace_scope(flat)
     values: list[float] = []
     for pname in parameter_names:
-        values.append(_resolve_override(pname, parameter_overrides, flat.parameters[pname].default))
+        values.append(
+            _resolve_override(
+                pname,
+                parameter_overrides,
+                flat.parameters[pname].default,
+                known=known,
+                namespaces=namespaces,
+            )
+        )
     return values
 
 
@@ -237,9 +255,21 @@ def _build_scalar_rhs(
         for target, rhs in scalar_ic_equations(flat)
     }
     y0_list: list[float] = []
+    known_states = set(flat.state_variables)
+    state_namespaces = flat_namespace_scope(flat)
     for name in state_names:
         default = eq_ics.get(name, flat.state_variables[name].default)
-        y0_list.append(_resolve_override(name, initial_conditions, default))
+        y0_list.append(
+            _resolve_override(
+                name,
+                initial_conditions,
+                default,
+                known=known_states,
+                namespaces=state_namespaces,
+                surface="initial_conditions",
+                kind="state",
+            )
+        )
     y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.
