@@ -1,0 +1,175 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "pde_inline_observed_indexed_lhs",
+    "description": "§6.3.1 admits TWO LHS spellings for the equation that DEFINES an unknown: bare (`y ~ f(...)`) and indexed (`y[i] ~ f(...)`, which defines the whole array `y`). Neither is restricted by rank, and the spec is explicit that the defining form is read through the LHS's BASE NAME. Every array-shaped observed in this document is written the INDEXED way, spelled `aggregate{k}(index(w, k)) ~ ...` — `wf` is STATE-FREE and `ws` is STATE-DEPENDENT, the two classes a binding routes differently (build-materialized vs. evaluated at the sampled state). Both right-hand sides are exactly integrable: D(u) = wf = 2k is a per-cell constant, so u[k](t) = 2*k*t; D(v) = ws = 3*u is then linear in t, so v[k](t) = 3*k*t^2. Every solver family of order >= 2 reproduces both to machine precision, so the assertions are integrator-independent."
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": ["lev"],
+          "description": "state driven by the STATE-FREE indexed observed; u[k](t) = 2*k*t"
+        },
+        "v": {
+          "type": "unknown",
+          "units": "s",
+          "shape": ["lev"],
+          "description": "state driven by the STATE-DEPENDENT indexed observed; v[k](t) = 3*k*t^2"
+        },
+        "wf": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "state-free array observed, INDEXED LHS: wf[k] = 2*k"
+        },
+        "ws": {
+          "type": "unknown",
+          "units": "1",
+          "shape": ["lev"],
+          "description": "state-dependent array observed, INDEXED LHS: ws[k] = 3*u[k]"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "wf[k] ~ 2*k -- the INDEXED (aggregate) LHS spelling, state-free.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "index", "args": ["wf", "k"] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "*", "args": [2.0, "k"] }
+          }
+        },
+        {
+          "_comment": "ws[k] ~ 3*u[k] -- the INDEXED LHS spelling, state-dependent.",
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "index", "args": ["ws", "k"] }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": ["u"],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": {
+              "op": "*",
+              "args": [3.0, { "op": "index", "args": ["u", "k"] }]
+            }
+          }
+        },
+        { "lhs": { "op": "ic", "args": ["u"] }, "rhs": 0.0 },
+        { "lhs": { "op": "ic", "args": ["v"] }, "rhs": 0.0 },
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["u", "k"] }],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "index", "args": ["wf", "k"] }
+          }
+        },
+        {
+          "lhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": {
+              "op": "D",
+              "args": [{ "op": "index", "args": ["v", "k"] }],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev" } },
+            "expr": { "op": "index", "args": ["ws", "k"] }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "observed_indexed_lhs",
+          "description": "u[k](t) = 2*k*t and v[k](t) = 3*k*t^2, both integrated exactly. At t = 1: u = [2, 4, 6, 8] (max 8, mean 5) and v = [3, 6, 9, 12] (max 12, mean 7.5).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 1.0,
+              "coords": { "lev": 1 },
+              "expected": 2.0,
+              "tolerance": { "abs": 1e-09 }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "reduce": "max",
+              "expected": 8.0,
+              "tolerance": { "abs": 1e-09 }
+            },
+            {
+              "variable": "u",
+              "time": 1.0,
+              "reduce": "mean",
+              "expected": 5.0,
+              "tolerance": { "abs": 1e-09 }
+            },
+            {
+              "variable": "u",
+              "time": 0.0,
+              "coords": { "lev": 4 },
+              "expected": 0.0,
+              "tolerance": { "abs": 1e-09 }
+            },
+            {
+              "variable": "v",
+              "time": 1.0,
+              "coords": { "lev": 4 },
+              "expected": 12.0,
+              "tolerance": { "abs": 1e-09 }
+            },
+            {
+              "variable": "v",
+              "time": 1.0,
+              "reduce": "mean",
+              "expected": 7.5,
+              "tolerance": { "abs": 1e-09 }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

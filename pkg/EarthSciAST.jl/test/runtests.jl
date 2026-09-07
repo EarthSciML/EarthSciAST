@@ -109,6 +109,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("broadcast_alignment_test.jl")           # §4.3.4 broadcast lowering + name-based operand alignment
     include("tree_walk_inline_const_index_test.jl")  # inline `const` array as index() target (fix/index-inline-const-array)
     include("tree_walk_elementwise_obs_gather_test.jl")  # #175 elementwise array observed reached only via an aggregate gather
+    include("tree_walk_indexed_observed_lhs_test.jl")    # #232 array observed defined by the INDEXED LHS spelling (§6.3.1)
     include("tree_walk_vectorized_test.jl")
     include("access_kernel_foundation_test.jl")     # ess-affine IR foundation
     include("stencil_affine_lowering_test.jl")       # ess-affine _lower_to_access
@@ -270,6 +271,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_elementwise_observed_gather_test.jl")
     include("conformance_pde_inline_observed_param_rank2_test.jl")
     include("conformance_pde_inline_observed_state_dependent_test.jl")  # §6.6.5 state-dependent array observed
+    include("conformance_pde_inline_observed_indexed_lhs_test.jl")      # §6.3.1 INDEXED-LHS array observed (#232)
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals

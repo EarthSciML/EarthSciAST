@@ -1,0 +1,109 @@
+{
+  "category": "pde_inline_observed_indexed_lhs",
+  "version": "1.0",
+  "description": "Cross-binding conformance for the INDEXED LHS spelling of an ARRAY-shaped observed (esm-spec §6.3.1). §6.3.1 admits TWO LHS spellings for the equation that DEFINES an unknown — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the whole array `y`) — and neither is restricted by rank: the defining form is read through the LHS's BASE NAME, so \"an arrayed definition is observed exactly as its scalar counterpart is\". Julia's tree-walk build classified equations by the SYNTACTIC `lhs isa VarExpr`, so an array-shaped observed written the indexed way matched no owner bucket and was refused outright with `E_TREEWALK_UNSUPPORTED_SHAPE` on a document Rust and Python both ran (issue #232). Every array observed in this fixture uses the indexed spelling: `wf` is STATE-FREE and `ws` is STATE-DEPENDENT, the two classes a binding routes differently (build-materialized vs. evaluated at the sampled state), so a binding cannot pass by fixing one path only. Both right-hand sides are exactly integrable — D(u) = wf = 2k is a per-cell constant giving u[k](t) = 2*k*t, and D(v) = ws = 3*u is then linear in t giving v[k](t) = 3*k*t^2 — so every solver family named below reproduces the goldens to machine precision and a divergence in this category is a semantics divergence, never an integrator one. Julia is the reference binding: its `run_pde_tests` minted golden/observed_indexed_lhs.json.",
+  "reference_binding": "julia",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust"
+  ],
+  "scope_excluded": {
+    "go": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner",
+    "typescript": "rewrite-only port; no makearray lowering / simulator / inline PDE-test runner"
+  },
+  "integrators": {
+    "julia": {
+      "algorithm": "Tsit5",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    },
+    "python": {
+      "method": "RK45",
+      "rtol": 1e-12,
+      "atol": 1e-14
+    },
+    "rust": {
+      "solver": "Erk",
+      "reltol": 1e-12,
+      "abstol": 1e-14
+    }
+  },
+  "tolerances": {
+    "assertion_rtol": 1e-09,
+    "assertion_atol": 1e-11
+  },
+  "fixtures": [
+    {
+      "id": "observed_indexed_lhs",
+      "path": "fixtures/observed_indexed_lhs.esm",
+      "model": "M",
+      "test_id": "observed_indexed_lhs",
+      "tags": [
+        "pde-inline-test",
+        "esm-spec-6.3.1",
+        "array-observed",
+        "indexed-lhs",
+        "state-free",
+        "state-dependent",
+        "reduce-max",
+        "reduce-mean",
+        "coords"
+      ],
+      "shape": {
+        "lev": 4
+      },
+      "assertions": [
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 1,
+          "variable": "u",
+          "coords": {
+            "lev": 1
+          },
+          "expected": 2.0
+        },
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 2,
+          "variable": "u",
+          "reduce": "max",
+          "expected": 8.0
+        },
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 3,
+          "variable": "u",
+          "reduce": "mean",
+          "expected": 5.0
+        },
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 4,
+          "variable": "u",
+          "coords": {
+            "lev": 4
+          },
+          "expected": 0.0
+        },
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 5,
+          "variable": "v",
+          "coords": {
+            "lev": 4
+          },
+          "expected": 12.0
+        },
+        {
+          "test_id": "observed_indexed_lhs",
+          "assertion_idx": 6,
+          "variable": "v",
+          "reduce": "mean",
+          "expected": 7.5
+        }
+      ],
+      "golden": "golden/observed_indexed_lhs.json"
+    }
+  ]
+}

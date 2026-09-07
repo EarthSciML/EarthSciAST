@@ -4418,6 +4418,69 @@ brings a self-qualified reference (`<model>.<local>` where `<local>` is a
 declared variable or is rooted at a declared subsystem) back to the local
 spelling before the build; the multi-model and scalar paths were already right.
 
+### 5.30 Both LHS Spellings Define an Observed, at Every Rank (normative)
+
+esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
+unknown, and states the criterion semantically: the defining form is read
+through the LHS's **base name**, so an unknown is observed when some equation
+*defines* it whether that LHS names it bare (`y ~ f(…)`) or indexed
+(`y[i] ~ f(…)`, which defines the whole array `y`). The spec spells out that
+this is deliberate and not a scalar-only convenience — "an arrayed definition is
+observed exactly as its scalar counterpart is", and an earlier bare-LHS-only
+wording is called out there as the mistake the semantic criterion replaces.
+
+**Neither spelling may be restricted by rank.** A binding MUST run a document
+whose ARRAY-shaped observed is defined the indexed way exactly as it runs the
+bare one. A binding is free to keep a NARROWER set alongside `observed_unknowns`
+for the strict `y ~ f(…)` form — §6.3.1 sanctions it for inlining specifically,
+and Python spells it `inlined_unknowns` — but that set governs *how* the observed
+is eliminated (a scalar substitutes into its consumers; an array materializes
+into a buffer its consumers index), never *whether* the document is accepted.
+
+The failure this pins is what happens when the narrower set is used as the
+classifier. Julia's tree-walk build routed every array observed into an owner
+bucket — the elementwise fold, the promoted-arrayop inline set, the bare-alias
+registration, geometry clip-ring discovery — and each bucket tested the
+SYNTACTIC bare LHS. An array-shaped observed written the indexed way matched no
+bucket, fell through to the partition's geometry-ring gate, and was refused with
+`E_TREEWALK_UNSUPPORTED_SHAPE: <name>` on a document Rust and Python both ran
+(issue #232). The refusal was loud, which is the good half of it: nothing ran on
+a bad value. The fix belongs UPSTREAM of the classifiers — normalize the
+spelling once, before any of them reads an LHS — and not in the runner, which
+esm AGENTS.md forbids from dispatching on rule shape, nor in the gate, which
+would admit the shape with no owner to evaluate it.
+
+#### 5.30.1 Gate
+
+`tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
+and the Julia-minted golden. Every array observed in it uses the indexed
+spelling, and it carries a CONTROLLED PAIR of them: `wf` is STATE-FREE (the
+build-materialized path) and `ws` is STATE-DEPENDENT (evaluated at the sampled
+state) — the two classes a binding routes differently, so fixing one path only
+does not pass the category. Both right-hand sides are exactly integrable —
+`D(u) = wf = 2k` is a per-cell constant, so `u[k](t) = 2·k·t`, and `D(v) = ws =
+3·u` is then linear in `t`, so `v[k](t) = 3·k·t²` — hence every pinned solver
+family of order ≥ 2 reproduces the goldens to machine precision and a divergence
+here is a semantics divergence, never an integrator one.
+
+Per-binding runners drive it and gate every assertion against BOTH the golden
+actual and the fixture's own declared `expected`: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_pde_inline_observed_indexed_lhs_test.jl`;
+**Python** — `pkg/earthsci-ast-py/tests/test_pde_inline_observed_indexed_lhs_conformance.py`;
+**Rust** — `pkg/earthsci-ast-rs/tests/pde_inline_observed_indexed_lhs_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; Go and TypeScript are
+rewrite-only ports with no simulator and no inline-test runner, and are
+`scope_excluded` in the manifest.
+
+**Julia** — FIXED. `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl)
+rewrites `aggregate{k…}(index(V, k…)) ~ rhs` into the bare `V ~ rhs` before any
+classifier reads an LHS, wrapping the rhs in the LHS's own frame when the rhs is
+a per-cell body rather than the whole array. **Python**, **Rust** — already
+conforming; the category pins them.
+
+**TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
