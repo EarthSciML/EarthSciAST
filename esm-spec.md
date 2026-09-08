@@ -1240,7 +1240,7 @@ uniqueness requirement invalidates nothing that exists.
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference.
 
-**Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline.
+**Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline. A component mounted at the **top level** by `{ref}` (a `models` / `reaction_systems` entry, resolved the same way) is spliced in with one deliberate exception: its `tests` are dropped, because inline tests do not cross a mount edge (§6.6). A *subsystem*'s `tests` need no such handling — a test targets a top-level component, so they are never run by the mounting document either.
 
 **Relation to template imports (§9.7):** `expression_template_imports` reuses this section's reference formats and resolution-timing rule but is a distinct mechanism with a distinct target kind. A subsystem `ref` MUST NOT target a template-library file (`subsystem_ref_is_template_library`), and a template import MUST NOT target a subsystem/component file (`template_import_not_library`).
 
@@ -2346,6 +2346,14 @@ A model may carry an array of **inline tests**. Each test pins down a specific r
 Tests are **per-component** by design: they exercise one model (or one reaction system) in isolation. They do not reach across coupled systems. Integrated / coupled / cross-system testing is a separate concern.
 
 Because a test lives inside its parent component, there is no `model_ref` field: the target is implicit from document location.
+
+**Tests do not cross a mount edge (normative).** When a document mounts a component by reference — a top-level `models` / `reaction_systems` entry that is a `{ref}` mount object (§4.7, §9.7.10) — the mounted component's `tests` array MUST be **dropped at load**: it is not part of the mounting document, and a runner whose test target is that document MUST NOT run it. A component's inline tests are assertions about that component under its **own** standalone conditions, and a mounting document may legitimately change those conditions — a `variable_map` entry replaces one of its parameters with another component's state (§10), a mount-edge `expression_template_imports` lowers it under a different discretization (§9.7.10), a mount-edge `bindings` closes a metaparameter at another value (§9.7.6). Re-running the leaf's assertions there checks a claim its author never made, and reports a component that is correct as broken. They run when the mounted component's own file is the test target — which a directory-wide test run reaches anyway, so nothing goes unasserted.
+
+A `subsystems` `{ref}` mount (§4.7) needs no separate rule: a test's target is the **top-level** component it lives in, so the `tests` of a component mounted as a *subsystem* are not run by the mounting document either.
+
+A runner that prints a per-file summary SHOULD name the mount edges it found, so the components it did not assert on are visible rather than silently absent.
+
+An assembly that needs an assertion about the **coupled** system declares that test on a component the assembly document itself declares. Such a test is built from the document it lives in, coupling and all (§6.6.5 build-time evaluation scope) — which is exactly why a leaf's own assertions cannot be reused there.
 
 #### 6.6.1 Test Schema
 

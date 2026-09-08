@@ -485,6 +485,16 @@ fn inline_toplevel_model_refs(
             }
             let sel = entry_obj.get("model").and_then(|v| v.as_str());
             let mut model = extract_toplevel_model(&comp, sel, ref_str, &canonical)?;
+            // esm-spec §6.6: inline tests do NOT cross a mount edge. They are
+            // assertions about the leaf under the leaf's OWN standalone
+            // conditions, and the mounting document may couple it — replacing a
+            // parameter, reshaping it, feeding it another component's state — so
+            // re-running them here would check a claim the leaf's author never
+            // made. They run when the leaf's own file is the test target, which
+            // a directory-wide `esm test` reaches anyway.
+            if let Some(model_obj) = model.as_object_mut() {
+                model_obj.remove("tests");
+            }
             // The leaf model's own relative refs anchor at the leaf's dir; the
             // edge's injected imports anchor at THIS document's dir (§9.7.10
             // merge order: target's own first, then injected).

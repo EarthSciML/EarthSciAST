@@ -47,6 +47,10 @@ fn total_row(stdout: &str) -> (usize, usize, usize) {
 
 const PASSING: &str = "tests/fixtures/inline_tests/passing_decay.esm";
 const FAILING: &str = "tests/fixtures/inline_tests/failing_decay.esm";
+/// A document that MOUNTS a leaf carrying its own inline tests, and couples it
+/// (`tests/conformance/mounted_component_tests/`, shared with Julia and Python).
+const MOUNTED_ASSEMBLY: &str =
+    "../../tests/conformance/mounted_component_tests/fixtures/assembly.esm";
 
 #[test]
 fn all_assertions_passing_exits_zero_with_no_failures_block() {
@@ -136,6 +140,24 @@ fn a_directory_holding_no_esm_files_warns_and_exits_zero() {
         stdout.contains("No .esm files discovered"),
         "a mis-rooted invocation must warn rather than pass silently:\n{stdout}"
     );
+}
+
+/// esm-spec §6.6: a mount does not carry the mounted component's inline tests,
+/// and the summary NAMES the mount edge so the components this run did not
+/// assert on are visible rather than silently absent. Before the rule, the
+/// leaf's own `u(1) = 1/e` assertion ran here under the coupled `k = 5` and
+/// failed by two orders of magnitude (issue #198 item 2).
+#[test]
+fn a_mount_is_reported_and_the_mounted_components_tests_do_not_run() {
+    let (ok, stdout) = esm(&["test", MOUNTED_ASSEMBLY]);
+    assert!(ok, "the assembly's own test passes; got:\n{stdout}");
+    assert_eq!(
+        total_row(&stdout),
+        (1, 0, 0),
+        "only the assembly's own assertion runs:\n{stdout}"
+    );
+    assert!(stdout.contains("Mounted:          1"), "in:\n{stdout}");
+    assert!(stdout.contains("Decay ← ./leaf.esm"), "in:\n{stdout}");
 }
 
 #[test]

@@ -666,6 +666,14 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
                     "(available: $(join(sort(collect(keys(cmodels))), ", ")))"))
                 first(values(cmodels))
             end
+            # esm-spec §6.6: inline tests do NOT cross a mount edge. They are
+            # assertions about the leaf under the leaf's OWN standalone
+            # conditions, and the mounting document may couple it — replacing a
+            # parameter, reshaping it, feeding it another component's state — so
+            # re-running them here would check a claim the leaf's author never
+            # made. They run when the leaf's own file is the test target, which a
+            # directory-wide `run_tests` reaches anyway.
+            cmodel isa AbstractDict && delete!(cmodel, "tests")
             _absolutize_nested_refs!(cmodel, compdir)
             models[name] = cmodel
             # esm-spec §9.7.10 form A at a TOP-LEVEL model-ref edge: the edge's
@@ -809,6 +817,9 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
                     "(available: $(join(sort(collect(keys(crsystems))), ", ")))"))
                 first(values(crsystems))
             end
+            # esm-spec §6.6: inline tests do not cross a mount edge — the
+            # reaction-system twin of the rule in `_inline_toplevel_model_refs!`.
+            crsys isa AbstractDict && delete!(crsys, "tests")
             _absolutize_nested_refs!(crsys, compdir)
             rsystems[name] = crsys
             # esm-spec §9.7.10 form A at a TOP-LEVEL reaction-system-ref edge:
