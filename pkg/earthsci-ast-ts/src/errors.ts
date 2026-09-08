@@ -253,6 +253,22 @@ export const ERROR_CODES = {
   ENUM_NOT_DECLARED: 'enum_not_declared',
   ENUM_MEMBER_NOT_FOUND: 'enum_member_not_found',
 
+  // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
+  //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
+  TABLE_LOOKUP_UNKNOWN_TABLE: 'table_lookup_unknown_table',
+  TABLE_LOOKUP_AXIS_NAME_MISMATCH: 'table_lookup_axis_name_mismatch',
+  TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE: 'table_lookup_output_out_of_range',
+  TABLE_INTERPOLATION_AXES_MISMATCH: 'table_interpolation_axes_mismatch',
+  TABLE_DATA_SHAPE_MISMATCH: 'table_data_shape_mismatch',
+  TABLE_AXIS_NAN: 'table_axis_nan',
+  // `table_out_of_bounds_unsupported` — esm-spec §9.5.3a. `out_of_bounds:
+  //   "error"` is "conformant when implemented" (§9.5.1) and this binding does
+  //   not implement it. Lowering such a table to the clamping `interp.*` form
+  //   anyway would answer in a mode the author did not ask for, with nothing in
+  //   the result to say so, so the lookup is REFUSED at the point it would
+  //   otherwise lower. Loading and round-tripping are unaffected.
+  TABLE_OUT_OF_BOUNDS_UNSUPPORTED: 'table_out_of_bounds_unsupported',
+
   // ---- closed-functions: §9.2 closed function registry (closed-functions.ts;
   //      ClosedFunctionError codes) ----
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',

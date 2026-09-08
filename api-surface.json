@@ -1327,6 +1327,62 @@
       }
     },
     {
+      "name": "code_table_axis_nan",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisNaN"
+      }
+    },
+    {
+      "name": "code_table_data_shape_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableDataShapeMismatch"
+      }
+    },
+    {
+      "name": "code_table_interpolation_axes_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableInterpolationAxesMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_axis_name_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupAxisNameMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_output_out_of_range",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupOutputOutOfRange"
+      }
+    },
+    {
+      "name": "code_table_lookup_unknown_table",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupUnknownTable"
+      }
+    },
+    {
+      "name": "code_table_out_of_bounds_unsupported",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutOfBoundsUnsupported"
+      }
+    },
+    {
       "name": "code_template_body_expansion_too_deep",
       "kind": "constant",
       "tier": "extension",

@@ -272,6 +272,51 @@ const (
 	codeDataSourceURLUnresolved = "data_source_url_unresolved"
 )
 
+// --- Diagnostic codes: §9.5 sampled function tables — the §9.5.3
+// `table_lookup` lowering (raised via newTableLookupError from
+// lower_table_lookup.go).
+//
+// A CROSS-BINDING vocabulary: every binding raises these same strings from its
+// own §9.5.3 lowering, so they belong in the shared registry rather than beside
+// the pass. Only the codes THIS binding actually emits are declared — the
+// remaining §9.5.5 codes (`table_axis_non_monotonic`, `table_data_nan`,
+// `table_outputs_length_mismatch`, `table_axis_duplicate_name`,
+// `table_outputs_duplicate_name`) are load-time table-well-formedness checks
+// this binding does not perform, and a constant for a code nothing raises would
+// advertise a diagnostic it cannot report. ---
+const (
+	// CodeTableLookupUnknownTable: a `table_lookup` names no table, or one the
+	// document's `function_tables` block does not declare.
+	CodeTableLookupUnknownTable = "table_lookup_unknown_table"
+	// CodeTableLookupAxisNameMismatch: the key set of `table_lookup.axes` does
+	// not match the axis names the referenced table declares — or the node
+	// carries positional `args`, which §9.5.2 requires to be empty.
+	CodeTableLookupAxisNameMismatch = "table_lookup_axis_name_mismatch"
+	// CodeTableLookupOutputOutOfRange: `table_lookup.output` selects no output
+	// of the referenced table — an index past `len(outputs)` (or past 0 for a
+	// single-output table), a name absent from `outputs`, or a non-integer /
+	// non-string selector.
+	CodeTableLookupOutputOutOfRange = "table_lookup_output_out_of_range"
+	// CodeTableInterpolationAxesMismatch: `interpolation` and the axis count
+	// disagree — `linear` and `nearest` require 1 axis, `bilinear` 2.
+	CodeTableInterpolationAxesMismatch = "table_interpolation_axes_mismatch"
+	// CodeTableDataShapeMismatch: `data`'s nesting does not match the shape
+	// `axes` (and `outputs`, when present) imply, so the selected output names
+	// no sub-array.
+	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
+	// CodeTableAxisNaN: an axis's `values` carries a non-finite entry; §9.5.1
+	// requires strictly-increasing FINITE floats.
+	CodeTableAxisNaN = "table_axis_nan"
+	// CodeTableOutOfBoundsUnsupported: the referenced table declares
+	// `out_of_bounds: "error"`, which this binding does not implement. Per
+	// esm-spec §9.5.3a the lookup is REFUSED at the point it would otherwise
+	// lower — answering it under the `"clamp"` mode the binding does have would
+	// return a number the author did not ask for with nothing in the result to
+	// say so. The document still LOADS and still round-trips; it simply does not
+	// evaluate.
+	CodeTableOutOfBoundsUnsupported = "table_out_of_bounds_unsupported"
+)
+
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from
 // expression.go). `unlowered_operator` is a cross-binding wire code — Julia and
 // TypeScript emit exactly this string — so it belongs in the registry rather
@@ -370,10 +415,11 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
-// ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
-// recover the stable diagnostic code from any of them uniformly —
-// errors.As(err, &de) then de.DiagnosticCode() — without switching over the
-// concrete types. All six render Error() in the shared "[code] message" form.
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError).
+// It lets a caller recover the stable diagnostic code from any of them
+// uniformly — errors.As(err, &de) then de.DiagnosticCode() — without switching
+// over the concrete types. All seven render Error() in the shared
+// "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -388,4 +434,5 @@ var (
 	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
+	_ DiagnosticError = (*tableLookupError)(nil)
 )

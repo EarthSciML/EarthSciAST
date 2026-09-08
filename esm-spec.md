@@ -3799,6 +3799,11 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 | `table_lookup_unknown_table` | `table_lookup.table` references an id not declared in `function_tables`. |
 | `table_lookup_axis_name_mismatch` | The set of keys in `table_lookup.axes` does not match the set of axis names declared on the referenced table. |
 | `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ leading dimension of `data` when `outputs` is absent), or its string is not an entry of `outputs`. |
+| `table_out_of_bounds_unsupported` | The referenced table declares `out_of_bounds: "error"` and the binding does not implement that mode. Raised where the binding would otherwise lower or evaluate the lookup — see §9.5.3a. |
+
+##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
+
+`out_of_bounds: "clamp"` is required of every binding; `"error"` is "conformant when implemented" (§9.5.1). A binding that has not implemented `"error"` **MUST refuse the lookup** with `table_out_of_bounds_unsupported` rather than evaluate it under `"clamp"`. Substituting the mode the binding happens to have for the mode the author declared is a wrong answer with nothing in the result to say so — the same defect class as an unlowered `table_lookup` reaching an evaluator. The refusal is raised at the point the binding would otherwise lower or dispatch the node, so a document declaring `"error"` still LOADS and still round-trips (§9.5.4); it simply does not evaluate. No binding implements `"error"` as of v1.0.0.
 
 #### 9.5.6 Conformance fixtures
 
@@ -3807,6 +3812,8 @@ Conformance fixtures under `tests/conformance/function_tables/` exercise:
 1. A single-output 1-axis linear table (canonical 1-D blend) — `linear/`.
 2. A multi-output 2-axis bilinear table with named outputs — `bilinear/`.
 3. A roundtrip-preservation case (load + save reproduces the authored byte sequence modulo whitespace, with NO promotion or demotion across the inline-const ↔ table_lookup boundary) — `roundtrip/`.
+4. An END-TO-END case run through the binding's own inline-test runner (§6.6) rather than through a lowering harness — `inline_test/`. It pairs an observed defined by a `table_lookup` with a sibling observed spelling the same lookup in the lowered form, plus an out-of-range input that must clamp; a binding whose lowering exists only inside its test harness fails the first and third assertions while passing the second. The lowering is a property of the EVALUATION path, and only this fixture pins that.
+5. The `out_of_bounds: "error"` refusal of §9.5.3a — `out_of_bounds_error/`.
 
 Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (`abs: 0, rel: 0` non-FMA, `abs: 0, rel: 4e-16` mixed-FMA cross-binding). All five bindings MUST pass.
 
