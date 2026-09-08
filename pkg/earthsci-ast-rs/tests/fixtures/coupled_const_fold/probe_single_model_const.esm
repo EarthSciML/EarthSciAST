@@ -1,0 +1,48 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ProbeSingleModelConst",
+    "description": "The control for issue #207: ONE model, no `ref` mounts, no `coupling` at all — the same bare-`const` table gathered at an index computed from a chain of state-free observeds. If this fails the same way `probe_chain_const.esm` does, the defect has nothing to do with when couplings are applied.",
+    "authors": ["EarthSciML Authors and Contributors"]
+  },
+  "index_sets": { "tbl": { "kind": "interval", "size": 5 } },
+  "models": {
+    "Solo": {
+      "variables": {
+        "T_surface": { "type": "unknown" },
+        "T": { "type": "unknown" },
+        "totplnk": { "type": "unknown", "shape": ["tbl"] },
+        "plnk": { "type": "unknown" },
+        "flux": { "type": "unknown", "default": 0.0 }
+      },
+      "equations": [
+        { "lhs": "T_surface", "rhs": 163.0 },
+        { "lhs": "T", "rhs": "T_surface" },
+        {
+          "lhs": "totplnk",
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": [10.0, 20.0, 30.0, 40.0, 50.0]
+          }
+        },
+        {
+          "lhs": "plnk",
+          "rhs": {
+            "op": "index",
+            "args": ["totplnk", { "op": "-", "args": ["T", 159] }]
+          }
+        },
+        { "lhs": { "op": "D", "args": ["flux"], "wrt": "t" }, "rhs": 0.0 }
+      ],
+      "tests": [
+        {
+          "id": "const_table_gather_at_an_observed_index",
+          "description": "T = 163, so the gather is totplnk[4] = 40.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [{ "variable": "plnk", "time": 0.0, "expected": 40.0 }]
+        }
+      ]
+    }
+  }
+}
