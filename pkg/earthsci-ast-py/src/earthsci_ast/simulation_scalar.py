@@ -5,8 +5,10 @@ the flattened system is lowered to a lambdified SymPy RHS (via
 :func:`earthsci_ast.sympy_bridge._compile_flat_rhs`), integrated with
 :func:`scipy.integrate.solve_ivp`, and its algebraic-only states and observed
 bindings are recovered along the output trajectory. This is the pathway used
-when the flattened system contains no array ops, no data-loader fields, and no
-top-level provider injections. It also owns :func:`_create_event_functions`,
+when the flattened system is scalar by BOTH of ``_choose_pathway``'s measures —
+no variable declares a resolvable ``shape`` (esm-spec §6.3) and no equation
+carries an array op — and has no data-loader fields and no top-level provider
+injections. It also owns :func:`_create_event_functions`,
 the scalar continuous-event helper that builds SciPy root-finding callbacks
 from a system's ``continuous_events``. ``earthsci_ast.simulation`` re-exports
 this module's API and :func:`earthsci_ast.problem.solve` routes to
@@ -36,6 +38,7 @@ from .simulation_common import (
     _resolve_override,
     _retcode_for_error,
     _retcode_from_scipy,
+    flat_namespace_scope,
     solve_ivp,
 )
 from .sympy_bridge import (
@@ -43,6 +46,7 @@ from .sympy_bridge import (
     SimulationError,
     _compile_flat_rhs,
     _expr_to_sympy,
+    _lambdify,
 )
 
 
@@ -82,7 +86,7 @@ def _create_event_functions(
             var_names = [str(var) for var in variables]
 
             # Create lambda function
-            condition_func = sp.lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
+            condition_func = _lambdify(variables, condition_expr, modules=_LAMBDIFY_MODULES)
 
             # Check if we have direction-dependent affects
             has_affect_neg = event.affect_neg is not None and len(event.affect_neg) > 0
@@ -155,14 +159,30 @@ def _resolve_parameter_values(
 ) -> list[float]:
     """Resolve parameter values for a scalar solve() call.
 
-    Caller overrides win (dot-namespaced first, then bare name), then the
-    flattened parameter metadata default, then 0. The returned list is
-    aligned with ``parameter_names`` so it can be spliced into the
-    lambdified function's argument tuple.
+    Caller overrides win (dot-namespaced first, then bare name, then a
+    more-qualified key that resolves to this parameter), then the flattened
+    parameter metadata default, then 0. The returned list is aligned with
+    ``parameter_names`` so it can be spliced into the lambdified function's
+    argument tuple.
+
+    The WHOLE flattened parameter set is handed to each resolution, not just the
+    name being resolved: rule 2 of esm-spec §6.6.2 maps a key to the one name it
+    designates, so a key that exactly names another parameter must not also be
+    read as a more-qualified spelling of this one.
     """
+    known = set(flat.parameters)
+    namespaces = flat_namespace_scope(flat)
     values: list[float] = []
     for pname in parameter_names:
-        values.append(_resolve_override(pname, parameter_overrides, flat.parameters[pname].default))
+        values.append(
+            _resolve_override(
+                pname,
+                parameter_overrides,
+                flat.parameters[pname].default,
+                known=known,
+                namespaces=namespaces,
+            )
+        )
     return values
 
 
@@ -237,9 +257,21 @@ def _build_scalar_rhs(
         for target, rhs in scalar_ic_equations(flat)
     }
     y0_list: list[float] = []
+    known_states = set(flat.state_variables)
+    state_namespaces = flat_namespace_scope(flat)
     for name in state_names:
         default = eq_ics.get(name, flat.state_variables[name].default)
-        y0_list.append(_resolve_override(name, initial_conditions, default))
+        y0_list.append(
+            _resolve_override(
+                name,
+                initial_conditions,
+                default,
+                known=known_states,
+                namespaces=state_namespaces,
+                surface="initial_conditions",
+                kind="state",
+            )
+        )
     y0 = np.array(y0_list)
 
     # Override y0 for algebraic states so the t=0 sample is consistent.
@@ -310,7 +342,8 @@ def _simulate_scalar(
 
     See :func:`earthsci_ast.problem.esm_problem` / :func:`earthsci_ast.problem.solve`
     for the full argument contract; this is the pathway a EsmProblem routes to when
-    its system has no array ops, loader fields, or provider injections.
+    its system has no declared (resolvable) shapes, no array ops, no loader
+    fields, and no provider injections.
 
     ``prebuilt`` is the :class:`_ScalarRhsBuild` the EsmProblem compiled at
     construction; ``None`` compiles here (the SymPy lambdify is cached on the

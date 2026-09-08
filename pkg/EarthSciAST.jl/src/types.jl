@@ -26,7 +26,7 @@ Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
 Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
 NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "1.0.0"
+const SCHEMA_VERSION = "1.1.0"
 
 """
     LIBRARY_VERSION
@@ -1256,6 +1256,37 @@ struct TimeSpan
 end
 
 """
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing)
+
+Document-scoped, OPTIONAL solver hints (esm-spec §2.2) — numerics the document
+knows about *itself*, which each binding maps to its own integrator.
+
+Every field is ADVISORY: a binding may ignore any or all of them and still
+conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that
+ignores every field and still converges conforms; the CONFORMANCE_SPEC §5.9
+requirement to integrate successfully and agree within the error band is
+untouched by this block and is not excused by it.
+
+`abstol` / `reltol` are INTEGRATION tolerances and are a DIFFERENT QUANTITY
+from [`Tolerance`](@ref), which is what an assertion is COMPARED at (§6.6.4).
+They resolve on independent chains and neither substitutes for the other.
+
+Every field is `Union{...,Nothing}` because each is independently optional and
+absence is NOT a default value: a document omitting `stiffness` has not
+declared its stiffness, and a binding must not read absence as an assertion
+about the system.
+"""
+struct Solver
+    stiffness::Union{String,Nothing}
+    abstol::Union{Float64,Nothing}
+    reltol::Union{Float64,Nothing}
+    splitting::Union{String,Nothing}
+
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing) =
+        new(stiffness, abstol, reltol, splitting)
+end
+
+"""
     Tolerance(abs::Union{Float64,Nothing}, rel::Union{Float64,Nothing})
 
 Numerical comparison tolerance. Either or both of `abs` / `rel` may be
@@ -1453,18 +1484,28 @@ scope (esm-spec §9.7.10 form A — assembler-chosen discretization for a mounte
 PDE leaf); they are threaded into the referenced document's load and consumed by
 the §9.6.3 fixpoint, so a resolved subsystem round-trips as the lowered inline
 component and the field does not survive `parse → emit`.
+`index_set_rename` translates the mounted document's index-set names into the
+mounting document's vocabulary at load (esm-spec §4.7 "Mount-edge index-set
+renaming") — the §9.7.7 renaming mechanism at a component-mount edge, restricted
+to index sets. Like the two fields above it is consumed at the mount and does not
+survive `parse → emit`.
 """
 struct SubsystemRef <: SubsystemNode
     ref::String
     bindings::Dict{String,Int}
     expression_template_imports::Vector{Any}
+    index_set_rename::Union{Nothing,OrderedDict{String,String}}
 end
 
+SubsystemRef(ref::AbstractString, bindings::AbstractDict, injected::AbstractVector) =
+    SubsystemRef(String(ref),
+                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings),
+                 Any[e for e in injected], nothing)
 SubsystemRef(ref::AbstractString, bindings::AbstractDict) =
     SubsystemRef(String(ref),
-                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings), Any[])
+                 Dict{String,Int}(string(k) => Int(v) for (k, v) in bindings), Any[], nothing)
 SubsystemRef(ref::AbstractString) =
-    SubsystemRef(String(ref), Dict{String,Int}(), Any[])
+    SubsystemRef(String(ref), Dict{String,Int}(), Any[], nothing)
 
 """
     Model
@@ -1617,9 +1658,22 @@ struct CouplingOperatorCompose <: CouplingEntry
     translate::Union{Dict{String,Any},Nothing}
     description::Union{String,Nothing}
     lifting::Union{String,Nothing}
+    # esm-libraries-spec §4.7.1 step 5, TRI-STATE — `nothing` is NOT `false`:
+    #
+    #   nothing  the author has not said. A zero-merge is then
+    #            `operator_compose_no_merge`, an ERROR (such an entry is
+    #            indistinguishable from one that is absent); a partial merge is
+    #            a warning.
+    #   true     `systems[2]`'s equations are CONTRIBUTIONS and every one must
+    #            land; any shortfall, partial included, is a hard refusal.
+    #   false    a standalone-contributing operator, DECLARED. Unmatched
+    #            equations are expected and nothing is reported.
+    require_match::Union{Bool,Nothing}
 
-    CouplingOperatorCompose(systems::Vector{String}; translate=nothing, description=nothing, lifting=nothing) =
-        new(systems, translate, description, lifting)
+    CouplingOperatorCompose(systems::Vector{String}; translate=nothing,
+                            description=nothing, lifting=nothing,
+                            require_match::Union{Bool,Nothing}=nothing) =
+        new(systems, translate, description, lifting, require_match)
 end
 
 """
@@ -2192,6 +2246,14 @@ struct EsmFile
     # fixed for the top-level `expression_templates` registry above.
     coupling_roles::Union{Dict{String,Any},Nothing}
 
+    # Document-scoped, OPTIONAL and purely ADVISORY solver hints (esm-spec
+    # §2.2): stiffness, integration tolerances and a splitting hint the document
+    # knows about itself. Purely additive — presence changes no equations, no
+    # classification and no flattened system. Authored configuration, so it
+    # round-trips VERBATIM (§2.2.4 requirement 2). `nothing` when the document
+    # declares none, which is NOT a synonym for any default value.
+    solver::Union{Solver,Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -2206,7 +2268,8 @@ struct EsmFile
             metaparameters=nothing,
             component_templates=nothing,
             coordinates=nothing,
-            coupling_roles=nothing) =
+            coupling_roles=nothing,
+            solver=nothing) =
         new(esm, metadata,
             models === nothing ? nothing : OrderedDict{String,Model}(models),
             reaction_systems === nothing ? nothing :
@@ -2219,7 +2282,7 @@ struct EsmFile
             expression_templates, metaparameters,
             component_templates === nothing ? nothing :
                 OrderedDict{String,Any}(component_templates),
-            coordinates, coupling_roles)
+            coordinates, coupling_roles, solver)
 end
 
 # ========================================
@@ -2771,6 +2834,13 @@ const RECORD_FIELD_TABLES = (
         (f = :translate,   wire = "translate",   kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :lifting,     wire = "lifting",     kind = :string, mode = :opt, emit = :nonnothing),
+        # esm-libraries-spec §4.7.1 step 5. TRI-STATE, so `:opt`/`:nonnothing`
+        # rather than a defaulted bool: an ABSENT key and an explicit `false`
+        # mean different things, and an explicit `false` must survive the round
+        # trip — dropping it as "the default" would silently re-arm the
+        # zero-merge refusal on every document that opted out.
+        (f = :require_match, wire = "require_match", kind = :bool,
+         mode = :opt, emit = :nonnothing),
     )),
     (T = :CouplingCouple, fn = :couple, tag = "couple", rows = (
         (f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,

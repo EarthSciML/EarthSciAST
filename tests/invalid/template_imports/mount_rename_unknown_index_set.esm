@@ -1,0 +1,24 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "mount_rename_unknown_index_set",
+    "description": "INVALID — RESOLVER-LEVEL (esm-spec §4.7 'Mount-edge index-set renaming'). The Host mounts ../../valid/subsystem_mesh_lib.esm, whose resolved registry declares `cells` and `vertices`, under index_set_rename {\"celsl\": \"cells_b\"} — a misspelling of `cells`. A mount-edge rename never invents names (the §9.7.7 rule at a component-mount edge), so this MUST fail at load with subsystem_index_set_rename_unknown_name (§9.6.6) rather than silently renaming nothing and reappearing later as a size conflict one layer from its cause."
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.5, "description": "host scalar state" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] } }
+      ],
+      "subsystems": {
+        "M": {
+          "ref": "../../valid/subsystem_mesh_lib.esm",
+          "index_set_rename": { "celsl": "cells_b" }
+        }
+      }
+    }
+  }
+}

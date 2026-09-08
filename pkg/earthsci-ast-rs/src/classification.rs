@@ -437,6 +437,91 @@ pub fn observed_definitions(model: &Model) -> BTreeMap<String, Expr> {
     Classification::of(model).observed_definitions
 }
 
+/// The first cycle a deterministic DFS closes over an observed dependency
+/// graph, as the path in traversal order with the entry node repeated to close
+/// it (`["a", "b", "a"]`), or `None` when the graph is acyclic.
+///
+/// Shared by all three sites that need this answer — the `observed_cycle`
+/// structural check (esm-spec §4.9.6), `prepare`'s observed ordering, and the
+/// array runtime's `dependency_order_observed` — so that a document reaching
+/// any of them is told about the SAME cycle, in the same order, in the same
+/// shape. They read different inputs (a model's equations, a definition map,
+/// a set of lowered rules); agreeing on the walk is what makes their answers
+/// comparable.
+///
+/// `BTreeMap`/`BTreeSet` on both axes is load-bearing, not tidiness: the cycle
+/// a diagnostic NAMES is chosen by the traversal order, and hashed iteration
+/// would hand a different member of the same cycle to two runs of one binary.
+///
+/// ITERATIVE. The depth of this walk is the length of the longest observed
+/// CHAIN — a property of the document, and unbounded — rather than the
+/// expression nesting the schema caps, so a recursive walk would put a
+/// stack-overflow abort between a long acyclic mechanism and its clean
+/// verdict. Each frame carries the node's own successor cursor, so resuming a
+/// parent after a child finishes picks up exactly where it left off.
+pub(crate) fn first_observed_cycle(
+    deps: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<Vec<String>> {
+    const ON_CHAIN: u8 = 1;
+    const FINISHED: u8 = 2;
+    let mut state: BTreeMap<&str, u8> = BTreeMap::new();
+
+    for root in deps.keys() {
+        if state.contains_key(root.as_str()) {
+            continue;
+        }
+        state.insert(root.as_str(), ON_CHAIN);
+        let mut chain: Vec<&str> = vec![root.as_str()];
+        // One cursor per chain entry: an iterator over that node's successors.
+        let mut cursors: Vec<std::collections::btree_set::Iter<'_, String>> =
+            vec![empty_successors(deps, root.as_str())];
+        while let Some(&name) = chain.last() {
+            match cursors.last_mut().and_then(Iterator::next) {
+                None => {
+                    state.insert(name, FINISHED);
+                    chain.pop();
+                    cursors.pop();
+                }
+                Some(successor) => match state.get(successor.as_str()).copied() {
+                    Some(ON_CHAIN) => {
+                        // Close the cycle at its ENTRY node: the suffix of the
+                        // chain from where this name first appeared, repeated
+                        // to close it. A PATH, so it is ordered semantically
+                        // rather than by the §7.1.0 lexicographic rule.
+                        let start = chain
+                            .iter()
+                            .position(|c| *c == successor.as_str())
+                            .unwrap_or(0);
+                        let mut cycle: Vec<String> =
+                            chain[start..].iter().map(|s| (*s).to_string()).collect();
+                        cycle.push(successor.clone());
+                        return Some(cycle);
+                    }
+                    Some(_) => {}
+                    None => {
+                        state.insert(successor.as_str(), ON_CHAIN);
+                        chain.push(successor.as_str());
+                        cursors.push(empty_successors(deps, successor.as_str()));
+                    }
+                },
+            }
+        }
+    }
+    None
+}
+
+/// `name`'s successor iterator, or an empty one when the graph has no entry for
+/// it (a dependency on an observed with no defining equation is a leaf).
+fn empty_successors<'a>(
+    deps: &'a BTreeMap<String, BTreeSet<String>>,
+    name: &str,
+) -> std::collections::btree_set::Iter<'a, String> {
+    static EMPTY: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    deps.get(name)
+        .unwrap_or_else(|| EMPTY.get_or_init(BTreeSet::new))
+        .iter()
+}
+
 /// An observed unknown's defining RHS, read from a model held as RAW JSON.
 ///
 /// The JSON-view counterpart of [`observed_definitions`], for the passes and
@@ -754,5 +839,45 @@ mod tests {
         assert_eq!(c.observed_unknowns, ["y", "z"]);
         assert!(c.observed_definitions.contains_key("y"));
         assert!(c.observed_definitions.contains_key("z"));
+    }
+
+    /// [`first_observed_cycle`]'s walk descends the longest observed CHAIN,
+    /// which is a property of the DOCUMENT and unbounded — not the expression
+    /// nesting the schema caps. A recursive walk therefore puts a stack
+    /// overflow between a long acyclic mechanism and its clean verdict, and a
+    /// stack overflow in Rust is an abort, not a diagnosis.
+    #[test]
+    fn a_chain_far_deeper_than_a_call_stack_is_walked_without_recursing() {
+        const N: usize = 200_000;
+        // x_i -> x_{i+1}, with x_{N-1} the base case: the DFS entered at the
+        // sorted-first root descends the whole thing in one go.
+        let mut deps: BTreeMap<String, BTreeSet<String>> = (0..N - 1)
+            .map(|i| (format!("x{i}"), BTreeSet::from([format!("x{}", i + 1)])))
+            .collect();
+        deps.insert(format!("x{}", N - 1), BTreeSet::new());
+        assert_eq!(first_observed_cycle(&deps), None);
+
+        // Closing it into a ring at the same depth must still name the path.
+        deps.insert(format!("x{}", N - 1), BTreeSet::from(["x0".to_string()]));
+        let cycle = first_observed_cycle(&deps).expect("the ring is a cycle");
+        assert_eq!(cycle.len(), N + 1);
+        assert_eq!(cycle.first().map(String::as_str), Some("x0"));
+        assert_eq!(cycle.last().map(String::as_str), Some("x0"));
+    }
+
+    /// A DIAMOND is not a cycle: `a` reaches `d` by two routes, and `d` being
+    /// already FINISHED on the second is a shared tail, not a closed loop.
+    #[test]
+    fn a_diamond_is_not_a_cycle() {
+        let deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::from([
+            (
+                "a".to_string(),
+                BTreeSet::from(["b".to_string(), "c".to_string()]),
+            ),
+            ("b".to_string(), BTreeSet::from(["d".to_string()])),
+            ("c".to_string(), BTreeSet::from(["d".to_string()])),
+            ("d".to_string(), BTreeSet::new()),
+        ]);
+        assert_eq!(first_observed_cycle(&deps), None);
     }
 }

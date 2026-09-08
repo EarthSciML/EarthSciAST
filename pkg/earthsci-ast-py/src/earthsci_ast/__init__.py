@@ -48,6 +48,16 @@ from .esm_types import (
     EsmFile,
     FunctionTable,
     FunctionTableAxis,
+    Solver,
+)
+
+# Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
+# §2.2.2 tolerance resolution order — the two parts of the block that are NOT
+# advisory.
+from .solver import (
+    SolverBlockError,
+    reject_solver_pre_v11,
+    resolve_tolerances,
 )
 
 # Core parsing and serialization.
@@ -109,6 +119,9 @@ from .flatten import (
     FlattenError,
     ConflictingDerivativeError,
     CoupleMultiplicativeNoTendencyError,
+    OperatorComposeNoMergeError,
+    OperatorComposeRequireMatchError,
+    OperatorComposeAmbiguousBareNameError,
     DimensionPromotionError,
     UnmappedDomainError,
     UnsupportedMappingError,
@@ -468,6 +481,10 @@ __all__ = [
     "ModelVariable",
     "Model",
     "Species",
+    "Solver",
+    "SolverBlockError",
+    "reject_solver_pre_v11",
+    "resolve_tolerances",
     "Parameter",
     "Reaction",
     "ReactionSystem",
@@ -546,6 +563,9 @@ __all__ = [
     "FlattenError",
     "ConflictingDerivativeError",
     "CoupleMultiplicativeNoTendencyError",
+    "OperatorComposeNoMergeError",
+    "OperatorComposeRequireMatchError",
+    "OperatorComposeAmbiguousBareNameError",
     "DimensionPromotionError",
     "UnmappedDomainError",
     "UnsupportedMappingError",

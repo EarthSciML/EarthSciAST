@@ -42,6 +42,7 @@ module-import graph acyclic.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from . import index_alignment, op_registry, recurrence
@@ -51,7 +52,8 @@ from .classification import (
     ode_states,
     system_kind,
 )
-from .json_walk import iter_child_values
+from .error_handling import OBSERVED_CYCLE
+from .json_walk import iter_child_values, walk_dict_exprs
 
 # StructuralValidationError is built lazily (and cached) so that its base class,
 # ``earthsci_ast.parse.SchemaValidationError``, can be imported without
@@ -775,6 +777,206 @@ def _check_recurrence_wellfoundedness(data: dict[str, Any], errors: list) -> Non
                         {"variable": var},
                     )
                 )
+
+
+def _is_observed_cycle_self_edge_exempt(var: str, rhs: Any, *, array_shaped: bool) -> bool:
+    """Is ``var``'s self-edge dropped from the §4.9.6 observed-dependency graph?
+
+    :func:`earthsci_ast.recurrence.is_recurrence_candidate` is the canonical
+    predicate and answers this on its own for every ordinary document. It is
+    widened here for exactly one reason: **the two walks must see the same
+    tree.**
+
+    The edge ``V -> V`` is manufactured by :func:`_walk_expression_strings`,
+    which descends the FULL canonical child set (:func:`iter_child_values` —
+    ``args``, the single-child slots, ``values``, ``axes``, ``bindings``,
+    ``regions``). ``find_self_reads``, which candidacy is built on, descends the
+    smaller set the recurrence LOWERING has to reason about (``args``, the
+    single-child slots, ``values``). Where the two disagree, a self-read that is
+    invisible to candidacy still produces an edge — and a perfectly legal
+    recurrence is reported as a length-one cycle.
+
+    That gap is reachable, not theoretical: ``apply_expression_template``
+    carries its call-site arguments in ``bindings``, and this validator runs
+    BEFORE the §9.6.4 Option-B expansion in ``load`` (``_validate_structural``
+    precedes ``lower_expression_templates`` / ``expand_document`` in
+    :func:`earthsci_ast.parse.load`), so a self-read bound to a template
+    parameter — ``twice(v = s[k-1])``, fixture
+    ``tests/fixtures/recurrence/09_recurrence_through_expression_template.esm``
+    — is present as an edge and absent as a self-read. Widening the WALK rather
+    than the RULE is what keeps this faithful: the exemption is still "an
+    array-shaped unknown with at least one ``index`` self-read in its own
+    defining RHS", still gated on CANDIDACY and never on the well-foundedness
+    verdict (CONFORMANCE_SPEC §5.19.5), and still narrower than "reads its own
+    name" — a bare ``s ~ s + 1`` has no ``index`` read anywhere and stays a
+    cycle of length one.
+
+    Narrowing the edge walk instead would be wrong: a template binding that
+    names a DIFFERENT observed (``f(v = b)``) is a real dependency on ``b`` once
+    the application expands, so those edges have to stay."""
+    if not array_shaped:
+        return False
+    if recurrence.is_recurrence_candidate(var, rhs, array_shaped=True):
+        return True
+    return any(
+        isinstance(node, dict)
+        and node.get("op") == "index"
+        and (node.get("args") or [None])[0] == var
+        for node in walk_dict_exprs(rhs)
+    )
+
+
+def _first_observed_cycle(successors: dict[str, list[str]]) -> list[str] | None:
+    """The first cycle a deterministic DFS closes over ``successors``, or ``None``.
+
+    Roots are visited in sorted name order and each node's successors are already
+    sorted by the caller, so the SAME cycle is named on every run — the
+    determinism esm-spec §4.9.6 requires of a diagnostic that reports one cycle
+    per model out of possibly several. WHITE/GRAY/BLACK colouring, as
+    :func:`_check_circular_references` uses on the model graph: a GRAY successor
+    is on the current stack, so the cycle is the tail of the path from it
+    onwards, closed by repeating it.
+
+    ITERATIVE, not recursive, and that is not a style choice. The depth of a
+    recursive walk here is the length of the longest observed CHAIN, which is a
+    property of the document rather than of its nesting, and CPython's default
+    limit is ~1000 frames: an acyclic chain of ~800 observeds — one large
+    lowered mechanism — raised ``RecursionError`` out of :func:`load_string`
+    instead of validating clean. An explicit stack of ``(node, successor
+    iterator)`` frames costs the same asymptotics and has no such ceiling.
+    ``path`` is maintained as the GRAY stack itself, so closing a cycle is a
+    slice of it rather than a per-edge copy."""
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = dict.fromkeys(successors, WHITE)
+
+    for root in sorted(successors):
+        if color[root] != WHITE:
+            continue
+        color[root] = GRAY
+        path = [root]
+        # Each frame is the node's own successor iterator, so resuming a parent
+        # after a child finishes picks up exactly where it left off.
+        stack: list[Iterator[str]] = [iter(successors.get(root, ()))]
+        while stack:
+            nxt = next(stack[-1], None)
+            if nxt is None:
+                color[path[-1]] = BLACK
+                path.pop()
+                stack.pop()
+                continue
+            state = color.get(nxt)
+            if state == GRAY:
+                return path[path.index(nxt) :] + [nxt]
+            if state == WHITE:
+                color[nxt] = GRAY
+                path.append(nxt)
+                stack.append(iter(successors.get(nxt, ())))
+    return None
+
+
+def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
+    """``observed_cycle`` (esm-spec §4.9.6): a cycle among a model's OBSERVED
+    definitions.
+
+    An observed unknown is *defined* by the RHS of the equation whose LHS names
+    it (§6.3.1), so a model's observed definitions induce a dependency graph over
+    the observed names: ``V -> W`` whenever ``W`` occurs free in ``V``'s defining
+    RHS and ``W`` is itself an observed of the same model. A cycle in that graph
+    means no evaluation order satisfies every definition, and the equations ALONE
+    decide it — no shapes, no values, no solver — so it is a hard structural
+    error here rather than something the build discovers.
+
+    Naming the cycle is the requirement, not a nicety. A binding that lets the
+    cycle through materializes the observeds in some order and then reads one
+    that has no value yet, and the name it reports is whichever the walk reached
+    first — typically an observed that is declared, referenced and defined
+    perfectly well (issue #181: ``in_pbl``). This check replaces that
+    mis-attribution with the names actually on the cycle.
+
+    Emitted as ``(code, json_pointer, message, details)`` 4-tuples at
+    ``/models/<M>``: a cycle belongs to no single equation, so it pins at the
+    model exactly as ``equation_count_mismatch`` does. ``details["cycle"]`` is
+    the path in traversal order with the entry node repeated to close it — a
+    PATH, so it is ordered semantically, not lexicographically.
+
+    One cycle is reported per model (the first the sorted DFS closes), which is
+    the same policy ``_check_circular_references`` applies to the model graph."""
+    for mname, m in (data.get("models") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        variables = m.get("variables") or {}
+        # `observed_definitions` is this binding's single answer to "which
+        # unknowns are observed, and what defines each" — the same one
+        # `cadence.py` resolves through — so the graph's NODE SET is exactly its
+        # keys. An unknown with no defining equation (an ODE state, or one the
+        # equation-balance check will report) is not a node and cannot be on a
+        # cycle.
+        definitions = observed_definitions(m)
+        if not definitions:
+            continue
+        nodes = set(definitions)
+
+        successors: dict[str, list[str]] = {}
+        for var, rhs in definitions.items():
+            # Free names of the defining RHS: every string leaf the reference
+            # walker reaches, minus the index/integration symbols the expression
+            # itself binds. Subtracting the binders BEFORE intersecting with the
+            # node set is what stops a loop symbol that happens to share a name
+            # with an observed from manufacturing an edge. A top-level bare
+            # string RHS (`a ~ b`, the alias form) is a reference in its own
+            # right, and `_walk_expression_strings` only descends op-nodes, so it
+            # is added here.
+            names = set(_walk_expression_strings(rhs))
+            if isinstance(rhs, str):
+                names.add(rhs)
+            names -= _expression_bound_symbols(rhs)
+            edges = names & nodes
+            if var in edges and _is_observed_cycle_self_edge_exempt(
+                var,
+                rhs,
+                array_shaped=bool(
+                    isinstance(variables.get(var), dict) and variables[var].get("shape")
+                ),
+            ):
+                # The SELF-EDGE of a §4.3.1.1 causal self-reference is dropped: a
+                # causal self-read is an ORDERING WITHIN one variable — the sweep
+                # publishes each cell before the axis advances — rather than a
+                # dependency between two.
+                #
+                # Gated on CANDIDACY, never on the well-foundedness verdict
+                # (CONFORMANCE_SPEC §5.19.5). Verdict-gating would leave the
+                # exemption off for an ILL-founded self-read, so this check would
+                # fire first and collapse the document to one cycle error, and
+                # the `recurrence_not_wellfounded` / `recurrence_unsupported_form`
+                # diagnosis would never be reached — the masking defect the
+                # construct exists to remove, moved from the legal case to the
+                # illegal one.
+                #
+                # Candidacy is also narrower than "is this a self-edge at all": a
+                # scalar `x ~ x + 1`, or a bare `s ~ s + 1` over an array, has no
+                # axis to fold along, can never be a recurrence, and IS a cycle
+                # of length one that this check must report.
+                edges.discard(var)
+            # Sorted successors (and sorted roots in the traversal): the walk must
+            # be deterministic so the binding names the SAME cycle on every run.
+            successors[var] = sorted(edges)
+
+        found = _first_observed_cycle(successors)
+        if found is not None:
+            joined = " -> ".join(found)
+            errors.append(
+                (
+                    OBSERVED_CYCLE,
+                    _pointer(f"models/{mname}"),
+                    f"models/{mname}: observed definition cycle: {joined} — each of these "
+                    f"observeds is defined in terms of the next, so no evaluation order "
+                    f"satisfies every definition",
+                    # `dependency_type` distinguishes this payload from
+                    # `circular_dependency`'s, which carries a cycle among
+                    # MODELS; the other four bindings emit the same pair.
+                    {"cycle": found, "dependency_type": "observed_definitions"},
+                )
+            )
 
 
 def _check_expression_arity(expr, errors: list[str], path: str) -> None:
@@ -1703,6 +1905,97 @@ def _check_system_kind(data: dict[str, Any], errors: list[str]) -> None:
                 {"declared": declared, "derived": derived, "model": mname},
             )
         )
+
+
+def _reserved_declaration_names(data: dict[str, Any]) -> dict[str, str]:
+    """The names no declaration map may spell, mapped to WHY (esm-spec §4.9.1.1).
+
+    Two symbols, both of them GLOBALLY scoped: the document's independent
+    variable (``domain.independent_variable``, default ``"t"``) and the §6.4
+    operator placeholder. §4.9.1.1 is the normative home of this set; the
+    sibling ``reserved_index_symbol`` rule for an ``aggregate`` binder reads the
+    same set, so the two cannot drift apart. (That sibling rule is currently
+    implemented only in the Rust binding; this one is implemented in all five.)
+
+    Spatial coordinate names are deliberately absent: ``x``, ``y``, ``lon`` are
+    coordinates only in a coordinate position (§11.4), and
+    ``tests/valid/units_dimensional_analysis.esm`` declares ``x`` as an ordinary
+    position variable.
+    """
+    domain = data.get("domain")
+    independent = "t"
+    if isinstance(domain, dict):
+        independent = str(domain.get("independent_variable") or "t")
+    return {independent: "independent_variable", "_var": "operator_placeholder"}
+
+
+def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -> None:
+    """``reserved_variable_name``: a declaration spelled with a globally-scoped
+    name (esm-spec §4.9.1.1).
+
+    The independent variable and ``_var`` are in scope in every model and are
+    resolved BY NAME, ahead of the declaration maps, so such a declaration is
+    unreachable -- it does not shadow the implicit symbol, the implicit symbol
+    shadows it. What that cost before the rejection existed is why it is a hard
+    error and not a lint (issue #200): the document VALIDATED, a bare build
+    reported the observed as having no defining expression, and a build with a
+    subsystem mounted handed every reader of ``t`` the simulation clock instead
+    -- ``log(t)`` was ``-inf`` at ``t = 0`` and every number downstream was
+    finite, plausible and wrong.
+
+    All three declaration maps are covered, because a species and a reaction
+    parameter become symbols of the derived ODE system exactly as a
+    ``variables`` entry does (§7.4).
+    """
+    reserved = _reserved_declaration_names(data)
+
+    def scan(container: dict[str, Any], pointer: str, owner: str, kind: str) -> None:
+        # Sorted, not authored, order: Go decodes ``variables`` into a plain map
+        # and cannot reproduce the authored order at all, so sorted is the one
+        # ordering all five bindings can agree on.
+        for name in sorted(container, key=str):
+            why = reserved.get(str(name))
+            if why is None:
+                continue
+            role = (
+                "the document's independent variable"
+                if why == "independent_variable"
+                else "the operator-model placeholder"
+            )
+            errors.append(
+                (
+                    f"{pointer}/{name}",
+                    f"{owner} declares a {kind} named '{name}', which is {role}",
+                    {"name": str(name), "reserved_as": why},
+                )
+            )
+
+    def scan_model(m: Any, pointer: str, owner: str) -> None:
+        """One model's ``variables``, then every inline subsystem of it.
+
+        A subsystem is a model, so its ``variables`` map is a declaration map
+        like any other -- and a MOUNTED subsystem is exactly the shape issue
+        #200 was reported in, where every reader of ``t`` silently received the
+        simulation clock. A ``$ref`` mount has already been spliced in by the
+        time this runs, so it is covered by the same walk.
+        """
+        if not isinstance(m, dict):
+            return
+        if isinstance(m.get("variables"), dict):
+            scan(m["variables"], f"{pointer}/variables", owner, "variable")
+        for sname, sub in (m.get("subsystems") or {}).items():
+            scan_model(sub, f"{pointer}/subsystems/{sname}", f"Model '{sname}'")
+
+    for mname, m in (data.get("models") or {}).items():
+        scan_model(m, f"/models/{mname}", f"Model '{mname}'")
+    for rname, rs in (data.get("reaction_systems") or {}).items():
+        if not isinstance(rs, dict):
+            continue
+        owner = f"Reaction system '{rname}'"
+        if isinstance(rs.get("species"), dict):
+            scan(rs["species"], f"/reaction_systems/{rname}/species", owner, "species")
+        if isinstance(rs.get("parameters"), dict):
+            scan(rs["parameters"], f"/reaction_systems/{rname}/parameters", owner, "parameter")
 
 
 def _check_event_affects_parameter(data: dict[str, Any], errors: list[str]) -> None:
@@ -2806,6 +3099,13 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
         "recurrence_not_wellfounded",
         lambda sub: _check_recurrence_wellfoundedness(data, sub),
     )
+    # §4.9.6: a cycle among ONE model's observed definitions. Ordered AFTER the
+    # recurrence pass so that a document carrying both gets the recurrence
+    # diagnosis listed first, and BEFORE `circular_dependency`, which is the
+    # unrelated cycle among MODELS. The self-edge of a recurrence CANDIDATE is
+    # not one of these edges — see `_check_observed_cycles` for why the gate is
+    # candidacy and never the well-foundedness verdict.
+    collect(OBSERVED_CYCLE, lambda sub: _check_observed_cycles(data, sub))
     # A coupling edge's `from` is a FULLY-QUALIFIED scoped reference (§4.6), so an
     # unresolvable one is an `unresolved_scoped_ref`, not a bare
     # `undefined_variable` (CONFORMANCE_SPEC §7.1; TypeScript reference).
@@ -2819,6 +3119,14 @@ def _validate_structural(data: dict[str, Any], file_path=None) -> None:
     collect("circular_dependency", lambda sub: _check_circular_references(data, tables, sub))
     collect("data_source_undefined", lambda sub: _check_data_source_references(data, sub))
     collect("event_affects_parameter", lambda sub: _check_event_affects_parameter(data, sub))
+    # A declaration spelled with a globally-scoped name (the independent
+    # variable, or `_var`) is unreachable: both resolve BY NAME ahead of the
+    # declaration maps, so every reader silently gets the implicit symbol
+    # instead of the declared quantity (issue #200).
+    collect(
+        "reserved_variable_name",
+        lambda sub: _check_reserved_declaration_names(data, sub),
+    )
     collect("system_kind_mismatch", lambda sub: _check_system_kind(data, sub))
     collect("invalid_metadata_format", lambda sub: _check_metadata_formats(data, sub))
     collect("invalid_temporal_resolution", lambda sub: _check_temporal_resolution(data, sub))

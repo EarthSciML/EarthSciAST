@@ -771,7 +771,8 @@
       "systems": [
         "FluidDynamics",
         "WaveEquation"
-      ]
+      ],
+      "require_match": false
     }
   ],
   "domain": {

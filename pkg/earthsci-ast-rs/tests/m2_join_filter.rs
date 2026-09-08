@@ -57,8 +57,8 @@ fn sim_y(model_json: &str, slot: &str) -> Result<f64, String> {
     let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
         ..Default::default()

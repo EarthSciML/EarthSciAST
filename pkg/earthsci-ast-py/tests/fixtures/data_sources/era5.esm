@@ -53,7 +53,7 @@
           "units": "1",
           "default": 0.0
         },
-        "t": {
+        "air_temperature": {
           "type": "parameter",
           "units": "K",
           "default": 0.0,
@@ -65,7 +65,7 @@
               "file_variable": "t"
             }
           },
-          "description": "Air temperature (ERA5 variable 'temperature')"
+          "description": "Air temperature (ERA5 variable 'temperature'). The ERA5 short name is `t`, which a DECLARATION may not spell (esm-spec §4.9.1.1) — `t` is the independent variable. `from.file_variable` carries the on-disk name."
         },
         "u": {
           "type": "parameter",

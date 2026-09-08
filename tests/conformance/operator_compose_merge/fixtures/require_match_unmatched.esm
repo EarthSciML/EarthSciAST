@@ -1,0 +1,103 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_require_match_unmatched",
+    "description": "esm-libraries-spec 4.7.1 step 5, `require_match`. The same zero-merge document as `no_merge.esm`, with the entry declaring `require_match: true` -- the author saying that Sink's equations are CONTRIBUTIONS and must land on an existing state of Chem. They do not, so flatten REFUSES with operator_compose_require_match_unmatched instead of quietly integrating a decoupled Sink. This document is schema-valid and structurally valid; it is refused at FLATTEN, which is why it lives here and not in tests/invalid/.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "operator-compose-require-match",
+      "merge-intent"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "O3S": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 40.0,
+          "description": "The species the mechanism does NOT carry. Nothing matches it."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3S"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "O3S"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ],
+      "require_match": true
+    }
+  ]
+}

@@ -15,7 +15,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_pde_tests;
+use earthsci_ast::run_inline_tests;
 use earthsci_ast::{Alg, Model, SolveOptions, load_string};
 use earthsci_ast::{StructuralErrorCode, validate};
 use std::collections::HashMap;
@@ -26,8 +26,8 @@ mod common;
 fn opts() -> SolveOptions {
     SolveOptions {
         alg: Alg::Bdf,
-        reltol: 1e-12,
-        abstol: 1e-14,
+        reltol: Some(1e-12),
+        abstol: Some(1e-14),
         ..Default::default()
     }
 }
@@ -67,7 +67,7 @@ fn run_shared_fixture(name: &str) {
         report.structural_errors
     );
 
-    let results = run_pde_tests(&file, None, &opts());
+    let results = run_inline_tests(&file, None, &opts());
     assert!(!results.is_empty(), "{name}: no inline assertions ran");
     for r in &results {
         assert!(

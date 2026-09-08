@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "function_tables_out_of_bounds_error_conformance",
+    "description": "A table declaring `out_of_bounds: \"error\"` — the §9.5.1 mode that is \"conformant when implemented\" and that NO binding implements today. The document LOADS (it is schema-valid and §9.5.5 lists no load-time diagnostic for it); what it must not do is evaluate as though it said \"clamp\". Every binding must refuse the lookup with `table_out_of_bounds_unsupported` on the path that would otherwise lower it, because silently substituting clamp semantics for a declared error semantics is a wrong answer with nothing in the result to say so.",
+    "authors": ["esm-hid conformance"]
+  },
+  "function_tables": {
+    "strict_tab": {
+      "description": "Same data as the linear fixture, but out-of-range queries are declared an error rather than a clamp.",
+      "axes": [
+        { "name": "p", "values": [1.0, 2.0, 3.0, 4.0] }
+      ],
+      "interpolation": "linear",
+      "out_of_bounds": "error",
+      "data": [10.0, 20.0, 30.0, 40.0]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": { "type": "unknown", "default": 0.0 },
+        "p": { "type": "parameter", "default": 2.5 }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "strict_tab",
+            "axes": { "p": "p" },
+            "args": []
+          }
+        }
+      ]
+    }
+  }
+}

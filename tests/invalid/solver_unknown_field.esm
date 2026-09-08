@@ -1,0 +1,39 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "solver_unknown_field",
+    "description": "A `solver` block carrying an `alg` key. The block is closed (`additionalProperties: false`), and `alg` in particular is the field esm-spec \u00a72.2.3 rules OUT by name: `BDF` is a scipy identifier where Julia would want `Rosenbrock23`, so a document carrying one would not be portable. MUST be rejected."
+  },
+  "solver": {
+    "stiffness": "high",
+    "alg": "BDF"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

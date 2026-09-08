@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 853,
+    "symbols": 879,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 298,
-      "typescript": 231,
-      "python": 243,
-      "rust": 329,
-      "go": 384
+      "julia": 305,
+      "typescript": 238,
+      "python": 250,
+      "rust": 335,
+      "go": 405
     },
     "by_tier": {
-      "extension": 590,
-      "stable": 263
+      "extension": 607,
+      "stable": 272
     }
   },
   "planned": [
@@ -465,9 +465,10 @@
     {
       "name": "assertion_result",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "AssertionResult"
+        "julia": "AssertionResult",
+        "rust": "AssertionResult"
       }
     },
     {
@@ -821,6 +822,14 @@
         "julia": "CanonicalizeError",
         "rust": "CanonicalizeError",
         "typescript": "CanonicalizeError"
+      }
+    },
+    {
+      "name": "capture_coupling_diagnostics",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "capture_coupling_diagnostics"
       }
     },
     {
@@ -1255,6 +1264,38 @@
       }
     },
     {
+      "name": "code_operator_compose_ambiguous_bare_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeAmbiguousBareName"
+      }
+    },
+    {
+      "name": "code_operator_compose_no_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeNoMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_partial_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposePartialMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_require_match_unmatched",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeRequireMatchUnmatched"
+      }
+    },
+    {
       "name": "code_ref_cycle",
       "kind": "constant",
       "tier": "extension",
@@ -1311,6 +1352,22 @@
       }
     },
     {
+      "name": "code_subsystem_index_set_rename_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnknownName"
+      }
+    },
+    {
+      "name": "code_subsystem_index_set_rename_unsupported_mount_form",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnsupportedMountForm"
+      }
+    },
+    {
       "name": "code_subsystem_ref_is_coupling_library",
       "kind": "constant",
       "tier": "extension",
@@ -1324,6 +1381,62 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeSubsystemRefIsTemplateLibrary"
+      }
+    },
+    {
+      "name": "code_table_axis_na_n",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisNaN"
+      }
+    },
+    {
+      "name": "code_table_data_shape_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableDataShapeMismatch"
+      }
+    },
+    {
+      "name": "code_table_interpolation_axes_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableInterpolationAxesMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_axis_name_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupAxisNameMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_output_out_of_range",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupOutputOutOfRange"
+      }
+    },
+    {
+      "name": "code_table_lookup_unknown_table",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupUnknownTable"
+      }
+    },
+    {
+      "name": "code_table_out_of_bounds_unsupported",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutOfBoundsUnsupported"
       }
     },
     {
@@ -1492,6 +1605,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "coerce_coupling_entry"
+      }
+    },
+    {
+      "name": "coerce_solver",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "coerce_solver"
       }
     },
     {
@@ -2059,9 +2180,10 @@
     {
       "name": "default_abstol",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "DEFAULT_ABSTOL"
+        "rust": "DEFAULT_ABSTOL",
+        "typescript": "DEFAULT_ABSTOL"
       }
     },
     {
@@ -2091,9 +2213,10 @@
     {
       "name": "default_reltol",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "DEFAULT_RELTOL"
+        "rust": "DEFAULT_RELTOL",
+        "typescript": "DEFAULT_RELTOL"
       }
     },
     {
@@ -2767,6 +2890,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ErrorNullReaction"
+      }
+    },
+    {
+      "name": "error_reserved_variable_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorReservedVariableName"
       }
     },
     {
@@ -3929,6 +4060,15 @@
       }
     },
     {
+      "name": "inline_test_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "InlineTestOptions",
+        "rust": "InlineTestOptions"
+      }
+    },
+    {
       "name": "inline_value",
       "kind": "type",
       "tier": "extension",
@@ -4783,11 +4923,44 @@
       }
     },
     {
+      "name": "operator_compose_ambiguous_bare_name_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeAmbiguousBareNameError",
+        "julia": "OperatorComposeAmbiguousBareNameError",
+        "python": "OperatorComposeAmbiguousBareNameError",
+        "typescript": "OperatorComposeAmbiguousBareNameError"
+      }
+    },
+    {
       "name": "operator_compose_coupling",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "go": "OperatorComposeCoupling"
+      }
+    },
+    {
+      "name": "operator_compose_no_merge_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeNoMergeError",
+        "julia": "OperatorComposeNoMergeError",
+        "python": "OperatorComposeNoMergeError",
+        "typescript": "OperatorComposeNoMergeError"
+      }
+    },
+    {
+      "name": "operator_compose_require_match_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeRequireMatchError",
+        "julia": "OperatorComposeRequireMatchError",
+        "python": "OperatorComposeRequireMatchError",
+        "typescript": "OperatorComposeRequireMatchError"
       }
     },
     {
@@ -5086,15 +5259,6 @@
       "tier": "extension",
       "bindings": {
         "julia": "PASS"
-      }
-    },
-    {
-      "name": "pde_assertion_result",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "PdeAssertionResult",
-        "rust": "PdeAssertionResult"
       }
     },
     {
@@ -5582,6 +5746,18 @@
       }
     },
     {
+      "name": "reject_solver_pre_v11",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "RejectSolverPreV11",
+        "julia": "reject_solver_pre_v11",
+        "python": "reject_solver_pre_v11",
+        "rust": "reject_solver_pre_v11",
+        "typescript": "rejectSolverPreV11"
+      }
+    },
+    {
       "name": "reject_template_imports_pre_v08",
       "kind": "function",
       "tier": "stable",
@@ -5875,6 +6051,17 @@
       }
     },
     {
+      "name": "resolve_tolerances",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "resolve_tolerances",
+        "python": "resolve_tolerances",
+        "rust": "resolve_tolerances",
+        "typescript": "resolveTolerances"
+      }
+    },
+    {
       "name": "resolved_expr",
       "kind": "type",
       "tier": "extension",
@@ -5980,36 +6167,44 @@
       }
     },
     {
-      "name": "run_pde_tests",
+      "name": "run_inline_tests",
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "julia": "run_pde_tests",
-        "rust": "run_pde_tests"
+        "julia": "run_inline_tests",
+        "rust": "run_inline_tests"
       }
     },
     {
-      "name": "run_pde_tests_with_base_dir",
+      "name": "run_inline_tests_filtered",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_base_dir"
+        "rust": "run_inline_tests_filtered"
       }
     },
     {
-      "name": "run_pde_tests_with_providers",
+      "name": "run_inline_tests_paths",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_providers"
+        "rust": "run_inline_tests_paths"
       }
     },
     {
-      "name": "run_pde_tests_filtered",
+      "name": "run_inline_tests_with_base_dir",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_filtered"
+        "rust": "run_inline_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "run_inline_tests_with_providers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_inline_tests_with_providers"
       }
     },
     {
@@ -6392,6 +6587,25 @@
       "tier": "extension",
       "bindings": {
         "rust": "solve_to_completion"
+      }
+    },
+    {
+      "name": "solver",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Solver",
+        "julia": "Solver",
+        "python": "Solver",
+        "rust": "Solver"
+      }
+    },
+    {
+      "name": "solver_block_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "SolverBlockError"
       }
     },
     {

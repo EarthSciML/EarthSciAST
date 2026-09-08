@@ -72,8 +72,8 @@ grows skip semantics.
 
 Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
 result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_pde_tests`](@ref) over the tree-walk solve engine;
-`PdeAssertionResult` is an alias of this type).
+MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine;
+`AssertionResult` is an alias of this type).
 
 `message` carries the diff or error text for non-`PASS` results.
 `duration_s` is this assertion's even share of its test's wall time (solve +
@@ -88,7 +88,7 @@ parse/compile failure). The trailing three fields have defaults, so the
 historical 12-argument positional construction still works.
 
 Virtual properties (backwards compatibility with the former
-`PdeAssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
+`AssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
 `container_name`).
 """
 struct AssertionResult
@@ -201,18 +201,41 @@ discover_esm_files(; kwargs...) = discover_esm_files(DEFAULT_ROOTS; kwargs...)
 
 # ---------------------------------------------------------------------------
 # SHARED §6.6 assertion helpers — used by BOTH this MTK scalar runner and the
-# tree-walk PDE runner (pde_inline_tests.jl). The two runners' tolerance
+# tree-walk PDE runner (inline_tests.jl). The two runners' tolerance
 # resolution and pass predicate must stay in lockstep; edit here only.
 # ---------------------------------------------------------------------------
 
 const _DEFAULT_REL_TOL = 1.0e-6
 
 # Tight solver tolerances for integrating inline tests, shared between the
-# MTK engine's per-test solve and `run_pde_tests`' keyword defaults
+# MTK engine's per-test solve and `run_inline_tests`' keyword defaults
 # (tree-walk path): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
 const DEFAULT_TEST_RELTOL = 1e-10
 const DEFAULT_TEST_ABSTOL = 1e-12
+
+"""
+    _test_integration_tolerances(solver_hints) -> (reltol, abstol)
+
+The INTEGRATION tolerances an inline-test run solves at, esm-spec §2.2.2:
+the document's `solver.reltol` / `solver.abstol` when it declares them, else
+this runner's `DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+
+The runner defaults sit at LEVEL 3 of the chain — they are binding defaults,
+not a caller's opinion — which is what makes a document's declared accuracy
+travel: without this, three bindings integrated the same document's inline
+tests at two different tolerances. The two resolve INDEPENDENTLY, so a document
+declaring only `reltol` leaves `abstol` on the runner default.
+
+NOT the tolerance an assertion is COMPARED at, which is §6.6.4's own chain
+([`_resolve_tolerance`](@ref)); the two never substitute for each other.
+"""
+function _test_integration_tolerances(solver_hints)
+    solver_hints === nothing && return (DEFAULT_TEST_RELTOL, DEFAULT_TEST_ABSTOL)
+    r = solver_hints.reltol === nothing ? DEFAULT_TEST_RELTOL : solver_hints.reltol
+    a = solver_hints.abstol === nothing ? DEFAULT_TEST_ABSTOL : solver_hints.abstol
+    return (Float64(r), Float64(a))
+end
 
 # Returns (rtol, atol) — the most-specific declared tolerance wins (spec
 # §6.6.4: assertion > test > model > default rel=1e-6).
@@ -327,20 +350,34 @@ end
 
 _try_require(pkg::Base.PkgId) = get(Base.loaded_modules, pkg, nothing)
 
-# Default per-file stiff-solver override set: .esm basenames listed here are
-# integrated with the stiff Rosenbrock23 solver instead of the default
-# non-stiff Tsit5. This is a pragmatic library default for known-stiff shared
-# fixtures; callers override it per run via `run_esm_tests(...; stiff_files=…)`.
-# (Declaring stiffness in the .esm test metadata itself would be the right
-# long-term home, but that needs an esm-spec §6.6 change.)
+# FALLBACK per-file stiff-solver override set, for documents that do not
+# declare their own stiffness: .esm basenames listed here are integrated with
+# the stiff Rosenbrock23 solver instead of the default non-stiff Tsit5.
+# Callers override it per run via `run_esm_tests(...; stiff_files=…)`.
+#
+# A document should not need to be on this list. `solver.stiffness` (esm-spec
+# §2.2) is the declaration a document makes about ITSELF, and `_pick_solver`
+# consults it FIRST — which is the whole point of the block: a basename table
+# in one binding's runner cannot travel, so every other binding rediscovers a
+# stiff system the same way, as a hang or an overflow. This set remains for
+# documents that predate the block or decline to use it.
 const STIFF_SOLVER_OVERRIDE_FILENAMES = Set(["pollu.esm"])
 
 # Pick a solver: prefer Tsit5 (non-stiff, fast); fall back to Rosenbrock23.
-# `stiff_files` is the set of .esm basenames forced onto Rosenbrock23.
+#
+# `stiffness` is the document's own declaration (esm-spec §2.2, the `solver`
+# block) and is consulted FIRST: `"high"` selects the stiff Rosenbrock23. The
+# field is ADVISORY — this binding is free to ignore it, and does ignore
+# `"low"` / `"moderate"`, which say nothing Tsit5 does not already handle — but
+# acting on `"high"` is exactly what keeps a stiff document from being a hang.
+#
+# `stiff_files` is the FALLBACK: the set of .esm basenames forced onto
+# Rosenbrock23 when the document declares nothing.
 function _pick_solver(file::AbstractString="";
-                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                      stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                      stiffness=nothing)
     rb = _try_require(_ROSENBROCK_PKGID)
-    if rb !== nothing && basename(file) in stiff_files
+    if rb !== nothing && (stiffness == "high" || basename(file) in stiff_files)
         return (rb.Rosenbrock23(), :rosenbrock23)
     end
     tsit = _try_require(_TSIT5_PKGID)
@@ -358,8 +395,8 @@ end
 #   engine            entry point       execution pathway
 #   ----------------  ----------------  ------------------------------------
 #   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
-#   SimulateTestEngine run_pde_tests    tree-walk esm_problem/solve + field lookup
-#                     (pde_inline_tests.jl)
+#   SimulateTestEngine run_inline_tests    tree-walk esm_problem/solve + field lookup
+#                     (inline_tests.jl)
 #
 # The frame owns everything the two runners used to duplicate: the per-test /
 # per-assertion loop, §6.6.4 tolerance resolution, the §6.6.3 pass predicate
@@ -488,6 +525,22 @@ struct MtkTestEngine
     solver::Any
     defaults_u0::Dict{Any,Float64}
     defaults_p::Dict{Any,Float64}
+    # esm-spec §2.2.2: the INTEGRATION tolerances this engine solves at, already
+    # resolved against the document's `solver` block. The runner's own
+    # DEFAULT_TEST_* sit at the BOTTOM of that chain -- they are binding
+    # defaults, not a caller's opinion -- so a document that declares
+    # `solver.reltol` displaces them and every binding runs its inline tests at
+    # one integration tolerance instead of at five different runner defaults.
+    # NOT the tolerance an assertion is COMPARED at (§6.6.4): that is
+    # `container.tolerance`, resolved on its own chain in `_run_test_frame!`.
+    reltol::Float64
+    abstol::Float64
+
+    MtkTestEngine(simp, sys_name, container_kind, solver, defaults_u0, defaults_p;
+                  reltol::Float64=DEFAULT_TEST_RELTOL,
+                  abstol::Float64=DEFAULT_TEST_ABSTOL) =
+        new(simp, sys_name, container_kind, solver, defaults_u0, defaults_p,
+            reltol, abstol)
 end
 
 function _engine_setup(e::MtkTestEngine, t)
@@ -509,8 +562,7 @@ function _engine_setup(e::MtkTestEngine, t)
             MTK.ODEProblem(e.simp, merged, tspan)
         end
         return MTK.SciMLBase.solve(prob, e.solver;
-                                    reltol=DEFAULT_TEST_RELTOL,
-                                    abstol=DEFAULT_TEST_ABSTOL)
+                                    reltol=e.reltol, abstol=e.abstol)
     catch err
         return "Solve setup failed: $(err)"
     end
@@ -553,11 +605,21 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                name::AbstractString, container,
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
-                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES)
+                               function_tables=nothing,
+                               stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
+                               stiffness=nothing, solver_hints=nothing)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
     try
+        # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed
+        # functions, and nothing downstream of here speaks it — so it is lowered
+        # on the way INTO the build, never at load, where it would break the
+        # §9.5.4 round trip of the authored form. Lowering per CONTAINER (rather
+        # than per file) keeps the refusal §9.5.3a owes an unimplementable table
+        # attached to a build that actually happens: a container with no tests
+        # is never compiled, so it is never lowered.
+        lower_table_lookups!(container, function_tables)
         simp = compile(container, sys_name)
     catch err
         for t in container.tests
@@ -567,11 +629,15 @@ function _run_container_tests!(results::Vector{AssertionResult},
         end
         return
     end
-    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files)
+    solver, _solver_kind = _pick_solver(path; stiff_files=stiff_files,
+                                        stiffness=stiffness)
     defaults_u0, defaults_p =
         _catalyst_default_maps(container_kind, esm_container, simp, sys_name)
+    # esm-spec §2.2.2: the document's declared INTEGRATION tolerances displace
+    # the runner's own defaults; each falls through independently.
+    reltol, abstol = _test_integration_tolerances(solver_hints)
     engine = MtkTestEngine(simp, sys_name, container_kind, solver,
-                           defaults_u0, defaults_p)
+                           defaults_u0, defaults_p; reltol=reltol, abstol=abstol)
     _run_test_frame!(results, engine, path, container_kind, String(name),
                      container.tolerance, container.tests)
 end
@@ -588,11 +654,22 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         return
     end
 
+    # The document's sampled-table registry (esm-spec §9.5), passed to each
+    # container build so its `table_lookup` nodes can be lowered there.
+    tables = esm_file.function_tables
+
+    # The document's own stiffness declaration (esm-spec §2.2), which
+    # `_pick_solver` prefers over the basename fallback set. Document-scoped,
+    # so it applies to every container in the file.
+    stiffness = esm_file.solver === nothing ? nothing : esm_file.solver.stiffness
+
     if esm_file.models !== nothing
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
-                                  stiff_files=stiff_files)
+                                  function_tables=tables,
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 
@@ -601,7 +678,9 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
-                                  stiff_files=stiff_files)
+                                  function_tables=tables,
+                                  stiff_files=stiff_files, stiffness=stiffness,
+                                  solver_hints=esm_file.solver)
         end
     end
 end
@@ -665,6 +744,51 @@ end
 run_esm_tests(roots::AbstractString...; kwargs...) =
     run_esm_tests(collect(String, roots); kwargs...)
 
+"""
+    _mounted_components(path) -> Vector{String}
+
+The top-level `models.<k>` / `reaction_systems.<k>` MOUNT EDGES a document
+declares in its SOURCE, as `"<k> ← <ref>"` strings in document order (models
+first, then reaction systems).
+
+Read from the raw file because a LOADED document no longer shows them: the mount
+splices the referenced leaf's component in under the same key (esm-spec §4.7 /
+§9.7.10), leaving nothing to distinguish it from a component the document wrote
+itself. The summary reports them so the §6.6 rule — a mount does not carry the
+mounted component's inline tests — is VISIBLE rather than silent.
+
+Both sections are scanned because both drop the leaf's tests
+(`_inline_toplevel_model_refs!` and `_inline_toplevel_reaction_system_refs!`),
+and this runner runs a reaction system's tests as well as a model's — so a
+reaction-system mount that went unnamed here would be exactly the silent
+omission the §6.6 reporting SHOULD exists to prevent.
+
+Best-effort: an unreadable or unparseable file yields nothing, because the run
+itself already reports that failure as a load ERROR row.
+"""
+function _mounted_components(path::AbstractString)
+    edges = String[]
+    raw = try
+        JSON3.read(read(path, String))
+    catch
+        return edges
+    end
+    (raw isa AbstractDict || raw isa JSON3.Object) || return edges
+    # The mount-edge shapes the two inliners recognise: a `ref` and no inline
+    # body key (`variables` for a model, `species` for a reaction system).
+    for (section, body) in ((:models, :variables), (:reaction_systems, :species))
+        comps = get(raw, section, nothing)
+        (comps isa AbstractDict || comps isa JSON3.Object) || continue
+        for (name, entry) in pairs(comps)
+            (entry isa AbstractDict || entry isa JSON3.Object) || continue
+            (haskey(entry, :ref) && !haskey(entry, body)) || continue
+            entry[:ref] isa AbstractString || continue
+            push!(edges, string(name, " ← ", entry[:ref]))
+        end
+    end
+    return edges
+end
+
 function _print_summary(io::IO, files::Vector{String},
                         results::Vector{AssertionResult},
                         base::AbstractString=esm_root())
@@ -674,6 +798,21 @@ function _print_summary(io::IO, files::Vector{String},
     println(io, "================ ESM inline-test summary ================")
     println(io, "Files discovered: ", length(files))
     println(io, "Assertions:       ", length(results))
+
+    # esm-spec §6.6: a mount does not carry the mounted component's inline
+    # tests. Naming the mount edges keeps that VISIBLE — the reader sees which
+    # components this run did not assert on, and where their assertions do run.
+    # Printed before the `isempty(results)` exit, so a document that is nothing
+    # but mounts and coupling still says so.
+    mounts = [(rel(f), edge) for f in files for edge in _mounted_components(f)]
+    if !isempty(mounts)
+        println(io, "Mounted:          ", length(mounts),
+                " (esm-spec §6.6 — a mounted component's inline tests are not run here; ",
+                "they run when its own file is a test target)")
+        for (f, edge) in mounts
+            println(io, "  - ", f, " :: ", edge)
+        end
+    end
 
     by_file = Dict{String,Vector{AssertionResult}}()
     for r in results
@@ -743,7 +882,7 @@ assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
 
 `file`, when given, relabels every result's source file before grouping —
-used by [`run_pde_tests`](@ref) callers, whose results carry no per-assertion
+used by [`run_inline_tests`](@ref) callers, whose results carry no per-assertion
 source file (`r.file == ""`), to label the whole batch in the testcase
 classnames.
 """

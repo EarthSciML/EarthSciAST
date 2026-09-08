@@ -110,8 +110,8 @@ fn run_fixture(fx: &Value, base: &Path, integ: &Value) -> Result<Value, String> 
         .collect();
     let opts = SolveOptions {
         alg: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
-        abstol: integ["abstol"].as_f64().unwrap_or(1e-12),
-        reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
+        abstol: Some(integ["abstol"].as_f64().unwrap_or(1e-12)),
+        reltol: Some(integ["reltol"].as_f64().unwrap_or(1e-10)),
         maxiters: 1_000_000,
         saveat: Some(out_times.clone()),
         ..Default::default()
@@ -248,8 +248,8 @@ fn run_fixture_full(fx: &Value, base: &Path, integ: &Value) -> Result<Value, Str
     let t1 = *checkpoints.last().ok_or("empty checkpoints")?;
     let opts = SolveOptions {
         alg: solver_from(integ["solver"].as_str().unwrap_or("Erk")),
-        abstol: integ["abstol"].as_f64().unwrap_or(1e-12),
-        reltol: integ["reltol"].as_f64().unwrap_or(1e-10),
+        abstol: Some(integ["abstol"].as_f64().unwrap_or(1e-12)),
+        reltol: Some(integ["reltol"].as_f64().unwrap_or(1e-10)),
         maxiters: 10_000_000,
         saveat: Some(checkpoints.clone()),
         ..Default::default()

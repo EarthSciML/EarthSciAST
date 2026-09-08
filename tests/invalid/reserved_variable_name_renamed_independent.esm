@@ -1,0 +1,43 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ReservedVariableNameRenamedIndependent",
+    "description": "The reserved name FOLLOWS THE DOCUMENT. This file renames its independent variable to `s` (esm-spec §11.3), so `s` — not `t` — is the name a declaration may not spell (§4.9.1.1). The mirror pin is `tests/valid/independent_variable_renamed.esm`, where the same rename FREES `t` for an ordinary declaration. Together they forbid a binding from hard-coding the literal `\"t\"`.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "validation",
+      "reserved-names",
+      "independent-variable"
+    ]
+  },
+  "domain": {
+    "independent_variable": "s"
+  },
+  "models": {
+    "Renamed": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "s": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "Path length. RESERVED — this document's independent variable is named `s`."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Equilibrium value"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 1.0
+        }
+      ]
+    }
+  }
+}

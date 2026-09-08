@@ -37,11 +37,10 @@ derivative, the composed system's derivative is the **sum** of theirs.
     },
     "Emissions": {
       "variables": {
-        "O3": { "type": "unknown", "units": "mol/mol", "default": 1e-9 },
         "E":  { "type": "parameter", "units": "mol/mol/s", "default": 1e-12 }
       },
       "equations": [
-        { "lhs": { "op": "D", "args": ["O3"], "wrt": "t" }, "rhs": "E" }
+        { "lhs": { "op": "D", "args": ["Chemistry.O3"], "wrt": "t" }, "rhs": "E" }
       ]
     }
   },
@@ -52,6 +51,71 @@ derivative, the composed system's derivative is the **sum** of theirs.
 ```
 
 The flattened system has one `O3` whose tendency is `-k·O3 + E`.
+
+Note how `Emissions` writes `Chemistry.O3` — the mechanism's own scoped name —
+rather than declaring an `O3` of its own. That is the spelling to reach for: it
+says outright whose state the operator contributes to, and it merges by a DIRECT
+match with nothing to infer.
+
+If both systems *did* declare their own `O3`, the only thing binding them would
+be the **bare-name fallback**, a guess from a shared local name. The merge keeps
+one of the two, and each carries its own initial condition, so that choice
+decides what the system integrates from. The format will not guess: such a
+document is refused with `operator_compose_ambiguous_bare_name`. Say which name
+the quantity keeps, with `translate`:
+
+```json
+{ "type": "operator_compose", "systems": ["Chemistry", "Emissions"],
+  "translate": { "Chemistry.O3": "Emissions.O3" } }
+```
+
+(Where only *one* of the two is a state — the other an observed, carrying no
+initial condition — there is nothing to choose and the state simply owns it, in
+either `systems` order.)
+
+### `require_match`
+
+An `operator_compose` entry that matches **nothing** is indistinguishable from an
+entry that is not there: the operator integrates a private, decoupled system from
+its own defaults, the mechanism receives no contribution at all, and the only
+evidence is a state count one too high. That is `operator_compose_no_merge`, and
+it is an **error**.
+
+A **partial** merge is different in kind — it looks exactly like an operator that
+legitimately contributes states of its own alongside the ones it does merge, and
+the format cannot tell those apart. So that one is a **warning**,
+`operator_compose_partial_merge`, naming the equations that did not land.
+
+`require_match` lets you say which you meant. It has three states, and leaving it
+out is not the same as writing `false`:
+
+| `require_match` | zero merged | some but not all |
+|---|---|---|
+| *absent* | error | warning |
+| `true` | error | error |
+| `false` | fine, silently | fine, silently |
+
+Use **`true`** when your operator's equations really are contributions and every
+one must land:
+
+```json
+{ "type": "operator_compose", "systems": ["Chemistry", "DepositionSink"],
+  "require_match": true }
+```
+
+An equation of `DepositionSink` that finds no counterpart is then
+`operator_compose_require_match_unmatched`. A partial match fails too: an
+operator that reaches seven of your twelve species and silently misses five is
+exactly what the flag exists to catch.
+
+Use **`false`** when the operator really does contribute only states of its own —
+a transport model whose single equation defines its own wind field, composed for
+its *variables* rather than its tendencies:
+
+```json
+{ "type": "operator_compose", "systems": ["Chemistry", "Winds"],
+  "require_match": false }
+```
 
 ### `translate`
 

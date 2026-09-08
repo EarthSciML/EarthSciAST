@@ -186,8 +186,8 @@ fn recorder() -> (ProgressFn, Arc<Mutex<Vec<Snap>>>) {
 fn opts(progress: Option<ProgressFn>, saveat: Option<Vec<f64>>) -> SolveOptions {
     SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat,
         progress,
