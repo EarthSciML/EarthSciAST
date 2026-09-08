@@ -84,6 +84,51 @@ function _apply_ic_defaults!(var_dict::Dict{String,Any}, states,
     return nothing
 end
 
+# ---- Close a state that NO equation mentions ----
+# esm-libraries-spec §4.6.1 says a species touched by no reaction gets no
+# `D(X, t)` equation: the flattened document leaves it an unknown that no
+# equation names, which esm-spec §6.3.1 classifies ALGEBRAIC. That is a
+# statement about the DOCUMENT. It is not a solver plan — §4.7.1 spells out
+# that an unknown with no constraint is a structurally singular system — and
+# `state_variables` still carries the species, because §4.7.5's field table
+# says it is solved for either way.
+#
+# So the BACKEND has to say what "solved for" means for it, and MTK's answer
+# by default is to say nothing: `mtkcompile` drops an unknown that appears in
+# no equation, so the state vanishes from `unknowns(simp)`, an
+# `initial_conditions` entry naming it cannot bind, and it is missing from
+# every solution the caller reads back. Emit `D(X, t) ~ 0` for it instead —
+# the species is held at its initial value, which is what a quantity the
+# network says nothing about does, and what Python's SciPy backend already
+# does for the same document (it keeps such a state in the vector at its u0).
+# The zero lives HERE, at the lowering, and is never written into
+# `flat.equations`, so the cross-binding flattened artifact is untouched.
+#
+# Only a state that appears NOWHERE is closed. An inert species that some
+# other equation still names is another rule's business and is left alone —
+# an operator's preserved `_var` clone (§4.7.1 step 5) names one, which is the
+# shape `tests/valid/full_coupled.esm` has. Array-shaped states are skipped: a
+# scalar `D(arr) ~ 0` is not the right closure for a buffer, and no path
+# produces an unmentioned one. This is the ODE constructor only; `PDESystem`
+# takes its initial values as explicit boundary conditions and is untouched.
+function _closures_for_unmentioned_states(flat::FlattenedSystem,
+                                          dyn_equations::Vector{Equation},
+                                          var_dict::Dict{String,Any})
+    mentioned = Set{String}()
+    for eq in dyn_equations
+        union!(mentioned, free_variables(eq.lhs))
+        union!(mentioned, free_variables(eq.rhs))
+    end
+    closures = Equation[]
+    for vname in keys(flat.state_variables)
+        vname in mentioned && continue
+        get(var_dict, vname, nothing) isa Num || continue   # scalars only
+        push!(closures,
+              Equation(OpExpr("D", EsmExpr[VarExpr(vname)], wrt="t"), NumExpr(0.0)))
+    end
+    return closures
+end
+
 """
     ModelingToolkit.System(flat::FlattenedSystem; name=:anonymous, kwargs...)
 
@@ -111,6 +156,10 @@ function ModelingToolkit.System(flat::FlattenedSystem;
 
     ic_values, dyn_equations = _split_ic_equations(flat, var_dict, t_sym, dim_dict)
     _apply_ic_defaults!(var_dict, states, ic_values)
+    # After the `ic` split, so a state whose only appearance is an initial
+    # value still counts as unmentioned and gets its closure (see above).
+    append!(dyn_equations,
+            _closures_for_unmentioned_states(flat, dyn_equations, var_dict))
 
     MTKEquation = ModelingToolkit.Equation
     eqs = Vector{MTKEquation}()
