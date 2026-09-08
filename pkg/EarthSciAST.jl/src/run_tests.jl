@@ -668,14 +668,21 @@ run_esm_tests(roots::AbstractString...; kwargs...) =
 """
     _mounted_components(path) -> Vector{String}
 
-The top-level `models.<k>` MOUNT EDGES a document declares in its SOURCE, as
-`"<k> ← <ref>"` strings in document order.
+The top-level `models.<k>` / `reaction_systems.<k>` MOUNT EDGES a document
+declares in its SOURCE, as `"<k> ← <ref>"` strings in document order (models
+first, then reaction systems).
 
 Read from the raw file because a LOADED document no longer shows them: the mount
-splices the referenced leaf's model in under the same key (esm-spec §4.7 /
-§9.7.10), leaving nothing to distinguish it from a model the document wrote
+splices the referenced leaf's component in under the same key (esm-spec §4.7 /
+§9.7.10), leaving nothing to distinguish it from a component the document wrote
 itself. The summary reports them so the §6.6 rule — a mount does not carry the
 mounted component's inline tests — is VISIBLE rather than silent.
+
+Both sections are scanned because both drop the leaf's tests
+(`_inline_toplevel_model_refs!` and `_inline_toplevel_reaction_system_refs!`),
+and this runner runs a reaction system's tests as well as a model's — so a
+reaction-system mount that went unnamed here would be exactly the silent
+omission the §6.6 reporting SHOULD exists to prevent.
 
 Best-effort: an unreadable or unparseable file yields nothing, because the run
 itself already reports that failure as a load ERROR row.
@@ -688,14 +695,17 @@ function _mounted_components(path::AbstractString)
         return edges
     end
     (raw isa AbstractDict || raw isa JSON3.Object) || return edges
-    models = get(raw, :models, nothing)
-    models === nothing && return edges
-    for (name, entry) in pairs(models)
-        # The mount-edge shape `_inline_toplevel_model_refs!` recognises: a
-        # `ref` and no inline `variables`.
-        (entry isa AbstractDict || entry isa JSON3.Object) || continue
-        (haskey(entry, :ref) && !haskey(entry, :variables)) || continue
-        push!(edges, string(name, " ← ", entry[:ref]))
+    # The mount-edge shapes the two inliners recognise: a `ref` and no inline
+    # body key (`variables` for a model, `species` for a reaction system).
+    for (section, body) in ((:models, :variables), (:reaction_systems, :species))
+        comps = get(raw, section, nothing)
+        (comps isa AbstractDict || comps isa JSON3.Object) || continue
+        for (name, entry) in pairs(comps)
+            (entry isa AbstractDict || entry isa JSON3.Object) || continue
+            (haskey(entry, :ref) && !haskey(entry, body)) || continue
+            entry[:ref] isa AbstractString || continue
+            push!(edges, string(name, " ← ", entry[:ref]))
+        end
     end
     return edges
 end
