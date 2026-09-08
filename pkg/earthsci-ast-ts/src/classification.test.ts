@@ -182,3 +182,98 @@ describe('effectiveSystemKind (API_SPEC.md §8 item 11)', () => {
     expect(effectiveSystemKind(declared)).toBe('nonlinear')
   })
 })
+
+/**
+ * esm-spec §6.3.1 admits TWO LHS spellings for the equation that DEFINES an
+ * unknown — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the
+ * whole array `y`) — and neither is restricted by rank: "the defining form is
+ * read through the LHS's BASE NAME … so an arrayed definition is observed
+ * exactly as its scalar counterpart is".
+ *
+ * Both spellings of the indexed one must credit `w` an OBSERVED: the bare
+ * `index(w, i)` LHS that §6.3.1's worked example names verbatim, and the
+ * `aggregate{k}(index(w, k))` shell that documents in this repo actually use
+ * (every array observed in `tests/conformance/pde_inline_observed_indexed_lhs/`
+ * is written that way). `baseVariableName` stopped at the aggregate shell, so
+ * the second spelling was credited to nobody and {@link algebraicUnknowns}
+ * claimed `w` by elimination.
+ *
+ * That is not bookkeeping. §6.3.1: `algebraic_unknowns` seeds the CONTINUOUS
+ * cadence partition, whereas an observed's cadence resolves through its
+ * defining RHS — "so misclassifying an arrayed definition as algebraic pushes
+ * build-time work … onto the per-timestep hot path". The partition assertion is
+ * what pins that consequence.
+ *
+ * The classification conformance corpus above cannot catch this: none of its
+ * fixtures carries an `index` or `aggregate` LHS at all.
+ *
+ * See issue #232 (Julia), issue #231 / PR #237 (Python), PR #250.
+ */
+describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', () => {
+  const aggregateIndexed = {
+    op: 'aggregate',
+    args: [],
+    output_idx: ['k'],
+    ranges: { k: { from: 'lev' } },
+    expr: { op: 'index', args: ['w', 'k'] },
+  }
+  const spellings: { [label: string]: unknown } = {
+    bare: 'w',
+    indexed: { op: 'index', args: ['w', 'k'] },
+    'aggregate of indexed': aggregateIndexed,
+  }
+
+  for (const [label, lhs] of Object.entries(spellings)) {
+    describe(label, () => {
+      const model = {
+        variables: {
+          u: { type: 'unknown', units: '1' },
+          w: { type: 'unknown', units: '1', shape: ['lev'] },
+        },
+        equations: [
+          { lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 'w' },
+          { lhs, rhs: 2 },
+        ],
+      } as unknown as Model
+
+      it('puts `w` in observedUnknowns', () => {
+        expect(observedUnknowns(model)).toEqual(['w'])
+      })
+
+      // The three sets PARTITION, so crediting the definition must also take
+      // `w` out of the algebraic bucket, not merely add it to the observed one.
+      it('leaves algebraicUnknowns empty', () => {
+        expect(algebraicUnknowns(model)).toEqual([])
+      })
+
+      it('leaves the ODE partition untouched', () => {
+        expect(odeStates(model)).toEqual(['u'])
+      })
+    })
+  }
+
+  // The aggregate unwrap recognises an `index` body ONLY. An `aggregate` whose
+  // body is a `D` is the whole-array spelling of a TENDENCY — it makes an ODE
+  // state, and crediting it as a definition would hand a state's derivative RHS
+  // to the units and cadence passes as if it defined the state.
+  it('does NOT credit an aggregate over a derivative as a definition', () => {
+    const model = {
+      variables: { u: { type: 'unknown', units: '1', shape: ['lev'] } },
+      equations: [
+        {
+          lhs: {
+            op: 'aggregate',
+            args: [],
+            output_idx: ['k'],
+            ranges: { k: { from: 'lev' } },
+            expr: { op: 'D', args: [{ op: 'index', args: ['u', 'k'] }], wrt: 't' },
+          },
+          rhs: 1,
+        },
+      ],
+    } as unknown as Model
+    expect(odeStates(model)).toEqual(['u'])
+    expect(observedUnknowns(model)).toEqual([])
+    expect(algebraicUnknowns(model)).toEqual([])
+  })
+})
