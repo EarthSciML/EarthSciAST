@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ReservedVariableNameObserved",
+    "description": "An OBSERVED unknown named `t` — the document's independent variable (esm-spec §11.3, §4.9.1.1). This is the reported shape: a fuel time-lag constant declared as `t` in a WRF-Fire fuel-moisture component. `t` is implicitly declared in every model's expression scope, so the declaration never wins: bare, the model reports the observed as having no defining expression, and with a subsystem mounted every reader of `t` silently receives the SIMULATION TIME instead (log(t) = -inf at t = 0). Rejected at the declaration, not at the readers.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "validation",
+      "reserved-names",
+      "independent-variable"
+    ]
+  },
+  "models": {
+    "FuelMoisture": {
+      "variables": {
+        "m": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.1,
+          "description": "Fuel moisture content"
+        },
+        "t": {
+          "type": "unknown",
+          "units": "s",
+          "description": "Fuel time-lag constant. RESERVED — this is the independent variable's name."
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3600.0,
+          "description": "Nominal time lag"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "m"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  0.3,
+                  "m"
+                ]
+              },
+              "t"
+            ]
+          }
+        },
+        {
+          "lhs": "t",
+          "rhs": "tau"
+        }
+      ]
+    }
+  }
+}

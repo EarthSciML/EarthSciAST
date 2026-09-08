@@ -2388,6 +2388,16 @@ def _build_numpy_rhs(
     # loaded data beats a document default, matching the caller-wins direction
     # the Rust `vi_factor_arrays` overlay takes.
     #
+    # A SCALAR on a shaped parameter takes the SAME channel, BROADCAST over the
+    # declared grid: esm-spec §6.3 gives it the same meaning ("the one value
+    # applies to every element"), and only the array channel can express that.
+    # Left in `param_values` alone the name resolves to a float, so `index(p, k)`
+    # raises "index applied to scalar value" and a whole-array read has the wrong
+    # rank — which is the shaped-UNKNOWN rule (one scalar `default` seeds every
+    # cell of the state vector) simply not applied to the parameter side
+    # (EarthSciML/EarthSciAST#219). It stays in `param_values` too, so the
+    # §6.6.5 build-time SCALAR scope keeps resolving it.
+    #
     # The BARE alias is registered only when it is unambiguous and free. Unlike
     # the scalar `param_values` alias below, `input_arrays` is consulted BEFORE
     # the state layout, so a bare alias that collided with another component's
@@ -2437,6 +2447,30 @@ def _build_numpy_rhs(
         )
         param_values[pname] = val
         param_values[bare] = val  # also expose via bare name
+        decl = getattr(pvar, "shape", None)
+        want = (
+            _resolve_index_set_shape(decl, flat.index_sets, derived_extents=None) if decl else None
+        )
+        # Only a value the document or the caller actually SUPPLIED is broadcast.
+        # ``_resolve_override`` substitutes 0.0 for a missing or non-numeric
+        # ``default`` (the same substitution the scalar ``param_values`` binding
+        # has always made), and filling the whole grid with that stand-in would
+        # turn "this shaped parameter has no value yet" — a name a forcing buffer
+        # or an `update` is meant to fill — into a silent column of zeros. Rust
+        # (`lower_inline_array_parameters` skips a `None` default) and Julia
+        # (`scalar === nothing` skips) both leave such a name alone.
+        supplied = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+        if want and supplied:
+            # esm-spec §6.3 broadcast. A shape that does not resolve (an
+            # unmaterialized derived set) has no extent to fill, so the name
+            # keeps its scalar binding and the build's own extent checks report
+            # any real disagreement.
+            arr = np.full(tuple(want), float(val), dtype=float)
+            loader_arrays.setdefault(pname, arr)
+            param_array_names.add(pname)
+            if bare != pname and bare not in _all_names and len(_bare_owners[bare]) == 1:
+                loader_arrays.setdefault(bare, arr)
+                param_array_names.add(bare)
 
     # Keyed-factor scope (esm-spec §5.4 / RFC §5.2): a RAGGED index set's
     # `offsets`/`values` keyed factors bind by BARE name in the model scope, but

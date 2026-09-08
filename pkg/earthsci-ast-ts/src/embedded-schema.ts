@@ -2046,6 +2046,14 @@ export const schema: AnySchemaObject = {
           "items": {
             "$ref": "#/$defs/TemplateImport"
           }
+        },
+        "index_set_rename": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Mount-edge index-set renaming (esm-spec §4.7 'Mount-edge index-set renaming'; docs/content/rfcs/mount-edge-index-set-renaming.md): a map from an index-set name AS THE RESOLVED MOUNTED DOCUMENT SPELLS IT to the name it takes in the mounting document. `index_sets` is a document-scoped registry, so two mounts that independently use one axis name at different lengths (a 59-layer atmospheric column and a 4-layer soil column both over `lev`) collide with subsystem_index_set_conflict; this field is the §9.7.7 renaming mechanism at a component-mount edge, restricted to index sets because they are the only declaration kind a mount contributes to document scope. Applied as ONE simultaneous substitution AFTER the referenced document resolves completely (its own imports, this edge's `bindings` and injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its `index_sets` merge, transitively through every occurrence inside the mounted document — `index_sets` keys and ragged `of` lists, `{\"from\": …}` ranges, the `wrt`/`dim`/`var` axis scalars and bare-axis-name `integral` bounds, `where` `shape` constraints, variable/parameter `shape` lists, `Assertion.coords` keys, and `DataSourceSelectAxis.gated_by`. Keys must name an index set of the resolved mounted document (subsystem_index_set_rename_unknown_name); targets are dotted identifiers (template_import_rename_invalid) and must be distinct (template_import_rename_collision). The map need not be total: an unnamed axis passes through unrenamed, so a deliberately shared axis still merges deep-equal. Load-time only; consumed at the mount; does not survive parse→emit."
         }
       }
     },

@@ -1224,6 +1224,24 @@ pub fn esm_problem<'a>(
         inferred = true;
     }
 
+    // ---- (1d) Lower `table_lookup` (esm-spec §9.5.3). ---------------------
+    // `table_lookup` is sugar over `interp.linear` / `interp.bilinear` /
+    // `index`, and NOTHING downstream evaluates it — the array runtime's
+    // stage-(0) gate refuses it as `unevaluable_operator`. Lowering happens
+    // here rather than in `parse::load_value` because §9.5.4 requires the
+    // AUTHORED form to round-trip and this binding serializes the typed
+    // document it loaded; a load-time rewrite would emit the lowered `fn`
+    // tree (issue #188).
+    //
+    // Done for a TYPED input before the block below re-serializes it, so the
+    // build pipeline's own observed-graph evaluation sees the lowered form
+    // too; a raw-JSON input gets the same treatment at stage (3c), after its
+    // typed parse. The pass is idempotent, so a document that goes through
+    // both is lowered once.
+    if let Some(f) = owned_file.as_mut() {
+        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
+    }
+
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
@@ -1309,6 +1327,14 @@ pub fn esm_problem<'a>(
         && let Some(models) = f.models.as_mut()
     {
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
+    }
+
+    // ---- (3c) Lower `table_lookup`, for a RAW-JSON input. ------------------
+    // The counterpart of stage (1d) for a document that had no typed form
+    // until stage (3). Idempotent, so a typed input already lowered above
+    // walks nothing here.
+    if let Some(f) = owned_file.as_mut() {
+        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
     }
 
     // ---- (4) Compile the right-hand side. ---------------------------------

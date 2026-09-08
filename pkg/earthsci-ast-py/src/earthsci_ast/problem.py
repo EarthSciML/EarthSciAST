@@ -69,6 +69,7 @@ from .flatten import (
     _has_array_op,
     flatten,
 )
+from .lower_table_lookup import lower_table_lookups
 from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
 from .parse import load_document, load_path
 from .pushdown_rewrite import (
@@ -548,6 +549,16 @@ def esm_problem(
         file = load_document(input, metaparameters=closed_metaparameters, base_path=base_path)
     else:
         file = load_path(input, metaparameters=closed_metaparameters)
+
+    # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed functions,
+    # and nothing downstream of the loader evaluates it — the interpreter
+    # refuses the op outright. The lowering runs HERE, not in `parse`, because
+    # §9.5.4 makes the AUTHORED form round-trip and this binding serializes the
+    # typed document it loaded, so a load-time rewrite would emit the lowered
+    # `fn` tree (issue #188). Pure and idempotent, and not even a walk for a
+    # document declaring no `function_tables`.
+    if file is not None:
+        file = lower_table_lookups(file)
 
     flat = input if isinstance(input, FlattenedSystem) else flatten(file)
 

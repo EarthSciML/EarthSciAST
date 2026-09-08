@@ -185,6 +185,20 @@ const (
 	// CodeSubsystemIndexSetConflict: a referenced subsystem declares an index
 	// set that conflicts with a same-named set already in the parent document.
 	CodeSubsystemIndexSetConflict = "subsystem_index_set_conflict"
+	// CodeSubsystemIndexSetRenameUnknownName: a mount edge's
+	// `index_set_rename` names an index set the RESOLVED mounted document does
+	// not declare (esm-spec §4.7 "Mount-edge index-set renaming") — the
+	// mount-edge mirror of `template_import_rename_unknown_name`.
+	CodeSubsystemIndexSetRenameUnknownName = "subsystem_index_set_rename_unknown_name"
+	// CodeSubsystemIndexSetRenameUnsupportedMountForm: `index_set_rename` on a
+	// mount form that does not implement it (esm-spec §4.7 "Mount-edge
+	// index-set renaming", "Where it applies"). The field is a legal
+	// `SubsystemRef` property at either mount form, but a binding whose
+	// top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so rather
+	// than merge the leaf under its pre-rename axis names. Go does not inline a
+	// top-level `{ref}` at all, so it never raises this; the constant exists
+	// because the code table is cross-language uniform.
+	CodeSubsystemIndexSetRenameUnsupportedMountForm = "subsystem_index_set_rename_unsupported_mount_form"
 )
 
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section
@@ -228,6 +242,18 @@ const (
 	// ModelA's equations reference ModelB's variables and vice versa
 	// (tests/invalid/circular_coupling.esm).
 	ErrorCircularDependency = "circular_dependency"
+	// ErrorReservedVariableName is a DECLARATION — a `variables` key, a species,
+	// or a reaction parameter — spelled with a globally-scoped name: the
+	// document's independent variable (`domain.independent_variable`, default
+	// "t") or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope
+	// in every component and are resolved BY NAME ahead of the declaration maps
+	// — creditIndependentVariable below is exactly that precedence — so the
+	// declaration is unreachable and every reader silently receives the implicit
+	// symbol instead of the declared quantity. Hard error: the document that
+	// reported this (issue #200) validated clean and then read the simulation
+	// clock in place of a fuel time-lag constant.
+	// (tests/invalid/reserved_variable_name_*.esm).
+	ErrorReservedVariableName = "reserved_variable_name"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block
@@ -258,6 +284,51 @@ const (
 	// StructuralError: the document is schema-valid and the failure is the
 	// resolver's. The message names the offending data source and template.
 	codeDataSourceURLUnresolved = "data_source_url_unresolved"
+)
+
+// --- Diagnostic codes: §9.5 sampled function tables — the §9.5.3
+// `table_lookup` lowering (raised via newTableLookupError from
+// lower_table_lookup.go).
+//
+// A CROSS-BINDING vocabulary: every binding raises these same strings from its
+// own §9.5.3 lowering, so they belong in the shared registry rather than beside
+// the pass. Only the codes THIS binding actually emits are declared — the
+// remaining §9.5.5 codes (`table_axis_non_monotonic`, `table_data_nan`,
+// `table_outputs_length_mismatch`, `table_axis_duplicate_name`,
+// `table_outputs_duplicate_name`) are load-time table-well-formedness checks
+// this binding does not perform, and a constant for a code nothing raises would
+// advertise a diagnostic it cannot report. ---
+const (
+	// CodeTableLookupUnknownTable: a `table_lookup` names no table, or one the
+	// document's `function_tables` block does not declare.
+	CodeTableLookupUnknownTable = "table_lookup_unknown_table"
+	// CodeTableLookupAxisNameMismatch: the key set of `table_lookup.axes` does
+	// not match the axis names the referenced table declares — or the node
+	// carries positional `args`, which §9.5.2 requires to be empty.
+	CodeTableLookupAxisNameMismatch = "table_lookup_axis_name_mismatch"
+	// CodeTableLookupOutputOutOfRange: `table_lookup.output` selects no output
+	// of the referenced table — an index past `len(outputs)` (or past 0 for a
+	// single-output table), a name absent from `outputs`, or a non-integer /
+	// non-string selector.
+	CodeTableLookupOutputOutOfRange = "table_lookup_output_out_of_range"
+	// CodeTableInterpolationAxesMismatch: `interpolation` and the axis count
+	// disagree — `linear` and `nearest` require 1 axis, `bilinear` 2.
+	CodeTableInterpolationAxesMismatch = "table_interpolation_axes_mismatch"
+	// CodeTableDataShapeMismatch: `data`'s nesting does not match the shape
+	// `axes` (and `outputs`, when present) imply, so the selected output names
+	// no sub-array.
+	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
+	// CodeTableAxisNaN: an axis's `values` carries a non-finite entry; §9.5.1
+	// requires strictly-increasing FINITE floats.
+	CodeTableAxisNaN = "table_axis_nan"
+	// CodeTableOutOfBoundsUnsupported: the referenced table declares
+	// `out_of_bounds: "error"`, which this binding does not implement. Per
+	// esm-spec §9.5.3a the lookup is REFUSED at the point it would otherwise
+	// lower — answering it under the `"clamp"` mode the binding does have would
+	// return a number the author did not ask for with nothing in the result to
+	// say so. The document still LOADS and still round-trips; it simply does not
+	// evaluate.
+	CodeTableOutOfBoundsUnsupported = "table_out_of_bounds_unsupported"
 )
 
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from
@@ -358,10 +429,11 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
-// ClosedFunctionError, CoupleMultiplicativeNoTendencyError). It lets a caller
-// recover the stable diagnostic code from any of them uniformly —
-// errors.As(err, &de) then de.DiagnosticCode() — without switching over the
-// concrete types. All six render Error() in the shared "[code] message" form.
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError).
+// It lets a caller recover the stable diagnostic code from any of them
+// uniformly — errors.As(err, &de) then de.DiagnosticCode() — without switching
+// over the concrete types. All seven render Error() in the shared
+// "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -376,4 +448,5 @@ var (
 	_ DiagnosticError = (*EnumLoweringError)(nil)
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
+	_ DiagnosticError = (*tableLookupError)(nil)
 )
