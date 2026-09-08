@@ -71,3 +71,75 @@ def test_shaped_parameter_broadcast_matches_golden(fixture: dict) -> None:
         assert abs(r.actual - want) <= max(atol, rtol * max(abs(want), abs(r.actual))), (
             f"{key}: actual {r.actual} vs golden {want}"
         )
+
+
+def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Path) -> None:
+    """The broadcast covers a SUPPLIED value, never the ``0.0`` stand-in.
+
+    ``_resolve_override`` substitutes ``0.0`` for a missing (or non-numeric)
+    ``default``, the way the scalar ``param_values`` binding always has. Feeding
+    that stand-in to the §6.3 broadcast would fill the whole grid with zeros and
+    turn "this shaped parameter has no value yet" — a name an `update` binding or
+    a forcing buffer is meant to fill — into a silent, plausible answer: the
+    document below integrates ``p[k]`` and would report ``x[2](1) == 1.0``,
+    PASSING, with nothing anywhere naming ``p``.
+
+    Rust (`lower_inline_array_parameters` skips a ``None`` default) and Julia
+    (``scalar === nothing`` skips) both leave such a name alone, so Python does
+    too: the read stays scalar and ``index(p, k)`` says so.
+    """
+    doc = {
+        "esm": "1.0.0",
+        "metadata": {"name": "NoValueShapedParameter", "authors": ["conformance"]},
+        "index_sets": {"lev": {"kind": "interval", "size": 3}},
+        "models": {
+            "C": {
+                "variables": {
+                    "p": {"type": "parameter", "units": "K/s", "shape": ["lev"]},
+                    "x": {"type": "unknown", "units": "K", "shape": ["lev"], "default": 1.0},
+                },
+                "equations": [
+                    {
+                        "lhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["k"],
+                            "ranges": {"k": {"from": "lev"}},
+                            "expr": {
+                                "op": "D",
+                                "args": [{"op": "index", "args": ["x", "k"]}],
+                                "wrt": "t",
+                            },
+                        },
+                        "rhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["k"],
+                            "ranges": {"k": {"from": "lev"}},
+                            "expr": {"op": "index", "args": ["p", "k"]},
+                        },
+                    }
+                ],
+                "tests": [
+                    {
+                        "id": "t",
+                        "time_span": {"start": 0.0, "end": 1.0},
+                        "assertions": [
+                            {"variable": "x", "time": 1.0, "coords": {"lev": 2}, "expected": 1.0}
+                        ],
+                    }
+                ],
+            }
+        },
+    }
+    path = tmp_path / "no_value_shaped_parameter.esm"
+    path.write_text(json.dumps(doc))
+
+    results = run_pde_tests(str(path), model_name="C", method="RK45", rtol=1e-10, atol=1e-12)
+    assert len(results) == 1
+    r = results[0]
+    assert not r.passed, (
+        "a shaped parameter with no supplied value was broadcast as a column of zeros, "
+        "so the assertion passed on a value nothing in the document supplies"
+    )
+    assert "index applied to scalar value" in r.message, r.message

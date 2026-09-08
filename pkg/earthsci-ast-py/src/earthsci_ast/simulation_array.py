@@ -2439,7 +2439,16 @@ def _build_numpy_rhs(
         want = (
             _resolve_index_set_shape(decl, flat.index_sets, derived_extents=None) if decl else None
         )
-        if want:
+        # Only a value the document or the caller actually SUPPLIED is broadcast.
+        # ``_resolve_override`` substitutes 0.0 for a missing or non-numeric
+        # ``default`` (the same substitution the scalar ``param_values`` binding
+        # has always made), and filling the whole grid with that stand-in would
+        # turn "this shaped parameter has no value yet" — a name a forcing buffer
+        # or an `update` is meant to fill — into a silent column of zeros. Rust
+        # (`lower_inline_array_parameters` skips a `None` default) and Julia
+        # (`scalar === nothing` skips) both leave such a name alone.
+        supplied = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+        if want and supplied:
             # esm-spec §6.3 broadcast. A shape that does not resolve (an
             # unmaterialized derived set) has no extent to fill, so the name
             # keeps its scalar binding and the build's own extent checks report
