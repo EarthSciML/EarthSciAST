@@ -191,7 +191,9 @@ kind that crosses a mount into document scope:
 
 A mount-edge index-set rename rewrites the declaration key **and every reference to the old
 name inside the mounted document**. The list is §9.7.7's, plus the three sites that only exist
-because a mount carries a whole component rather than a set of declarations:
+because a mount carries a whole component rather than a set of declarations. Site 6b is a
+§9.7.7 site the pre-existing declaration walk did not cover; it is added to **both** walks
+here, so import-edge and mount-edge renaming stay one rule.
 
 | # | Site | Note |
 |---|---|---|
@@ -201,6 +203,7 @@ because a mount carries a whole component rather than a set of declarations:
 | 4 | Expression axis scalars `wrt`, `dim`, `integral`'s `var` | §9.7.7 site (§4.2). |
 | 5 | `integral` `lower` / `upper` **when the value is a bare string naming a renamed index set** | §9.7.7 site; any other bound is an ordinary expression position and is left alone. |
 | 6 | `ExpressionTemplate.where.<param>.shape` entries | §9.7.7 site (§9.6.1). Constraint **keys** are param names and are never rewritten. |
+| 6b | `aggregate` `join.<i>.on` key-column entries (§4.9.5) | §9.7.7 site, **added in this change and applied to §9.7.7's own walk too**. An `on` name resolves as a loop symbol, then the index set one of the node's ranges draws `{from}`, then a data column (CONFORMANCE_SPEC §5.5.8); only the middle class is an axis, so an entry is rewritten **iff** it is a key of the rename map. A clause's `syms` are bound symbols and are never rewritten. |
 | 7 | **`ModelVariable.shape` / `Parameter.shape` entries** | **New.** The site that makes the whole mechanism work — a mounted component's arrays are declared over the axis by name. |
 | 8 | **`Assertion.coords` KEYS** (§6.6.5 PDE-aware assertions) | **New.** The keys are spatial index-set / dimension names. |
 | 9 | **`DataSourceSelectAxis.gated_by`** (§8.9.2) | **New.** Names a `kind: "derived"` index set. |
@@ -208,7 +211,7 @@ because a mount carries a whole component rather than a set of declarations:
 Never rewritten, for the avoidance of doubt: `IndexSet.from_faq` and `ExpressionNode.id` (node
 identities, not axis names); `IndexSet.offsets` / `IndexSet.values` / `IndexSet.member_factor`
 (keyed-factor *variable* names — §9.7.7's `rebind` domain, not `rename`'s);
-`aggregate.output_idx` and `ranges` **keys** (bound index symbols); `coordinates.<k>.source`
+`aggregate.output_idx`, `ranges` **keys** and a `join` clause's `syms` (bound index symbols); `coordinates.<k>.source`
 (a data-array name); every structural scalar in the §9.7.7 protected set (`op`, `reduce`,
 `semiring`, `manifold`, `fn`, `table`, `side`, `attrs`, `members`).
 

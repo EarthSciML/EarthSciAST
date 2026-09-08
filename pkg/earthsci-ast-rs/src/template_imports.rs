@@ -739,6 +739,56 @@ fn name_map(
 ///
 /// Hand-rolled rather than `crate::json_visit`: nearly every object entry has
 /// a key-dependent substitution or skip rule.
+/// Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
+/// (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
+/// clause, and its shape is unambiguous, so the key plus this test is a sound
+/// positional guard.
+fn is_join_on_pairs(v: &Value) -> bool {
+    v.as_array()
+        .is_some_and(|arr| arr.iter().all(|p| p.as_array().is_some_and(|p| p.len() == 2)))
+}
+
+/// Rewrite a join clause's `on` key columns under an index-set rename (esm-spec
+/// §9.7.7 / §4.7 transitivity list).
+///
+/// An `on` name resolves as a LOOP SYMBOL, then the INDEX SET one of the node's
+/// ranges draws `{from}`, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8). Only the
+/// middle class is an axis occurrence, and a rename map is keyed by axis name,
+/// so an entry follows the rename **iff** it is a key of `isetmap`. Anything else
+/// — a loop symbol, a data-column name — is handed to `fallback` (the caller's
+/// ordinary treatment for a bare string here: the §9.7.7 `varmap` fold, or
+/// identity at a mount edge), so this rule only ever ADDS the axis case. The
+/// `isetmap` test runs on the name AS SPELLED, before any fallback, so the two
+/// maps cannot chain.
+fn rename_join_on(
+    v: &Value,
+    isetmap: &IndexMap<String, String>,
+    fallback: &dyn Fn(&str) -> String,
+) -> Value {
+    Value::Array(
+        v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|pair| match pair.as_array() {
+                        Some(p) => Value::Array(
+                            p.iter()
+                                .map(|e| match e.as_str() {
+                                    Some(s) => Value::String(match isetmap.get(s) {
+                                        Some(n) => n.clone(),
+                                        None => fallback(s),
+                                    }),
+                                    None => e.clone(),
+                                })
+                                .collect(),
+                        ),
+                        None => pair.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
 fn rename_walk(
     x: &Value,
     varmap: &IndexMap<String, String>,
@@ -784,6 +834,17 @@ fn rename_walk(
                     );
                 } else if k == "where" && v.is_object() {
                     out.insert(k.clone(), rename_where(v, isetmap));
+                } else if k == "on" && is_join_on_pairs(v) {
+                    // A join clause's key columns (esm-spec §4.9.5). Only an
+                    // entry that is a KEY of `isetmap` is an axis occurrence; a
+                    // loop symbol or a data-column name keeps the varmap fold it
+                    // had before this rule existed.
+                    out.insert(
+                        k.clone(),
+                        rename_join_on(v, isetmap, &|s| {
+                            varmap.get(s).cloned().unwrap_or_else(|| s.to_string())
+                        }),
+                    );
                 } else if k == "of" || is_rename_protected(k) {
                     out.insert(k.clone(), v.clone());
                 } else {
@@ -929,6 +990,22 @@ fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
                             && let Some(n) = m.get(s.as_str())
                         {
                             *s = n.clone();
+                        }
+                    }
+                }
+                // `join.<i>.on` key columns (§4.9.5): an entry follows the
+                // rename iff it names a renamed index set; a loop symbol or a
+                // data-column name is left as spelled. A clause's `syms` are
+                // bound symbols, never axes.
+                if let Some(Value::Array(join)) = obj.get_mut("join") {
+                    for clause in join.iter_mut() {
+                        let Some(on) = clause.get("on") else { continue };
+                        if !is_join_on_pairs(on) {
+                            continue;
+                        }
+                        let renamed = rename_join_on(on, m, &|s| s.to_string());
+                        if let Some(c) = clause.as_object_mut() {
+                            c.insert("on".to_string(), renamed);
                         }
                     }
                 }

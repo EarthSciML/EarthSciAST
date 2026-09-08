@@ -798,6 +798,49 @@ const RENAME_PROTECTED_KEYS = new Set<string>([
  * `where` still named the original, and registration would fail with
  * `template_constraint_unknown_index_set`.
  */
+/**
+ * Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
+ * (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
+ * clause, and its shape is unambiguous, so the key plus this test is a sound
+ * positional guard.
+ */
+function isJoinOnPairs(v: Json): boolean {
+  return Array.isArray(v) && v.every((p) => Array.isArray(p) && p.length === 2)
+}
+
+/**
+ * Rewrite a join clause's `on` key columns under an index-set rename (esm-spec
+ * §9.7.7 / §4.7 transitivity list).
+ *
+ * An `on` name resolves as a LOOP SYMBOL, then the INDEX SET one of the node's
+ * ranges draws `{from}`, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8). Only the
+ * middle class is an axis occurrence, and a rename map is keyed by axis name, so
+ * an entry follows the rename **iff** it is a key of `isetmap`. Anything else — a
+ * loop symbol, a data-column name — goes through `fallback` (the caller's
+ * ordinary treatment for a bare string here: the §9.7.7 `varmap` fold, or
+ * identity at a mount edge), so this rule only ever ADDS the axis case. The
+ * `isetmap` test runs on the name AS SPELLED, before any fallback, so the two
+ * maps cannot chain.
+ */
+function renameJoinOn(
+  v: Json,
+  isetmap: Record<string, string>,
+  fallback: (s: string) => string,
+): Json {
+  if (!Array.isArray(v)) return v
+  return v.map((pair) =>
+    Array.isArray(pair)
+      ? pair.map((e) =>
+          typeof e === 'string'
+            ? Object.prototype.hasOwnProperty.call(isetmap, e)
+              ? isetmap[e]!
+              : fallback(e)
+            : e,
+        )
+      : pair,
+  )
+}
+
 function renameWalk(
   x: Json,
   varmap: Record<string, string>,
@@ -829,6 +872,13 @@ function renameWalk(
         out[k] = Object.prototype.hasOwnProperty.call(tplmap, v) ? tplmap[v]! : v
       } else if (k === 'where' && isObject(v)) {
         out[k] = renameWhere(v, isetmap)
+      } else if (k === 'on' && isJoinOnPairs(v)) {
+        // A join clause's key columns (esm-spec §4.9.5). Only an entry that is a
+        // KEY of `isetmap` is an axis occurrence; a loop symbol or a data-column
+        // name keeps the varmap fold it had before this rule existed.
+        out[k] = renameJoinOn(v, isetmap, (e) =>
+          Object.prototype.hasOwnProperty.call(varmap, e) ? varmap[e]! : e,
+        )
       } else if (k === 'of' || RENAME_PROTECTED_KEYS.has(k)) {
         out[k] = deepClone(v)
       } else {
@@ -2165,6 +2215,17 @@ function mountRenameWalk(x: unknown, m: Record<string, string>): void {
         if (!isObject(rv)) continue
         const ro = rv as Record<string, unknown>
         if (typeof ro.from === 'string' && ro.from in m) ro.from = m[ro.from]
+      }
+    }
+    // `join.<i>.on` key columns (§4.9.5): an entry follows the rename iff it
+    // names a renamed index set; a loop symbol or a data-column name is left as
+    // spelled. A clause's `syms` are bound symbols, never axes.
+    if (Array.isArray(obj.join)) {
+      for (const c of obj.join as unknown[]) {
+        if (!isObject(c)) continue
+        const clause = c as Record<string, unknown>
+        if (!isJoinOnPairs(clause.on as Json)) continue
+        clause.on = renameJoinOn(clause.on as Json, m, (e) => e)
       }
     }
   } else if (Array.isArray(obj.shape)) {

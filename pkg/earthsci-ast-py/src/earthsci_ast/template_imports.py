@@ -739,6 +739,43 @@ _REF_NAME_SKIP_KEYS = (
 )
 
 
+def _is_join_on_pairs(value: Any) -> bool:
+    """Is ``value`` a join clause's ``on`` — a list of ``[left, right]`` key-column
+    pairs (esm-spec §4.9.5)? ``on`` occurs in exactly one place in the schema, a
+    ``join`` clause, and its shape is unambiguous, so the key plus this test is a
+    sound positional guard."""
+    return _is_array(value) and all(_is_array(pair) and len(pair) == 2 for pair in value)
+
+
+def _rename_join_on(value: Any, isetmap: dict[str, str], fallback=None) -> Any:
+    """Rewrite a join clause's ``on`` key columns under an index-set rename
+    (esm-spec §9.7.7 / §4.7 transitivity list).
+
+    An ``on`` name resolves as a LOOP SYMBOL, then the INDEX SET one of the
+    node's ranges draws ``{from}``, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8).
+    Only the middle class is an axis occurrence, and a rename map is keyed by
+    axis name, so an entry follows the rename **iff** it is a key of ``isetmap``.
+    Anything else — a loop symbol, a data-column name — is handed to
+    ``fallback`` (the caller's ordinary treatment for a bare string in this
+    position: the §9.7.7 ``varmap`` fold, or identity at a mount edge), so this
+    rule only ever ADDS the axis case. The ``isetmap`` test runs on the name AS
+    SPELLED, before any fallback, so the two maps cannot chain.
+
+    Without this, an ``on`` column naming a renamed axis would keep naming the
+    pre-rename axis and resolve against nothing."""
+    if fallback is None:
+
+        def fallback(e):
+            return e
+
+    def one(e):
+        if isinstance(e, str):
+            return isetmap[e] if e in isetmap else fallback(e)
+        return e
+
+    return [[one(e) for e in pair] for pair in value]
+
+
 def _rename_walk(
     x: Any, varmap: dict[str, str], isetmap: dict[str, str], tplmap: dict[str, str]
 ) -> Any:
@@ -784,6 +821,12 @@ def _rename_walk(
             return tplmap.get(value, value)
         if ks == "where" and _is_object(value):
             return _rename_where(value, isetmap)
+        if ks == "on" and _is_join_on_pairs(value):
+            # A join clause's key columns (esm-spec §4.9.5). Only an entry that
+            # is a KEY of `isetmap` is an axis occurrence; a loop symbol or a
+            # data-column name keeps the varmap fold it had before this rule
+            # existed.
+            return _rename_join_on(value, isetmap, lambda e: varmap.get(e, e))
         if ks == "of" or ks in _RENAME_PROTECTED_KEYS:
             return copy.deepcopy(value)
         return recurse(value)
@@ -876,6 +919,14 @@ def _mount_rename_walk(x: Any, m: dict[str, str]) -> None:
                     frm = rv.get("from")
                     if isinstance(frm, str) and frm in m:
                         rv["from"] = m[frm]
+        # ``join.<i>.on`` key columns (§4.9.5): an entry follows the rename iff
+        # it names a renamed index set; a loop symbol or a data-column name is
+        # left as spelled. A clause's ``syms`` are bound symbols, never axes.
+        join = x.get("join")
+        if _is_array(join):
+            for clause in join:
+                if _is_object(clause) and _is_join_on_pairs(clause.get("on")):
+                    clause["on"] = _rename_join_on(clause["on"], m)
     else:
         # ``ModelVariable``/``Parameter`` ``shape`` and a ``where`` constraint's
         # ``shape`` are ordered index-set names; an ExpressionNode ``shape``

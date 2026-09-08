@@ -122,3 +122,91 @@ def test_two_rename_keys_onto_one_target_is_a_collision(tmp_path):
         load_path(str(p))
     assert exc.value.code == "template_import_rename_collision"
     assert "merged" in str(exc.value)
+
+
+def _join_leaf() -> dict:
+    """A leaf whose `aggregate` joins on a loop symbol against an index set.
+
+    Modelled on ``tests/valid/aggregate/join_moves_running_exhaust.esm``: each
+    ``on`` pair is ``[loop symbol, index set]``, which is exactly the mix the
+    rename rule has to tell apart.
+    """
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "join_leaf", "description": "aggregate join on an axis"},
+        "index_sets": {
+            "sourceType": {"kind": "categorical", "members": ["onroad", "nonroad"]},
+        },
+        "models": {
+            "Leaf": {
+                "variables": {
+                    "e": {"type": "unknown", "units": "1", "shape": ["sourceType"], "default": 1.0}
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["e"], "wrt": "t"},
+                        "rhs": {
+                            "op": "aggregate",
+                            "args": [],
+                            "output_idx": ["src"],
+                            "semiring": "sum_product",
+                            "reduce": "+",
+                            "ranges": {"src": {"from": "sourceType"}},
+                            "join": [{"on": [["src", "sourceType"]]}],
+                            "expr": {
+                                "op": "*",
+                                "args": [-1.0, {"op": "index", "args": ["e", "src"]}],
+                            },
+                        },
+                    }
+                ],
+            }
+        },
+    }
+
+
+def test_mount_rename_rewrites_a_join_on_axis_but_not_its_loop_symbol(tmp_path):
+    # esm-spec §4.7 transitivity list / §9.7.7: an `aggregate` `join` clause's
+    # `on` key column follows the rename IFF it names a renamed index set. An
+    # `on` pair here is [loop symbol, index set]: `src` is bound by the node's
+    # own `ranges` and must stay, `sourceType` is the axis and must move. Left
+    # unrewritten, the join would key against an axis the merged registry no
+    # longer holds.
+    leaf = tmp_path / "join_leaf.esm"
+    leaf.write_text(json.dumps(_join_leaf()))
+    host = {
+        "esm": "1.0.0",
+        "metadata": {"name": "join_host", "description": "renames the joined axis"},
+        "models": {
+            "Host": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "*", "args": [-0.5, "x"]},
+                    }
+                ],
+                "subsystems": {
+                    "L": {
+                        "ref": str(leaf),
+                        "index_set_rename": {"sourceType": "atm_sourceType"},
+                    }
+                },
+            }
+        },
+    }
+    p = tmp_path / "join_host.esm"
+    p.write_text(json.dumps(host))
+
+    doc = load_path(str(p))
+    assert "atm_sourceType" in doc.index_sets
+    assert "sourceType" not in doc.index_sets
+
+    sub = doc.models["Host"].subsystems["L"]
+    assert sub.variables["e"].shape == ["atm_sourceType"]
+    rhs = json.loads(json.dumps(sub.equations[0].rhs, default=lambda o: o.__dict__))
+    emitted = json.dumps(rhs)
+    # The axis moved; the loop symbol did not.
+    assert '"atm_sourceType"' in emitted
+    assert '"sourceType"' not in emitted.replace('"atm_sourceType"', "")
+    assert '"src"' in emitted

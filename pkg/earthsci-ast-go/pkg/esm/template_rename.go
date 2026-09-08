@@ -133,6 +133,62 @@ func isetRenamed(s string, isetmap map[string]string) string {
 // are mapped through `isetmap` (an unmapped name stays as spelled). Without this
 // the rule body/registry would use the renamed set while `where` still named the
 // original, and registration would fail with template_constraint_unknown_index_set.
+// isJoinOnPairs reports whether v is a join clause's `on` — a list of
+// `[left, right]` key-column pairs (esm-spec §4.9.5). `on` occurs in exactly one
+// place in the schema, a `join` clause, and its shape is unambiguous, so the key
+// plus this test is a sound positional guard.
+func isJoinOnPairs(v any) bool {
+	arr, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	for _, p := range arr {
+		pair, ok := p.([]any)
+		if !ok || len(pair) != 2 {
+			return false
+		}
+	}
+	return true
+}
+
+// renameJoinOn rewrites a join clause's `on` key columns under an index-set
+// rename (esm-spec §9.7.7 / §4.7 transitivity list).
+//
+// An `on` name resolves as a LOOP SYMBOL, then the INDEX SET one of the node's
+// ranges draws `{from}`, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8). Only the
+// middle class is an axis occurrence, and a rename map is keyed by axis name, so
+// an entry follows the rename IFF it is a key of isetmap. Anything else — a loop
+// symbol, a data-column name — goes through fallback (the caller's ordinary
+// treatment for a bare string here: the §9.7.7 varmap fold, or identity at a
+// mount edge), so this rule only ever ADDS the axis case. The isetmap test runs
+// on the name AS SPELLED, before any fallback, so the two maps cannot chain.
+func renameJoinOn(v any, isetmap map[string]string, fallback func(string) string) any {
+	arr, _ := v.([]any)
+	out := make([]any, len(arr))
+	for i, p := range arr {
+		pair, ok := p.([]any)
+		if !ok {
+			out[i] = deepCopyJSON(p)
+			continue
+		}
+		renamed := make([]any, len(pair))
+		for j, e := range pair {
+			s, ok := e.(string)
+			if !ok {
+				renamed[j] = deepCopyJSON(e)
+				continue
+			}
+			if n, hit := isetmap[s]; hit {
+				renamed[j] = n
+			} else {
+				renamed[j] = fallback(s)
+			}
+		}
+		out[i] = renamed
+	}
+	return out
+}
+
 func renameWalk(x any, varmap, isetmap, tplmap map[string]string) any {
 	switch v := x.(type) {
 	case string:
@@ -188,6 +244,19 @@ func renameWalk(x any, varmap, isetmap, tplmap map[string]string) any {
 					out[k] = renameWhere(w, isetmap)
 					continue
 				}
+			}
+			// A join clause's key columns (esm-spec §4.9.5). Only an entry that
+			// is a KEY of isetmap is an axis occurrence; a loop symbol or a
+			// data-column name keeps the varmap fold it had before this rule
+			// existed.
+			if k == "on" && isJoinOnPairs(val) {
+				out[k] = renameJoinOn(val, isetmap, func(s string) string {
+					if n, ok := varmap[s]; ok {
+						return n
+					}
+					return s
+				})
+				continue
 			}
 			if k == "of" {
 				out[k] = deepCopyJSON(val)
@@ -673,6 +742,19 @@ func mountRenameWalk(x any, m map[string]string) {
 							ro["from"] = n
 						}
 					}
+				}
+			}
+			// `join.<i>.on` key columns (§4.9.5): an entry follows the rename
+			// iff it names a renamed index set; a loop symbol or a data-column
+			// name is left as spelled. A clause's `syms` are bound symbols,
+			// never axes.
+			if join, ok := v["join"].([]any); ok {
+				for _, c := range join {
+					clause, ok := c.(map[string]any)
+					if !ok || !isJoinOnPairs(clause["on"]) {
+						continue
+					}
+					clause["on"] = renameJoinOn(clause["on"], m, func(s string) string { return s })
 				}
 			}
 		} else if shape, ok := v["shape"].([]any); ok {

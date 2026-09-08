@@ -692,6 +692,37 @@ every object key needs sibling-context dispatch (the op-dependent apply
 combinator visitor would rebuild every object by hand anyway and the
 combinator would only ever handle arrays.
 """
+# Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
+# (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
+# clause, and its shape is unambiguous, so the key plus this test is a sound
+# positional guard.
+_is_join_on_pairs(v) = _is_array(v) && all(p -> _is_array(p) && length(p) == 2, v)
+
+"""
+    _rename_join_on(v, isetmap, fallback)
+
+Rewrite a join clause's `on` key columns under an index-set rename (esm-spec
+§9.7.7 / §4.7 transitivity list).
+
+An `on` name resolves as a LOOP SYMBOL, then the INDEX SET one of the node's
+ranges draws `{from}`, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8). Only the
+middle class is an axis occurrence, and a rename map is keyed by axis name, so an
+entry follows the rename **iff** it is a key of `isetmap`. Anything else — a loop
+symbol, a data-column name — goes through `fallback` (the caller's ordinary
+treatment for a bare string here: the §9.7.7 `varmap` fold, or identity at a
+mount edge), so this rule only ever ADDS the axis case. The `isetmap` test runs
+on the name AS SPELLED, before any fallback, so the two maps cannot chain.
+"""
+function _rename_join_on(v, isetmap::AbstractDict{String,String}, fallback)
+    Any[
+        _is_array(pair) ?
+        Any[e isa AbstractString ?
+            (haskey(isetmap, String(e)) ? isetmap[String(e)] : fallback(String(e))) : e
+            for e in pair] : pair
+        for pair in v
+    ]
+end
+
 function _rename_walk(x, varmap::AbstractDict{String,String},
                       isetmap::AbstractDict{String,String},
                       tplmap::AbstractDict{String,String})
@@ -717,6 +748,12 @@ function _rename_walk(x, varmap::AbstractDict{String,String},
                 out[ks] = get(tplmap, string(v), string(v))
             elseif ks == "where" && _is_object(v)
                 out[ks] = _rename_where(v, isetmap)
+            elseif ks == "on" && _is_join_on_pairs(v)
+                # A join clause's key columns (esm-spec §4.9.5). Only an entry
+                # that is a KEY of `isetmap` is an axis occurrence; a loop symbol
+                # or a data-column name keeps the varmap fold it had before this
+                # rule existed.
+                out[ks] = _rename_join_on(v, isetmap, e -> get(varmap, e, e))
             elseif ks == "of" || ks in _RENAME_PROTECTED_KEYS
                 out[ks] = _to_ordered(v)
             else
@@ -1909,6 +1946,18 @@ function _mount_rename_walk!(x, m::AbstractDict{String,String})
                 if frm isa AbstractString && haskey(m, String(frm))
                     rv["from"] = m[String(frm)]
                 end
+            end
+        end
+        # `join.<i>.on` key columns (§4.9.5): an entry follows the rename iff it
+        # names a renamed index set; a loop symbol or a data-column name is left
+        # as spelled. A clause's `syms` are bound symbols, never axes.
+        join_clauses = get(x, "join", nothing)
+        if _is_array(join_clauses)
+            for clause in join_clauses
+                _is_object(clause) || continue
+                on = get(clause, "on", nothing)
+                _is_join_on_pairs(on) || continue
+                clause["on"] = _rename_join_on(on, m, identity)
             end
         end
     else
