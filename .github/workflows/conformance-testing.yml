@@ -631,6 +631,14 @@ jobs:
       # measured 4m21s per run (#224). Dev is not the slow profile here:
       # Cargo.toml pins `opt-level = 2` for this crate and its dependencies in
       # the dev profile precisely so the conformance producers run fast.
+      #
+      # This step is NOT cheaper than the one it replaces, and nothing here
+      # claims it is: it builds three more bin targets at the same
+      # optimisation level, so on its own it takes longer than the release
+      # build did. What is saved is downstream — the crate is compiled ONCE,
+      # here, instead of again inside the 45-minute harness step below, where
+      # it was previously built twice over (once at default features for
+      # `esm`, once with `conformance-adapters` for the first adapter).
       - name: Build Rust package
         working-directory: pkg/earthsci-ast-rs
         run: |

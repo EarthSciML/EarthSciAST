@@ -438,7 +438,13 @@ Outputs land in `conformance-results/`:
 - `conformance-results/comparison/analysis.json` — cross-language comparison
 - `conformance-results/reports/conformance_report_*.html` — HTML report
 
-The comparison step requires at least two passing language implementations; it is skipped otherwise with the message "Need at least 2 successful language implementations to perform comparison."
+All five bindings are REQUIRED, and the comparison step is never skipped for want
+of them. A binding named on `--languages` that produced no `results.json` is
+recorded as a coverage FAILURE against that binding, so the run goes red rather
+than quietly comparing whatever is left; with fewer than two results to compare
+at all the comparator errors out (`need at least 2 language implementations to
+compare`) and writes no analysis, which is likewise red. There has been no
+"at least two succeeded, carry on" clause since the harness audit.
 
 By default this re-runs each binding's own test suite before generating that
 binding's conformance outputs, which is what you want on a laptop: one command,
