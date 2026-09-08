@@ -55,6 +55,12 @@ from typing import Any, Callable
 import numpy as np
 
 from .esm_types import EsmFile
+
+# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
+# under `DEFAULT_ALG`): nothing in this module names them any more, because no
+# entry point may default to a concrete tolerance — that would occupy level 1 of
+# the §2.2.2 chain and the document could never win. Hence the `noqa`.
+from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
@@ -85,6 +91,7 @@ from .simulation_common import (
     _retcode_for_error,
     _scipy_missing_message,
     check_parameter_override_keys,
+    flat_namespace_scope,
 )
 from .simulation_loaders import (
     LoaderProvider,
@@ -122,18 +129,13 @@ __all__ = [
 #: (API_SPEC §4); this binding's ecosystem has no first-class algorithm object,
 #: so a SciPy method NAME is accepted, which §2.5.3 explicitly permits.
 DEFAULT_ALG = "LSODA"
-#: Canonical cross-binding tolerance defaults (API_SPEC §5.8): the same knobs
-#: under the same names produce comparable trajectories in Julia, Python and Rust.
-#:
-#: These are Julia's values, and they are LOOSER than what this binding used to
-#: default to (1e-10 / 1e-14). A default is what a document gets when its author
-#: has expressed no opinion about accuracy, so it is the cheapest of the three
-#: rather than the most accurate. A caller who needs tighter integration passes
-#: `reltol=` / `abstol=` -- and a TEST that asserts trajectory accuracy must do
-#: so, rather than lean on the default and thereby assert something about the
-#: library's default instead of about the model.
-DEFAULT_RELTOL = 1e-4
-DEFAULT_ABSTOL = 1e-6
+# `DEFAULT_RELTOL` / `DEFAULT_ABSTOL` are imported at the top of this module from
+# `solver.py`, which owns them because it also owns the §2.2.2 chain they sit at
+# the bottom of. A second copy here would let the entry points and the bottom of
+# that chain drift apart. They stay importable from this module under their
+# historical names, but no entry point here uses them as a signature default:
+# `solve` and `init` both take `None` and hand the chain a "caller said nothing",
+# which is the only way the document can sit BETWEEN the call site and these.
 
 
 def _discover_loader_extents(
@@ -335,6 +337,13 @@ class EsmProblem:
     providers: dict[str, Any] | None = None
     gated_provider_keys: list[str] = field(default_factory=list)
     doc: dict | None = None  # the (possibly rewritten) raw document
+    #: The document's §2.2 `solver` block, captured at construction. Kept as its
+    #: OWN field rather than read back out of :attr:`doc`, because ``doc`` is
+    #: only populated on the pushdown-rewrite path — reading the block from
+    #: there made the §2.2.2 chain dead code for every ordinary problem. ``None``
+    #: when the document declares no block, or when the problem was built from a
+    #: bare :class:`FlattenedSystem` (which carries no document at all).
+    solver: Any = None
     model_name: str | None = None
     metaparameters: dict[str, int] = field(default_factory=dict)
     sample_time: float = 0.0
@@ -560,7 +569,7 @@ def esm_problem(
     # leaves every parameter at its default, so the author's binding does
     # nothing and the run still reports a verdict: a wrong answer, not a
     # missing one.
-    check_parameter_override_keys(flat.parameters, p)
+    check_parameter_override_keys(flat.parameters, p, flat_namespace_scope(flat))
 
     # ---- provider injection: eager CONST materialization; gated deferral ----
     merged: dict[str, Any] = {
@@ -659,6 +668,9 @@ def esm_problem(
         providers=dict(providers) if providers else None,
         gated_provider_keys=sorted(gated),
         doc=doc_for_record,
+        # esm-spec §2.2: the document's own solver hints, taken from the TYPED
+        # file, which every input carrier except a bare FlattenedSystem produces.
+        solver=getattr(file, "solver", None),
         model_name=model_name,
         metaparameters=dict(closed_metaparameters),
         sample_time=t0,
@@ -710,8 +722,8 @@ def solve(
     prob: EsmProblem | EnsembleProblem,
     *,
     alg: str = DEFAULT_ALG,
-    abstol: float = DEFAULT_ABSTOL,
-    reltol: float = DEFAULT_RELTOL,
+    abstol: float | None = None,
+    reltol: float | None = None,
     saveat: Any = None,
     callback: Any = None,
     maxiters: int | None = None,
@@ -737,7 +749,15 @@ def solve(
         The solver algorithm. This binding's ecosystem has no first-class
         algorithm object, so a SciPy method name is accepted (§2.5.3).
     abstol, reltol:
-        Absolute and relative solver tolerances.
+        Absolute and relative INTEGRATION tolerances. ``None`` (the default)
+        means "not given" and resolves per esm-spec §2.2.2, most-specific
+        first: an explicit argument here, then the document's
+        ``solver.abstol`` / ``solver.reltol`` (§2.2), then the binding default
+        (``abstol`` 1e-6, ``reltol`` 1e-4). The two resolve independently, so a
+        document declaring only ``reltol`` leaves ``abstol`` on the default.
+
+        These are a different quantity from the ``tolerance`` object an
+        assertion is COMPARED at (§6.6.4), which resolves on its own chain.
     saveat:
         Output times: an explicit sequence, or a scalar output STEP measured
         from ``tspan[0]``. ``None`` keeps the dense uniform default grid.
@@ -760,6 +780,12 @@ def solve(
         violation still raises.
     """
     if isinstance(prob, EnsembleProblem):
+        # `abstol` / `reltol` are forwarded UNRESOLVED — still `None` when the
+        # caller named nothing. Resolving here would turn "caller said nothing"
+        # into an explicit binding default at level 1 of the §2.2.2 chain, and
+        # each trajectory's own document could then never win. The recursive
+        # `solve()` on each member problem runs the chain against that member's
+        # document.
         return prob.solve(
             trajectories=trajectories,
             alg=alg,
@@ -769,6 +795,12 @@ def solve(
             callback=callback,
             maxiters=maxiters,
         )
+
+    # esm-spec §2.2.2: caller > document `solver` block > binding default. Read
+    # from the typed block the EsmProblem captured at construction, so the order
+    # holds however the problem was built (`prob.doc` is populated only on the
+    # pushdown-rewrite path).
+    abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
     if not SCIPY_AVAILABLE:
         return _failure_result(_scipy_missing_message("solve"))
 
@@ -930,7 +962,7 @@ def remake(
                 f"state vector. Build a new EsmProblem with "
                 f"esm_problem(..., metaparameters={{'{clash[0]}': ...}})."
             )
-        check_parameter_override_keys(prob.flat.parameters, p)
+        check_parameter_override_keys(prob.flat.parameters, p, flat_namespace_scope(prob.flat))
         # A gated provider's fetch was SLICED to the support set value-invention
         # derived from the parameters at construction. Substituting a parameter
         # can move that set, and re-fetching is exactly what remake must not do.
@@ -971,6 +1003,7 @@ def remake(
         providers=prob.providers,
         gated_provider_keys=list(prob.gated_provider_keys),
         doc=prob.doc,
+        solver=prob.solver,
         model_name=prob.model_name,
         metaparameters=dict(prob.metaparameters),
         sample_time=prob.sample_time,
@@ -1013,6 +1046,12 @@ class Integrator:
 
     ``u`` is the current state vector; :meth:`__getitem__` indexes it BY NAME
     (§2.5.7), as a :class:`Solution` does.
+
+    ``abstol`` / ``reltol`` resolve on the esm-spec §2.2.2 chain — call site,
+    then the document's ``solver`` block, then the binding default — the same
+    chain :func:`solve` runs, because it belongs to a document being integrated
+    rather than to one entry point. The resolved values are readable back as
+    :attr:`abstol` / :attr:`reltol`.
     """
 
     def __init__(
@@ -1020,8 +1059,8 @@ class Integrator:
         prob: EsmProblem,
         *,
         alg: str = DEFAULT_ALG,
-        abstol: float = DEFAULT_ABSTOL,
-        reltol: float = DEFAULT_RELTOL,
+        abstol: float | None = None,
+        reltol: float | None = None,
         callback: Any = None,
         maxiters: int | None = None,
     ) -> None:
@@ -1040,9 +1079,26 @@ class Integrator:
                 f"init: alg={alg!r} is not a steppable SciPy solver "
                 f"(have: {', '.join(_STEPPABLE_ALGS)})"
             )
+        # esm-spec §2.2.2: caller > the document's `solver` block > binding
+        # default, per field. The chain belongs to "a document is being
+        # integrated", not to the `solve()` call site, so it runs at THIS door
+        # too — otherwise ``solve(prob)`` honoured a declared ``abstol`` and
+        # ``init(prob)`` + ``step`` silently did not, on the same document.
+        #
+        # ``None`` (not ``DEFAULT_ABSTOL``) is what makes level 1 expressible: a
+        # concrete default here would be indistinguishable from a caller who
+        # passed that value, and the document could never win. The chain tests
+        # ``is not None`` rather than truthiness, so a declared ``0.0`` — a
+        # value the author SET — is not swallowed.
+        abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
         rhs, y0, names = _rhs_of(prob)
         self.prob = prob
         self.vars: list[str] = names
+        #: The effective INTEGRATION tolerances this integrator holds, after the
+        #: §2.2.2 chain. A different quantity from the assertion-comparison
+        #: ``tolerance`` object of §6.6.4.
+        self.abstol: float = abstol
+        self.reltol: float = reltol
         self.callbacks: CallbackSet = prob.callbacks if callback is None else CallbackSet(callback)
         self.retcode: ReturnCode | None = None
         self.message: str = ""
@@ -1172,12 +1228,20 @@ def init(
     prob: EsmProblem,
     *,
     alg: str = DEFAULT_ALG,
-    abstol: float = DEFAULT_ABSTOL,
-    reltol: float = DEFAULT_RELTOL,
+    abstol: float | None = None,
+    reltol: float | None = None,
     callback: Any = None,
     maxiters: int | None = None,
 ) -> Integrator:
-    """Build a stepping :class:`Integrator` over ``prob`` (esm-libraries-spec §2.5.6)."""
+    """Build a stepping :class:`Integrator` over ``prob`` (esm-libraries-spec §2.5.6).
+
+    ``abstol`` / ``reltol`` resolve on the esm-spec §2.2.2 chain, exactly as
+    :func:`solve`'s do: ``None`` (the default) means "not given", so the
+    document's ``solver.abstol`` / ``solver.reltol`` are used, falling through
+    per field to the binding defaults (``abstol`` 1e-6, ``reltol`` 1e-4). An
+    explicit argument here wins outright. The chain runs wherever a document is
+    integrated, so stepping honours the document as solving does.
+    """
     return Integrator(
         prob, alg=alg, abstol=abstol, reltol=reltol, callback=callback, maxiters=maxiters
     )

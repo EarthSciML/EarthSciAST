@@ -349,6 +349,169 @@ func TestTemplateImports_IntegralRenameFollowsAxis(t *testing.T) {
 	}
 }
 
+// TestTemplateImports_MetaparamDoesNotRewriteDimSlot pins `dim` as opaque to
+// §9.7.6 metaparameter substitution, alongside `wrt`.
+//
+// `dim` is a scalar field naming a spatial axis (esm-spec §4.9.1) — an axis
+// NAME, not an expression position. Go was the only binding that omitted it
+// from the substitution skip set, so a bound metaparameter sharing a name with
+// an axis rewrote the axis into an integer: with `x` bound to 3,
+// {"op":"grad","args":["x"],"dim":"x"} became {"op":"grad","args":[3],"dim":3}
+// in Go alone, while `wrt` in the same node was correctly left alone. Julia,
+// TypeScript, Python and Rust all skip `dim`; this asserts Go agrees.
+func TestTemplateImports_MetaparamDoesNotRewriteDimSlot(t *testing.T) {
+	// One node carrying BOTH kinds of slot: `x` in `args` is an ordinary
+	// expression position and must fold; `x` in `dim`/`wrt` is an axis name and
+	// must not.
+	var node any
+	if err := json.Unmarshal(
+		[]byte(`{"op":"grad","args":["x"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		t.Fatal(err)
+	}
+	got := substituteMetaparams(node, map[string]any{"x": int64(3)})
+	obj, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("substituteMetaparams returned %T; want map", got)
+	}
+	// The two axis-naming slots must behave IDENTICALLY — that symmetry is the
+	// invariant the divergence broke.
+	for _, k := range []string{"dim", "wrt"} {
+		if obj[k] != "x" {
+			t.Errorf("%s = %#v; want %q — an axis name is not an expression position",
+				k, obj[k], "x")
+		}
+	}
+	// Positive control, in the SAME node: the skip is per-KEY, not per-node. A
+	// regression that bailed out of the whole map on meeting a skipped key would
+	// leave the two assertions above green for the wrong reason, so `args` — a
+	// genuine expression position sitting beside `dim`/`wrt` — must still fold.
+	args, ok := obj["args"].([]any)
+	if !ok {
+		t.Fatalf("args is %T; want []any", obj["args"])
+	}
+	if len(args) != 1 || args[0] != int64(3) {
+		t.Errorf("args = %#v; want [3] — skipping `dim` must not stop ordinary "+
+			"expression-position substitution in the same node", args)
+	}
+}
+
+// TestTemplateImports_MetaparamDoesNotRewriteDimInDocument is the document-level
+// half of the test above: it drives the real §9.7 pipeline
+// (`resolveAndLowerJSON`, the surface `LoadPath` and the conformance runners
+// share) rather than the unexported walker, so it proves the divergence was
+// REACHABLE and not merely latent behind an earlier check.
+//
+// The reachable spelling is deliberate. §9.7.6 forbids a metaparameter name
+// colliding with a visible variable / parameter / species / INDEX-SET name
+// (`metaparameter_name_conflict`), so the obvious repro — metaparameter `lev`
+// plus index set `lev` — never reaches substitution. But §4.9.1 clause (ii)
+// makes the value of a `dim` field name a spatial coordinate STRUCTURALLY, with
+// no `index_sets` entry required, and a bare coordinate is none of the four
+// kinds the collision check covers. So `lev` may legally be a metaparameter and
+// a `dim` axis in one document — and before the fix the axis silently became
+// `"dim": 3` here while every other binding kept `"dim": "lev"`.
+func TestTemplateImports_MetaparamDoesNotRewriteDimInDocument(t *testing.T) {
+	src := `{
+      "esm": "0.8.0",
+      "metadata": {"name": "t"},
+      "metaparameters": {"lev": {"type": "integer", "default": 3}},
+      "models": {
+        "M": {
+          "variables": {"c": {"type": "unknown", "units": "1", "default": 0.5}},
+          "equations": [{"lhs": {"op": "D", "args": ["c"], "wrt": "t"},
+                         "rhs": {"op": "*", "args": [
+                           {"op": "grad", "args": ["c"], "dim": "lev"}, "lev"]}}]
+        }
+      }
+    }`
+	out, err := resolveAndLowerJSON(src, ".", nil)
+	if err != nil {
+		t.Fatalf("resolve+lower: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode expanded: %v", err)
+	}
+	rhs, ok := tiDig(doc, "models", "M", "equations", 0, "rhs").(map[string]any)
+	if !ok {
+		t.Fatalf("rhs is not an object: %#v", tiDig(doc, "models", "M", "equations", 0, "rhs"))
+	}
+	rhsArgs, ok := rhs["args"].([]any)
+	if !ok || len(rhsArgs) != 2 {
+		t.Fatalf("rhs.args = %#v; want two entries", rhs["args"])
+	}
+	grad, ok := rhsArgs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("rhs.args[0] = %#v; want the grad node", rhsArgs[0])
+	}
+	// The axis slot survives as an axis NAME…
+	if grad["dim"] != "lev" {
+		t.Errorf("grad.dim = %#v; want %q — the §4.9.1 axis name must survive the "+
+			"§9.7.6 close", grad["dim"], "lev")
+	}
+	// …while the genuine expression position beside it closes to the integer.
+	if rhsArgs[1] != float64(3) {
+		t.Errorf("rhs.args[1] = %#v; want 3 — the expression position must still close",
+			rhsArgs[1])
+	}
+}
+
+// tiDig walks a decoded JSON document by string keys and int array indices,
+// returning nil at the first step that does not exist or has the wrong shape.
+func tiDig(v any, path ...any) any {
+	for _, step := range path {
+		switch s := step.(type) {
+		case string:
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil
+			}
+			v = m[s]
+		case int:
+			a, ok := v.([]any)
+			if !ok || s < 0 || s >= len(a) {
+				return nil
+			}
+			v = a[s]
+		default:
+			return nil
+		}
+	}
+	return v
+}
+
+// TestTemplateImports_RenameStillRewritesDimAxis guards the other side of the
+// change above: `dim` joining metaSubstSkipKeys also puts it in the DERIVED
+// renameProtectedKeys, and a protected key is copied verbatim by the §9.7.7
+// rename walk. It must still rename, because renameWalk tests renameAxisKeys
+// FIRST — this pins that ordering so a future reshuffle cannot silently make an
+// index-set rename stop following a `dim` axis.
+//
+// The ordering argument holds for a STRING `dim` — the axis branch claims the
+// key only when the value is a string. A non-string `dim` (schema-invalid, but
+// the §9.7.2 walk runs at load, before validation) now falls through to the
+// protected-key branch and is copied verbatim instead of being recursed. That
+// is the same behavior the other four bindings already have, since `dim` is in
+// their rename-protected sets too, so it is convergence rather than drift.
+func TestTemplateImports_RenameStillRewritesDimAxis(t *testing.T) {
+	var node any
+	if err := json.Unmarshal(
+		[]byte(`{"op":"grad","args":["c"],"dim":"x","wrt":"x"}`), &node); err != nil {
+		t.Fatal(err)
+	}
+	walked := renameWalk(node, map[string]string{}, map[string]string{"x": "lev"},
+		map[string]string{})
+	out, ok := walked.(map[string]any)
+	if !ok {
+		t.Fatalf("renameWalk returned %T; want map", walked)
+	}
+	for _, k := range []string{"dim", "wrt"} {
+		if out[k] != "lev" {
+			t.Errorf("%s = %#v; want %q — the rename must follow the axis", k, out[k], "lev")
+		}
+	}
+}
+
 // TestTemplateImports_WhereRenameUnknownIndexSet confirms a `where` shape naming
 // a set the library never declares survives the rename as spelled and is
 // rejected at rule registration — the fix does not paper over genuine typos.

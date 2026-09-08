@@ -21,6 +21,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")
+    include("solver_block_test.jl")
     include("classification_test.jl")
     include("parse_test.jl")
     # Version-marker migration (src/migration.jl, esm-libraries-spec §8.3) —
@@ -272,8 +273,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_pde_inline_ic_param_override_test.jl")
     include("conformance_pde_inline_array_overrides_test.jl")
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
+    include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
     include("conformance_scalar_ic_test.jl")
     include("conformance_override_key_diagnostics_test.jl")
+    include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("closed_functions_test.jl")
     include("closed_functions_autodiff_test.jl")
     include("datetime_arithmetic_test.jl")

@@ -17,7 +17,7 @@ import type { AnySchemaObject } from 'ajv'
 // prettier-ignore
 export const schema: AnySchemaObject = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://earthsciml.org/schemas/esm/1.0.0/esm.schema.json",
+  "$id": "https://earthsciml.org/schemas/esm/1.1.0/esm.schema.json",
   "title": "ESM Format",
   "description": "EarthSciML Abstract Syntax Tree Format (v1.0.0) — an `aggregate`'s `join` clause carries the optional `syms`, naming the two RANGE SYMBOLS its `on` pairs are read at, so a relation can be joined to ITSELF: two ranges over one index set, whose key columns' shared axis cannot say which side is which (CONFORMANCE_SPEC §5.5.8, docs/content/rfcs/self-join-two-ranges-over-one-index-set.md). Purely additive — every document written before it stays valid and unchanged, which is why it lands without a version bump; see that note's §4. v1.0.0 — a language-agnostic JSON format for Earth system model components, their composition, and runtime configuration. v1.0.0 is a clean break with no deprecation path and no compatibility shims (docs/content/rfcs/unified-variable-model.md): the five declared variable types collapse to TWO. `unknown` is a quantity the solver solves for — its behavior is given by EQUATIONS and never by a field on the variable — and `parameter` is a quantity supplied to the solver, carrying a number or a `distribution` plus an optional `update` block saying when and from what it refreshes. Removed: `state` and `observed` (with the `expression` field — an observed variable becomes an unknown plus a bare-variable-LHS equation); `brownian` (with `noise_kind` / `correlation_group` — a noise source is a parameter with a `distribution` and `update.kind: \"wiener\"`, correlated noise being ONE vector-valued parameter whose distribution carries a `cov` matrix, which closes the gap the 0.x schema explicitly deferred); `discrete` (with `refresh` and the `RefreshTrigger` def — a refreshing input is a parameter with a `schedule` / `data` / `remesh` update); the `discrete_parameters` event lists and the event `functional_affect` (parameter mutation moves onto the parameter itself as a `condition` / `crossing` update carrying an `expression`, a `from` binding, or a `handler`; events now affect UNKNOWNS only); and the `data_loaders` COMPONENT kind together with `DataLoader.variables` (top-level `data_sources` is now a pure registry of ingest configuration — source, temporal, select, record_filter, extent, reader_options, determinism — that parameters draw from via `update.from`; a data source is no longer a coupling endpoint, a subsystem, or a scoped-name path root). Everything the solver needs is DERIVED rather than declared — which unknowns are ODE states, observed, or algebraic, and which parameters are Brownian, discrete, sampled, or constant — and every binding exposes the same classification functions to derive it (esm-spec §6.3.1). v0.9.0 changes no on-disk shape: it replaces the Option A (always-expanded) template round-trip with Option B (reference-preserving; esm-spec §9.6.4, docs/content/rfcs/out-of-line-expression-templates.md). Template references survive load and parse-then-emit; emit materializes each component's referenced templates into its `expression_templates` registry (authored entries first in authored order, materialized entries after in lexicographic UTF-8 name order; registry keys may be dotted post-rename names); eager references (target-bearing, esm-spec §9.6.4 rule 3) still expand at load, so no rewrite-target op survives inside a reference; `emit ∘ load` is a byte-wise fixed point; emitted documents carrying surviving references or materialized registries declare `esm: 0.9.0` or later. v0.8.0 is a clean break that removes all bespoke spatial-grid machinery in favor of expressing grid geometry directly with the unified Functional Aggregate Query (`aggregate`) IR (RFC semiring-faq-unified-ir), and retains no backward-compatibility shims. Removed: the top-level `grids`, `staggering_rules`, and `discretizations` blocks; the `Grid` / `GridExtent` / `GridMetricArray` / `GridMetricGenerator` / `GridConnectivity` / `GridCRS` defs; the entire stencil-template discretization rule grammar (`Discretization`, `DiscretizationVariant`, `MultiOutputStencilRule`, `DiscretizationRef`, `GridDiscretizationDescriptor`, and the `Rule` / `PatternNode` / `NeighborSelector` / `StencilEntry` / `RuleBinding` / `BoundaryPolicy` / `BoundaryPolicySpec` / `GhostWidth` / `GhostVarDecl` / `RuleRegion` / `RuleGuard` machinery, including `Equation.region`); all regridding configuration (`Model.regrid`, `RegridSpec`, `Interface.regridding`); the `Domain.spatial` / `SpatialDimension` / `CoordinateTransform` geometry block and the deprecated domain-level `boundary_conditions`; the `DataLoader.grid` / `DataLoader.mesh` descriptors and the `DataLoaderMesh` def; and the `grid_discretization_descriptor` document kind with its `grid_refs` test/example fields. Grid geometry — coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays — is now ordinary data: loaded from a `data_loaders` primitive or declared as variables/parameters, with topology and metrics constructed declaratively as `aggregate` FAQs (the `intersect_polygon` kernel leaf remains for polygon clipping). Iteration domains are declared once in the document-scoped `index_sets` registry. Regridding is expressed as an ordinary coupling expression between two variables. Earlier additive features are retained: the `integral` AST op (PIDEs), array-or-single `plots.y`, sampled `function_tables` + `table_lookup`, in-file `expression_templates` + `apply_expression_template`, and the closed `enums` + `fn` / `enum` ops. The template-library RFC (docs/content/rfcs/template-library-imports.md; esm-spec §9.7) adds cross-file template sharing at esm 0.8.0: template-library files (top-level `expression_templates`), ordered `expression_template_imports` with §4.7 reference semantics, and load-time integer `metaparameters` admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions — all resolved and folded at load, before validation and before the §9.6.3 rewrite fixpoint.",
   "type": "object",
@@ -135,6 +135,9 @@ export const schema: AnySchemaObject = {
       "additionalProperties": {
         "$ref": "#/$defs/Coordinate"
       }
+    },
+    "solver": {
+      "$ref": "#/$defs/Solver"
     },
     "expression_templates": {
       "type": "object",
@@ -2559,9 +2562,42 @@ export const schema: AnySchemaObject = {
         }
       ]
     },
+    "Solver": {
+      "type": "object",
+      "description": "Document-scoped, OPTIONAL solver hints (esm-spec §2.2): numerics the document knows about ITSELF, which each binding maps to its own integrator. Purely additive — a document without it validates, flattens and emits exactly as before. Every field is ADVISORY: a binding MAY ignore any or all of them and still conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that ignores every field and still converges conforms; the requirement to integrate successfully and agree within the CONFORMANCE_SPEC §5.9 error band is untouched by this block and is not excused by it. What IS normative: parse it, validate it, round-trip it VERBATIM (it is authored configuration, a peer of `tolerance` and `parameter_overrides` — not a load-time construct like `expression_template_imports`), leave the flattened system unchanged, and reject it in a document declaring `esm` below 1.1.0 with `solver_version_too_old`. This block is NOT for algorithm names (`BDF`/`LSODA`/`Rosenbrock23` are per-binding identifiers and would not be portable — there is deliberately no `alg` field), NOT for binding-specific compile knobs (`cse` is a sympy.lambdify concern), and NOT a DAE declaration (`system_class` is DERIVED from the equation set). An empty block (`\"solver\": {}`) is LEGAL and means exactly what absence means; it NORMALIZES to absence at load, so it does not survive `parse -> emit` and the typed value never holds a block with nothing set. That normalization is why the schema does NOT carry `minProperties: 1`: every other optional top-level container (`coordinates`, `index_sets`, `metaparameters`, `coupling_roles`) admits an empty object, and a lone exception here would be a rule a reader has to learn for no gain. Arrives at esm 1.1.0.",
+      "additionalProperties": false,
+      "properties": {
+        "stiffness": {
+          "enum": [
+            "low",
+            "moderate",
+            "high"
+          ],
+          "description": "The author's declaration of the system's stiffness. A binding MAY select an implicit / BDF-family integrator on `high`. ABSENCE IS NOT A DEFAULT VALUE: a document that omits this key has not declared its stiffness and does not thereby declare `low`; bindings MUST NOT read absence as an assertion about the system. The motivating case is the POLLU stiff-ODE benchmark (Verwer 1994), whose rate constants span ~8e-7 to ~7e9 1/s: scipy's LSODA cannot integrate it at all while BDF reproduces the published reference, a fact that is true of the MODEL rather than of any runner."
+        },
+        "abstol": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Absolute INTEGRATION tolerance the document asks for. Spelled as the `solve()` keyword (API_SPEC §4) so it passes through literally. This is a DIFFERENT QUANTITY from the `tolerance` object on a model / reaction system / test / assertion (esm-spec §6.6.4), which is the tolerance an assertion is COMPARED at; the two resolve independently and neither substitutes for the other. Resolution order, most-specific first: an explicit argument at the `solve()` call site, then this field, then the binding default (1e-6)."
+        },
+        "reltol": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Relative INTEGRATION tolerance the document asks for. Same resolution order and the same distinction from the assertion-comparison `tolerance` object as `abstol`; the binding default is 1e-4."
+        },
+        "splitting": {
+          "enum": [
+            "none",
+            "lie",
+            "strang"
+          ],
+          "description": "Advisory: the system tolerates or benefits from this operator-splitting convention. Carries NO prescribed substep structure and does not amend esm-spec §9's single-flat-system model — a binding that does not split ignores it. The vocabulary is deliberately the one the discretization RFC §7.5 dimensional-splitting field already uses, so the word means one thing across the spec, even though that occurrence is executable and this one is a hint."
+        }
+      }
+    },
     "Tolerance": {
       "type": "object",
-      "description": "Numerical comparison tolerance. Any of abs/rel may be specified. If both are given, an assertion passes when either bound is satisfied: |actual - expected| <= abs  OR  |actual - expected| / max(|expected|, epsilon) <= rel.",
+      "description": "Numerical comparison tolerance. Any of abs/rel may be specified. If both are given, an assertion passes when either bound is satisfied: |actual - expected| <= abs  OR  |actual - expected| <= rel * max(|actual|, |expected|). The relative bound is SYMMETRIC -- it scales by the larger of the two magnitudes, not by |expected| alone (Julia `isapprox`; esm-spec 6.6.3). Finiteness is judged before tolerance: a non-finite actual fails against every finite expected, at every tolerance.",
       "additionalProperties": false,
       "properties": {
         "abs": {
@@ -2572,7 +2608,7 @@ export const schema: AnySchemaObject = {
         "rel": {
           "type": "number",
           "minimum": 0,
-          "description": "Relative tolerance: |actual - expected| / max(|expected|, epsilon) <= rel."
+          "description": "Relative tolerance: |actual - expected| <= rel * max(|actual|, |expected|). Symmetric in actual and expected -- the scale is the larger of the two magnitudes, not |expected| alone."
         }
       }
     },

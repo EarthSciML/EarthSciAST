@@ -1,0 +1,49 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "SolverBlock",
+    "description": "Exercises the document-scoped `solver` block (esm-spec §2.2): stiffness, integration tolerances, and a splitting hint the document knows about itself. All four fields are present, so this pins each one's spelling and admissible values, and pins that the block round-trips VERBATIM (§2.2.4 requirement 2). Purely additive and purely ADVISORY: removing `solver` leaves a still-valid document that flattens and emits identically, and a binding that reads none of these fields still conforms — advisory governs the MECHANISM, never the OUTCOME (§2.2.1). Note that `solver.abstol`/`reltol` are INTEGRATION tolerances and are a different quantity from the model-level `tolerance` object below, which is what the inline test's assertion is COMPARED at (§6.6.4); both appear here deliberately, so a reader can see the two side by side.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "solver",
+      "stiffness",
+      "tolerances",
+      "advisory",
+      "additive-schema"
+    ]
+  },
+  "solver": {
+    "stiffness": "high",
+    "abstol": 1e-8,
+    "reltol": 1e-6,
+    "splitting": "strang"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": { "type": "unknown", "units": "mol/m^3", "default": 2.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.5 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["A"], "wrt": "t" },
+          "rhs": { "op": "neg", "args": [{ "op": "*", "args": ["k", "A"] }] }
+        }
+      ],
+      "tolerance": { "abs": 1e-6 },
+      "tests": [
+        {
+          "id": "decays_by_half_life",
+          "description": "A(t) = 2 exp(-k t); at t = 2/k the value is 2/e^2.",
+          "time_span": { "start": 0.0, "end": 4.0 },
+          "assertions": [
+            { "variable": "A", "time": 4.0, "expected": 0.2706705664732254 }
+          ]
+        }
+      ]
+    }
+  }
+}

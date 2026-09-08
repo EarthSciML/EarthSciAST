@@ -2930,5 +2930,45 @@
     "resolver_only": true,
     "resolver_error_code": "data_source_url_unresolved",
     "notes": "Resolver-level invalid (esm-spec §8.2.1). The document is SCHEMA-VALID — `url_template` is a bare string, so nothing in JSON Schema forbids a `${VAR}` in it — which is what makes this the resolver's rejection rather than a schema error. UNLIKE the other `resolver_only` pins, `is_valid` is false for EVERY binding: §8.2.1 resolution is REQUIRED of all five (it decides where a document's data comes from, and an optional capability there would make the same document resolve under one binding and not another), so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names the offending entry and template — the failure this replaces was an `io error at /${VAR}/x.parquet` that named neither. The portable spelling is tests/valid/data_source_relative_url.esm; the resolution rule itself is pinned across bindings by tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC §5.22)."
+  },
+  "solver_unknown_stiffness.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/stiffness",
+        "message": "Value 'extreme' not in enum: [low, moderate, high]",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_unknown_field.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver",
+        "message": "Additional property 'alg' is not allowed",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_nonpositive_abstol.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/abstol",
+        "message": "Value 0 must be greater than 0 (schema: exclusiveMinimum 0)",
+        "keyword": "exclusiveMinimum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "Rejected at load with `solver_version_too_old` (esm-spec §2.2.4): the top-level `solver` block arrives at esm 1.1.0 and this document declares 1.0.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
   }
 }

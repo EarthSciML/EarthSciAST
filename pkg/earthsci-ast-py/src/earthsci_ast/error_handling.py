@@ -162,6 +162,13 @@ TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
 DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 
 # ===========================================================================
+# Solver-hint code (esm-spec §2.2.5), raised as ``SolverBlockError`` from
+# ``solver.py``.
+# ===========================================================================
+
+SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
+
+# ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
 # ``subsystem_ref_is_template_library`` from ``parse.py``).
