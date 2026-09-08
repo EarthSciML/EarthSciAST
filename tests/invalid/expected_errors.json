@@ -2941,5 +2941,45 @@
     ],
     "is_valid": false,
     "notes": "esm-spec §4.9.6 (issue #181). Three ARRAY observeds over one index set reading each other elementwise: gamfac -> hpbl -> wscale -> gamfac. The cycle is a function of the equations alone, so it is a HARD structural error in `validate` — not something a build discovers. The pin is the (code, path) pair only: a cycle belongs to no single equation, so it pins at the model (as `equation_count_mismatch` does), and the prose is deliberately NOT pinned across bindings (CONFORMANCE_SPEC §5.19.5) — what IS required of every binding's message is that it NAME the observeds on the cycle. `in_pbl` is a fourth observed, correct in every respect, that merely reads `hpbl`; it is the name the Rust build reported as E_TREEWALK_UNBOUND_NAME before this check existed, and it MUST NOT appear on the reported cycle. Companion: the recurrence self-edge is NOT one of these edges (tests/valid/recurrence_causal_self_reference.esm must still validate clean)."
+  },
+  "solver_unknown_stiffness.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/stiffness",
+        "message": "Value 'extreme' not in enum: [low, moderate, high]",
+        "keyword": "enum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_unknown_field.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver",
+        "message": "Additional property 'alg' is not allowed",
+        "keyword": "additionalProperties"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_nonpositive_abstol.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/abstol",
+        "message": "Value 0 must be greater than 0 (schema: exclusiveMinimum 0)",
+        "keyword": "exclusiveMinimum"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false
+  },
+  "solver_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "Rejected at load with `solver_version_too_old` (esm-spec §2.2.4): the top-level `solver` block arrives at esm 1.1.0 and this document declares 1.0.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
   }
 }

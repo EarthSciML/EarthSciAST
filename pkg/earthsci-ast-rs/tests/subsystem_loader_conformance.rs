@@ -163,8 +163,8 @@ fn subsystem_loader_trajectory_matches_golden() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 1_000_000,
         saveat: Some(want_times),
         ..Default::default()

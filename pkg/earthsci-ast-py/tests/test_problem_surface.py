@@ -109,12 +109,26 @@ def test_canonical_tolerance_defaults() -> None:
     gets when its author expressed no opinion about accuracy, and it should be a
     sane starting point rather than a silent decision to spend six orders of
     magnitude of extra work on their behalf. Tests that assert numbers pass
-    TEST_RELTOL / TEST_ABSTOL instead — see pde_inline_tests."""
+    TEST_RELTOL / TEST_ABSTOL instead — see pde_inline_tests.
+
+    The signature default is the sentinel ``None``, not the number: esm-spec
+    §2.2.2 puts the document's ``solver`` block BETWEEN the call site and the
+    binding default, and a concrete default in the signature cannot express
+    that — a caller who omitted the argument would be indistinguishable from
+    one who passed 1e-6 explicitly, and the document could never win. The
+    canonical VALUES are asserted where they now live, on the resolution
+    itself."""
     import inspect
 
+    from earthsci_ast.solver import resolve_tolerances
+
     sig = inspect.signature(solve)
-    assert sig.parameters["reltol"].default == 1e-4
-    assert sig.parameters["abstol"].default == 1e-6
+    assert sig.parameters["reltol"].default is None
+    assert sig.parameters["abstol"].default is None
+    # The canonical values still govern when nothing more specific is given.
+    assert resolve_tolerances(None) == (1e-6, 1e-4)
+    # And an explicit argument still beats them (§2.2.2 level 1).
+    assert resolve_tolerances(None, abstol=1e-12, reltol=1e-11) == (1e-12, 1e-11)
     # SciPy's spellings must NOT be the surface (API_SPEC §4).
     assert "rtol" not in sig.parameters
     assert "atol" not in sig.parameters

@@ -254,11 +254,25 @@ mod tests {
 
     #[test]
     fn version_comparison_is_numeric_not_lexicographic() {
-        // `1.10.0` is NEWER than the current 1.0.0 and so off the line, and a
-        // large patch of the current minor is off it too. A string comparison
+        // `1.10.0` is NEWER than the current version and so off the line, and a
+        // large patch of the CURRENT minor is off it too. A string comparison
         // would get "1.10.0" < "1.9.0" and could place either on the line.
+        //
+        // The second case is DERIVED from `CURRENT` rather than written out:
+        // "1.0.100" was above the ceiling while the library was 1.0.0 and fell
+        // BELOW it the moment the library reached 1.1.0, at which point the case
+        // silently stopped testing what it names — it asserted that an ordinary
+        // on-line source has no targets. Deriving it keeps the witness a patch
+        // of whatever minor is current. Mirrors
+        // `pkg/EarthSciAST.jl/test/migration_test.jl`.
         assert_eq!(supported_migration_targets("1.10.0"), Vec::<String>::new());
-        assert_eq!(supported_migration_targets("1.0.100"), Vec::<String>::new());
+        let (major, minor, patch) = current_version();
+        let big_patch = format!("{major}.{minor}.{}", patch + 100);
+        assert_eq!(
+            supported_migration_targets(&big_patch),
+            Vec::<String>::new(),
+            "a large patch of the current minor ({big_patch}) is past the ceiling"
+        );
     }
 
     #[test]
@@ -277,11 +291,26 @@ mod tests {
 
     #[test]
     fn can_migrate_rejects_an_intermediate_non_current_target() {
-        // Only the current schema is a valid target; per-minor jumps are not
-        // offered, because there is no per-minor transform to encode.
-        assert!(!can_migrate("1.0.0", "1.0.1"));
-        assert!(!can_migrate("1.0.0", "1.1.0"));
-        assert!(!can_migrate("1.0.0", "2.0.0"));
+        // Only the current schema is a valid target; per-patch and per-minor
+        // jumps are not offered, because there is no per-minor transform to
+        // encode — only "bring this file up to current".
+        //
+        // The current version is SKIPPED rather than dropped from the list:
+        // "1.1.0" was an intermediate target until the library itself reached
+        // 1.1.0, at which point this case asserted the exact opposite of
+        // `can_migrate_accepts_an_additive_line_source_to_current` one test
+        // above. Skipping keeps the witness set stable across the next bump too,
+        // and keeps a non-current MINOR in it (`1.2.0`) now that `1.1.0` is
+        // current. Mirrors `pkg/EarthSciAST.jl/test/migration_test.jl`.
+        for target in ["1.0.1", "1.1.0", "1.2.0", "2.0.0"] {
+            if target == CURRENT {
+                continue;
+            }
+            assert!(
+                !can_migrate("1.0.0", target),
+                "{target} is not the current schema and must not be offered"
+            );
+        }
         assert!(!can_migrate("not-a-version", CURRENT));
         assert!(!can_migrate("1.0.0", "not-a-version"));
     }

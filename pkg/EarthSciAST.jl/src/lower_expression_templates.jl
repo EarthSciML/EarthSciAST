@@ -83,7 +83,7 @@ Base.showerror(io::IO, e::ExpressionTemplateError) =
 
 The subset of [`ERROR_CODES`](@ref) that is raised as an
 [`ExpressionTemplateError`](@ref) anywhere in the package (this file,
-`template_imports.jl`, `coupling_imports.jl`, `parse.jl`), grouped by the
+`template_imports.jl`, `coupling_imports.jl`, `parse.jl`, `solver.jl`), grouped by the
 spec section that pins it. Every entry is a REFERENCE into the central
 registry (`src/error_codes.jl`), never a literal — this tuple records which
 codes belong to this exception, and `ERROR_CODES` alone owns their values.
@@ -116,6 +116,9 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # site, so the call-site-only rewrite cannot reach it (esm-spec §9.6.4
     # Option B / CONFORMANCE_SPEC §5.5.7).
     ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+    # esm-spec §2.2.4 document-scoped solver hints (solver.jl): the top-level
+    # `solver` block in a file declaring esm < 1.1.0.
+    ERROR_CODES.SOLVER_VERSION_TOO_OLD,
     # esm-spec §9.7 template-library imports + metaparameters
     # (template_imports.jl).
     ERROR_CODES.TEMPLATE_IMPORT_VERSION_TOO_OLD,

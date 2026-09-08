@@ -1228,8 +1228,8 @@ mod elementwise_array_observed_tests {
     fn erk() -> SolveOptions {
         SolveOptions {
             alg: Alg::Erk,
-            reltol: 1e-10,
-            abstol: 1e-12,
+            reltol: Some(1e-10),
+            abstol: Some(1e-12),
             saveat: Some(vec![1.0]),
             ..Default::default()
         }

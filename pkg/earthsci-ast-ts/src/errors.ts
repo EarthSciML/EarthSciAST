@@ -199,6 +199,10 @@ export const ERROR_CODES = {
   NONFINITE_NUMBER: 'nonfinite_number',
   LOAD_ERROR: 'load_error',
 
+  // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
+  //      EsmMachineryError code) ----
+  SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
+
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;
   //      EsmMachineryError codes) ----

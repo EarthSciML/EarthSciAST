@@ -184,7 +184,12 @@ describe('Version Compatibility', () => {
     // test asserting lockstep encoded that coincidence as a rule -- which broke
     // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
     it('exposes the schema version, derived from the embedded schema $id', () => {
-      expect(SCHEMA_VERSION).toBe('1.0.0')
+      // Moved 1.0.0 -> 1.1.0 with the top-level `solver` block (esm-spec §2.2).
+      // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
+      // embedded schema `$id`, so this pins that the derivation still reads the
+      // schema rather than a stale copy, and it is expected to be updated by
+      // hand on each format bump.
+      expect(SCHEMA_VERSION).toBe('1.1.0')
     })
 
     it('exposes the package version separately, under its own name', () => {
