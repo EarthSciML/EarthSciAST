@@ -349,6 +349,19 @@ impl Solution {
         if let Some(i) = self.state_variable_names.iter().position(|n| n == name) {
             return Some(&self.state[i]);
         }
+        // A name this solution does not carry may be one an `operator_compose`
+        // renaming match DELETED (issue #230): the quantity MOVED to the
+        // survivor's row rather than never existing. Consulted only after the
+        // exact match, so the map can never shadow a live row.
+        if let Some(survivor) = self.metadata.merged_variable_renames.get(name) {
+            if let Some(i) = self
+                .state_variable_names
+                .iter()
+                .position(|n| n == survivor)
+            {
+                return Some(&self.state[i]);
+            }
+        }
         if name.contains('.') {
             return None;
         }
@@ -433,4 +446,16 @@ pub struct SolutionMetadata {
     /// — an empty list means "nothing to report", not "the tape covered
     /// everything".
     pub tape_fallbacks: Vec<(String, String)>,
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor it was folded into (issue #230; carried from
+    /// `FlattenMetadata::merged_variable_renames`).
+    ///
+    /// It rides on the SOLUTION because the solution is the one object a caller
+    /// reading a trajectory by name holds — the flattened system is not in its
+    /// hand — and a caller naming `B.x` after the merge folded it into `A.x` is
+    /// naming a state that MOVED, not one that never existed.
+    /// [`Solution::get`] resolves through it, and so does the `esm simulate
+    /// --format grid` output plan. Empty for a document with no renaming merge,
+    /// which is the overwhelming majority.
+    pub merged_variable_renames: HashMap<String, String>,
 }

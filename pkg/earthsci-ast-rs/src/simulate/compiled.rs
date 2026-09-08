@@ -65,6 +65,12 @@ pub(super) enum StateKind {
 }
 
 impl Compiled {
+    /// The flatten-time merge map (issue #230): every state spelling an
+    /// `operator_compose` renaming match DELETED, mapped onto the survivor.
+    pub(crate) fn merged_renames(&self) -> &HashMap<String, String> {
+        &self.merged_renames
+    }
+
     /// Build from a [`FlattenedSystem`] (the spec-compliant flattening output).
     ///
     /// The build runs as a sequence of named phases: v1 scope guards
@@ -267,6 +273,9 @@ impl Compiled {
                 // The scalar interpreter builds no tape, so there is nothing to
                 // fall back FROM.
                 tape_fallbacks: Vec::new(),
+                // Rides to the caller so a name-keyed read of the result can
+                // resolve a spelling the merge deleted (issue #230).
+                merged_variable_renames: self.merged_renames.clone(),
             },
         })
     }

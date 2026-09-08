@@ -449,6 +449,13 @@ struct EsmProblem
     sinks::Vector{Any}                    # diagnostic sinks
     lifecycle_sinks::Vector{Any}          # distinct sinks to open!/close! per run
     symcache::Base.RefValue{Any}          # lazy SymbolicIndexingInterface cache
+    # Every state spelling an `operator_compose` renaming match DELETED, mapped
+    # onto the survivor it was folded into (issue #230). Carried here because
+    # `flattened_to_esm` drops `FlattenMetadata`, so the run doc cannot hold it,
+    # and because a NAME-KEYED read of this problem — `observed_field(prob, name)`
+    # — is naming a quantity that MOVED, not one that never existed. Empty for a
+    # document with no renaming merge, which is the overwhelming majority.
+    merged_renames::OrderedDict{String,String}
 end
 
 function Base.show(io::IO, prob::EsmProblem)
@@ -870,7 +877,8 @@ function esm_problem(input, tspan;
                       Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
                       Ref{Any}(nothing), param_classes, insp,
                       _compose_callbacks(cbs), tstops, save_everystep,
-                      sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing))
+                      sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
+                      merged_renames)
 end
 
 # The seeded initial state: the build's own `u0`, then the caller's `u0`
@@ -953,7 +961,10 @@ function observed_field(prob::EsmProblem, name::AbstractString)
     (file.models !== nothing && !isempty(file.models)) || throw(SimulateError(
         "observed_field: prepared document has no model"))
     mname = String(first(keys(file.models)))
-    v = String(name)
+    # A name an `operator_compose` renaming match DELETED addresses a field that
+    # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
+    # here can never shadow a live field.
+    v = get(prob.merged_renames, String(name), String(name))
     model = file.models[mname]
     comps = _field_components(model)
     single = length(comps) == 1
@@ -1261,5 +1272,6 @@ function remake(prob::EsmProblem; p = nothing, u0 = nothing, tspan = nothing,
                       prob.n_equations, prob.buffer_time, prob.dirty,
                       prob.output_meta, prob.run_doc, prob.run_file,
                       prob.param_classes, prob.inspection, cb, prob.tstops,
-                      prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc)
+                      prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
+                      prob.merged_renames)
 end

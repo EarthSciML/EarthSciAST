@@ -2696,7 +2696,16 @@ fn gridded_results(
     sol: &earthsci_ast::Solution,
     observed: &[String],
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let plan = earthsci_ast::derive_output_plan(esm_file, &sol.state_variable_names, observed)
+    // A `--observed` name an `operator_compose` renaming match DELETED addresses
+    // a variable that MOVED (issue #230), and `derive_output_plan` sees only the
+    // request and the slot names — so it would report the dead spelling as
+    // unknown. The solution carries the merge's map for exactly this.
+    let renames = &sol.metadata.merged_variable_renames;
+    let resolved: Vec<String> = observed
+        .iter()
+        .map(|n| renames.get(n.as_str()).cloned().unwrap_or_else(|| n.clone()))
+        .collect();
+    let plan = earthsci_ast::derive_output_plan(esm_file, &sol.state_variable_names, &resolved)
         .map_err(|e| fail(format!("deriving the output plan: {e}")))?;
 
     let n_records = sol.time.len();

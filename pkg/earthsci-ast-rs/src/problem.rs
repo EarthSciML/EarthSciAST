@@ -697,6 +697,13 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
     // Re-arm the document's working precision for the duration of this call
     // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
     let _precision_guard = prob.precision.enter();
+    // A name an `operator_compose` renaming match DELETED addresses a field that
+    // MOVED (issue #230). The merge only ever removes a spelling, so a hit here
+    // can never shadow a live field.
+    let name = problem_merged_renames(prob)
+        .get(name)
+        .map(String::as_str)
+        .unwrap_or(name);
     let model = prob.model_name.as_deref().unwrap_or("");
     let components = field_components(prob);
     let single = components.len() == 1;
@@ -1812,6 +1819,13 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
 /// extension-seam progress observer into the one per-step hook `run_solver`
 /// already drives.
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
+    // An OUTPUT REQUEST is keyed by name, so it addresses a state an
+    // `operator_compose` renaming match may have DELETED (issue #230). Resolve
+    // the request list onto the surviving spellings here, where the compiled
+    // artifact's map is in hand — `derive_output_plan` sees only the request and
+    // the slot names, and would report the dead spelling as unknown.
+    let observed = resolve_output_request(prob, &opts.output_observed);
+
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
     let set = opts
@@ -1819,14 +1833,51 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
         .clone()
         .unwrap_or_else(|| prob.callbacks.clone());
     if set.is_empty() {
-        return opts.clone();
+        return match observed {
+            Some(output_observed) => SolveOptions {
+                output_observed,
+                ..opts.clone()
+            },
+            None => opts.clone(),
+        };
     }
     let user = opts.progress.clone();
     let observer: ProgressFn = wrap_observer(set, user);
     SolveOptions {
         progress: Some(observer),
+        output_observed: observed.unwrap_or_else(|| opts.output_observed.clone()),
         ..opts.clone()
     }
+}
+
+/// The problem's flatten-time merge map (issue #230), or an empty one for a
+/// backend that carries none.
+fn problem_merged_renames(prob: &EsmProblem) -> &HashMap<String, String> {
+    static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    match &*prob.backend {
+        Backend::Scalar(c) => c.merged_renames(),
+        Backend::Array(c) => c.merged_renames(),
+        Backend::Static(_) => EMPTY.get_or_init(HashMap::new),
+    }
+}
+
+/// Rewrite an output request off names an `operator_compose` renaming match
+/// DELETED. `None` when nothing changes, so the common path clones nothing.
+#[cfg(feature = "solve")]
+fn resolve_output_request(prob: &EsmProblem, requested: &[String]) -> Option<Vec<String>> {
+    if requested.is_empty() {
+        return None;
+    }
+    let renames = problem_merged_renames(prob);
+    if renames.is_empty() || !requested.iter().any(|n| renames.contains_key(n.as_str())) {
+        return None;
+    }
+    Some(
+        requested
+            .iter()
+            .map(|n| renames.get(n.as_str()).cloned().unwrap_or_else(|| n.clone()))
+            .collect(),
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
