@@ -134,6 +134,63 @@ export class CoupleMultiplicativeNoTendencyError extends FlattenError {
 }
 
 /**
+ * An `operator_compose` entry merged NOTHING (esm-libraries-spec §4.7.1 step 5).
+ *
+ * Such an entry is indistinguishable from one that is not there: the operator
+ * integrates a private, decoupled system from its own defaults, the other system
+ * receives no contribution at all, and the only evidence is a state count one too
+ * high. That is the one outcome a coupling mis-specification must not have, so it
+ * is refused rather than reported.
+ *
+ * An operator that genuinely contributes only states of its own — a transport
+ * operator whose single equation defines its own wind field, say — says so with
+ * `require_match: false`, and is then permitted.
+ */
+export class OperatorComposeNoMergeError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.OPERATOR_COMPOSE_NO_MERGE)
+    this.name = 'OperatorComposeNoMergeError'
+  }
+}
+
+/**
+ * An `operator_compose` entry declared `require_match: true` and one of
+ * `systems[1]`'s equations found no equation of `systems[0]` to land on
+ * (esm-libraries-spec §4.7.1 step 5).
+ *
+ * Step 5 otherwise preserves an unmatched equation unchanged, and a PARTIAL
+ * shortfall is only a warning by default; `require_match` is the author's opt-in
+ * to make it fatal. A PARTIAL match throws here — there is no "some is enough"
+ * reading an author could rely on.
+ */
+export class OperatorComposeRequireMatchError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED)
+    this.name = 'OperatorComposeRequireMatchError'
+  }
+}
+
+/**
+ * The bare-name fallback would unify two STATE variables and the document has
+ * not said which spelling survives (esm-libraries-spec §4.7.1 step 3).
+ *
+ * The fallback binds `A.x` to `B.x` on the strength of a shared local name alone.
+ * When both are states, each carries its own INITIAL CONDITION, and the merge has
+ * to delete one of them — so the choice decides which IC the flattened system
+ * integrates from. Nothing in the document expresses that choice, and picking one
+ * silently is how flipping the entry's `systems` order came to change the answer.
+ *
+ * A match where only ONE side is a state is NOT ambiguous: the other carries no
+ * initial condition, so the state is the owner and the merge renames onto it.
+ */
+export class OperatorComposeAmbiguousBareNameError extends FlattenError {
+  constructor(message: string) {
+    super(message, ERROR_CODES.OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME)
+    this.name = 'OperatorComposeAmbiguousBareNameError'
+  }
+}
+
+/**
  * An `identity`-transform `variable_map` bridges two variables whose declared,
  * non-empty units differ (esm-libraries-spec §4.7.6). `conversion_factor` and
  * `param_to_var` are exempt: the first declares the conversion explicitly, the
@@ -1260,7 +1317,12 @@ function expandOperatorComposePlaceholders(
 /**
  * Merge B's equations into A by matching dependent variables (esm-spec §4.7.1):
  * for each B equation with LHS `D(x, t)`, find A's equation with the same LHS
- * (translation-aware) and SUM their RHS. Unmatched B equations survive unchanged.
+ * (translation-aware) and SUM their RHS. Unmatched B equations survive unchanged
+ * — and, since issue #195, are REPORTED: an entry that merges nothing at all, or
+ * only some of what B authored, emits `operator_compose_no_merge` /
+ * `operator_compose_partial_merge`, and throws outright when the entry declares
+ * `require_match`. Preserving an unmatched equation quietly is what made
+ * "merged everything" and "merged nothing" the same observable outcome.
  */
 function applyOperatorCompose(
   components: Record<string, ComponentSystem>,
@@ -1283,17 +1345,27 @@ function applyOperatorCompose(
   const survivingB: FlattenedEquation[] = []
   // `bDep -> targetDep` for every match that RENAMED the dependent variable.
   const mergedAway: Record<string, string> = {}
+  // The subset of `mergedAway` the BARE-NAME fallback produced. Its surviving
+  // spelling is settled by ownership below, not by which side was `systems[0]`.
+  const bareMatches: Record<string, string> = {}
   // Positions in `a.equations` this entry merged INTO, for the reattribution
   // below. Collected rather than acted on in place because `aIndex` indexes
   // `a.equations` POSITIONALLY and stays live until the last B equation has been
   // matched — relocating an equation mid-loop would invalidate it.
   const mergedPositions = new Set<number>()
+  // §4.7.1 step 5's merge tally. `authored` counts the B equations that COULD
+  // match (one with no extractable dependent variable is not a contribution and
+  // is exempt by construction); `unmatched` records the ones that did not, in
+  // document order, because naming them is what turns the diagnostic into a fix.
+  let authored = 0
+  const unmatched: string[] = []
   for (const bEq of b.equations) {
     const bDep = lhsDependentVar(bEq.lhs)
     if (bDep === undefined) {
       survivingB.push(bEq)
       continue
     }
+    authored += 1
 
     // Resolve A's target for this dependent variable. §4.7.1 step 3 lists the
     // match kinds in PRECEDENCE order: DIRECT first, then TRANSLATION, then the
@@ -1307,6 +1379,7 @@ function applyOperatorCompose(
     // `_var` explicitly asks for something automatic, and MUST stay harmless.
     let targetDep = bDep
     let factor = 1
+    let isBareMatch = false
     if (Object.prototype.hasOwnProperty.call(aIndex, bDep)) {
       // Direct match — `targetDep` is already right.
     } else if (Object.prototype.hasOwnProperty.call(translate, bDep)) {
@@ -1319,6 +1392,7 @@ function applyOperatorCompose(
       for (const ad of Object.keys(aIndex)) {
         if (ad.endsWith(`.${short}`)) {
           targetDep = ad
+          isBareMatch = true
           break
         }
       }
@@ -1344,12 +1418,45 @@ function applyOperatorCompose(
         sourceSystem: aEq.sourceSystem,
       }
       mergedPositions.add(i)
-      if (targetDep !== bDep) mergedAway[bDep] = targetDep
+      if (targetDep !== bDep) {
+        mergedAway[bDep] = targetDep
+        if (isBareMatch) bareMatches[bDep] = targetDep
+      }
     } else {
+      unmatched.push(bDep)
       survivingB.push(bEq)
     }
   }
   b.equations = survivingB
+
+  reportOperatorComposeMerge(entry, systems[0], systems[1], authored, unmatched)
+
+  // §4.7.1 step 3, the bare-name fallback's OWNERSHIP rule. A bare-name match
+  // asserts that A's `x` and B's `x` are one state under two spellings; the
+  // surviving spelling is the OWNER's, not `systems[0]`'s, so that flipping the
+  // entry's argument order cannot change which state name — and therefore which
+  // INITIAL CONDITION — comes out the far side.
+  const inverted: Record<string, string> = {}
+  for (const [bDep, targetDep] of Object.entries(bareMatches)) {
+    if (bareNameOwner(components, systems[0], systems[1], bDep, targetDep) === bDep) {
+      inverted[targetDep] = bDep
+      delete mergedAway[bDep]
+    }
+  }
+  if (Object.keys(inverted).length > 0) {
+    // Retarget BEFORE the reattribution: the reattribution reads each merged
+    // equation's dependent variable to decide whose bag it belongs in, and after
+    // this rewrite that variable is the owner's spelling. Running it first would
+    // file the merged tendency under the name that just went away.
+    retargetMergedNames(components, inverted)
+    for (const gone of Object.keys(inverted)) {
+      const owner = components[gone.split('.')[0]]
+      if (owner !== undefined) {
+        delete owner.stateVars[gone]
+        delete owner.observed[gone]
+      }
+    }
+  }
 
   // `a === b` is a self-compose (`"systems": ["X", "X"]`), which nothing rejects
   // and which has just rebound the one shared array out from under
@@ -1379,6 +1486,134 @@ function applyOperatorCompose(
       delete b.observed[gone]
     }
   }
+}
+
+/**
+ * Is `dep` a STATE variable of the (partly flattened) component tables?
+ *
+ * A state is the thing that carries an initial condition, which is the whole of
+ * what a bare-name match decides between. An observed carries none.
+ */
+function isStateVar(components: Record<string, ComponentSystem>, dep: string): boolean {
+  const comp = components[dep.split('.')[0]]
+  return comp !== undefined && Object.prototype.hasOwnProperty.call(comp.stateVars, dep)
+}
+
+/**
+ * Which spelling owns the quantity a bare-name match unified?
+ * (esm-libraries-spec §4.7.1 step 3.)
+ *
+ * A DIRECT match needs no decision (the two names are equal) and a `translate`
+ * match is the author naming the surviving spelling explicitly. The BARE-NAME
+ * fallback is the one that has to choose, and choosing `systems[0]` — what this
+ * binding did before — makes an `operator_compose` entry mean different things
+ * in its two argument orders: flipping `systems` silently swapped which state
+ * name, and which INITIAL CONDITION, came out the far side.
+ *
+ * Ownership follows the variable's own namespace, the direction step 4's
+ * merged-equation reattribution already reaches in. The merge deletes one of the
+ * two names, so the question is which of them the flattened system keeps:
+ *
+ * - **Both are STATES** — each carries its own initial condition, and nothing in
+ *   the document says which one the merged tendency should integrate from.
+ *   Refused, because deciding it here is exactly the silent choice issue #195 is
+ *   about. The author says what they mean with `translate`, which names the
+ *   surviving spelling outright, or with `require_match`.
+ * - **Exactly one is a state** — the other carries no initial condition, so
+ *   there is nothing to lose by renaming onto the state. That one is the owner,
+ *   in either argument order.
+ * - **Neither is** — no initial condition is at stake either way; the incumbent
+ *   (`systems[0]`'s spelling) stands, as before.
+ */
+function bareNameOwner(
+  components: Record<string, ComponentSystem>,
+  aName: string,
+  bName: string,
+  bDep: string,
+  targetDep: string,
+): string {
+  const bState = isStateVar(components, bDep)
+  const aState = isStateVar(components, targetDep)
+  if (bState && aState) {
+    throw new OperatorComposeAmbiguousBareNameError(
+      `${ERROR_CODES.OPERATOR_COMPOSE_AMBIGUOUS_BARE_NAME}: operator_compose(${aName} + ` +
+        `${bName}) matched '${bDep}' to '${targetDep}' on their shared local name alone, ` +
+        `but BOTH are state variables and the merge keeps only one. Each carries its own ` +
+        `initial condition, so the choice decides which the flattened system integrates ` +
+        `from, and the document does not express it. Name the surviving spelling with a ` +
+        `\`translate\` entry ({'${targetDep}': '${bDep}'}), or rename one of them.`,
+    )
+  }
+  return bState ? bDep : targetDep
+}
+
+/**
+ * Report an `operator_compose` entry that merged nothing, or only some of what
+ * the operator side authored (esm-libraries-spec §4.7.1 step 5).
+ *
+ * Preserving an unmatched equation is correct — an operator system may
+ * legitimately contribute states of its own — but preserving it SILENTLY leaves
+ * "merged everything" and "merged nothing" indistinguishable, and both wrong
+ * outcomes reachable from a document that is spec-valid and loads clean.
+ *
+ * `require_match` is TRI-STATE, and the three states are three different things
+ * an author can mean:
+ *
+ * | `require_match` | zero merged                       | some but not all      |
+ * |:----------------|:----------------------------------|:----------------------|
+ * | absent          | `operator_compose_no_merge` ERROR | partial-merge warning |
+ * | `true`          | `operator_compose_require_match_unmatched` ERROR (both) ||
+ * | `false`         | permitted, silently               | permitted, silently   |
+ *
+ * ZERO merged is an error by default because such an entry is indistinguishable
+ * from an entry that is not there. PARTIAL stays a warning because an operator
+ * may legitimately contribute states of its own alongside the ones it does
+ * merge, and the format cannot tell the two apart.
+ *
+ * `require_match: false` is the explicit opt-out — the author declaring a
+ * standalone-contributing operator. It is a DECLARATION, not a default: an
+ * absent flag means "I have not said", which is why it is the case that errors.
+ */
+function reportOperatorComposeMerge(
+  entry: CouplingEntry,
+  aName: string,
+  bName: string,
+  authored: number,
+  unmatched: string[],
+): void {
+  if (authored === 0 || unmatched.length === 0) return
+  const requireMatch = (entry as unknown as { require_match?: boolean }).require_match
+  // The author has declared a standalone-contributing operator. Nothing to
+  // report: an unmatched equation is what they said to expect.
+  if (requireMatch === false) return
+  const merged = authored - unmatched.length
+  const where = `operator_compose(${aName} + ${bName})`
+  const names = unmatched.join(', ')
+  if (requireMatch === true) {
+    throw new OperatorComposeRequireMatchError(
+      `${ERROR_CODES.OPERATOR_COMPOSE_REQUIRE_MATCH_UNMATCHED}: ${where} declares ` +
+        `\`require_match\` and merged ${merged} of ${authored} equations '${bName}' ` +
+        `authored; no equation of '${aName}' matches: ${names}`,
+    )
+  }
+  if (merged === 0) {
+    throw new OperatorComposeNoMergeError(
+      `${ERROR_CODES.OPERATOR_COMPOSE_NO_MERGE}: ${where} merged NONE of the ${authored} ` +
+        `equations '${bName}' authored; no equation of '${aName}' matches: ${names}. The ` +
+        `entry is indistinguishable from one that is not there — '${bName}' would ` +
+        `integrate decoupled from its own defaults and '${aName}' would receive no ` +
+        `contribution. If '${bName}' really does contribute only states of its own, ` +
+        `declare it with \`require_match: false\` on this entry.`,
+    )
+  }
+  console.warn(
+    `${ERROR_CODES.OPERATOR_COMPOSE_PARTIAL_MERGE}: ${where} merged ${merged} of ` +
+      `${authored} equations '${bName}' authored; unmatched dependent variable(s): ` +
+      `${names}. The unmatched equations are preserved unchanged (esm-libraries-spec ` +
+      `§4.7.1 step 5), so they integrate DECOUPLED from '${aName}'. Set ` +
+      `\`require_match: true\` if they were meant to be contributions, or ` +
+      `\`require_match: false\` if they were not.`,
+  )
 }
 
 /**

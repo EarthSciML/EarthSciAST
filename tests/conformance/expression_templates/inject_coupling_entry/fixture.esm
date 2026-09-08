@@ -29,6 +29,7 @@
     {
       "type": "operator_compose",
       "systems": ["Emit", "Advection"],
+      "require_match": false,
       "expression_template_imports": {
         "Advection": [
           { "ref": "./central_D_lon_zero_grad_bc.esm",

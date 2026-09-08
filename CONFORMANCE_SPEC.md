@@ -4525,6 +4525,84 @@ runners are, respectively, a scalar expression evaluator with no state vector an
 a parse-plus-validate surface with no evaluator at all — though both accept and
 round-trip the document.
 
+### 5.33 `operator_compose` Merge Intent (normative)
+
+esm-libraries-spec §4.7.1 step 5 preserves an equation the merge did not match.
+That is correct — an operator may legitimately contribute states of its own —
+but preserving it SILENTLY made **"merged everything"** and **"merged nothing"**
+the same observable outcome, so a spec-valid document could integrate a private
+decoupled operator while the mechanism received no contribution at all, with a
+state count one too high as the only evidence (issue #195).
+
+This category pins three things, and they are distinct.
+
+**1. The merge tally is reported, and the two shortfalls differ in KIND.**
+Counted over the equations `systems[1]` authored whose LHS names a dependent
+variable; one that names none is not a contribution and is exempt by
+construction.
+
+- **Zero matched** → `operator_compose_no_merge`, an **ERROR**. Such an entry is
+  indistinguishable from an entry that is not there.
+- **Some but not all** → `operator_compose_partial_merge`, a **WARNING**. Unlike
+  a zero merge this is indistinguishable from an operator that legitimately
+  contributes states of its own ALONGSIDE the ones it does merge, and the format
+  cannot tell the two apart.
+
+Both name the unmatched dependent variables. Naming them is what turns a
+diagnostic into a fix.
+
+**2. `require_match` is TRI-STATE, and absent is not `false`.** The schema
+therefore declares no default for the property, and an explicit `false` MUST
+survive a round trip — dropping it as "the default" silently re-arms the
+zero-merge refusal on every document that opted out.
+
+| `require_match` | zero merged | some but not all | all merged |
+|---|---|---|---|
+| **absent** | `operator_compose_no_merge` (error) | `operator_compose_partial_merge` (warning) | clean |
+| **`true`** | `operator_compose_require_match_unmatched` (error) | same (error) | clean |
+| **`false`** | clean, silently | clean, silently | clean |
+
+`false` is a DECLARATION — *this operator contributes only states of its own* —
+not a default. An absent flag means "the author has not said", which is why that
+is the case that errors.
+
+**3. A bare-name match that would unify two STATES is refused**
+(`operator_compose_ambiguous_bare_name`, §4.7.1 step 3). Each state carries its
+own initial condition and the merge keeps one, so the choice decides what the
+flattened system integrates from — and a document that bound them on a shared
+local name alone has not expressed it. Making that choice deterministic would
+only make it quietly deterministic. Where only ONE side is a state the match is
+not ambiguous: the other carries no initial condition, so the STATE owns the
+quantity and the other name is retargeted onto it, **in either argument order**.
+
+**Shape.** Diagnostic-outcome comparing, like §5.19's
+`override_key_diagnostics`: it carries no golden, because what it pins is a
+CLASSIFICATION, not a number. Each binding asserts its own idiomatic warning
+channel and error type, and reads back the manifest's per-binding column so the
+record cannot drift from the code. Cases that flatten cleanly additionally pin
+the surviving state's NAME and DEFAULT — those two, and nothing else, are what
+used to change with the `systems` order.
+
+**Non-vacuity is structural here.** Each of `require_match`'s three states, and
+the ambiguity refusal, has an anchor that fails if a binding is uniformly strict
+or uniformly lax: `no_merge_declared` (a zero merge that must pass),
+`require_match_satisfied` (a flagged entry that must pass), and
+`ambiguous_resolved_by_translate` (a bare-name-shaped document that must pass).
+Two pairs differ ONLY in `systems` order and are compared against EACH OTHER
+rather than against a recorded value, so they fail on disagreement even if both
+were re-recorded.
+
+The manifest and fixtures live in `tests/conformance/operator_compose_merge/`.
+Adapters: `pkg/EarthSciAST.jl/test/operator_compose_merge_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_operator_compose_merge_conformance.py`;
+`pkg/earthsci-ast-rs/tests/operator_compose_merge_conformance.rs`;
+`pkg/earthsci-ast-ts/src/conformance-operator-compose-merge.test.ts`;
+`pkg/earthsci-ast-go/pkg/esm/operator_compose_merge_conformance_test.go`.
+
+**All five bindings** are in scope: the merge is a rewrite, so a rewrite-only
+port implements it in full. None is excluded.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

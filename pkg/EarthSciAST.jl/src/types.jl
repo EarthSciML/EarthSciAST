@@ -1658,9 +1658,22 @@ struct CouplingOperatorCompose <: CouplingEntry
     translate::Union{Dict{String,Any},Nothing}
     description::Union{String,Nothing}
     lifting::Union{String,Nothing}
+    # esm-libraries-spec §4.7.1 step 5, TRI-STATE — `nothing` is NOT `false`:
+    #
+    #   nothing  the author has not said. A zero-merge is then
+    #            `operator_compose_no_merge`, an ERROR (such an entry is
+    #            indistinguishable from one that is absent); a partial merge is
+    #            a warning.
+    #   true     `systems[2]`'s equations are CONTRIBUTIONS and every one must
+    #            land; any shortfall, partial included, is a hard refusal.
+    #   false    a standalone-contributing operator, DECLARED. Unmatched
+    #            equations are expected and nothing is reported.
+    require_match::Union{Bool,Nothing}
 
-    CouplingOperatorCompose(systems::Vector{String}; translate=nothing, description=nothing, lifting=nothing) =
-        new(systems, translate, description, lifting)
+    CouplingOperatorCompose(systems::Vector{String}; translate=nothing,
+                            description=nothing, lifting=nothing,
+                            require_match::Union{Bool,Nothing}=nothing) =
+        new(systems, translate, description, lifting, require_match)
 end
 
 """
@@ -2821,6 +2834,13 @@ const RECORD_FIELD_TABLES = (
         (f = :translate,   wire = "translate",   kind = :str_keyed_copy, mode = :opt, emit = :nonnothing),
         (f = :description, wire = "description", kind = :string, mode = :opt, emit = :nonnothing),
         (f = :lifting,     wire = "lifting",     kind = :string, mode = :opt, emit = :nonnothing),
+        # esm-libraries-spec §4.7.1 step 5. TRI-STATE, so `:opt`/`:nonnothing`
+        # rather than a defaulted bool: an ABSENT key and an explicit `false`
+        # mean different things, and an explicit `false` must survive the round
+        # trip — dropping it as "the default" would silently re-arm the
+        # zero-merge refusal on every document that opted out.
+        (f = :require_match, wire = "require_match", kind = :bool,
+         mode = :opt, emit = :nonnothing),
     )),
     (T = :CouplingCouple, fn = :couple, tag = "couple", rows = (
         (f = :systems, wire = "systems", kind = :string_vec_strict, mode = :req_err,

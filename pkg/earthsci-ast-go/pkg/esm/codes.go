@@ -162,6 +162,40 @@ const (
 	// identity, so an additive term against an absent tendency simply becomes
 	// the tendency. There is no multiplicative identity that would do the same.
 	CodeCoupleMultiplicativeNoTendency = "couple_multiplicative_no_tendency"
+
+	// CodeOperatorComposeNoMerge is an ERROR (esm-libraries-spec §4.7.1 step 5):
+	// an `operator_compose` entry merged NONE of the equations Systems[1]
+	// authored, which makes it indistinguishable from an entry that is not
+	// there — the operator integrates a private decoupled system from its own
+	// defaults, the other system receives no contribution, and the only evidence
+	// is a state count one too high. An operator that genuinely contributes only
+	// states of its own declares that with `require_match: false` and is then
+	// permitted.
+	CodeOperatorComposeNoMerge = "operator_compose_no_merge"
+	// CodeOperatorComposePartialMerge is WARNING-level: some but not all of
+	// Systems[1]'s equations landed. Unlike a zero merge this is
+	// indistinguishable from an operator that legitimately contributes states of
+	// its own ALONGSIDE the ones it does merge, so the format cannot call it a
+	// defect; an author who knows better says so with `require_match`.
+	CodeOperatorComposePartialMerge = "operator_compose_partial_merge"
+
+	// CodeOperatorComposeAmbiguousBareName: the bare-name fallback (§4.7.1
+	// step 3) would unify two STATE variables. Each carries its own INITIAL
+	// CONDITION and the merge keeps only one, so the choice decides what the
+	// flattened system integrates from — and the document, which bound them on a
+	// shared local name alone, has not expressed it. Deciding it silently is how
+	// flipping an entry's `systems` order came to change the answer. A match
+	// where only ONE side is a state is not ambiguous: the state owns it.
+	CodeOperatorComposeAmbiguousBareName = "operator_compose_ambiguous_bare_name"
+
+	// CodeOperatorComposeRequireMatchUnmatched: an `operator_compose` entry
+	// declared `require_match: true` and one of Systems[1]'s equations found no
+	// equation of Systems[0] to land on (esm-libraries-spec §4.7.1 step 5). A
+	// PARTIAL match fails too: there is no "some is enough" reading an author
+	// could rely on — the seven-of-twelve-species case is exactly the defect the
+	// flag exists to catch. Refused at FLATTEN, not at validate: the document is
+	// schema-valid and structurally valid, and only the merge knows the answer.
+	CodeOperatorComposeRequireMatchUnmatched = "operator_compose_require_match_unmatched"
 )
 
 // --- Diagnostic codes: §4.7 subsystem refs. Shared with the structural
@@ -429,11 +463,12 @@ const (
 
 // DiagnosticError is implemented by the package's code-bearing error types
 // (EvaluationError, ExpressionTemplateError, RuleEngineError, EnumLoweringError,
-// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError).
-// It lets a caller recover the stable diagnostic code from any of them
-// uniformly — errors.As(err, &de) then de.DiagnosticCode() — without switching
-// over the concrete types. All seven render Error() in the shared
-// "[code] message" form.
+// ClosedFunctionError, CoupleMultiplicativeNoTendencyError, tableLookupError,
+// OperatorComposeNoMergeError, OperatorComposeAmbiguousBareNameError,
+// OperatorComposeRequireMatchError). It lets a caller recover the stable
+// diagnostic code from any of them uniformly — errors.As(err, &de) then
+// de.DiagnosticCode() — without switching over the concrete types. All ten
+// render Error() in the shared "[code] message" form.
 type DiagnosticError interface {
 	error
 	DiagnosticCode() string
@@ -449,4 +484,7 @@ var (
 	_ DiagnosticError = (*ClosedFunctionError)(nil)
 	_ DiagnosticError = (*CoupleMultiplicativeNoTendencyError)(nil)
 	_ DiagnosticError = (*tableLookupError)(nil)
+	_ DiagnosticError = (*OperatorComposeNoMergeError)(nil)
+	_ DiagnosticError = (*OperatorComposeAmbiguousBareNameError)(nil)
+	_ DiagnosticError = (*OperatorComposeRequireMatchError)(nil)
 )

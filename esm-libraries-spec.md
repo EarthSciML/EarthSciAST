@@ -607,6 +607,10 @@ text.
 | `undefined_system` | Coupling entry references a nonexistent model, reaction system, or operator |
 | `undefined_operator` | `operator_apply` references a nonexistent operator |
 | `couple_multiplicative_no_tendency` | A `couple` connector equation applies the `multiplicative` transform to a `to` target that has no `D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or an undefined name. There is no tendency to multiply (§4.7.2, esm-spec §10.3) |
+| `operator_compose_no_merge` | An `operator_compose` entry whose `require_match` is ABSENT merged ZERO of the equations `systems[1]` authored, so the entry is indistinguishable from one that is not there: the operator integrates a private decoupled system from its own defaults and the other system receives no contribution. Names the unmatched dependent variables. An operator that contributes only states of its own declares `require_match: false` and is then permitted (§4.7.1 step 5) |
+| `operator_compose_partial_merge` | **WARNING.** An `operator_compose` entry merged SOME but not all of the equations `systems[1]` authored. Names the unmatched dependent variables. A warning and not an error because — unlike a zero merge — it is indistinguishable from an operator that legitimately contributes states of its own ALONGSIDE the ones it does merge (§4.7.1 step 5) |
+| `operator_compose_require_match_unmatched` | An `operator_compose` entry declares `require_match: true` — its `systems[1]` equations are contributions and must land — and at least one of them matched no equation of `systems[0]`. A PARTIAL match raises too; there is no "some is enough" reading (§4.7.1 step 5) |
+| `operator_compose_ambiguous_bare_name` | The bare-name fallback (§4.7.1 step 3) would unify two STATE variables. Each carries its own initial condition and the merge keeps only one, so the choice decides what the flattened system integrates from — and the document, which bound them on a shared local name alone, has not expressed it. Resolve with a `translate` entry naming the surviving spelling, or by renaming one of the two. A match where only ONE side is a state is not ambiguous: the state owns the quantity |
 | `unresolved_scoped_ref` | Scoped reference (e.g., `"Model.Subsystem.var"`) cannot be resolved — a segment in the system path does not exist or the final variable is not declared. Also raised at flatten for an edge produced by a `coupling_import` expansion whose bound component lacks a referenced variable (esm-spec §10.10.3) |
 | `coupling_import_unresolved` | A `coupling_import` `ref` failed to load or parse (esm-spec §10.11) |
 | `coupling_import_not_library` | A `coupling_import` `ref` targets a document that is not a coupling-library file (no top-level `coupling_roles`) |
@@ -815,6 +819,42 @@ order; the application sequence and the reporting sequence are separate.
    - **Direct match:** Both equations have `D(x, t)` on the LHS with the same variable name `x`.
    - **Translation match:** The translate map maps A's variable to B's variable.
    - **Placeholder expansion:** If system B's equation uses the `_var` placeholder (e.g., `D(_var, t) = ...`), it matches _every_ state variable in system A. The placeholder equation is cloned once per matched variable, with `_var` substituted for the actual variable name.
+   - **Bare-name fallback:** B's dependent variable `B.x` matches A's equation for any `A.x` with
+     the same LOCAL name. This is a name-based translation, so a hit renames like one (step 4's
+     "the merged-away name does not survive").
+
+     **The surviving spelling is the quantity's OWNER's, not `systems[0]`'s — and where ownership
+     is genuinely ambiguous the entry is REFUSED rather than decided.** A direct match needs no
+     decision (the two names are equal) and a `translate` match is the author naming the surviving
+     spelling explicitly. The bare-name fallback is the one that has to choose, and choosing
+     `systems[0]` makes an `operator_compose` entry mean **different things in its two argument
+     orders**: flipping `systems` changes which state name, and therefore which *initial condition*,
+     comes out the far side. The tendency is arithmetically identical either way, so nothing
+     downstream reports the difference. An author has no reason to expect an argument order to
+     choose between two ICs.
+
+     Ownership follows the variable's own namespace — the direction step 4's merged-equation
+     reattribution already reaches in. The merge deletes one of the two names, so the question is
+     which of them the flattened system keeps, and the answer turns on which of them carries an
+     initial condition:
+
+     - **Both are STATE variables.** Each carries its own initial condition, the merge keeps one,
+       and nothing in the document says which one the merged tendency should integrate from. A
+       library MUST raise `operator_compose_ambiguous_bare_name` and MUST NOT choose. Choosing
+       here is exactly the silent decision this rule exists to remove; making it deterministic
+       would only make it *quietly* deterministic. The author resolves it with a `translate` entry,
+       which names the surviving spelling outright, or by renaming one of the two variables.
+     - **Exactly one is a state.** The other carries no initial condition — an observed, say — so
+       there is nothing to lose by renaming onto the state. That one is the owner, its declaration
+       survives, the other name is retargeted onto it and its declaration dropped, **in either
+       argument order**.
+     - **Neither is.** No initial condition is at stake either way, and `systems[0]`'s spelling
+       stands.
+
+     This settles the *name*, which is what an author and every downstream reference address the
+     state by. It does not make the merged equation's POSITION or the rendered term order of
+     `rhs_A + factor * rhs_B` argument-order-independent; those follow step 4 and step 5 as written,
+     and the sum is arithmetically the same either way.
 
 4. **Combine matched equations.** For each matched pair:
    - The final equation for variable `x` has the original LHS: `D(x, t)`.
@@ -879,7 +919,62 @@ order; the application sequence and the reporting sequence are separate.
      that caused it. Avoiding exactly that is what the rewrite in the previous bullet is for; the
      prune is its other half.
 
-5. **Preserve unmatched equations.** Equations in either system that have no match are included in the merged system unchanged.
+5. **Preserve unmatched equations — and REPORT them.** Equations in either system that have no
+   match are included in the merged system unchanged.
+
+   Preserving them is correct: §4.7.1 places no restriction on which side is the operator, and an
+   operator system may legitimately contribute states of its own. But preserving them **silently**
+   is not, because it makes **"merged everything"** and **"merged nothing"** the same observable
+   outcome, and the format then offers no way for an author to tell one from the other. An
+   `operator_compose` entry that matches nothing is indistinguishable from an entry that is not
+   there: the operator integrates a private, decoupled system from its own defaults, the mechanism
+   receives no contribution at all, and the only evidence is a state count one too high. That is
+   the one outcome a coupling mis-specification must not have — the same standard §4.7.1 step 2
+   already applies to a `translate` map consulted backwards, and §9.6.6's `unlowered_operator`
+   already applies to an unmatched *spatial* differential.
+
+   A library MUST therefore report the shortfall, counted over the equations **B** (`systems[1]`)
+   authored whose LHS names a dependent variable. An equation whose LHS names none is not a
+   contribution and is exempt by construction. Every report names the unmatched dependent
+   variables, in document order — naming them is what turns a diagnostic into a fix.
+
+   **`require_match` is TRI-STATE, and the three states are three different things an author can
+   mean.** Absent is NOT the same as `false`, which is why the schema declares no default for the
+   property:
+
+   | `require_match` | zero matched | some but not all matched |
+   |---|---|---|
+   | **absent** | `operator_compose_no_merge` — **ERROR** | `operator_compose_partial_merge` — warning |
+   | **`true`** | `operator_compose_require_match_unmatched` — **ERROR** | `operator_compose_require_match_unmatched` — **ERROR** |
+   | **`false`** | permitted, reported as nothing | permitted, reported as nothing |
+
+   **Why a zero merge is an error and a partial merge is not.** An entry that merges *nothing* is
+   indistinguishable from an entry that is not there: the operator integrates a private, decoupled
+   system from its own defaults, the other system receives no contribution at all, and the only
+   evidence is a state count one too high. Nothing in the document distinguishes that from the
+   composition the author intended, so it is refused. A *partial* merge is different in kind: it is
+   indistinguishable from an operator that legitimately contributes states of its own **alongside**
+   the ones it does merge, and the format cannot tell the two apart — so it is reported and the
+   document stands.
+
+   **`require_match: false` is a DECLARATION, not a default.** It says: this operator contributes
+   only states of its own, and unmatched equations are expected. Under it step 5 preserves the
+   equations exactly as before and nothing is reported. An *absent* flag means "the author has not
+   said", which is precisely why that is the case that errors — the format asks the author to
+   commit rather than inferring intent from silence.
+
+   **`require_match: true`** says the `systems[1]` equations are **contributions** and every one of
+   them MUST land. What counts as a match is exactly what step 3 already defines: a direct match, a
+   `translate` match, a `_var` placeholder expansion, or the bare-name fallback. `require_match`
+   adds no new matching; it only checks the outcome. A **partial** match fails under it just as a
+   zero match does — there is no "some is enough" reading an author could rely on: an operator that
+   contributes to seven of a mechanism's twelve species and silently misses the other five is
+   precisely the defect the flag exists to catch.
+
+   A library reports the WARNING through whatever diagnostic channel it offers its callers; the
+   *classification* is the cross-binding contract, the channel is not. The two ERROR cases are
+   refusals at flatten, not at `validate()`: such a document is schema-valid and structurally
+   valid, and only the merge knows the answer.
 
 **Placeholder expansion example:** Given system A (a reaction system with species O₃, NO, NO₂) composed with system B (advection with equation `D(_var)/dt = -u·∂_var/∂x - v·∂_var/∂y`), the result contains three advection equations:
 

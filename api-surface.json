@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 871,
+    "symbols": 879,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 302,
-      "typescript": 235,
-      "python": 247,
-      "rust": 334,
-      "go": 398
+      "julia": 305,
+      "typescript": 238,
+      "python": 250,
+      "rust": 335,
+      "go": 405
     },
     "by_tier": {
-      "extension": 602,
-      "stable": 269
+      "extension": 607,
+      "stable": 272
     }
   },
   "planned": [
@@ -825,6 +825,14 @@
       }
     },
     {
+      "name": "capture_coupling_diagnostics",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "capture_coupling_diagnostics"
+      }
+    },
+    {
       "name": "check_dimensional_consistency",
       "kind": "function",
       "tier": "extension",
@@ -1253,6 +1261,38 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeMissingDataSourceURLTemplate"
+      }
+    },
+    {
+      "name": "code_operator_compose_ambiguous_bare_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeAmbiguousBareName"
+      }
+    },
+    {
+      "name": "code_operator_compose_no_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeNoMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_partial_merge",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposePartialMerge"
+      }
+    },
+    {
+      "name": "code_operator_compose_require_match_unmatched",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeOperatorComposeRequireMatchUnmatched"
       }
     },
     {
@@ -4883,11 +4923,44 @@
       }
     },
     {
+      "name": "operator_compose_ambiguous_bare_name_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeAmbiguousBareNameError",
+        "julia": "OperatorComposeAmbiguousBareNameError",
+        "python": "OperatorComposeAmbiguousBareNameError",
+        "typescript": "OperatorComposeAmbiguousBareNameError"
+      }
+    },
+    {
       "name": "operator_compose_coupling",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "go": "OperatorComposeCoupling"
+      }
+    },
+    {
+      "name": "operator_compose_no_merge_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeNoMergeError",
+        "julia": "OperatorComposeNoMergeError",
+        "python": "OperatorComposeNoMergeError",
+        "typescript": "OperatorComposeNoMergeError"
+      }
+    },
+    {
+      "name": "operator_compose_require_match_error",
+      "kind": "error",
+      "tier": "stable",
+      "bindings": {
+        "go": "OperatorComposeRequireMatchError",
+        "julia": "OperatorComposeRequireMatchError",
+        "python": "OperatorComposeRequireMatchError",
+        "typescript": "OperatorComposeRequireMatchError"
       }
     },
     {

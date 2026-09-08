@@ -1,0 +1,149 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "operator_compose_partial_merge",
+    "description": "esm-libraries-spec 4.7.1 step 5, PARTIAL MERGE. The deposition operator `Sink` authors its tendencies directly over the mechanism's scoped names -- `Chem.O3`, which `Chem` carries, and `Chem.CO`, which it does not (a species this mechanism variant does not have). One of the two lands and the other is preserved as a decoupled equation, so the flattened system silently deposits half of what the author wrote. This is the seven-of-twelve-species shape from EarthSciML/EarthSciModels#9, reduced. It stays a WARNING because an operator MAY legitimately contribute states of its own; `require_match_partial.esm` is the same document with the author saying it may not.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "tags": [
+      "esm-libraries-spec-4.7.1",
+      "operator-compose",
+      "operator-compose-partial-merge",
+      "merge-intent"
+    ]
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 30.0
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 5.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0002
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "CO": {
+          "type": "unknown",
+          "units": "ppb",
+          "default": 100.0,
+          "description": "Declared so `Sink.CO` below is a name the document carries. The mechanism has no CO, so the operator's CO tendency lands nowhere."
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "CO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "CO"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    }
+  ]
+}
