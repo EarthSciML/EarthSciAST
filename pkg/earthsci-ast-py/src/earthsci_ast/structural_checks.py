@@ -1747,7 +1747,10 @@ def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -
     reserved = _reserved_declaration_names(data)
 
     def scan(container: dict[str, Any], pointer: str, owner: str, kind: str) -> None:
-        for name in container:
+        # Sorted, not authored, order: Go decodes ``variables`` into a plain map
+        # and cannot reproduce the authored order at all, so sorted is the one
+        # ordering all five bindings can agree on.
+        for name in sorted(container, key=str):
             why = reserved.get(str(name))
             if why is None:
                 continue

@@ -196,7 +196,10 @@ export function validateReservedDeclarationNames(
   const errors: StructuralError[] = []
   if (!declarations) return errors
   const reserved = reservedDeclarationNames(esmFile)
-  for (const name of Object.keys(declarations)) {
+  // Sorted, not authored, order: Go decodes `variables` into a plain map and
+  // cannot reproduce the authored order at all, so sorted is the one ordering
+  // all five bindings can agree on.
+  for (const name of Object.keys(declarations).sort()) {
     const reason = reserved.get(name)
     if (!reason) continue
     const role =
