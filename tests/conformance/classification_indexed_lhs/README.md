@@ -19,13 +19,13 @@ independently**, and no shared fixture could have caught any of them: the
 all, so the indexed spelling was unpinned everywhere.
 
 - Julia — issue #232, PR #250 (the tree-walk build's owner buckets)
-- Python — issue #231, PR #237 (`flatten._collect_model` + `classification._base_name`)
+- Python — issue #232, PR #276 (`flatten._normalize_indexed_observed_lhs` + `classification._base_name`)
 - Go and TypeScript — PR #268 (`definedVariableName` / `baseVariableName`)
 - Rust — already correct; `lhs_form` peels both shells
 
 ## The fixture
 
-One model, `M`, over `lev` (4 cells). Six unknowns, chosen so that a binding
+One model, `M`, over `lev` (4 cells). Seven unknowns, chosen so that a binding
 cannot pass by widening indiscriminately:
 
 | Variable | LHS spelling | Must classify as |
@@ -53,15 +53,16 @@ The golden is **authored** against the spec, not minted by a binding.
 
 ## Expected failures
 
-**Python is RED here until PR #237 merges, deliberately.** It is kept in
-`bindings_required` rather than moved to `scope_excluded`, following PR #250's
-precedent: defining the contract down to what already passes is the weaker use of
-the mechanism. Measured on `main` it answers `observed_unknowns = ['sc', 'wb']`
-and `algebraic_unknowns = ['im', 'wf', 'ws']` — it misses both aggregate-indexed
-observeds. Measured at #237's head it answers this golden exactly.
+None. All five bindings pass.
 
-Every other binding was measured against this fixture and passes: Julia and Rust
-on `main`, Go and TypeScript with PR #268 applied.
+This category was authored while the Python half was still open, and kept python
+in `bindings_required` rather than moving it to `scope_excluded` — defining the
+contract down to what already passes is the weaker use of the mechanism (PR
+#250's precedent). Python answered `observed_unknowns = ['sc', 'wb']` and
+`algebraic_unknowns = ['im', 'wf', 'ws']` — missing both aggregate-indexed
+observeds — until PR #276 (issue #232's Python half) landed
+`classification._base_name`'s aggregate unwrap. Julia and Rust were already
+correct; Go and TypeScript are corrected in PR #268.
 
 ## What this category deliberately does NOT pin
 
@@ -72,8 +73,12 @@ Two things were left out on purpose. Both are omissions, not oversights.
 esm-libraries-spec §4.7.5 says an arrayed observed is in **both**
 `state_variables` (it materializes into a buffer the solver allocates) and
 `observed_variables` (an equation defines it). No binding does that, and they
-miss in two opposite directions — Julia and post-#237 Python drop it out of
-`state_variables`; Rust, Go and TypeScript drop it out of `observed_variables`.
+miss in two opposite directions. Measured on this fixture: Python puts `wf` and
+`ws` in `observed_variables` and drops them from `state_variables`, while Rust,
+Go and TypeScript put them in `state_variables` and drop them from
+`observed_variables`. Python is not even self-consistent — `wb`, whose LHS is the
+bare `index(wb, i)` of §6.3.1's worked example, stays in `state_variables` there,
+because only the `aggregate` spelling is normalized upstream.
 Dual membership is not expressible in any of them today, because each assigns one
 role per variable with a single `switch`.
 
@@ -109,4 +114,4 @@ four parameter sets and `system_kind` against the golden, plus the partition
 invariant. The golden's shape is identical to the `classification` category's, so
 a binding can drive both with one reader.
 
-See also `CONFORMANCE_SPEC.md` §5.33.
+See also `CONFORMANCE_SPEC.md` §5.34.

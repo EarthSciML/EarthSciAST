@@ -24,8 +24,9 @@
     "naming": "snake_case in Julia, Python, Rust and Go; camelCase (odeStates, observedUnknowns, algebraicUnknowns) in TypeScript.",
     "golden_shape": "Identical to the `classification` category's, so a binding can drive both with one reader."
   },
-  "expected_failures": {
-    "python": "RED until PR #237 merges — kept in bindings_required on purpose rather than moved to scope_excluded, following PR #250's precedent: defining the contract down to what already passes is the weaker use of the mechanism. Measured on main, Python answers observed_unknowns = ['sc', 'wb'] and algebraic_unknowns = ['im', 'wf', 'ws'], i.e. it misses BOTH aggregate-indexed observeds. Measured at PR #237's head it answers this golden exactly. No other binding is expected to fail: Julia, Rust (both already correct on main) and Go / TypeScript (corrected in PR #268) were each measured against this fixture."
+  "expected_failures": {},
+  "notes": {
+    "python": "GREEN on main since PR #276 (issue #232's Python half) landed `classification._base_name`'s aggregate unwrap. Before it, Python answered observed_unknowns = ['sc', 'wb'] and algebraic_unknowns = ['im', 'wf', 'ws'], missing BOTH aggregate-indexed observeds; this category was authored while that fix was still open and kept python in bindings_required rather than scope_excluded. All five bindings now pass."
   },
   "fixtures": [
     {
