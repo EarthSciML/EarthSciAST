@@ -29,8 +29,8 @@
 
 use earthsci_ast::Solution;
 use earthsci_ast::{
-    Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, Tolerance, check_assertion,
-    load_string,
+    Alg, EsmFile, Model, ModelTest, ModelTestAssertion, SolveOptions, check_assertion, load_string,
+    resolve_tolerance,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -75,21 +75,6 @@ fn model_iter(file: &EsmFile) -> Vec<(&String, &Model)> {
         .as_ref()
         .map(|m| m.iter().collect::<Vec<_>>())
         .unwrap_or_default()
-}
-
-fn effective_tolerance(
-    assertion: Option<&Tolerance>,
-    test: Option<&Tolerance>,
-    model: Option<&Tolerance>,
-) -> (f64, f64) {
-    for t in [assertion, test, model].into_iter().flatten() {
-        let rel = t.rel.unwrap_or(0.0);
-        let abs = t.abs.unwrap_or(0.0);
-        if rel > 0.0 || abs > 0.0 {
-            return (rel, abs);
-        }
-    }
-    (1e-6, 0.0)
 }
 
 /// Locate an assertion's variable in the solution, matching either the bare name
@@ -160,10 +145,16 @@ fn check_one_assertion(
     sol: &Solution,
 ) {
     let actual = lookup(sol, &a.variable, a.time);
-    let (rel, abs) = effective_tolerance(
-        a.tolerance.as_ref(),
-        t.tolerance.as_ref(),
+    // esm-spec §6.6.4 through the binding's own resolver, the one
+    // `run_pde_tests` uses — note the argument order is (model, test,
+    // assertion), the reverse of the local copy this replaces. That copy
+    // additionally SKIPPED a tolerance level whose fields were all zero and
+    // fell through to the next; §6.6.4 gives the first level that is present,
+    // and `rel == abs == 0` is exact-equality mode, not "no bound".
+    let (rel, abs) = resolve_tolerance(
         model.tolerance.as_ref(),
+        t.tolerance.as_ref(),
+        a.tolerance.as_ref(),
     );
     assert!(
         check_assertion(actual, a.expected, rel, abs),
