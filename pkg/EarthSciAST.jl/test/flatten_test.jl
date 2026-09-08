@@ -455,9 +455,19 @@ end
     end
 
     @testset "8a. couple additive connector transform (esm-spec §10.3)" begin
-        # Chem: one species A (no reactions) → D(Chem.A) ~ 0.
-        # Sink: a parameter k. An additive couple edge Sink.k → Chem.A adds
-        # (-Sink.k)*Chem.A to A's tendency, so D(Chem.A) ~ 0 + (-k*A) = -k*A.
+        # Chem: one species A in NO reaction, so esm-libraries-spec §4.6.1 emits
+        # no equation for it and A has NO tendency yet. Sink: a parameter k.
+        #
+        # That makes this the case §4.7.2 spells out for `additive`: "If `to` has
+        # no tendency yet, `expression` BECOMES it (`D(to) ~ expression`) — an
+        # additive term against an absent tendency is well defined, because zero
+        # is the additive identity." So D(Chem.A) ~ (-Sink.k) * Chem.A exactly,
+        # with no summation node.
+        #
+        # This testset used to assert a `+` here, because Julia emitted a vacuous
+        # `D(Chem.A) = 0` for the inert species and the connector summed onto it.
+        # The `+` was pinning that artifact, not the coupling behaviour under
+        # test; §4.6.1 removed the artifact and §4.7.2's own rule is what is left.
         rsys = EarthSciAST.ReactionSystem(
             [EarthSciAST.Species("A", default=2.0)], EarthSciAST.Reaction[])
         sink = Model(
@@ -479,11 +489,13 @@ end
         @test isempty(flat.metadata.opaque_coupling_refs)
         eq_A = _find_eq(flat, "Chem.A")
         @test eq_A !== nothing
-        # The additive term was summed onto A's tendency: -k*A is present.
-        @test _has_op(eq_A.rhs, "+")          # 0 + <term>
+        # The expression BECAME the tendency (§4.7.2), rather than being summed
+        # onto a vacuous zero: `-k*A` is the whole RHS.
+        @test !_has_op(eq_A.rhs, "+")         # no `0 + <term>` left to sum onto
         @test _has_op(eq_A.rhs, "-")          # negation of Sink.k
         @test _uses_var(eq_A.rhs, "Sink.k")
         @test _uses_var(eq_A.rhs, "Chem.A")
+        @test to_ascii(eq_A.rhs) == "(-Sink.k) * Chem.A"
         # Exactly one D(Chem.A) equation (no over-determining duplicate).
         @test count(eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
                     flat.equations) == 1
