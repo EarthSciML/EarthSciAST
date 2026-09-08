@@ -12,8 +12,9 @@ import (
 //
 // `index_sets` is a DOCUMENT-scoped registry, so a document that mounts a
 // 59-layer atmospheric column and a 4-layer soil column — both of which spell
-// their axis `lev`, because both import the same column-grid library at
-// different `NLEV` — hits the §4.7 deep-equal-or-error merge and fails with
+// their axis `lev`, because both come from the same one-dimensional column
+// family at different lengths — hits the §4.7 deep-equal-or-error merge and
+// fails with
 // `subsystem_index_set_conflict`. That scoping is load-bearing, so the fix is
 // not to re-scope it but to let the ASSEMBLER say "this mount's `lev` is not
 // that mount's `lev`" at the edge.
