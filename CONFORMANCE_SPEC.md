@@ -2600,7 +2600,7 @@ configuration.
 #### 5.14.1 What is compared
 
 Each in-scope binding runs the fixture's inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — the three tests differ *only* in their
 `parameter_overrides`, so the pair is the identity.
@@ -2725,7 +2725,7 @@ both ranks and is the reference binding.
 #### 5.16.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator and compares every
+inline-test runner (`run_inline_tests`) with the pinned integrator and compares every
 assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)`.
 
@@ -3302,7 +3302,7 @@ because every other fixture's actuals are finite.
 #### 5.20.2 What is compared
 
 Each in-scope binding runs the fixture's inline test through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator, and for each
+inline-test runner (`run_inline_tests`) with the pinned integrator, and for each
 `(test_id, assertion_idx)` the manifest's `cases` entry declares:
 
 | Field | Contract |
@@ -3557,7 +3557,7 @@ laundered answer would have gone green on the defect.
 
 Rust drives it on both routes in
 `pkg/earthsci-ast-rs/tests/undeclared_operand_gate.rs` — the per-step route
-(`run_pde_tests`), the build pipeline (`build_pipeline: true`, which needs no
+(`run_inline_tests`), the build pipeline (`build_pipeline: true`, which needs no
 data reader linked and reaches the identical code an ingest reaches), a
 cross-route assertion that both name the same operand in the same words, and the
 resolver-level backstop with its non-vacuity twin.
@@ -4144,7 +4144,7 @@ asserted at `time: 0`) needs them on one shared model.
 #### 5.28.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — each fixture's tests differ *only* in their inline
 array data, so the pair is the identity.
@@ -4357,19 +4357,19 @@ The two clauses above that a document cannot express as a passing fixture — a
 `wrt` that must not trigger the wrap, and the scope clash that must be a fault —
 are gated per binding on `bind_dimension_names` directly, one test each.
 
-The `wrt` clause: **Julia** `test/pde_inline_tests_test.jl`
+The `wrt` clause: **Julia** `test/inline_tests_test.jl`
 (`bind_dimension_names` wraps only a free mention), **Python**
-`tests/test_pde_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
-**Rust** `pde_inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
+`tests/test_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
+**Rust** `inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
 The same three cases also pin the two other non-mentions the rule turns on: an
 `aggregate` that rebinds the dimension name, and an `integral` whose integration
 variable is it.
 
-The scope clash: **Julia** `test/pde_inline_tests_test.jl`
+The scope clash: **Julia** `test/inline_tests_test.jl`
 (`bind_dimension_names` rejects a dimension the parameter scope binds),
 **Python**
-`tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
-**Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+`tests/test_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
+**Rust** `inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
 
 ### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
 
@@ -4480,7 +4480,7 @@ they *say* and never in what the runtime *does*.
 #### 5.32.1 What is compared
 
 The in-scope bindings run the fixture's inline tests through their official
-inline-test runner (`run_pde_tests`) with the pinned integrator and compare every
+inline-test runner (`run_inline_tests`) with the pinned integrator and compare every
 assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)`.
 
@@ -4613,6 +4613,7 @@ ever emitted it, and the code had zero real coverage.
 | `unit_dimension_mismatch` | Units | Dimensional analysis failure — a PROVABLE inconsistency (esm-spec §4.8.4). Emitted by the structural layer as `unit_inconsistency`. Hard error. |
 | `unit_parse_error` | Units | Unrecognized unit string — does not parse under the esm-spec §4.8.2 grammar, or names a symbol absent from the §4.8.1 registry. Hard error, NOT a warning. |
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
+| `observed_cycle` | Structural | A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6): each observed on the cycle is defined by an equation whose RHS names the next, so no evaluation order satisfies every definition. Decidable from the equations alone — hard error in `validate`, in EVERY binding, executing or not. Pointer: `/models/<M>` (a cycle belongs to no single equation). `details.cycle` is the path in traversal order with the entry node repeated to close it — a PATH, so it is ordered semantically, not by §7.1.0. The self-edge of a §4.3.1.1 recurrence CANDIDATE is dropped (§5.19.5); every other self-reference (`x ~ x + 1`, `s ~ s + 1`) is a cycle of length one and IS reported. Fixture: `tests/invalid/observed_cycle_array_elementwise.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not an `aggregate` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
@@ -4742,6 +4743,7 @@ only "some error was produced" is what let 42 pins drift undetected (audit 2026-
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
 | `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |
+| `E_TREEWALK_UNRESOLVED_ORDER` | Runtime | An expression referenced a name the model DOES declare — a state, a parameter or an observed — for which no value existed at the point of evaluation. For an observed that means its defining rule had not run: the materialization order stalled, which is what an `observed_cycle` (esm-spec §4.9.6) looks like from inside the evaluator. Split out of `E_TREEWALK_UNBOUND_NAME` because reporting a DECLARED name as bound-by-nothing is a false statement about the document, and the name it lands on is whichever the walk reached first — routinely an innocent one (issue #181). A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one. |
 | `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 ### 7.2 Error Message Format

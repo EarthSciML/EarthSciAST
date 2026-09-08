@@ -19,12 +19,12 @@
 //!    test's problem produces a WRONG number, not merely a fast one.
 //!
 //! Sabotage check (how to confirm this suite bites): delete any one field from
-//! `BuildKey::of` in `src/pde_inline_tests.rs` and the matching
+//! `BuildKey::of` in `src/inline_tests.rs` and the matching
 //! `rebuilds_when_*` test fails on both counts.
 
 use earthsci_ast::{
-    BuildProviderFactory, PdeAssertionResult, SolveOptions, load_string, run_pde_tests_filtered,
-    run_pde_tests_with_base_dir, run_pde_tests_with_providers,
+    AssertionResult, BuildProviderFactory, SolveOptions, load_string, run_inline_tests_filtered,
+    run_inline_tests_with_base_dir, run_inline_tests_with_providers,
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
@@ -70,7 +70,7 @@ fn test_entry(id: &str, start: f64, end: f64, at: f64, expected: f64) -> Value {
 
 /// Run `tests` with a counting provider factory; return the results and the
 /// number of times the factory was called, i.e. the number of BUILDS.
-fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<PdeAssertionResult>, usize) {
+fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<AssertionResult>, usize) {
     let file = load_string(&file_json.to_string()).expect("document loads");
     let builds = Cell::new(0usize);
     // An EMPTY provider set: this document reads no `data_sources`, and the
@@ -81,11 +81,11 @@ fn run_counting(file_json: &Value, filter: Option<&str>) -> (Vec<PdeAssertionRes
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_pde_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
+    let results = run_inline_tests_filtered(&file, None, &opts(), None, Some(&*make), filter);
     (results, builds.get())
 }
 
-fn actual(results: &[PdeAssertionResult], id: &str) -> f64 {
+fn actual(results: &[AssertionResult], id: &str) -> f64 {
     let r = results
         .iter()
         .find(|r| r.test_id == id)
@@ -94,7 +94,7 @@ fn actual(results: &[PdeAssertionResult], id: &str) -> f64 {
         .unwrap_or_else(|| panic!("test {id} recorded no actual: {}", r.message))
 }
 
-fn assert_all_pass(results: &[PdeAssertionResult]) {
+fn assert_all_pass(results: &[AssertionResult]) {
     for r in results {
         assert!(
             r.passed,
@@ -256,11 +256,11 @@ fn rebuilds_when_expression_template_imports_differ() {
     let two = entry("t_two", "lib_two", 2.0);
     let three = entry("t_three", "lib_three", 3.0);
 
-    let run = |tests: Value| -> Vec<PdeAssertionResult> {
+    let run = |tests: Value| -> Vec<AssertionResult> {
         let base = dir.path().join("model.esm");
         std::fs::write(&base, leaf_doc(tests).to_string()).expect("write model");
         let file = earthsci_ast::load_path(&base).expect("model loads");
-        run_pde_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
+        run_inline_tests_with_base_dir(&file, None, &opts(), Some(dir.path()))
     };
 
     let fwd = run(json!([two.clone(), three.clone()]));
@@ -349,8 +349,8 @@ fn filter_matching_nothing_builds_nothing() {
     assert_eq!(builds, 0);
 }
 
-/// The unfiltered entry points keep their meaning: `run_pde_tests_with_providers`
-/// is `run_pde_tests_filtered(.., None)`.
+/// The unfiltered entry points keep their meaning: `run_inline_tests_with_providers`
+/// is `run_inline_tests_filtered(.., None)`.
 #[test]
 fn unfiltered_entry_point_runs_everything() {
     let file = load_string(
@@ -366,7 +366,8 @@ fn unfiltered_entry_point_runs_everything() {
         builds.set(builds.get() + 1);
         Ok(Vec::new())
     });
-    let results = run_pde_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
+    let results =
+        run_inline_tests_with_providers(&file, None, &opts(), None::<&Path>, Some(&*make));
     assert_eq!(results.len(), 2);
     assert_eq!(builds.get(), 1);
 }

@@ -758,6 +758,17 @@ impl ArrayCompiled {
             state_defaults,
             n_states,
         } = slots;
+        // Every name this model declares (issue #181): the state slots, the
+        // parameters, and each observed rule's target. Read only by the
+        // evaluator's fault arm, to tell a name declared NOWHERE from one
+        // declared here but not yet materialized — see [`EvalCtx::declared`].
+        let declared_names: HashSet<String> = var_shapes
+            .keys()
+            .cloned()
+            .chain(param_names.iter().cloned())
+            .chain(observed_rules.iter().map(|r| observed_rule_var(r).clone()))
+            .collect();
+
         Ok(ArrayCompiled {
             var_shapes,
             scalar_state_names,
@@ -769,6 +780,7 @@ impl ArrayCompiled {
             observed_rules,
             rhs_rules,
             n_states,
+            declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),
             field_ics,
             ic_scope_defs,
@@ -2272,7 +2284,7 @@ fn build_observed_rules(
             )?);
         }
     }
-    Ok(dependency_order_observed(observed_rules))
+    dependency_order_observed(observed_rules)
 }
 
 /// Wrap one algebraic body — a declared observed's `expression`, or the RHS of
@@ -4585,7 +4597,7 @@ mod subsystem_ragged_and_inspection_tests {
         let sol = crate::problem::solve(&prob, &erk_opts()).expect("solves");
         let insp = prob.take_inspection();
         let ti = sol.time.len() - 1;
-        let cells = crate::pde_inline_tests::state_cells(&sol.state_variable_names, "u", "M");
+        let cells = crate::inline_tests::state_cells(&sol.state_variable_names, "u", "M");
         assert_eq!(cells.len(), 2);
         let u1: Vec<f64> = cells.iter().map(|(_, row)| sol.state[*row][ti]).collect();
         assert!((u1[0] - 30.0).abs() < 1e-8, "u[1](1) = {} != 30", u1[0]);

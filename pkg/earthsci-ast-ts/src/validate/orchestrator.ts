@@ -45,6 +45,7 @@ import {
   validateReservedModelNames,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
+import { validateObservedCycles } from './observed-checks.js'
 import { validateRecurrenceEquations } from '../recurrence.js'
 import {
   validateReactionConsistency,
@@ -225,6 +226,15 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // come from the `index_sets` registry, which is document-scoped.
       errors.push(...validateRecurrenceEquations(model, modelPath, esmFile))
 
+      // esm-spec §4.9.6. The companion rule to the one above: a cycle among the
+      // model's OBSERVED definitions, where the recurrence self-edge just
+      // exempted is precisely the edge that is NOT one of these. Decidable from
+      // the equations alone and INTRA-model — a cycle closed by this model's own
+      // observeds is a cycle however the model is wired into a coupling — so it
+      // runs unconditionally, outside the `isCoupled` relaxation that equation
+      // balance gets.
+      errors.push(...validateObservedCycles(model, modelPath, esmFile))
+
       // Recursively validate subsystems
       if (model.subsystems) {
         for (const [subsystemName, subsystem] of Object.entries(model.subsystems)) {
@@ -252,6 +262,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateBroadcastFns(subsystem, subsystemPath))
           errors.push(...validateArrayBroadcastShapes(subsystem, subsystemPath))
           errors.push(...validateRecurrenceEquations(subsystem, subsystemPath, esmFile))
+          errors.push(...validateObservedCycles(subsystem, subsystemPath, esmFile))
         }
       }
     }

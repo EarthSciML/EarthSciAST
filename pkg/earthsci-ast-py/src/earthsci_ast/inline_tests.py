@@ -1,6 +1,6 @@
-"""pde_inline_tests — the §6.6.5-capable inline-test runner over the NumPy
+"""inline_tests — the §6.6.5-capable inline-test runner over the NumPy
 simulation pathway (the Python mirror of the Julia binding's
-``pde_inline_tests.jl``).
+``inline_tests.jl``).
 
 A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
 field — ``reduce: L2_error | Linf_error`` against an analytic ``reference``
@@ -45,20 +45,30 @@ Public surface (1:1 with the Julia reference):
   state, sorted by cell tuple.
 - :func:`simulate_states` — states sampled at requested times, with the
   element-name → row map conformance runners key on.
-- :func:`run_pde_tests` — run every inline test of the selected model(s);
-  returns per-assertion results carrying the ACTUAL reduction values
-  (conformance runners record these).
+- :func:`run_inline_tests` — run every inline test of the selected
+  component(s) of one or many documents; returns per-assertion results
+  carrying the ACTUAL reduction values (conformance runners record these).
+- :class:`InlineTestOptions` — the per-document override record a caller's
+  ``options_for`` callback returns.
+
+This entry was called ``run_pde_tests`` until it grew the ability to run a
+whole corpus. The name was always too narrow — the §6.6.5 spatial reductions
+are one assertion FORM, and the same runner has always executed the plain
+pointwise assertions of an ODE document through the same frame — so it is now
+``run_inline_tests``, with no deprecated alias (the old spelling is exactly
+the misunderstanding the rename exists to remove).
 """
 
 from __future__ import annotations
 
 import copy
+import glob
 import json
 import math
 import os
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -67,6 +77,7 @@ from .classification import is_observed_unknown
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .expr_walk import iter_children
 from .flatten import flatten
+from .lower_table_lookup import lower_table_lookups
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
@@ -190,7 +201,7 @@ _CELL_NAME_RE = re.compile(r"^(.+)\[([0-9,]+)\]$")
 
 
 @dataclass
-class PdeAssertionResult:
+class AssertionResult:
     """Outcome of one §6.6.5 inline-test assertion evaluated through the
     NumPy simulation pathway. ``actual`` is the computed reduction value
     (``None`` when the simulation or reduction itself failed); ``message``
@@ -208,6 +219,72 @@ class PdeAssertionResult:
     atol: float
     passed: bool
     message: str
+
+
+@dataclass(frozen=True)
+class InlineTestOptions:
+    """Per-document overrides for :func:`run_inline_tests`, returned by its
+    ``options_for`` callback.
+
+    Every field is optional, and a field left ``None`` INHERITS the value the
+    caller passed to :func:`run_inline_tests` itself. So a callback that cares
+    about one document's solver and nothing else returns
+    ``InlineTestOptions(method="BDF")`` and the rest of the run is unchanged.
+
+    This record exists so that site-specific policy stays at the site. A CI
+    gate over a model corpus routinely carries basename-keyed tables — a
+    ``cse`` allowlist, a stiff-solver map, an initial-condition seed for the
+    documents whose tests do not state one — and each of those is a reason
+    the gate could not call the library entry and re-implemented esm-spec
+    §6.6 instead. One callback absorbs all of them without this module
+    learning anything about the corpus.
+
+    ``initial_conditions`` / ``parameter_overrides`` are SEEDS: they are
+    applied BENEATH the test's own maps, so a test that states a value keeps
+    it and a test that is silent gets the caller's. They are merged with the
+    test's map BEFORE :func:`_scope_to_component` runs, and so are keyed and
+    resolved exactly like a test's own keys — which is what makes the
+    precedence well defined. Merging afterwards would hand the build two keys
+    (``T`` and ``M.T``) designating one parameter with two values.
+    """
+
+    #: Run only this component of the document (``None`` runs every one).
+    model_name: str | None = None
+    #: scipy ``solve_ivp`` method.
+    method: str | None = None
+    #: Solver relative tolerance.
+    rtol: float | None = None
+    #: Solver absolute tolerance.
+    atol: float | None = None
+    #: Directory that anchors ``from_file`` reference paths (§6.6.5).
+    base_dir: str | None = None
+    #: Common-subexpression elimination in the right-hand-side build.
+    cse: bool | None = None
+    #: Initial-condition seed, applied beneath each test's own map.
+    initial_conditions: Mapping[str, Any] | None = None
+    #: Parameter-override seed, applied beneath each test's own map.
+    parameter_overrides: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedOptions:
+    """One document's options after ``options_for`` has been folded onto the
+    call-level defaults. Internal.
+
+    ``method`` / ``rtol`` / ``atol`` may still be ``None``: those three resolve
+    further against the DOCUMENT's own ``solver`` block (esm-spec §2.2.2,
+    §2.2.3), which is only reachable once the document is loaded. ``None`` here
+    means "neither ``options_for`` nor the caller named one", which is what
+    keeps the document's own opinion expressible."""
+
+    model_name: str | None
+    method: str | None
+    rtol: float | None
+    atol: float | None
+    base_dir: str | None
+    cse: bool
+    initial_conditions: Mapping[str, Any] = field(default_factory=dict)
+    parameter_overrides: Mapping[str, Any] = field(default_factory=dict)
 
 
 def evaluate_cellwise(
@@ -537,6 +614,31 @@ def _scalar_slot(var_map: dict[str, int], variable: str, model: str) -> int | No
     return None
 
 
+def _test_components(file: EsmFile, model_name: str | None) -> Iterator[tuple[str, Any]]:
+    """The document's TEST-BEARING components, models first and then reaction
+    systems, each in the document's own key order.
+
+    esm-spec §6.6 hangs ``tests`` off a component, and the schema gives
+    ``reaction_systems`` the same ``tests`` / ``tolerance`` members it gives
+    ``models``. The runner iterated ``models`` alone until this was fixed, so
+    a chemical mechanism's inline tests were not run and not reported — the
+    silent half of a coverage gap, since a component with no rows and a
+    component that was never looked at are indistinguishable in the result
+    list.
+
+    Reaction-system species are 0-D, so their assertions take the pointwise
+    (scalar-slot) form; nothing about the build changes, because the whole
+    document is flattened either way and a species becomes an ordinary state.
+    """
+    for kind in ((file.models or {}), (file.reaction_systems or {})):
+        for name, component in kind.items():
+            if model_name is not None and str(name) != str(model_name):
+                continue
+            if not getattr(component, "tests", None):
+                continue
+            yield str(name), component
+
+
 def _variable_shape(file: EsmFile, mname: str, variable: str) -> list[str]:
     """The asserted variable's declared spatial shape (ordered index-set
     names). Raises when the variable is missing or scalar — a ``coords``
@@ -544,6 +646,14 @@ def _variable_shape(file: EsmFile, mname: str, variable: str) -> list[str]:
     to the Julia reference's ``_variable_shape``."""
     model = (file.models or {}).get(str(mname))
     if model is None:
+        if str(mname) in (file.reaction_systems or {}):
+            # A reaction system declares SPECIES, and a species is 0-D. So the
+            # answer is the coords-specific rejection, not "model not found":
+            # the component exists, and what is ill-formed is asking a scalar
+            # for a grid cell.
+            raise RuntimeError(
+                f"`coords` requires a spatially-shaped variable; '{variable}' is scalar"
+            )
         raise RuntimeError(f"model '{mname}' not found")
     v = (model.variables or {}).get(str(variable))
     if v is None:
@@ -702,6 +812,16 @@ def _scope_to_component(
     rewritten to it. A key that does not (already qualified, a scoped reference
     the prefix would double up, or simply wrong) is passed through untouched, so
     `esm_problem` reports on it exactly as it would have.
+
+    This is what makes the runner's answer differ from handing the authored
+    map to :func:`~earthsci_ast.problem.esm_problem` raw and letting bare-name
+    resolution find it. The scoped spelling is fully qualified, which is an
+    EXACT hit under the forward, longest-dotted-suffix resolution of esm-spec
+    §6.6.2 rule 2 — so the two rules agree here rather than compete, and the
+    scoped one additionally survives a document where a sibling component
+    declares the same bare name. A seed supplied by an
+    :class:`InlineTestOptions` callback is merged onto the authored map
+    before this runs, so it is keyed and scoped by the same rule.
     """
     if not overrides:
         return {}
@@ -727,6 +847,7 @@ def simulate_states(
     saveat: Sequence[float],
     parameters: dict[str, float] | None = None,
     initial_conditions: dict[str, float] | None = None,
+    cse: bool = True,
     inspect: BuildInspection | None = None,
 ) -> SimulatedStates:
     """Run the official :func:`earthsci_ast.problem.solve` pathway
@@ -739,12 +860,20 @@ def simulate_states(
     ``inspect`` is forwarded to :func:`~earthsci_ast.problem.esm_problem` — an
     optional :class:`~earthsci_ast.simulation.BuildInspection` sink the NumPy
     pathway fills with the build-time setup arrays / observed map (results
-    are identical with or without it)."""
+    are identical with or without it).
+
+    ``cse`` is forwarded too. It is the right-hand-side build's
+    common-subexpression elimination, and it is a knob rather than a constant
+    because a large enough document can make the CSE pass itself the
+    expensive part of a build that is then run once — so a corpus gate that
+    is memory- or time-bounded per document needs to be able to say
+    ``cse=False``. It does not change what is computed."""
     prob = esm_problem(
         file,
         tspan,
         p=dict(parameters or {}),
         u0=dict(initial_conditions or {}),
+        cse=cse,
         inspect=inspect,
     )
     # esm-spec §2.2.2, most-specific first: an explicit `rtol` / `atol` here
@@ -893,12 +1022,12 @@ def _result(
     actual: float | None,
     passed: bool,
     message: str,
-) -> PdeAssertionResult:
-    """Build one :class:`PdeAssertionResult`, filling the assertion-identity
+) -> AssertionResult:
+    """Build one :class:`AssertionResult`, filling the assertion-identity
     fields (model / test / index / variable / time / reduce / expected) from
     the ``test`` + ``assertion`` and taking the outcome fields verbatim. The
-    three result sites of :func:`run_pde_tests` share this shape."""
-    return PdeAssertionResult(
+    three result sites of :func:`run_inline_tests` share this shape."""
+    return AssertionResult(
         str(mname),
         test.id,
         idx,
@@ -928,7 +1057,7 @@ def _evaluate_assertion(
     (``None`` on failure) and any error text. Point-samples per ``coords``,
     collapses per ``reduce`` (evaluating an analytic or ``from_file``
     ``reference`` for the error norms), or reads a scalar state when the
-    assertion has neither. The per-assertion body of :func:`run_pde_tests`."""
+    assertion has neither. The per-assertion body of :func:`run_inline_tests`."""
     a = assertion
     actual: float | None = None
     msg = ""
@@ -1033,54 +1162,44 @@ def _evaluate_assertion(
     return actual, msg
 
 
-def run_pde_tests(
-    pde_input: str | EsmFile,
-    *,
-    model_name: str | None = None,
-    method: str | None = None,
-    rtol: float | None = None,
-    atol: float | None = None,
-    base_dir: str | None = None,
-) -> list[PdeAssertionResult]:
-    """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
-    assertions) of the selected model(s) of ``pde_input`` (a path or a loaded
-    :class:`EsmFile`) through the official NumPy simulation pathway, and
-    return one :class:`PdeAssertionResult` per assertion — carrying the ACTUAL
-    reduction value alongside pass/fail, so conformance harnesses can record
-    and cross-compare the numbers.
+def _run_document_tests(
+    file: EsmFile,
+    source: str | None,
+    opts: _ResolvedOptions,
+    results: list[AssertionResult],
+) -> None:
+    """Run one document's inline tests, appending to ``results``.
 
-    Per test: simulate over the test's ``time_span`` (with its
-    ``initial_conditions`` / ``parameter_overrides`` applied, ``method`` /
-    ``rtol`` / ``atol`` pinning scipy's ``solve_ivp``); then per assertion the
-    asserted variable's field is read at the assertion time and either
-    point-sampled per its ``coords`` (positions in 1-based INDEX space;
-    nearest grid index, exact ties rounding DOWN — the pinned cross-binding
-    convention) or collapsed per its ``reduce`` (error norms evaluate the
-    ``reference`` — an analytic expression cellwise via
-    :func:`evaluate_cellwise`, or a ``{type: "from_file", path, format?}``
-    JSON snapshot resolved against ``base_dir``). An assertion with neither
-    ``coords`` nor ``reduce`` samples a scalar state. ``base_dir`` defaults
-    to the .esm file's directory when ``pde_input`` is a path, else the working
-    directory. Mirrors the Julia binding's ``run_pde_tests`` 1:1 (tolerances
-    per §6.6.4; the pass predicate is Julia ``isapprox``)."""
-    file = load_path(pde_input) if isinstance(pde_input, str) else pde_input
-    if not isinstance(file, EsmFile):
-        raise TypeError(f"run_pde_tests expects a path or EsmFile, got {type(pde_input)}")
-    if base_dir is not None:
-        resolved_base = str(base_dir)
-    elif isinstance(pde_input, str) and os.path.isfile(pde_input):
+    ``source`` is the path the document was loaded from, or ``None`` for an
+    already-loaded :class:`EsmFile` — it anchors ``from_file`` references and
+    the §9.7.10 per-test injection. The per-document body of
+    :func:`run_inline_tests`."""
+    # esm-spec §9.5.3 lowering, ahead of the per-test builds. `esm_problem`
+    # lowers the document it builds, but a §6.6.5 assertion's analytic
+    # `reference` is evaluated HERE, off that path — so a `table_lookup` in a
+    # reference would otherwise reach `evaluate_cellwise`, which cannot
+    # evaluate it. Pure, so the caller's EsmFile keeps its authored form.
+    file = lower_table_lookups(file)
+    if opts.base_dir is not None:
+        resolved_base = str(opts.base_dir)
+    elif source is not None and os.path.isfile(source):
         # `load_path` needs a real path; only a real path anchors
         # from_file references at the .esm file's directory.
-        resolved_base = os.path.dirname(os.path.abspath(pde_input))
+        resolved_base = os.path.dirname(os.path.abspath(source))
     else:
         resolved_base = os.getcwd()
-    results: list[PdeAssertionResult] = []
-    for mname, model in (file.models or {}).items():
-        if model_name is not None and str(mname) != str(model_name):
-            continue
-        if not model.tests:
-            continue
-        for t in model.tests:
+    # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
+    # call-level argument, then THIS DOCUMENT's `solver` block, then the runner
+    # defaults. `opts.rtol` / `opts.atol` already carry the first two folded
+    # together — `None` there means neither was named — so this call appends the
+    # last two. Same chain for `method` via `_method_for` at the solve below
+    # (§2.2.3, where the document speaks through `solver.stiffness`).
+    #
+    # These are INTEGRATION tolerances; the tolerance each assertion is COMPARED
+    # at resolves separately (§6.6.4) and is untouched here.
+    doc_rtol, doc_atol = _integration_tolerances(file, opts.rtol, opts.atol)
+    for mname, component in _test_components(file, opts.model_name):
+        for t in component.tests:
             times = sorted({float(a.time) for a in t.assertions})
             sim: SimulatedStates | None = None
             sim_err = ""
@@ -1090,21 +1209,18 @@ def run_pde_tests(
             # persisted `file` is untouched. A test with no injection runs
             # against the file as loaded.
             run_file: EsmFile | None = file
-            run_model = model
+            run_component = component
             if t.expression_template_imports:
                 try:
-                    src = (
-                        pde_input
-                        if (isinstance(pde_input, str) and os.path.isfile(pde_input))
-                        else None
-                    )
                     run_file = _ephemeral_injected_file(
-                        file, src, str(mname), t.expression_template_imports, resolved_base
+                        file, source, mname, t.expression_template_imports, resolved_base
                     )
-                    rm = (run_file.models or {}).get(str(mname))
+                    rm = (run_file.models or {}).get(mname) or (
+                        run_file.reaction_systems or {}
+                    ).get(mname)
                     if rm is None:
                         raise RuntimeError(f"component '{mname}' vanished from the ephemeral build")
-                    run_model = rm
+                    run_component = rm
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
                     sim_err = f"per-test discretization injection failed: {err}"
                     run_file = None
@@ -1114,17 +1230,33 @@ def run_pde_tests(
             insp = BuildInspection()
             if run_file is not None:
                 try:
+                    # The caller's seeds go UNDER the test's own maps — the
+                    # document is authoritative about its own test and the
+                    # seed supplies only what the document left unsaid — and
+                    # the merge happens BEFORE scoping, so a seed key and a
+                    # test key that name the same variable collide on the one
+                    # spelling and the test's value wins. Merging after
+                    # scoping would instead hand the build BOTH `T` and
+                    # `M.T`, two keys designating one parameter with two
+                    # values.
                     sim = simulate_states(
                         run_file,
                         (t.time_span.start, t.time_span.end),
-                        method=_method_for(method, run_file),
-                        rtol=rtol,
-                        atol=atol,
+                        method=_method_for(opts.method, run_file),
+                        rtol=doc_rtol,
+                        atol=doc_atol,
                         saveat=times,
-                        parameters=_scope_to_component(t.parameter_overrides, str(mname), run_file),
-                        initial_conditions=_scope_to_component(
-                            t.initial_conditions, str(mname), run_file
+                        parameters=_scope_to_component(
+                            {**dict(opts.parameter_overrides), **(t.parameter_overrides or {})},
+                            mname,
+                            run_file,
                         ),
+                        initial_conditions=_scope_to_component(
+                            {**dict(opts.initial_conditions), **(t.initial_conditions or {})},
+                            mname,
+                            run_file,
+                        ),
+                        cse=opts.cse,
                         inspect=insp,
                     )
                 except Exception as err:  # noqa: BLE001 — recorded per assertion
@@ -1132,7 +1264,9 @@ def run_pde_tests(
                     sim = None
             eval_file = file if run_file is None else run_file
             for i, a in enumerate(t.assertions, start=1):
-                a_rtol, a_atol = _resolve_tolerance(run_model.tolerance, t.tolerance, a.tolerance)
+                a_rtol, a_atol = _resolve_tolerance(
+                    run_component.tolerance, t.tolerance, a.tolerance
+                )
                 if sim is None:
                     results.append(_result(mname, t, i, a, a_rtol, a_atol, None, False, sim_err))
                     continue
@@ -1148,16 +1282,221 @@ def run_pde_tests(
                             f"actual={actual} expected={a.expected} (rtol={a_rtol}, atol={a_atol})"
                         )
                     results.append(_result(mname, t, i, a, a_rtol, a_atol, actual, ok, msg))
+
+
+def _esm_files_under(directory: str) -> list[str]:
+    """Every ``.esm`` document under ``directory``, recursively, sorted.
+
+    Sorted because a result list whose ORDER depends on the filesystem is not
+    comparable between two runs, let alone between two machines."""
+    return sorted(glob.glob(os.path.join(directory, "**", "*.esm"), recursive=True))
+
+
+def _expand_inputs(inputs: Any) -> list[str | EsmFile]:
+    """Resolve :func:`run_inline_tests`'s ``inputs`` to a flat list of
+    documents: a path stays a path, a directory expands to the ``.esm`` files
+    under it, an :class:`EsmFile` stays itself.
+
+    A ``str`` and an :class:`EsmFile` are SINGLE inputs — neither is iterated
+    element-wise, which for a string would otherwise silently mean "one
+    document per character"."""
+    if isinstance(inputs, (str, os.PathLike, EsmFile)):
+        items: list[Any] = [inputs]
+    elif isinstance(inputs, Iterable):
+        items = list(inputs)
+    else:
+        raise TypeError(
+            f"run_inline_tests expects a path, an EsmFile, a directory or an "
+            f"iterable of those, got {type(inputs)}"
+        )
+    out: list[str | EsmFile] = []
+    for item in items:
+        if isinstance(item, EsmFile):
+            out.append(item)
+        elif isinstance(item, (str, os.PathLike)):
+            path = os.fspath(item)
+            out.extend(_esm_files_under(path) if os.path.isdir(path) else [path])
+        else:
+            raise TypeError(f"run_inline_tests: {type(item)} is not a path or EsmFile")
+    return out
+
+
+def _load_failure_result(source: str, err: Exception) -> AssertionResult:
+    """The one ERROR row a document that could not be LOADED contributes to a
+    batch.
+
+    A corpus run must not lose a file to one bad document, and it must not
+    lose it SILENTLY either — a document that vanishes from the result list
+    is indistinguishable from one that passed. So the failure becomes a row,
+    the same way every other failure in this runner becomes a row. The shape
+    mirrors the Julia binding's existing ``<parse>`` / ``<load>`` row."""
+    return AssertionResult(
+        source,
+        "<load>",
+        0,
+        "",
+        math.nan,
+        None,
+        math.nan,
+        None,
+        0.0,
+        0.0,
+        False,
+        f"load failed: {err}",
+    )
+
+
+def _fold_options(
+    override: InlineTestOptions | None,
+    *,
+    model_name: str | None,
+    method: str | None,
+    rtol: float | None,
+    atol: float | None,
+    base_dir: str | None,
+    cse: bool,
+) -> _ResolvedOptions:
+    """Fold one document's :class:`InlineTestOptions` onto the call-level
+    defaults: a field the override left ``None`` inherits, every other field
+    wins. ``None`` for the whole record means "inherit everything"."""
+    if override is None:
+        return _ResolvedOptions(
+            model_name=model_name,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            base_dir=base_dir,
+            cse=cse,
+        )
+    if not isinstance(override, InlineTestOptions):
+        raise TypeError(
+            f"options_for must return an InlineTestOptions or None, got {type(override)}"
+        )
+    return _ResolvedOptions(
+        model_name=model_name if override.model_name is None else override.model_name,
+        method=method if override.method is None else override.method,
+        rtol=rtol if override.rtol is None else float(override.rtol),
+        atol=atol if override.atol is None else float(override.atol),
+        base_dir=base_dir if override.base_dir is None else override.base_dir,
+        cse=cse if override.cse is None else bool(override.cse),
+        initial_conditions=dict(override.initial_conditions or {}),
+        parameter_overrides=dict(override.parameter_overrides or {}),
+    )
+
+
+def run_inline_tests(
+    inputs: str | EsmFile | Iterable[str | EsmFile],
+    *,
+    model_name: str | None = None,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
+    base_dir: str | None = None,
+    cse: bool = True,
+    options_for: Callable[[Any], InlineTestOptions | None] | None = None,
+) -> list[AssertionResult]:
+    """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
+    assertions) of the selected component(s) of ``inputs`` through the
+    official NumPy simulation pathway, and return one
+    :class:`AssertionResult` per assertion — carrying the ACTUAL reduction
+    value alongside pass/fail, so conformance harnesses can record and
+    cross-compare the numbers.
+
+    ``inputs`` is a path to a ``.esm`` file, a loaded :class:`EsmFile`, a
+    DIRECTORY (walked recursively for ``*.esm``, sorted), or any iterable of
+    those. Results are concatenated in input order.
+
+    Both kinds of test-bearing component are run: ``models`` first, then
+    ``reaction_systems``, which the schema gives the same ``tests`` member and
+    which this runner skipped entirely until it was fixed.
+
+    Per test: simulate over the test's ``time_span`` (with its
+    ``initial_conditions`` / ``parameter_overrides`` applied, ``method`` /
+    ``rtol`` / ``atol`` pinning scipy's ``solve_ivp``); then per assertion the
+    asserted variable's field is read at the assertion time and either
+    point-sampled per its ``coords`` (positions in 1-based INDEX space;
+    nearest grid index, exact ties rounding DOWN — the pinned cross-binding
+    convention) or collapsed per its ``reduce`` (error norms evaluate the
+    ``reference`` — an analytic expression cellwise via
+    :func:`evaluate_cellwise`, or a ``{type: "from_file", path, format?}``
+    JSON snapshot resolved against ``base_dir``). An assertion with neither
+    ``coords`` nor ``reduce`` samples a scalar state. ``base_dir`` defaults
+    to the .esm file's directory when the document came from a path, else the
+    working directory. Mirrors the Julia binding's ``run_inline_tests`` 1:1
+    (tolerances per §6.6.4; the pass predicate is Julia ``isapprox``).
+
+    ``options_for`` is the seam for site-specific policy. It is called once
+    per resolved document — with the document's path when it came from one,
+    else the :class:`EsmFile`, and BEFORE the document is loaded, so a
+    basename-keyed callback is asked about an unreadable file too and wants a
+    default rather than a lookup error — and returns an
+    :class:`InlineTestOptions`
+    whose non-``None`` fields override the arguments above for that document
+    (or ``None`` to change nothing). It exists so that a corpus gate's
+    basename-keyed tables — a stiff-solver map, a ``cse`` allowlist, an
+    initial-condition seed — can stay in the gate instead of forcing it to
+    re-implement §6.6 to get at them.
+
+    ``method`` / ``rtol`` / ``atol`` default to ``None``, and that is load
+    bearing rather than merely tidy: it is what keeps the DOCUMENT's own
+    opinion expressible. Each resolves most-specific first — an ``options_for``
+    override, then the argument here, then this document's ``solver`` block
+    (``solver.stiffness`` for the method per esm-spec §2.2.3,
+    ``solver.reltol`` / ``solver.abstol`` for the tolerances per §2.2.2), then
+    this runner's own :data:`TEST_RELTOL` / :data:`TEST_ABSTOL` and
+    :data:`DEFAULT_METHOD`. The runner values sit at the BOTTOM of the chain
+    because they are binding defaults, not a caller's opinion, so a stiff
+    document gets the integration accuracy it asked for without every caller
+    naming it. Passing a value explicitly overrides the document, which is why
+    a concrete default here would silently have suppressed it. These are
+    INTEGRATION tolerances; the tolerance each assertion is COMPARED at is the
+    separate §6.6.4 quantity and is untouched.
+
+    A document that fails to LOAD raises when ``inputs`` names a single
+    document, exactly as before. In a BATCH — an iterable or a directory — it
+    instead contributes one ERROR row naming the path, so one unreadable file
+    cannot cost the run every other file's verdicts.
+    """
+    documents = _expand_inputs(inputs)
+    batch = not isinstance(inputs, EsmFile) and not (
+        isinstance(inputs, (str, os.PathLike)) and not os.path.isdir(os.fspath(inputs))
+    )
+    results: list[AssertionResult] = []
+    for document in documents:
+        override = options_for(document) if options_for is not None else None
+        opts = _fold_options(
+            override,
+            model_name=model_name,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            base_dir=base_dir,
+            cse=cse,
+        )
+        if isinstance(document, EsmFile):
+            _run_document_tests(document, None, opts, results)
+            continue
+        try:
+            file = load_path(document)
+        except Exception as err:  # noqa: BLE001 — one bad file must not end a batch
+            if not batch:
+                raise
+            results.append(_load_failure_result(document, err))
+            continue
+        if not isinstance(file, EsmFile):
+            raise TypeError(f"run_inline_tests expects a path or EsmFile, got {type(document)}")
+        _run_document_tests(file, document, opts, results)
     return results
 
 
 __all__ = [
-    "PdeAssertionResult",
+    "InlineTestOptions",
+    "AssertionResult",
     "SimulatedStates",
     "bind_dimension_names",
     "evaluate_cellwise",
     "field_reduce",
-    "run_pde_tests",
+    "run_inline_tests",
     "simulate_states",
     "state_cells",
 ]

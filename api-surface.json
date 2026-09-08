@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 860,
+    "symbols": 871,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 302,
       "typescript": 235,
       "python": 247,
-      "rust": 332,
-      "go": 388
+      "rust": 334,
+      "go": 398
     },
     "by_tier": {
-      "extension": 592,
-      "stable": 268
+      "extension": 602,
+      "stable": 269
     }
   },
   "planned": [
@@ -465,9 +465,10 @@
     {
       "name": "assertion_result",
       "kind": "type",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "julia": "AssertionResult"
+        "julia": "AssertionResult",
+        "rust": "AssertionResult"
       }
     },
     {
@@ -1311,6 +1312,22 @@
       }
     },
     {
+      "name": "code_subsystem_index_set_rename_unknown_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnknownName"
+      }
+    },
+    {
+      "name": "code_subsystem_index_set_rename_unsupported_mount_form",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnsupportedMountForm"
+      }
+    },
+    {
       "name": "code_subsystem_ref_is_coupling_library",
       "kind": "constant",
       "tier": "extension",
@@ -1324,6 +1341,62 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeSubsystemRefIsTemplateLibrary"
+      }
+    },
+    {
+      "name": "code_table_axis_na_n",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisNaN"
+      }
+    },
+    {
+      "name": "code_table_data_shape_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableDataShapeMismatch"
+      }
+    },
+    {
+      "name": "code_table_interpolation_axes_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableInterpolationAxesMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_axis_name_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupAxisNameMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_output_out_of_range",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupOutputOutOfRange"
+      }
+    },
+    {
+      "name": "code_table_lookup_unknown_table",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupUnknownTable"
+      }
+    },
+    {
+      "name": "code_table_out_of_bounds_unsupported",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutOfBoundsUnsupported"
       }
     },
     {
@@ -3947,6 +4020,15 @@
       }
     },
     {
+      "name": "inline_test_options",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "InlineTestOptions",
+        "rust": "InlineTestOptions"
+      }
+    },
+    {
       "name": "inline_value",
       "kind": "type",
       "tier": "extension",
@@ -5107,15 +5189,6 @@
       }
     },
     {
-      "name": "pde_assertion_result",
-      "kind": "type",
-      "tier": "stable",
-      "bindings": {
-        "julia": "PdeAssertionResult",
-        "rust": "PdeAssertionResult"
-      }
-    },
-    {
       "name": "performance_error",
       "kind": "error",
       "tier": "extension",
@@ -6021,36 +6094,44 @@
       }
     },
     {
-      "name": "run_pde_tests",
+      "name": "run_inline_tests",
       "kind": "function",
       "tier": "stable",
       "bindings": {
-        "julia": "run_pde_tests",
-        "rust": "run_pde_tests"
+        "julia": "run_inline_tests",
+        "rust": "run_inline_tests"
       }
     },
     {
-      "name": "run_pde_tests_filtered",
+      "name": "run_inline_tests_filtered",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_filtered"
+        "rust": "run_inline_tests_filtered"
       }
     },
     {
-      "name": "run_pde_tests_with_base_dir",
+      "name": "run_inline_tests_paths",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_base_dir"
+        "rust": "run_inline_tests_paths"
       }
     },
     {
-      "name": "run_pde_tests_with_providers",
+      "name": "run_inline_tests_with_base_dir",
       "kind": "function",
       "tier": "extension",
       "bindings": {
-        "rust": "run_pde_tests_with_providers"
+        "rust": "run_inline_tests_with_base_dir"
+      }
+    },
+    {
+      "name": "run_inline_tests_with_providers",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_inline_tests_with_providers"
       }
     },
     {

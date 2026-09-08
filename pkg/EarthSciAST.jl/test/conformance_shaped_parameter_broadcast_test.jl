@@ -10,7 +10,7 @@
 # scalar `default` reached neither, so a spec-valid column component failed with
 # `E_TREEWALK_UNSUPPORTED_SHAPE` (EarthSciML/EarthSciAST#219 — Rust and Python
 # got the same rule wrong in their own vocabularies). The reference binding
-# (Julia) runs the OFFICIAL `run_pde_tests` pathway over the committed fixture
+# (Julia) runs the OFFICIAL `run_inline_tests` pathway over the committed fixture
 # and must reproduce the committed golden (which that same pathway minted).
 #
 # See tests/conformance/shaped_parameter_broadcast/.
@@ -49,7 +49,7 @@ const _SPB_MANIFEST = joinpath(_SPB_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=1e-12, abstol=1e-14)
             @test length(results) == length(golden.assertions)

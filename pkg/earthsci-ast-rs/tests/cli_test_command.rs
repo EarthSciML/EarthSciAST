@@ -1,7 +1,7 @@
 //! End-to-end coverage of `esm test`, the CLI runner for a document's inline
 //! §6.6 tests.
 //!
-//! These drive the real binary rather than calling `run_pde_tests` directly:
+//! These drive the real binary rather than calling `run_inline_tests` directly:
 //! what is under test here is the CLI contract — the verdict classification,
 //! the summary table, and above all the EXIT CODE, which is the only part of
 //! the command a CI job actually reads. A runner that reports failures on

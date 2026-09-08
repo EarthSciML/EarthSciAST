@@ -2817,7 +2817,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # bytes as before this change. A factored array observed no longer sits
         # in the RHS substitution map (its readers gather its buffer), but the
         # observability surface is not the RHS: `_observed_field`
-        # (pde_inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
+        # (inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
         # observed's expression CELLWISE, off the ODE path, so every reference
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only

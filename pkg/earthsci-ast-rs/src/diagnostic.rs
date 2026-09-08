@@ -221,6 +221,41 @@ diagnostic_code_registry! {
     /// A reference to a symbol the named enum does not declare.
     UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol";
 
+    // ---- function tables: §9.5 `table_lookup` lowering
+    //      (`lower_table_lookup.rs`) ----
+    //
+    // The §9.5.5 subset this binding actually raises. Carried on
+    // `CompileError::TableLookupLowering` rather than `DiagnosticError`,
+    // because the lowering runs at BUILD (§9.5.4 requires the authored form
+    // to round-trip, so it cannot run at load) — but the CODES are the same
+    // cross-binding vocabulary either way, which is what this registry is.
+
+    /// `table_lookup.table` names an id the document's `function_tables`
+    /// block does not declare.
+    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table";
+    /// The key set of `table_lookup.axes` does not match the axis names the
+    /// referenced table declares (an extra key, a missing one, or a
+    /// positional `args` list where the axes map belongs).
+    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch";
+    /// `table_lookup.output` selects a row the table's leading `data`
+    /// dimension does not have, or a name its `outputs` list does not carry.
+    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range";
+    /// A table whose `interpolation` and axis count disagree (`linear` and
+    /// `nearest` require 1 axis, `bilinear` 2).
+    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch";
+    /// The nesting of `data` does not match the shape `axes` (and `outputs`,
+    /// when present) imply.
+    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch";
+    /// An axis's `values` carries a non-finite entry; §9.5.1 requires
+    /// strictly-increasing FINITE floats.
+    TABLE_AXIS_NAN = "table_axis_nan";
+    /// The referenced table declares `out_of_bounds: "error"`, which no
+    /// binding implements as of v1.0.0 (esm-spec §9.5.3a). Refused rather
+    /// than evaluated under `"clamp"`: answering in the mode the binding
+    /// happens to have, rather than the one the author declared, is a wrong
+    /// answer with nothing in the result to say so.
+    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported";
+
     // ---- subsystem refs: §4.7 reference resolution (`ref_loading.rs`) ----
     //
     // `unresolved_subsystem_ref` and `ambiguous_subsystem_ref` are the
@@ -241,6 +276,18 @@ diagnostic_code_registry! {
     /// A referenced subsystem file's top-level `index_sets` entry collides with
     /// a non-deep-equal declaration in the importing document (§4.7).
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict";
+    /// A mount edge's `index_set_rename` names an index set the RESOLVED
+    /// mounted document does not declare (§4.7 "Mount-edge index-set
+    /// renaming") — the mount-edge mirror of
+    /// [`TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME`].
+    SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name";
+    /// `index_set_rename` on a mount form that does not implement it (§4.7
+    /// "Mount-edge index-set renaming", "Where it applies"). The field is a
+    /// legal `SubsystemRef` property at either mount form, but a binding whose
+    /// top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so
+    /// rather than merge the leaf under its pre-rename axis names.
+    SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
+        "subsystem_index_set_rename_unsupported_mount_form";
     /// A `subsystem` ref pointing at a COUPLING library, which exports roles
     /// rather than a mountable system.
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
@@ -294,6 +341,11 @@ diagnostic_code_registry! {
     JOIN_SYMS_UNKNOWN_SYMBOL = "join_syms_unknown_symbol";
     /// A null entry in a reaction list.
     NULL_REACTION = "null_reaction";
+    /// A dependency cycle among a model's OBSERVED unknowns (esm-spec §4.9.6):
+    /// `a` is defined in terms of `b`, `b` (transitively) in terms of `a`, so
+    /// no evaluation order satisfies both definitions. The self-edge of a
+    /// §4.3.1.1 recurrence CANDIDATE is not such an edge and is dropped.
+    OBSERVED_CYCLE = "observed_cycle";
     /// An `operator` whose declared variable the model does not have.
     OPERATOR_VARIABLE_MISSING = "operator_variable_missing";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
@@ -482,6 +534,7 @@ mod error_code_tests {
             "metaparameter_type_error",
             "metaparameter_unbound",
             "null_reaction",
+            "observed_cycle",
             "operator_variable_missing",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
@@ -493,8 +546,17 @@ mod error_code_tests {
             "searchsorted_non_monotonic",
             "solver_version_too_old",
             "subsystem_index_set_conflict",
+            "subsystem_index_set_rename_unknown_name",
+            "subsystem_index_set_rename_unsupported_mount_form",
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
+            "table_axis_nan",
+            "table_data_shape_mismatch",
+            "table_interpolation_axes_mismatch",
+            "table_lookup_axis_name_mismatch",
+            "table_lookup_output_out_of_range",
+            "table_lookup_unknown_table",
+            "table_out_of_bounds_unsupported",
             "template_body_expansion_too_deep",
             "template_constraint_unknown_index_set",
             "template_import_cycle",
@@ -543,6 +605,10 @@ mod error_code_tests {
         assert_eq!(
             StructuralErrorCode::ArrayShapeMismatch.to_string(),
             super::codes::ARRAY_SHAPE_MISMATCH
+        );
+        assert_eq!(
+            StructuralErrorCode::ObservedCycle.to_string(),
+            super::codes::OBSERVED_CYCLE
         );
     }
 }

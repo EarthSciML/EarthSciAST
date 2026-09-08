@@ -72,8 +72,8 @@ grows skip semantics.
 
 Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
 result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_pde_tests`](@ref) over the tree-walk solve engine;
-`PdeAssertionResult` is an alias of this type).
+MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine;
+`AssertionResult` is an alias of this type).
 
 `message` carries the diff or error text for non-`PASS` results.
 `duration_s` is this assertion's even share of its test's wall time (solve +
@@ -88,7 +88,7 @@ parse/compile failure). The trailing three fields have defaults, so the
 historical 12-argument positional construction still works.
 
 Virtual properties (backwards compatibility with the former
-`PdeAssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
+`AssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
 `container_name`).
 """
 struct AssertionResult
@@ -201,14 +201,14 @@ discover_esm_files(; kwargs...) = discover_esm_files(DEFAULT_ROOTS; kwargs...)
 
 # ---------------------------------------------------------------------------
 # SHARED §6.6 assertion helpers — used by BOTH this MTK scalar runner and the
-# tree-walk PDE runner (pde_inline_tests.jl). The two runners' tolerance
+# tree-walk PDE runner (inline_tests.jl). The two runners' tolerance
 # resolution and pass predicate must stay in lockstep; edit here only.
 # ---------------------------------------------------------------------------
 
 const _DEFAULT_REL_TOL = 1.0e-6
 
 # Tight solver tolerances for integrating inline tests, shared between the
-# MTK engine's per-test solve and `run_pde_tests`' keyword defaults
+# MTK engine's per-test solve and `run_inline_tests`' keyword defaults
 # (tree-walk path): assertion expectations are pinned to many digits, so the
 # integration error must sit well below the default rel=1e-6 assertion gate.
 const DEFAULT_TEST_RELTOL = 1e-10
@@ -395,8 +395,8 @@ end
 #   engine            entry point       execution pathway
 #   ----------------  ----------------  ------------------------------------
 #   MtkTestEngine     run_esm_tests     mtkcompile + ODEProblem + interpolant
-#   SimulateTestEngine run_pde_tests    tree-walk esm_problem/solve + field lookup
-#                     (pde_inline_tests.jl)
+#   SimulateTestEngine run_inline_tests    tree-walk esm_problem/solve + field lookup
+#                     (inline_tests.jl)
 #
 # The frame owns everything the two runners used to duplicate: the per-test /
 # per-assertion loop, §6.6.4 tolerance resolution, the §6.6.3 pass predicate
@@ -605,12 +605,21 @@ function _run_container_tests!(results::Vector{AssertionResult},
                                name::AbstractString, container,
                                compile::Function, label::AbstractString;
                                esm_container=nothing,
+                               function_tables=nothing,
                                stiff_files=STIFF_SOLVER_OVERRIDE_FILENAMES,
                                stiffness=nothing, solver_hints=nothing)
     isempty(container.tests) && return
     sys_name = Symbol(name)
     local simp
     try
+        # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed
+        # functions, and nothing downstream of here speaks it — so it is lowered
+        # on the way INTO the build, never at load, where it would break the
+        # §9.5.4 round trip of the authored form. Lowering per CONTAINER (rather
+        # than per file) keeps the refusal §9.5.3a owes an unimplementable table
+        # attached to a build that actually happens: a container with no tests
+        # is never compiled, so it is never lowered.
+        lower_table_lookups!(container, function_tables)
         simp = compile(container, sys_name)
     catch err
         for t in container.tests
@@ -645,6 +654,10 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         return
     end
 
+    # The document's sampled-table registry (esm-spec §9.5), passed to each
+    # container build so its `table_lookup` nodes can be lowered there.
+    tables = esm_file.function_tables
+
     # The document's own stiffness declaration (esm-spec §2.2), which
     # `_pick_solver` prefers over the basename fallback set. Document-scoped,
     # so it applies to every container in the file.
@@ -654,6 +667,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
         for (mname, model) in esm_file.models
             _run_container_tests!(results, path, :model, String(mname), model,
                                   _compile_model, "Model";
+                                  function_tables=tables,
                                   stiff_files=stiff_files, stiffness=stiffness,
                                   solver_hints=esm_file.solver)
         end
@@ -664,6 +678,7 @@ function run_file_tests!(results::Vector{AssertionResult}, path::AbstractString;
             _run_container_tests!(results, path, :reaction_system,
                                   String(rname), rs, _compile_reaction_system,
                                   "ReactionSystem"; esm_container=rs,
+                                  function_tables=tables,
                                   stiff_files=stiff_files, stiffness=stiffness,
                                   solver_hints=esm_file.solver)
         end
@@ -807,7 +822,7 @@ assertion carries an even share of its test's wall time, so the sum is the
 test's duration (no N-fold overcount).
 
 `file`, when given, relabels every result's source file before grouping —
-used by [`run_pde_tests`](@ref) callers, whose results carry no per-assertion
+used by [`run_inline_tests`](@ref) callers, whose results carry no per-assertion
 source file (`r.file == ""`), to label the whole batch in the testcase
 classnames.
 """

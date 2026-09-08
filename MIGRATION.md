@@ -1272,6 +1272,66 @@ Listed because knowing the boundary is what stops you over-migrating.
 
 ---
 
+# Part VI — After the harmonization release
+
+Everything above describes one coordinated release. This part records the
+breaking changes that landed **after** it, newest last. The row kinds are the
+same ones [How to read a row](#how-to-read-a-row) defines.
+
+## The inline-test runner is no longer named for PDEs
+
+`run_pde_tests` ran a document's esm-spec §6.6 inline tests — all of them. The
+§6.6.5 spatial reductions are one assertion **form**, and the same runner had
+always executed the plain pointwise assertions of an ODE document through the
+same frame, so the name described something the code was not. It is now
+`run_inline_tests`, and the "Pde" is gone from the result type, the error type
+and the file names with it.
+
+**No aliases.** These are `deleted` rows, not `alias` rows: keeping the old
+spelling working keeps alive exactly the misreading the rename exists to
+remove. Your code stops compiling (Rust), or raises `UndefVarError` /
+`AttributeError` (Julia, Python), and the row tells you what to write instead.
+
+### Julia — `EarthSciAST.jl`
+
+| Before | After | Kind |
+|---|---|---|
+| `run_pde_tests(input; …)` | `run_inline_tests(inputs; …)` — and it now takes many documents, a directory, and an `options_for` callback | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` — it was only ever an alias of it, and both inline-test runners have always shared the one type | `deleted` |
+| `PdeTestError` | `InlineTestError` (unexported; listed for anyone reaching in) | `deleted` |
+| `src/pde_inline_tests.jl` | `src/inline_tests.jl` | `deleted` |
+| — | `InlineTestOptions` — the per-document override record `options_for` returns | `new` |
+
+### Python — `earthsci-ast`
+
+| Before | After | Kind |
+|---|---|---|
+| `from earthsci_ast.pde_inline_tests import run_pde_tests` | `from earthsci_ast.inline_tests import run_inline_tests` | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` | `deleted` |
+| `simulate_states(...)` | unchanged, plus a `cse: bool = True` keyword threaded to `esm_problem` | `new` |
+| — | `InlineTestOptions` | `new` |
+
+### Rust — `earthsci-ast`
+
+| Before | After | Kind |
+|---|---|---|
+| `run_pde_tests` | `run_inline_tests` | `deleted` |
+| `run_pde_tests_with_base_dir` | `run_inline_tests_with_base_dir` | `deleted` |
+| `run_pde_tests_with_providers` | `run_inline_tests_with_providers` | `deleted` |
+| `run_pde_tests_filtered` | `run_inline_tests_filtered` | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` — the same canonical name Julia exports | `deleted` |
+| `src/pde_inline_tests.rs` | `src/inline_tests.rs` (crate-internal module path) | `deleted` |
+| — | `InlineTestOptions` + `run_inline_tests_paths(paths, options_for)` — the corpus entry | `new` |
+
+### Behaviour that changed without a rename
+
+| Binding | Symbol | What changed | How it shows up |
+|---|---|---|---|
+| Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
+| Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
+
+---
+
 ## Where the contract lives
 
 - `API_SPEC.md` §6 — the full `stable` surface; §8 — the reconciliation ledger;
