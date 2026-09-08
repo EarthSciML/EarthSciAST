@@ -376,13 +376,37 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
+      # Registry + git checkouts ONLY -- deliberately NOT `target`.
+      #
+      # Caching `target` here cost far more than it bought. This job builds the
+      # crate three ways (native, wasm32, `--all-features` tests) plus rustdoc,
+      # so one cold run leaves a target tree tens of GB wide. Two consequences,
+      # both observed:
+      #   * The post-job `tar` writes cache.tzst onto the SAME runner volume it
+      #     is compressing, and on the `stable` leg -- the only one that also
+      #     builds wasm32 and rustdoc -- that ran the disk out ("No space left
+      #     on device"), failing a job whose every real step had passed.
+      #   * The saved entry was 7 GiB for the SMALLEST leg. A repository gets
+      #     10 GiB of Actions cache total, so the three legs evicted each other
+      #     and every other cache in the repo. Every rust-tests restore in
+      #     recorded history reports "Cache not found" -- the target half of
+      #     this cache has never once been reused.
+      #
+      # `~/.cargo/registry` + `~/.cargo/git` are a few hundred MB, do not
+      # approach either limit, and save the crates.io downloads that are the
+      # part actually worth keeping. Compile time is unchanged: these builds
+      # were already cold on every run.
+      #
+      # (Note that `hashFiles` resolves to the empty string here -- Cargo.lock
+      # is gitignored for this library crate -- so the key is effectively the
+      # restore-key. Harmless for a download cache; it is why the entry is
+      # rewritten on every run.)
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            pkg/earthsci-ast-rs/target
           key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
