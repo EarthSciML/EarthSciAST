@@ -164,9 +164,9 @@ fn a_chained_tendency_resolves_transitively() {
             "M": {
                 "variables": {
                     "b": {"type": "unknown", "units": "kg", "default": 0.0},
-                    "l": {"type": "unknown", "units": "m2", "default": 1.0},
+                    "l": {"type": "unknown", "units": "m^2", "default": 1.0},
                     "growth": {"type": "parameter", "units": "kg/s", "default": 5.0},
-                    "sla": {"type": "parameter", "units": "m2/kg", "default": 2.0}
+                    "sla": {"type": "parameter", "units": "m^2/kg", "default": 2.0}
                 },
                 "equations": [
                     {"lhs": {"op": "D", "args": ["b"], "wrt": "t"}, "rhs": "growth"},
