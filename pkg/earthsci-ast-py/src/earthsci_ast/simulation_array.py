@@ -2250,17 +2250,29 @@ def _build_numpy_rhs(
     # extent past the true grid; the lift's recorded extent is authoritative.
     if flat.lifted_shapes:
         shapes.update(flat.lifted_shapes)
-    # Declared-shape resolution (esm-spec §11): a state's declared ``shape``
+    # Declared-shape resolution (esm-spec §11): a variable's declared ``shape``
     # (index-set names) is authoritative over usage inference — a whole-array
     # ``D(SST)`` never index-uses SST, so inference alone collapses it to a
     # scalar. Resolve each declared shape against the index-set registry so the
-    # array state gets its true per-cell extent (ocean_cells → 3).
-    for _name, _var in flat.state_variables.items():
-        _decl = getattr(_var, "shape", None)
-        if _decl:
-            _res = _resolve_index_set_shape(_decl, flat.index_sets)
-            if _res is not None:
-                shapes[_name] = _res
+    # array variable gets its true per-cell extent (ocean_cells → 3).
+    #
+    # STATES **and** OBSERVEDS: §6.3 gives every variable role the same `shape`
+    # field and says nothing that makes it authoritative for one role only, and
+    # a whole-array observed body (``flux = k * theta``, no ``index`` anywhere)
+    # under-reports through usage inference exactly the way a whole-array state
+    # does. This is also the authority ``problem._declares_resolvable_shape``
+    # routes on, so routing and layout now read the SAME resolver over the SAME
+    # roles — a declared shape that sends a document to this pathway is a
+    # declared shape this pathway then honours. Parameters are excluded: a
+    # shaped parameter is bound from its inline array data / loader slice
+    # below, not laid out from `shapes`.
+    for _varmap in (flat.state_variables, flat.observed_variables):
+        for _name, _var in _varmap.items():
+            _decl = getattr(_var, "shape", None)
+            if _decl:
+                _res = _resolve_index_set_shape(_decl, flat.index_sets)
+                if _res is not None:
+                    shapes[_name] = _res
     # Value-invention states (broad-phase bins / candidate-set membership) are
     # materialized at setup and DROPPED from the ODE (RFC §5.3 / §6.1).
     vi_var_names, bin_specs = _detect_value_invention_states(flat)

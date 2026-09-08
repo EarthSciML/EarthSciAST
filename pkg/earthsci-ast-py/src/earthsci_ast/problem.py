@@ -739,9 +739,13 @@ def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
     and infer the same scalar, so routing on it would change the engine without
     changing the answer.
 
-    Parameters as well as states: a shaped parameter carrying inline array data
-    (§6.3 "Inline array data") is array-valued whatever its consumers look like,
-    and the scalar pathway refuses to bind it.
+    All three §6.3 roles, because §6.3 gives them all the same ``shape`` field
+    and privileges none. A shaped PARAMETER carrying inline array data (§6.3
+    "Inline array data") is array-valued whatever its consumers look like, and
+    the scalar pathway refuses to bind it. A shaped OBSERVED is array-valued for
+    the same reason its state counterpart is, and ``_build_numpy_rhs`` resolves
+    an observed's declared shape through this very resolver — so a declaration
+    that routes a document here is a declaration the build then honours.
     """
     for varmap in (flat.state_variables, flat.parameters, flat.observed_variables):
         for var in varmap.values():

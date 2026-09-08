@@ -143,6 +143,29 @@ BARE_INLINE_ARRAY_PARAM = {
     },
 }
 
+# ONLY an OBSERVED declares a resolvable shape: the state is scalar, there is no
+# parameter, and no equation carries an array op. This is the third of the §6.3
+# roles the arm consults, and it is a real supported path rather than a latent
+# one — ``_build_numpy_rhs`` resolves declared shapes for observeds through the
+# SAME resolver the routing arm reads, so routing and layout agree.
+OBSERVED_ONLY_SHAPE = {
+    "esm": "1.0.0",
+    "metadata": {"name": "ObservedOnlyShape", "authors": ["repro"]},
+    "index_sets": {"lev": {"kind": "interval", "size": 4}},
+    "models": {
+        "Column": {
+            "variables": {
+                "c": {"type": "unknown", "units": "1", "default": 1.0},
+                "flux": {"type": "unknown", "units": "1", "shape": ["lev"]},
+            },
+            "equations": [
+                {"lhs": {"op": "D", "args": ["c"], "wrt": "t"}, "rhs": 1.0},
+                {"lhs": "flux", "rhs": {"op": "*", "args": ["c", 2.0]}},
+            ],
+        }
+    },
+}
+
 # A declared shape whose axes name NO index-set registry entry. The array build
 # would fall back to usage inference here and infer exactly the scalar the
 # scalar pathway already runs, so routing on it would change the engine without
@@ -268,9 +291,42 @@ def test_the_shape_arm_reads_states_parameters_and_observeds(tmp_path):
     assert _declares_resolvable_shape(
         flatten(load_path(_write(tmp_path, BARE_INLINE_ARRAY_PARAM, "i.esm.json")))
     )
+    # The observed map, whose only shaped variable is an observed: no shaped
+    # state, no shaped parameter, no array op anywhere.
+    assert _declares_resolvable_shape(
+        flatten(load_path(_write(tmp_path, OBSERVED_ONLY_SHAPE, "o.esm.json")))
+    )
     assert not _declares_resolvable_shape(
         flatten(load_path(_write(tmp_path, UNRESOLVABLE_SHAPE, "u.esm.json")))
     )
     assert not _declares_resolvable_shape(
         flatten(load_path(_write(tmp_path, PLAIN_SCALAR, "p.esm.json")))
     )
+
+
+def test_an_observed_only_declared_shape_routes_AND_lays_out_as_an_array(tmp_path):
+    """Routing and layout must read the SAME authority.
+
+    ``_declares_resolvable_shape`` sends this document to the array pathway on
+    the strength of an OBSERVED's declared ``shape``, so ``_build_numpy_rhs``
+    has to honour that same declaration: usage inference sees a whole-array body
+    (``flux = c * 2``, no ``index`` anywhere) and would give the observed no
+    extent at all, which is the under-report §11 makes the declaration
+    authoritative over. Before the build learned to resolve observed shapes,
+    ``build.shapes`` carried no ``Column.flux`` entry whatsoever.
+    """
+    path = _write(tmp_path, OBSERVED_ONLY_SHAPE, "observed_only.esm.json")
+
+    prob = esm_problem(path, (0.0, 1.0))
+    assert prob.pathway == "array"
+
+    assert prob.build is not None
+    assert prob.build.shapes["Column.flux"] == (4,)
+    # The scalar state stays scalar — the declaration is per variable, not a
+    # blanket promotion of the whole system.
+    assert prob.build.shapes["Column.c"] == ()
+
+    sol = solve(prob)
+    assert sol.retcode.name == "Success", sol
+    # c(0) = 1, D(c) = 1, so c(1) = 2 and flux = 2c = 4 in every cell.
+    assert np.asarray(sol["Column.flux"])[..., -1] == pytest.approx(4.0, rel=1e-5)
