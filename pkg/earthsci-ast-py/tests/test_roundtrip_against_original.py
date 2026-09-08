@@ -106,6 +106,13 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
         + ", plus the referenced file's top-level `index_sets` merging into the "
         "importing document's registry"
     ),
+    "mount_rename_two_columns.esm": (
+        _SUBSYSTEM_REF_RESOLUTION
+        + ", plus the referenced files' top-level `index_sets` merging into the "
+        "importing document's registry -- one of them through a mount-edge "
+        "`index_set_rename`, which is a load-time construct consumed at the "
+        "edge (esm-spec 4.7 'Mount-edge index-set renaming', Round trip)"
+    ),
     "events_discrete_periodic.esm": _EMPTY_EVENT_ARRAY,
     "events_discrete_preset_times.esm": _EMPTY_EVENT_ARRAY,
     "full_coupled.esm": _EMPTY_EVENT_ARRAY,

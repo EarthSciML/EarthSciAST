@@ -504,11 +504,20 @@ breaks URL refs and offers no per-name control.
 Shared corpus (every `.esm` under `tests/valid/**` and `tests/invalid/**` is swept by
 `scripts/conformance_corpus.py` in all five bindings):
 
-- `tests/valid/mount_rename_column_grid.esm` — a `column_nonuniform_1d`-shaped template
-  library declaring the generic axis `lev` sized by an open `NLEV`.
-- `tests/valid/mount_rename_atm_column.esm` (`NLEV = 59`) and
-  `tests/valid/mount_rename_soil_column.esm` (`NLEV = 4`) — two components that independently
-  spell their axis `lev`; each loads standalone.
+- `tests/valid/mount_rename_atm_column.esm` (`lev` = interval/59) and
+  `tests/valid/mount_rename_soil_column.esm` (`lev` = interval/4) — two components of the
+  same `column_nonuniform_1d` family that independently spell their axis `lev` at different
+  lengths; each loads standalone.
+
+  Each declares `lev` in its **own** top-level `index_sets` rather than importing it from a
+  shared grid library. That is a corpus constraint, not a design one: four bindings (Julia,
+  Go, TypeScript, and the Python sweep) run a reference-resolution pass over every
+  `tests/valid/**` fixture **from the raw document**, where an axis contributed by an
+  unresolved `expression_template_imports` edge is invisible and an `aggregate` range over it
+  is a false `E_REF_UNDECLARED_INDEX_SET`. Renaming an axis that arrives through a template
+  import is normative (§4.7 edge pipeline step 1), but it currently has **no** regression
+  fixture; covering it needs either an inline per-binding test or a corpus sweep that loads
+  before it resolves.
 - `tests/valid/mount_rename_two_columns.esm` — the #198 item 4 reproducer with the fix
   applied: the soil mount carries `index_set_rename: {"lev": "soil_lev"}` and the merged
   registry holds **both** `lev` (59) and `soil_lev` (4).

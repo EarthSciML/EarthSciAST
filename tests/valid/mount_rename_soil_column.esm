@@ -2,16 +2,16 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "mount_rename_soil_column",
-    "description": "A 4-layer soil column component, the twin of tests/valid/mount_rename_atm_column.esm: it imports the SAME ./mount_rename_column_grid.esm with NLEV = 4, so its registry also spells the axis `lev` — interval/4 rather than interval/59. Mounting both into one document without a mount-edge rename is the subsystem_index_set_conflict of issue #198 item 4. Loads standalone as an ordinary single-model document.",
+    "description": "A 4-layer soil column component, the twin of tests/valid/mount_rename_atm_column.esm: it declares the SAME axis name `lev` — interval/4 rather than interval/59 — because both components come from the same one-dimensional column family sized differently. Mounting both into one document without a mount-edge rename is the subsystem_index_set_conflict of issue #198 item 4. Loads standalone as an ordinary single-model document.",
     "authors": ["EarthSciAST"],
     "created": "2026-09-06T00:00:00Z",
-    "tags": ["index_sets", "mount", "column", "template_imports"]
+    "tags": ["index_sets", "mount", "column"]
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": 4 }
   },
   "models": {
     "SoilColumn": {
-      "expression_template_imports": [
-        { "ref": "./mount_rename_column_grid.esm", "bindings": { "NLEV": 4 } }
-      ],
       "variables": {
         "Tsoil": {
           "type": "unknown",

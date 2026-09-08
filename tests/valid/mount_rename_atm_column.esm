@@ -2,16 +2,16 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "mount_rename_atm_column",
-    "description": "A 59-layer atmospheric column component: it imports ./mount_rename_column_grid.esm with NLEV = 59, so the library's generic axis `lev` reaches this document's registry as interval/59 and the model's unknown T is shaped over it. Mounted (with its 4-layer soil twin) by tests/valid/mount_rename_two_columns.esm. Loads standalone as an ordinary single-model document.",
+    "description": "A 59-layer atmospheric column component, the `column_nonuniform_1d` shape of the EqWeFiC report in issue #198 item 4: it declares the axis `lev` as interval/59 and shapes its unknown T over it. Its 4-layer soil twin (tests/valid/mount_rename_soil_column.esm) independently spells the SAME axis name at a different length, which is what puts two `lev` declarations on the road to one document-scoped registry when tests/valid/mount_rename_two_columns.esm mounts both. Loads standalone as an ordinary single-model document.",
     "authors": ["EarthSciAST"],
     "created": "2026-09-06T00:00:00Z",
-    "tags": ["index_sets", "mount", "column", "template_imports"]
+    "tags": ["index_sets", "mount", "column"]
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": 59 }
   },
   "models": {
     "AtmColumn": {
-      "expression_template_imports": [
-        { "ref": "./mount_rename_column_grid.esm", "bindings": { "NLEV": 59 } }
-      ],
       "variables": {
         "T": {
           "type": "unknown",
