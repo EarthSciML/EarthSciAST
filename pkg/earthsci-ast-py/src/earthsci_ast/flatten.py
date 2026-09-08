@@ -2318,6 +2318,13 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     # Step 4b: pointwise spatial lift (esm-spec §10.5) over the expanded couplings.
     _apply_pointwise_lift(flat, coupling_entries)
 
+    # Step 4c: resolve a right-hand-side STRUCTURAL time derivative of an ODE
+    # unknown to the tendency this system defines for it. Runs after the lift so
+    # it sees the equations the lift produced, and after component collection so
+    # a reaction network's mass-action tendency (§7.4) is available to a sibling
+    # model's scoped `D(Chem.O3, t)`.
+    _resolve_rhs_time_derivatives(flat)
+
     # Step 5: domain pass-through.
     _apply_domain(esm_file, flat)
 
@@ -2338,6 +2345,120 @@ def flatten(esm_file: EsmFile, base_path: str = ".", load_ref=None) -> Flattened
     flat.template_registry = _merged_template_registry(esm_file)
 
     return flat
+
+
+def _is_structural_time_derivative(expr: Expr) -> bool:
+    """True for the STRUCTURAL time derivative — ``D`` with ``wrt: "t"`` or no
+    ``wrt`` at all (esm-spec §4.2: an absent ``wrt`` MEANS ``t``), applied to a
+    single operand.
+
+    The complement of
+    :func:`~earthsci_ast.op_registry.is_rewrite_target_derivative`, which is the
+    SPATIAL tier: a ``D`` whose ``wrt`` names an axis, lowered to a stencil by a
+    discretization rule and never evaluated."""
+    from .op_registry import is_rewrite_target_derivative
+
+    return (
+        isinstance(expr, ExprNode)
+        and expr.op == "D"
+        and len(expr.args) == 1
+        and not is_rewrite_target_derivative(expr.op, expr.wrt)
+    )
+
+
+def _derivative_target(expr: Expr) -> str | None:
+    """The bare variable name a structural ``D`` differentiates, or ``None``."""
+    if not _is_structural_time_derivative(expr):
+        return None
+    arg = expr.args[0]  # type: ignore[union-attr]
+    return arg if isinstance(arg, str) else None
+
+
+def _substitute_time_derivatives(
+    expr: Expr, tendency: dict[str, Expr], active: list[str]
+) -> Expr:
+    """The rewrite :func:`_resolve_rhs_time_derivatives` documents, over one
+    expression."""
+    if not isinstance(expr, ExprNode):
+        return expr
+    target = _derivative_target(expr)
+    if target is not None and target in tendency:
+        if target in active:
+            # A cycle: leave the node as authored rather than expanding it
+            # without end. Downstream sees exactly what it saw before.
+            return expr
+        active.append(target)
+        try:
+            return _substitute_time_derivatives(tendency[target], tendency, active)
+        finally:
+            active.pop()
+    return map_children(expr, lambda child: _substitute_time_derivatives(child, tendency, active))
+
+
+def _has_resolvable_time_derivative(expr: Expr, tendency: dict[str, Expr]) -> bool:
+    """Does ``expr`` carry a structural ``D`` the tendency table can answer?
+    Checked before rebuilding so a document with no such node keeps its
+    equations untouched."""
+    if not isinstance(expr, ExprNode):
+        return False
+    target = _derivative_target(expr)
+    if target is not None and target in tendency:
+        return True
+    return any_child(expr, lambda child: _has_resolvable_time_derivative(child, tendency))
+
+
+def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
+    """Step 4c of :func:`flatten`: rewrite every right-hand-side STRUCTURAL time
+    derivative of an ODE unknown into that unknown's TENDENCY — the right-hand
+    side of its own ``D(x)/dt ~ f`` equation.
+
+    ``D`` on an equation's LEFT-hand side is structural: it is what makes the
+    equation differential, and system assembly consumes it. On a RIGHT-hand side
+    there was no consumer at all, so an observed written ``dxdt ~ D(x, t)`` — the
+    standard shape for asserting a species tendency at ``t = 0`` (esm-spec §6.6.2
+    "instantaneous-derivative test shape") — was unrunnable: this binding raised
+    ``unlowered_operator``, and the Rust binding silently evaluated it to ``0``.
+
+    The value was never a runner's to invent or refuse: ``x`` already has a
+    defining ``D(x)/dt ~ f`` equation in this very system, so resolving it is an
+    ordinary AST substitution over the canonical flattened form — the same layer
+    that qualifies names, applies coupling and lowers a reaction network to its
+    mass-action ODEs. Doing it here is what lets ``D(Chem.O3, t)`` in a sibling
+    model resolve to the mechanism's tendency (esm-spec §7.4) with no runner
+    knowing anything about reactions.
+
+    Scope, deliberately narrow (mirrors the Rust
+    ``resolve_rhs_time_derivatives``):
+
+    * only an ``args[0]`` that is a bare variable REFERENCE naming an unknown
+      carrying ``D(x)/dt ~ f`` is resolved;
+    * ``D`` of an OBSERVED or a PARAMETER, and ``D`` of a compound expression,
+      are left exactly as authored — resolving those is symbolic
+      differentiation, which this format does not define;
+    * a SPATIAL ``D`` is untouched: it is a rewrite target for a discretization
+      rule (§9.6.8) and the ``unlowered_operator`` gate still owns it;
+    * left-hand sides are never rewritten.
+
+    A tendency may itself name another state's derivative
+    (``D(lai)/dt ~ sla · D(biomass)/dt``), so substitution recurses; ``active``
+    carries the chain being expanded and a self- or mutually-referential
+    definition stops there.
+    """
+    tendency: dict[str, Expr] = {}
+    for eq in flat.equations:
+        target = _derivative_target(eq.lhs)
+        if target is not None:
+            tendency[target] = eq.rhs
+    if not tendency:
+        return
+    for eq in flat.equations:
+        if not _has_resolvable_time_derivative(eq.rhs, tendency):
+            continue
+        # While expanding the RHS of `D(x)/dt` itself, `x`'s tendency is the very
+        # thing being defined and so is not available to substitute into.
+        own = _derivative_target(eq.lhs)
+        active: list[str] = [own] if own is not None else []
+        eq.rhs = _substitute_time_derivatives(eq.rhs, tendency, active)
 
 
 def _expand_operator_compose_placeholders(

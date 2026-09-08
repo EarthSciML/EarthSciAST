@@ -731,6 +731,41 @@ def _ephemeral_injected_file(
     return load_string(json.dumps(raw), base_path=str(base_dir))
 
 
+def _test_bearing_components(file: EsmFile) -> list[tuple[str, Any]]:
+    """``(name, component)`` for every component of ``file`` that declares
+    inline tests — models first, then reaction systems.
+
+    esm-spec §7.2 gives a ``reaction_system`` a ``tests`` field whose
+    "semantics, field shape, and tolerance resolution are identical to Section
+    6.6", and the shared corpus ships documents whose *only* tests are on a
+    mechanism (``tests/simulation/autocatalytic_reaction.esm``). A runner that
+    enumerates ``file.models`` alone reports no assertions at all for one of
+    those — a whole mechanism's suite silently unexecuted, which is what
+    prompted issue #206.
+
+    Nothing downstream needs the component's TYPE: the build is
+    :func:`~earthsci_ast.problem.esm_problem` over the whole flattened
+    document either way (a reaction system reaches it as its mass-action ODEs,
+    §7.4), and the only per-component inputs are the test list and the
+    component-level ``tolerance``, which both kinds carry."""
+    out: list[tuple[str, Any]] = []
+    for name, comp in (file.models or {}).items():
+        if comp.tests:
+            out.append((str(name), comp))
+    for name, comp in (file.reaction_systems or {}).items():
+        if comp.tests:
+            out.append((str(name), comp))
+    return out
+
+
+def _component_in(file: EsmFile, name: str) -> Any:
+    """The model or reaction system ``name`` of ``file``, or ``None``.
+
+    Used after a §9.7.10 per-test injection re-loads the document, where the
+    component must be found again in whichever kind owns it."""
+    return (file.models or {}).get(name) or (file.reaction_systems or {}).get(name)
+
+
 def _result(
     mname: Any,
     test: Any,
@@ -884,11 +919,16 @@ def run_pde_tests(
     base_dir: str | None = None,
 ) -> list[PdeAssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
-    assertions) of the selected model(s) of ``pde_input`` (a path or a loaded
-    :class:`EsmFile`) through the official NumPy simulation pathway, and
+    assertions) of the selected component(s) of ``pde_input`` (a path or a
+    loaded :class:`EsmFile`) through the official NumPy simulation pathway, and
     return one :class:`PdeAssertionResult` per assertion — carrying the ACTUAL
     reduction value alongside pass/fail, so conformance harnesses can record
     and cross-compare the numbers.
+
+    Both TEST-BEARING COMPONENT KINDS are enumerated: ``models`` first, then
+    ``reaction_systems`` (esm-spec §7.2 — a reaction system's ``tests`` have
+    "semantics, field shape, and tolerance resolution identical to Section
+    6.6"). ``model_name`` selects by component name across both kinds.
 
     Per test: simulate over the test's ``time_span`` (with its
     ``initial_conditions`` / ``parameter_overrides`` applied, ``method`` /
@@ -916,10 +956,8 @@ def run_pde_tests(
     else:
         resolved_base = os.getcwd()
     results: list[PdeAssertionResult] = []
-    for mname, model in (file.models or {}).items():
+    for mname, model in _test_bearing_components(file):
         if model_name is not None and str(mname) != str(model_name):
-            continue
-        if not model.tests:
             continue
         for t in model.tests:
             times = sorted({float(a.time) for a in t.assertions})
@@ -942,7 +980,7 @@ def run_pde_tests(
                     run_file = _ephemeral_injected_file(
                         file, src, str(mname), t.expression_template_imports, resolved_base
                     )
-                    rm = (run_file.models or {}).get(str(mname))
+                    rm = _component_in(run_file, str(mname))
                     if rm is None:
                         raise RuntimeError(f"component '{mname}' vanished from the ephemeral build")
                     run_model = rm
