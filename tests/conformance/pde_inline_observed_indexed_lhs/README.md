@@ -1,7 +1,7 @@
 # `pde_inline_observed_indexed_lhs`
 
 The INDEXED LHS spelling of an ARRAY-shaped observed (esm-spec §6.3.1;
-CONFORMANCE_SPEC §5.30). Normative prose lives in CONFORMANCE_SPEC — this file
+CONFORMANCE_SPEC §5.32). Normative prose lives in CONFORMANCE_SPEC — this file
 records what the fixture is for, and the one thing about this category that is
 unusual.
 

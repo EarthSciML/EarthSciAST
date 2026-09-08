@@ -4418,7 +4418,7 @@ brings a self-qualified reference (`<model>.<local>` where `<local>` is a
 declared variable or is rooted at a declared subsystem) back to the local
 spelling before the build; the multi-model and scalar paths were already right.
 
-### 5.30 Both LHS Spellings Define an Observed, at Every Rank (normative)
+### 5.32 Both LHS Spellings Define an Observed, at Every Rank (normative)
 
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
@@ -4450,7 +4450,7 @@ spelling once, before any of them reads an LHS — and not in the runner, which
 esm AGENTS.md forbids from dispatching on rule shape, nor in the gate, which
 would admit the shape with no owner to evaluate it.
 
-#### 5.30.1 Gate
+#### 5.32.1 Gate
 
 `tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
 and the Julia-minted golden. Every array observed in it uses the indexed

@@ -56,7 +56,7 @@ the dynamics (or the reverse) still fails.
 
    Reproducers are in the body of PR #250, which introduced this category. See
    ``tests/conformance/pde_inline_observed_indexed_lhs/README.md`` and
-   CONFORMANCE_SPEC §5.30.1.
+   CONFORMANCE_SPEC §5.32.1.
 """
 
 from __future__ import annotations
