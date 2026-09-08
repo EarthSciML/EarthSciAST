@@ -49,6 +49,40 @@ fn sub_binary_and_unary() {
     assert_eq!(interpret(&e, &[], &[], &[], 0.0), -5.0);
 }
 
+/// `neg` is the strictly-unary SPELLING of negation, and it is evaluable-core
+/// arithmetic: esm-spec §4.2 lists it (`+ - * / ^ neg`), `op_registry` gives it
+/// `Arity::Exact(1)`, and the ARRAY runtime evaluates it
+/// (`simulate_array::vectorized`, `VecOp::Neg`).
+///
+/// This interpreter had no arm for it, so a `neg` node fell through `eval_op`'s
+/// `_ => f64::NAN` backstop and came back `NaN` — silently, and only on the
+/// scalar backend, so the two Rust runners disagreed about a core op. It was
+/// reachable from an ordinary document: `canonicalize` folds `neg` of a LITERAL
+/// into a signed literal but keeps `neg` as `neg` for every other operand
+/// (`canon_neg_value`), which is exactly the case a model writes.
+///
+/// The negation of a literal is checked alongside so this pins the ARM rather
+/// than the constant folder.
+#[test]
+fn neg_is_unary_negation_not_nan() {
+    let e = op("neg", vec![n(5.0)]);
+    assert_eq!(interpret(&e, &[], &[], &[], 0.0), -5.0);
+
+    // Nested, so the operand is not a literal at the inner site either.
+    let e = op("neg", vec![op("+", vec![n(2.0), n(3.0)])]);
+    assert_eq!(interpret(&e, &[], &[], &[], 0.0), -5.0);
+
+    // A sign flip is exact, and `-0.0` is the negation of `0.0`.
+    let e = op("neg", vec![n(0.0)]);
+    let got = interpret(&e, &[], &[], &[], 0.0);
+    assert_eq!(got, 0.0);
+    assert!(got.is_sign_negative(), "neg(0.0) should be -0.0, got {got}");
+
+    // The shape it used to take: `-k*x` with `k` and `x` supplied as params.
+    let e = op("*", vec![op("neg", vec![n(3.0)]), n(2.0)]);
+    assert_eq!(interpret(&e, &[], &[], &[], 0.0), -6.0);
+}
+
 #[test]
 fn mul_and_div() {
     let e = op("*", vec![n(2.0), n(3.0), n(4.0)]);

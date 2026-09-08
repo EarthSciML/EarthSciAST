@@ -17,7 +17,9 @@ pub(super) fn reject_unsupported_features(flat: &FlattenedSystem) -> Result<(), 
     // only admits a system with a SPATIAL independent variable, and this defect
     // lives in 0-D documents, where `dxdt ~ D(x, t)` is written.
     if crate::flatten::first_unresolved_rhs_time_derivative(flat).is_some() {
-        return Err(CompileError::UnloweredOperatorError { op: "D".to_string() });
+        return Err(CompileError::UnloweredOperatorError {
+            op: "D".to_string(),
+        });
     }
     if flat.independent_variables != ["t"] {
         // A spatial independent variable means a rewrite-target operator was
