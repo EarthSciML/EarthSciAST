@@ -27,7 +27,7 @@ running the whole model — the SR contraction is inlined into `deathsK` — thr
   → 52,411-cell compute goes from "never finishes" to **~12 s, flat ~6 MiB** working set.
   Includes the OOM fix (see below).
 - **D** optional BLAS accelerator (`evaluate_cellwise(…; blas_accel=true)`,
-  pde_inline_tests.jl) — recognizes the linear mat-vec `conc=A'·E` (reuses `_pd_detect`'s
+  inline_tests.jl) — recognizes the linear mat-vec `conc=A'·E` (reuses `_pd_detect`'s
   `_pd_matvec_factors`) and does one `mul!` over the whole field. ~120× over Phase C.
   NOT bit-identical (BLAS sums in a different order; measured max rel-diff 6.21e-15);
   Phase C stays the bit-exact baseline and the default.

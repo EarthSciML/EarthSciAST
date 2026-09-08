@@ -72,7 +72,7 @@ def test_stiffness_selects_the_integrator_but_only_for_high(tmp_path: Path) -> N
     Julia wants ``Rosenbrock23``, which §2.2.3 rules out. ``low`` / ``moderate``
     are ignored: they say nothing the default does not already handle.
     """
-    from earthsci_ast.pde_inline_tests import DEFAULT_METHOD, STIFF_METHOD, _method_for
+    from earthsci_ast.inline_tests import DEFAULT_METHOD, STIFF_METHOD, _method_for
 
     high = _load(BASE, tmp_path)
     assert _method_for(None, high) == STIFF_METHOD
@@ -120,7 +120,7 @@ def test_inline_test_integration_tolerances_come_from_the_document(tmp_path: Pat
     which is why the chain tests ``is not None``.
     """
     from earthsci_ast.esm_types import Solver
-    from earthsci_ast.pde_inline_tests import (
+    from earthsci_ast.inline_tests import (
         TEST_ABSTOL,
         TEST_RELTOL,
         _integration_tolerances,

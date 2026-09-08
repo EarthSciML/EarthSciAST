@@ -499,6 +499,35 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # 3e. A DECLARATION spelled with a globally-scoped name — the independent
+    # variable or the §6.4 `_var` placeholder — is unreachable (esm-spec
+    # §4.9.1.1, `reserved_variable_name`). `_implicit_symbols` credits both by
+    # NAME, ahead of the declaration maps, so every reader gets the implicit
+    # symbol instead of the declared quantity (issue #200). All three
+    # declaration maps are covered: a species and a reaction parameter become
+    # symbols of the derived ODE system exactly as a `variables` entry does.
+    let indep = _indep_var(file)
+        if file.models !== nothing
+            for model_name in sort!(collect(keys(file.models)))
+                _check_reserved_model_names!(errors, file.models[model_name],
+                                             "/models/$model_name",
+                                             "Model '$model_name'"; indep=indep)
+            end
+        end
+        if file.reaction_systems !== nothing
+            for rs_name in sort!(collect(keys(file.reaction_systems)))
+                rs = file.reaction_systems[rs_name]
+                owner = "Reaction system '$rs_name'"
+                _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
+                                                   "/reaction_systems/$rs_name/species",
+                                                   owner, "species"; indep=indep)
+                _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
+                                                   "/reaction_systems/$rs_name/parameters",
+                                                   owner, "parameter"; indep=indep)
+            end
+        end
+    end
+
     # 4. Validate event consistency. Unlike balance and reference integrity, this
     # still RUNS for a coupled model — it is where a genuinely undeclared event
     # target is caught — but with the §6.4 `_var` placeholder credited (finding (b)).
@@ -559,6 +588,18 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # plausible wrong number. Both codes are owed by every binding, executing or
     # not (CONFORMANCE_SPEC §5.19.5 rejection parity).
     append!(errors, validate_recurrence_semantics(file))
+
+    # 5c'''. Observed dependency cycles (esm-spec §4.9.6, issue #181). A cycle
+    # among a model's observed definitions has no evaluation order, and the
+    # equations alone decide it — so it is decided HERE rather than left to the
+    # build, which used to report `E_TREEWALK_UNBOUND_NAME` against whichever
+    # innocent observed its materialization walk reached first after the cycle
+    # stalled. Runs AFTER `validate_recurrence_semantics` for readability only:
+    # the two are independent, because the self-edge exemption is gated on
+    # recurrence CANDIDACY, never on that pass's verdict (CONFORMANCE_SPEC
+    # §5.19.5) — so an ill-founded self-read still gets its `recurrence_*` name
+    # rather than being collapsed into a cycle error.
+    append!(errors, validate_observed_cycles(file))
 
     # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
     # The flatten path already rejects this via `_check_variable_map_units`
@@ -1012,6 +1053,82 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
     end
     for (subsys_name, subsys) in model_subsystems(model)
         _check_system_kind!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
+    return errors
+end
+
+"""
+    _reserved_declaration_names(indep::AbstractString) -> Dict{String,String}
+
+Every name a declaration map may NOT spell, mapped to the reason it is reserved
+(esm-spec §4.9.1.1).
+
+Two symbols, both GLOBALLY scoped: the document's independent variable and the
+§6.4 operator placeholder. §4.9.1.1 is the normative home of this set; the
+sibling `reserved_index_symbol` rule for an `aggregate` binder reads the same
+set, so the two cannot drift apart. (That sibling rule is currently implemented
+only in the Rust binding; this one is implemented in all five.)
+
+Spatial coordinate names are deliberately absent: they resolve as coordinates
+only in a coordinate position (§11.4), and
+`tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary
+position variable.
+"""
+_reserved_declaration_names(indep::AbstractString)::Dict{String,String} = Dict{String,String}(
+    String(indep) => "independent_variable",
+    _OPERATOR_PLACEHOLDER_VAR => "operator_placeholder")
+
+"""
+    _check_reserved_declaration_names!(errors, names, container_path, owner, kind; indep)
+
+`reserved_variable_name` for every declared `name` spelled with a globally-scoped
+name (esm-spec §4.9.1.1).
+
+The declaration never wins: the independent variable and `_var` are implicitly
+declared in every component's expression scope (§4.9.1) and are resolved BY NAME
+ahead of the declaration maps, so the implicit symbol shadows the declaration
+rather than the other way round. That is why this is a hard error and not a lint
+(issue #200) — the reported document validated clean, and a build with a
+subsystem mounted handed every reader of `t` the simulation clock in place of a
+fuel time-lag constant.
+
+`names` is walked in sorted order: `Model.variables` is ordered but a reaction
+system's species and parameters are vectors, and sorted is the ordering every
+binding can produce.
+"""
+function _check_reserved_declaration_names!(errors::Vector{StructuralError},
+                                            names, container_path::AbstractString,
+                                            owner::AbstractString, kind::AbstractString;
+                                            indep::AbstractString="t")
+    reserved = _reserved_declaration_names(indep)
+    for name in sort!(collect(String.(names)))
+        why = get(reserved, name, nothing)
+        why === nothing && continue
+        role = why == "independent_variable" ? "the document's independent variable" :
+               "the operator-model placeholder"
+        push!(errors, StructuralError(
+            "$container_path/$name",
+            "$owner declares a $kind named '$name', which is $role",
+            ERROR_CODES.RESERVED_VARIABLE_NAME,
+            Dict{String,Any}("name" => name, "reserved_as" => why)))
+    end
+    return errors
+end
+
+"""
+    _check_reserved_model_names!(errors, model, path; indep)
+
+[`_check_reserved_declaration_names!`](@ref) over a model's `variables`,
+recursing into subsystems.
+"""
+function _check_reserved_model_names!(errors::Vector{StructuralError}, model::Model,
+                                      path::String, owner::AbstractString;
+                                      indep::AbstractString="t")
+    _check_reserved_declaration_names!(errors, keys(model.variables), "$path/variables",
+                                       owner, "variable"; indep=indep)
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_reserved_model_names!(errors, subsys, "$path/subsystems/$subsys_name",
+                                     "Model '$subsys_name'"; indep=indep)
     end
     return errors
 end
@@ -1661,6 +1778,213 @@ end
 function _qualified_head(ref::AbstractString)::Union{String,Nothing}
     idx = findfirst('.', ref)
     idx === nothing ? nothing : String(ref[1:prevind(ref, idx)])
+end
+
+"""
+    validate_observed_cycles(file::EsmFile) -> Vector{StructuralError}
+
+Detect a dependency cycle among ONE model's observed unknowns (esm-spec §4.9.6).
+
+An observed is *defined* by the right-hand side of the equation whose LHS names
+it (§6.3.1), so a model's observed definitions induce a dependency graph over
+the observed names: `V → W` whenever `W` occurs free in `V`'s defining RHS and
+`W` is itself an observed of the same model. A cycle in that graph means no
+evaluation order satisfies every definition, and — crucially — that is a
+function of the equations ALONE: no shapes, no values, no solver. So it is
+decided here, at the same layer as `undefined_variable`, and it is a hard error
+on the same grounds as every other provable conflict in §4.9.
+
+Naming the cycle is the point, not a nicety. Before this check `validate()`
+accepted `tests/invalid/observed_cycle_array_elementwise.esm` and the tree-walk
+build reported `E_TREEWALK_UNBOUND_NAME: 'in_pbl'` — `in_pbl` being a fourth
+observed that is declared, defined and referenced perfectly well and merely
+reads one member of the cycle. It was simply the name the materialization walk
+happened to try first after the cycle stalled (issue #181). A report against an
+innocent bystander, from a stage that had already lost the information needed to
+say what was actually wrong, is what this replaces.
+
+This is distinct from [`validate_coupling_cycles`](@ref), which finds cycles
+among top-level SYSTEMS reached through qualified references; that one attaches
+at `/models`, this one at `/models/<M>` (a cycle belongs to no single equation,
+so it pins at the model exactly as `equation_count_mismatch` does).
+
+Cross-binding pins: `(observed_cycle, /models/<M>)` only — the prose is
+deliberately NOT pinned (CONFORMANCE_SPEC §5.19.5); what every binding owes is
+that the message NAME the observeds on the cycle.
+"""
+function validate_observed_cycles(file::EsmFile)::Vector{StructuralError}
+    errors = StructuralError[]
+    file.models === nothing && return errors
+    for model_name in sort!(collect(keys(file.models)))
+        _check_observed_cycles!(errors, file.models[model_name], "/models/$model_name")
+    end
+    return errors
+end
+
+function _check_observed_cycles!(errors::Vector{StructuralError}, model::Model,
+                                 path::String)
+    defs = observed_definitions(model)
+    if !isempty(defs)
+        observed = Set{String}(keys(defs))
+        candidates = _recurrence_candidate_names(model, defs)
+        adj = Dict{String,Vector{String}}()
+        for (name, rhs) in defs
+            deps = intersect(_observed_dependency_names(rhs), observed)
+            # esm-spec §4.3.1.1 / CONFORMANCE_SPEC §5.19.5: a causal self-read is
+            # an ORDERING WITHIN one variable, not a dependency between two, so
+            # `V → V` is dropped — for a recurrence CANDIDATE, and only for one.
+            name in candidates && delete!(deps, name)
+            adj[name] = sort!(collect(deps))
+        end
+        cycle = _first_observed_cycle(adj)
+        if cycle !== nothing
+            push!(errors, StructuralError(
+                path,
+                "Observed dependency cycle: " * join(cycle, " -> ") * ". Each of these " *
+                "observed variables is defined in terms of the next, so no evaluation " *
+                "order satisfies every definition (esm-spec §4.9.6). Break the cycle by " *
+                "splitting one observed into a pre-value and a post-value.",
+                ERROR_CODES.OBSERVED_CYCLE,
+                Dict{String,Any}("cycle" => cycle,
+                                 "dependency_type" => "observed_definitions"),
+            ))
+        end
+    end
+
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_observed_cycles!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
+    return errors
+end
+
+# The model's recurrence CANDIDATES among `defs`: array-shaped variables whose
+# own defining RHS reads them back through at least one `index` (esm-spec
+# §4.3.1.1), well founded or NOT.
+#
+# CANDIDACY is the gate CONFORMANCE_SPEC §5.19.5 mandates, and both ways of
+# getting it wrong lose a diagnosis:
+#
+#   * Gating on the WELL-FOUNDEDNESS VERDICT is the intuitive choice and is
+#     backwards. An ill-founded self-read is by definition not well founded, so
+#     the exemption would not apply, so THIS check would fire first and collapse
+#     the document to one cycle error — and the `recurrence_not_wellfounded` /
+#     `recurrence_unsupported_form` diagnosis the construct exists to produce is
+#     never reached. `tests/conformance/recurrence/rejections.json` pins exactly
+#     that, across bindings.
+#   * Gating on "is this a self-edge at all" is WIDER than candidacy and is the
+#     mirror-image mistake: it swallows a scalar `x ~ x + 1` and a bare
+#     `s ~ s + 1` over an array, neither of which has an axis to fold along, so
+#     neither can ever be a recurrence — they are cycles of length one and MUST
+#     keep the cycle diagnosis they have always had.
+#
+# The predicate is character-for-character the one `_decline_recurrence_definitions`
+# (tree_walk/build.jl) uses, which is the point: §5.19.5 asks that the two sites
+# agree, not that either be clever.
+function _recurrence_candidate_names(model::Model,
+                                     defs::Dict{String,ASTExpr})::Set{String}
+    out = Set{String}()
+    for (name, rhs) in defs
+        v = get(model.variables, name, nothing)
+        (v !== nothing && _recurrence_is_array_shape(v.shape)) || continue
+        recurrence_self_reference_kind(name, rhs) === :indexed && push!(out, name)
+    end
+    return out
+end
+
+# The bare names an observed's defining RHS DEPENDS ON: every `VarExpr` in the
+# tree minus every symbol some node in that tree BINDS.
+#
+# Binder subtraction is what keeps the graph honest. An `aggregate` over
+# `ranges: {i: …}` writes `index(hpbl, i)`, and the `i` is a loop symbol, not a
+# reference — so a model that also happens to declare an observed named `i`
+# would otherwise gain a manufactured edge into it from every aggregate in the
+# document. The binder set is `_bound_index_symbols`, the SAME one the
+# `undefined_variable` walk credits into scope (aggregate `output_idx` and
+# `ranges` keys, an integral's `int_var`, the argmin/argmax `arg` witness,
+# `index` subscript positions, the `skolem` binder, template `bindings` keys) —
+# two checks disagreeing about what a binder is, is how a name ends up both
+# "undeclared" here and "bound" there.
+#
+# The subtraction is WHOLE-EXPRESSION rather than scope-threaded, matching Rust
+# `collect_bound_symbols` / Go `collectBoundSymbols` / TS `collectIndexSymbols`.
+# It is therefore slightly wide — a symbol bound in one subtree is credited
+# across the whole RHS — and that direction is the safe one here: it can only
+# MISS an edge, never invent one, and inventing one rejects a legal document.
+#
+# `wrt` is deliberately NOT collected (unlike `_referenced_var_names`): it names
+# the coordinate a derivative is taken with respect to, not a value the RHS
+# reads, and the differentiand itself is in `args` where the walk already sees
+# it. Counting it would let `d(u)/d(x)` fabricate an edge into an observed that
+# happens to share a coordinate's name.
+function _observed_dependency_names(rhs::ASTExpr)::Set{String}
+    free = Set{String}()
+    bound = Set{String}()
+    foreach_subexpr_once(rhs) do e
+        if e isa VarExpr
+            push!(free, e.name)
+        elseif e isa OpExpr
+            for sym in _bound_index_symbols(e)
+                push!(bound, sym)
+            end
+        end
+    end
+    setdiff!(free, bound)
+    return free
+end
+
+# The first cycle a DFS over `adj` closes, as the path in traversal order with
+# the entry node repeated to close it (`["gamfac", "hpbl", "wscale", "gamfac"]`),
+# or `nothing` when the graph is acyclic.
+#
+# WHITE/GREY/BLACK with an explicit path stack, the same shape
+# `validate_coupling_cycles` uses. Roots AND successors are visited in sorted
+# order so the cycle that gets named — and which of its members is the entry —
+# does not depend on `Dict` hashing; §4.9.6 requires that determinism explicitly,
+# because a binding that names a different member on each run cannot be pinned.
+# ONE cycle is reported per model: a second is usually the same defect seen from
+# another entry point, and the author fixes them one at a time regardless.
+#
+# ITERATIVE, and that is not a style choice. The depth of this walk is the
+# length of the longest observed CHAIN — a property of the document, and
+# unbounded — not the expression nesting the schema caps. A recursive `dfs`
+# raised `StackOverflowError` ("program state may be corrupted") on an ACYCLIC
+# chain of somewhere under 20 000 observeds, turning a document that must
+# validate CLEAN into a crash. `cursor[i]` is how far into `adj[path_stack[i]]`
+# that frame has got, so resuming a parent after a child finishes picks up
+# exactly where it left off.
+function _first_observed_cycle(adj::Dict{String,Vector{String}})::Union{Vector{String},Nothing}
+    WHITE, GREY, BLACK = 0, 1, 2
+    color = Dict{String,Int}(n => WHITE for n in keys(adj))
+    path_stack = String[]
+    cursor = Int[]
+
+    for root in sort!(collect(keys(adj)))
+        color[root] == WHITE || continue
+        color[root] = GREY
+        push!(path_stack, root)
+        push!(cursor, 1)
+        while !isempty(path_stack)
+            u = path_stack[end]
+            succ = adj[u]
+            if cursor[end] > length(succ)
+                color[u] = BLACK
+                pop!(path_stack)
+                pop!(cursor)
+                continue
+            end
+            v = succ[cursor[end]]
+            cursor[end] += 1
+            if color[v] == GREY
+                start = findfirst(==(v), path_stack)
+                return vcat(path_stack[start:end], v)
+            elseif color[v] == WHITE
+                color[v] = GREY
+                push!(path_stack, v)
+                push!(cursor, 1)
+            end
+        end
+    end
+    return nothing
 end
 
 """

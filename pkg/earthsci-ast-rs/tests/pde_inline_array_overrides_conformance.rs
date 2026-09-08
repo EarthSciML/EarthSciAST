@@ -20,13 +20,13 @@
 //! The Rust array runtime lowers a shaped parameter's inline column into the
 //! `const` observed channel (`simulate_array::lower_inline_array_parameters`),
 //! expands an array-valued `initial_conditions` entry into the per-cell `u0`
-//! keys (`pde_inline_tests::expand_array_initial_conditions`), and materializes
+//! keys (`inline_tests::expand_array_initial_conditions`), and materializes
 //! the state-free observeds an `ic` reads (`ArrayCompiled::ic_scope_defs`).
 //! This suite pins all three against the reference binding.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_pde_tests_with_base_dir;
+use earthsci_ast::run_inline_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
@@ -91,7 +91,7 @@ fn array_overrides_match_golden() {
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
-            run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(results.len(), expected.len());

@@ -489,6 +489,25 @@ pub enum CouplingEntry {
         /// merged 0-D equations as-is.
         #[serde(skip_serializing_if = "Option::is_none")]
         lifting: Option<String>,
+        /// The entry's MERGE INTENT (esm-libraries-spec §4.7.1 step 5).
+        /// TRI-STATE, which is why it is an `Option`: `None` is NOT `false`.
+        ///
+        /// * `None` — the author has not said. A zero-merge is then
+        ///   [`FlattenError::OperatorComposeNoMerge`], an ERROR (such an entry
+        ///   is indistinguishable from one that is absent); a partial merge is a
+        ///   warning.
+        /// * `Some(true)` — the `systems[1]` equations are CONTRIBUTIONS and
+        ///   every one must land; any shortfall, partial included, is
+        ///   [`FlattenError::OperatorComposeRequireMatchUnmatched`].
+        /// * `Some(false)` — a standalone-contributing operator, DECLARED.
+        ///   Unmatched equations are expected and nothing is reported.
+        ///
+        /// `skip_serializing_if = "Option::is_none"` drops only the absent case,
+        /// so an explicit `false` survives the round trip — dropping it would
+        /// silently re-arm the zero-merge refusal on every document that opted
+        /// out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        require_match: Option<bool>,
         /// Optional description
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -715,6 +734,7 @@ mod coupling_field_tests {
             lifting: None,
             systems: vec!["sys1".to_string(), "sys2".to_string()],
             translate: None,
+            require_match: None,
             description: None,
         };
 

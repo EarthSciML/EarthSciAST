@@ -25,12 +25,13 @@ import {
   countDerivatives,
   resolveScopedReference,
   expressionReferencesName,
+  isInlineModel,
 } from './expr-utils.js'
 import { isAffineTempUnit } from './unit-format.js'
 import { forEachExpressionScope } from '../traverse.js'
 import { documentDeclaredNames } from './coupling-checks.js'
 import { observedDefinitions } from '../classification.js'
-import { CadenceSeeder } from '../cadence.js'
+import { CadenceSeeder, CadenceCycleError } from '../cadence.js'
 
 /**
  * Check equation-unknown balance for a model (esm-spec §4.9.4).
@@ -148,6 +149,109 @@ function independentVariableName(esmFile: EsmFile): string {
  */
 export function implicitNames(esmFile: EsmFile): Set<string> {
   return new Set<string>([independentVariableName(esmFile), ...SPATIAL_COORDINATE_NAMES])
+}
+
+/** Why a name is reserved, for the `reserved_variable_name` details payload. */
+type ReservedReason = 'independent_variable' | 'operator_placeholder'
+
+/**
+ * The names no declaration map may spell (spec §4.9.1.1).
+ *
+ * Two symbols, both GLOBALLY scoped: the document's independent variable and
+ * the §6.4 operator placeholder. Same set the §4.3.1 `reserved_index_symbol`
+ * binder rule uses, so the two rules cannot drift apart. (That sibling rule is
+ * currently implemented only in the Rust binding; this one is in all five.)
+ *
+ * Spatial coordinate names are deliberately NOT here. They resolve as
+ * coordinates only in a coordinate position (§11.4), and
+ * `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary
+ * position variable.
+ */
+export function reservedDeclarationNames(esmFile: EsmFile): Map<string, ReservedReason> {
+  return new Map<string, ReservedReason>([
+    [independentVariableName(esmFile), 'independent_variable'],
+    [OPERATOR_VAR_PLACEHOLDER, 'operator_placeholder'],
+  ])
+}
+
+/**
+ * `reserved_variable_name` for every key of one declaration map spelled with a
+ * globally-scoped name (spec §4.9.1.1).
+ *
+ * The independent variable and `_var` are in scope in every component and are
+ * resolved BY NAME, ahead of the declaration maps, so such a declaration is
+ * unreachable — it does not shadow the implicit symbol, the implicit symbol
+ * shadows it. That is why this is a hard error and not a lint (issue #200): the
+ * offending document VALIDATED, a bare build reported the observed as having no
+ * defining expression, and a build with a subsystem mounted handed every reader
+ * of `t` the simulation clock instead, so `log(t)` was `-inf` at `t = 0` and
+ * every number downstream was finite, plausible and wrong.
+ */
+export function validateReservedDeclarationNames(
+  declarations: Record<string, unknown> | undefined,
+  containerPath: string,
+  owner: string,
+  kind: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors: StructuralError[] = []
+  if (!declarations) return errors
+  const reserved = reservedDeclarationNames(esmFile)
+  // Sorted, not authored, order: Go decodes `variables` into a plain map and
+  // cannot reproduce the authored order at all, so sorted is the one ordering
+  // all five bindings can agree on.
+  for (const name of Object.keys(declarations).sort()) {
+    const reason = reserved.get(name)
+    if (!reason) continue
+    const role =
+      reason === 'independent_variable'
+        ? "the document's independent variable"
+        : 'the operator-model placeholder'
+    errors.push({
+      path: `${containerPath}/${name}`,
+      code: ERROR_CODES.RESERVED_VARIABLE_NAME,
+      message: `${owner} declares a ${kind} named '${name}', which is ${role}`,
+      details: { name, reserved_as: reason },
+    })
+  }
+  return errors
+}
+
+/**
+ * [[validateReservedDeclarationNames]] over a model's `variables`, recursing
+ * into every INLINE subsystem (spec §4.9.1.1).
+ *
+ * A subsystem is a model, so its `variables` map declares symbols of the
+ * assembled system exactly as the parent's does — and a MOUNTED subsystem is
+ * the shape issue #200 was reported in, where every reader of `t` silently
+ * received the simulation clock. A `ref` mount carries no `variables` key
+ * until the resolver splices it in, and is skipped until then.
+ */
+export function validateReservedModelNames(
+  model: Model,
+  modelPath: string,
+  owner: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors = validateReservedDeclarationNames(
+    model.variables,
+    `${modelPath}/variables`,
+    owner,
+    'variable',
+    esmFile,
+  )
+  for (const [name, subsystem] of Object.entries(model.subsystems ?? {})) {
+    if (!isInlineModel(subsystem)) continue
+    errors.push(
+      ...validateReservedModelNames(
+        subsystem,
+        `${modelPath}/subsystems/${name}`,
+        `Model '${name}'`,
+        esmFile,
+      ),
+    )
+  }
+  return errors
 }
 
 /**
@@ -1017,10 +1121,34 @@ export function validateRelationalNodesInContinuous(
   // DEFINING EQUATION resolves continuous. The 0.x code tested
   // `variable.type === 'state'`, which 1.0.0 does not declare, and which never
   // saw the observed case at all.
-  const seeder = new CadenceSeeder(model)
-  const continuousNames = new Set(
-    Object.keys(model.variables || {}).filter((name) => seeder.leaf(name) === 'continuous'),
-  )
+  //
+  // A model whose observed definitions contain a CYCLE has no cadence
+  // assignment at all — the chain `V -> W -> V` has no base case, so `leaf`
+  // raises rather than inventing one — and this check DECLINES to run there
+  // instead of guessing at a class. Nothing is lost by declining:
+  // `validateObservedCycles` reports the cycle itself as `observed_cycle` at
+  // the model, naming the observeds on it (esm-spec §4.9.6, issue #181), which
+  // is both a better diagnosis and the one the shared corpus pins.
+  //
+  // Catching here is what keeps that diagnosis reachable. `CadenceCycleError`
+  // extends `EsmDiagnosticError` directly rather than `EsmMachineryError`, so
+  // `loadErrorCode` has no arm for it: escaping this function, it reached the
+  // orchestrator's generic catch and collapsed the ENTIRE document into one
+  // `load_error` at the root path, discarding every other structural finding
+  // including the cycle report. The seeder still throws — a caller outside
+  // `validate()` asking for the cadence of a cyclic model deserves the
+  // exception — it is only this validator, which has a named check standing
+  // behind it, that absorbs it.
+  let continuousNames: Set<string>
+  try {
+    const seeder = new CadenceSeeder(model)
+    continuousNames = new Set(
+      Object.keys(model.variables || {}).filter((name) => seeder.leaf(name) === 'continuous'),
+    )
+  } catch (error) {
+    if (error instanceof CadenceCycleError) return errors
+    throw error
+  }
   if (continuousNames.size === 0) return errors
 
   forEachExpressionScope(model, modelPath, (scope) => {

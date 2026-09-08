@@ -1310,6 +1310,104 @@
     ],
     "is_valid": false
   },
+  "reserved_variable_name_observed.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/FuelMoisture/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'FuelMoisture' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "The reported shape (issue #200): an OBSERVED unknown named `t`. The declaration never wins — `t` is implicitly declared in every model's expression scope (esm-spec §4.9.1), so a bare model reports the observed as having no defining expression and a mounted one silently hands every reader the SIMULATION TIME. The finding pins at the DECLARATION, not at the readers: the declaration is the single node that carries the defect, and the readers are all correct."
+  },
+  "reserved_variable_name_parameter.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Ingest/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'Ingest' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      },
+      {
+        "path": "/models/Ingest/variables/_var",
+        "code": "reserved_variable_name",
+        "message": "Model 'Ingest' declares a variable named '_var', which is the operator-model placeholder",
+        "details": {
+          "name": "_var",
+          "reserved_as": "operator_placeholder"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Both globally-scoped names of esm-spec §4.9.1 in one file, so a binding that covers only the independent variable is caught. Spatial coordinate names (`x`, `y`, `lon`, …) are deliberately NOT in this set — they resolve as coordinates only in a coordinate position (§11.4), and `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position variable."
+  },
+  "reserved_variable_name_renamed_independent.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Renamed/variables/s",
+        "code": "reserved_variable_name",
+        "message": "Model 'Renamed' declares a variable named 's', which is the document's independent variable",
+        "details": {
+          "name": "s",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "The reserved name FOLLOWS `domain.independent_variable` (default `\"t\"`), the same set §4.3.1's `reserved_index_symbol` binder rule follows, so the two cannot drift. This document renames it to `s`, which both reserves `s` and FREES `t`; the free half is pinned by the valid twin `tests/valid/independent_variable_renamed.esm`. A binding that hard-codes the literal `\"t\"` fails one of the two."
+  },
+  "reserved_variable_name_species.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TracerDecay/species/t",
+        "code": "reserved_variable_name",
+        "message": "Reaction system 'TracerDecay' declares a species named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      },
+      {
+        "path": "/reaction_systems/RateConstants/parameters/t",
+        "code": "reserved_variable_name",
+        "message": "Reaction system 'RateConstants' declares a parameter named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A reaction system's `species` and `parameters` maps declare symbols of the derived ODE system exactly as `models[M].variables` does (esm-spec §7.4), so the §4.9.1.1 rule covers all three declaration maps."
+  },
+  "reserved_variable_name_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Column/subsystems/Fuel/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'Fuel' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A subsystem is a model (esm-spec \u00a74.7), so its `variables` map is a declaration map and \u00a74.9.1.1 applies to it unchanged. This is the shape issue #200 was reported in \u2014 a MOUNTED subsystem, where every reader of `t` silently received the simulation clock. Pinned so a binding that walks only top-level `models` is caught."
+  },
   "subsystem_ref_not_found.esm": {
     "schema_errors": [],
     "structural_errors": [
@@ -2290,6 +2388,14 @@
     "resolver_error_code": "subsystem_index_set_conflict",
     "notes": "Resolver-level invalid (esm-spec §4.7 'Index-set merge'). The document is SCHEMA-VALID — a subsystem ref and top-level index_sets are both legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring §9.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
   },
+  "mount_rename_unknown_index_set.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_rename_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §4.7 'Mount-edge index-set renaming'). The document is SCHEMA-VALID — `index_set_rename` is a legal SubsystemRef field and its value is a string→string object — so schema-only bindings accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. The mount edge renames 'celsl', a misspelling of the mounted mesh file's 'cells': a mount-edge rename never invents names (the §9.7.7 rule at a component-mount edge), so the typo must fail loudly at the edge that authored it rather than silently renaming nothing."
+  },
   "body_apply_cycle.esm": {
     "schema_errors": [],
     "structural_errors": [],
@@ -2930,6 +3036,17 @@
     "resolver_only": true,
     "resolver_error_code": "data_source_url_unresolved",
     "notes": "Resolver-level invalid (esm-spec §8.2.1). The document is SCHEMA-VALID — `url_template` is a bare string, so nothing in JSON Schema forbids a `${VAR}` in it — which is what makes this the resolver's rejection rather than a schema error. UNLIKE the other `resolver_only` pins, `is_valid` is false for EVERY binding: §8.2.1 resolution is REQUIRED of all five (it decides where a document's data comes from, and an optional capability there would make the same document resolve under one binding and not another), so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names the offending entry and template — the failure this replaces was an `io error at /${VAR}/x.parquet` that named neither. The portable spelling is tests/valid/data_source_relative_url.esm; the resolution rule itself is pinned across bindings by tests/conformance/data_source_url/manifest.json (CONFORMANCE_SPEC §5.22)."
+  },
+  "observed_cycle_array_elementwise.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/YSU",
+        "code": "observed_cycle"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec §4.9.6 (issue #181). Three ARRAY observeds over one index set reading each other elementwise: gamfac -> hpbl -> wscale -> gamfac. The cycle is a function of the equations alone, so it is a HARD structural error in `validate` — not something a build discovers. The pin is the (code, path) pair only: a cycle belongs to no single equation, so it pins at the model (as `equation_count_mismatch` does), and the prose is deliberately NOT pinned across bindings (CONFORMANCE_SPEC §5.19.5) — what IS required of every binding's message is that it NAME the observeds on the cycle. `in_pbl` is a fourth observed, correct in every respect, that merely reads `hpbl`; it is the name the Rust build reported as E_TREEWALK_UNBOUND_NAME before this check existed, and it MUST NOT appear on the reported cycle. Companion: the recurrence self-edge is NOT one of these edges (tests/valid/recurrence_causal_self_reference.esm must still validate clean)."
   },
   "solver_unknown_stiffness.esm": {
     "schema_errors": [

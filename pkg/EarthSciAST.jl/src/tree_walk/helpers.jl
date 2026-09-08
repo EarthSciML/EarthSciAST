@@ -487,7 +487,7 @@ Inverse of [`_cell_key`](@ref): parse a flat array-cell key like `"u[3]"` or
 Returns `nothing` when `key` is not a well-formed cell key (no bracket suffix,
 empty variable name, or non-integer indices), so callers can use it both to
 decode known-valid keys and to test whether a string IS a cell key. Accepts
-any `AbstractString`. Shared with simulate.jl / pde_inline_tests.jl — keep the
+any `AbstractString`. Shared with simulate.jl / inline_tests.jl — keep the
 signature stable.
 """
 function _parse_cell_key(key::AbstractString)

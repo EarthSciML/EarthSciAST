@@ -18,7 +18,7 @@
 //! one canonical pipeline (`.esm` → `load` → §9.7 import/metaparameter
 //! resolution → §9.6.3 rewrite fixpoint → official runner):
 //!
-//! - `pde-tests`   [`earthsci_ast::run_pde_tests`] —
+//! - `pde-tests`   [`earthsci_ast::run_inline_tests`] —
 //!   the §6.6/§6.6.5 inline tests through [`earthsci_ast::solve`].
 //! - `convergence` [`earthsci_ast::load_path_with_options`] once
 //!   per resolution (loader-API metaparameter binding, esm-spec §9.7.6 site
@@ -29,7 +29,7 @@
 //!   [`earthsci_ast::evaluate`] per golden point (mirrors the Julia /
 //!   Python runners' wrapper-doc scheme).
 //! - `regrid`      the fixture's exact-invariant inline tests via
-//!   `run_pde_tests`, the recorded regridded/invariant state fields at t=1
+//!   `run_inline_tests`, the recorded regridded/invariant state fields at t=1
 //!   via `simulate_with_inspection` + `state_cells`, and the per-pair
 //!   `A_ij`/`A_j`/`W_ij` setup arrays read from the official
 //!   [`earthsci_ast::simulate_array::BuildInspection`] surface
@@ -45,7 +45,7 @@ use earthsci_ast::simulate_array::BuildInspection;
 use earthsci_ast::{Alg, SolveOptions};
 use earthsci_ast::{EsmFile, Expr};
 use earthsci_ast::{LoadOptions, load_path, load_path_with_options, load_string_with_options};
-use earthsci_ast::{evaluate_cellwise, field_reduce, run_pde_tests, state_cells};
+use earthsci_ast::{evaluate_cellwise, field_reduce, run_inline_tests, state_cells};
 use serde_json::{Value, json};
 
 fn parse_solver(name: &str) -> Result<Alg, String> {
@@ -103,7 +103,7 @@ fn sim_options(flags: &HashMap<String, String>) -> Result<SolveOptions, String> 
 }
 
 // ---------------------------------------------------------------------------
-// pde-tests — the problem's inline §6.6/§6.6.5 tests via run_pde_tests.
+// pde-tests — the problem's inline §6.6/§6.6.5 tests via run_inline_tests.
 // ---------------------------------------------------------------------------
 
 fn cmd_pde_tests(positional: &[String], flags: &HashMap<String, String>) -> Result<Value, String> {
@@ -115,7 +115,7 @@ fn cmd_pde_tests(positional: &[String], flags: &HashMap<String, String>) -> Resu
     let file = load_path(problem).map_err(|e| format!("{problem}: {e}"))?;
     let model = flag(flags, "model")?;
     let opts = sim_options(flags)?;
-    let results = run_pde_tests(&file, Some(model), &opts);
+    let results = run_inline_tests(&file, Some(model), &opts);
     Ok(json!({
         "assertions": results,
     }))
@@ -182,7 +182,7 @@ fn cmd_regrid(positional: &[String], flags: &HashMap<String, String>) -> Result<
     let file = load_path(fixture).map_err(|e| format!("{fixture}: {e}"))?;
     let model = flag(flags, "model")?;
     let opts = sim_options(flags)?;
-    let results = run_pde_tests(&file, Some(model), &opts);
+    let results = run_inline_tests(&file, Some(model), &opts);
     let passed = !results.is_empty() && results.iter().all(|r| r.passed);
     // regrid_state integrates the constant regridded field from 0 over [0,1],
     // so state(1) IS the regridded field F_tgt.
