@@ -1,0 +1,136 @@
+{
+    "category": "rhs_time_derivative",
+    "version": "1.0",
+    "description": "Cross-binding conformance for esm-spec §4.2's RIGHT-HAND-SIDE structural `D` rule, in BOTH of its halves. RESOLVE: a `D` with `wrt: \"t\"` (or no `wrt`) whose `args[0]` is a bare reference to an unknown that CARRIES a differential equation names that unknown's tendency and is substituted during flattening, recursing through chained tendencies — so `dxdt ~ D(x, t)` is `-k*x`, and a model's scoped `D(Chem.A, t)` is the mass-action tendency §7.4 generated for the sibling reaction system. REFUSE: a structural `D` that resolves to NOTHING — one over an observed, over a parameter, or over a compound expression — is a rewrite-target reaching evaluation, and a conforming runtime MUST report `unlowered_operator` rather than invent a value for it, IN PARTICULAR NOT `0`. The two halves are gated together on purpose. Before this category all three Rust evaluators answered `D(anything) = 0` \"for parity\" with one another, so three shipped documents (`tests/end_to_end/land_atmosphere_hydrology.esm`, `tests/events/financial_climate_scenarios.esm`, `tests/valid/scoped_refs_nested.esm`) computed silent zeros and an inline test asserting a species tendency at t = 0 graded a configuration the model never ran; Python meanwhile refused BOTH halves with `unlowered_operator`, so the bindings disagreed in opposite directions on the same document. The refusal half is the one that can silently rot: `0` is a plausible-looking number, and `d_of_parameter` deliberately asserts `expected: 0.0` so a binding that invents the value is caught by the OUTCOME contract and not by the arithmetic. VERDICTS and outcome CLASSES are compared, not a numeric golden: a refusal has no actual to record, and each binding's diagnostic text differs while the `unlowered_operator` code (esm-spec §9.6.3 constraint 6) is the cross-binding contract.",
+    "reference_binding": "python",
+    "bindings_required": [
+        "python",
+        "rust"
+    ],
+    "scope_excluded": {
+        "go": "rewrite-only port; no simulator / inline test runner",
+        "typescript": "rewrite-only port; no simulator / inline test runner",
+        "julia": "does not implement §4.2's right-hand-side `D` rule yet: `EarthSciAST.flatten` leaves `M.dxdt ~ D(M.x, t)` standing rather than substituting the tendency, so neither half is expressible here. Tracked as a follow-up; the exclusion is a binding GAP, not a design decision, and should be removed once Julia implements the phase."
+    },
+    "integrators": {
+        "python": {
+            "method": "RK45",
+            "rtol": 1e-12,
+            "atol": 1e-14
+        },
+        "rust": {
+            "solver": "Erk",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        }
+    },
+    "fixtures": [
+        {
+            "id": "tendency_resolution",
+            "path": "fixtures/tendency_resolution.esm",
+            "model": "M",
+            "test_id": "tendencies_resolve",
+            "tags": [
+                "esm-spec-4.2",
+                "esm-spec-6.6.2",
+                "esm-spec-7.4",
+                "tendency",
+                "inline-test",
+                "reaction-system"
+            ],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "x",
+                    "outcome": "value",
+                    "expected": 2.0,
+                    "passed": true,
+                    "note": "Anchor: the ODE state itself, so a document that failed to build is distinguishable from one that resolved wrongly."
+                },
+                {
+                    "assertion_idx": 2,
+                    "variable": "dxdt",
+                    "outcome": "value",
+                    "expected": -6.0,
+                    "passed": true,
+                    "note": "OWN-STATE form. D(x, t) = -kx*x = -3*2. The pre-fix Rust answer was exactly 0."
+                },
+                {
+                    "assertion_idx": 3,
+                    "variable": "b",
+                    "outcome": "value",
+                    "expected": 15.0,
+                    "passed": true,
+                    "note": "The tendency that the chained one names: d(b)/dt = 5 over [0, 3]."
+                },
+                {
+                    "assertion_idx": 4,
+                    "variable": "l",
+                    "outcome": "value",
+                    "expected": 31.0,
+                    "passed": true,
+                    "note": "CHAINED form: d(l)/dt = sla*d(b)/dt = 10, so l(3) = 1 + 30. A binding that resolves only one level deep, or that zeroes the inner D, leaves l at its default 1."
+                },
+                {
+                    "assertion_idx": 5,
+                    "variable": "dAdt",
+                    "outcome": "value",
+                    "expected": -2.0,
+                    "passed": true,
+                    "note": "SCOPED form: D(Chem.A, t) = -k*A = -0.5*4, a tendency that exists only because §7.4 generated it from the reaction list. This is the shape the reporter of issue #206 needed."
+                }
+            ]
+        },
+        {
+            "id": "d_of_observed",
+            "path": "fixtures/d_of_observed.esm",
+            "model": "M",
+            "test_id": "d_of_observed_is_refused",
+            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "dcombo",
+                    "outcome": "refused",
+                    "diagnostic": "unlowered_operator",
+                    "passed": false,
+                    "note": "combo has no d(combo)/dt equation. Chain-ruling through its definition would be symbolic differentiation, which the format does not define. The mathematically intended -12 must NOT be produced either — the contract is refusal, not a different number."
+                }
+            ]
+        },
+        {
+            "id": "d_of_parameter",
+            "path": "fixtures/d_of_parameter.esm",
+            "model": "M",
+            "test_id": "d_of_parameter_is_refused",
+            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "dk",
+                    "outcome": "refused",
+                    "diagnostic": "unlowered_operator",
+                    "passed": false,
+                    "note": "The sharpest case. A constant's derivative really is 0, and 0 is exactly what the pre-fix bindings returned for EVERY unresolvable D — so the fixture asserts `expected: 0.0` and a binding that answers it PASSES on the number while failing this category. That is the whole point of pinning the outcome class."
+                }
+            ]
+        },
+        {
+            "id": "d_of_compound",
+            "path": "fixtures/d_of_compound.esm",
+            "model": "M",
+            "test_id": "d_of_compound_is_refused",
+            "tags": ["esm-spec-4.2", "esm-spec-9.6.3", "unlowered-operator", "refusal"],
+            "cases": [
+                {
+                    "assertion_idx": 1,
+                    "variable": "dscaled",
+                    "outcome": "refused",
+                    "diagnostic": "unlowered_operator",
+                    "passed": false,
+                    "note": "args[0] is an operator node, not a bare reference, so there is nothing to look up. Distributing D over the product is symbolic differentiation."
+                }
+            ]
+        }
+    ]
+}

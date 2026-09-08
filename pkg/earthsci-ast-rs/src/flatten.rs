@@ -965,6 +965,79 @@ pub fn first_unlowered_operator(flat: &FlattenedSystem) -> Option<String> {
     None
 }
 
+/// The name a right-hand-side structural `D` differentiates, for the first such
+/// node in `flat` that [`resolve_rhs_time_derivatives`] left standing — or
+/// `None` when every one of them resolved.
+///
+/// The companion gate to that phase, and the second half of esm-spec §4.2's
+/// right-hand-side `D` rule. The phase resolves a `D` over an unknown that
+/// carries a differential equation; everything else it deliberately leaves
+/// alone, because resolving it would be symbolic differentiation and the format
+/// defines none:
+///
+/// * `D` of an OBSERVED or a PARAMETER,
+/// * `D` of a compound expression (`D(a*b, t)`),
+/// * a self- or mutually-referential tendency chain, which the phase stops
+///   expanding rather than looping.
+///
+/// Each of those is a rewrite-target that reached evaluation unlowered, and
+/// §4.2 says an implementation MUST NOT invent a value for it — **in particular
+/// not `0`**, which is what all three Rust evaluators used to return and what
+/// made three shipped documents compute silent zeros. So both compile paths ask
+/// this before they build.
+///
+/// This is a SEPARATE query from [`first_unlowered_operator`] rather than a new
+/// case inside it, for two reasons. It is RHS-only — a `D` on an equation's
+/// left-hand side is what makes the equation differential and must never be
+/// reported — and `first_unlowered_operator` is reached only from behind the
+/// `independent_variables != ["t"]` guard in both compile paths, so a 0-D
+/// document (which is exactly where `dxdt ~ D(x, t)` is written) never passes
+/// through it at all.
+///
+/// The returned string is the differentiated operand rendered for the
+/// diagnostic, not a variable that can be looked up: `D` of a compound has no
+/// name, so it renders as the expression.
+pub fn first_unresolved_rhs_time_derivative(flat: &FlattenedSystem) -> Option<String> {
+    first_unresolved_rhs_time_derivative_in(&flat.equations)
+}
+
+/// [`first_unresolved_rhs_time_derivative`] over a bare equation list.
+///
+/// The array runtime's SINGLE-MODEL entry point (`ArrayCompiled::from_file` →
+/// `from_model_owned_with_arrays`) deliberately never flattens — it exists so a
+/// large expanded discretization is not copied through a `FlattenedSystem` — so
+/// it needs both the resolution phase and this gate applied to the model's own
+/// equations. Same two functions, same order, so the two array routes cannot
+/// answer a document differently.
+pub(crate) fn first_unresolved_rhs_time_derivative_in(equations: &[Equation]) -> Option<String> {
+    for eq in equations {
+        if let Some(target) = first_rhs_time_derivative(&eq.rhs) {
+            return Some(target);
+        }
+    }
+    None
+}
+
+/// The operand of the first structural `D` anywhere inside `expr`, rendered.
+fn first_rhs_time_derivative(expr: &Expr) -> Option<String> {
+    let Expr::Operator(node) = expr else {
+        return None;
+    };
+    if is_structural_time_derivative(node) {
+        return Some(match &node.args[0] {
+            Expr::Variable(name) => name.clone(),
+            other => format!("{other}"),
+        });
+    }
+    let mut found: Option<String> = None;
+    node.for_each_child(&mut |child| {
+        if found.is_none() {
+            found = first_rhs_time_derivative(child);
+        }
+    });
+    found
+}
+
 /// Phase 5d of [`flatten`]: the provider-served loaded fields
 /// (esm-spec §8.5; esm-libraries-spec §4.7.5 step 4 `loader_fields`).
 ///
@@ -1448,7 +1521,7 @@ fn is_structural_time_derivative(node: &ExpressionNode) -> bool {
 /// so substitution recurses; `active` carries the chain being expanded and a
 /// self- or mutually-referential definition stops there with the node left as
 /// authored rather than expanding forever.
-fn resolve_rhs_time_derivatives(equations: &mut [Equation]) {
+pub(crate) fn resolve_rhs_time_derivatives(equations: &mut [Equation]) {
     // The tendency table: `x` -> the RHS of its `D(x)/dt ~ …` equation.
     let mut tendency: HashMap<String, Expr> = HashMap::new();
     for eq in equations.iter() {

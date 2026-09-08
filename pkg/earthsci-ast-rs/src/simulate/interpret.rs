@@ -166,11 +166,21 @@ fn eval_op(
             }
         }
 
-        // `-` is unary negate (arity 1) or binary subtract (arity 2). Only the
-        // binary case has a leaf-kernel entry; unary negation is trivial and has
-        // no shared `f64` kernel (the array path negates at the `Value` level).
-        // Unary negation is a sign flip: exact in every binary format, so it
-        // needs no rounding under Float32 (its operand already is binary32).
+        // `-` is unary negate (arity 1) or binary subtract (arity 2), and `neg`
+        // is the strictly-unary SPELLING of the same negation (esm-spec §4.2
+        // lists it in the arithmetic core, `+ - * / ^ neg`; `op_registry` gives
+        // it `Arity::Exact(1)`). Only the binary case has a leaf-kernel entry;
+        // unary negation is trivial and has no shared `f64` kernel (the array
+        // path negates at the `Value` level). Unary negation is a sign flip:
+        // exact in every binary format, so it needs no rounding under Float32
+        // (its operand already is binary32).
+        //
+        // `neg` had no arm here at all, so it fell through to the `_` backstop
+        // and came back `NaN` — silently, on the SCALAR backend only, while the
+        // array runtime evaluated it (`simulate_array::vectorized` `VecOp::Neg`).
+        // `canonicalize` keeps `neg` as `neg` whenever its operand is not a
+        // literal, so the hole was reachable from an ordinary document.
+        "neg" => -v(0),
         "-" => match args.len() {
             1 => -v(0),
             2 => apply_binary("-", v(0), v(1)),
