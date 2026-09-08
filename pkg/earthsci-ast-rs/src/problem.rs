@@ -1863,7 +1863,8 @@ fn problem_merged_renames(prob: &EsmProblem) -> &HashMap<String, String> {
 
 /// Rewrite an output request off names an `operator_compose` renaming match
 /// DELETED. `None` when nothing changes, so the common path clones nothing.
-#[cfg(feature = "solve")]
+///
+/// Not gated on `solve`: its one caller, `effective_options`, is not either.
 fn resolve_output_request(prob: &EsmProblem, requested: &[String]) -> Option<Vec<String>> {
     if requested.is_empty() {
         return None;
