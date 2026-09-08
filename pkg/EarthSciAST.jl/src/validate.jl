@@ -1838,32 +1838,46 @@ end
 # because a binding that names a different member on each run cannot be pinned.
 # ONE cycle is reported per model: a second is usually the same defect seen from
 # another entry point, and the author fixes them one at a time regardless.
+#
+# ITERATIVE, and that is not a style choice. The depth of this walk is the
+# length of the longest observed CHAIN — a property of the document, and
+# unbounded — not the expression nesting the schema caps. A recursive `dfs`
+# raised `StackOverflowError` ("program state may be corrupted") on an ACYCLIC
+# chain of somewhere under 20 000 observeds, turning a document that must
+# validate CLEAN into a crash. `cursor[i]` is how far into `adj[path_stack[i]]`
+# that frame has got, so resuming a parent after a child finishes picks up
+# exactly where it left off.
 function _first_observed_cycle(adj::Dict{String,Vector{String}})::Union{Vector{String},Nothing}
     WHITE, GREY, BLACK = 0, 1, 2
     color = Dict{String,Int}(n => WHITE for n in keys(adj))
     path_stack = String[]
-    found = Ref{Union{Vector{String},Nothing}}(nothing)
+    cursor = Int[]
 
-    function dfs(u::String)::Bool
-        color[u] = GREY
-        push!(path_stack, u)
-        for v in adj[u]
+    for root in sort!(collect(keys(adj)))
+        color[root] == WHITE || continue
+        color[root] = GREY
+        push!(path_stack, root)
+        push!(cursor, 1)
+        while !isempty(path_stack)
+            u = path_stack[end]
+            succ = adj[u]
+            if cursor[end] > length(succ)
+                color[u] = BLACK
+                pop!(path_stack)
+                pop!(cursor)
+                continue
+            end
+            v = succ[cursor[end]]
+            cursor[end] += 1
             if color[v] == GREY
                 start = findfirst(==(v), path_stack)
-                found[] = vcat(path_stack[start:end], v)
-                return true
-            elseif color[v] == WHITE && dfs(v)
-                return true
+                return vcat(path_stack[start:end], v)
+            elseif color[v] == WHITE
+                color[v] = GREY
+                push!(path_stack, v)
+                push!(cursor, 1)
             end
         end
-        pop!(path_stack)
-        color[u] = BLACK
-        return false
-    end
-
-    for u in sort!(collect(keys(adj)))
-        color[u] == WHITE || continue
-        dfs(u) && return found[]
     end
     return nothing
 end

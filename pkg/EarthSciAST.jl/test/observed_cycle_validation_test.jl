@@ -211,6 +211,29 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         @test isempty(ESM_OC.validate_observed_cycles(file))
     end
 
+    @testset "a chain deeper than the call stack is not a cycle either" begin
+        # The walk's depth is the length of the longest observed CHAIN, which is
+        # a property of the DOCUMENT and unbounded — not the expression nesting
+        # the schema caps. A recursive DFS raised `StackOverflowError` ("program
+        # state may be corrupted") on an ACYCLIC chain of somewhere under 20 000
+        # observeds, so the walk is iterative and this pins that. Exercised on
+        # the graph walker directly: building a 20 000-equation `Model` to reach
+        # it would measure the constructors, not the walk.
+        n = 20_000
+        adj = Dict{String,Vector{String}}("x$(n - 1)" => String[])
+        for i in 0:(n - 2)
+            adj["x$i"] = ["x$(i + 1)"]
+        end
+        @test ESM_OC._first_observed_cycle(adj) === nothing
+        # …and closing it into a ring at the same depth still names the path.
+        adj["x$(n - 1)"] = ["x0"]
+        cycle = ESM_OC._first_observed_cycle(adj)
+        @test cycle !== nothing
+        @test length(cycle) == n + 1
+        @test cycle[1] == "x0"
+        @test cycle[end] == "x0"
+    end
+
     @testset "a bound loop symbol does not manufacture an edge" begin
         # `y`'s aggregate binds the loop symbol `i`, and the model ALSO declares
         # an observed named `i` that reads `y`. Without binder subtraction the

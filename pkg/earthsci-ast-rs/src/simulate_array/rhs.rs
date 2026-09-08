@@ -386,17 +386,17 @@ pub(super) fn dependency_order_observed(
         .collect())
 }
 
-/// The first cycle a sorted DFS closes over the rules that could not be
-/// ordered, as a path with its entry node repeated (`["a", "b", "a"]`).
+/// The first cycle among the rules that could not be ordered, as a path with
+/// its entry node repeated (`["a", "b", "a"]`).
 ///
-/// Roots and successors are visited in sorted name order so the same cycle is
-/// named on every run — the residue is indexed by rule position and the
-/// adjacency sets are `HashSet`s, neither of which iterates stably. This is the
-/// same walk (and the same output shape) the validator's `observed_cycle`
-/// check uses; the two are separate because they read different inputs — the
-/// validator reads the model's equations, this reads lowered rules — and
-/// agreeing on the SHAPE is what matters, since a document that reaches here
-/// uncaught was never validated.
+/// The residue is indexed by rule POSITION and its adjacency sets are
+/// `HashSet`s, neither of which iterates stably, so it is re-keyed by name into
+/// the sorted graph [`first_observed_cycle`] walks — the same walk, and the
+/// same output shape, the validator's `observed_cycle` check uses. The two
+/// remain separate CALLERS because they read different inputs (the validator
+/// reads a model's equations, this reads lowered rules), and agreeing on the
+/// walk is what makes their answers comparable for a document that reached here
+/// unvalidated.
 fn first_cycle_among(
     rules: &[AlgebraicRule],
     deps: &[HashSet<String>],
@@ -411,48 +411,11 @@ fn first_cycle_among(
         })
         .collect();
 
-    fn visit(
-        name: &str,
-        stuck: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-        state: &mut HashMap<String, u8>,
-        chain: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
-        match state.get(name).copied().unwrap_or(0) {
-            1 => {
-                let start = chain.iter().position(|c| c == name).unwrap_or(0);
-                let mut cycle: Vec<String> = chain[start..].to_vec();
-                cycle.push(name.to_string());
-                Some(cycle)
-            }
-            2 => None,
-            _ => {
-                state.insert(name.to_string(), 1);
-                chain.push(name.to_string());
-                if let Some(ds) = stuck.get(name) {
-                    for d in ds {
-                        if let Some(cycle) = visit(d, stuck, state, chain) {
-                            return Some(cycle);
-                        }
-                    }
-                }
-                chain.pop();
-                state.insert(name.to_string(), 2);
-                None
-            }
-        }
-    }
-
-    let mut state: HashMap<String, u8> = HashMap::new();
-    let mut chain: Vec<String> = Vec::new();
-    for name in stuck.keys() {
-        if let Some(cycle) = visit(name, &stuck, &mut state, &mut chain) {
-            return cycle;
-        }
-    }
     // Unreachable in practice — the residue is non-empty precisely because no
     // rule was ready, which requires an unsatisfied dependency inside it — but
     // a name is more useful than a panic if the invariant ever moves.
-    stuck.keys().cloned().collect()
+    crate::classification::first_observed_cycle(&stuck)
+        .unwrap_or_else(|| stuck.keys().cloned().collect())
 }
 
 // ============================================================================

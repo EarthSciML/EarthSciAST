@@ -1547,46 +1547,7 @@ fn check_observed_dependency_cycle(
     let candidates = recurrence_candidate_vars(model);
     let deps = observed_dependency_graph(class, &candidates);
 
-    // Iterative-friendly tri-state DFS (0 = unseen, 1 = on stack, 2 = done),
-    // the same shape the template-body reference DAG uses in
-    // `lower_expression_templates::mirror::validate_template_body_references`.
-    fn visit(
-        name: &str,
-        deps: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-        state: &mut HashMap<String, u8>,
-        chain: &mut Vec<String>,
-    ) -> Option<Vec<String>> {
-        match state.get(name).copied().unwrap_or(0) {
-            1 => {
-                let start = chain.iter().position(|c| c == name).unwrap_or(0);
-                let mut cycle: Vec<String> = chain[start..].to_vec();
-                cycle.push(name.to_string());
-                Some(cycle)
-            }
-            2 => None,
-            _ => {
-                state.insert(name.to_string(), 1);
-                chain.push(name.to_string());
-                if let Some(ds) = deps.get(name) {
-                    for d in ds {
-                        if let Some(cycle) = visit(d, deps, state, chain) {
-                            return Some(cycle);
-                        }
-                    }
-                }
-                chain.pop();
-                state.insert(name.to_string(), 2);
-                None
-            }
-        }
-    }
-
-    let mut state: HashMap<String, u8> = HashMap::new();
-    let mut chain: Vec<String> = Vec::new();
-    for name in deps.keys() {
-        let Some(cycle) = visit(name, &deps, &mut state, &mut chain) else {
-            continue;
-        };
+    if let Some(cycle) = crate::classification::first_observed_cycle(&deps) {
         errors.push(StructuralError {
             path: format!("/models/{model_name}"),
             code: StructuralErrorCode::ObservedCycle,
@@ -1602,7 +1563,6 @@ fn check_observed_dependency_cycle(
                 "dependency_type": "observed_definitions",
             }),
         });
-        return;
     }
 }
 
