@@ -84,8 +84,46 @@ const DEFAULT_SIM_ABSTOL = 1e-6
 # always produced. `base_path = pwd()` anchors its relative refs, a file input
 # anchoring them at its own directory.
 # --------------------------------------------------------------------------- #
+"""
+    _resolve_merged_renames(renames, overrides) -> AbstractDict
+
+Rewrite override keys off names an `operator_compose` merge DELETED
+(esm-libraries-spec §4.7.1 step 4; issue #230).
+
+A renaming match folds `B.x` into `A.x`, so only `A.x` still exists and every
+equation is rewritten off the dead spelling. A CALLER holding `"B.x"` — a
+`parameter_overrides` or `initial_conditions` key, an output selection — is
+addressing a state that has moved, and nothing rewrites the strings it holds:
+the key resolves to nothing and is silently dropped, so the state runs from its
+default and the run still reports a verdict.
+
+An EXPLICIT key for the survivor wins over an alias for the dead spelling: the
+caller who names the surviving state has said what they mean.
+"""
+function _resolve_merged_renames(renames::AbstractDict, overrides::AbstractDict)
+    (isempty(renames) || isempty(overrides)) && return overrides
+    keytype(overrides) <: AbstractString || return overrides
+    any(haskey(renames, String(k)) for k in keys(overrides)) || return overrides
+    out = empty(overrides)
+    for (key, value) in overrides
+        k = String(key)
+        survivor = get(renames, k, k)
+        survivor != k && haskey(overrides, survivor) && continue
+        out[survivor] = value
+    end
+    return out
+end
+
+#
+# `renames_out`, when given, is filled with the flattened system's
+# `merged_variable_renames` (issue #230) — the states an `operator_compose`
+# renaming match DELETED, mapped onto the survivors. `flattened_to_esm` drops
+# `FlattenMetadata`, so this out-parameter is the only channel a caller's
+# `parameter_overrides` / `initial_conditions` keys have to reach it. Optional so
+# the existing callers that want only the doc are unchanged.
 function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
-                          base_path::AbstractString = pwd())
+                          base_path::AbstractString = pwd(),
+                          renames_out::Union{Nothing,AbstractDict} = nothing)
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load_path(input; metaparameters=metaparameters)
@@ -106,6 +144,8 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = flatten(input)
     end
     if input isa FlattenedSystem
+        renames_out === nothing ||
+            merge!(renames_out, input.metadata.merged_variable_renames)
         # Surviving references are THE behavior: they ride through
         # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
         # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
@@ -665,14 +705,26 @@ function esm_problem(input, tspan;
             "metaparameter '$(provider_extent_metaparameter(providers[k]))'; a gated " *
             "slab's extent is the gating set's, not a discovered one"))
     end
-    doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path)
+    # `merged_renames` records the state spellings an `operator_compose` renaming
+    # match DELETED (issue #230). A caller holding `"Sink.O3"` after the merge
+    # folded it into `Chem.O3` is addressing a state that has moved, and nothing
+    # rewrites the strings a caller holds — so the key resolves to nothing and
+    # the state silently runs from its default. Resolve those keys here, where
+    # the flattened system's metadata is still reachable.
+    merged_renames = OrderedDict{String,String}()
+    doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
+                           renames_out=merged_renames)
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
     # `_coerce_inline_value` normalizes both; the build then routes the array
     # ones onto the const-array channel (`_register_inline_array_parameters`),
     # which is where an array-shaped parameter's value has always lived.
-    overrides = Dict{String,Any}(String(k) => _coerce_inline_value(v) for (k, v) in p)
+    overrides = _resolve_merged_renames(
+        merged_renames,
+        Dict{String,Any}(String(k) => _coerce_inline_value(v) for (k, v) in p))
+    u0 = u0 === nothing || isempty(merged_renames) ? u0 :
+         (u0 isa AbstractDict ? _resolve_merged_renames(merged_renames, u0) : u0)
 
     # Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
     # through the Provider seam, never as raw `const_arrays` keyed by internal

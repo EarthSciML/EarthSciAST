@@ -308,8 +308,12 @@ impl ArrayCompiled {
         // `<namespace>.` prefix: rule 2 resolves `M.A` against a bare-named
         // single-model system, and rule 3 resolves the LOCAL `A` against a
         // flattening-qualified `M.A` — which the prefix strip could not do.
-        let params = crate::simulate::canonicalize_override_keys(&self.param_index, params)
-            .map_err(crate::simulate::param_key_error)?;
+        let params = crate::simulate::canonicalize_override_keys(
+            &self.param_index,
+            params,
+            &self.merged_renames,
+        )
+        .map_err(crate::simulate::param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -340,6 +344,7 @@ impl ArrayCompiled {
         let initial_conditions = crate::simulate::canonicalize_override_keys(
             &self.scalar_state_index,
             initial_conditions,
+            &self.merged_renames,
         )
         .map_err(crate::simulate::ic_key_error)?;
         // Resolved scalar-parameter scope (load-time constants) for the ic

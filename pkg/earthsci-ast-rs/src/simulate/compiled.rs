@@ -46,6 +46,12 @@ pub struct Compiled {
     /// the same way, and the only way to guarantee that is for the artifact to
     /// carry the precision its constants were folded in.
     precision: crate::precision::Env,
+    /// Every state spelling an `operator_compose` renaming match DELETED,
+    /// mapped onto the survivor (issue #230). Carried from
+    /// `FlattenMetadata::merged_variable_renames` so an override key naming a
+    /// state the merge moved resolves instead of silently designating nothing.
+    /// Empty for every document with no renaming merge.
+    merged_renames: HashMap<String, String>,
 }
 
 /// Internal classification of how a state variable is defined.
@@ -158,6 +164,12 @@ impl Compiled {
             state_ic_exprs,
             algebraic_topo,
             precision: crate::precision::Env::capture(),
+            merged_renames: flat
+                .metadata
+                .merged_variable_renames
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         })
     }
 
@@ -269,7 +281,8 @@ impl Compiled {
         // parameter — an unknown key is `InvalidParameter`, a bare name two
         // components both carry is the distinct `AmbiguousParameter`.
         let params =
-            canonicalize_override_keys(&self.param_index, params).map_err(param_key_error)?;
+            canonicalize_override_keys(&self.param_index, params, &self.merged_renames)
+                .map_err(param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -297,8 +310,9 @@ impl Compiled {
         t0: f64,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
-        let initial_conditions = canonicalize_override_keys(&self.state_index, initial_conditions)
-            .map_err(ic_key_error)?;
+        let initial_conditions =
+            canonicalize_override_keys(&self.state_index, initial_conditions, &self.merged_renames)
+                .map_err(ic_key_error)?;
         let no_state: [f64; 0] = [];
         let no_obs: [f64; 0] = [];
         let mut ic_vec = vec![0.0f64; self.state_names.len()];

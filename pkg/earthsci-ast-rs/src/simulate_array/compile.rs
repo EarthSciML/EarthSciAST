@@ -503,6 +503,17 @@ impl ArrayCompiled {
         // Carry the classified scoped-reference `ic` equations through so `u0` is
         // folded from the provider-served loaded initial fields at build time.
         compiled.field_ics = flat.field_ics.clone();
+        // …and the merge's rename map, so an override key naming a state an
+        // `operator_compose` renaming match DELETED resolves to the survivor
+        // rather than designating nothing (issue #230). The synthetic `Model`
+        // above cannot carry it: it is a property of the COUPLING, not of any
+        // one component.
+        compiled.merged_renames = flat
+            .metadata
+            .merged_variable_renames
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         Ok(compiled)
     }
 
@@ -761,6 +772,7 @@ impl ArrayCompiled {
             namespace: None,
             const_scope,
             precision: crate::precision::Env::capture(),
+            merged_renames: HashMap::new(),
         })
     }
 }

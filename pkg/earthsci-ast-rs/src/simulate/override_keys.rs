@@ -51,10 +51,25 @@ fn bare_name(name: &str) -> &str {
 pub(crate) fn canonicalize_override_keys(
     known: &HashMap<String, usize>,
     overrides: &HashMap<String, f64>,
+    renames: &HashMap<String, String>,
 ) -> Result<HashMap<String, f64>, OverrideKeyError> {
     if overrides.is_empty() {
         return Ok(HashMap::new());
     }
+    // Rule 0, ahead of everything: a key naming a state an `operator_compose`
+    // renaming match DELETED (esm-libraries-spec §4.7.1 step 4) addresses a
+    // quantity that MOVED, not one that never existed. `renames` is the map
+    // flatten recorded, carried here on the compiled artifact; resolving through
+    // it first is what keeps a document that merges `B.x` onto `A.x` addressable
+    // by either spelling (issue #230). An EXPLICIT key for the survivor wins:
+    // the caller who names the surviving state has said what they mean.
+    let resolved;
+    let overrides = if renames.is_empty() {
+        overrides
+    } else {
+        resolved = resolve_merged_renames(overrides, renames);
+        &resolved
+    };
     // Local name -> every qualified name carrying it.
     let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
     for n in known.keys() {
@@ -101,6 +116,30 @@ pub(crate) fn canonicalize_override_keys(
         }
     }
     Ok(out)
+}
+
+/// Rewrite each override key that names a merged-away state onto its survivor.
+///
+/// Separate from [`canonicalize_override_keys`] so the same resolution is
+/// reachable for a caller that does not go through the §6.6.2 rules.
+pub(crate) fn resolve_merged_renames(
+    overrides: &HashMap<String, f64>,
+    renames: &HashMap<String, String>,
+) -> HashMap<String, f64> {
+    let mut out = HashMap::with_capacity(overrides.len());
+    for (k, v) in overrides {
+        match renames.get(k.as_str()) {
+            // An explicit override for the survivor beats the dead alias.
+            Some(survivor) if !overrides.contains_key(survivor.as_str()) => {
+                out.insert(survivor.clone(), *v);
+            }
+            Some(_) => {}
+            None => {
+                out.insert(k.clone(), *v);
+            }
+        }
+    }
+    out
 }
 
 fn override_key_of(e: &OverrideKeyError) -> &str {
