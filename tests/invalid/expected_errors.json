@@ -2388,6 +2388,14 @@
     "resolver_error_code": "subsystem_index_set_conflict",
     "notes": "Resolver-level invalid (esm-spec §4.7 'Index-set merge'). The document is SCHEMA-VALID — a subsystem ref and top-level index_sets are both legal schema — so schema-only bindings (TypeScript, Go) accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code` (Julia: ExpressionTemplateError). Lives under tests/invalid/template_imports/. The document's own index_sets.cells (interval, size 7) collides with the mounted subsystem file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm: a referenced subsystem file's top-level index_sets merge into the importing document's registry (deep-equal idempotent, mirroring §9.7.5), so the size disagreement is a load-time error instead of the importer's declaration silently winning."
   },
+  "mount_rename_unknown_index_set.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": true,
+    "resolver_only": true,
+    "resolver_error_code": "subsystem_index_set_rename_unknown_name",
+    "notes": "Resolver-level invalid (esm-spec §4.7 'Mount-edge index-set renaming'). The document is SCHEMA-VALID — `index_set_rename` is a legal SubsystemRef field and its value is a string→string object — so schema-only bindings accept it (is_valid: true); their invalid-fixture loops read `resolver_only` and assert schema acceptance. Resolving bindings reject it at load with the stable diagnostic in `resolver_error_code`. The mount edge renames 'celsl', a misspelling of the mounted mesh file's 'cells': a mount-edge rename never invents names (the §9.7.7 rule at a component-mount edge), so the typo must fail loudly at the edge that authored it rather than silently renaming nothing."
+  },
   "body_apply_cycle.esm": {
     "schema_errors": [],
     "structural_errors": [],

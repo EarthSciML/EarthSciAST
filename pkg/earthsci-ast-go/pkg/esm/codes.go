@@ -185,6 +185,20 @@ const (
 	// CodeSubsystemIndexSetConflict: a referenced subsystem declares an index
 	// set that conflicts with a same-named set already in the parent document.
 	CodeSubsystemIndexSetConflict = "subsystem_index_set_conflict"
+	// CodeSubsystemIndexSetRenameUnknownName: a mount edge's
+	// `index_set_rename` names an index set the RESOLVED mounted document does
+	// not declare (esm-spec §4.7 "Mount-edge index-set renaming") — the
+	// mount-edge mirror of `template_import_rename_unknown_name`.
+	CodeSubsystemIndexSetRenameUnknownName = "subsystem_index_set_rename_unknown_name"
+	// CodeSubsystemIndexSetRenameUnsupportedMountForm: `index_set_rename` on a
+	// mount form that does not implement it (esm-spec §4.7 "Mount-edge
+	// index-set renaming", "Where it applies"). The field is a legal
+	// `SubsystemRef` property at either mount form, but a binding whose
+	// top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so rather
+	// than merge the leaf under its pre-rename axis names. Go does not inline a
+	// top-level `{ref}` at all, so it never raises this; the constant exists
+	// because the code table is cross-language uniform.
+	CodeSubsystemIndexSetRenameUnsupportedMountForm = "subsystem_index_set_rename_unsupported_mount_form"
 )
 
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section
