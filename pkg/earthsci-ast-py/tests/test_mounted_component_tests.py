@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from conftest import FIXTURES_ROOT
 
-from earthsci_ast.parse import load_path
 from earthsci_ast.inline_tests import run_inline_tests
+from earthsci_ast.parse import load_path
 
 FIXTURES = FIXTURES_ROOT / "conformance" / "mounted_component_tests" / "fixtures"
 
