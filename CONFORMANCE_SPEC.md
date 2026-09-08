@@ -4317,6 +4317,82 @@ Adapters: `pkg/EarthSciAST.jl/test/operator_compose_merge_conformance_test.jl`;
 **All five bindings** are in scope: the merge is a rewrite, so a rewrite-only
 port implements it in full. None is excluded.
 
+### 5.31 Merged-Away Rename Reach (normative)
+
+§5.30 settled *when* an `operator_compose` match may rename. This settles how
+far that rename **reaches**.
+
+A renaming match — a `translate` match, or the bare-name fallback §5.30 resolves
+by ownership — folds `B.x` into `A.x`. `B.x` is then DELETED: its defining
+equation was consumed, so keeping the declaration would hand the solver an
+unknown nothing constrains. esm-libraries-spec §4.7.1 step 4 therefore rewrites
+every reference to `B.x` at `A.x` first, document-wide.
+
+That rewrite was document-wide over **equation ASTs and nothing else**, and
+three other places address the state BY NAME:
+
+1. **The by-name endpoints of a coupling entry that has not run yet.** A
+   `couple` connector's `from` / `to` and a `variable_map`'s `from` / `to` are
+   plain scoped-reference STRINGS on the entry object, which no AST walk
+   reaches. §4.7.5 step 3 applies every `operator_compose` BEFORE any `couple`
+   or `variable_map`, so such an entry can still name a spelling the merge has
+   already deleted.
+2. **A runner's override keys.** `parameter_overrides` and
+   `initial_conditions` are keyed by name, as are output selections and any
+   consumer holding `"SuperFast.O3"` as a string.
+3. **A surviving expression-template registry body**, which is a shadow copy of
+   authored source that expands at the build boundary rather than at flatten.
+
+**The rule is RESOLUTION, not refusal.** A reference to a merged-away name
+resolves to the survivor, so a document that merges `B.x` onto `A.x` stays
+addressable by either spelling. Refusing would be defensible for a name nothing
+can resolve, but these are renames the author ASKED for — a `translate` map
+names the surviving spelling on purpose — and a document is built around them.
+Consequently:
+
+- **Flatten carries the map.** A library records the merged-away names on the
+  flattened form's metadata (`merged_variable_renames`, transliterated per
+  API_SPEC.md §2), because a consumer that addresses a state by name has no
+  other way to learn that the state moved. Empty for a document with no renaming
+  merge, which is the overwhelming majority.
+- **A pending entry's endpoints are resolved, not the source document's.** The
+  entry is copied before rewriting, so a load → save round trip still emits what
+  the author wrote.
+- **An explicit key for the survivor wins** over an alias for the dead spelling,
+  on the override-key surface: the caller who names the surviving state has said
+  what they mean.
+- **The registry body is refused, not rewritten.** It is authored source the
+  substitution never sees, so a body still naming a merged-away variable would
+  expand at the build boundary into a name the flattened system no longer
+  declares. That is the guard `template_body_references_coupling_rewritten_variable`
+  already applies to a `variable_map`-substituted name (§9.6.4); the merged-away
+  names join the same set.
+
+**Shape.** Structure-comparing and golden-free, like §5.30. Each flatten case
+pins BOTH halves — the dead name survives nowhere, AND the later entry landed on
+the survivor. The second is the non-vacuity anchor for the first, which dropping
+the entry outright would otherwise satisfy by doing nothing at all.
+
+The manifest and fixtures live in `tests/conformance/merged_rename_reach/`.
+Adapters: `pkg/EarthSciAST.jl/test/merged_rename_reach_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_merged_rename_reach_conformance.py`;
+`pkg/earthsci-ast-rs/tests/merged_rename_reach_conformance.rs`;
+`pkg/earthsci-ast-ts/src/conformance-merged-rename-reach.test.ts`;
+`pkg/earthsci-ast-go/pkg/esm/merged_rename_reach_conformance_test.go`.
+
+**Scope is per surface.** The `flatten` surface binds **all five bindings** —
+the rewrite is a pure structural transform, so a rewrite-only port implements it
+in full. The `override_keys` surface binds the three EXECUTING bindings
+(**Julia**, **Python**, **Rust**); **Go** and **TypeScript** have no simulator
+and therefore no override-key surface, the same split §5.19
+(`override_key_diagnostics`) records. Each excluded binding's adapter ASSERTS
+its own exclusion, so it cannot quietly become a gap.
+
+**A merged-away name is never a parameter.** `operator_compose` deletes only a
+DEPENDENT VARIABLE — a state or an observed — so a `parameter_overrides` key can
+never name one. `initial_conditions` is the surface the case actually lands on;
+the two share the §6.6.2 canonicalization, so covering one covers the rule.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
