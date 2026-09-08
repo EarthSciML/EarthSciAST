@@ -39,22 +39,35 @@ divergence, never an integrator one.**
 Julia is the reference binding; `golden/observed_indexed_lhs.json` was minted by
 its `run_pde_tests` (Tsit5, reltol 1e-12, abstol 1e-14).
 
-## Python is EXPECTED TO FAIL this category today
+## Python: red on `main`, fixed by PR #237, pending merge
 
-This is the unusual part. **Python is deliberately kept in
-`bindings_required`** even though it does not yet pass. It has a real runner, so
-`scope_excluded` would be the wrong mechanism: the point of a conformance
-category is to state the contract and let a non-conforming binding be red
-against it, not to define the contract down to what already passes.
+Julia and Rust pass all fourteen assertions. **Python passes 7 of 14 on `main`**
+(at `71e25b380`, where this category was authored) and **14 of 14 on PR #237**
+at `57b72acad`. It is deliberately kept in `bindings_required` rather than
+`scope_excluded`: it has a real runner, so the category states the contract and
+lets the binding be red until the fix lands, instead of being defined down to
+what passes today.
 
-Python currently fails the six non-zero observed assertions (1–6), returning
-`0.0` for both `wf` and `ws`, and passes the seven state assertions. Three
-distinct divergences are involved, all on this same spelling:
+So this is not a standing divergence — it is a **fixed defect awaiting a merge**.
+The category's Python leg is red until #237 merges and green immediately after.
 
-1. **An indexed-LHS array observed is not readable by an assertion.** Asserting
-   `wf` or `ws` at any time returns `0.0` instead of the field's value. (This is
-   what assertions 1–6 catch. Assertion 7 passes only because `ws(0)` is
-   genuinely zero.)
+### The defect
+
+Three symptoms, one root cause. `flatten._collect_model` read observed-ness from
+`classification.inlined_unknowns` — the strict `y ~ f(…)` set that §6.3.1
+sanctions **for inlining specifically** — and used it as if it were the
+classification. §6.3.1 says that set "does not narrow the partition".
+
+That is the same mistake, in a different binding, that #250 fixes on the Julia
+side: there the tree-walk build's owner buckets each tested the syntactic
+`eq.lhs isa VarExpr`. Two bindings, one wrong substitution, found independently.
+
+The three symptoms on `main`:
+
+1. **An indexed-LHS array observed is not readable by an assertion.** `wf` and
+   `ws` answer `0.0` at every time instead of their field values. (Assertions
+   1–6 and 8 catch this. Assertion 7 passes even on `main`, because `ws(0)` is
+   genuinely zero — see the note on assertion 7 below.)
 2. **An indexed LHS with a PER-CELL right-hand side is silently dropped.**
    `aggregate{k}(w[k]) ~ 2*u[k]`, with no `aggregate` on the right, raises
    `RuntimeWarning: unrecognized algebraic equation … was not applied to the ODE
@@ -65,19 +78,49 @@ distinct divergences are involved, all on this same spelling:
    derivative `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])` — which is what this
    fixture does — makes it integrate.
 
-All three are Python-side and are being folded into **PR #237** ("a declared
-`shape` routes to the array pathway, whatever the equation spelling", issue
-#231). Complete reproducer documents for each are in the body of **PR #250**,
-which introduced this category.
+Complete reproducer documents for all three are in the body of **PR #250**, which
+introduced this category.
 
-**Measured, not assumed:** all three reproducers were run against #237 at head
-`67504523`, and it closes **none** of them — each fails there exactly as it does
-on `main`, and this fixture scores the same 7/13 either way. Divergence 3 in
-particular looked like #237's subject from the title, and is not (yet) covered by
-it. So this category goes green for Python only once that work actually reaches
-these three shapes; the numbers above are the check to re-run.
+### Measured, not assumed — at both heads
 
-Julia and Rust pass all thirteen assertions.
+Each of the three reproducers, plus this whole fixture, was run against #237's
+`pkg/earthsci-ast-py/src` extracted with `git archive` and put on `PYTHONPATH`:
+
+| #237 head | the three reproducers | this fixture |
+|---|---|---|
+| `67504523` (earlier) | all three fail, identically to `main` | 7 / 14 |
+| `57b72acad` (current) | **all three pass** | **14 / 14** |
+
+The earlier head is recorded because divergence 3 reads exactly like #237's
+title ("a declared `shape` routes to the array pathway, whatever the equation
+spelling") and was nonetheless not covered by it then — worth knowing that the
+title was not sufficient evidence, and that the later commit is what actually
+closes it.
+
+### No mechanism marks this red-until-merge
+
+The manifest's `tags` are free-form strings with no runner behind them, and the
+Python adapter carries no `xfail` — an `xfail` would flip to an unexpected-pass
+failure the moment #237 merges, which is worse than a red leg that turns green.
+So the tag `red-on-main-until-pr-237` is documentation only, and the actual
+signal is this section plus the adapter docstring. Nothing needs to be removed
+from the fixture when #237 merges; only this prose goes stale, and the tag
+should be dropped then.
+
+## A note on assertion 7, and one on `_comment`
+
+**Assertion 7 (`ws` at `t = 0`) is deliberately non-discriminating** — a binding
+that always answers zero passes it, and Python did on `main`. It is kept because
+it pins the state-dependent observed at the trajectory START, a distinct sample
+from the mid- and end-trajectory ones. **Assertion 8 (`ws` at `t = 0.5`) is its
+discriminating partner**, added so that `ws` is checked at three distinct times
+and only one of them can be passed by accident. Do not read assertion 7 alone as
+evidence of conformance.
+
+**The schema rejects `_comment` inside an `assertion` object.** It is fine on an
+`equation`, but inside an assertion it fails the `oneOf` and the diagnostic dumps
+the entire model rather than pointing at the offending key. Put per-assertion
+prose in the test's `description` instead.
 
 ## Runners
 

@@ -26,23 +26,37 @@ the dynamics (or the reverse) still fails.
 
 .. warning::
 
-   **This binding is expected to FAIL this category today, and that is
-   deliberate.** Python is kept in ``bindings_required`` rather than
-   ``scope_excluded`` because it has a real runner: a conformance category
-   states the contract and lets a non-conforming binding be red against it,
-   instead of being defined down to what already passes.
+   **This binding is RED on ``main`` and GREEN on PR #237 — the defect is
+   fixed, the fix is not merged yet.** Python is kept in ``bindings_required``
+   rather than ``scope_excluded`` because it has a real runner: a conformance
+   category states the contract and lets the binding be red until the fix
+   lands, instead of being defined down to what passes today.
 
-   Python currently answers ``0.0`` for both indexed-LHS observeds (failing the
-   six non-zero observed assertions) and passes the seven state assertions.
-   Three divergences are involved — an indexed-LHS array observed is not
-   readable by an assertion; one whose rhs is a PER-CELL body is silently
-   dropped from the ODE RHS; and one feeding a WHOLE-ARRAY derivative
-   (``D(u) ~ wf``) is dropped the same way. All three are being folded into
-   PR #237 (issue #231). Measured, not assumed: #237 at head ``67504523``
-   closes NONE of the three — this fixture scores the same 7/13 there as on
-   ``main``. Reproducers are in the body of PR #250, which introduced this
-   category. See ``tests/conformance/pde_inline_observed_indexed_lhs/README.md``
-   and CONFORMANCE_SPEC §5.30.1.
+   Measured, with #237's ``pkg/earthsci-ast-py/src`` on ``PYTHONPATH``:
+
+   ===========================  ==============
+   source                       this category
+   ===========================  ==============
+   ``main`` @ ``71e25b380``     7 / 14
+   #237 @ ``67504523``          7 / 14
+   #237 @ ``57b72acad``         **14 / 14**
+   ===========================  ==============
+
+   One root cause, three symptoms: ``flatten._collect_model`` read
+   observed-ness from ``classification.inlined_unknowns`` — the strict
+   ``y ~ f(…)`` set §6.3.1 sanctions for INLINING specifically — and used it as
+   the classification, which §6.3.1 forbids. (Julia's tree-walk build made the
+   same substitution syntactically; that is what PR #250 fixes.) The symptoms:
+   an indexed-LHS array observed is not readable by an assertion; one whose rhs
+   is a PER-CELL body is silently dropped from the ODE RHS; and one feeding a
+   WHOLE-ARRAY derivative (``D(u) ~ wf``) is dropped the same way.
+
+   No ``xfail`` marks this on purpose — it would flip to an unexpected-pass
+   failure the moment #237 merges. Nothing here needs changing when it does.
+
+   Reproducers are in the body of PR #250, which introduced this category. See
+   ``tests/conformance/pde_inline_observed_indexed_lhs/README.md`` and
+   CONFORMANCE_SPEC §5.30.1.
 """
 
 from __future__ import annotations

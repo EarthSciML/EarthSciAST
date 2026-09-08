@@ -4482,17 +4482,30 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 **Julia** — FIXED. `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl)
 rewrites `aggregate{k…}(index(V, k…)) ~ rhs` into the bare `V ~ rhs` before any
 classifier reads an LHS, wrapping the rhs in the LHS's own frame when the rhs is
-a per-cell body rather than the whole array. All thirteen assertions pass.
+a per-cell body rather than the whole array. All fourteen assertions pass.
 
-**Rust** — conforming; all thirteen assertions pass. The category pins it.
+**Rust** — conforming; all fourteen assertions pass. The category pins it.
 
-**Python** — **EXPECTED TO FAIL this category today.** It is kept in
-`bindings_required` on purpose. `scope_excluded` is for a binding with no
-runner at all; Python has one, and defining the contract down to what already
-passes would be the weaker use of the mechanism. Python fails the six non-zero
-observed assertions, returning `0.0` for both `wf` and `ws`, and passes the
-seven state assertions. Three distinct divergences are involved, all on this
-same spelling:
+**Python** — FIXED by PR #237, **red on `main` until that merges**. It is kept in
+`bindings_required` on purpose. `scope_excluded` is for a binding with no runner
+at all; Python has one, so the category states the contract and lets the binding
+be red until the fix lands, rather than being defined down to what passes today.
+Measured at both of that PR's heads, with its `pkg/earthsci-ast-py/src` extracted
+and put on `PYTHONPATH`:
+
+| source | this category |
+|---|---|
+| `main` @ `71e25b380` | 7 / 14 — `wf` and `ws` both answer `0.0` |
+| #237 @ `67504523` | 7 / 14 — unchanged from `main` |
+| #237 @ `57b72acad` | **14 / 14** |
+
+Three symptoms, ONE root cause, and it is the SAME wrong substitution this
+section's Julia half describes: `flatten._collect_model` read observed-ness from
+`classification.inlined_unknowns` — the strict `y ~ f(…)` set §6.3.1 sanctions
+for INLINING specifically — and used it as the classification, which §6.3.1
+forbids ("it does not narrow the partition"). Julia's owner buckets made the same
+substitution syntactically. Two bindings, one error, diagnosed independently. The
+symptoms on `main` were:
 
 1. an indexed-LHS array observed is **not readable by an assertion** — `wf` and
    `ws` answer `0.0` at every time rather than their field values;
@@ -4505,14 +4518,17 @@ same spelling:
    is dropped the same way, while `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])`
    — the spelling this fixture uses — integrates.
 
-All three are being folded into PR #237 (Python routing, issue #231). MEASURED,
-NOT ASSUMED: all three reproducers were run against #237 at head `67504523` and
-it closes NONE of them — each fails there exactly as on `main`, and this category
-scores the same 7/13 either way. Divergence 3 in particular reads like that PR's
-subject ("a declared `shape` routes to the array pathway, whatever the equation
-spelling") and is nonetheless not yet covered by it. Complete reproducer
-documents are in the body of PR #250, which introduced this category; the
-numbers above are the check to re-run.
+All three reproduce on `main` and on `67504523`, and all three pass on
+`57b72acad`. Complete reproducer documents are in the body of PR #250, which
+introduced this category. The `67504523` row is kept because symptom 3 reads
+exactly like #237's title and was nonetheless not covered by it at that head — a
+reminder that a matching title is not evidence.
+
+Nothing in the fixture marks this red-until-merge: manifest `tags` are free-form
+strings with no runner behind them, and the Python adapter deliberately carries
+no `xfail`, which would flip to an unexpected-pass failure the moment #237
+merges. The tag `red-on-main-until-pr-237` is documentation only; drop it, and
+this paragraph, once that PR lands.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 
