@@ -476,6 +476,22 @@ function _reject_library_ref(raw_doc, ref::AbstractString,
 end
 
 """
+    _native_index_set_is_folded(decl) -> Bool
+
+Is this post-wire `index_sets` entry mergeable as it stands, i.e. is its `size`
+either absent (categorical / derived / ragged) or already a concrete integer?
+
+A `size` that is still a metaparameter expression — a bare name, or an
+`{op, args}` tree (esm-spec §9.7.6) — is not. See [`_merge_native_index_sets!`](@ref).
+"""
+function _native_index_set_is_folded(decl)
+    decl isa AbstractDict || return false
+    haskey(decl, "size") || return true
+    sz = decl["size"]
+    return sz isa Integer && !(sz isa Bool)
+end
+
+"""
     _merge_native_index_sets!(native, comp, ref) -> native
 
 Merge a mounted component file's top-level `index_sets` into the importing
@@ -492,6 +508,20 @@ added, and a non-deep-equal collision throws
 forms consistent: an assembly that mounts a leaf through a top-level `ref`
 inherits the leaf's axes exactly as one that mounts it as a subsystem does,
 instead of having to redeclare them.
+
+One declaration is NOT merged here: an `interval` whose `size` is still an
+unfolded metaparameter expression. §4.7 merges a mounted file's axes "after the
+referenced document's metaparameters are closed and folded", and at THIS
+attachment point they have not been — the top-level inliner is a raw pre-pass
+that drops the leaf's `metaparameters` block and defers everything §9.7 to the
+ROOT pass. Merging such a declaration anyway resolves it in the wrong scope: the
+root either has no binding for the leaf's name, and coercing `size` to `Int`
+dies with a bare `MethodError`, or it happens to declare the same name and the
+axis silently takes the ROOT's value instead of the leaf's own default. Skipping
+leaves the axis exactly where it was before this merge existed — undeclared, so
+the importer must redeclare it — which is the honest state until a top-level
+mount edge closes the leaf's metaparameters the way a subsystem edge does
+(`_load_ref`'s `metaparameters=ref.bindings`).
 """
 function _merge_native_index_sets!(native::AbstractDict{String,Any}, comp, ref::String)
     loaded = get(comp, "index_sets", nothing)
@@ -499,6 +529,7 @@ function _merge_native_index_sets!(native::AbstractDict{String,Any}, comp, ref::
     registry = get!(() -> OrderedDict{String,Any}(), native, "index_sets")
     registry isa AbstractDict || return native
     for (n, decl) in loaded
+        _native_index_set_is_folded(decl) || continue
         if haskey(registry, n)
             registry[n] == decl || throw(ExpressionTemplateError(
                 ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,

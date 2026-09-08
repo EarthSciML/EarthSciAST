@@ -345,6 +345,21 @@ fn toplevel_ref_mount_merges_leaf_index_sets() {
         e.to_string().contains("[subsystem_index_set_conflict]"),
         "got: {e}"
     );
+
+    // §4.7 merges a mounted file's axes "after the referenced document's
+    // metaparameters are closed and folded", and a top-level mount edge does
+    // NOT close them (it is a raw pre-pass that drops the leaf's
+    // `metaparameters` block). An axis whose `size` is still the leaf's own
+    // metaparameter name is therefore held back rather than merged in the wrong
+    // scope — without the guard this load dies on `invalid type: string
+    // "NLEV", expected i64`.
+    let f = load_path(dir.join("toplevel_ref_metaparameter_axis.esm"))
+        .expect("an unfolded leaf axis must not break the load");
+    assert!(
+        f.index_sets.as_ref().is_none_or(|s| !s.contains_key("lev")),
+        "an unfolded `size` must not reach the registry: {:?}",
+        f.index_sets
+    );
 }
 
 /// §4.3.2 makearray region bounds: the empty bound `[start, start-1]` (here

@@ -530,6 +530,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
         end
         @test err isa ExpressionTemplateError
         @test err.code == "subsystem_index_set_conflict"
+
+        # §4.7 merges a mounted file's axes "after the referenced document's
+        # metaparameters are closed and folded", and a top-level mount edge does
+        # NOT close them (it is a raw pre-pass that drops the leaf's
+        # `metaparameters` block). An axis whose `size` is still the leaf's own
+        # metaparameter name is held back rather than merged in the wrong scope
+        # — without the guard this load dies on a bare
+        # `MethodError: no method matching Int64(::String)`.
+        m = EarthSciAST.load_path(joinpath(dir, "toplevel_ref_metaparameter_axis.esm"))
+        @test !haskey(m.index_sets, "lev")
     end
 
     @testset "makearray empty vs inverted region bounds (esm-spec §4.3.2)" begin

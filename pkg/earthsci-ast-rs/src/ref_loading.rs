@@ -167,6 +167,22 @@ fn merge_subsystem_index_sets(
     Ok(())
 }
 
+/// Is this post-wire `index_sets` entry mergeable as it stands, i.e. is its
+/// `size` either absent (categorical / derived / ragged) or already a concrete
+/// integer? A `size` that is still a metaparameter expression — a bare name, or
+/// an `{op, args}` tree (esm-spec §9.7.6) — is not. Used only by
+/// [`inline_toplevel_model_refs`], where nothing has folded the leaf's
+/// metaparameters yet; mirrors the Julia `_native_index_set_is_folded`.
+fn native_index_set_is_folded(decl: &Value) -> bool {
+    let Some(obj) = decl.as_object() else {
+        return false;
+    };
+    match obj.get("size") {
+        None => true,
+        Some(v) => v.as_i64().is_some(),
+    }
+}
+
 /// Wording for [`load_ref_document`]'s diagnostics, so each call site keeps its
 /// original error strings while sharing the load sequence.
 struct RefNoun {
@@ -467,9 +483,29 @@ fn inline_toplevel_model_refs(
         // recursion above, so `comp`'s registry already carries whatever ITS own
         // mounts brought in and the merge composes transitively. Unlike the
         // by-name blocks below, the importer does NOT silently win a clash.
+        //
+        // One declaration is held back: an `interval` whose `size` is still an
+        // unfolded metaparameter expression. §4.7 merges a mounted file's axes
+        // "after the referenced document's metaparameters are closed and
+        // folded", and at THIS attachment point they have not been — this
+        // inliner is a raw pre-pass that drops the leaf's `metaparameters`
+        // block and defers everything §9.7 to the ROOT pass. Merging one anyway
+        // resolves it in the wrong scope: either the root has no binding for
+        // the leaf's name and coercion to `IndexSet.size: i64` fails with a raw
+        // serde message, or the root happens to declare the same name and the
+        // axis silently takes the ROOT's value instead of the leaf's own
+        // default. Skipping leaves the axis where it was before this merge
+        // existed — undeclared, so the importer must redeclare it — until a
+        // top-level mount edge closes the leaf's metaparameters the way a
+        // subsystem edge does. Mirrors the Julia
+        // `_native_index_set_is_folded` guard.
         if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
             && !loaded.is_empty()
         {
+            let loaded: Map<String, Value> = loaded
+                .into_iter()
+                .filter(|(_, decl)| native_index_set_is_folded(decl))
+                .collect();
             let registry = obj
                 .entry("index_sets".to_string())
                 .or_insert_with(|| Value::Object(Map::new()));
