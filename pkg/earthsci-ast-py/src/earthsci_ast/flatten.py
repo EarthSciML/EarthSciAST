@@ -1306,7 +1306,7 @@ def _apply_operator_compose(
     must not have. ``require_match: true`` promotes either to a hard refusal.
 
     The bare-name fallback resolves its surviving spelling by OWNERSHIP rather
-    than by ``systems[0]``; see :func:`_bare_name_owner_wins`.
+    than by ``systems[0]``; see :func:`_bare_name_owner`.
     """
     if not entry.systems or len(entry.systems) < 2:
         return

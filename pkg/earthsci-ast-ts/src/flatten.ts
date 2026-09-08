@@ -1450,7 +1450,7 @@ function applyOperatorCompose(
     // file the merged tendency under the name that just went away.
     retargetMergedNames(components, inverted)
     for (const gone of Object.keys(inverted)) {
-      const owner = components[gone.slice(0, gone.indexOf('.'))]
+      const owner = components[gone.split('.')[0]]
       if (owner !== undefined) {
         delete owner.stateVars[gone]
         delete owner.observed[gone]
@@ -1489,62 +1489,13 @@ function applyOperatorCompose(
 }
 
 /**
- * Move each freshly merged equation into its dependent variable's component.
- *
- * A composed tendency is no longer any single author's contribution, so
- * esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
- * dependent variable rather than to the `systems[0]` that happened to carry the
- * surviving equation. Where A already IS that system — the ordinary
- * `["Chemistry", "Advection"]` spelling, and every fixture in the shared tree
- * before this one — the move is the identity and nothing changes.
- *
- * Where it is NOT the identity is a document that CHAINS compose entries over
- * one state with the OPERATOR as A:
- *
- * ```json
- * {"type": "operator_compose", "systems": ["Sink", "Chem"]}
- * {"type": "operator_compose", "systems": ["Src",  "Chem"]}
- * {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}
- * ```
- *
- * with `Sink` and `Src` authoring `D(Chem.X, t) = …` directly. §4.7.1 permits it
- * and `reseact.esm` is built on it (deposition, then emission, then the
- * transport lift). Entry 1 consumes Chem's own equation and leaves the sum in
- * `components.Sink.equations`; entry 2 then walks `components.Src` and
- * `components.Chem` and cannot see it. Both the composed tendency and Src's
- * un-merged contribution reach {@link assembleSystem}, which raises
- * `ConflictingDerivativeError` for `Chem.O3` — loud rather than corrupt, but the
- * document is spec-valid and must flatten. Relocating the merge to
- * `components.Chem` is what puts it back where the next entry looks for it, in
- * either role.
- *
- * The component bag is this binding's analogue of the reference
- * implementation's per-equation owner (Julia `coupling_apply.jl`, the
- * `new_owners[j] = _component_root(dep)` line): membership in
- * `components[X].equations` is the only record of who authored an equation, and
- * after namespacing an operator's equation for a chemistry species is textually
- * indistinguishable from the chemistry component's own.
- *
- * POSITION. §4.7.5 step 4 makes document order normative, and a relocated
- * equation is APPENDED to the owner's list rather than inserted at the slot of
- * the B equation it consumed. Appending is what reproduces the reference order:
- * each merge trails the ones before it, so a species whose chain ends at a later
- * entry ends up after one whose chain ended earlier — `Chem.NO` (last merged by
- * entry 1) ahead of `Chem.O3` (last merged by entry 2) in the document above.
- * Inserting at the consumed equation's slot instead would freeze both at Chem's
- * original declaration order and disagree with every other binding.
- *
- * An equation whose dependent variable names no component of this document stays
- * where it is; there is no bag to move it to.
- */
-/**
  * Is `dep` a STATE variable of the (partly flattened) component tables?
  *
  * A state is the thing that carries an initial condition, which is the whole of
  * what a bare-name match decides between. An observed carries none.
  */
 function isStateVar(components: Record<string, ComponentSystem>, dep: string): boolean {
-  const comp = components[dep.slice(0, dep.indexOf('.'))]
+  const comp = components[dep.split('.')[0]]
   return comp !== undefined && Object.prototype.hasOwnProperty.call(comp.stateVars, dep)
 }
 
@@ -1665,6 +1616,55 @@ function reportOperatorComposeMerge(
   )
 }
 
+/**
+ * Move each freshly merged equation into its dependent variable's component.
+ *
+ * A composed tendency is no longer any single author's contribution, so
+ * esm-libraries-spec §4.7.1 step 4 attributes it to the system that OWNS its
+ * dependent variable rather than to the `systems[0]` that happened to carry the
+ * surviving equation. Where A already IS that system — the ordinary
+ * `["Chemistry", "Advection"]` spelling, and every fixture in the shared tree
+ * before this one — the move is the identity and nothing changes.
+ *
+ * Where it is NOT the identity is a document that CHAINS compose entries over
+ * one state with the OPERATOR as A:
+ *
+ * ```json
+ * {"type": "operator_compose", "systems": ["Sink", "Chem"]}
+ * {"type": "operator_compose", "systems": ["Src",  "Chem"]}
+ * {"type": "operator_compose", "systems": ["Chem", "Adv"], "lifting": "pointwise"}
+ * ```
+ *
+ * with `Sink` and `Src` authoring `D(Chem.X, t) = …` directly. §4.7.1 permits it
+ * and `reseact.esm` is built on it (deposition, then emission, then the
+ * transport lift). Entry 1 consumes Chem's own equation and leaves the sum in
+ * `components.Sink.equations`; entry 2 then walks `components.Src` and
+ * `components.Chem` and cannot see it. Both the composed tendency and Src's
+ * un-merged contribution reach {@link assembleSystem}, which raises
+ * `ConflictingDerivativeError` for `Chem.O3` — loud rather than corrupt, but the
+ * document is spec-valid and must flatten. Relocating the merge to
+ * `components.Chem` is what puts it back where the next entry looks for it, in
+ * either role.
+ *
+ * The component bag is this binding's analogue of the reference
+ * implementation's per-equation owner (Julia `coupling_apply.jl`, the
+ * `new_owners[j] = _component_root(dep)` line): membership in
+ * `components[X].equations` is the only record of who authored an equation, and
+ * after namespacing an operator's equation for a chemistry species is textually
+ * indistinguishable from the chemistry component's own.
+ *
+ * POSITION. §4.7.5 step 4 makes document order normative, and a relocated
+ * equation is APPENDED to the owner's list rather than inserted at the slot of
+ * the B equation it consumed. Appending is what reproduces the reference order:
+ * each merge trails the ones before it, so a species whose chain ends at a later
+ * entry ends up after one whose chain ended earlier — `Chem.NO` (last merged by
+ * entry 1) ahead of `Chem.O3` (last merged by entry 2) in the document above.
+ * Inserting at the consumed equation's slot instead would freeze both at Chem's
+ * original declaration order and disagree with every other binding.
+ *
+ * An equation whose dependent variable names no component of this document stays
+ * where it is; there is no bag to move it to.
+ */
 function reattributeMergedEquations(
   components: Record<string, ComponentSystem>,
   aName: string,
