@@ -3,10 +3,8 @@
 //!
 //! The shared fixtures and the per-assertion outcomes live under
 //! `tests/conformance/rhs_time_derivative/` (repo root); the Python runner
-//! (`test_rhs_time_derivative_conformance.py`) gates the same manifest. Julia
-//! is `scope_excluded` for now — its `flatten` leaves a right-hand-side `D`
-//! standing rather than substituting the tendency — and the manifest records
-//! that as a binding gap to close, not a design decision.
+//! (`test_rhs_time_derivative_conformance.py`) and the Julia runner
+//! (`conformance_rhs_time_derivative_test.jl`) gate the same manifest.
 //!
 //! The category pins OUTCOME CLASSES rather than a numeric golden, because half
 //! of it has no number to record:
@@ -59,7 +57,7 @@ fn manifest_requires_both_bindings_and_both_halves() {
         .iter()
         .map(|v| v.as_str().expect("binding name"))
         .collect();
-    for b in ["python", "rust"] {
+    for b in ["julia", "python", "rust"] {
         assert!(required.contains(&b), "manifest must require {b}");
     }
     // Every excluded binding must say WHY, so a GAP cannot masquerade as a

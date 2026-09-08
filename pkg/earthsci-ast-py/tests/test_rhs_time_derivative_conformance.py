@@ -1,10 +1,8 @@
 """Cross-language conformance: esm-spec §4.2's right-hand-side structural ``D``
 rule, in both halves (``tests/conformance/rhs_time_derivative/``).
 
-The Rust runner (``rhs_time_derivative_conformance.rs``) gates the same
-manifest. Julia is ``scope_excluded`` for now — its ``flatten`` leaves a
-right-hand-side ``D`` standing rather than substituting the tendency — and the
-manifest records that as a binding gap to close, not a design decision.
+The Rust runner (``rhs_time_derivative_conformance.rs``) and the Julia runner
+(``conformance_rhs_time_derivative_test.jl``) gate the same manifest.
 
 The category pins OUTCOME CLASSES rather than a numeric golden, because half of
 it has no number to record:
@@ -45,8 +43,8 @@ def test_manifest_shape() -> None:
     """The manifest is the contract; a binding must not silently drop out of it."""
     m = _manifest()
     assert m["category"] == "rhs_time_derivative"
-    assert "python" in m["bindings_required"]
-    assert "rust" in m["bindings_required"]
+    for binding in ("julia", "python", "rust"):
+        assert binding in m["bindings_required"], binding
     # Every excluded binding must say WHY, so a gap cannot masquerade as a
     # design decision.
     for binding, reason in m["scope_excluded"].items():

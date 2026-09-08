@@ -2,17 +2,22 @@
     "category": "rhs_time_derivative",
     "version": "1.0",
     "description": "Cross-binding conformance for esm-spec §4.2's RIGHT-HAND-SIDE structural `D` rule, in BOTH of its halves. RESOLVE: a `D` with `wrt: \"t\"` (or no `wrt`) whose `args[0]` is a bare reference to an unknown that CARRIES a differential equation names that unknown's tendency and is substituted during flattening, recursing through chained tendencies — so `dxdt ~ D(x, t)` is `-k*x`, and a model's scoped `D(Chem.A, t)` is the mass-action tendency §7.4 generated for the sibling reaction system. REFUSE: a structural `D` that resolves to NOTHING — one over an observed, over a parameter, or over a compound expression — is a rewrite-target reaching evaluation, and a conforming runtime MUST report `unlowered_operator` rather than invent a value for it, IN PARTICULAR NOT `0`. The two halves are gated together on purpose. Before this category all three Rust evaluators answered `D(anything) = 0` \"for parity\" with one another, so three shipped documents (`tests/end_to_end/land_atmosphere_hydrology.esm`, `tests/events/financial_climate_scenarios.esm`, `tests/valid/scoped_refs_nested.esm`) computed silent zeros and an inline test asserting a species tendency at t = 0 graded a configuration the model never ran; Python meanwhile refused BOTH halves with `unlowered_operator`, so the bindings disagreed in opposite directions on the same document. The refusal half is the one that can silently rot: `0` is a plausible-looking number, and `d_of_parameter` deliberately asserts `expected: 0.0` so a binding that invents the value is caught by the OUTCOME contract and not by the arithmetic. VERDICTS and outcome CLASSES are compared, not a numeric golden: a refusal has no actual to record, and each binding's diagnostic text differs while the `unlowered_operator` code (esm-spec §9.6.3 constraint 6) is the cross-binding contract.",
-    "reference_binding": "python",
+    "reference_binding": "julia",
     "bindings_required": [
+        "julia",
         "python",
         "rust"
     ],
     "scope_excluded": {
         "go": "rewrite-only port; no simulator / inline test runner",
-        "typescript": "rewrite-only port; no simulator / inline test runner",
-        "julia": "does not implement §4.2's right-hand-side `D` rule yet: `EarthSciAST.flatten` leaves `M.dxdt ~ D(M.x, t)` standing rather than substituting the tendency, so neither half is expressible here. Tracked as a follow-up; the exclusion is a binding GAP, not a design decision, and should be removed once Julia implements the phase."
+        "typescript": "rewrite-only port; no simulator / inline test runner"
     },
     "integrators": {
+        "julia": {
+            "algorithm": "Tsit5",
+            "reltol": 1e-12,
+            "abstol": 1e-14
+        },
         "python": {
             "method": "RK45",
             "rtol": 1e-12,
