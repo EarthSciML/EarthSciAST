@@ -1,0 +1,304 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "column_probe",
+    "description": "Throwaway probe: a 59-level prognostic column with a diurnal surface forcing, stepped 24 h and asserted with coords/reduce at a LATE time. Structural proxy for the Phase 3.1 EqWeather single-column run.",
+    "license": "MIT"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 59
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "kappa": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.002,
+          "description": "diffusion rate per cell"
+        },
+        "omega": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 7.27220521664304e-05,
+          "description": "diurnal frequency"
+        },
+        "amp": {
+          "type": "parameter",
+          "units": "K",
+          "default": 10.0,
+          "description": "surface forcing amplitude"
+        },
+        "Tsfc0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 288.0,
+          "description": "surface mean temperature"
+        },
+        "rlx": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.001,
+          "description": "surface relaxation rate"
+        },
+        "Tsfc": {
+          "type": "unknown",
+          "units": "K",
+          "description": "prescribed diurnal surface temperature, an observed function of t"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "shape": [
+            "lev"
+          ],
+          "default": 288.0,
+          "description": "column temperature"
+        },
+        "dTdt": {
+          "type": "unknown",
+          "units": "K/s",
+          "shape": [
+            "lev"
+          ],
+          "description": "column temperature tendency"
+        },
+        "Tsfc_raw": {
+          "type": "unknown",
+          "units": "K",
+          "description": "intermediate"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "Tsfc_raw",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "Tsfc0",
+              {
+                "op": "*",
+                "args": [
+                  "amp",
+                  {
+                    "op": "sin",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "omega",
+                          "t"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "Tsfc",
+          "rhs": "Tsfc_raw"
+        },
+        {
+          "lhs": "dTdt",
+          "rhs": {
+            "op": "aggregate",
+            "output_idx": [
+              "k"
+            ],
+            "args": [],
+            "ranges": {
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "kappa",
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "T",
+                                {
+                                  "op": "max",
+                                  "args": [
+                                    1,
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "T",
+                                {
+                                  "op": "min",
+                                  "args": [
+                                    59,
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            2.0,
+                            {
+                              "op": "index",
+                              "args": [
+                                "T",
+                                "k"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "rlx",
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        {
+                          "op": "==",
+                          "args": [
+                            "k",
+                            1
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            "Tsfc",
+                            {
+                              "op": "index",
+                              "args": [
+                                "T",
+                                "k"
+                              ]
+                            }
+                          ]
+                        },
+                        0.0
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "T"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "dTdt"
+        }
+      ],
+      "tests": [
+        {
+          "id": "span_60",
+          "description": "span 60 s",
+          "time_span": {
+            "start": 0.0,
+            "end": 60.0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 60.0,
+              "coords": {
+                "lev": 1
+              },
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1000000000.0
+              }
+            }
+          ]
+        },
+        {
+          "id": "span_3600",
+          "description": "span 3600 s",
+          "time_span": {
+            "start": 0.0,
+            "end": 3600.0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 3600.0,
+              "coords": {
+                "lev": 1
+              },
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1000000000.0
+              }
+            }
+          ]
+        },
+        {
+          "id": "span_86400",
+          "description": "span 86400 s",
+          "time_span": {
+            "start": 0.0,
+            "end": 86400.0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 86400.0,
+              "coords": {
+                "lev": 1
+              },
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1000000000.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

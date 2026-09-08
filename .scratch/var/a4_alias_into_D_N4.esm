@@ -1,0 +1,242 @@
+{
+ "esm": "1.0.0",
+ "metadata": {
+  "name": "a4_alias_into_D_N4",
+  "description": "probe",
+  "license": "MIT"
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "M": {
+   "variables": {
+    "kappa": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.002
+    },
+    "omega": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 7.27220521664304e-05
+    },
+    "amp": {
+     "type": "parameter",
+     "units": "K",
+     "default": 10.0
+    },
+    "Tsfc0": {
+     "type": "parameter",
+     "units": "K",
+     "default": 288.0
+    },
+    "rlx": {
+     "type": "parameter",
+     "units": "1/s",
+     "default": 0.001
+    },
+    "T": {
+     "type": "unknown",
+     "units": "K",
+     "shape": [
+      "lev"
+     ],
+     "default": 288.0
+    },
+    "Tsfc": {
+     "type": "unknown",
+     "units": "K"
+    },
+    "Tsfc_raw": {
+     "type": "unknown",
+     "units": "K"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "Tsfc_raw",
+     "rhs": {
+      "op": "+",
+      "args": [
+       "Tsfc0",
+       {
+        "op": "*",
+        "args": [
+         "amp",
+         {
+          "op": "sin",
+          "args": [
+           {
+            "op": "*",
+            "args": [
+             "omega",
+             "t"
+            ]
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "Tsfc",
+     "rhs": "Tsfc_raw"
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "T"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "aggregate",
+      "output_idx": [
+       "k"
+      ],
+      "args": [],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          "kappa",
+          {
+           "op": "-",
+           "args": [
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "T",
+                {
+                 "op": "max",
+                 "args": [
+                  1,
+                  {
+                   "op": "-",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "T",
+                {
+                 "op": "min",
+                 "args": [
+                  4,
+                  {
+                   "op": "+",
+                   "args": [
+                    "k",
+                    1
+                   ]
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            },
+            {
+             "op": "*",
+             "args": [
+              2.0,
+              {
+               "op": "index",
+               "args": [
+                "T",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          "rlx",
+          {
+           "op": "ifelse",
+           "args": [
+            {
+             "op": "==",
+             "args": [
+              "k",
+              1
+             ]
+            },
+            {
+             "op": "-",
+             "args": [
+              "Tsfc",
+              {
+               "op": "index",
+               "args": [
+                "T",
+                "k"
+               ]
+              }
+             ]
+            },
+            0.0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "t1",
+     "description": "run",
+     "time_span": {
+      "start": 0.0,
+      "end": 60.0
+     },
+     "assertions": [
+      {
+       "variable": "T",
+       "time": 60.0,
+       "coords": {
+        "lev": 1
+       },
+       "expected": 0.0,
+       "tolerance": {
+        "abs": 1000000000.0
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
