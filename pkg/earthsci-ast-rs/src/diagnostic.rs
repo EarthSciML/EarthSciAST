@@ -309,6 +309,13 @@ diagnostic_code_registry! {
     /// resolves by name before the loop bindings, so the symbol would never
     /// address the loop it declares.
     RESERVED_INDEX_SYMBOL = "reserved_index_symbol";
+    /// A DECLARATION — a `variables` key, a reaction species, or a reaction
+    /// parameter — spelled with a globally-scoped name: the document's
+    /// independent variable (esm-spec §11.3) or the §6.4 `_var` placeholder.
+    /// Both are in scope in every component and are resolved by name ahead of
+    /// the declaration maps, so the declaration is unreachable and every reader
+    /// silently receives the implicit symbol instead (§4.9.1.1).
+    RESERVED_VARIABLE_NAME = "reserved_variable_name";
     /// A provable dimensional inconsistency, promoted from a unit finding.
     UNIT_INCONSISTENCY = "unit_inconsistency";
     /// A declared unit string that denotes no real unit, promoted from a
@@ -480,6 +487,7 @@ mod error_code_tests {
             "recurrence_unsupported_form",
             "relational_node_in_continuous",
             "reserved_index_symbol",
+            "reserved_variable_name",
             "rewrite_rule_nonterminating",
             "searchsorted_nan_in_table",
             "searchsorted_non_monotonic",

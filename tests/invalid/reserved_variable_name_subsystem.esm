@@ -1,0 +1,59 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ReservedVariableNameSubsystem",
+    "description": "A reserved declaration inside an INLINE SUBSYSTEM. A subsystem is a model (esm-spec §4.7), so its `variables` map is a declaration map like any other and §4.9.1.1 applies to it unchanged — and a MOUNTED subsystem is the exact shape issue #200 was reported in, where every equation that read `t` silently received the simulation clock. The finding is reported at the subsystem's own key, `/models/<M>/subsystems/<S>/variables/<name>`. Pinned so a binding that checks only TOP-LEVEL models is caught.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-07T00:00:00Z",
+    "tags": [
+      "validation",
+      "reserved-names",
+      "independent-variable",
+      "subsystems"
+    ]
+  },
+  "models": {
+    "Column": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Equilibrium value"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 1.0
+        }
+      ],
+      "subsystems": {
+        "Fuel": {
+          "system_kind": "nonlinear",
+          "variables": {
+            "t": {
+              "type": "parameter",
+              "units": "s",
+              "default": 3600.0,
+              "description": "Fuel time-lag constant. RESERVED — this is the independent variable's name."
+            },
+            "m": {
+              "type": "unknown",
+              "units": "1",
+              "description": "Fuel moisture content"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "m",
+              "rhs": 0.3
+            }
+          ]
+        }
+      }
+    }
+  }
+}

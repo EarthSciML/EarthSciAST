@@ -1310,6 +1310,104 @@
     ],
     "is_valid": false
   },
+  "reserved_variable_name_observed.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/FuelMoisture/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'FuelMoisture' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "The reported shape (issue #200): an OBSERVED unknown named `t`. The declaration never wins — `t` is implicitly declared in every model's expression scope (esm-spec §4.9.1), so a bare model reports the observed as having no defining expression and a mounted one silently hands every reader the SIMULATION TIME. The finding pins at the DECLARATION, not at the readers: the declaration is the single node that carries the defect, and the readers are all correct."
+  },
+  "reserved_variable_name_parameter.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Ingest/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'Ingest' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      },
+      {
+        "path": "/models/Ingest/variables/_var",
+        "code": "reserved_variable_name",
+        "message": "Model 'Ingest' declares a variable named '_var', which is the operator-model placeholder",
+        "details": {
+          "name": "_var",
+          "reserved_as": "operator_placeholder"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "Both globally-scoped names of esm-spec §4.9.1 in one file, so a binding that covers only the independent variable is caught. Spatial coordinate names (`x`, `y`, `lon`, …) are deliberately NOT in this set — they resolve as coordinates only in a coordinate position (§11.4), and `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position variable."
+  },
+  "reserved_variable_name_renamed_independent.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Renamed/variables/s",
+        "code": "reserved_variable_name",
+        "message": "Model 'Renamed' declares a variable named 's', which is the document's independent variable",
+        "details": {
+          "name": "s",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "The reserved name FOLLOWS `domain.independent_variable` (default `\"t\"`), the same set §4.3.1's `reserved_index_symbol` binder rule follows, so the two cannot drift. This document renames it to `s`, which both reserves `s` and FREES `t`; the free half is pinned by the valid twin `tests/valid/independent_variable_renamed.esm`. A binding that hard-codes the literal `\"t\"` fails one of the two."
+  },
+  "reserved_variable_name_species.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/TracerDecay/species/t",
+        "code": "reserved_variable_name",
+        "message": "Reaction system 'TracerDecay' declares a species named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      },
+      {
+        "path": "/reaction_systems/RateConstants/parameters/t",
+        "code": "reserved_variable_name",
+        "message": "Reaction system 'RateConstants' declares a parameter named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A reaction system's `species` and `parameters` maps declare symbols of the derived ODE system exactly as `models[M].variables` does (esm-spec §7.4), so the §4.9.1.1 rule covers all three declaration maps."
+  },
+  "reserved_variable_name_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Column/subsystems/Fuel/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'Fuel' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A subsystem is a model (esm-spec \u00a74.7), so its `variables` map is a declaration map and \u00a74.9.1.1 applies to it unchanged. This is the shape issue #200 was reported in \u2014 a MOUNTED subsystem, where every reader of `t` silently received the simulation clock. Pinned so a binding that walks only top-level `models` is caught."
+  },
   "subsystem_ref_not_found.esm": {
     "schema_errors": [],
     "structural_errors": [

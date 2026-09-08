@@ -238,6 +238,53 @@ Where:
 > fixtures under `tests/fixtures/reserved_index_symbol/` (the data-column half, the
 > `const`-array half, and the `k`-spelled control that still answers 2).
 
+### BEHAV-04-G: Declarations vs Globally-Scoped Names (esm-spec §4.9.1.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-G-001 | A DECLARATION spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder — MUST be a hard structural error, `reserved_variable_name`, at the offending key. Both names are implicitly declared in every component's expression scope (§4.9.1) and are resolved by name AHEAD of the declaration maps, so the declaration is unreachable and every reader silently receives the implicit symbol instead | esm-spec.md §4.9.1.1, §4.9.1, §11.3; CONFORMANCE_SPEC.md §7.1 | Yes | validation |
+| BEHAV-04-G-002 | The rule covers all three declaration maps — `models[M].variables`, `reaction_systems[S].species`, `reaction_systems[S].parameters` — because a species and a reaction parameter become symbols of the derived ODE system exactly as a `variables` entry does. A checker MUST recurse into every INLINE subsystem: a subsystem is a model (§4.7), so its `variables` map is a declaration map like any other, and a MOUNTED subsystem is the shape #200 was reported in | esm-spec.md §7.4, §4.7 | Yes | validation |
+| BEHAV-04-G-003 | The reserved set follows `domain.independent_variable`: a document that renames it moves the rejection onto the new name and frees `t` as an ordinary declared name. Same set BEHAV-04-F-002 pins for the binder rule | esm-spec.md §11.3 | Yes | validation |
+| BEHAV-04-G-004 | Spatial coordinate names (`x`, `y`, `z`, `lon`, `lat`, `lev`) are NOT reserved: they resolve as coordinates only in a coordinate position (§11.4), and `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position variable | esm-spec.md §11.4 | Yes | validation |
+
+> **Binding status (2026-09-06)**: implemented in **all five** bindings — Julia
+> (`validate.jl::_check_reserved_declaration_names!`), Python
+> (`structural_checks.py::_check_reserved_declaration_names`), TypeScript
+> (`validate/model-checks.ts::validateReservedDeclarationNames`), Rust
+> (`structural.rs::check_reserved_declaration_names`) and Go
+> (`validate.go::validateReservedDeclarationNames`). It is a STRUCTURAL check in
+> every binding, not a schema constraint: the reserved name is the value of
+> another field, which JSON Schema cannot express, and a schema rejection would
+> pre-empt the layer where the finding is pinned (CONFORMANCE_SPEC §7.1.2).
+>
+> **What it was before.** SILENT, and worse than the binder collision above.
+> Reported as issue #200 from a WRF-Fire fuel-moisture component that declared
+> its fuel time-lag constant as `t`: the document VALIDATED; built bare, the
+> model reported the observed as having *no defining expression* — a diagnostic
+> about the wrong thing; built with a subsystem mounted, every equation that read
+> `t` received the SIMULATION TIME instead, so `log(t)` was `-inf` at `t = 0` and
+> every number downstream was finite, plausible and wrong.
+>
+> **Corpus impact.** Three shared fixtures carried a redundant `t` parameter
+> declared purely as a "time placeholder"
+> (`tests/valid/units_dimensional_analysis.esm`,
+> `tests/invalid/units_invalid_derivative.esm`,
+> `tests/invalid/units_gradient_operator_mismatch.esm`); all three now rely on the
+> §4.9.1 implicit declaration and emit exactly the findings they pinned before.
+> The three binding-local ERA5 stubs bound air temperature to a parameter
+> literally named `t` — the real instance of this bug, since the ERA5 short name
+> for temperature *is* `t` — and now declare `air_temperature` with
+> `from.file_variable: "t"`. Gates: `tests/invalid/reserved_variable_name_*.esm`
+> (5, including `…_subsystem.esm`) and `tests/valid/independent_variable_renamed.esm`,
+> plus a per-binding unit test in each of the five.
+>
+> **Subsystem recursion, added in review.** The first cut checked only the
+> TOP-LEVEL `models` map in Python, Rust and Go, and only one level deep in
+> TypeScript, while Julia already recursed — so a document declaring `t` inside an
+> inline subsystem was rejected by one binding and accepted by three. All five now
+> recurse to arbitrary depth, pinned by `tests/invalid/reserved_variable_name_subsystem.esm`.
+> A reaction system's own `subsystems` map is NOT walked by any binding (no
+> binding walked it before this rule either); it is the one remaining gap.
+
 ### BEHAV-04-E: Subsystem-Mounted Data-Loader Consumption (RFC pure-io-data-loaders §4.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
