@@ -54,7 +54,9 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .esm_types import EsmFile
+from . import op_registry
+from .esm_types import EsmFile, ExprNode
+from .expr_walk import iter_children
 
 # `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
 # under `DEFAULT_ALG`): nothing in this module names them any more, because no
@@ -68,6 +70,7 @@ from .flatten import (
     flatten,
 )
 from .lower_table_lookup import lower_table_lookups
+from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
 from .parse import load_document, load_path
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
@@ -81,6 +84,7 @@ from .simulation_array import (
     _element_names,
     _fill_build_inspection,
     _NumpyRhsBuild,
+    _resolve_index_set_shape,
     _simulate_with_numpy,
 )
 from .simulation_common import (
@@ -574,6 +578,12 @@ def esm_problem(
             f"PDEs run natively here."
         )
 
+    # esm-spec §9.6.3 constraint 6 — the REWRITE-TARGET OPERATOR GATE, run here
+    # as the spec words it: "before a component is EVALUATED or COMPILED for
+    # simulation, its expression trees are WALKED". A whole-tree walk, not a
+    # reachability check.
+    _assert_no_unlowered_operator(flat)
+
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
     # routes through so the three executing bindings agree. Ignoring it silently
@@ -709,8 +719,9 @@ def _choose_pathway(
     the NumPy interpreter and take precedence over the in-document data-loader
     seam (a document with both binds the injected arrays, as the pre-EsmProblem
     entry points did). ``loader_fields`` alone means cadence segmentation.
-    Otherwise an array op anywhere (including every discretized PDE) routes to
-    the NumPy interpreter, and a scalar-only system to the lambdified SymPy
+    Otherwise ARRAY-NESS routes to the NumPy interpreter — a DECLARED ``shape``
+    (esm-spec §6.3) or an array op anywhere (including every discretized PDE) —
+    and a system that is scalar by both measures goes to the lambdified SymPy
     pathway.
     """
     if discrete_providers:
@@ -719,9 +730,119 @@ def _choose_pathway(
         return "array"
     if flat.loader_fields:
         return "loaders"
+    if _declares_resolvable_shape(flat):
+        return "array"
     if any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations):
         return "array"
     return "scalar"
+
+
+def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
+    """Does any variable DECLARE an array shape this document can resolve?
+
+    esm-spec §6.3 makes ``shape`` — "the ordered list of index-set names the
+    variable is arrayed over" — the authoritative statement of array-ness; it
+    says nothing about how the defining equation happens to be spelled. Equation
+    content alone therefore under-reports: a bare whole-array ``D(theta) ~ 1``
+    over ``"shape": ["lev"]`` carries no ``index`` / ``aggregate`` / ``arrayop``
+    node anywhere, so :func:`_has_array_op` sees a scalar system and the state
+    reaches the SymPy pathway with no cells at all (issue #231). The
+    ``aggregate`` spelling of the SAME semantics routed to the array runtime,
+    which made the choice of spelling — not the model — decide the answer.
+
+    This mirrors ``_build_numpy_rhs``'s own declared-shape resolution (esm-spec
+    §11), including its fallback: a shape is only counted when every axis
+    RESOLVES against the document's ``index_sets`` registry to a concrete
+    extent. An unresolvable shape (an axis naming no registry entry, or a
+    ``derived`` set whose extent value-invention has not materialized yet) is
+    exactly the case where the array build would fall back to usage inference
+    and infer the same scalar, so routing on it would change the engine without
+    changing the answer.
+
+    All three §6.3 roles, because §6.3 gives them all the same ``shape`` field
+    and privileges none. A shaped PARAMETER carrying inline array data (§6.3
+    "Inline array data") is array-valued whatever its consumers look like, and
+    the scalar pathway refuses to bind it. A shaped OBSERVED is array-valued for
+    the same reason its state counterpart is, and ``_build_numpy_rhs`` resolves
+    an observed's declared shape through this very resolver — so a declaration
+    that routes a document here is a declaration the build then honours.
+    """
+    for varmap in (flat.state_variables, flat.parameters, flat.observed_variables):
+        for var in varmap.values():
+            declared = getattr(var, "shape", None)
+            if not declared:
+                continue
+            resolved = _resolve_index_set_shape(list(declared), flat.index_sets)
+            if resolved:
+                return True
+    return False
+
+
+def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
+    """esm-spec §9.6.3 constraint 6 / §9.6.8 — the pre-evaluation rewrite-target gate.
+
+    The spec makes this a WALK, not a reachability test: "before a component is
+    EVALUATED or COMPILED for simulation, its expression trees are walked; any
+    node whose ``op`` is not in the evaluable-core set (§4.2) — including a
+    spatial ``D``, or any ``D`` in a right-hand-side / evaluation position — is
+    rejected with diagnostic ``unlowered_operator``". §9.6.8 calls it "the sole
+    guarantee that a rewrite-target op cannot reach evaluation", and §9.6.3
+    constraint 6 is what a constrained rule that never fires falls through to.
+
+    Python used to have no such walk. Both pathways raised ``unlowered_operator``
+    REACTIVELY, when the evaluator happened to reach the node — which made the
+    gate an artifact of the engine rather than of the document. The scalar-SymPy
+    pathway lambdifies every observed eagerly and so tripped over a surviving
+    op in a DEAD observed; the NumPy pathway evaluates observeds lazily and
+    never reached one. The same document therefore passed or failed on which
+    engine ``_choose_pathway`` picked. Walking here, at the one front door every
+    pathway routes through, makes the answer a property of the document.
+
+    Scope. Equations (which is where flatten puts every observed body) and the
+    ``ic`` right-hand sides — the trees that are compiled for simulation. A
+    ``D`` is evaluable-core ONLY in its structural equation-LHS role, where it
+    names the differentiated state and is never evaluated; ``args`` of an LHS
+    ``aggregate`` are still LHS, so the array-level spelling
+    ``aggregate{k}(D(theta[k]))`` stays legal. Anywhere on a right-hand side,
+    any ``D`` at all is a rewrite target — exactly the rule
+    :mod:`earthsci_ast.numpy_interpreter` already applies at evaluation.
+
+    This does NOT narrow CONFORMANCE_SPEC §5.27.3 ("a dead observed is still an
+    observed"): §5.27.3 is about a dead observed's field staying READABLE
+    however the build chose to treat it, and a dead observed whose body is fully
+    lowered is untouched here. What the walk refuses is a rewrite-target op that
+    no rule eliminated — dead or live, which is §9.6.3's point.
+
+    Runs AFTER the §4.7.6.12 surviving-spatial-dimension check above, so a
+    document that trips both keeps the diagnostic it has always reported. Both
+    carry ``code = "unlowered_operator"``.
+    """
+    for eq in flat.equations:
+        _walk_for_unlowered(eq.lhs, structural_derivative_ok=True)
+        _walk_for_unlowered(eq.rhs, structural_derivative_ok=False)
+    for _target, rhs in flat.field_ics:
+        _walk_for_unlowered(rhs, structural_derivative_ok=False)
+
+
+def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
+    """Raise on the first non-evaluable-core node in ``expr`` (pre-order).
+
+    ``structural_derivative_ok`` marks an equation-LHS tree, the one position
+    where a time ``D`` is core (§4.2). It propagates to children so a ``D``
+    nested under an LHS ``aggregate`` is still structural.
+    """
+    if not isinstance(expr, ExprNode):
+        return
+    op = expr.op
+    if op == "D":
+        if not structural_derivative_ok or op_registry.is_rewrite_target_derivative(
+            op, getattr(expr, "wrt", None)
+        ):
+            raise UnreachableSpatialOperatorError(op)
+    elif op not in _EVALUABLE_CORE_OPS:
+        raise UnreachableSpatialOperatorError(op)
+    for child in iter_children(expr):
+        _walk_for_unlowered(child, structural_derivative_ok=structural_derivative_ok)
 
 
 # --------------------------------------------------------------------------- #
