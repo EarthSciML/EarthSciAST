@@ -546,6 +546,8 @@ mod error_code_tests {
             "searchsorted_non_monotonic",
             "solver_version_too_old",
             "subsystem_index_set_conflict",
+            "subsystem_index_set_rename_unknown_name",
+            "subsystem_index_set_rename_unsupported_mount_form",
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
             "table_axis_nan",
