@@ -1069,6 +1069,43 @@ describe('reserved declaration names (§4.9.1.1)', () => {
     expect(reserved(validate(doc('t')))).toEqual([])
   })
 
+  it('covers an inline subsystem, at any depth', () => {
+    // A subsystem is a model, and a MOUNTED subsystem is the exact shape issue
+    // #200 was reported in — a scan of only the top-level `models` map accepted
+    // the offending document.
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'subsystem-named-t' },
+      models: {
+        Parent: {
+          system_kind: 'nonlinear',
+          variables: { y: { type: 'unknown', units: '1' } },
+          equations: [{ lhs: 'y', rhs: 1.0 }],
+          subsystems: {
+            Child: {
+              system_kind: 'nonlinear',
+              variables: { z: { type: 'unknown', units: '1' } },
+              equations: [{ lhs: 'z', rhs: 1.0 }],
+              subsystems: {
+                GrandChild: {
+                  system_kind: 'nonlinear',
+                  variables: {
+                    t: { type: 'parameter', units: 'K', default: 288 },
+                    w: { type: 'unknown', units: '1' },
+                  },
+                  equations: [{ lhs: 'w', rhs: 1.0 }],
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    expect(reserved(result).map((e) => e.path)).toEqual([
+      '/models/Parent/subsystems/Child/subsystems/GrandChild/variables/t',
+    ])
+  })
+
   it('leaves spatial coordinate names alone', () => {
     // `x` is a coordinate only in a coordinate position (§11.4);
     // tests/valid/units_dimensional_analysis.esm declares it as a position.

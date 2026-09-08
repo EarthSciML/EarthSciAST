@@ -1764,9 +1764,24 @@ def _check_reserved_declaration_names(data: dict[str, Any], errors: list[str]) -
                 )
             )
 
+    def scan_model(m: Any, pointer: str, owner: str) -> None:
+        """One model's ``variables``, then every inline subsystem of it.
+
+        A subsystem is a model, so its ``variables`` map is a declaration map
+        like any other -- and a MOUNTED subsystem is exactly the shape issue
+        #200 was reported in, where every reader of ``t`` silently received the
+        simulation clock. A ``$ref`` mount has already been spliced in by the
+        time this runs, so it is covered by the same walk.
+        """
+        if not isinstance(m, dict):
+            return
+        if isinstance(m.get("variables"), dict):
+            scan(m["variables"], f"{pointer}/variables", owner, "variable")
+        for sname, sub in (m.get("subsystems") or {}).items():
+            scan_model(sub, f"{pointer}/subsystems/{sname}", f"Model '{sname}'")
+
     for mname, m in (data.get("models") or {}).items():
-        if isinstance(m, dict) and isinstance(m.get("variables"), dict):
-            scan(m["variables"], f"/models/{mname}/variables", f"Model '{mname}'", "variable")
+        scan_model(m, f"/models/{mname}", f"Model '{mname}'")
     for rname, rs in (data.get("reaction_systems") or {}).items():
         if not isinstance(rs, dict):
             continue

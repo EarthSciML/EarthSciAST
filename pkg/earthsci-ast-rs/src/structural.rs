@@ -42,6 +42,16 @@ pub(crate) fn validate_model(
         "variable",
         errors,
     );
+    // A subsystem is a model, so its `variables` map is a declaration map too —
+    // and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
+    if let Some(subsystems) = &model.subsystems {
+        check_reserved_subsystem_names(
+            esm_file,
+            subsystems.iter(),
+            &format!("/models/{model_name}/subsystems"),
+            errors,
+        );
+    }
 
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
@@ -865,6 +875,50 @@ fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
             message: format!("{owner} declares a {kind} named '{name}', which is {role}"),
             details: serde_json::json!({ "name": name, "reserved_as": reason }),
         });
+    }
+}
+
+/// [`check_reserved_declaration_names`] over every INLINE subsystem of a model,
+/// recursively (esm-spec §4.9.1.1).
+///
+/// A subsystem is a model, so its `variables` map declares symbols of the
+/// assembled system exactly as the parent's does; the failure reported in issue
+/// #200 was a subsystem mount. `Model::subsystems` is untyped because an entry
+/// may be an unresolved `{"ref": …}`, which carries no `variables` key and
+/// contributes nothing — by the time validation runs the ref resolver has
+/// spliced a resolved mount into the same `{variables, equations}` shape, so
+/// one walk covers both. Keys are visited in sorted order, as the sibling
+/// declaration-map check is.
+fn check_reserved_subsystem_names<'a, I>(
+    esm_file: &EsmFile,
+    subsystems: I,
+    base_path: &str,
+    errors: &mut Vec<StructuralError>,
+) where
+    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+{
+    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in entries {
+        let sub_path = format!("{base_path}/{name}");
+        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
+            check_reserved_declaration_names(
+                esm_file,
+                vars.keys(),
+                &format!("{sub_path}/variables"),
+                &format!("Model '{name}'"),
+                "variable",
+                errors,
+            );
+        }
+        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+            check_reserved_subsystem_names(
+                esm_file,
+                nested.iter(),
+                &format!("{sub_path}/subsystems"),
+                errors,
+            );
+        }
     }
 }
 

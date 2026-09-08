@@ -1251,12 +1251,17 @@ variable.
 | Site | Pointer |
 |---|---|
 | `models[M].variables` | `/models/<M>/variables/<name>` |
+| an inline SUBSYSTEM's `variables`, at any depth | `/models/<M>/subsystems/<S>/variables/<name>` |
 | `reaction_systems[S].species` | `/reaction_systems/<S>/species/<name>` |
 | `reaction_systems[S].parameters` | `/reaction_systems/<S>/parameters/<name>` |
 
 All three declare symbols of the assembled system — a species and a reaction
 parameter become symbols of the derived ODE system exactly as a `variables` entry
-does (§7.4) — so all three collide identically.
+does (§7.4) — so all three collide identically. A subsystem is a model (§4.7),
+so its `variables` map is a declaration map like any other and a checker MUST
+recurse into every inline subsystem — a MOUNTED subsystem is the shape issue
+#200 was reported in, and a `ref` mount has been spliced in by the time
+structural validation runs.
 
 **Why a hard error and not a warning.** The three things this cost in practice
 are the whole argument, and the third is why the severity is not negotiable
@@ -1289,7 +1294,8 @@ The rule is a structural check in every binding, and the schema is unchanged.
 Fixtures: `tests/invalid/reserved_variable_name_observed.esm` (the reported
 shape), `…_parameter.esm` (both reserved names, including the ERA5 short name
 `t` for air temperature — how this reaches a real document), `…_species.esm`
-(the two reaction maps), `…_renamed_independent.esm` and its valid twin
+(the two reaction maps), `…_subsystem.esm` (an inline subsystem — the mounted
+shape of #200), `…_renamed_independent.esm` and its valid twin
 `tests/valid/independent_variable_renamed.esm` (the reserved name follows
 `domain.independent_variable`; a binding that hard-codes `"t"` fails one of the
 two).

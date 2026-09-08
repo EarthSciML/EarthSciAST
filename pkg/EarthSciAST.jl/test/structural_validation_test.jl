@@ -833,6 +833,20 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture
             end
         end
 
+        # A subsystem is a model, so §4.9.1.1 applies to its `variables` map
+        # unchanged — and a MOUNTED subsystem is the exact shape issue #200 was
+        # reported in. A binding that walks only top-level `models` accepts it.
+        @testset "an inline subsystem's declarations are covered" begin
+            fixture_path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
+                                    "reserved_variable_name_subsystem.esm")
+            if _require_fixture(fixture_path)
+                result = EarthSciAST.validate(EarthSciAST.load_path(fixture_path))
+                @test !result.is_valid
+                @test map(e -> e.path, _reserved(result)) ==
+                      ["/models/Column/subsystems/Fuel/variables/t"]
+            end
+        end
+
         # `x`/`y`/`lon` are coordinates only in a coordinate POSITION (§11.4), so
         # a variable may be named after one — tests/valid/units_dimensional_analysis.esm
         # declares `x` as a position.

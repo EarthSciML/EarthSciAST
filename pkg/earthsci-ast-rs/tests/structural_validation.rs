@@ -1430,3 +1430,19 @@ fn spatial_coordinate_names_are_not_reserved() {
     assert!(reserved_findings(fixture).is_empty());
     assert!(validate(&load_string(fixture).unwrap()).is_valid);
 }
+
+/// A subsystem is a model, so §4.9.1.1 applies to its `variables` map too — and
+/// a MOUNTED subsystem is the exact shape issue #200 was reported in. A binding
+/// that walked only top-level `models` accepted this document.
+#[test]
+fn a_subsystem_declaration_is_covered() {
+    let fixture = include_str!("../../../tests/invalid/reserved_variable_name_subsystem.esm");
+    assert_eq!(
+        reserved_findings(fixture),
+        vec![(
+            "/models/Column/subsystems/Fuel/variables/t".to_string(),
+            "independent_variable".to_string()
+        )]
+    );
+    assert!(!validate(&load_string(fixture).unwrap()).is_valid);
+}

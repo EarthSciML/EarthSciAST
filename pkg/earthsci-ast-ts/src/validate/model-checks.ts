@@ -25,6 +25,7 @@ import {
   countDerivatives,
   resolveScopedReference,
   expressionReferencesName,
+  isInlineModel,
 } from './expr-utils.js'
 import { isAffineTempUnit } from './unit-format.js'
 import { forEachExpressionScope } from '../traverse.js'
@@ -208,6 +209,43 @@ export function validateReservedDeclarationNames(
       message: `${owner} declares a ${kind} named '${name}', which is ${role}`,
       details: { name, reserved_as: reason },
     })
+  }
+  return errors
+}
+
+/**
+ * [[validateReservedDeclarationNames]] over a model's `variables`, recursing
+ * into every INLINE subsystem (spec §4.9.1.1).
+ *
+ * A subsystem is a model, so its `variables` map declares symbols of the
+ * assembled system exactly as the parent's does — and a MOUNTED subsystem is
+ * the shape issue #200 was reported in, where every reader of `t` silently
+ * received the simulation clock. A `ref` mount carries no `variables` key
+ * until the resolver splices it in, and is skipped until then.
+ */
+export function validateReservedModelNames(
+  model: Model,
+  modelPath: string,
+  owner: string,
+  esmFile: EsmFile,
+): StructuralError[] {
+  const errors = validateReservedDeclarationNames(
+    model.variables,
+    `${modelPath}/variables`,
+    owner,
+    'variable',
+    esmFile,
+  )
+  for (const [name, subsystem] of Object.entries(model.subsystems ?? {})) {
+    if (!isInlineModel(subsystem)) continue
+    errors.push(
+      ...validateReservedModelNames(
+        subsystem,
+        `${modelPath}/subsystems/${name}`,
+        `Model '${name}'`,
+        esmFile,
+      ),
+    )
   }
   return errors
 }

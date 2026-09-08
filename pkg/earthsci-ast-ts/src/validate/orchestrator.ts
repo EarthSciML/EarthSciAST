@@ -42,6 +42,7 @@ import {
   validateAggregateIndexSets,
   validateRelationalNodesInContinuous,
   validateReservedDeclarationNames,
+  validateReservedModelNames,
 } from './model-checks.js'
 import { validateBroadcastFns, validateArrayBroadcastShapes } from './array-checks.js'
 import { validateRecurrenceEquations } from '../recurrence.js'
@@ -191,14 +192,10 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // unreachable: both resolve BY NAME ahead of the declaration map, so
       // every reader silently receives the implicit symbol instead of the
       // declared quantity (issue #200). Independent of coupling.
+      // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
+      // subsystem is the shape #200 was reported in.
       errors.push(
-        ...validateReservedDeclarationNames(
-          model.variables,
-          `${modelPath}/variables`,
-          `Model '${modelName}'`,
-          'variable',
-          esmFile,
-        ),
+        ...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile),
       )
 
       // (F-6) Static `aggregate` semantics decidable from this document alone:
@@ -250,15 +247,6 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           errors.push(...validateEventConsistency(subsystem, subsystemPath, isCoupled))
           errors.push(...validatePhysicalConstantUnits(subsystem, subsystemPath))
           errors.push(...validateConversionFactorConsistency(subsystem, subsystemPath))
-          errors.push(
-            ...validateReservedDeclarationNames(
-              subsystem.variables,
-              `${subsystemPath}/variables`,
-              `Model '${subsystemName}'`,
-              'variable',
-              esmFile,
-            ),
-          )
           errors.push(...validateAggregateJoinKeys(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateJoinSides(subsystem, subsystemPath, esmFile))
           errors.push(...validateAggregateIndexSets(subsystem, subsystemPath, esmFile))

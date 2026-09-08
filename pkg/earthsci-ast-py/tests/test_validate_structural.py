@@ -1052,6 +1052,41 @@ class TestReservedDeclarationNames:
         assert result.is_valid, [(e.code, e.path) for e in result.structural_errors]
 
 
+    def test_subsystem_declarations_are_covered(self):
+        """A subsystem is a model, so its ``variables`` map is a declaration map
+        like any other -- and a MOUNTED subsystem is the exact shape issue #200
+        was reported in. A scan of only the top-level ``models`` map accepted
+        this document.
+        """
+        content = json.dumps(
+            {
+                "esm": "1.0.0",
+                "metadata": {"name": "SubsystemDeclaration"},
+                "models": {
+                    "Parent": {
+                        "system_kind": "nonlinear",
+                        "variables": {"y": {"type": "unknown", "units": "1"}},
+                        "equations": [{"lhs": "y", "rhs": 1.0}],
+                        "subsystems": {
+                            "Child": {
+                                "system_kind": "nonlinear",
+                                "variables": {
+                                    "t": {"type": "parameter", "units": "K", "default": 288.0},
+                                    "z": {"type": "unknown", "units": "1"},
+                                },
+                                "equations": [{"lhs": "z", "rhs": 1.0}],
+                            }
+                        },
+                    }
+                },
+            }
+        )
+        result = validate_text(content)
+        assert not result.is_valid
+        errors = self._reserved(result)
+        assert [e.path for e in errors] == ["/models/Parent/subsystems/Child/variables/t"]
+
+
 class TestReferenceIntegrityEveryExpressionBearingField:
     """esm-spec §4.9.5 / CONFORMANCE_SPEC §7.1.3 row (h).
 

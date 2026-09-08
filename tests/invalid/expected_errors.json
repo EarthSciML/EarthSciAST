@@ -1392,6 +1392,22 @@
     "is_valid": false,
     "notes": "A reaction system's `species` and `parameters` maps declare symbols of the derived ODE system exactly as `models[M].variables` does (esm-spec §7.4), so the §4.9.1.1 rule covers all three declaration maps."
   },
+  "reserved_variable_name_subsystem.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Column/subsystems/Fuel/variables/t",
+        "code": "reserved_variable_name",
+        "message": "Model 'Fuel' declares a variable named 't', which is the document's independent variable",
+        "details": {
+          "name": "t",
+          "reserved_as": "independent_variable"
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "A subsystem is a model (esm-spec \u00a74.7), so its `variables` map is a declaration map and \u00a74.9.1.1 applies to it unchanged. This is the shape issue #200 was reported in \u2014 a MOUNTED subsystem, where every reader of `t` silently received the simulation clock. Pinned so a binding that walks only top-level `models` is caught."
+  },
   "subsystem_ref_not_found.esm": {
     "schema_errors": [],
     "structural_errors": [

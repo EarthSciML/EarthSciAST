@@ -828,6 +828,10 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// gets the clock instead of the declared quantity (issue #200).
 	validateReservedDeclarationNames(s, model.Variables,
 		basePath+"/variables", fmt.Sprintf("Model '%s'", modelName), "variable")
+	// A subsystem is a model, so its `variables` map is a declaration map too —
+	// and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
+	// Subsystems are held untyped, so the walk is over raw JSON.
+	validateReservedSubsystemNames(s, model.Subsystems, basePath+"/subsystems")
 
 	for i, event := range model.DiscreteEvents {
 		event := event
@@ -1648,6 +1652,31 @@ func validateReservedDeclarationNames[V any](
 				"reserved_as": why,
 			},
 		})
+	}
+}
+
+// validateReservedSubsystemNames applies the §4.9.1.1 rule to every INLINE
+// subsystem of a model, recursively.
+//
+// A subsystem is a model, so its `variables` map declares symbols of the
+// assembled system exactly as the parent's does; the reported failure in issue
+// #200 was a subsystem mount. `Model.Subsystems` is `map[string]any` because an
+// entry may also be an unresolved `{"ref": …}` — which carries no `variables`
+// key and so contributes nothing — so the walk is over raw decoded JSON.
+func validateReservedSubsystemNames(s *structuralScan, subsystems map[string]any, basePath string) {
+	for _, name := range sortedKeys(subsystems) {
+		sub, ok := subsystems[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		subPath := fmt.Sprintf("%s/%s", basePath, name)
+		if vars, ok := sub["variables"].(map[string]any); ok {
+			validateReservedDeclarationNames(s, vars, subPath+"/variables",
+				fmt.Sprintf("Model '%s'", name), "variable")
+		}
+		if nested, ok := sub["subsystems"].(map[string]any); ok {
+			validateReservedSubsystemNames(s, nested, subPath+"/subsystems")
+		}
 	}
 }
 

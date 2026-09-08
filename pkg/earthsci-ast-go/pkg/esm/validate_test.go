@@ -1009,3 +1009,20 @@ func TestReservedDeclarationNameFollowsTheDocument(t *testing.T) {
 			"renaming the independent variable frees 't': %+v", freed.StructuralErrors)
 	}
 }
+
+// TestReservedDeclarationNameCoversSubsystems pins that a subsystem's
+// `variables` map is held to §4.9.1.1 too. A subsystem is a model, and a
+// MOUNTED subsystem is the exact shape issue #200 was reported in — a scan of
+// only the top-level `models` map accepted the offending document.
+func TestReservedDeclarationNameCoversSubsystems(t *testing.T) {
+	esmFile, err := LoadPath("../../../../tests/invalid/reserved_variable_name_subsystem.esm")
+	assert.NoError(t, err)
+
+	result := ValidateStructuralWithCodes(esmFile)
+
+	assert.True(t,
+		hasReservedError(result.StructuralErrors, ErrorReservedVariableName,
+			"/models/Column/subsystems/Fuel/variables/t"),
+		"want reserved_variable_name @ /models/Column/subsystems/Fuel/variables/t, got %+v",
+		result.StructuralErrors)
+}
