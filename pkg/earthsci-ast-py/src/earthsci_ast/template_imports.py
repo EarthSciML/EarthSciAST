@@ -37,6 +37,7 @@ from .error_handling import (
     METAPARAMETER_NAME_CONFLICT,
     METAPARAMETER_TYPE_ERROR,
     METAPARAMETER_UNBOUND,
+    SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
     TEMPLATE_BODY_EXPANSION_TOO_DEEP,
     TEMPLATE_IMPORT_CYCLE,
     TEMPLATE_IMPORT_INDEX_SET_CONFLICT,
@@ -738,6 +739,43 @@ _REF_NAME_SKIP_KEYS = (
 )
 
 
+def _is_join_on_pairs(value: Any) -> bool:
+    """Is ``value`` a join clause's ``on`` — a list of ``[left, right]`` key-column
+    pairs (esm-spec §4.9.5)? ``on`` occurs in exactly one place in the schema, a
+    ``join`` clause, and its shape is unambiguous, so the key plus this test is a
+    sound positional guard."""
+    return _is_array(value) and all(_is_array(pair) and len(pair) == 2 for pair in value)
+
+
+def _rename_join_on(value: Any, isetmap: dict[str, str], fallback=None) -> Any:
+    """Rewrite a join clause's ``on`` key columns under an index-set rename
+    (esm-spec §9.7.7 / §4.7 transitivity list).
+
+    An ``on`` name resolves as a LOOP SYMBOL, then the INDEX SET one of the
+    node's ranges draws ``{from}``, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8).
+    Only the middle class is an axis occurrence, and a rename map is keyed by
+    axis name, so an entry follows the rename **iff** it is a key of ``isetmap``.
+    Anything else — a loop symbol, a data-column name — is handed to
+    ``fallback`` (the caller's ordinary treatment for a bare string in this
+    position: the §9.7.7 ``varmap`` fold, or identity at a mount edge), so this
+    rule only ever ADDS the axis case. The ``isetmap`` test runs on the name AS
+    SPELLED, before any fallback, so the two maps cannot chain.
+
+    Without this, an ``on`` column naming a renamed axis would keep naming the
+    pre-rename axis and resolve against nothing."""
+    if fallback is None:
+
+        def fallback(e):
+            return e
+
+    def one(e):
+        if isinstance(e, str):
+            return isetmap[e] if e in isetmap else fallback(e)
+        return e
+
+    return [[one(e) for e in pair] for pair in value]
+
+
 def _rename_walk(
     x: Any, varmap: dict[str, str], isetmap: dict[str, str], tplmap: dict[str, str]
 ) -> Any:
@@ -783,6 +821,12 @@ def _rename_walk(
             return tplmap.get(value, value)
         if ks == "where" and _is_object(value):
             return _rename_where(value, isetmap)
+        if ks == "on" and _is_join_on_pairs(value):
+            # A join clause's key columns (esm-spec §4.9.5). Only an entry that
+            # is a KEY of `isetmap` is an axis occurrence; a loop symbol or a
+            # data-column name keeps the varmap fold it had before this rule
+            # existed.
+            return _rename_join_on(value, isetmap, lambda e: varmap.get(e, e))
         if ks == "of" or ks in _RENAME_PROTECTED_KEYS:
             return copy.deepcopy(value)
         return recurse(value)
@@ -830,6 +874,142 @@ def _rename_decl(
         if any(p in isetmap for p in pset):
             i2 = {k: val for k, val in isetmap.items() if k not in pset}
     return _rename_walk(decl, v2, i2, tplmap)
+
+
+# ---------------------------------------------------------------------------
+# Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set renaming")
+# ---------------------------------------------------------------------------
+
+
+def _mount_rename_walk(x: Any, m: dict[str, str]) -> None:
+    """One index-set substitution pass, IN PLACE, over a fully resolved mounted
+    document (esm-spec §4.7 "Mount-edge index-set renaming", transitivity list).
+
+    Deliberately NOT :func:`_rename_walk`: that walk is written for template and
+    index-set DECLARATIONS, where ``from`` only ever occurs as a range reference
+    and every bare string is a variable-reference position. A mount carries a
+    whole component, where ``from`` also names a data source
+    (``Parameter.update.from``), a coupling endpoint (``variable_map.from``) and
+    a connector endpoint, and where ``shape`` lists, ``Assertion.coords`` keys
+    and ``DataSourceSelectAxis.gated_by`` name axes no declaration walk ever
+    sees. So this walk touches ONLY positions that are index-set names *by
+    position* and never rewrites a bare string on its own account — a name it
+    does not recognise is left exactly as spelled."""
+    if isinstance(x, list):
+        for v in x:
+            _mount_rename_walk(v, m)
+        return
+    if not _is_object(x):
+        return
+
+    # An ExpressionNode is identified by its ``op``; only there are wrt/dim/var,
+    # the ``integral`` bounds and ``ranges`` axis positions (§4.2 / §4.3.1).
+    is_node = isinstance(x.get("op"), str)
+    if is_node:
+        for k in (*_RENAME_AXIS_KEYS, *_RENAME_BOUND_KEYS):
+            v = x.get(k)
+            if isinstance(v, str) and v in m:
+                x[k] = m[v]
+        ranges = x.get("ranges")
+        if _is_object(ranges):
+            for rv in ranges.values():
+                # ``{"from": <index set>}``; a range's own ``of`` is a list of
+                # BOUND SYMBOLS, never index-set names.
+                if _is_object(rv):
+                    frm = rv.get("from")
+                    if isinstance(frm, str) and frm in m:
+                        rv["from"] = m[frm]
+        # ``join.<i>.on`` key columns (§4.9.5): an entry follows the rename iff
+        # it names a renamed index set; a loop symbol or a data-column name is
+        # left as spelled. A clause's ``syms`` are bound symbols, never axes.
+        join = x.get("join")
+        if _is_array(join):
+            for clause in join:
+                if _is_object(clause) and _is_join_on_pairs(clause.get("on")):
+                    clause["on"] = _rename_join_on(clause["on"], m)
+    else:
+        # ``ModelVariable``/``Parameter`` ``shape`` and a ``where`` constraint's
+        # ``shape`` are ordered index-set names; an ExpressionNode ``shape``
+        # (``reshape``'s target extents) and a ``FunctionTable`` ``shape`` are
+        # integers, so the ``is_node`` guard plus the string test cover both.
+        shape = x.get("shape")
+        if _is_array(shape):
+            x["shape"] = [m.get(e, e) if isinstance(e, str) else e for e in shape]
+
+    # ``DataSourceSelectAxis.gated_by`` names a ``kind: "derived"`` set.
+    gated = x.get("gated_by")
+    if isinstance(gated, str) and gated in m:
+        x["gated_by"] = m[gated]
+
+    # ``Assertion.coords`` KEYS are spatial index-set names (§6.6.5).
+    coords = x.get("coords")
+    if _is_object(coords) and any(k in m for k in coords):
+        x["coords"] = {m.get(k, k): v for k, v in coords.items()}
+
+    for v in x.values():
+        _mount_rename_walk(v, m)
+
+
+def apply_mount_index_set_rename(doc: Any, rename_raw: Any, where: str) -> None:
+    """Apply a mount edge's ``index_set_rename`` to a FULLY RESOLVED mounted
+    document, in place (esm-spec §4.7 "Mount-edge index-set renaming").
+
+    Runs at pipeline step 2: after the referenced document has resolved as a
+    complete document (its own imports, this edge's ``bindings`` and §9.7.10
+    injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its
+    ``index_sets`` merge into the mounting registry — so the map's KEYS speak
+    the mounted document's own post-resolution vocabulary, exactly as §9.7.7's
+    ``rename`` speaks the import target's export vocabulary.
+
+    An absent, ``None`` or empty map is the identity and leaves ``doc``
+    untouched, which is what makes the field purely additive."""
+    if rename_raw is None or not _is_object(doc):
+        return
+    requested = _name_map(rename_raw, "index_set_rename", where)
+
+    declared = list((doc.get("index_sets") or {}).keys()) if _is_object(doc) else []
+
+    # Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
+    for key in requested:
+        if key not in declared:
+            raise ExpressionTemplateError(
+                SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
+                f"{where}: `index_set_rename` names index set {key!r}, which the "
+                "resolved mounted document does not declare (it declares: "
+                f"{', '.join(declared) if declared else 'none'}). Keys speak the "
+                "MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 "
+                '"Mount-edge index-set renaming")',
+            )
+
+    # Identity entries are no-ops; everything else must land on a distinct name.
+    changed = {o: n for o, n in requested.items() if o != n}
+    if not changed:
+        return
+    finals: list[str] = []
+    for name in declared:
+        final = changed.get(name, name)
+        if final in finals:
+            raise ExpressionTemplateError(
+                TEMPLATE_IMPORT_RENAME_COLLISION,
+                f"{where}: `index_set_rename` maps two index sets onto {final!r}; "
+                "post-rename names must be distinct within one mount edge "
+                "(esm-spec §4.7 / §9.7.7)",
+            )
+        finals.append(final)
+
+    _mount_rename_walk(doc, changed)
+
+    # Re-key the registry last, preserving declaration order, and rewrite each
+    # ragged/derived ``of`` parent list (an index-set-name list — unlike a
+    # range's ``of``, which the walk deliberately leaves alone).
+    sets = doc.get("index_sets")
+    if _is_object(sets):
+        renamed: dict[str, Any] = {}
+        for name, decl in sets.items():
+            if _is_object(decl) and _is_array(decl.get("of")):
+                decl["of"] = [changed.get(e, e) if isinstance(e, str) else e for e in decl["of"]]
+            renamed[changed.get(name, name)] = decl
+        doc["index_sets"] = renamed
 
 
 def _collect_bound_syms(out: set, x: Any) -> set:
@@ -1624,7 +1804,7 @@ def resolve_template_machinery(
 # each widens the target component's ``expression_template_imports`` in the
 # §9.7.10 merge order, so the ordinary import resolver + §9.6.3 fixpoint lower
 # the target's rewrite-targets with no engine change. Form C is applied by the
-# PDE test runner (``pde_inline_tests.py``) in a per-test ephemeral build.
+# PDE test runner (``inline_tests.py``) in a per-test ephemeral build.
 # Mirrors the Julia reference ``template_imports.jl`` injection section.
 # ===========================================================================
 

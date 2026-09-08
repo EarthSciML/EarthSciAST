@@ -237,6 +237,7 @@
         "EmptySystem",
         "SingleVariableSystem"
       ],
+      "require_match": false,
       "description": "EDGE CASE 1: Compose empty system with non-empty system"
     },
     {
@@ -269,6 +270,7 @@
         "SingleVariableSystem",
         "AlgebraicSystem"
       ],
+      "require_match": false,
       "description": "EDGE CASE 5: Mix ODE and algebraic equations"
     },
     {
@@ -277,6 +279,7 @@
         "SingleVariableSystem",
         "ConflictingNamesSystem"
       ],
+      "require_match": false,
       "translate": {
         "x": {
           "var": "x",
@@ -291,6 +294,7 @@
         "SingleVariableSystem",
         "ConflictingNamesSystem"
       ],
+      "require_match": false,
       "translate": {
         "x": {
           "var": "nonexistent_var",

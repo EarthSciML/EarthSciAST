@@ -100,6 +100,7 @@ BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Blosc = "a74b3585-a348-5f62-a45c-50e91977d574"
 EarthSciIO = "180e2c70-dda6-501b-9997-3c819c50e0c3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
@@ -124,4 +125,4 @@ SymbolicUtils = "d1185830-fcd6-423d-90d6-eec64667417b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "SymbolicUtils", "EarthSciIO", "Blosc", "JSON", "SHA", "ZipFile"]
+test = ["Test", "Logging", "BenchmarkTools", "ComponentArrays", "ForwardDiff", "DiffEqCallbacks", "DomainSets", "Extents", "GeoInterface", "GeometryOps", "ModelingToolkit", "Catalyst", "OrdinaryDiffEqNonlinearSolve", "OrdinaryDiffEqRosenbrock", "OrdinaryDiffEqTsit5", "Pkg", "Random", "Reactant", "SciMLBase", "SortTileRecursiveTree", "Symbolics", "SymbolicUtils", "EarthSciIO", "Blosc", "JSON", "SHA", "ZipFile"]

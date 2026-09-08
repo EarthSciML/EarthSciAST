@@ -1,5 +1,5 @@
 # ===========================================================================
-# pde_inline_tests — the §6.6.5-capable inline-test runner over the tree-walk
+# inline_tests — the §6.6.5-capable inline-test runner over the tree-walk
 # simulation pathway (the PDE dual of run_tests.jl's MTK scalar runner).
 #
 # A PDE model's inline tests (esm-spec §6.6.5) assert REDUCTIONS of a spatial
@@ -45,11 +45,21 @@
 #   the evaluator uses for coordinate-expression `ic` seeding.
 # - `field_reduce(kind, actual; reference=…)` — the §6.6.5 reduction semantics
 #   (relative L2, absolute Linf, integral/mean/max/min).
-# - `run_pde_tests(input; model_name, alg, reltol, abstol)` — run every inline
-#   test of the selected model(s); returns per-assertion results carrying the
-#   ACTUAL reduction values (conformance runners record these).
+# - `run_inline_tests(inputs; model_name, alg, reltol, abstol, base_dir,
+#   options_for)` — run every inline test of the selected component(s) of one
+#   or many documents; returns per-assertion results carrying the ACTUAL
+#   reduction values (conformance runners record these).
+# - `InlineTestOptions` — the per-document override record a caller's
+#   `options_for` callback returns.
 #
-# SHARED frame: `run_pde_tests` and `run_esm_tests` are the SAME runner
+# This entry was called `run_pde_tests` until it grew the ability to run a whole
+# corpus. The name was always too narrow — the §6.6.5 spatial reductions are one
+# assertion FORM, and the same runner has always executed the plain pointwise
+# assertions of an ODE document through the same frame — so it is now
+# `run_inline_tests`, with no deprecated alias (the old spelling is exactly the
+# misunderstanding the rename exists to remove).
+#
+# SHARED frame: `run_inline_tests` and `run_esm_tests` are the SAME runner
 # skeleton — `_run_test_frame!` in run_tests.jl (per-test/per-assertion loop,
 # §6.6.4 tolerance resolution, §6.6.3 pass predicate, wall-time split,
 # `AssertionResult` construction, JUnit emission) — with different execution
@@ -59,35 +69,34 @@
 # ===========================================================================
 
 """
-    PdeTestError(msg)
+    InlineTestError(msg)
 
 A §6.6.5 inline-test evaluation failed: an ill-formed `coords` / `reduce`
 assertion, a `from_file` reference that is missing or shape-mismatched, an
 asserted variable with no field, or a per-test discretization injection
-(§9.7.10 form C) that could not build. `run_pde_tests` catches it per
-assertion and records the message on the failing [`PdeAssertionResult`](@ref).
+(§9.7.10 form C) that could not build. `run_inline_tests` catches it per
+assertion and records the message on the failing [`AssertionResult`](@ref).
 """
-struct PdeTestError <: EarthSciASTError
+struct InlineTestError <: EarthSciASTError
     msg::String
 end
-Base.showerror(io::IO, e::PdeTestError) = print(io, "PdeTestError: ", e.msg)
+Base.showerror(io::IO, e::InlineTestError) = print(io, "InlineTestError: ", e.msg)
 
-"""
-    PdeAssertionResult
-
-Alias of [`AssertionResult`](@ref) — the two inline-test runners share ONE
-result type (and one JUnit emitter). Kept as a name because `run_pde_tests`'
-results were historically a distinct struct; the old field spellings survive
-as virtual properties on `AssertionResult` (`r.model` ≡ `r.container_name`,
-`r.passed` ≡ `r.status == PASS`).
-
-For results produced by [`run_pde_tests`](@ref): `container_kind` is always
-`:model`, `file` is `""` (the PDE runner takes one document, not a discovery
-walk — pass `file=...` to [`write_junit_xml`](@ref) to label the batch), and
-`reduce`/`rtol`/`atol` carry the assertion's declared reduction and the
-resolved §6.6.4 tolerances.
-"""
-const PdeAssertionResult = AssertionResult
+# `PdeAssertionResult` used to be aliased here, back when this runner's results
+# were a distinct struct. Both inline-test runners have long shared ONE result
+# type — [`AssertionResult`](@ref), defined in run_tests.jl, with one JUnit
+# emitter — so the alias named nothing of its own, and its "Pde" was the same
+# too-narrow word this file's rename removed. Deleted rather than kept: a second
+# spelling for one type is exactly what makes a reader think there are two.
+#
+# For results this runner produces, `container_kind` is `:model` or
+# `:reaction_system` after the component the test hangs off (both carry
+# `tests`); `file` is `""` on an assertion row — the runner is handed its
+# documents rather than discovering them, so pass `file=...` to
+# [`write_junit_xml`](@ref) to label the batch — and is the document's path on
+# the `<load>` row a batch emits for an unreadable file; and `reduce` / `rtol` /
+# `atol` carry the assertion's declared reduction and the resolved §6.6.4
+# tolerances.
 
 # ============================================================
 # wall2 Phase D — OPTIONAL BLAS accelerator for the linear mat-vec observed
@@ -696,7 +705,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
                          mname::AbstractString, variable::AbstractString;
                          state_arrays::AbstractDict=Dict{String,Any}(),
                          state_scalars::AbstractDict=Dict{String,Float64}())
-    model = get(file.models, String(mname), nothing)
+    # `models === nothing` for a document that is reaction systems only, whose
+    # components declare SPECIES rather than variables and so have no observed
+    # to find here; the assertion falls through to the scalar-slot path.
+    model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
     model === nothing && return nothing
     v = get(model.variables, String(variable), nothing)
     (v !== nothing && String(variable) in observed_unknowns(model)) || return nothing
@@ -1089,7 +1101,7 @@ function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractStri
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
     clash = findfirst(d -> haskey(scope, d) || d in arrays, mentioned)
-    clash === nothing || throw(PdeTestError(
+    clash === nothing || throw(InlineTestError(
         "inline `reference` mentions '$(mentioned[clash])', which is both a dimension " *
         "of the asserted field and a name the build-time scope already binds " *
         "($(haskey(scope, mentioned[clash]) ? "a parameter" : "a build-time array")). " *
@@ -1109,11 +1121,21 @@ end
 function _variable_shape(file::EsmFile, mname::AbstractString,
                          variable::AbstractString)::Vector{String}
     model = file.models === nothing ? nothing : get(file.models, String(mname), nothing)
-    model === nothing && throw(PdeTestError("model '$(mname)' not found"))
+    if model === nothing
+        # A reaction system declares SPECIES, and a species is 0-D. The answer
+        # is therefore the coords-specific rejection, not "model not found":
+        # the component exists, and what is ill-formed is asking a scalar for
+        # a grid cell.
+        file.reaction_systems !== nothing &&
+            haskey(file.reaction_systems, String(mname)) &&
+            throw(InlineTestError(
+                "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
+        throw(InlineTestError("model '$(mname)' not found"))
+    end
     v = get(model.variables, String(variable), nothing)
-    v === nothing && throw(PdeTestError(
+    v === nothing && throw(InlineTestError(
         "variable '$(variable)' is not declared in model '$(mname)'"))
-    (v.shape === nothing || isempty(v.shape)) && throw(PdeTestError(
+    (v.shape === nothing || isempty(v.shape)) && throw(InlineTestError(
         "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
     return String[String(s) for s in v.shape]
 end
@@ -1128,26 +1150,26 @@ function _coords_cell(coords::AbstractDict, shape::Vector{String},
                       index_sets::AbstractDict)::Vector{Int}
     for k in keys(coords)
         String(k) in shape ||
-            throw(PdeTestError("`coords` names unknown dimension '$(k)' " *
+            throw(InlineTestError("`coords` names unknown dimension '$(k)' " *
                   "(field dimensions: $(join(shape, ", ")))"))
     end
     cell = Int[]
     for s in shape
         iset = get(index_sets, s, nothing)
         (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            throw(PdeTestError("`coords` sampling requires interval index sets " *
+            throw(InlineTestError("`coords` sampling requires interval index sets " *
                   "with a declared size; '$(s)' is not one"))
         n = Int(iset.size)
         if haskey(coords, s)
             c = Float64(coords[s])
             idx = ceil(Int, c - 0.5)  # nearest index; exact ties round DOWN
             (1 <= idx <= n) ||
-                throw(PdeTestError("`coords` position $(c) along '$(s)' resolves " *
+                throw(InlineTestError("`coords` position $(c) along '$(s)' resolves " *
                       "to index $(idx), outside 1..$(n)"))
             push!(cell, idx)
         else
             n == 1 ||
-                throw(PdeTestError("`coords` leaves dimension '$(s)' unpinned " *
+                throw(InlineTestError("`coords` leaves dimension '$(s)' unpinned " *
                       "with $(n) samples; a strict subset pins only when every " *
                       "remaining dimension is singleton"))
             push!(cell, 1)
@@ -1164,15 +1186,15 @@ function _nested_at(data, cell::Vector{Int}, exts::Vector{Int})::Float64
     node = data
     for (d, i) in enumerate(cell)
         node isa AbstractVector ||
-            throw(PdeTestError("from_file reference shape mismatch along " *
+            throw(InlineTestError("from_file reference shape mismatch along " *
                   "dimension $(d): expected a nested array of length $(exts[d])"))
         length(node) == exts[d] ||
-            throw(PdeTestError("from_file reference shape mismatch along " *
+            throw(InlineTestError("from_file reference shape mismatch along " *
                   "dimension $(d): expected length $(exts[d]), found $(length(node))"))
         node = node[i]
     end
     (node isa Real && !(node isa Bool)) ||
-        throw(PdeTestError("from_file reference shape mismatch at cell " *
+        throw(InlineTestError("from_file reference shape mismatch at cell " *
               "[$(join(cell, ","))]: expected a number"))
     return Float64(node)
 end
@@ -1187,17 +1209,17 @@ function _from_file_reference(ref::AbstractDict, base_dir::AbstractString,
     fmt_raw = get(ref, "format", nothing)
     fmt = fmt_raw === nothing ? "json" : lowercase(String(fmt_raw))
     fmt == "json" ||
-        throw(PdeTestError("from_file reference format '$(fmt)' is not supported " *
+        throw(InlineTestError("from_file reference format '$(fmt)' is not supported " *
               "(v1 supports \"json\" only)"))
     path_raw = get(ref, "path", nothing)
-    path_raw === nothing && throw(PdeTestError("from_file reference is missing `path`"))
+    path_raw === nothing && throw(InlineTestError("from_file reference is missing `path`"))
     p = String(path_raw)
     resolved = isabspath(p) ? p : joinpath(String(base_dir), p)
     isfile(resolved) ||
-        throw(PdeTestError("from_file reference file not found: $(resolved)"))
+        throw(InlineTestError("from_file reference file not found: $(resolved)"))
     data = JSON3.read(read(resolved, String))
     isempty(cell_tuples) &&
-        throw(PdeTestError("from_file reference: field has no cells"))
+        throw(InlineTestError("from_file reference: field has no cells"))
     nd = length(cell_tuples[1])
     exts = Int[maximum(c[d] for c in cell_tuples) for d in 1:nd]
     return Float64[_nested_at(data, c, exts) for c in cell_tuples]
@@ -1237,11 +1259,15 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
         injected = true
         break
     end
-    injected || throw(PdeTestError(
+    injected || throw(InlineTestError(
         "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
     f = load_string(JSON3.write(raw); base_path=String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
-    return f
+    # The ephemeral file is a BUILD input (and the file this test's §6.6.5
+    # `reference` expressions evaluate against), and the raw base may have come
+    # straight off disk — so it gets the same §9.5.3 lowering `run_inline_tests`
+    # gave the persisted one. In place: this file exists only for this test.
+    return lower_table_lookups!(f)
 end
 
 # Relative slack when matching an assertion's `time` against the solver's
@@ -1253,8 +1279,8 @@ const _SAVED_TIME_RTOL = 1e-9
 
 # ---------------------------------------------------------------------------
 # Per-assertion evaluation — the §6.6.5 scalar-selection / reduction machinery,
-# split out of `run_pde_tests` so the driver stays a flat loop. Returns the
-# scalar `actual`; throws [`PdeTestError`](@ref) on any spec-relevant failure
+# split out of `run_inline_tests` so the driver stays a flat loop. Returns the
+# scalar `actual`; throws [`InlineTestError`](@ref) on any spec-relevant failure
 # (the driver records it as an `ERROR` result).
 # ---------------------------------------------------------------------------
 function _evaluate_assertion(a, sim, var_map::AbstractDict,
@@ -1263,12 +1289,12 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                              resolved_base::AbstractString)::Float64
     ti = argmin(abs.(sim.t .- a.time))
     abs(sim.t[ti] - a.time) <= _SAVED_TIME_RTOL * max(1.0, abs(a.time)) ||
-        throw(PdeTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
+        throw(InlineTestError("no saved state at t=$(a.time) (nearest $(sim.t[ti]))"))
     state = sim.u[ti]
 
     if a.coords === nothing && a.reduce === nothing
         slot = _scalar_slot(var_map, a.variable, String(mname))
-        slot == 0 && throw(PdeTestError("scalar state '$(a.variable)' not found"))
+        slot == 0 && throw(InlineTestError("scalar state '$(a.variable)' not found"))
         return state[slot]
     end
 
@@ -1296,14 +1322,14 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         state_scalars["t"] = Float64(sim.t[ti])
         obs = _observed_field(insp, eval_file, String(mname), String(a.variable);
                               state_arrays=state_arrays, state_scalars=state_scalars)
-        obs === nothing && throw(PdeTestError(
+        obs === nothing && throw(InlineTestError(
             "array state '$(a.variable)' has no cells in var_map"))
         field, cell_tuples = obs
     end
 
     if coords_target !== nothing
         pos = findfirst(==(coords_target), cell_tuples)
-        pos === nothing && throw(PdeTestError("no grid sample at cell " *
+        pos === nothing && throw(InlineTestError("no grid sample at cell " *
             "[$(join(coords_target, ","))] of '$(a.variable)'"))
         return field[pos]
     end
@@ -1319,7 +1345,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
             dims = try
                 _variable_shape(eval_file, String(mname), String(a.variable))
             catch err
-                err isa PdeTestError ? String[] : rethrow()
+                err isa InlineTestError ? String[] : rethrow()
             end
             scope = _param_scope_with_aliases(insp.params)
             # The ARRAY half of the §6.6.5 clash scope: `evaluate_cellwise`
@@ -1334,7 +1360,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
                string(get(a.reference, "type", "")) == "from_file"
             ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
         else
-            throw(PdeTestError("unsupported `reference` shape $(typeof(a.reference))"))
+            throw(InlineTestError("unsupported `reference` shape $(typeof(a.reference))"))
         end
     end
     return field_reduce(a.reduce, field; reference=ref)
@@ -1371,13 +1397,21 @@ end
 # ---------------------------------------------------------------------------
 struct SimulateTestEngine
     file::EsmFile            # document as loaded
-    input::Any               # original `run_pde_tests` input (path or EsmFile)
+    input::Any               # original `run_inline_tests` input (path or EsmFile)
     mname::String
     resolved_base::String
     alg::Any
     reltol::Float64
     abstol::Float64
+    # Caller-supplied SEEDS from an `InlineTestOptions` (empty when there is
+    # none). They sit BENEATH each test's own maps — see `_engine_setup`.
+    seed_p::AbstractDict
+    seed_u0::AbstractDict
 end
+
+SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol) =
+    SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
+                       Dict{String,Any}(), Dict{String,Any}())
 
 # Per-test handle: the successful simulation plus the build-observability sink
 # (assertions on ARRAY OBSERVEDS evaluate their resolved expression from
@@ -1406,6 +1440,27 @@ end
 # up, or simply wrong) passes through untouched, so `esm_problem` reports on it
 # exactly as it would have.
 _overrides_or_empty(o) = o === nothing ? Dict{String,Any}() : o
+
+# Lay a caller's SEED under a test's own override map (esm-spec §6.6.2). The
+# document is authoritative about its own test, so the test's key wins; the
+# seed only supplies what the document left unsaid.
+#
+# The merge happens BEFORE `_scope_to_component`, so a seed key and a test key
+# naming the same variable collide on the one spelling. Merging afterwards
+# would instead hand `esm_problem` both `T` and `M.T` — two keys designating
+# one parameter, with two values.
+function _seeded_overrides(seed::AbstractDict, authored)
+    isempty(seed) && return authored
+    out = Dict{String,Any}()
+    for (k, v) in seed
+        out[String(k)] = v
+    end
+    authored === nothing && return out
+    for (k, v) in authored
+        out[String(k)] = v
+    end
+    return out
+end
 
 function _scope_to_component(overrides, mname, target)
     (overrides === nothing || isempty(overrides)) && return overrides
@@ -1437,8 +1492,11 @@ function _engine_setup(e::SimulateTestEngine, t)
     try
         prob = esm_problem(target, (t.time_span.start, t.time_span.stop);
                            p=_overrides_or_empty(_scope_to_component(
-                               t.parameter_overrides, e.mname, target)),
-                           u0=_scope_to_component(t.initial_conditions, e.mname, target),
+                               _seeded_overrides(e.seed_p, t.parameter_overrides),
+                               e.mname, target)),
+                           u0=_scope_to_component(
+                               _seeded_overrides(e.seed_u0, t.initial_conditions),
+                               e.mname, target),
                            inspect=insp)
         sim = _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
                              saveat=times)
@@ -1460,16 +1518,143 @@ _engine_error_message(::SimulateTestEngine, err) =
     "assertion evaluation failed: $(sprint(showerror, err))"
 
 """
-    run_pde_tests(input; model_name=nothing, alg=nothing,
-                  reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
-                  base_dir=nothing) -> Vector{PdeAssertionResult}
+    InlineTestOptions(; model_name=nothing, alg=nothing, reltol=nothing,
+                      abstol=nothing, base_dir=nothing,
+                      initial_conditions=nothing, parameter_overrides=nothing)
+
+Per-document overrides for [`run_inline_tests`](@ref), returned by its
+`options_for` callback.
+
+Every field is optional, and a field left `nothing` INHERITS the value passed
+to `run_inline_tests` itself — so a callback that cares about one document's
+solver and nothing else returns `InlineTestOptions(alg=Rodas5())` and the rest
+of the run is unchanged.
+
+This record exists so that site-specific policy stays at the site. A CI gate
+over a model corpus routinely carries basename-keyed tables — a stiff-solver
+map, an initial-condition seed for the documents whose tests do not state one
+— and each of those is a reason the gate could not call the library entry and
+re-implemented esm-spec §6.6 instead. One callback absorbs all of them without
+this module learning anything about the corpus.
+
+`initial_conditions` / `parameter_overrides` are SEEDS: they are laid BENEATH
+each test's own maps, so a test that states a value keeps it and a test that is
+silent gets the caller's. They are merged with the test's map before
+`_scope_to_component` runs, and so are keyed and resolved exactly like a test's
+own keys — which is what makes the precedence well defined.
+"""
+Base.@kwdef struct InlineTestOptions
+    model_name::Union{Nothing,AbstractString} = nothing
+    alg::Any = nothing
+    reltol::Union{Nothing,Float64} = nothing
+    abstol::Union{Nothing,Float64} = nothing
+    base_dir::Union{Nothing,AbstractString} = nothing
+    initial_conditions::Union{Nothing,AbstractDict} = nothing
+    parameter_overrides::Union{Nothing,AbstractDict} = nothing
+end
+
+# The document's TEST-BEARING components, models first and then reaction
+# systems, each in the document's own key order.
+#
+# esm-spec §6.6 hangs `tests` off a component, and the schema gives
+# `reaction_systems` the same `tests` / `tolerance` members it gives `models`.
+# This runner iterated `models` alone until issue #194, so a chemical
+# mechanism's inline tests were neither run nor reported — the silent half of a
+# coverage gap, since a component with no rows and a component that was never
+# looked at are indistinguishable in the result list. `run_file_tests!` in
+# run_tests.jl has always walked both maps; this brings the simulate runner
+# into line with it, `container_kind` and all.
+#
+# Reaction-system species are 0-D, so their assertions take the pointwise
+# (scalar-slot) form; nothing about the build changes, because the whole
+# document is flattened either way and a species becomes an ordinary state.
+function _test_components(file::EsmFile, model_name)
+    out = Tuple{String,Symbol,Any}[]
+    for (kind, container) in ((:model, file.models),
+                              (:reaction_system, file.reaction_systems))
+        container === nothing && continue
+        for (name, component) in container
+            model_name !== nothing && String(name) != String(model_name) && continue
+            isempty(component.tests) && continue
+            push!(out, (String(name), kind, component))
+        end
+    end
+    return out
+end
+
+# Every `.esm` document under `dir`, recursively, SORTED — a result list whose
+# order depends on the filesystem is not comparable between two runs, let alone
+# between two machines.
+function _esm_files_under(dir::AbstractString)
+    found = String[]
+    for (root, _, files) in walkdir(String(dir))
+        for f in files
+            endswith(f, ".esm") && push!(found, joinpath(root, f))
+        end
+    end
+    return sort!(found)
+end
+
+# Resolve `run_inline_tests`' `inputs` to a flat vector of documents: a path
+# stays a path, a directory expands to the `.esm` files under it, an `EsmFile`
+# stays itself. An `AbstractString` and an `EsmFile` are SINGLE inputs — neither
+# is iterated element-wise.
+function _expand_inputs(inputs)
+    items = (inputs isa AbstractString || inputs isa EsmFile) ? Any[inputs] :
+        (applicable(iterate, inputs) ? collect(Any, inputs) :
+         throw(ArgumentError("run_inline_tests expects a path, an EsmFile, a " *
+                             "directory or an iterable of those, got $(typeof(inputs))")))
+    out = Any[]
+    for item in items
+        if item isa EsmFile
+            push!(out, item)
+        elseif item isa AbstractString
+            p = String(item)
+            isdir(p) ? append!(out, _esm_files_under(p)) : push!(out, p)
+        else
+            throw(ArgumentError("run_inline_tests: $(typeof(item)) is not a path or EsmFile"))
+        end
+    end
+    return out
+end
+
+# The one ERROR row a document that could not be LOADED contributes to a batch.
+# A corpus run must not lose a file to one bad document, and must not lose it
+# SILENTLY either — a document that vanishes from the result list is
+# indistinguishable from one that passed. Same shape `run_file_tests!` already
+# emits for an unparseable file.
+_load_failure_result(path::AbstractString, err) = AssertionResult(
+    String(path), :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
+    ERROR, "load failed: $(sprint(showerror, err))", 0.0)
+
+# Fold one document's `InlineTestOptions` onto the call-level defaults: a field
+# the override left `nothing` inherits, every other field wins.
+_opt_or(::Nothing, _field, fallback) = fallback
+_opt_or(o::InlineTestOptions, field::Symbol, fallback) =
+    (v = getfield(o, field); v === nothing ? fallback : v)
+_opt_dict(::Nothing, _field) = Dict{String,Any}()
+_opt_dict(o::InlineTestOptions, field::Symbol) =
+    (v = getfield(o, field); v === nothing ? Dict{String,Any}() : v)
+
+"""
+    run_inline_tests(inputs; model_name=nothing, alg=nothing,
+                     reltol=DEFAULT_TEST_RELTOL, abstol=DEFAULT_TEST_ABSTOL,
+                     base_dir=nothing, options_for=nothing)
+        -> Vector{AssertionResult}
 
 Run every inline test (esm-spec §6.6, including the §6.6.5 PDE assertions) of
-the selected model(s) of `input` (a path or a loaded [`EsmFile`](@ref)) through
-the official tree-walk simulation pathway, and return one
-[`PdeAssertionResult`](@ref) per assertion — carrying the ACTUAL reduction
-value alongside pass/fail, so conformance harnesses can record and
-cross-compare the numbers.
+the selected component(s) of `inputs` through the official tree-walk simulation
+pathway, and return one [`AssertionResult`](@ref) per assertion — carrying
+the ACTUAL reduction value alongside pass/fail, so conformance harnesses can
+record and cross-compare the numbers.
+
+`inputs` is a path to a `.esm` file, a loaded [`EsmFile`](@ref), a DIRECTORY
+(walked recursively for `*.esm`, sorted), or any iterable of those. Results are
+concatenated in input order.
+
+Both kinds of test-bearing component are run: `models` first, then
+`reaction_systems`, which the schema gives the same `tests` member and which
+this runner skipped entirely until it was fixed.
 
 Per test: `solve(esm_problem(input, (time_span.start, time_span.stop)), alg;
 reltol, abstol, saveat=<assertion times>)` with the test's `initial_conditions`
@@ -1481,7 +1666,22 @@ DOWN — the pinned cross-binding convention) or collapsed per its `reduce`
 [`evaluate_cellwise`](@ref), or a `{type: "from_file", path, format?}` JSON
 snapshot resolved against `base_dir`). An assertion with neither `coords` nor
 `reduce` samples a scalar state. `base_dir` defaults to the .esm file's
-directory when `input` is a path, else the working directory.
+directory when the document came from a path, else the working directory.
+
+`options_for` is the seam for site-specific policy. It is called once per
+resolved document — with the document's path when it came from one, else the
+`EsmFile`, and BEFORE the document is loaded, so a basename-keyed callback is
+asked about an unreadable file too and wants a default rather than an indexing
+error — and returns an [`InlineTestOptions`](@ref) whose non-`nothing`
+fields override the keywords above for that document (or `nothing` to change
+nothing). It exists so that a corpus gate's basename-keyed tables — a
+stiff-solver map, an initial-condition seed — can stay in the gate instead of
+forcing it to re-implement §6.6 to get at them.
+
+A document that fails to LOAD throws when `inputs` names a single document,
+exactly as before. In a BATCH — an iterable or a directory — it instead
+contributes one ERROR row naming the path, so one unreadable file cannot cost
+the run every other file's verdicts.
 
 Tolerances resolve per esm-spec §6.6.4 (assertion > test > model > default
 `rel=1e-6`); the pass predicate is the same `isapprox` check `run_esm_tests`
@@ -1492,43 +1692,90 @@ resolution, the pass predicate, per-test wall-time accounting, and JUnit
 emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
 cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
 OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
-`reltol`/`abstol` resolve per esm-spec §2.2.2, most-specific first: an explicit
-argument here, then this document's `solver.reltol` / `solver.abstol` (§2.2),
-then the shared inline-test solver tolerances `DEFAULT_TEST_RELTOL` /
-`DEFAULT_TEST_ABSTOL`. Those runner defaults sit at the BOTTOM of the chain, so
-a document that declares its own integration accuracy gets it without every
-caller naming it. These are INTEGRATION tolerances and are a different quantity
-from the §6.6.4 assertion tolerance above.
+`reltol`/`abstol` default to `nothing`, and that is load bearing rather than
+merely tidy: it is what keeps the DOCUMENT's own opinion expressible. Each
+resolves per esm-spec §2.2.2, most-specific first — an `options_for` override,
+then the keyword here, then this document's `solver.reltol` / `solver.abstol`
+(§2.2), then the shared inline-test defaults `DEFAULT_TEST_RELTOL` /
+`DEFAULT_TEST_ABSTOL`. The runner defaults sit at the BOTTOM of the chain
+because they are binding defaults, not a caller's opinion, so a document that
+declares its own integration accuracy gets it without every caller naming it.
+Passing a value explicitly overrides the document, which is why a concrete
+default here would silently have suppressed it. These are INTEGRATION
+tolerances and are a different quantity from the §6.6.4 assertion tolerance
+above.
+
+This entry was called `run_pde_tests` until it grew the ability to run a whole
+corpus. The name was always too narrow — the §6.6.5 spatial reductions are one
+assertion FORM, and the same runner has always executed the plain pointwise
+assertions of an ODE document through the same frame — so it is now
+`run_inline_tests`, with no deprecated alias.
 """
-function run_pde_tests(input; model_name::Union{Nothing,AbstractString}=nothing,
-                       alg=nothing,
-                       reltol::Union{Float64,Nothing}=nothing,
-                       abstol::Union{Float64,Nothing}=nothing,
-                       base_dir::Union{Nothing,AbstractString}=nothing)
-    file = input isa AbstractString ? load_path(String(input)) : input
-    file isa EsmFile ||
-        throw(ArgumentError("run_pde_tests expects a path or EsmFile, got $(typeof(input))"))
-    resolved_base = base_dir !== nothing ? String(base_dir) :
-        (input isa AbstractString ? dirname(abspath(String(input))) : pwd())
-    # esm-spec §2.2.2, most-specific first: an explicit `reltol` / `abstol` here
-    # wins, else this document's `solver` block, else the runner's own
-    # DEFAULT_TEST_*. `nothing` is what makes level 1 expressible -- a caller who
-    # named no tolerance is distinguishable from one who passed the default
-    # value, which is exactly the distinction the document sits in the middle
-    # of. INTEGRATION tolerances; the tolerance each assertion is COMPARED at
-    # (§6.6.4) resolves separately and is untouched here.
+function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=nothing,
+                          alg=nothing,
+                          reltol::Union{Float64,Nothing}=nothing,
+                          abstol::Union{Float64,Nothing}=nothing,
+                          base_dir::Union{Nothing,AbstractString}=nothing,
+                          options_for=nothing)
+    documents = _expand_inputs(inputs)
+    batch = !((inputs isa EsmFile) ||
+              (inputs isa AbstractString && !isdir(String(inputs))))
+    results = AssertionResult[]
+    for document in documents
+        o = options_for === nothing ? nothing : options_for(document)
+        (o === nothing || o isa InlineTestOptions) || throw(ArgumentError(
+            "options_for must return an InlineTestOptions or nothing, got $(typeof(o))"))
+        file = document
+        if document isa AbstractString
+            file = try
+                load_path(String(document))
+            catch err
+                batch || rethrow()
+                push!(results, _load_failure_result(document, err))
+                continue
+            end
+        end
+        file isa EsmFile || throw(ArgumentError(
+            "run_inline_tests expects a path or EsmFile, got $(typeof(document))"))
+        _run_document_tests!(results, file, document, o;
+                             model_name, alg, reltol, abstol, base_dir)
+    end
+    return results
+end
+
+# Run one document's inline tests, appending to `results`. `document` is the
+# path it was loaded from, or the `EsmFile` itself — it anchors `from_file`
+# references and the §9.7.10 per-test injection. The per-document body of
+# `run_inline_tests`.
+function _run_document_tests!(results, file::EsmFile, document, o;
+                              model_name, alg, reltol, abstol, base_dir)
+    # esm-spec §9.5.3, at the build boundary rather than at load (§9.5.4 wants
+    # the authored form to round-trip). `esm_problem` lowers the flattened
+    # system it builds, but the file kept HERE is also an evaluated artifact:
+    # `_evaluate_assertion` reads a §6.6.5 `reference` expression straight off
+    # it. The pure form leaves a caller's `EsmFile` untouched, and returns it
+    # as-is — no copy — for the documents that declare no tables.
+    file = lower_table_lookups(file)
+    d_model_name = _opt_or(o, :model_name, model_name)
+    d_alg        = _opt_or(o, :alg, alg)
+    # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
+    # keyword, then THIS DOCUMENT's `solver` block, then the runner defaults
+    # (which `_test_integration_tolerances` supplies as its own fallback). A
+    # `nothing` at either of the first two levels is what lets the next one
+    # speak. INTEGRATION tolerances; the §6.6.4 assertion tolerance is separate.
     doc_reltol, doc_abstol = _test_integration_tolerances(file.solver)
-    eff_reltol = reltol === nothing ? doc_reltol : reltol
-    eff_abstol = abstol === nothing ? doc_abstol : abstol
-    results = PdeAssertionResult[]
-    file.models === nothing && return results
-    for (mname, model) in file.models
-        model_name !== nothing && String(mname) != String(model_name) && continue
-        isempty(model.tests) && continue
-        engine = SimulateTestEngine(file, input, String(mname),
-                                    resolved_base, alg, eff_reltol, eff_abstol)
-        _run_test_frame!(results, engine, "", :model, String(mname),
-                         model.tolerance, model.tests)
+    d_reltol     = Float64(_opt_or(o, :reltol, reltol === nothing ? doc_reltol : reltol))
+    d_abstol     = Float64(_opt_or(o, :abstol, abstol === nothing ? doc_abstol : abstol))
+    d_base_dir   = _opt_or(o, :base_dir, base_dir)
+    seed_p       = _opt_dict(o, :parameter_overrides)
+    seed_u0      = _opt_dict(o, :initial_conditions)
+    resolved_base = d_base_dir !== nothing ? String(d_base_dir) :
+        (document isa AbstractString ? dirname(abspath(String(document))) : pwd())
+    for (mname, kind, component) in _test_components(file, d_model_name)
+        engine = SimulateTestEngine(file, document, mname, resolved_base,
+                                    d_alg, d_reltol, d_abstol, seed_p, seed_u0)
+        _run_test_frame!(results, engine, "", kind, mname,
+                         component.tolerance, component.tests)
     end
     return results
 end

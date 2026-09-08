@@ -23,7 +23,7 @@ from conftest import FIXTURES_ROOT
 
 from earthsci_ast.parse import load_path
 from earthsci_ast.problem import ReturnCode, esm_problem, solve
-from earthsci_ast.pde_inline_tests import TEST_ABSTOL, TEST_RELTOL
+from earthsci_ast.inline_tests import TEST_ABSTOL, TEST_RELTOL
 
 
 _FIXTURES_DIR = FIXTURES_ROOT / "fixtures" / "arrayop"

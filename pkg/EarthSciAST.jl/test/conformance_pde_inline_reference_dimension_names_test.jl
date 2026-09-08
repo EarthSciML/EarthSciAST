@@ -57,7 +57,7 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=solver_reltol, abstol=solver_abstol)
             @test length(results) == length(golden.assertions)

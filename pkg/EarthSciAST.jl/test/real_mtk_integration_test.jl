@@ -177,6 +177,40 @@ import Symbolics
                    eq_strs)
     end
 
+    @testset "A state no equation mentions survives into the compiled system" begin
+        # esm-libraries-spec §4.6.1: a species touched by no reaction gets NO
+        # `D(X, t)` equation, which leaves it an unknown nothing names. It is
+        # still in `state_variables` (§4.7.5's field table), so the BACKEND has
+        # to carry it — MTK on its own drops an unknown that appears in no
+        # equation, which would delete the species from `unknowns(simp)`, make
+        # an `initial_conditions` entry naming it unbindable, and drop it from
+        # every solution. `System(::FlattenedSystem)` closes it with
+        # `D(X, t) ~ 0` at the lowering instead.
+        rsys = EarthSciAST.ReactionSystem(
+            [EarthSciAST.Species("A", default=1.0),
+             EarthSciAST.Species("B", default=0.0),
+             EarthSciAST.Species("Xe", default=5.0)],   # in no reaction
+            [EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k"))],
+            parameters=[EarthSciAST.Parameter("k", 0.1)])
+        flat = EarthSciAST.flatten(rsys; name="Chem")
+
+        # The DOCUMENT-level artifact is unchanged by the closure: no equation
+        # for Xe, and it classifies algebraic.
+        @test !any(EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
+                   for eq in flat.equations)
+        @test haskey(flat.algebraic_variables, "Chem.Xe")
+
+        sys = ModelingToolkit.System(flat; name=:Chem)
+        simp = ModelingToolkit.mtkcompile(sys)
+        names = String[string(ModelingToolkit.getname(u))
+                       for u in ModelingToolkit.unknowns(simp)]
+        @test any(endswith(n, "Xe") for n in names)
+        # ...and the closure is a ZERO tendency, so it holds its initial value.
+        d_xe = only(eq for eq in ModelingToolkit.equations(simp)
+                    if occursin("Xe", string(eq.lhs)))
+        @test iszero(Symbolics.value(d_xe.rhs))
+    end
+
     @testset "Extension-gated: removed exports are gone" begin
         # These names were removed as part of the extension refactor. They
         # must not exist as exported symbols of the main package.

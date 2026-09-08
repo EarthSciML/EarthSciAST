@@ -26,7 +26,7 @@
 //! self-read (finding F24, §5.19.3b) and then again of an undeclared name.
 
 use earthsci_ast::simulate_array::{Value as EvalValue, eval_expression};
-use earthsci_ast::{SolveOptions, load_path, run_pde_tests};
+use earthsci_ast::{SolveOptions, load_path, run_inline_tests};
 use serde_json::json;
 
 fn fixture() -> std::path::PathBuf {
@@ -54,7 +54,7 @@ const LAUNDERED: f64 = 2.0;
 #[test]
 fn per_step_route_refuses_and_names_the_operand() {
     let file = load_path(fixture()).expect("fixture parses");
-    let results = run_pde_tests(&file, None, &SolveOptions::default());
+    let results = run_inline_tests(&file, None, &SolveOptions::default());
     assert_eq!(results.len(), 1, "the fixture asserts exactly once");
     let r = &results[0];
     assert!(
@@ -124,7 +124,7 @@ fn build_pipeline_route_refuses_and_names_the_operand() {
 fn both_routes_give_the_same_verdict_in_the_same_words() {
     let file = load_path(fixture()).expect("fixture parses");
 
-    let per_step = run_pde_tests(&file, None, &SolveOptions::default())
+    let per_step = run_inline_tests(&file, None, &SolveOptions::default())
         .into_iter()
         .next()
         .expect("one assertion")

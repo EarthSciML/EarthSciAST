@@ -58,6 +58,7 @@ green and your program does something different. Audit these first.
 | Go | `Substitute` | Single-pass, no longer transitive. `Substitute("a", {a: b, b: c})` returns `"b"`, not `"c"`. | Chained renames that were silently mis-applied now apply correctly. Goldens change. |
 | Julia, Python, Rust | `solve` default tolerances | `reltol = 1e-4`, `abstol = 1e-6` everywhere — **looser** than Rust's and Python's old defaults. | Trajectory assertions fail. |
 | Julia, Python, Rust | a failed **build** | Raises instead of returning a failed result. | Code inspecting `result.success` for build failures never sees it; the exception propagates. |
+| Julia | `derive_odes` / `flatten` on a reaction system | A species whose net stoichiometry is zero in every reaction gets **no equation**, where Julia used to emit `D(X, t) = 0`. The other four bindings already omitted it. | `equations`, `equation_count` and equation ORDER change; a `couple` `additive` edge onto such a species now BECOMES its tendency instead of summing onto a zero. Simulation results do not change — see the Julia section below. |
 | Python | `UnitWarning.path` | Was the string `"unit_validation"` at every site; is now `""` (the document root). | A consumer matching on that literal stops matching. |
 | Python | index-set merge | A model-nested `index_sets` now **merges over** the document-scoped registry instead of being invisible to it. | Different resolution verdicts on pre-0.8.0-shaped documents. |
 | Julia | diagnostic pointers | A scalar `update: {...}` no longer reports a synthetic `/0` segment. | A consumer matching on diagnostic JSON Pointers sees a different path. |
@@ -70,7 +71,7 @@ Each of these is expanded in the per-binding table it belongs to.
 
 # Part II — The document format changed
 
-These two changes are `format`-kind: they apply to `.esm` documents in every
+These changes are `format`-kind: they apply to `.esm` documents in every
 binding at once, whether or not you touch any API.
 
 ### `from_faq` resolves at DOCUMENT scope
@@ -125,6 +126,95 @@ model-nested key invisible. Measured before the change: a `ranges[*].from`
 naming a model-nested-only set raised `undeclared_index_set` in Python and
 resolved in Go and Rust; with the same name in both, Python took the *document*
 entry where Go and Rust took the *model* one. Python now matches.
+
+### An `operator_compose` entry that merges nothing is now REFUSED
+
+`§4.7.1` step 5 preserves an equation that matched nothing, and used to preserve
+it *silently*. That made **"merged everything"** and **"merged nothing"** the
+same observable outcome: an entry that matches nothing is indistinguishable from
+an entry that is not there — the operator integrates a private, decoupled system
+from its own defaults, the other system receives no contribution, and the only
+evidence is a state count one too high.
+
+Three diagnostics now exist, and two of them are **refusals at flatten** (not at
+`validate()` — such a document is schema-valid and structurally valid, and only
+the merge knows the answer):
+
+| Code | When | Severity |
+|---|---|---|
+| `operator_compose_no_merge` | zero of B's equations matched and `require_match` is **absent** | error |
+| `operator_compose_partial_merge` | some matched, some did not | warning |
+| `operator_compose_require_match_unmatched` | either, under `require_match: true` | error |
+
+**`require_match` is tri-state, and absent is NOT `false`.** The schema
+therefore declares no `default` for the property, and an explicit `false` is
+emitted rather than dropped — it carries meaning a missing key does not.
+
+| `require_match` | zero merged | some but not all | all merged |
+|---|---|---|---|
+| **absent** | error | warning | clean |
+| **`true`** | error | error | clean |
+| **`false`** | clean | clean | clean |
+
+**What to write instead.** If your operator really does contribute only states
+of its own — a transport operator whose one equation defines its own wind field,
+say — declare it:
+
+```json
+{ "type": "operator_compose", "systems": ["Chem", "Transport"],
+  "require_match": false }
+```
+
+`false` is a **declaration**, not a default: *this operator contributes only
+states of its own; unmatched equations are expected.* An absent flag means the
+author has not said, which is exactly why that is the case that errors. Seventeen
+entries across ten documents in this repo's own corpus needed the annotation; the
+diff is one line each.
+
+### An ambiguous bare-name `operator_compose` match is now REFUSED
+
+The bare-name fallback (`§4.7.1` step 3) binds `A.x` to `B.x` on a shared local
+name alone, and the merge keeps one of the two. Where **both are states**, each
+carries its own initial condition, so the choice decides what the flattened
+system integrates from — and flipping the entry's `systems` order silently
+changed the answer. That is now `operator_compose_ambiguous_bare_name`, an
+error.
+
+**Read this row as broad, not exotic. It refuses essentially every bare-name
+*rename* between two components.** For a bare-name match to happen at all, both
+sides must be namespaced dependent variables — and in practice both are then
+states, which is the refused case. So as a way of binding two components'
+same-named states, the fallback is now **closed**, and a document that relied on
+it loaded clean before and does not load at all now. This is a deliberate
+choice, not an edge case that happens to trip: the alternative is letting the
+`systems` argument order silently pick which initial condition the flattened
+system starts from.
+
+The fallback still works wherever it renames *nothing* — a direct match, a
+`_var` placeholder expansion — so an entry composing an operator over the
+mechanism's own scoped names (`D(Chemistry.O3, t) = …`) is unaffected.
+
+**How exposed are you?** Zero documents in this repo's corpus hit the refusal —
+the bare-name fallback produced no renames anywhere in the shipped tree — so the
+in-tree cost was two *tests* that had leaned on it, not any fixture. Your own
+documents are the ones to check: grep for an `operator_compose` whose two systems
+each declare the same local variable name with no `translate` between them.
+
+**What to write instead.** Name the surviving spelling outright:
+
+```json
+{ "type": "operator_compose", "systems": ["Sink", "Chem"],
+  "translate": { "Sink.O3": "Chem.O3" } }
+```
+
+or rename one of the two variables. The format will not infer which initial
+condition wins from argument order, from declaration order, or from anything
+else.
+
+Where **exactly one** side is a state the match is *not* ambiguous and nothing
+changes for you: the other name carries no initial condition, so the state owns
+the quantity and the other name is retargeted onto it — **in either argument
+order**, which is itself a fix for the old order-dependence.
 
 ---
 
@@ -256,6 +346,36 @@ loaded from a stream therefore kept its subsystem refs as unresolved
 `SubsystemRef`s — and `flatten` **silently skips** an unresolved `SubsystemRef`.
 Same bytes, strictly smaller system, no error. All three entry points now share
 one pipeline; the successor of `load(::IO)` is `load_string(::IO)`.
+
+### A species in no reaction gets no equation (bug fix, silent)
+
+`derive_odes` and `flatten` emitted `D(X, t) = 0` for a species whose net
+stoichiometry is zero in every reaction — the empty sum. Python, Rust, Go and
+TypeScript all omit the equation, so Julia was the 4–1 outlier; the rule is now
+written down as **esm-libraries-spec §4.6.1** and Julia follows it.
+
+Nothing raises. What changes is the **shape of the flattened system**:
+
+| | Before | After |
+|---|---|---|
+| `equations` | carries `D(X, t) = 0` | no entry for `X` |
+| `equation_count` | counts the inert species | does not |
+| equation ORDER | an inert species that a later operator also touches kept the reaction system's position | it takes the operator's position instead |
+| `X` in `state_variables` | yes, DIFFERENTIAL | yes, but in `algebraic_variables` too |
+| a `couple` `additive` edge onto `X` | summed onto the zero (`D(X) = 0 + expr`) | **becomes** the tendency (`D(X) = expr`, §4.7.2) |
+| a `couple` `multiplicative` edge onto `X` | multiplied the zero | raises `couple_multiplicative_no_tendency` — there is no tendency to multiply |
+
+If you pin equation strings, counts, or order, expect those pins to move —
+toward the shared `tests/conformance/flatten` corpus, which the other four
+bindings already matched.
+
+**Simulation is unchanged.** `ModelingToolkit.System(flat)` closes a state that
+no equation mentions with `D(X, t) ~ 0` at the lowering (see
+`ext/mtk_ext/systems.jl`), so such a species stays in `unknowns`, still binds an
+initial condition, and is still held at its initial value in the solution —
+the same trajectory as before, and the same one Python's SciPy backend
+produces. The zero is a backend closure only; it is never written into
+`flat.equations`.
 
 ## TypeScript — `@earthsciml/ast`
 
@@ -1238,6 +1358,66 @@ Listed because knowing the boundary is what stops you over-migrating.
   display renderers** were already conformant and were verified, not changed.
 - **`Expression` and `Expr` (TypeScript) are deliberately not collapsed.** They
   are two different types; see the note at the top of `types.ts`.
+
+---
+
+# Part VI — After the harmonization release
+
+Everything above describes one coordinated release. This part records the
+breaking changes that landed **after** it, newest last. The row kinds are the
+same ones [How to read a row](#how-to-read-a-row) defines.
+
+## The inline-test runner is no longer named for PDEs
+
+`run_pde_tests` ran a document's esm-spec §6.6 inline tests — all of them. The
+§6.6.5 spatial reductions are one assertion **form**, and the same runner had
+always executed the plain pointwise assertions of an ODE document through the
+same frame, so the name described something the code was not. It is now
+`run_inline_tests`, and the "Pde" is gone from the result type, the error type
+and the file names with it.
+
+**No aliases.** These are `deleted` rows, not `alias` rows: keeping the old
+spelling working keeps alive exactly the misreading the rename exists to
+remove. Your code stops compiling (Rust), or raises `UndefVarError` /
+`AttributeError` (Julia, Python), and the row tells you what to write instead.
+
+### Julia — `EarthSciAST.jl`
+
+| Before | After | Kind |
+|---|---|---|
+| `run_pde_tests(input; …)` | `run_inline_tests(inputs; …)` — and it now takes many documents, a directory, and an `options_for` callback | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` — it was only ever an alias of it, and both inline-test runners have always shared the one type | `deleted` |
+| `PdeTestError` | `InlineTestError` (unexported; listed for anyone reaching in) | `deleted` |
+| `src/pde_inline_tests.jl` | `src/inline_tests.jl` | `deleted` |
+| — | `InlineTestOptions` — the per-document override record `options_for` returns | `new` |
+
+### Python — `earthsci-ast`
+
+| Before | After | Kind |
+|---|---|---|
+| `from earthsci_ast.pde_inline_tests import run_pde_tests` | `from earthsci_ast.inline_tests import run_inline_tests` | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` | `deleted` |
+| `simulate_states(...)` | unchanged, plus a `cse: bool = True` keyword threaded to `esm_problem` | `new` |
+| — | `InlineTestOptions` | `new` |
+
+### Rust — `earthsci-ast`
+
+| Before | After | Kind |
+|---|---|---|
+| `run_pde_tests` | `run_inline_tests` | `deleted` |
+| `run_pde_tests_with_base_dir` | `run_inline_tests_with_base_dir` | `deleted` |
+| `run_pde_tests_with_providers` | `run_inline_tests_with_providers` | `deleted` |
+| `run_pde_tests_filtered` | `run_inline_tests_filtered` | `deleted` |
+| `PdeAssertionResult` | `AssertionResult` — the same canonical name Julia exports | `deleted` |
+| `src/pde_inline_tests.rs` | `src/inline_tests.rs` (crate-internal module path) | `deleted` |
+| — | `InlineTestOptions` + `run_inline_tests_paths(paths, options_for)` — the corpus entry | `new` |
+
+### Behaviour that changed without a rename
+
+| Binding | Symbol | What changed | How it shows up |
+|---|---|---|---|
+| Julia, Python, Rust | the inline-test runner | Now runs **`reaction_systems`** as well as `models`. Both carry `tests` (esm-spec §6.6); only `models` were run before. | More result rows, from components that previously reported none. A gate counting rows sees the count rise — that is the bug being fixed, not a regression. |
+| Julia, Python, Rust | the inline-test runner | A **batch** input (an iterable or a directory) records an unreadable document as one ERROR row instead of raising. A single-document call still raises. | A corpus run no longer aborts on one bad file. |
 
 ---
 

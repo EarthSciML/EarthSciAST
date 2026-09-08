@@ -212,7 +212,7 @@ different measure. They should each cross-reference the other so nobody
 
 The sibling assertion reduction was never pinned in the spec either; it was
 pinned in implementation comments, identically across three bindings
-(`pkg/earthsci-ast-rs/src/pde_inline_tests.rs:18–42`, and the Julia/Python
+(`pkg/earthsci-ast-rs/src/inline_tests.rs:18–42`, and the Julia/Python
 mirrors), with the reason stated plainly: "the esm-spec leaves these open, so
 determinism requires pinning them." Convention 2 there is:
 

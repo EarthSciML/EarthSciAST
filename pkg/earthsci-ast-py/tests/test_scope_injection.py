@@ -17,7 +17,7 @@ from conftest import CONFORMANCE_DIR
 from earthsci_ast.esm_types import Model
 from earthsci_ast.lower_expression_templates import ExpressionTemplateError
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import _ephemeral_injected_file
+from earthsci_ast.inline_tests import _ephemeral_injected_file
 from earthsci_ast.serialize import _serialize_esm_file
 
 CONF = str(CONFORMANCE_DIR / "expression_templates")
