@@ -3333,16 +3333,21 @@ it takes an OVERSHOOT (`|actual| > |expected|`) whose margin is itself of order
 above its expectation is one — but landing inside that band is not, and no
 fixture in this or any other category does: every fixture assertion in the
 corpus gets the same verdict under both readings, which is why the seam is
-invisible to fixtures however many are added. It is therefore pinned by a
-per-binding unit test rather than by a shared fixture:
+invisible to fixtures however many are added.
+
+It is pinned instead by **§5.32**, whose fixture is DATA-ONLY: it feeds
+`(actual, expected, rel, abs)` tuples straight to each binding's predicate, so
+it never has to *arrive* at a discriminating pair — it states one. Promoting the
+seam to a *simulation* category would indeed need a fixture whose integrated
+actual overshoots its expectation by a pinned margin, which the
+pinned-integrator contract does not give; that is a constraint on the shape, not
+on the contract. The per-binding unit tests
 `assertion_tolerance_symmetry_test.jl` (Julia),
-`test_relative_bound_is_symmetric_in_actual_and_expected` (Python), and
-`relative_bound_is_symmetric_in_actual_and_expected` (Rust) each assert the same
-discriminating case and the same swap-invariance property. Promoting it to a
-shared category would need a fixture whose simulated actual reliably overshoots
-its expectation by a pinned margin, which the pinned-integrator contract does
-not currently give; the three unit tests are the interim gate, and they are
-named here so the gap is recorded rather than assumed covered.
+`test_relative_bound_is_symmetric_in_actual_and_expected` (Python) and
+`relative_bound_is_symmetric_in_actual_and_expected` (Rust) remain as each
+binding's own statement of the same discriminating case and swap-invariance
+property; §5.32 is what makes them a repo-wide contract instead of three
+independent assertions, and extends the pin to TypeScript.
 
 **All five bindings READ this manifest**, including the two that cannot execute
 it: `pkg/earthsci-ast-go/pkg/esm/assertion_nonfinite_scope_test.go` and
