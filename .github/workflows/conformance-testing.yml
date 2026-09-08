@@ -845,7 +845,6 @@ jobs:
                 const analysis = JSON.parse(fs.readFileSync(analysisPath, 'utf8'));
 
                 const overallStatus = analysis.overall_status || 'UNKNOWN';
-                const overallScore = analysis.divergence_summary?.overall_score || 0;
                 const languagesTested = analysis.languages_tested || [];
                 const criticalDivergences = analysis.divergence_summary?.critical_divergences || [];
 
@@ -856,9 +855,8 @@ jobs:
 
                 let comment = `## ${statusEmoji} ${analysisType} Cross-Language Conformance Test Results\n\n`;
                 comment += `**Overall Status:** ${overallStatus}\n`;
-                comment += `**Consistency Score:** ${(overallScore * 100).toFixed(1)}%\n`;
                 comment += `**Languages Tested:** ${languagesTested.join(', ')}\n`;
-                comment += `**Critical Divergences:** ${criticalDivergences.length}\n\n`;
+                comment += `**Failing checks:** ${criticalDivergences.length}\n\n`;
 
                 // Performance summary if available
                 if (analysis.performance_analysis && analysis.performance_analysis.execution_time_stats) {
@@ -875,19 +873,38 @@ jobs:
                   comment += '\n';
                 }
 
+                // Read ONLY keys that `build_analysis()` in
+                // compare-conformance-outputs.py actually writes. This block used
+                // to read `divergence.score`, `data.status`, `data.consistency_score`,
+                // `data.divergent_tests` and `data.total_tests` — none of which
+                // exist in that schema, which emits `divergent_count` per entry and
+                // a plain integer per category. Every FAIL comment would have
+                // rendered `NaN%` and `undefined/undefined`. Nobody had seen it,
+                // because the harness had never once produced an analysis to
+                // comment on (#224); the first real divergence this gate catches
+                // must be readable.
+                const sections = [
+                  ['validation', analysis.validation_analysis],
+                  ['display', analysis.display_analysis],
+                  ['substitution', analysis.substitution_analysis],
+                ];
+                comment += `### Sections\n`;
+                for (const [name, sec] of sections) {
+                  const summary = (sec && sec.summary) || {};
+                  const divergent = summary.divergent_tests ?? 0;
+                  const total = summary.total_tests ?? 0;
+                  comment += `- ${divergent === 0 ? '✅' : '❌'} **${name}**: ${divergent}/${total} divergent\n`;
+                }
+                comment += '\n';
+
+                // `critical_divergences` and `divergence_summary.categories` carry
+                // the same per-check counts; one rendering of them is enough.
                 if (criticalDivergences.length > 0) {
-                  comment += `### Critical Divergences (< 70% consistency):\n`;
+                  comment += `### Failures by check\n`;
                   for (const divergence of criticalDivergences) {
-                    comment += `- **${divergence.category}**: ${(divergence.score * 100).toFixed(1)}% consistency\n`;
+                    comment += `- \`${divergence.category}\`: ${divergence.divergent_count} failure(s)\n`;
                   }
                   comment += '\n';
-                }
-
-                comment += `### Category Results:\n`;
-                const categories = analysis.divergence_summary?.categories || {};
-                for (const [category, data] of Object.entries(categories)) {
-                  const statusIcon = data.status === 'PASS' ? '✅' : data.status === 'WARN' ? '⚠️' : '❌';
-                  comment += `- ${statusIcon} **${category.charAt(0).toUpperCase() + category.slice(1)}**: ${(data.consistency_score * 100).toFixed(1)}% (${data.divergent_tests}/${data.total_tests} divergent)\n`;
                 }
 
                 comment += `\n📊 [View detailed conformance report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
