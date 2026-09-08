@@ -876,11 +876,15 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
     end
 
-    # A surviving template-registry body is a SHADOW copy of authored source that
-    # no equation walk reaches, so a body still naming a state the merge deleted
-    # would expand at the build boundary into a variable the flattened system no
-    # longer declares. Same guard, same code, as the `variable_map` half below
-    # (issue #230).
+    # An `operator_compose` merge DELETES a name the same way a `variable_map`
+    # substitution does, and a surviving template-registry body is the same
+    # SHADOW copy of authored source that no equation walk reaches — a body
+    # still naming a merged-away state would expand at the build boundary into a
+    # variable the flattened system no longer declares. So the merged-away names
+    # join the set the registry guard below checks against (issue #230). This is
+    # the ONE site where a stale reference is refused rather than resolved: the
+    # body is authored source, and rewriting it would silently diverge from the
+    # Expand-at-load image.
     union!(map_rewritten_names, keys(merged_renames))
 
     # (`template_registry` was computed before collection — see above — so its
