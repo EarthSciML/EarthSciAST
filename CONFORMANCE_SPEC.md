@@ -4480,18 +4480,31 @@ cell rather than passing on a coincidence. `theta(0)` pins the shaped
 UNKNOWN's own scalar default, so the fixture states both halves of the rule
 rather than assuming the half that worked.
 
-The fixture's three tests hold the issue's bisection axis inside ONE document —
-the declared scalar, a SCALAR `parameter_overrides` value, and the ARRAY
-`parameter_overrides` spelling of the SAME parameter. The array arm passed
+The fixture's first three tests hold the issue's bisection axis inside ONE
+document — the declared scalar, a SCALAR `parameter_overrides` value, and the
+ARRAY `parameter_overrides` spelling of the SAME parameter. The array arm passed
 *before* the fix and must keep passing, which is what stops a
 "treat every shaped parameter as array data" over-correction from breaking §5.28
 silently.
+
+A fourth test, `scalar_override_beats_array_default`, pins the §6.6.2
+PRECEDENCE arm on the other shaped parameter — the one whose declared `default`
+IS an array. `scale` is overridden by one scalar, so every `theta` cell is
+`1 + 0.5*3 = 2.5` and `min == max` again; a binding that ranks the scalar
+override behind the declared array reads `[1, 2, 3, 4]` and answers
+`[1.5, 2.0, 2.5, 3.0]`, disagreeing in three cells of four and on both
+reductions. Julia did exactly that — its registration tested the scalar arm
+AFTER the declared-`default` arms, so a scalar override of a parameter with an
+array `default` was silently dropped while Rust and Python honoured it.
 
 #### 5.32.3 A scalar override takes the same channel
 
 esm-spec §6.6.2 puts an override in the same value union as the `default`, so a
 SCALAR `parameter_overrides` entry naming a shaped parameter MUST broadcast too —
-it does not fall back to the scalar `p` vector, which cannot express it. The
+it does not fall back to the scalar `p` vector, which cannot express it, and it
+MUST NOT lose to the very `default` it replaces, whichever spelling that default
+uses. One union means one precedence: the two spellings of an override rank
+identically against the declaration. The
 routing is each binding's own (Julia broadcasts it in
 `_register_inline_array_parameters`; Python resolves it before broadcasting onto
 `input_arrays`; Rust binds it onto the ephemeral run document's `default`, which
