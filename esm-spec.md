@@ -2071,12 +2071,22 @@ convention `from_file` reference data follows (§6.6.5 convention 3). A
 **scalar** on a shaped variable keeps its broadcast meaning — the one value
 applies to every element — so nothing about existing documents changes.
 
-Inline array data is **build-time constant data**: it is fixed at load, so a
-binding MAY bind it through whatever channel it already uses for constant
-arrays rather than through its scalar parameter vector. A test supplies the same
-union through `parameter_overrides` / `initial_conditions` (§6.6.2), which is
-what lets a column-physics component carry its profiles per regime without one
-generated document per regime.
+A shaped variable's value is **build-time constant data** — the whole union, the
+broadcast scalar included: it is fixed at load, so a binding MAY bind it through
+whatever channel it already uses for constant arrays rather than through its
+scalar parameter vector. The **choice of channel is the binding's, but the
+broadcast is not**: whichever channel carries the value, a scalar on a shaped
+variable MUST be materialized over the variable's whole declared grid, so that
+`p` and `index(p, k)` mean what §4.3.4 says they mean and the two spellings of
+this union differ only in what they say. A binding that leaves a shaped
+parameter's scalar in a one-slot parameter vector has not implemented the
+broadcast — the value is then unindexable, and the failure surfaces far from the
+declaration (a non-finite right-hand side, an out-of-rank gather, a refusal to
+build) rather than as anything naming the variable.
+
+A test supplies the same union through `parameter_overrides` /
+`initial_conditions` (§6.6.2), which is what lets a column-physics component
+carry its profiles per regime without one generated document per regime.
 
 Precision:
 
@@ -2347,7 +2357,7 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 | `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this test runs (§6.6.6, §9.7.10). |
 | `assertions` | ✓ | Array of scalar checks; must contain at least one. |
 
-**Shaped values.** An `initial_conditions` or `parameter_overrides` value is a **number**, or — for a variable whose `shape` is non-empty — a **row-major nested JSON array** carrying the whole field. The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**; this is the same convention `from_file` reference data already follows (§6.6.5 convention 3). A **scalar** on a shaped variable keeps its broadcast meaning: the one value applies to every element. The same union applies to a shaped variable's declared `default` (§6.3).
+**Shaped values.** An `initial_conditions` or `parameter_overrides` value is a **number**, or — for a variable whose `shape` is non-empty — a **row-major nested JSON array** carrying the whole field. The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**; this is the same convention `from_file` reference data already follows (§6.6.5 convention 3). A **scalar** on a shaped variable keeps its broadcast meaning: the one value applies to every element. The same union applies to a shaped variable's declared `default` (§6.3). A scalar override of a shaped variable is therefore a value of that variable's full shape, and MUST be honoured on whatever channel the binding uses for that shape (§6.3) — never silently dropped because the scalar override channel has no room for a field.
 
 This is what lets a column-physics test supply its inputs. The inputs of such a component *are* columns — θ, q_v, u, v, p, dz, K profiles — and the instantaneous-derivative test shape (observed tendencies asserted at `time: 0`) needs them as `parameter_overrides` / `initial_conditions` of one shared model, per regime, not as one generated document per regime.
 
