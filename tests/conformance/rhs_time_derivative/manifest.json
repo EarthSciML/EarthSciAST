@@ -2,22 +2,17 @@
     "category": "rhs_time_derivative",
     "version": "1.0",
     "description": "Cross-binding conformance for esm-spec §4.2's RIGHT-HAND-SIDE structural `D` rule, in BOTH of its halves. RESOLVE: a `D` with `wrt: \"t\"` (or no `wrt`) whose `args[0]` is a bare reference to an unknown that CARRIES a differential equation names that unknown's tendency and is substituted during flattening, recursing through chained tendencies — so `dxdt ~ D(x, t)` is `-k*x`, and a model's scoped `D(Chem.A, t)` is the mass-action tendency §7.4 generated for the sibling reaction system. REFUSE: a structural `D` that resolves to NOTHING — one over an observed, over a parameter, or over a compound expression — is a rewrite-target reaching evaluation, and a conforming runtime MUST report `unlowered_operator` rather than invent a value for it, IN PARTICULAR NOT `0`. The two halves are gated together on purpose. Before this category all three Rust evaluators answered `D(anything) = 0` \"for parity\" with one another, so three shipped documents (`tests/end_to_end/land_atmosphere_hydrology.esm`, `tests/events/financial_climate_scenarios.esm`, `tests/valid/scoped_refs_nested.esm`) computed silent zeros and an inline test asserting a species tendency at t = 0 graded a configuration the model never ran; Python meanwhile refused BOTH halves with `unlowered_operator`, so the bindings disagreed in opposite directions on the same document. The refusal half is the one that can silently rot: `0` is a plausible-looking number, and `d_of_parameter` deliberately asserts `expected: 0.0` so a binding that invents the value is caught by the OUTCOME contract and not by the arithmetic. VERDICTS and outcome CLASSES are compared, not a numeric golden: a refusal has no actual to record, and each binding's diagnostic text differs while the `unlowered_operator` code (esm-spec §9.6.3 constraint 6) is the cross-binding contract.",
-    "reference_binding": "julia",
+    "reference_binding": "python",
     "bindings_required": [
-        "julia",
         "python",
         "rust"
     ],
     "scope_excluded": {
         "go": "rewrite-only port; no simulator / inline test runner",
-        "typescript": "rewrite-only port; no simulator / inline test runner"
+        "typescript": "rewrite-only port; no simulator / inline test runner",
+        "julia": "TWO gaps in `run_pde_tests` — the runner every inline-test category drives — neither of them in the §4.2 transform itself. (1) It cannot READ a 0-D observed: `_evaluate_assertion`'s pointwise branch resolves the asserted name against the STATE VECTOR alone (`_scalar_slot`, src/pde_inline_tests.jl:1227) with no state-free-observed fallback of the kind Rust's `scalar_observed` and Python's `_scalar_observed` provide, so every assertion here answers `scalar state '<name>' not found`. (2) It does not REFUSE an unresolvable right-hand-side `D`: the three refusal fixtures build and solve without complaint and only fail at the assertion lookup, so the `unlowered_operator` contract is unmet on this path (the gate in `tree_walk/compile.jl` belongs to the OTHER runner). Julia DOES implement the resolve half — `flatten` step 3c — and that is pinned separately by `rhs_time_derivative_resolution_test.jl`, which asserts it through a STATE the runner can read (`l(3) = 31` requires the chained tendency to have resolved). A binding GAP, not a design decision: remove this entry once `run_pde_tests` can read a 0-D observed and refuses an unlowered `D`."
     },
     "integrators": {
-        "julia": {
-            "algorithm": "Tsit5",
-            "reltol": 1e-12,
-            "abstol": 1e-14
-        },
         "python": {
             "method": "RK45",
             "rtol": 1e-12,
