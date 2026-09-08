@@ -438,7 +438,29 @@ Outputs land in `conformance-results/`:
 - `conformance-results/comparison/analysis.json` — cross-language comparison
 - `conformance-results/reports/conformance_report_*.html` — HTML report
 
-The comparison step requires at least two passing language implementations; it is skipped otherwise with the message "Need at least 2 successful language implementations to perform comparison."
+All five bindings are REQUIRED, and the comparison step is never skipped for want
+of them. A binding named on `--languages` that produced no `results.json` is
+recorded as a coverage FAILURE against that binding, so the run goes red rather
+than quietly comparing whatever is left; with fewer than two results to compare
+at all the comparator errors out (`need at least 2 language implementations to
+compare`) and writes no analysis, which is likewise red. There has been no
+"at least two succeeded, carry on" clause since the harness audit.
+
+By default this re-runs each binding's own test suite before generating that
+binding's conformance outputs, which is what you want on a laptop: one command,
+everything checked. Where the suites have ALREADY been run and passed — CI holds
+this job behind all five per-language jobs via `needs:` — skip the duplicate:
+
+```bash
+./scripts/test-conformance.sh --skip-binding-suites
+```
+
+That skips only the suite invocation. Every conformance producer still runs, and
+a producer that fails still fails the run. Do not pass it anywhere the suites
+have not actually been run: it removes a duplicate of the gate, not the gate.
+
+Each stage's wall-clock is printed as it finishes, and again as a slowest-first
+table at the end of the run.
 
 Debug a failing run with shell tracing:
 
