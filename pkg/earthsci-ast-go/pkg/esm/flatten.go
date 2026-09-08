@@ -1502,10 +1502,11 @@ func expandOperatorComposePlaceholders(components map[string]*componentSystem, e
 // is what made "merged everything" and "merged nothing" the same observable
 // outcome.
 //
-// `order` is the document's component order; the bare-name fallback resolves its
-// surviving spelling against it rather than against Systems[0]. See
-// bareNameOwnerWins.
-func applyOperatorCompose(components map[string]*componentSystem, order []string, entry OperatorComposeCoupling) error {
+// The bare-name fallback resolves its surviving spelling by OWNERSHIP rather
+// than by Systems[0]: whichever of the two names is the state variable owns the
+// quantity, and where BOTH are states the entry is refused rather than decided.
+// See bareNameOwner.
+func applyOperatorCompose(components map[string]*componentSystem, entry OperatorComposeCoupling) error {
 	a, aok := components[entry.Systems[0]]
 	b, bok := components[entry.Systems[1]]
 	if !aok || !bok {
@@ -2379,7 +2380,7 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 
 	for _, oc := range composes {
 		expandOperatorComposePlaceholders(components, oc)
-		if err := applyOperatorCompose(components, order, oc); err != nil {
+		if err := applyOperatorCompose(components, oc); err != nil {
 			return err
 		}
 	}
