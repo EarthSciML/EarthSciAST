@@ -222,3 +222,53 @@ def test_require_match_round_trips_including_an_explicit_false():
     assert emitted("require_match_unmatched.esm")["coupling"][0]["require_match"] is True
     assert emitted("no_merge_declared.esm")["coupling"][0]["require_match"] is False
     assert "require_match" not in emitted("partial_merge.esm")["coupling"][0]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ({}, None),  # absent -> strict
+        ({"require_match": None}, None),  # explicit null -> ALSO strict
+        ({"require_match": False}, False),  # the declared opt-out
+        ({"require_match": True}, True),
+    ],
+    ids=["absent", "explicit-null", "false", "true"],
+)
+def test_require_match_decodes_null_to_ABSENT_not_false(raw, expected):
+    """A JSON ``null`` is the STRICT state, not the silent opt-out.
+
+    `esm-schema.json` declares ``"type": "boolean"``, so a null never survives
+    `load_path` -- it is a schema error. It reaches the decoder only through a
+    lower entry point that skips validation, which is exactly where a tri-state
+    keyed off PRESENCE alone went wrong: ``bool(None)`` is ``False``, i.e. the
+    DECLARED opt-out, the one reading that silently disarms the zero-merge
+    refusal on the malformed input that most needs it.
+
+    Absent is the strict state, so failing safe means treating an unusable value
+    as unsaid. Julia, TypeScript, Rust and Go all decode null to absent already;
+    this pins Python to the same answer.
+    """
+    from earthsci_ast.parse import _parse_coupling_entry
+
+    entry = _parse_coupling_entry({"type": "operator_compose", "systems": ["Chem", "Sink"], **raw})
+    assert entry.require_match is expected
+
+
+def test_a_null_require_match_is_a_schema_error_at_load(tmp_path):
+    """The decode rule above is the second line of defence; this is the first.
+
+    `require_match` is declared ``"type": "boolean"``, so a null is rejected
+    before the decoder ever sees it. Pinning both means a future schema
+    loosening cannot quietly re-open the `bool(None)` path.
+    """
+    from earthsci_ast import SchemaValidationError
+
+    doc = json.loads((CATEGORY_DIR / "fixtures" / "no_merge.esm").read_text())
+    entry = next(c for c in doc["coupling"] if c["type"] == "operator_compose")
+    assert "require_match" not in entry, "no_merge.esm must leave the flag ABSENT"
+    entry["require_match"] = None
+
+    path = tmp_path / "null_require_match.esm"
+    path.write_text(json.dumps(doc))
+    with pytest.raises(SchemaValidationError):
+        load_path(str(path))

@@ -1141,8 +1141,19 @@ def _parse_coupling_entry(coupling_data: dict[str, Any]) -> CouplingEntry:
             # Tri-state: an absent key stays ``None``, so "the author has not
             # said" stays distinguishable from an explicit ``false``
             # (esm-libraries-spec §4.7.1 step 5).
+            #
+            # An explicit JSON ``null`` decodes to ABSENT, not to ``False``.
+            # The schema declares ``"type": "boolean"``, so a null only reaches
+            # here in an unvalidated document -- and keying off presence alone
+            # (``bool(None)`` is ``False``) would have made it the SILENT
+            # opt-out, disarming the zero-merge refusal on exactly the
+            # malformed input that most needs it. Absent is the strict state,
+            # so failing safe means treating an unusable value as unsaid. The
+            # other four bindings already decode null this way.
             require_match=(
-                bool(coupling_data["require_match"]) if "require_match" in coupling_data else None
+                None
+                if coupling_data.get("require_match") is None
+                else bool(coupling_data["require_match"])
             ),
         )
 
