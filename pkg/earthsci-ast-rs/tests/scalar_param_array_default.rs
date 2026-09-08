@@ -51,12 +51,12 @@ fn an_array_default_on_a_scalar_parameter_is_not_a_zero() {
         return;
     };
     let y: Vec<f64> = match observed_field(&prob, "y") {
-        Some(a) => a.iter().copied().collect(),
-        // No field at all is also fail-closed.
-        None => return,
+        Ok(a) => a.iter().copied().collect(),
+        // No readable field is also fail-closed.
+        Err(_) => return,
     };
     assert!(
-        !y.iter().any(|v| *v == 0.0),
+        !y.contains(&0.0),
         "`k` has no scalar default, so nothing may bind it to 0.0 — got y = {y:?}"
     );
 }
