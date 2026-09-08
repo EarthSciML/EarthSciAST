@@ -675,8 +675,11 @@ distinction matters because §4.7.5 step 1 defers to this section:
    equation TARGET only — it stays a mass-action factor in every rate law that references it, and
    it lowers to a parameter carrying its declared `default`.
 
-2. A species that appears in **no reaction**, so its net stoichiometry is zero in every column of
-   the stoichiometric matrix. Its sum is empty, and a library MUST NOT emit `D(X, t) = 0` for it.
+2. A species whose net stoichiometry is **zero in every column** of the stoichiometric matrix. Its
+   sum is empty, and a library MUST NOT emit `D(X, t) = 0` for it. The usual way to be such a
+   species is to appear in no reaction at all, but the test is on the NET column and a catalyst —
+   one that appears with equal substrate and product stoichiometry in every reaction it takes part
+   in — meets it too, and is skipped for the same reason.
 
 The second is the one worth arguing, because the empty sum really is zero and emitting it is
 defensible arithmetic. What settles it is that the two readings give the species **different
@@ -697,6 +700,17 @@ incomparable across documents that model the same chemistry.
 — §4.7.1 step 5 preserves an operator's unmatched equation, so a `_var` transport operator gives an
 inert species a transport-only tendency and it is differential after all. The point is that
 `derive_odes` does not decide that; the flattened system does, from what actually names `X`.
+
+**And where nothing does name it, the BACKEND has to say what "solved for" means.** §4.7.1 is
+blunt that an unknown with no constraint is a structurally singular system, and §4.7.5's field
+table is equally clear that `X` is still in `state_variables` — it is part of the solved-for
+vector either way. Those are reconciled at the lowering, not in the document: a simulation
+backend MUST keep such a state in its solution and MUST NOT silently drop it, and holding it at
+its initial value (an implicit `D(X, t) = 0` introduced by the backend, never written back into
+the flattened equation list) is what the Julia and Python reference bindings both do. A backend
+that instead REFUSES the system is also conforming — what it may not do is return a solution the
+state is missing from, because a caller that seeded `X` through `initial_conditions` then gets no
+error and no `X`.
 
 > **Note (was a cross-binding divergence).** Julia emitted `D(X, t) = 0` here while Python, Rust,
 > Go and TypeScript omitted the equation — a 4-1 split, recorded in the Julia binding's
