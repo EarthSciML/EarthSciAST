@@ -68,6 +68,12 @@ pub(crate) fn validate_model(
     // time into plausible, zero-padded garbage.
     validate_array_broadcast_shapes(model_name, model, errors);
 
+    // An observed defined (transitively) in terms of itself has no evaluation
+    // order, and the equations alone decide it — esm-spec §4.9.6. Checked here,
+    // beside the other whole-model structural checks, so `esm validate` names
+    // the cycle instead of the build naming an innocent bystander (issue #181).
+    check_observed_dependency_cycle(model_name, model, &ctx.class, errors);
+
     ctx.check_default_units_identity(errors);
     ctx.check_observed_definitions(&unit_env, errors, warnings);
     ctx.check_update_expression_refs(errors);
@@ -1524,6 +1530,163 @@ fn check_recurrence_equation(
                 return;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observed dependency cycles — esm-spec §4.9.6
+// ---------------------------------------------------------------------------
+
+/// The model's recurrence CANDIDATES: array-shaped unknowns whose own defining
+/// RHS reads them back through at least one `index` (esm-spec §4.3.1.1).
+///
+/// This is the predicate CONFORMANCE_SPEC §5.19.5 requires every check that
+/// would otherwise fire on the self-edge to be exempted by — *candidacy*, not
+/// the well-foundedness verdict. Gating on the verdict would let the cycle
+/// check fire on an ill-founded self-read and collapse the document to one
+/// cycle error, giving back exactly the named `recurrence_*` diagnosis the
+/// construct exists to produce. Gating on "is this a self-edge at all" is the
+/// mirror-image mistake and is just as wrong: it would swallow a scalar
+/// `x ~ x + 1` and a bare `s ~ s + 1`, which have no axis to fold along and can
+/// never be recurrences, and drop the cycle error they must keep getting.
+fn recurrence_candidate_vars(model: &crate::Model) -> HashSet<String> {
+    let array_shaped: HashSet<&str> = model
+        .variables
+        .iter()
+        .filter(|(_, v)| v.shape.as_ref().is_some_and(|s| !s.is_empty()))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    let mut out = HashSet::new();
+    for equation in &model.equations {
+        let Some((var, _)) = recurrence_lhs_target(&equation.lhs) else {
+            continue;
+        };
+        if array_shaped.contains(var) && has_index_self_read(&equation.rhs, var) {
+            out.insert(var.to_string());
+        }
+    }
+    out
+}
+
+/// Does `expr` gather `var` through at least one `index` node — the second half
+/// of the §4.3.1.1 candidacy predicate?
+///
+/// Deliberately its own walk rather than a call into
+/// [`collect_structural_self_reads`], because THE TWO WALKS MUST SEE THE SAME
+/// TREE. The edge set of the cycle graph comes from [`collect_free_symbols`],
+/// which descends the canonical child set (`ExpressionNode::for_each_child` —
+/// esm-spec §4.9.5 requires every Expression-valued field, `bindings` and
+/// `axes` included). `collect_structural_self_reads` descends the smaller set
+/// the recurrence LOWERING has to reason about, and says so: it skips
+/// `bindings` on the stated grounds that five bindings mirror that field set
+/// and §5.19.5 is exact agreement. Where the two disagree, a self-read is
+/// visible as an EDGE and invisible as a CANDIDATE — and a legal recurrence is
+/// reported as a cycle of length one.
+///
+/// That gap is reachable, not theoretical. `apply_expression_template` carries
+/// its call-site arguments in `bindings`, and from `esm: 0.9.0` a reference is
+/// preserved uninlined (§9.6.4 rule 2), so a self-read bound to a template
+/// parameter — `twice(v = s[k-1])`, which is
+/// `tests/fixtures/recurrence/09_recurrence_through_expression_template.esm` —
+/// reaches the validator still wrapped. Widening the WALK rather than the RULE
+/// is what keeps this faithful: the exemption is still "an array-shaped unknown
+/// with at least one `index` self-read in its own defining RHS", still gated on
+/// CANDIDACY and never on the well-foundedness verdict (CONFORMANCE_SPEC
+/// §5.19.5), and still narrower than "reads its own name" — a bare
+/// `s ~ s + 1` has no `index` read anywhere and stays a cycle of length one.
+/// Narrowing the EDGE walk instead would be wrong: a template binding naming a
+/// DIFFERENT observed is a real dependency once the application expands.
+/// Python resolves this the same way, for the same reason.
+fn has_index_self_read(expr: &crate::Expr, var: &str) -> bool {
+    let crate::Expr::Operator(node) = expr else {
+        return false;
+    };
+    if node.op == "index" && matches!(node.args.first(), Some(crate::Expr::Variable(v)) if v == var)
+    {
+        return true;
+    }
+    node.any_child(&mut |child| has_index_self_read(child, var))
+}
+
+/// The observeds each observed's defining RHS names, as a sorted adjacency map.
+///
+/// Sorted (`BTreeMap`/`BTreeSet`) rather than hashed because the cycle the
+/// diagnostic NAMES is chosen by the traversal order, and a `HashMap` would
+/// hand a different member of the same cycle to two runs of the same binary.
+/// Binder symbols are subtracted first, so an `aggregate` range key that
+/// happens to share a name with an observed does not manufacture an edge.
+fn observed_dependency_graph(
+    class: &crate::classification::Classification,
+    candidates: &HashSet<String>,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let observed: HashSet<&str> = class.observed_unknowns.iter().map(String::as_str).collect();
+    class
+        .observed_definitions
+        .iter()
+        .map(|(name, rhs)| {
+            let mut free = HashSet::new();
+            collect_free_symbols(rhs, &mut free);
+            let mut bound = HashSet::new();
+            collect_bound_symbols(rhs, &mut bound);
+            let mut deps: std::collections::BTreeSet<String> = free
+                .into_iter()
+                .filter(|s| !bound.contains(s) && observed.contains(s.as_str()))
+                .collect();
+            // esm-spec §4.3.1.1: a well-founded causal self-read is an ORDERING
+            // within one variable, not a dependency between two, so `V → V` is
+            // dropped from this graph — for a CANDIDATE, and only for one.
+            if candidates.contains(name) {
+                deps.remove(name);
+            }
+            (name.clone(), deps)
+        })
+        .collect()
+}
+
+/// Reject a dependency cycle among a model's observed unknowns
+/// (esm-spec §4.9.6; issue #181).
+///
+/// An observed is *defined* by its equation's RHS, so the definitions induce a
+/// dependency graph over the observed names, and a cycle in it means no
+/// evaluation order satisfies every definition. That is decidable from the
+/// equations alone — no shapes, no values, no solver — which is why it is a
+/// hard error here rather than a surprise at build time. Before this check,
+/// `esm validate` accepted a cyclic document and the build reported
+/// `E_TREEWALK_UNBOUND_NAME` against whichever name its walk reached first
+/// *after* the cycle, which is generally an innocent one.
+///
+/// One cycle is reported per model (the first the sorted DFS closes), like
+/// [`check_circular_dependencies_in_models`]: a second cycle is usually the
+/// same defect seen from another entry point, and the author fixes them one at
+/// a time anyway.
+fn check_observed_dependency_cycle(
+    model_name: &str,
+    model: &crate::Model,
+    class: &crate::classification::Classification,
+    errors: &mut Vec<StructuralError>,
+) {
+    if class.observed_definitions.is_empty() {
+        return;
+    }
+    let candidates = recurrence_candidate_vars(model);
+    let deps = observed_dependency_graph(class, &candidates);
+
+    if let Some(cycle) = crate::classification::first_observed_cycle(&deps) {
+        errors.push(StructuralError {
+            path: format!("/models/{model_name}"),
+            code: StructuralErrorCode::ObservedCycle,
+            message: format!(
+                "Observed dependency cycle: {}. Each of these observed variables is defined \
+                 in terms of the next, so no evaluation order satisfies every definition \
+                 (esm-spec §4.9.6). Break the cycle by splitting one observed into a \
+                 pre-value and a post-value.",
+                cycle.join(" -> ")
+            ),
+            details: serde_json::json!({
+                "cycle": cycle,
+                "dependency_type": "observed_definitions",
+            }),
+        });
     }
 }
 

@@ -80,6 +80,22 @@ export const ERROR_CODES = {
   //   axis to align to. Both shapes are declared, so this is static — a hard
   //   error, not a warning and not a runtime concern.
   ARRAY_SHAPE_MISMATCH: 'array_shape_mismatch',
+  // `observed_cycle` — a dependency cycle among a model's OBSERVED unknowns
+  //   (esm-spec §4.9.6): each observed on the cycle is defined by an equation
+  //   whose RHS names the next, so no evaluation order satisfies every
+  //   definition. Decidable from the equations alone — no shapes, no values, no
+  //   solver — so it is a HARD error at the structural layer in every binding,
+  //   executing or not, rather than a surprise at build time.
+  //   Pinned at `/models/<M>`: a cycle belongs to no single equation, exactly as
+  //   `equation_count_mismatch` belongs to no single one. `details.cycle` is the
+  //   path in traversal order with the entry node repeated to close it — a PATH,
+  //   so it is ordered semantically rather than by the §7.1.0 sort.
+  //   The self-edge of a §4.3.1.1 recurrence CANDIDATE is not one of these edges
+  //   and is dropped; every other self-reference (a scalar `x ~ x + 1`, a bare
+  //   `s ~ s + 1`) has no axis to fold along, is a cycle of length one, and IS
+  //   reported here. Distinct from `circular_dependency`, which is a cycle among
+  //   MODELS reached through scoped references.
+  OBSERVED_CYCLE: 'observed_cycle',
   // `recurrence_not_wellfounded` — a causal self-read (esm-spec §4.3.1.1) that
   //   is not strictly earlier along exactly ONE of its aggregate's output axes:
   //   a read provably at the same cell or later on its axis (`k`, `k+c`), an

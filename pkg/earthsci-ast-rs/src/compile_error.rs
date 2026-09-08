@@ -250,6 +250,32 @@ pub enum CompileError {
         result_axes: Vec<String>,
     },
 
+    /// A dependency cycle among the model's OBSERVED unknowns (esm-spec
+    /// §4.9.6): each observed on the cycle is defined by an equation whose RHS
+    /// names the next, so no evaluation order satisfies every definition.
+    ///
+    /// The equations decide this on their own, so `validate()` reports the same
+    /// defect as an `observed_cycle` structural error before any build is
+    /// attempted; this is the build-time backstop for a model compiled without
+    /// being validated first — and it is the reason this variant exists at all.
+    /// The ordering sweep used to *tolerate* an unorderable rule set, appending
+    /// the stuck rules in declaration order so "the build still proceeds"; what
+    /// actually proceeded was a materialization pass that read an observed with
+    /// no value yet and reported `E_TREEWALK_UNBOUND_NAME` against whichever
+    /// name it reached first — routinely an observed that is declared, defined
+    /// and referenced perfectly well (issue #181).
+    #[error(
+        "observed_cycle: dependency cycle among observed variables: {}. Each is defined in \
+         terms of the next, so no evaluation order satisfies every definition (esm-spec §4.9.6). \
+         `esm validate` reports this cycle before any build.",
+        cycle.join(" -> ")
+    )]
+    ObservedCycle {
+        /// The observeds on the cycle, in traversal order, with the entry node
+        /// repeated to close it (`["a", "b", "a"]`).
+        cycle: Vec<String>,
+    },
+
     /// The convenience constructors flattened the input first; that step
     /// failed.
     #[error("Flatten failed: {0}")]
