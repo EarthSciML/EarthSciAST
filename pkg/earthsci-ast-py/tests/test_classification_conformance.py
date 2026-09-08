@@ -29,8 +29,6 @@ from earthsci_ast.parse import load_document
 #: See ``tests/conformance/classification_indexed_lhs/README.md``.
 CATEGORIES = ("classification", "classification_indexed_lhs")
 
-MANIFEST = CONFORMANCE_DIR / "classification" / "manifest.json"
-
 #: The keys a golden pins for each model node. ``declared_system_kind`` is
 #: optional in a golden (it is only interesting where a model carries the
 #: field), so it is compared when present and skipped when not.
