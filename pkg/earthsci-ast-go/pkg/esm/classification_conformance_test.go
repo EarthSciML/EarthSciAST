@@ -75,11 +75,25 @@ func classificationModelNodes(t *testing.T, file *ESMFile) map[string]*Model {
 }
 
 func TestClassificationConformanceGoldens(t *testing.T) {
+	runClassificationCategory(t, "classification")
+}
+
+// The INDEXED LHS spelling of an arrayed definition (esm-spec §6.3.1), which the
+// `classification` category cannot state: it carries no `index` or `aggregate`
+// LHS at all, which is why four of the five bindings drifted onto the same wrong
+// answer independently. Same golden shape, so the same driver reads it.
+// See tests/conformance/classification_indexed_lhs/README.md.
+func TestClassificationIndexedLhsConformanceGoldens(t *testing.T) {
+	runClassificationCategory(t, "classification_indexed_lhs")
+}
+
+func runClassificationCategory(t *testing.T, category string) {
+	t.Helper()
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
 	}
-	base := filepath.Join(repoRoot, "tests", "conformance", "classification")
+	base := filepath.Join(repoRoot, "tests", "conformance", category)
 
 	raw, err := os.ReadFile(filepath.Join(base, "manifest.json"))
 	if err != nil {
@@ -96,7 +110,7 @@ func TestClassificationConformanceGoldens(t *testing.T) {
 		}
 	}
 	if !requiresGo {
-		t.Fatalf("the classification manifest no longer lists go in bindings_required: %v", man.BindingsRequired)
+		t.Fatalf("the %s manifest no longer lists go in bindings_required: %v", category, man.BindingsRequired)
 	}
 	if len(man.Fixtures) == 0 {
 		t.Fatal("manifest lists no fixtures")

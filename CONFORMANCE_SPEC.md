@@ -4418,6 +4418,107 @@ brings a self-qualified reference (`<model>.<local>` where `<local>` is a
 declared variable or is rooted at a declared subsystem) back to the local
 spelling before the build; the multi-model and scalar paths were already right.
 
+<!-- 5.32 is reserved for PR #250 (`pde_inline_observed_indexed_lhs`), the RUNTIME half of the same §6.3.1 contract §5.33 states statically. The two were authored in parallel; whichever merges second fills the gap. -->
+
+### 5.33 An Arrayed Definition Is Observed, in Every LHS Spelling (normative)
+
+esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
+unknown — bare (`y ~ f(…)`) and indexed (`y[i] ~ f(…)`, which defines the whole
+array `y`) — and restricts **neither** by rank. It states the criterion
+semantically, not syntactically: the defining form is read through the LHS's
+**base name**, so "an arrayed definition is observed exactly as its scalar
+counterpart is". §6.3.1 also retired the older wording ("a bare-variable LHS")
+explicitly, as "written for scalar equations" and contradicting the semantic
+criterion in the arrayed case.
+
+Alongside `observed_unknowns`, §6.3.1 sanctions a **narrower** set — the strict
+`y ~ f(…)` form, for **inlining** specifically, which Python spells
+`inlined_unknowns` — and says in as many words that it "does not narrow the
+partition". Substituting that narrower set for the classification is the defect
+this category exists to catch. It was found independently in **four of the five
+bindings**:
+
+| Binding | Where | Fixed by |
+|---|---|---|
+| Julia | the tree-walk build's owner buckets keyed on `eq.lhs isa VarExpr` | #232 / PR #250 |
+| Python | `flatten._collect_model` reading `classification.inlined_unknowns` | #231 / PR #237 |
+| Go | `definedVariableName` stopping at the `aggregate` shell | PR #268 |
+| TypeScript | `baseVariableName` stopping at the `aggregate` shell | PR #268 |
+| Rust | — `lhs_form` already peels both shells | (already correct) |
+
+Four independent implementations reaching the same wrong answer is a corpus
+failure, not four coincidences: the `classification` category
+(CONFORMANCE_SPEC §5.x, `tests/conformance/classification/`) contains **no
+`index` or `aggregate` LHS at all**, so the indexed spelling was unpinned
+everywhere.
+
+**The base-name rule.** A bare string is itself; `index(w, i…)` is `w`; an
+`aggregate` whose `expr` is an `index` is that index's base. An `aggregate` whose
+`expr` is a **`D`** is NOT a definition — it is the whole-array spelling of a
+tendency, and its base is an ODE state. That asymmetry is the entire content of
+the category: every binding's *derivative* reader already peeled the `aggregate`
+shell, and four of five *observed* readers did not.
+
+#### 5.33.1 Gate
+
+`tests/conformance/classification_indexed_lhs/`, one authored fixture
+(`observed_indexed_lhs.esm`) whose golden is written against the spec rather than
+minted by a binding. Six unknowns, chosen so a binding cannot pass by widening
+indiscriminately:
+
+| Variable | LHS | Golden |
+|---|---|---|
+| `wf` | `aggregate{k}(index(wf, k))`, state-free RHS | observed |
+| `ws` | `aggregate{k}(index(ws, k))`, state-reading RHS | observed |
+| `wb` | `index(wb, i)` — §6.3.1's worked-example spelling | observed |
+| `sc` | bare `sc` — the rank-0 control | observed |
+| `u`, `v` | `aggregate{k}(D(u[k]))` — the **same shell**, over a `D` | ODE state |
+| `im` | `im*im ~ c0` | algebraic |
+
+`wf` and `ws` are a controlled pair (state-free vs. state-reading), the two
+classes bindings route differently downstream, so a partial fix does not pass.
+`u` and `v` are the pin in the other direction: their derivative LHSs wear
+exactly the shell `wf` and `ws` wear, and a reader that unwraps it
+indiscriminately steals them out of `ode_states`.
+
+The golden's shape is identical to the `classification` category's, so each
+binding drives both with one reader. All five are in `bindings_required`.
+
+**Python is expected RED here until PR #237 merges**, and is deliberately kept in
+`bindings_required` rather than moved to `scope_excluded` — defining the contract
+down to what already passes is the weaker use of the mechanism (PR #250's
+precedent). Measured on `main` it answers `observed_unknowns = ['sc', 'wb']` and
+`algebraic_unknowns = ['im', 'wf', 'ws']`; measured at #237's head it answers the
+golden exactly. Julia and Rust pass on `main`; Go and TypeScript pass with
+PR #268.
+
+#### 5.33.2 What this category deliberately does not pin
+
+Two omissions, both decisions rather than oversights, recorded in the category's
+`README.md`:
+
+- **Which flatten bucket an arrayed observed lands in** — issue #270.
+  esm-libraries-spec §4.7.5 puts it in **both** `state_variables` and
+  `observed_variables`; no binding does that, and they miss in two opposite
+  directions (Julia and post-#237 Python drop it from `state_variables`; Rust, Go
+  and TypeScript drop it from `observed_variables`). Dual membership is not
+  expressible today — each binding assigns one role per variable with a single
+  `switch` — so this is a four-binding data-model decision with two defensible
+  directions, and pinning it here would settle it by fixture rather than by
+  triage.
+
+- **The cadence of an indexed-LHS observed** — issue #272. This is the
+  consequence §6.3.1 names: `algebraic_unknowns` seeds the CONTINUOUS partition
+  (§5.7.2) while an observed's cadence resolves through its defining RHS, so a
+  state-free arrayed observed mis-credited as algebraic stops folding at bind.
+  It is not pinned cross-binding because the **cadence oracle itself** —
+  `scripts/run-cadence-conformance.py` and Julia's mirror in `src/cadence.jl` —
+  carries the same strict bare-LHS gate, and seven existing fixtures under
+  `tests/valid/cadence/` already have `index` / `aggregate` LHSs whose goldens
+  were minted against that behaviour. The consequence is pinned **per-binding**
+  in the meantime (Go and TypeScript both assert `cadence(w) == const` for a
+  state-free arrayed observed), which is what made #272 visible.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
