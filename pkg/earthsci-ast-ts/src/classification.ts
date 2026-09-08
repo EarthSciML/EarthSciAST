@@ -89,13 +89,38 @@ function derivativeTarget(expr: Expression): string | undefined {
 
 /**
  * The base variable a (possibly indexed) expression names: `u` → `u`,
- * `index(u, i)` → `u`. Anything else is not a single named variable.
+ * `index(u, i)` → `u`, and an `aggregate` whose `expr` is an `index` — the
+ * arrayed definition `y[i] ~ f(…)` as documents actually spell it — is that
+ * index's base. Anything else is not a single named variable.
+ *
+ * The `aggregate` unwrap is the mirror of {@link derivativeTarget}'s: that one
+ * already sees through the same shell for a `D` body, and esm-spec §6.3.1 reads
+ * BOTH defining spellings through the LHS's base name ("an arrayed definition is
+ * observed exactly as its scalar counterpart is"). Without it an array-shaped
+ * observed written `aggregate{k}(index(w, k)) ~ …` was credited to nobody, so
+ * {@link observedUnknowns} did not know it was an observed at all and
+ * {@link algebraicUnknowns} claimed it by elimination — which §6.3.1 calls out
+ * as load-bearing beyond bookkeeping, since `algebraic_unknowns` seeds the
+ * CONTINUOUS cadence partition while an observed's cadence resolves through its
+ * defining RHS.
+ *
+ * Only an `index` body unwraps. An `aggregate` whose body is a `D`
+ * (`aggregate{k}(D(u[k]))`) is the whole-array spelling of a DERIVATIVE, which
+ * makes an ODE state, not an observed; {@link derivativeTarget} owns that shape
+ * and crediting it here would hand a state's tendency to the units and cadence
+ * passes as if it were a definition.
  */
 function baseVariableName(expr: Expression): string | undefined {
   if (typeof expr === 'string') return expr
   if (isExpressionNode(expr) && expr.op === 'index') {
     const arg = expr.args?.[0]
     return arg === undefined ? undefined : baseVariableName(arg)
+  }
+  if (isExpressionNode(expr) && expr.op === 'aggregate') {
+    const inner = (expr as { expr?: Expression }).expr
+    if (inner !== undefined && isExpressionNode(inner) && inner.op === 'index') {
+      return baseVariableName(inner)
+    }
   }
   return undefined
 }
