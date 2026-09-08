@@ -396,7 +396,8 @@ function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
 end
 function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                      var_map, param_sym_set, reg_funcs,
-                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
+                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
+                     ranges::Union{Nothing,Vector{UnitRange{Int}}}=nothing)
     bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
                                var_map, param_sym_set, reg_funcs)
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
@@ -453,7 +454,16 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                 print(io, k, ':')
                 for d in 1:D
                     @inbounds for dd in 1:D; back[dd] = loop[dd]; end
-                    back[d] = loop[d] - 1
+                    # CLAMPED to the dim's own range. A subscript is NOT a total
+                    # function of an out-of-range loop point: an unstructured
+                    # gather (`index(cells_on_cell, i, n)`) resolves through a
+                    # const array and throws `E_TREEWALK_CONSTARRAY_OOB` at
+                    # `i = lo − 1`. At `lo` the difference degenerates to 0 for
+                    # every lane, which costs nothing: `lo` is a segment start
+                    # unconditionally, and the scan compares `lo` only against
+                    # `lo + 1`.
+                    back[d] = ranges === nothing ? loop[d] - 1 :
+                              max(first(ranges[d]), loop[d] - 1)
                     vb = _eval_const_int(a, _set_env!(env, idx_names, back), ca)
                     print(io, v - vb, ',')
                 end
@@ -633,7 +643,7 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     loop = Vector{Int}(undef, D)
     ck(iv) = (loop[d] = iv;
               (_cell_ckey!(sig, loop, idx_names, body, ctx_proto,
-                           var_map, param_sym_set, reg_funcs, okey))[2])
+                           var_map, param_sym_set, reg_funcs, okey, ranges))[2])
     # Region boundaries in this dim, kept only where they open a real segment
     # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
     cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
