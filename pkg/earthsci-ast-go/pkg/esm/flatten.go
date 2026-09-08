@@ -1762,18 +1762,6 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 	return nil
 }
 
-// applyVariableMap substitutes the target parameter with the source variable.
-//
-// For `param_to_var`, `conversion_factor`, and the empty/absent transform the
-// target parameter is PROMOTED — removed from the parameter list, since it
-// becomes a shared variable. For the remaining transforms (`identity`,
-// `additive`, `multiplicative`) the target stays a parameter; the substitution
-// still runs so the equation set references the canonical name.
-//
-// `loaderNames` is the set of top-level `data_sources` keys. When a
-// `param_to_var` binds a LOADED field onto a GRID-SHAPED consumer parameter, the
-// shape transfers to the source name so the pointwise lift recognizes it as an
-// array operand to index per grid cell (esm-spec §11.5 + §10.4).
 // checkVariableMapEndpoints is the resolution preflight for every
 // `variable_map` entry: each endpoint must name a state, parameter or observed
 // the collected system carries, under its FULL dot path (esm-spec §4.6).
@@ -1829,6 +1817,18 @@ func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSy
 	return nil
 }
 
+// applyVariableMap substitutes the target parameter with the source variable.
+//
+// For `param_to_var`, `conversion_factor`, and the empty/absent transform the
+// target parameter is PROMOTED — removed from the parameter list, since it
+// becomes a shared variable. For the remaining transforms (`identity`,
+// `additive`, `multiplicative`) the target stays a parameter; the substitution
+// still runs so the equation set references the canonical name.
+//
+// `loaderNames` is the set of top-level `data_sources` keys. When a
+// `param_to_var` binds a LOADED field onto a GRID-SHAPED consumer parameter, the
+// shape transfers to the source name so the pointwise lift recognizes it as an
+// array operand to index per grid cell (esm-spec §11.5 + §10.4).
 func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, loaderNames map[string]bool) error {
 	if entry.From == "" || entry.To == "" {
 		return nil
