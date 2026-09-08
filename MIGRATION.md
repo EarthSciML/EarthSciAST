@@ -58,6 +58,7 @@ green and your program does something different. Audit these first.
 | Go | `Substitute` | Single-pass, no longer transitive. `Substitute("a", {a: b, b: c})` returns `"b"`, not `"c"`. | Chained renames that were silently mis-applied now apply correctly. Goldens change. |
 | Julia, Python, Rust | `solve` default tolerances | `reltol = 1e-4`, `abstol = 1e-6` everywhere — **looser** than Rust's and Python's old defaults. | Trajectory assertions fail. |
 | Julia, Python, Rust | a failed **build** | Raises instead of returning a failed result. | Code inspecting `result.success` for build failures never sees it; the exception propagates. |
+| Julia | `derive_odes` / `flatten` on a reaction system | A species whose net stoichiometry is zero in every reaction gets **no equation**, where Julia used to emit `D(X, t) = 0`. The other four bindings already omitted it. | `equations`, `equation_count` and equation ORDER change; a `couple` `additive` edge onto such a species now BECOMES its tendency instead of summing onto a zero. Simulation results do not change — see the Julia section below. |
 | Python | `UnitWarning.path` | Was the string `"unit_validation"` at every site; is now `""` (the document root). | A consumer matching on that literal stops matching. |
 | Python | index-set merge | A model-nested `index_sets` now **merges over** the document-scoped registry instead of being invisible to it. | Different resolution verdicts on pre-0.8.0-shaped documents. |
 | Julia | diagnostic pointers | A scalar `update: {...}` no longer reports a synthetic `/0` segment. | A consumer matching on diagnostic JSON Pointers sees a different path. |
@@ -256,6 +257,36 @@ loaded from a stream therefore kept its subsystem refs as unresolved
 `SubsystemRef`s — and `flatten` **silently skips** an unresolved `SubsystemRef`.
 Same bytes, strictly smaller system, no error. All three entry points now share
 one pipeline; the successor of `load(::IO)` is `load_string(::IO)`.
+
+### A species in no reaction gets no equation (bug fix, silent)
+
+`derive_odes` and `flatten` emitted `D(X, t) = 0` for a species whose net
+stoichiometry is zero in every reaction — the empty sum. Python, Rust, Go and
+TypeScript all omit the equation, so Julia was the 4–1 outlier; the rule is now
+written down as **esm-libraries-spec §4.6.1** and Julia follows it.
+
+Nothing raises. What changes is the **shape of the flattened system**:
+
+| | Before | After |
+|---|---|---|
+| `equations` | carries `D(X, t) = 0` | no entry for `X` |
+| `equation_count` | counts the inert species | does not |
+| equation ORDER | an inert species that a later operator also touches kept the reaction system's position | it takes the operator's position instead |
+| `X` in `state_variables` | yes, DIFFERENTIAL | yes, but in `algebraic_variables` too |
+| a `couple` `additive` edge onto `X` | summed onto the zero (`D(X) = 0 + expr`) | **becomes** the tendency (`D(X) = expr`, §4.7.2) |
+| a `couple` `multiplicative` edge onto `X` | multiplied the zero | raises `couple_multiplicative_no_tendency` — there is no tendency to multiply |
+
+If you pin equation strings, counts, or order, expect those pins to move —
+toward the shared `tests/conformance/flatten` corpus, which the other four
+bindings already matched.
+
+**Simulation is unchanged.** `ModelingToolkit.System(flat)` closes a state that
+no equation mentions with `D(X, t) ~ 0` at the lowering (see
+`ext/mtk_ext/systems.jl`), so such a species stays in `unknowns`, still binds an
+initial condition, and is still held at its initial value in the solution —
+the same trajectory as before, and the same one Python's SciPy backend
+produces. The zero is a backend closure only; it is never written into
+`flat.equations`.
 
 ## TypeScript — `@earthsciml/ast`
 
