@@ -4415,6 +4415,11 @@ the common case anyway, because it matches bare tails both ways; that is an
 accident of its matching rule, not resolution, and it does not cover a
 `translate` that renames across differing local names.)
 
+That gap and Julia's `output_selection` exclusion share ONE cause — the last two
+name-keyed reads sit behind a public surface that cannot change without a
+cross-binding decision — and are tracked together in
+**EarthSciML/EarthSciAST#271**.
+
 **A merged-away name is never a parameter.** `operator_compose` deletes only a
 DEPENDENT VARIABLE — a state or an observed — so a `parameter_overrides` key can
 never name one. `initial_conditions` is the surface the case actually lands on;
