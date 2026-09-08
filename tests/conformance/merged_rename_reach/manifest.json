@@ -1,0 +1,106 @@
+{
+  "category": "merged_rename_reach",
+  "version": "1.0",
+  "description": "Cross-binding conformance for how far an `operator_compose` merged-away rename REACHES (esm-libraries-spec §4.7.1 step 4). A renaming match — a `translate` match, or the bare-name fallback #216 resolves by ownership — folds `B.x` into `A.x`, so `B.x` is DELETED and every equation in the document is rewritten off the dead spelling. That rewrite is document-wide over EQUATION ASTs and nothing else, and three other places address the state BY NAME: a `couple` connector's `from`/`to` and a `variable_map`'s `from`/`to`, which are plain scoped-reference STRINGS on the entry object; the override keys a runner is handed; and a surviving expression-template registry body. §4.7.5 step 3 applies every `operator_compose` BEFORE any `couple` or `variable_map`, so an entry that has not run yet can still name a spelling the merge has already deleted. The decision this category pins is RESOLUTION, not refusal: a reference to a merged-away name resolves to the survivor, so a document that merges `B.x` onto `A.x` stays addressable by either spelling. Refusing instead would be defensible for a name nothing can resolve, but these are renames the author ASKED for — a `translate` map names the surviving spelling on purpose — and a document is built around them. Like `operator_compose_merge` and `override_key_diagnostics` this category carries no golden: what it pins is REACH, asserted as structure (which names survive, which equations reference what) rather than as numbers.",
+  "spec": "esm-libraries-spec §4.7.1 step 4; §4.7.5 step 3 ordering",
+  "issue": "EarthSciML/EarthSciAST#230",
+  "bindings_required": [
+    "julia",
+    "python",
+    "rust",
+    "typescript",
+    "go"
+  ],
+  "surfaces": {
+    "flatten": {
+      "_comment": "The rewrite is a pure structural transform, so a rewrite-only port implements it in full. All five bindings are in scope.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust",
+        "typescript",
+        "go"
+      ]
+    },
+    "override_keys": {
+      "_comment": "The runner half: a caller's `initial_conditions` / `parameter_overrides` key naming the deleted spelling. Only the three EXECUTING bindings have an override-key surface at all — the same scope split `override_key_diagnostics` records.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust"
+      ],
+      "scope_excluded": {
+        "go": "rewrite-only port; no simulator, so no override-key surface",
+        "typescript": "rewrite-only port; no simulator, so no override-key surface"
+      }
+    }
+  },
+  "merged_variable_renames_field": {
+    "_comment": "The map flatten records on its metadata so a consumer that addresses a state by name can resolve a spelling the merge moved. Named per binding; the CONTENT is the cross-binding contract.",
+    "julia": "FlattenMetadata.merged_variable_renames",
+    "python": "FlattenMetadata.merged_variable_renames",
+    "rust": "FlattenMetadata::merged_variable_renames",
+    "typescript": "FlattenMetadata.mergedVariableRenames",
+    "go": "FlattenMetadata.MergedVariableRenames"
+  },
+  "cases": [
+    {
+      "id": "later_couple_connector",
+      "path": "fixtures/later_couple_connector.esm",
+      "surface": "flatten",
+      "merged_variable_renames": {
+        "Sink.O3": "Chem.O3"
+      },
+      "state_variables": [
+        "Chem.O3"
+      ],
+      "tendency_of": "Chem.O3",
+      "tendency_references": [
+        "Chem.k",
+        "Sink.kd",
+        "Emis.flux"
+      ],
+      "no_equation_references": [
+        "Sink.O3"
+      ],
+      "note": "The QUIET failure. A `couple` connector targets `Sink.O3`, which the earlier compose deleted; the connector's `to` is a plain string the equation retarget never reaches, so the target matched nothing and the whole connector was dropped — leaving a flattened tendency arithmetically identical to a document with no `couple` entry at all. `Emis.flux` in `D(Chem.O3, t)` is what the fix is observable as."
+    },
+    {
+      "id": "later_variable_map",
+      "path": "fixtures/later_variable_map.esm",
+      "surface": "flatten",
+      "merged_variable_renames": {
+        "Sink.O3": "Chem.O3"
+      },
+      "state_variables": [
+        "Chem.O3",
+        "Consumer.y"
+      ],
+      "tendency_of": "Consumer.y",
+      "tendency_references": [
+        "Chem.O3",
+        "Consumer.y"
+      ],
+      "no_equation_references": [
+        "Sink.O3",
+        "Consumer.bg"
+      ],
+      "note": "The LOUD failure, and the sharper half. A later `variable_map` names the deleted `Sink.O3` as its `from`, so the substitution injected a name the flattened system no longer declares into every equation referencing `Consumer.bg` — a dangling reference that surfaces far downstream as an unbound variable at the build boundary, not a missing term."
+    },
+    {
+      "id": "override_key_names_the_merged_away_state",
+      "path": "fixtures/later_couple_connector.esm",
+      "surface": "override_keys",
+      "initial_conditions": {
+        "Sink.O3": 10.0
+      },
+      "resolves_to": {
+        "Chem.O3": 10.0
+      },
+      "default_without_resolution": {
+        "Chem.O3": 30.0
+      },
+      "note": "A caller's initial-condition key naming the deleted spelling. Unresolved it designates nothing: the key is silently dropped (Python, Julia) or reported unknown (Rust), and the state runs from its declared 30.0 — a wrong answer, not a missing one, because the run still reports a verdict. `parameter_overrides` shares this canonicalization, but a merged-away name is always a DEPENDENT VARIABLE (a state or an observed) and never a parameter, so the state side is where the case actually lands."
+    }
+  ]
+}
