@@ -15,7 +15,8 @@
 //! | op | why it has no rule | what must happen |
 //! |---|---|---|
 //! | `skolem`, `rank`, `distinct`, `argmin`, `argmax` | build-time relational, materialized by `value_invention` | build error |
-//! | `enum`, `table_lookup`, `apply_expression_template` | lowered at LOAD; surviving one is a lowering bug | build error |
+//! | `enum`, `apply_expression_template` | lowered at LOAD; surviving one is a lowering bug | build error |
+//! | `table_lookup` | lowered on the way into the BUILD (§9.5.3, `lower_table_lookup`) — at load it would break the §9.5.4 round trip; surviving one is a lowering bug | build error |
 //! | `ic` | structural: initial-condition assembly reads the equation, the evaluator never sees the node | build error in a BODY, legal as an equation LHS |
 //! | `true` | **nothing consumes it** — it is a boolean literal | EVALUATE it |
 //!
@@ -72,10 +73,12 @@ fn a_true_body_counts_instead_of_panicking() {
 /// gate, six of these nine reached `eval_op`'s `unreachable!` exactly as `true`
 /// did, so the panic was a class and not one op.
 ///
-/// Built as a typed document rather than loaded, deliberately: `enum`,
-/// `table_lookup` and `apply_expression_template` are lowered at LOAD, so a
-/// loader-borne test could never place one in front of the build gate, which is
-/// the gate under test.
+/// Built as a typed document rather than loaded, deliberately: `enum` and
+/// `apply_expression_template` are lowered at LOAD, so a loader-borne test
+/// could never place one in front of the build gate, which is the gate under
+/// test. `table_lookup` lowers on the way into the build instead (§9.5.3), and
+/// reaches the gate here for the reason a real document would — the document
+/// declares no `function_tables`, so there is nothing to lower it against.
 #[test]
 fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
     /// What refuses this op, audited case by case rather than asserted

@@ -10,7 +10,8 @@ to look -- this module:
 
 * :class:`ErrorCode` -- an ``Enum`` of the *validation* codes emitted by the
   dataclass-level validator (:mod:`earthsci_ast.validation`) as coded
-  ``ValidationError`` records.
+  ``ValidationError`` records, plus the esm-spec §9.5.5 ``table_lookup``
+  codes (see the comment on those members).
 * module-level ``str`` constants -- the *template*, *coupling*,
   *metaparameter*, *geometry*, and *closed-function* code families raised as
   ``ExpressionTemplateError`` / ``ClosedFunctionError`` during load-time
@@ -127,6 +128,24 @@ class ErrorCode(Enum):
     SCHEMA = "schema"
     PARSE = "parse"
     VALIDATION_ERROR = "validation_error"
+    # esm-spec §9.5.5 `table_lookup` diagnostics, raised as
+    # `lower_table_lookup.TableLookupError` when the §9.5.3 lowering runs on the
+    # way into a build. Not validator findings — a table_lookup is well-formed
+    # until it is resolved against the `function_tables` entry it names — but
+    # they live here because §9.5.5 makes the code strings cross-binding
+    # contract exactly like every other value in this module.
+    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table"
+    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch"
+    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range"
+    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch"
+    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch"
+    TABLE_AXIS_NAN = "table_axis_nan"
+    # §9.5.3a: `out_of_bounds: "error"` is "conformant when implemented"
+    # (§9.5.1) and this binding does not implement it, so the lookup is REFUSED
+    # where it would otherwise lower. Silently substituting clamp semantics for
+    # a declared error semantics is a wrong answer with nothing in the result to
+    # say so.
+    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported"
 
 
 # ===========================================================================
@@ -197,6 +216,19 @@ TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME = "template_import_rename_unknown_name"
 TEMPLATE_IMPORT_REBIND_UNKNOWN_NAME = "template_import_rebind_unknown_name"
 TEMPLATE_IMPORT_RENAME_COLLISION = "template_import_rename_collision"
 TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid"
+
+# Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set
+# renaming"): the mount-edge mirror of `template_import_rename_unknown_name`.
+SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name"
+
+# `index_set_rename` on a mount form that does not implement it (esm-spec §4.7
+# "Mount-edge index-set renaming", "Where it applies"). Python honours the field
+# at BOTH mount forms -- the top-level `models.<k>` `{ref}` and the
+# `subsystems.<k>` edge share `_load_ref_data` -- so this binding never raises
+# it; the constant exists because the code table is cross-language uniform.
+SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM = (
+    "subsystem_index_set_rename_unsupported_mount_form"
+)
 
 # Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
 # is RETIRED in 1.0.0: a data source is not a component, so it can no longer be

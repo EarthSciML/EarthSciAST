@@ -114,6 +114,14 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = flatten(input)
     end
     if input isa FlattenedSystem
+        # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
+        # the one point every input kind (path, native Dict, EsmFile,
+        # already-flattened system) has funnelled into, and the first point
+        # inside a BUILD. Not at load: §9.5.4 requires the authored form to
+        # round-trip, and `save` re-serializes the very image `load` produced.
+        # First in the block, so the shape transforms below see the closed-
+        # function tree rather than an op they would have to know about.
+        input = lower_table_lookups(input)
         # Surviving references are THE behavior: they ride through
         # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
         # expands them with SITE RECORDING — the SINGLE evaluator-side expansion

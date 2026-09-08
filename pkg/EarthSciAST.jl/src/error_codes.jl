@@ -188,6 +188,19 @@ const ERROR_CODES = (
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY = "subsystem_ref_is_template_library",
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library",
     SUBSYSTEM_INDEX_SET_CONFLICT = "subsystem_index_set_conflict",
+    # A mount edge's `index_set_rename` names an index set the RESOLVED mounted
+    # document does not declare (esm-spec §4.7 "Mount-edge index-set
+    # renaming") — the mount-edge mirror of
+    # `template_import_rename_unknown_name`.
+    SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name",
+
+    # `index_set_rename` on a mount form that does not implement it (esm-spec
+    # §4.7 "Mount-edge index-set renaming", "Where it applies"). The field is a
+    # legal `SubsystemRef` property at either mount form, but a binding whose
+    # top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so rather
+    # than merge the leaf under its pre-rename axis names.
+    SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
+        "subsystem_index_set_rename_unsupported_mount_form",
 
     # ── Enum lowering (esm-spec §9.3; registered_functions.jl, raised as
     #    `EnumLoweringError`). The two `unknown_*` values are the ones the
@@ -216,6 +229,26 @@ const ERROR_CODES = (
     # documents them as part of its code vocabulary.
     INTERP_TABLE_NOT_CONST = "interp_table_not_const",
     INTERP_AXIS_NOT_CONST = "interp_axis_not_const",
+
+    # ── Sampled function tables (esm-spec §9.5.5; lower_table_lookup.jl, raised
+    #    as `TableLookupError`). The `table_lookup` → `interp.*` lowering is a
+    #    BUILD-time pass, so these are build diagnostics, not load ones — a
+    #    document carrying a malformed lookup still loads and still round-trips.
+    #    Added to all five bindings together, which is what a §9.5.5 code
+    #    family requires of this registry. ──────────────────────────────────
+    TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table",
+    TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch",
+    TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range",
+    TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch",
+    TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch",
+    TABLE_AXIS_NAN = "table_axis_nan",
+    # esm-spec §9.5.3a: `out_of_bounds: "clamp"` is required of every binding
+    # and `"error"` is "conformant when implemented" (§9.5.1). This binding
+    # implements only the first, so a table declaring the second is REFUSED
+    # where it would otherwise lower — answering in the mode we happen to have
+    # rather than the one the author declared is a wrong number with nothing in
+    # the result to say so.
+    TABLE_OUT_OF_BOUNDS_UNSUPPORTED = "table_out_of_bounds_unsupported",
 
     # ── Discretization pipeline (tree_walk/; esm-spec §4.2 / §9.6.8). The one
     #    `TreeWalkError` code that is NOT an `E_TREEWALK_*` Julia-local name:

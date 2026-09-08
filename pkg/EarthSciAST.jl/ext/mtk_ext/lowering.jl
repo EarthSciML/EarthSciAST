@@ -127,6 +127,18 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
         return _build_concat(expr, var_dict, t_sym, dim_dict)
     elseif op == "fn"
         return _build_fn(expr, var_dict, t_sym, dim_dict)
+    elseif op == "const"
+        # esm-spec §9.2: a `const` node IS its value. Only the SCALAR form
+        # lowers here — an ARRAY-valued `const` is a table argument, extracted
+        # at the `interp.*` call site by `_build_fn` (a bare array in a scalar
+        # symbolic expression has no meaning MTK can trace). Until this arm
+        # existed, a perfectly ordinary `{"op": "const", "value": 0.0}` RHS —
+        # the form every binding's conformance fixtures write a literal in —
+        # died as "Unsupported operator: const".
+        expr.value isa Real && return expr.value
+        throw(ArgumentError("`const` with a $(typeof(expr.value)) value is supported " *
+              "only as an `interp.*` table / axis argument in MTK lowering " *
+              "(esm-spec §9.2)"))
     else
         throw(ArgumentError("Unsupported operator: $op"))
     end

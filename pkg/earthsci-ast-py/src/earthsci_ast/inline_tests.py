@@ -77,6 +77,7 @@ from .classification import is_observed_unknown
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
 from .expr_walk import iter_children
 from .flatten import flatten
+from .lower_table_lookup import lower_table_lookups
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
 from .simulation import BuildInspection, _eval_buildtime_field, observed_at_state
@@ -1173,6 +1174,12 @@ def _run_document_tests(
     already-loaded :class:`EsmFile` — it anchors ``from_file`` references and
     the §9.7.10 per-test injection. The per-document body of
     :func:`run_inline_tests`."""
+    # esm-spec §9.5.3 lowering, ahead of the per-test builds. `esm_problem`
+    # lowers the document it builds, but a §6.6.5 assertion's analytic
+    # `reference` is evaluated HERE, off that path — so a `table_lookup` in a
+    # reference would otherwise reach `evaluate_cellwise`, which cannot
+    # evaluate it. Pure, so the caller's EsmFile keeps its authored form.
+    file = lower_table_lookups(file)
     if opts.base_dir is not None:
         resolved_base = str(opts.base_dir)
     elif source is not None and os.path.isfile(source):

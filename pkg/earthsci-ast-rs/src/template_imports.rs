@@ -739,6 +739,58 @@ fn name_map(
 ///
 /// Hand-rolled rather than `crate::json_visit`: nearly every object entry has
 /// a key-dependent substitution or skip rule.
+/// Is `v` a join clause's `on` — a list of `[left, right]` key-column pairs
+/// (esm-spec §4.9.5)? `on` occurs in exactly one place in the schema, a `join`
+/// clause, and its shape is unambiguous, so the key plus this test is a sound
+/// positional guard.
+fn is_join_on_pairs(v: &Value) -> bool {
+    v.as_array().is_some_and(|arr| {
+        arr.iter()
+            .all(|p| p.as_array().is_some_and(|p| p.len() == 2))
+    })
+}
+
+/// Rewrite a join clause's `on` key columns under an index-set rename (esm-spec
+/// §9.7.7 / §4.7 transitivity list).
+///
+/// An `on` name resolves as a LOOP SYMBOL, then the INDEX SET one of the node's
+/// ranges draws `{from}`, then a DATA COLUMN (CONFORMANCE_SPEC §5.5.8). Only the
+/// middle class is an axis occurrence, and a rename map is keyed by axis name,
+/// so an entry follows the rename **iff** it is a key of `isetmap`. Anything else
+/// — a loop symbol, a data-column name — is handed to `fallback` (the caller's
+/// ordinary treatment for a bare string here: the §9.7.7 `varmap` fold, or
+/// identity at a mount edge), so this rule only ever ADDS the axis case. The
+/// `isetmap` test runs on the name AS SPELLED, before any fallback, so the two
+/// maps cannot chain.
+fn rename_join_on(
+    v: &Value,
+    isetmap: &IndexMap<String, String>,
+    fallback: &dyn Fn(&str) -> String,
+) -> Value {
+    Value::Array(
+        v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|pair| match pair.as_array() {
+                        Some(p) => Value::Array(
+                            p.iter()
+                                .map(|e| match e.as_str() {
+                                    Some(s) => Value::String(match isetmap.get(s) {
+                                        Some(n) => n.clone(),
+                                        None => fallback(s),
+                                    }),
+                                    None => e.clone(),
+                                })
+                                .collect(),
+                        ),
+                        None => pair.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
 fn rename_walk(
     x: &Value,
     varmap: &IndexMap<String, String>,
@@ -784,6 +836,17 @@ fn rename_walk(
                     );
                 } else if k == "where" && v.is_object() {
                     out.insert(k.clone(), rename_where(v, isetmap));
+                } else if k == "on" && is_join_on_pairs(v) {
+                    // A join clause's key columns (esm-spec §4.9.5). Only an
+                    // entry that is a KEY of `isetmap` is an axis occurrence; a
+                    // loop symbol or a data-column name keeps the varmap fold it
+                    // had before this rule existed.
+                    out.insert(
+                        k.clone(),
+                        rename_join_on(v, isetmap, &|s| {
+                            varmap.get(s).cloned().unwrap_or_else(|| s.to_string())
+                        }),
+                    );
                 } else if k == "of" || is_rename_protected(k) {
                     out.insert(k.clone(), v.clone());
                 } else {
@@ -878,6 +941,209 @@ fn rename_decl(
     let v2 = without_keys(varmap, &pset);
     let i2 = without_keys(isetmap, &pset);
     rename_walk(decl, &v2, &i2, tplmap)
+}
+
+// ---------------------------------------------------------------------------
+// Mount-edge index-set renaming (esm-spec §4.7 "Mount-edge index-set renaming")
+// ---------------------------------------------------------------------------
+
+/// One index-set substitution pass over a FULLY RESOLVED mounted document
+/// (esm-spec §4.7 "Mount-edge index-set renaming", transitivity list).
+///
+/// Deliberately NOT [`rename_walk`]: that walk is written for template and
+/// index-set DECLARATIONS, where `from` only ever occurs as a range reference
+/// and every bare string is a variable-reference position. A mount carries a
+/// whole component, where `from` also names a data source
+/// (`Parameter.update.from`), a coupling endpoint (`variable_map.from`) and a
+/// connector endpoint, and where `shape` lists, `Assertion.coords` keys and
+/// `DataSourceSelectAxis.gated_by` name axes that no declaration walk ever sees.
+/// So this walk touches ONLY positions that are index-set names by position,
+/// and never rewrites a bare string on its own account — a name it does not
+/// recognise is left exactly as spelled.
+///
+/// `index_sets` declarations are re-keyed by the caller
+/// ([`apply_mount_index_set_rename`]); walking them here is harmless because no
+/// `IndexSet` field is a position this walk rewrites.
+fn mount_rename_walk(x: &mut Value, m: &IndexMap<String, String>) {
+    match x {
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                mount_rename_walk(v, m);
+            }
+        }
+        Value::Object(obj) => {
+            // An ExpressionNode is identified by its `op`; only there are
+            // `wrt`/`dim`/`var`, the `integral` bounds and `ranges` axis
+            // positions (esm-spec §4.2 / §4.3.1).
+            let is_node = obj.get("op").is_some_and(Value::is_string);
+            if is_node {
+                for k in RENAME_AXIS_KEYS.iter().chain(RENAME_BOUND_KEYS.iter()) {
+                    if let Some(Value::String(s)) = obj.get_mut(*k)
+                        && let Some(n) = m.get(s.as_str())
+                    {
+                        *s = n.clone();
+                    }
+                }
+                if let Some(Value::Object(ranges)) = obj.get_mut("ranges") {
+                    for rv in ranges.values_mut() {
+                        // `{ "from": <index set> }`; a range's own `of` is a
+                        // list of BOUND SYMBOLS, never index-set names.
+                        if let Some(Value::String(s)) = rv.get_mut("from")
+                            && let Some(n) = m.get(s.as_str())
+                        {
+                            *s = n.clone();
+                        }
+                    }
+                }
+                // `join.<i>.on` key columns (§4.9.5): an entry follows the
+                // rename iff it names a renamed index set; a loop symbol or a
+                // data-column name is left as spelled. A clause's `syms` are
+                // bound symbols, never axes.
+                if let Some(Value::Array(join)) = obj.get_mut("join") {
+                    for clause in join.iter_mut() {
+                        let Some(on) = clause.get("on") else { continue };
+                        if !is_join_on_pairs(on) {
+                            continue;
+                        }
+                        let renamed = rename_join_on(on, m, &|s| s.to_string());
+                        if let Some(c) = clause.as_object_mut() {
+                            c.insert("on".to_string(), renamed);
+                        }
+                    }
+                }
+            } else if let Some(Value::Array(shape)) = obj.get_mut("shape") {
+                // `ModelVariable`/`Parameter` `shape` and a `where` constraint's
+                // `shape` are ordered index-set names; an ExpressionNode `shape`
+                // (`reshape`'s target extents) and a `FunctionTable` `shape` are
+                // integers, so the `is_node` guard plus the string test cover both.
+                for e in shape.iter_mut() {
+                    if let Value::String(s) = e
+                        && let Some(n) = m.get(s.as_str())
+                    {
+                        *s = n.clone();
+                    }
+                }
+            }
+            // `DataSourceSelectAxis.gated_by` names a `kind: "derived"` set.
+            if let Some(Value::String(s)) = obj.get_mut("gated_by")
+                && let Some(n) = m.get(s.as_str())
+            {
+                *s = n.clone();
+            }
+            // `Assertion.coords` KEYS are spatial index-set names (§6.6.5).
+            if let Some(Value::Object(coords)) = obj.get_mut("coords")
+                && coords.keys().any(|k| m.contains_key(k))
+            {
+                let renamed: Map<String, Value> = coords
+                    .iter()
+                    .map(|(k, v)| (m.get(k).cloned().unwrap_or_else(|| k.clone()), v.clone()))
+                    .collect();
+                *coords = renamed;
+            }
+            for v in obj.values_mut() {
+                mount_rename_walk(v, m);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Apply a mount edge's `index_set_rename` to a FULLY RESOLVED mounted
+/// document, in place (esm-spec §4.7 "Mount-edge index-set renaming").
+///
+/// Runs at pipeline step 2: after the referenced document has resolved as a
+/// complete document (its own imports, this edge's `bindings` and §9.7.10
+/// injection, its metaparameter close and the §9.6.3 fixpoint) and BEFORE its
+/// `index_sets` merge into the mounting registry — so the map's KEYS speak the
+/// mounted document's own post-resolution vocabulary, exactly as §9.7.7's
+/// `rename` speaks the import target's export vocabulary.
+///
+/// An absent, `null` or empty map is the identity and leaves `doc` untouched,
+/// which is what makes the field purely additive.
+pub(crate) fn apply_mount_index_set_rename(
+    doc: &mut Value,
+    edge: &Map<String, Value>,
+    where_: &str,
+) -> Result<(), ExpressionTemplateError> {
+    let raw = edge.get("index_set_rename");
+    if raw.is_none_or(Value::is_null) {
+        return Ok(());
+    }
+    let requested = name_map(raw, "index_set_rename", where_)?;
+
+    let declared: Vec<String> = doc
+        .get("index_sets")
+        .and_then(|v| v.as_object())
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+
+    // Renames never invent names (esm-spec §4.7, mirroring §9.7.7).
+    for key in requested.keys() {
+        if !declared.iter().any(|d| d == key) {
+            return Err(err(
+                codes::SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME,
+                format!(
+                    "{where_}: `index_set_rename` names index set '{key}', which the resolved \
+                     mounted document does not declare (it declares: {}). Keys speak the \
+                     MOUNTED document's own post-resolution vocabulary (esm-spec §4.7 \
+                     \"Mount-edge index-set renaming\")",
+                    if declared.is_empty() {
+                        "none".to_string()
+                    } else {
+                        declared.join(", ")
+                    }
+                ),
+            ));
+        }
+    }
+
+    // Identity entries are no-ops; everything else must land on a distinct name.
+    let changed: IndexMap<String, String> = requested.into_iter().filter(|(o, n)| o != n).collect();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let mut finals: Vec<String> = Vec::with_capacity(declared.len());
+    for name in &declared {
+        let final_name = changed.get(name).cloned().unwrap_or_else(|| name.clone());
+        if finals.contains(&final_name) {
+            return Err(err(
+                codes::TEMPLATE_IMPORT_RENAME_COLLISION,
+                format!(
+                    "{where_}: `index_set_rename` maps two index sets onto '{final_name}'; \
+                     post-rename names must be distinct within one mount edge \
+                     (esm-spec §4.7 / §9.7.7)"
+                ),
+            ));
+        }
+        finals.push(final_name);
+    }
+
+    mount_rename_walk(doc, &changed);
+
+    // Re-key the registry last, preserving declaration order, and rewrite each
+    // ragged/derived `of` parent list (an index-set-name list — unlike a
+    // range's `of`, which the walk deliberately leaves alone).
+    if let Some(Value::Object(sets)) = doc.get_mut("index_sets") {
+        let mut renamed = Map::new();
+        for (name, decl) in sets.iter() {
+            let mut decl = decl.clone();
+            if let Some(Value::Array(of)) = decl.get_mut("of") {
+                for e in of.iter_mut() {
+                    if let Value::String(s) = e
+                        && let Some(n) = changed.get(s.as_str())
+                    {
+                        *s = n.clone();
+                    }
+                }
+            }
+            renamed.insert(
+                changed.get(name).cloned().unwrap_or_else(|| name.clone()),
+                decl,
+            );
+        }
+        *sets = renamed;
+    }
+    Ok(())
 }
 
 /// Bound index symbols of a declaration: aggregate `output_idx` entries and

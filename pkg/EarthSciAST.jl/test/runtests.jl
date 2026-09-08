@@ -83,6 +83,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("shape_promotion_test.jl")
     include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
     include("subsystem_ref_test.jl")
+    include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")
@@ -285,6 +286,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+    # …and the same lowering on the path that EVALUATES a document (#188):
+    # the harness above does the lowering itself, so it cannot see whether the
+    # build front doors do.
+    include("function_tables_lowering_path_test.jl")
 
     # ---- Expression templates & scoped imports
     #      (src/lower_expression_templates.jl, template_imports.jl) ----

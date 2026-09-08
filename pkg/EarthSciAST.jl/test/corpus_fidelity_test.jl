@@ -96,6 +96,8 @@ include("testutils.jl")
             "esm-spec §4.7: a `{ref}` subsystem is resolved and inlined at load",
         "tests/valid/subsystem_index_set_merge.esm" =>
             "esm-spec §4.7 + §9.7: a `{ref}` subsystem is inlined and its index sets merged",
+        "tests/valid/mount_rename_two_columns.esm" =>
+            "esm-spec §4.7: two `{ref}` subsystems are inlined and their index sets merged, one through a mount-edge `index_set_rename` that is consumed at the edge",
         "pkg/EarthSciAST.jl/test/fixtures/round_trip/open_op_attrs_match.esm" =>
             "esm-spec §9.6.3 + §9.6.4 rule 5: the `attrs.gamma` match rule fires at load and its match-only registry is dropped",
     )

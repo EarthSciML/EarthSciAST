@@ -1980,6 +1980,16 @@ fn run_inline_tests_seeded(
     seeds: &InlineTestSeeds,
 ) -> Vec<AssertionResult> {
     let mut results = Vec::new();
+
+    // Lower `table_lookup` ONCE for the whole run (esm-spec §9.5.3).
+    // `esm_problem` lowers its own copy, which covers everything it compiles —
+    // but this runner also evaluates §6.6.5 analytic `reference` expressions
+    // itself, outside any problem build, so those would otherwise be the one
+    // position where an authored `table_lookup` still reached an evaluator.
+    // A document that will not lower is passed through UNCHANGED and refused
+    // by the build, in the vocabulary this runner already reports.
+    let lowered = crate::lower_table_lookup::lowered_copy(file);
+    let file: &EsmFile = lowered.as_ref().unwrap_or(file);
     let index_sets: HashMap<String, IndexSet> = file
         .index_sets
         .clone()
