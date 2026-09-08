@@ -182,5 +182,8 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
         expression_templates=file.expression_templates,
         metaparameters=file.metaparameters,
         component_templates=file.component_templates,
-        coordinates=file.coordinates)
+        coordinates=file.coordinates,
+        # esm-spec §2.2. A migration on the additive line is a no-op MARKER
+        # bump; dropping a field here would make it a lossy rewrite.
+        solver=file.solver)
 end

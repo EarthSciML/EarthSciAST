@@ -121,17 +121,30 @@ the condition because `_var` is in no component's `local_names`; the affect LHS
 is a plain NAME rather than an expression, so it took a different path with no
 placeholder carve-out. `_collect_model!` now applies the §6.4 rule on both
 halves and the field is compared normally.)
-* `equations` on `full_coupled` — what survives of the `OH` divergence above is
-  the equation's POSITION, and it follows from the two bindings' different
-  reaction lowerings rather than from anything about coupling. Julia emits
-  `D(OH,t) = 0`, so the transport terms MERGE ONTO that equation and it keeps
-  its position among the reaction system's four (§4.7.5 step 4: a merged entry
-  keeps the position of its first occurrence) — and the merged RHS still leads
-  with the `0 +` term. The oracle has no `OH` reaction equation to merge into,
-  so its `OH` equation is Transport's UNMATCHED placeholder clone and sits in
-  `models` order, ahead of the reaction system: `[OH, O3, NO, NO2]` against
-  Julia's `[O3, NO, NO2, OH]`. Same four equations, same terms. Pinned locally
-  below.
+(RESOLVED: the `OH` half of `equations` on `full_coupled`. Julia used to emit
+`D(OH,t) = 0` for the inert species — the empty stoichiometric sum — so the
+transport terms merged ONTO that equation, and it kept its position among the
+reaction system's four while the oracle's `OH` equation was Transport's
+UNMATCHED placeholder clone sitting ahead of them: `[OH, O3, NO, NO2]` against
+Julia's `[O3, NO, NO2, OH]`, with Julia's RHS leading `0 +`.
+
+That was a 4-1 split, not a Julia-vs-oracle one: Python, Rust, Go AND TypeScript
+all omit the equation, and Rust argues the case in its own `reactions.rs`
+comment. esm-libraries-spec §4.6.1 now rules on it and Julia was the outlier —
+§6.3.1 classifies by COMPLEMENT, so a species no equation names is ALGEBRAIC,
+which is what a species touched by no reaction IS; emitting the zero would make
+it a differential unknown that never moves. `lower_reactions_to_equations`
+(src/flatten.jl) now skips it, so both bindings put `OH` first, both lead with
+the transport term, and the equation ORDER agrees.)
+
+* `equations` on `full_coupled` — what survives is ONLY the reaction-lowering
+  coefficient rendering below: the `O3` and `NO` equations differ in that the
+  oracle writes `-1 * rate` where Julia writes `-rate`. The `OH` and `NO2`
+  equations now match the corpus EXACTLY, as do `equation_count`,
+  `algebraic_variables`, `state_variables` and the equation order. This case is
+  therefore no longer a case of its own — it is one of "the reaction-lowering
+  cases" bullet below, and it stays in `_FC_DIVERGENCES` only until that
+  rendering is reconciled. Pinned locally below.
 * `equations` / `independent_variables` on `operator_compose_translate` — two
   separate oracle gaps, neither about the composition this case exists to pin
   (the merge itself matches the corpus exactly and is asserted locally below).
@@ -613,37 +626,55 @@ end
         @test EarthSciAST.flattened_to_esm(flat)["domain"]["element_type"] == "Float32"
     end
 
-    @testset "inert reaction species: zero tendency, then transported" begin
+    @testset "inert reaction species: no tendency, transported only" begin
         # `AtmosphericChemistry.OH` is declared as a species and touched by no
-        # reaction. §4.7.5 step 1's lowering emits `D(species,t) = Σ stoich·rate`
-        # for every species; the empty sum is 0. Dropping the equation instead
-        # (what the oracle does) makes `OH` an unknown no LHS names — an
-        # unconstrained algebraic unknown, i.e. a structurally singular DAE.
+        # reaction, so its stoichiometric sum is EMPTY and esm-libraries-spec
+        # §4.6.1 emits no `D(OH,t)` for it. Julia used to emit `D(OH,t) = 0`
+        # instead, which made it a differential unknown that never moves; §6.3.1
+        # classifies by COMPLEMENT, so leaving the equation out is what makes it
+        # the ALGEBRAIC unknown it is. Julia was the 4-1 outlier here (Python,
+        # Rust, Go and TypeScript all omit) and §4.6.1 ruled against it.
         #
-        # `OH` is a STATE, so §4.7.1 step 3's placeholder expansion also gives it
-        # a transport term, and the merge folds that onto the zero tendency. The
-        # `0 +` is therefore the visible trace of the two lowerings differing:
-        # the oracle's `OH` equation is transport ALONE and lands in Transport's
-        # document position, Julia's is `0 + transport` in the reaction system's.
-        # Same four equations either way, which is why `equation_count` and
-        # `algebraic_variables` are ordinary compared fields again.
+        # `OH` does still get an equation in THIS document, from somewhere else:
+        # it is a state, so §4.7.1 step 3's placeholder expansion gives it a
+        # transport clone, and with no reaction equation to merge onto, step 5
+        # preserves that clone unmatched. So the flattened `OH` is transport
+        # ALONE and sits in Transport's document position — ahead of the reaction
+        # system's three — which is exactly what the corpus records.
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid", "full_coupled.esm")))
         @test haskey(flat.state_variables, "AtmosphericChemistry.OH")
+        # NOT algebraic here: the surviving transport clone names it. The
+        # algebraic case is the one with no operator at all, pinned separately in
+        # `reactions_test.jl`.
         @test isempty(flat.algebraic_variables)
         eqs = String[to_ascii(eq) for eq in flat.equations]
         @test length(eqs) == 4
-        # Position: OH LAST (merged onto the reaction system's fourth equation),
-        # where the corpus records it first. This is the whole of what remains
-        # of the `equations` divergence on this case.
+        # Position: OH FIRST, in `models` order ahead of the reaction system —
+        # agreeing with the corpus, where Julia used to have it last.
         @test String[String(split(e, " = ")[1]) for e in eqs] ==
-              ["D(AtmosphericChemistry.O3)/Dt", "D(AtmosphericChemistry.NO)/Dt",
-               "D(AtmosphericChemistry.NO2)/Dt", "D(AtmosphericChemistry.OH)/Dt"]
-        @test eqs[4] == "D(AtmosphericChemistry.OH)/Dt = 0 + " *
+              ["D(AtmosphericChemistry.OH)/Dt", "D(AtmosphericChemistry.O3)/Dt",
+               "D(AtmosphericChemistry.NO)/Dt", "D(AtmosphericChemistry.NO2)/Dt"]
+        # Transport alone, with no leading `0 +`.
+        @test eqs[1] == "D(AtmosphericChemistry.OH)/Dt = " *
               "(-Transport.u) * grad(AtmosphericChemistry.OH) + " *
               "(-Transport.v) * grad(AtmosphericChemistry.OH) + " *
               "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
               "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
               "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
+        # ... and it is byte-identical to what the shared corpus records, which
+        # is the half of the `equations` divergence this closed. What remains is
+        # the `-1 * rate` vs `-rate` coefficient rendering on O3 and NO, and
+        # nothing else — asserted here so a regression cannot quietly widen the
+        # entry back out.
+        corpus_case = first(c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
+                            if String(c.id) == "full_coupled")
+        corpus_eqs = String["$(e.lhs) = $(e.rhs)" for e in corpus_case.equations]
+        @test eqs[1] == corpus_eqs[1]                       # OH  — exact
+        @test eqs[4] == corpus_eqs[4]                       # NO2 — exact
+        for i in (2, 3)                                     # O3, NO — only `-1 *`
+            @test eqs[i] != corpus_eqs[i]
+            @test replace(corpus_eqs[i], "-1 * " => "-") == eqs[i]
+        end
     end
 
     @testset "operator_compose tier: the composed equations, in full" begin

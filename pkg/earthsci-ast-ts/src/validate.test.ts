@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { validate, validateText } from './validate.js'
+import type { ValidationResult } from './validate.js'
 import { readFixture, REPO_ROOT } from './test-helpers.js'
 
 describe('Structural validation', () => {
@@ -955,6 +956,170 @@ describe('spec-sanctioned constructs the checker used to reject', () => {
     expect(parseErrors).toHaveLength(1)
     expect(parseErrors[0].path).toBe('/models/TestModel/variables/c')
     expect(parseErrors[0].details).toMatchObject({ variable: 'c', units: 'not_a_unit' })
+  })
+})
+
+/**
+ * esm-spec §4.9.1.1 — a DECLARATION may not spell a globally-scoped name.
+ *
+ * The independent variable and the §6.4 `_var` placeholder are in scope in every
+ * component and resolve BY NAME, ahead of the declaration maps, so a declaration
+ * spelled with one of them is unreachable: the implicit symbol shadows it, not
+ * the other way round. Issue #200 — a fuel time-lag constant declared as `t`
+ * validated clean, then silently became the simulation clock.
+ */
+describe('reserved declaration names (§4.9.1.1)', () => {
+  const reserved = (result: ValidationResult) =>
+    result.structural_errors.filter((e) => e.code === 'reserved_variable_name')
+
+  it('rejects an observed unknown named after the independent variable', () => {
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'observed-named-t' },
+      models: {
+        FuelMoisture: {
+          variables: {
+            m: { type: 'unknown', units: '1', default: 0.1 },
+            t: { type: 'unknown', units: 's' },
+            tau: { type: 'parameter', units: 's', default: 3600 },
+          },
+          equations: [
+            {
+              lhs: { op: 'D', args: ['m'], wrt: 't' },
+              rhs: { op: '/', args: [{ op: '-', args: [0.3, 'm'] }, 't'] },
+            },
+            { lhs: 't', rhs: 'tau' },
+          ],
+        },
+      },
+    })
+    expect(result.is_valid).toBe(false)
+    const errors = reserved(result)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].path).toBe('/models/FuelMoisture/variables/t')
+    expect(errors[0].details).toMatchObject({ name: 't', reserved_as: 'independent_variable' })
+  })
+
+  it('rejects a parameter named after the §6.4 operator placeholder', () => {
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'param-named-var' },
+      models: {
+        M: {
+          variables: {
+            u: { type: 'unknown', units: '1' },
+            _var: { type: 'parameter', units: '1', default: 1 },
+          },
+          equations: [{ lhs: { op: 'D', args: ['u'], wrt: 't' }, rhs: 0 }],
+        },
+      },
+    })
+    const errors = reserved(result)
+    expect(errors).toHaveLength(1)
+    expect(errors[0].path).toBe('/models/M/variables/_var')
+    expect(errors[0].details).toMatchObject({ name: '_var', reserved_as: 'operator_placeholder' })
+  })
+
+  it('covers a reaction system’s species and parameters', () => {
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'reaction-named-t' },
+      reaction_systems: {
+        R: {
+          species: { t: { units: 'mol/mol', default: 1e-9 }, P: { units: 'mol/mol', default: 0 } },
+          parameters: { t: { units: 'K', default: 298.15 } },
+          reactions: [
+            {
+              id: 'R1',
+              substrates: [{ species: 't', stoichiometry: 1 }],
+              products: [{ species: 'P', stoichiometry: 1 }],
+              rate: 1.0,
+            },
+          ],
+        },
+      },
+    })
+    const paths = reserved(result)
+      .map((e) => e.path)
+      .sort()
+    expect(paths).toEqual(['/reaction_systems/R/parameters/t', '/reaction_systems/R/species/t'])
+  })
+
+  it('follows domain.independent_variable rather than the literal "t"', () => {
+    const doc = (declared: string) => ({
+      esm: '1.0.0',
+      metadata: { name: 'renamed' },
+      domain: { independent_variable: 's' },
+      models: {
+        M: {
+          system_kind: 'nonlinear' as const,
+          variables: {
+            y: { type: 'unknown' as const, units: '1' },
+            [declared]: { type: 'parameter' as const, units: 'K', default: 288 },
+          },
+          equations: [{ lhs: 'y', rhs: 1.0 }],
+        },
+      },
+    })
+    // The rename MOVES the rejection onto `s` ...
+    const renamed = reserved(validate(doc('s')))
+    expect(renamed).toHaveLength(1)
+    expect(renamed[0].path).toBe('/models/M/variables/s')
+    // ... and FREES `t`, which is then an ordinary name.
+    expect(reserved(validate(doc('t')))).toEqual([])
+  })
+
+  it('covers an inline subsystem, at any depth', () => {
+    // A subsystem is a model, and a MOUNTED subsystem is the exact shape issue
+    // #200 was reported in — a scan of only the top-level `models` map accepted
+    // the offending document.
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'subsystem-named-t' },
+      models: {
+        Parent: {
+          system_kind: 'nonlinear',
+          variables: { y: { type: 'unknown', units: '1' } },
+          equations: [{ lhs: 'y', rhs: 1.0 }],
+          subsystems: {
+            Child: {
+              system_kind: 'nonlinear',
+              variables: { z: { type: 'unknown', units: '1' } },
+              equations: [{ lhs: 'z', rhs: 1.0 }],
+              subsystems: {
+                GrandChild: {
+                  system_kind: 'nonlinear',
+                  variables: {
+                    t: { type: 'parameter', units: 'K', default: 288 },
+                    w: { type: 'unknown', units: '1' },
+                  },
+                  equations: [{ lhs: 'w', rhs: 1.0 }],
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    expect(reserved(result).map((e) => e.path)).toEqual([
+      '/models/Parent/subsystems/Child/subsystems/GrandChild/variables/t',
+    ])
+  })
+
+  it('leaves spatial coordinate names alone', () => {
+    // `x` is a coordinate only in a coordinate position (§11.4);
+    // tests/valid/units_dimensional_analysis.esm declares it as a position.
+    const result = validate({
+      esm: '1.0.0',
+      metadata: { name: 'coordinate-named-variable' },
+      models: {
+        M: {
+          variables: { x: { type: 'unknown', units: 'm' }, v: { type: 'parameter', units: 'm/s' } },
+          equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'v' }],
+        },
+      },
+    })
+    expect(reserved(result)).toEqual([])
   })
 })
 

@@ -60,8 +60,8 @@ fn main() -> Result<(), String> {
     let tspan = (0.0, days * 86400.0);
     let opts = SolveOptions {
         alg: solver,
-        abstol: 1e-8,
-        reltol: 1e-6,
+        abstol: Some(1e-8),
+        reltol: Some(1e-6),
         maxiters: 10_000_000,
         saveat: Some(
             (0..samples.max(2))
