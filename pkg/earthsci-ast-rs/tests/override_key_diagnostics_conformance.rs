@@ -40,8 +40,8 @@ fn read_json(path: &PathBuf) -> serde_json::Value {
 fn opts() -> SolveOptions {
     SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-12,
-        abstol: 1e-14,
+        reltol: Some(1e-12),
+        abstol: Some(1e-14),
         saveat: Some(vec![1.0]),
         ..Default::default()
     }

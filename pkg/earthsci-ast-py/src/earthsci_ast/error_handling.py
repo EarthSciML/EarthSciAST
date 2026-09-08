@@ -97,6 +97,11 @@ class ErrorCode(Enum):
     # is optional and the derivation authoritative, so disagreement is always an
     # author error, never an override.
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch"
+    # A declaration spelled with a globally-scoped name -- the document's
+    # independent variable, or the §6.4 `_var` placeholder (esm-spec §4.9.1.1).
+    # Both resolve BY NAME ahead of the declaration maps, so the declaration is
+    # unreachable and its readers silently get the implicit symbol instead.
+    RESERVED_VARIABLE_NAME = "reserved_variable_name"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string
@@ -179,6 +184,13 @@ TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = (
 # ===========================================================================
 
 DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
+
+# ===========================================================================
+# Solver-hint code (esm-spec §2.2.5), raised as ``SolverBlockError`` from
+# ``solver.py``.
+# ===========================================================================
+
+SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
 
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as

@@ -66,11 +66,14 @@ end
                     @test isfile(expected)
 
                     # Parser must accept the fixture (i.e. the `fn` op AST is
-                    # valid under the current schema). The shared corpus tracks
-                    # the format version, so pin it against the constant rather
-                    # than a frozen string.
+                    # valid under the current schema). The corpus is stamped
+                    # 1.0.0 and is NOT restamped as the library advances: the
+                    # 1.x line is additive, so an older minor stays loadable and
+                    # a fixture bumped to the library's own version would stop
+                    # exercising that. Pinning SCHEMA_VERSION here only worked
+                    # while the two coincided.
                     file = EarthSciAST.load_path(canonical)
-                    @test file.esm == EarthSciAST.SCHEMA_VERSION
+                    @test file.esm == "1.0.0"
 
                     spec = JSON3.read(read(expected, String))
                     fn_name = String(spec.function)

@@ -126,8 +126,8 @@ fn ess_tape_disable_reverts_wholesale_to_the_legacy_path() {
     // exponentially, u(1) = u0 · e^(−0.5).
     let opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-10,
-        abstol: 1e-12,
+        reltol: Some(1e-10),
+        abstol: Some(1e-12),
         saveat: Some(vec![1.0]),
         ..Default::default()
     };

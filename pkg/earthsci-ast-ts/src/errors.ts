@@ -154,6 +154,14 @@ export const ERROR_CODES = {
   //   /${VAR}/x.parquet" that named neither, one step away from a source that
   //   silently delivered a consuming parameter's default.
   DATA_SOURCE_URL_UNRESOLVED: 'data_source_url_unresolved',
+  // A declaration — a `variables` key, a species, or a reaction parameter —
+  //   spelled with a GLOBALLY-SCOPED name: the document's independent variable
+  //   (`domain.independent_variable`, default `"t"`) or the §6.4 `_var`
+  //   placeholder (esm-spec §4.9.1.1). Both are in scope in every component and
+  //   resolve BY NAME ahead of the declaration maps, so the declaration is
+  //   unreachable and every reader silently receives the implicit symbol
+  //   instead — the simulation clock in place of the declared quantity.
+  RESERVED_VARIABLE_NAME: 'reserved_variable_name',
   UNDEFINED_PARAMETER: 'undefined_parameter',
   UNDEFINED_SPECIES: 'undefined_species',
   UNDEFINED_SYSTEM: 'undefined_system',
@@ -182,6 +190,10 @@ export const ERROR_CODES = {
   ENUM_LOWERING_ERROR: 'enum_lowering_error',
   NONFINITE_NUMBER: 'nonfinite_number',
   LOAD_ERROR: 'load_error',
+
+  // ---- solver hints: §2.2 document-scoped solver block (solver.ts;
+  //      EsmMachineryError code) ----
+  SOLVER_VERSION_TOO_OLD: 'solver_version_too_old',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;

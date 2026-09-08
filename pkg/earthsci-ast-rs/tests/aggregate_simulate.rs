@@ -74,8 +74,8 @@ fn sim_value(model_json: &str, var: &str) -> Result<f64, String> {
     let file = load_string(model_json).map_err(|e| format!("load: {e}"))?;
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
         ..Default::default()
@@ -521,8 +521,8 @@ fn ragged_index_set_drives_dynamic_reduction_bound() {
     let file = load_string(model).unwrap_or_else(|e| panic!("load ragged model: {e}"));
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
         ..Default::default()

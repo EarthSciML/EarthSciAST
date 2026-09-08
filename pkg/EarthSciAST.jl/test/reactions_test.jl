@@ -426,6 +426,59 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test model.variables["HO2"].type == UnknownVariable
     end
 
+    @testset "A species in NO reaction gets no equation, and is ALGEBRAIC" begin
+        # esm-libraries-spec §4.6.1. A species touched by no reaction has an EMPTY
+        # stoichiometric sum. Emitting `D(X,t) = 0` for it — which Julia used to do
+        # — makes it a DIFFERENTIAL unknown that never moves; esm-spec §6.3.1
+        # classifies by COMPLEMENT, so omitting the equation is what makes it the
+        # ALGEBRAIC unknown it is: a quantity the reaction network says nothing
+        # about, not one whose dynamics are known to be trivial.
+        #
+        # Julia was the 4-1 outlier on this (Python, Rust, Go and TypeScript all
+        # omit; Rust argues the case in its own `reactions.rs` comment), and
+        # §4.6.1 ruled against it. This is the regression pin for that ruling.
+        species = [Species("A", default=1.0), Species("B", default=0.0),
+                   Species("Xe", default=5.0)]   # Xe: declared, in no reaction
+        rxn = Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k"))
+        rxn_sys = ReactionSystem(species, [rxn], parameters=[Parameter("k", 0.1)])
+
+        eqs = lower_reactions_to_equations(rxn_sys.reactions, rxn_sys.species)
+        targets = Set(String(EarthSciAST.differential_lhs_variable(e.lhs)) for e in eqs)
+        @test targets == Set(["A", "B"])
+        @test !("Xe" in targets)          # no `D(Xe,t) = 0`
+
+        # It is still an UNKNOWN — the species is declared and solved for; what
+        # changed is which half of the solved-for vector it lands in.
+        model = derive_odes(rxn_sys)
+        @test model.variables["Xe"].type == UnknownVariable
+
+        # And through flatten it classifies ALGEBRAIC, which is the whole point:
+        # §6.3.1's partition-by-complement has a category for "no equation names
+        # it", and this is it.
+        doc = """
+        {"esm": "1.0.0",
+         "metadata": {"name": "InertSpecies",
+                      "description": "Xe is declared and appears in no reaction."},
+         "reaction_systems": {
+           "Chem": {
+             "species": {"A": {"units": "mol/mol", "default": 1.0},
+                         "B": {"units": "mol/mol", "default": 0.0},
+                         "Xe": {"units": "mol/mol", "default": 5.0}},
+             "parameters": {"k": {"units": "1/s", "default": 0.1}},
+             "reactions": [{"id": "R1",
+                            "substrates": [{"species": "A", "stoichiometry": 1}],
+                            "products": [{"species": "B", "stoichiometry": 1}],
+                            "rate": "k"}]}}}
+        """
+        tmp = joinpath(mktempdir(), "inert_species.esm")
+        write(tmp, doc)
+        flat = flatten(load_path(tmp))
+        @test haskey(flat.state_variables, "Chem.Xe")       # still solved for
+        @test haskey(flat.algebraic_variables, "Chem.Xe")   # …algebraically
+        @test !any(EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
+                   for eq in flat.equations)
+    end
+
     @testset "Reservoir species stay fixed through flatten (shared fixture)" begin
         # The flatten path (namespacing.jl `_collect_reaction_system!`) must agree
         # with `derive_odes`. Asserted against the SHARED cross-binding fixture, so

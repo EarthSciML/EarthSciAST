@@ -1823,6 +1823,11 @@ fn build_base_units() -> HashMap<String, Unit> {
     units.insert("bar".to_string(), pascal_scaled(&units, 1e5));
     units.insert("Torr".to_string(), pascal_scaled(&units, 133.322_368_421));
     units.insert("mmHg".to_string(), pascal_scaled(&units, 133.322_387_415));
+    // Inch of mercury — exactly 25.4 mmHg, the conventional value (NIST SP 811).
+    // US barometric datasets store pressure in inHg; without this entry such a
+    // column has no honest declaration, because a unit string carries no numeric
+    // scale factor, so `25.4 mmHg` cannot be spelled either.
+    units.insert("inHg".to_string(), pascal_scaled(&units, 3_386.388_640_341));
     units.insert("psi".to_string(), pascal_scaled(&units, 6_894.757_293_168));
 
     // Dobson unit: areal number density of ozone molecules.
@@ -2017,6 +2022,27 @@ mod tests {
 
     /// SI prefixes resolve against the prefixable symbols — which is what makes
     /// the `µ` → `u` normalization useful — but must not invent units out of
+    /// Inches of mercury — exactly 25.4 mmHg BY DEFINITION, so the two must agree
+    /// to the last bit rather than merely within a tolerance. `inHg` is how US
+    /// barometric data is stored, and before this entry the registry had `mmHg`
+    /// and no route to it: unit strings carry no numeric scale factor, so
+    /// `25.4 mmHg` was not spellable either, and such a column had to declare a
+    /// WRONG unit or none at all.
+    #[test]
+    fn test_inches_of_mercury() {
+        let inhg = parse_unit("inHg").unwrap();
+        let mmhg = parse_unit("mmHg").unwrap();
+        assert!(
+            inhg.is_compatible(&parse_unit("Pa").unwrap()),
+            "inHg must carry the pressure dimension"
+        );
+        assert_eq!(
+            inhg.scale,
+            mmhg.scale * 25.4,
+            "inHg must be EXACTLY 25.4 mmHg, not merely close to it"
+        );
+    }
+
     /// arbitrary identifiers, nor shadow a name that merely looks prefixed.
     #[test]
     fn test_si_prefixes() {

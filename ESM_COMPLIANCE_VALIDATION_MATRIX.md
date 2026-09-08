@@ -238,6 +238,53 @@ Where:
 > fixtures under `tests/fixtures/reserved_index_symbol/` (the data-column half, the
 > `const`-array half, and the `k`-spelled control that still answers 2).
 
+### BEHAV-04-G: Declarations vs Globally-Scoped Names (esm-spec §4.9.1.1)
+| ID | Requirement | Spec Reference | Testable | Test Category |
+|---|---|---|---|---|
+| BEHAV-04-G-001 | A DECLARATION spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder — MUST be a hard structural error, `reserved_variable_name`, at the offending key. Both names are implicitly declared in every component's expression scope (§4.9.1) and are resolved by name AHEAD of the declaration maps, so the declaration is unreachable and every reader silently receives the implicit symbol instead | esm-spec.md §4.9.1.1, §4.9.1, §11.3; CONFORMANCE_SPEC.md §7.1 | Yes | validation |
+| BEHAV-04-G-002 | The rule covers all three declaration maps — `models[M].variables`, `reaction_systems[S].species`, `reaction_systems[S].parameters` — because a species and a reaction parameter become symbols of the derived ODE system exactly as a `variables` entry does. A checker MUST recurse into every INLINE subsystem: a subsystem is a model (§4.7), so its `variables` map is a declaration map like any other, and a MOUNTED subsystem is the shape #200 was reported in | esm-spec.md §7.4, §4.7 | Yes | validation |
+| BEHAV-04-G-003 | The reserved set follows `domain.independent_variable`: a document that renames it moves the rejection onto the new name and frees `t` as an ordinary declared name. Same set BEHAV-04-F-002 pins for the binder rule | esm-spec.md §11.3 | Yes | validation |
+| BEHAV-04-G-004 | Spatial coordinate names (`x`, `y`, `z`, `lon`, `lat`, `lev`) are NOT reserved: they resolve as coordinates only in a coordinate position (§11.4), and `tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position variable | esm-spec.md §11.4 | Yes | validation |
+
+> **Binding status (2026-09-06)**: implemented in **all five** bindings — Julia
+> (`validate.jl::_check_reserved_declaration_names!`), Python
+> (`structural_checks.py::_check_reserved_declaration_names`), TypeScript
+> (`validate/model-checks.ts::validateReservedDeclarationNames`), Rust
+> (`structural.rs::check_reserved_declaration_names`) and Go
+> (`validate.go::validateReservedDeclarationNames`). It is a STRUCTURAL check in
+> every binding, not a schema constraint: the reserved name is the value of
+> another field, which JSON Schema cannot express, and a schema rejection would
+> pre-empt the layer where the finding is pinned (CONFORMANCE_SPEC §7.1.2).
+>
+> **What it was before.** SILENT, and worse than the binder collision above.
+> Reported as issue #200 from a WRF-Fire fuel-moisture component that declared
+> its fuel time-lag constant as `t`: the document VALIDATED; built bare, the
+> model reported the observed as having *no defining expression* — a diagnostic
+> about the wrong thing; built with a subsystem mounted, every equation that read
+> `t` received the SIMULATION TIME instead, so `log(t)` was `-inf` at `t = 0` and
+> every number downstream was finite, plausible and wrong.
+>
+> **Corpus impact.** Three shared fixtures carried a redundant `t` parameter
+> declared purely as a "time placeholder"
+> (`tests/valid/units_dimensional_analysis.esm`,
+> `tests/invalid/units_invalid_derivative.esm`,
+> `tests/invalid/units_gradient_operator_mismatch.esm`); all three now rely on the
+> §4.9.1 implicit declaration and emit exactly the findings they pinned before.
+> The three binding-local ERA5 stubs bound air temperature to a parameter
+> literally named `t` — the real instance of this bug, since the ERA5 short name
+> for temperature *is* `t` — and now declare `air_temperature` with
+> `from.file_variable: "t"`. Gates: `tests/invalid/reserved_variable_name_*.esm`
+> (5, including `…_subsystem.esm`) and `tests/valid/independent_variable_renamed.esm`,
+> plus a per-binding unit test in each of the five.
+>
+> **Subsystem recursion, added in review.** The first cut checked only the
+> TOP-LEVEL `models` map in Python, Rust and Go, and only one level deep in
+> TypeScript, while Julia already recursed — so a document declaring `t` inside an
+> inline subsystem was rejected by one binding and accepted by three. All five now
+> recurse to arbitrary depth, pinned by `tests/invalid/reserved_variable_name_subsystem.esm`.
+> A reaction system's own `subsystems` map is NOT walked by any binding (no
+> binding walked it before this rule either); it is the one remaining gap.
+
 ### BEHAV-04-E: Subsystem-Mounted Data-Loader Consumption (RFC pure-io-data-loaders §4.3)
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
@@ -250,8 +297,9 @@ Where:
 |---|---|---|---|---|
 | BEHAV-04-D-001 | A referenced subsystem file's top-level `index_sets` MUST merge into the importing document's document-scoped registry at resolution time, after the referenced document's metaparameters close and fold (§9.7.6 site 3 bindings, then defaults); names absent from the importer are added, deep-equal redeclaration is idempotent | esm-spec.md §4.7 | Yes | validation |
 | BEHAV-04-D-002 | A non-deep-equal collision between a mounted file's index-set declaration and the importing document's registry MUST be rejected at load with `subsystem_index_set_conflict` (the subsystem-edge mirror of `template_import_index_set_conflict`, §9.7.5) | esm-spec.md §4.7, §9.6.6 | Yes | validation |
+| BEHAV-04-D-003 | The merge and its diagnostic apply at **either** mount form — a `subsystems.<k>` ref and a top-level `models.<k>` ref are one mechanism at two attachment points (§4.7 "Two mount forms, one mechanism"), so a binding that implements both MUST merge identically at both; an assembly that mounts a leaf top-level MUST NOT have to redeclare the leaf's axes | esm-spec.md §4.7 | Yes | validation |
 
-> **Binding status (2026-07-02)**: Julia implemented (`_merge_subsystem_index_sets!` in `parse.jl`, called from `_resolve_subsystem_ref` for every §4.7 subsystem edge, local and remote; fixtures `tests/valid/subsystem_mesh_lib.esm` + `tests/valid/subsystem_index_set_merge.esm`, `tests/invalid/template_imports/subsystem_index_set_conflict.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) at every subsystem-ref resolution, merge the loaded file's top-level `index_sets` (post-metaparameter-fold) into the importing document's registry; (2) treat deep-equal redeclaration as idempotent (structural equality over kind/size/members/of/offsets/values/from_faq); (3) reject non-equal collisions with the stable `subsystem_index_set_conflict` diagnostic; (4) drive the shared fixtures (schema-only bindings assert schema acceptance per `resolver_only`). Note: the Julia raw-level top-level-model `{ref}` inline path (`_inline_toplevel_model_refs!`) is a distinct mechanism and does not yet merge `index_sets`; it merges only `function_tables`/`data_loaders`/`enums`.
+> **Binding status (2026-07-02)**: Julia implemented (`_merge_subsystem_index_sets!` in `parse.jl`, called from `_resolve_subsystem_ref` for every §4.7 subsystem edge, local and remote; fixtures `tests/valid/subsystem_mesh_lib.esm` + `tests/valid/subsystem_index_set_merge.esm`, `tests/invalid/template_imports/subsystem_index_set_conflict.esm`). **Pending port** — Python / Rust / TypeScript / Go must each: (1) at every subsystem-ref resolution, merge the loaded file's top-level `index_sets` (post-metaparameter-fold) into the importing document's registry; (2) treat deep-equal redeclaration as idempotent (structural equality over kind/size/members/of/offsets/values/from_faq); (3) reject non-equal collisions with the stable `subsystem_index_set_conflict` diagnostic; (4) drive the shared fixtures (schema-only bindings assert schema acceptance per `resolver_only`). ~~Note: the Julia raw-level top-level-model `{ref}` inline path (`_inline_toplevel_model_refs!`) is a distinct mechanism and does not yet merge `index_sets`; it merges only `function_tables`/`data_loaders`/`enums`.~~ **Superseded 2026-09-06 (BEHAV-04-D-003, issue #198 item 3)** — a top-level `models.<k>` `{ref}` is not a distinct mechanism, it is the §4.7 mount at a second attachment point, and it now merges `index_sets` in every binding that implements it.
 >
 > **Go port (2026-07-03)**: implemented (`mergeSubsystemIndexSets` + `indexSetDeepEqual` in `subsystem_ref.go`; the importing document's `file.IndexSets` registry is threaded through `resolveSubsystemRefs`/`resolveSubsystemMap` and each mounted file's folded top-level `index_sets` merge in, transitively through nested mounts). `subsystem_index_set_merge.esm` loads with `vertices` merged in (size 4) and `cells` deep-equal-idempotent; `subsystem_index_set_conflict.esm` is rejected with `subsystem_index_set_conflict` (`go test ./...`).
 > **TypeScript = implemented (2026-07-03)**: `mergeSubsystemIndexSets` in `pkg/earthsci-ast-ts/src/ref-loading.ts`, called from `resolveModelRefs` at every model subsystem-ref resolution with the importing document's `file.index_sets` threaded as the registry; deep-equal via `deepEqual` (numeric-literal-aware), non-equal collision → `subsystem_index_set_conflict`, absent name added. Matches the Julia reference (registry threaded only through the model walk, not reaction systems). The `subsystem_index_set_conflict.esm` fixture is rejected with the exact code (`src/template-imports.test.ts` invalid loop, via `resolveSubsystemRefs`).
@@ -263,6 +311,8 @@ Where:
 > `subsystem_index_set_merge.esm` (+ `subsystem_mesh_lib.esm`) and
 > `subsystem_index_set_conflict.esm` drive it (`template_imports_conformance`).
 > **Python (2026-07-03)**: implemented (`earthsci_ast/parse.py` `_merge_subsystem_index_sets` + `_index_set_deep_equal`, threaded through model subsystem resolution via `EsmFile.index_sets`; reaction-system subsystems do not merge, matching the Julia reference). Fixtures: `subsystem_index_set_merge.esm` brings `vertices` in and keeps deep-equal `cells`; `subsystem_index_set_conflict.esm` raises `subsystem_index_set_conflict`.
+>
+> **BEHAV-04-D-003, top-level `models.<k>` mount form (2026-09-06, issue #198 item 3)**: the merge now runs at BOTH model mount forms in every binding that mounts top-level refs. Python already did (`resolve_model_refs` calls `_merge_subsystem_index_sets` on the mounted leaf). Julia and Rust merged only `function_tables`/`data_sources`/`enums` at the top-level edge and silently dropped the leaf's axes, so an assembly had to redeclare them or lean on its §9.7.10 injected grid library — fixed by `_merge_native_index_sets!` in `resolve.jl` and the `merge_subsystem_index_sets` call in `ref_loading.rs`'s `inline_toplevel_model_refs`, both at the raw/native pre-pass layer where that inliner runs, both reusing the §4.7 deep-equal-or-`subsystem_index_set_conflict` rule verbatim. Shared fixtures: `tests/fixtures/toplevel_ref_index_sets/toplevel_ref_index_set_merge.esm` and `…/toplevel_ref_index_set_conflict.esm`, which mount the SAME leaf as the subsystem-edge pair (`tests/valid/subsystem_mesh_lib.esm`) through the other attachment point — a differential test of the two mount forms. **TypeScript and Go do not implement the top-level mount form at all** (a top-level `{ref}` entry is left unresolved), so the pair lives under `tests/fixtures/` rather than `tests/valid/` + `tests/invalid/`: the corpus sweep (`scripts/conformance_corpus.py`) demands one declared outcome from all five bindings, and it would score TS/Go a false pass on the valid half and a hard failure on the invalid half for a mechanism they do not have. Runners: `pkg/EarthSciAST.jl/test/template_imports_test.jl`, `pkg/earthsci-ast-rs/tests/template_imports_conformance.rs`, `pkg/earthsci-ast-py/tests/test_model_ref.py`. **Known scope limit at the top-level form (Julia, Rust)**: the inliner is a raw pre-pass that never closes or folds the mounted leaf's `metaparameters` (the edge's `bindings` are not read there either), so a leaf `interval` whose `size` is still a metaparameter expression is SKIPPED rather than merged — merging it unfolded coerces to `Int`/`i64` and fails with an internal error, not a diagnostic. Python, which closes and folds at both forms, merges it correctly. Closing this needs the top-level mount edge to run the §9.7.6 site-3 close/fold the subsystem edge already runs; it is not part of BEHAV-04-D-003.
 
 ### BEHAV-04-C: `makearray` Region Bounds — Empty vs Inverted (esm-spec §4.3.2)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -321,6 +371,10 @@ Where:
 | BEHAV-06-B-009 | A `coords` / `reduce` assertion MUST be answerable on a STATE-DEPENDENT array OBSERVED, not only on a state or a state-free one. Such a field is in NO build-time product (only state-free observeds are materialized at build) and is not a scalar output row either, so a binding must evaluate the observed's own expression AT THE SAMPLED STATE — §5.23's "a reference denotes its expansion", already applied to scalar observeds. All three executing bindings refused it with "array state '<v>' has no cells in var_map". Rust: FIXED — the runner REQUESTS the asserted array observed (`SolveOptions::output_observed`), which the array runtime already emits as one row per cell. Python: FIXED — `observed_at_state` replays the observed driver on the trajectory sample. Julia: FIXED — `_state_scope` puts the solved state and `t` into the `evaluate_cellwise` scopes. Gate: `tests/conformance/pde_inline_observed_state_dependent/` (Julia/Python/Rust agree on the golden actuals; the same fixture's state-free `rate` keeps the build-materialized path pinned) | esm-spec.md §6.6.5, §5.23 | Yes | simulation |
 | BEHAV-06-B-010 | An array field read for an assertion MUST be the ASSERTED COMPONENT's, never a union across sibling components that reuse the bare name: the model-qualified element stem wins, with the bare-suffix match reached only when no qualified element exists (the array analog of the pointwise `scalar_slot` rule). A single-pass union splices every model's cells into one field — four components each declaring `w[x]` yield four cells at index `[1]`, so a `coords` sample silently reads whichever component sorts first, a `reduce` collapses over all of them, and a per-cell `reference` indexes past the end. Julia and Rust: already two-pass. Python (`state_cells`): FIXED. The same rule binds the OBSERVED field sources, which resolve a bare name by a unique `.<name>` suffix over the whole flattened build: the asserted component MUST declare the name as an observed of its own before either source is read (Rust `observed_field` and Julia `_observed_field` already did; Python's assertion path: FIXED — a document where only `M1` defined `g` answered an `M2` assertion on `g` with M1's field) | esm-spec.md §6.6, §6.6.5 | Yes | simulation |
 | BEHAV-06-B-011 | A `coords`/`reduce` assertion MUST be answerable on an array OBSERVED that NO LIVE EQUATION CONSUMES. An inline test's natural target is a quantity computed FOR the test — a tendency, a flux, a diagnostic — which by construction nothing else reads; §6.6.5 admits any shaped variable and §5.23 makes a reference denote its expansion, neither of them conditioned on the dynamics reading it. Julia: FIXED — its build inlines an elementwise array observed into its readers and DROPS the equation, so a dead one (no readers) reached neither `BuildInspection.observed_exprs` nor `observed_defs` and every assertion failed with `array state '<name>' has no cells in var_map`; `_observed_field` now falls back to the component's own defining equation, lowered to the same per-cell form and evaluated in the same build-time scope (and reads the const-array buffer for an observed the build materialized). Rust (requests the observed from the runtime) and Python (evaluates the ordered observed graph on demand) were already conforming. On Julia an author previously had to wire a diagnostic into the dynamics — changing the model — to make a test runnable. Gate: `tests/conformance/pde_inline_dead_observed/` (Julia/Python/Rust agree on the golden actuals), CONFORMANCE_SPEC §5.27.3. One diagnostic changes deliberately: a declared observed whose body cannot be evaluated at assertion time (it names something the document never declares, a provider array not yet fetched) now reaches the evaluator and reports `E_TREEWALK_UNBOUND_VARIABLE: <name>` instead of `array state '<v>' has no cells in var_map` — the same ERROR verdict, naming the unresolved operand rather than a state lookup that was never the point | esm-spec.md §6.6.5, §5.23 | Yes | simulation |
+| BEHAV-06-B-012 | The RELATIVE tolerance bound MUST scale by `max(\|actual\|, \|expected\|)` — the larger of the two magnitudes — not by `\|expected\|` alone, and a conforming runtime MUST NOT add an `ε` floor to that scale. §6.6.3 stated the rule three ways: the normative box and the schema's `Tolerance` description gave an `\|expected\|`-only DENOMINATOR with an `ε` floor, while the finiteness rationale in the same section reasoned from `max(\|∞\|, \|expected\|)`; all three executing bindings (Julia `isapprox`, Python `_check_assertion`, Rust `check_assertion`) implemented the symmetric form, so #193 settled the SPEC as symmetric and dropped the floor (with the bound written as a product there is no division to protect, and a floor diverges on subnormals: `a=1e-320, e=0, rel=0.5` passes with `ε=1e-300` and fails without). The verdicts differ only inside `rel·\|e\| < \|a−e\| ≤ rel·\|a\|` — an overshoot of order `rel` — which no fixture in any category reaches, so `assertion_nonfinite` cannot gate it. Gate: per-binding unit tests `assertion_tolerance_symmetry_test.jl` (Julia), `test_relative_bound_is_symmetric_in_actual_and_expected` (Python), `relative_bound_is_symmetric_in_actual_and_expected` (Rust); CONFORMANCE_SPEC §5.20 records why this is not a shared category. NOT YET GATED: the ~12 ad-hoc assertion evaluators in the bindings' own fixture harnesses still scale by `\|expected\|` and several carry `ε` floors (see #193 follow-up) | esm-spec.md §6.6.3, CONFORMANCE_SPEC §5.20 | Yes | unit (per-binding) |
+| BEHAV-06-B-013 | An inline `reference`'s free variables are the field's DIMENSION NAMES: for a variable shaped over index sets, each `shape` entry is bound at every grid point to the 1-based position along its axis (the index space `coords` reads). A reference mentioning a dimension name free MUST be evaluated per cell as if wrapped in an `aggregate` whose output indices are the dimension names; one mentioning none (a literal, a parameter expression, an explicit gather, a gather that rebinds the dimension name as its own loop symbol) MUST be evaluated as written. A node's `wrt` is a differentiation target, not a free mention, and MUST NOT by itself trigger the wrap; a dimension name the build-time parameter scope ALSO binds MUST be a fault, since wrapping would silently shadow the parameter with the cell index. All three executing bindings left the name unbound. Julia/Python/Rust: FIXED (`bind_dimension_names`). Gate: `tests/conformance/pde_inline_reference_dimension_names/` | esm-spec.md §6.6.5, CONFORMANCE_SPEC §5.30 | Yes | simulation |
+| BEHAV-06-B-014 | A dotted `parameter_overrides` / `initial_conditions` key MUST resolve to the LONGEST of its dotted suffixes that is a flattened name (rule 2), the trailing segment being tried last, so the §4.6 fully-qualified `M.sub.A` binds a build's `sub.A` and `M.A` binds a bare `A`; a key none of whose suffixes is a name stays unknown (`Missing.solo`). Every LEADING segment rule 2 drops MUST name a component or subsystem the document declares — the dropped prefix is a §4.6 qualifier, so `Doc.Left.solo` with no component `Doc`, and a mistyped `Missng.M.pert_amp`, are UNKNOWN rather than silently suffix-matched onto the name they happen to end with. And TWO NON-EXACT keys resolving to ONE name (`solo` + `Doc.Left.solo`; `A.M.g` + `B.M.g`) MUST be reported naming the variable and every colliding key — only one override can take effect, so ranking them exact-before-bare-before-dotted turns a diagnosable authoring mistake into a wrong answer; an EXACT hit is never part of a collision and wins outright. Rust (`canonicalize_override_keys` + `namespace_scope`), Python (`check_parameter_override_keys` / `resolve_override_raw` + `namespace_scope`), Julia (`_canonicalize_override_keys` + `_override_namespaces`, plus the `initial_conditions` path in `simulate.jl`): FIXED. Rust additionally resolves a self-qualified EQUATION reference `M.sub.g` in a single-model array build to its local spelling (esm-spec §4.6). Gate: `tests/conformance/override_key_diagnostics/` case `Doc.Left.solo`, now pinned UNKNOWN (a deliberate reversal of the case as first committed); rule 2's positive path is not expressible in a flattening fixture and is gated per binding by the `P.sub.g` subsystem-override tests, the collision by each binding's verbatim-message unit test | esm-spec.md §6.6.2, §4.6, CONFORMANCE_SPEC §5.31 | Yes | simulation |
+| BEHAV-06-B-015 | A **scalar** on a SHAPED variable MUST be BROADCAST over the variable's whole declared grid — the one value applies to every element — for a shaped PARAMETER's declared `default` and for a test's `parameter_overrides` alike, not only for the shaped UNKNOWN whose scalar `default` already seeded every state cell. The choice of channel is the binding's; the broadcast is not, so a binding MUST NOT leave the value in a one-f64-per-parameter vector that cannot express it. All three executing bindings failed this, each in its own vocabulary: Rust indexed a scalar (`eval_index` → `NaN`) and every solve died at `t = 0` with `Exceeded maximum number of nonlinear solver failures`, naming no parameter; Python broadcast a BARE read but raised 'index applied to scalar value' on `index(p, k)`; Julia refused the document with `E_TREEWALK_UNSUPPORTED_SHAPE`. A scalar `parameter_overrides` value MUST additionally OUTRANK the declared `default` it replaces in EITHER spelling — Julia ranked the scalar arm after the array-`default` arm and silently dropped such an override. Rust (`lower_inline_array_parameters` + the `pde_inline_tests` routing), Python (`_build_numpy_rhs`'s parameter loop → `loader_arrays`), Julia (`_register_inline_array_parameters` → `const_arrays`): FIXED. Gate: `tests/conformance/shaped_parameter_broadcast/` | esm-spec.md §6.3, §6.6.2, CONFORMANCE_SPEC §5.32 | Yes | simulation |
 
 ### BEHAV-10-A: `join` Names Under Flattening (CONFORMANCE_SPEC §5.5.6)
 | ID | Requirement | Spec Reference | Testable | Test Category |
@@ -1004,6 +1058,50 @@ capability and no binding is exempt.
 | EXPR-09-D-002 | All five bindings MUST agree byte-for-byte after canonical serialization | esm-spec.md §9.6.7 | `tests/conformance/expression_templates/arrhenius_smoke/` | expression |
 
 ### EXPR-09-E: Template Libraries, Imports, and Metaparameters (esm-spec §9.7)
+
+> **`dim` is opaque to metaparameter substitution (2026-09-06, EXPR-09-E-008)**:
+> §9.7.6 substitutes a bound metaparameter name wherever it appears as a bare
+> string in an EXPRESSION position. The axis-naming scalar fields of an
+> Expression node are not expression positions — `dim` names a spatial
+> coordinate structurally (§4.9.1), exactly as `wrt` names one — so a
+> metaparameter that happens to share a name with an axis must not rewrite them
+> into integers. Julia, TypeScript, Python and Rust all skipped `dim`; **Go
+> alone did not**, so with `x` bound to 3 a node
+> `{"op": "grad", "args": ["c"], "dim": "x"}` became `"dim": 3` in Go and stayed
+> `"dim": "x"` everywhere else — a silent cross-binding divergence in the one
+> direction no fixture happened to cover. Fixed by adding `dim` to Go's
+> `metaSubstSkipKeys`, closing that asymmetry.
+>
+> The divergence was **reachable**, not latent. §9.7.6 forbids a metaparameter
+> name colliding with a visible variable / parameter / species / index-set name,
+> so the obvious repro (metaparameter `x` + index set `x`) never reaches
+> substitution — but §4.9.1 clause (ii) makes a `dim` value name a spatial
+> coordinate *structurally*, with no `index_sets` entry required, and a bare
+> coordinate is none of the four kinds that check covers. So one document may
+> legally declare metaparameter `lev` and write `dim: "lev"`, which is what
+> `TestTemplateImports_MetaparamDoesNotRewriteDimInDocument` drives through the
+> real load pipeline.
+>
+> Because Go's rename-walk protect set is DERIVED from that skip set, the §9.7.7
+> rename walk now also treats `dim` as protected — a STRING `dim` still renames,
+> since the walk tests its axis keys first, and a regression test pins that
+> ordering; a non-string `dim` (schema-invalid, but the walk runs at load, before
+> validation) is now copied verbatim instead of recursed, which is what the other
+> four bindings already do, since `dim` is in their rename-protected sets too.
+>
+> **Still open after this fix (opposite direction, EXPR-09-E-008).** The skip
+> sets are *not* yet identical. Go carries three entries the other four do not —
+> `op`, `id`, `expect_cadence` — so a metaparameter named after an operator or a
+> node id still diverges the other way: with `max` bound to 3,
+> `{"op": "max", …}` stays `"op": "max"` in Go and becomes `"op": 3` in Julia,
+> TypeScript, Python and Rust (the latter then dying in the typed load with a raw
+> "cannot unmarshal number into `ExprNode.op`" rather than a diagnostic — Go's
+> audit-G12 reason for adding it). §9.7.6 substitutes only in *expression
+> positions*, and an operator name is not one, so **Go's behavior is the correct
+> one and the other four need the three entries added**. That is a four-binding
+> behavior change and is deliberately NOT part of this Go-only fix; it needs its
+> own PR with a shared fixture.
+
 | ID | Requirement | Spec Reference | Testable | Test Category |
 |---|---|---|---|---|
 | EXPR-09-E-001 | A template-library file (top-level `expression_templates`, no models/reaction_systems/data_loaders/coupling/domain) MUST load as a valid ESM document | esm-spec.md §9.7.1 | Yes | validation |
@@ -1013,7 +1111,7 @@ capability and no binding is exempt.
 | EXPR-09-E-005 | Imported top-level `index_sets` MUST merge into the importing document's registry (deep-equal idempotent; else `template_import_index_set_conflict`) | esm-spec.md §9.7.5 | Yes | validation |
 | EXPR-09-E-006 | `only` MUST filter importer-visible templates; unknown names are `template_import_unknown_name` | esm-spec.md §9.7.2 | Yes | validation |
 | EXPR-09-E-007 | Metaparameter expressions in `index_sets.size`, dense `ranges`, and `regions` MUST fold to concrete integers at load (exact arithmetic; inexact `/` or 64-bit overflow is `metaparameter_type_error`) | esm-spec.md §9.7.6 | Yes | expression |
-| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding | esm-spec.md §9.7.6 | Yes | expression |
+| EXPR-09-E-008 | Metaparameter names in expression positions MUST substitute as integer literals with no further folding. The **axis-naming scalar fields** are NOT expression positions and MUST be skipped: `wrt`, `dim` (§4.9.1) and `integral`'s integration variable `var` (§4.2) name a spatial coordinate rather than referencing a value, so a metaparameter sharing an axis's name MUST NOT rewrite them | esm-spec.md §9.7.6, §9.7.7 | Yes | expression |
 | EXPR-09-E-009 | Binding precedence MUST be: import/subsystem edge → re-export upward → loader API (root) → defaults; still-open is `metaparameter_unbound` | esm-spec.md §9.7.6 | Yes | validation |
 | EXPR-09-E-010 | `load()` MUST accept root-document metaparameter bindings (name → integer) | esm-libraries-spec.md §2.1c | Yes | api |
 | EXPR-09-E-011 | Files declaring `esm` < 0.8.0 carrying any §9.7 construct MUST be rejected with `template_import_version_too_old` | esm-spec.md §9.6.5 | Yes | validation |
