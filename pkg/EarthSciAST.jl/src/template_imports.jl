@@ -174,8 +174,12 @@ end
 #                 like `:protected`/`:axis` these are opaque to metaparameter
 #                 substitution AND copied verbatim by the rename walk.
 #   :registry   — closed-registry id / literal enum PARAMETERIZING the node's
-#                 op (`reduce`, `semiring`, `fn`, `table`, …): copied verbatim
-#                 by the rename walk only.
+#                 op (`reduce`, `semiring`, `fn`, `table`, …). Like `:node`
+#                 these are names rather than values, so they are opaque to
+#                 metaparameter substitution AND copied verbatim by the rename
+#                 walk; the kind is kept distinct from `:node` because the two
+#                 answer different questions about a node (what it IS vs how
+#                 its op is parameterized).
 #   :positional — no derived-set membership; handled by a dedicated branch in
 #                 `_rename_walk` / `_collect_ref_names!`: `from` ({from:
 #                 <indexSet>} references map through `isetmap`) and `of`
@@ -238,9 +242,15 @@ const _STRUCTURAL_FIELDS = (
 # All five bindings MUST hold the SAME set here — a divergence is silent until a
 # document happens to name a metaparameter after a structural field's value
 # (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+#
+# Every structural kind but `:bound` and `:positional` is in: an expression
+# position is the ONLY thing substitution may rewrite, and `:bound` is the one
+# structural-table entry that IS one. This makes the set coincide with
+# `_RENAME_PROTECTED_KEYS` below; both stay derived from the table separately
+# because they answer different questions and a future kind may split them.
 const _META_SUBST_SKIP_KEYS = Set{String}(
     k for (k, kind) in _STRUCTURAL_FIELDS
-    if kind === :protected || kind === :axis || kind === :node)
+    if kind === :protected || kind === :axis || kind === :node || kind === :registry)
 
 # Scalar Expression-node fields whose string value names an AXIS / index set
 # (rewritten by the index-set rename map, param-shadowed like §9.6.1).

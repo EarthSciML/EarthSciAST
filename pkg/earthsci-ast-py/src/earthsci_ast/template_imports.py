@@ -253,8 +253,11 @@ _AXIS_KEYS = frozenset({"wrt", "dim", "var"})
 #: diagnostic. Opaque to substitution AND copied verbatim by the rename walk.
 _NODE_HEADER_KEYS = frozenset({"op", "id", "expect_cadence"})
 
-#: Closed-registry ids / literal enums PARAMETERIZING the node's op: copied
-#: verbatim by the rename walk only.
+#: Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
+#: node-header fields these are names rather than values, so they are opaque to
+#: metaparameter substitution AND copied verbatim by the rename walk; the kind
+#: is kept distinct because the two answer different questions about a node
+#: (what it IS vs how its op is parameterized).
 _REGISTRY_KEYS = frozenset(
     {
         "reduce",
@@ -277,7 +280,14 @@ _REGISTRY_KEYS = frozenset(
 #: All five bindings MUST hold the SAME set here — a divergence is silent until
 #: a document happens to name a metaparameter after a structural field's value
 #: (``tests/conformance/expression_templates/metaparam_axis_name_collision``).
-_META_SUBST_SKIP_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS
+#:
+#: Every structural kind but ``bound`` and ``positional`` is in: an expression
+#: position is the ONLY thing substitution may rewrite, and ``bound`` is the one
+#: structural-table entry that IS one. This makes the set coincide with
+#: :data:`_RENAME_PROTECTED_KEYS` below; both stay derived from the kind sets
+#: separately because they answer different questions and a future kind may
+#: split them.
+_META_SUBST_SKIP_KEYS = _PROTECTED_KEYS | _AXIS_KEYS | _NODE_HEADER_KEYS | _REGISTRY_KEYS
 
 
 def _substitute_metaparams(x: Any, values: dict[str, int]) -> Any:

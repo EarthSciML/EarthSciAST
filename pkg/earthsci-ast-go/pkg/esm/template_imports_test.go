@@ -225,6 +225,41 @@ func TestTemplateImports_MetaparamSubstitutionIsPerField(t *testing.T) {
 	if len(sargs) != 2 || sargs[0] != float64(5) || sargs[1] != float64(7) {
 		t.Errorf("s.args = %#v; want [5, 7]", sargs)
 	}
+
+	// OP-REGISTRY fields: a closed-registry id or literal enum parameterizing
+	// the node's op is a name, not a value, so it is not an expression position
+	// either. Each node carries a genuine expression position alongside it.
+	rargs := defRHS("r")["args"].([]any)
+	reduceAgg := rargs[0].(map[string]any)
+	if reduceAgg["reduce"] != "max" {
+		t.Errorf("reduce = %#v; want %q — a reduction-operator name is not an "+
+			"expression position", reduceAgg["reduce"], "max")
+	}
+	if a := reduceAgg["expr"].(map[string]any)["args"].([]any); a[1] != float64(3) {
+		t.Errorf("reduce node expr.args[1] = %#v; want 3", a[1])
+	}
+	semiAgg := rargs[1].(map[string]any)
+	if semiAgg["semiring"] != "min_sum" {
+		t.Errorf("semiring = %#v; want %q", semiAgg["semiring"], "min_sum")
+	}
+	if a := semiAgg["expr"].(map[string]any)["args"].([]any); a[1] != float64(6) {
+		t.Errorf("semiring node expr.args[1] = %#v; want 6", a[1])
+	}
+	bcast := rargs[2].(map[string]any)
+	if bcast["fn"] != "max" {
+		t.Errorf("fn = %#v; want %q", bcast["fn"], "max")
+	}
+	if a := bcast["args"].([]any); a[1] != float64(3) {
+		t.Errorf("broadcast args[1] = %#v; want 3", a[1])
+	}
+	open := rargs[3].(map[string]any)
+	if got := open["attrs"].(map[string]any)["limiter"]; got != "max" {
+		t.Errorf("attrs.limiter = %#v; want %q — an open op's scalar attributes "+
+			"mirror the fixed dim/side/wrt/var slots, not `args`", got, "max")
+	}
+	if a := open["args"].([]any); a[1] != float64(3) {
+		t.Errorf("open-op args[1] = %#v; want 3", a[1])
+	}
 }
 
 // TestMatchScoping_ConformanceGoldens drives the §9.6.1 `where` match-scoping

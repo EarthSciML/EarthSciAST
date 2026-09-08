@@ -121,7 +121,10 @@ var axisKeys = []string{"wrt", "dim", "var"}
 var nodeHeaderKeys = []string{"op", "id", "expect_cadence"}
 
 // registryKeys: closed-registry ids / literal enums PARAMETERIZING the node's
-// op. Copied verbatim by the §9.7.7 rename walk only.
+// op. Like nodeHeaderKeys these are names rather than values, so they are opaque
+// to metaparameter substitution AND copied verbatim by the §9.7.7 rename walk;
+// the kind is kept distinct because the two answer different questions about a
+// node (what it IS vs how its op is parameterized).
 var registryKeys = []string{
 	"reduce", "semiring", "manifold", "fn", "table", "side", "attrs",
 	"members", "from_faq",
@@ -153,7 +156,14 @@ func keySet(groups ...[]string) map[string]struct{} {
 // All five bindings MUST hold the SAME set here — a divergence is silent until a
 // document happens to name a metaparameter after a structural field's value
 // (tests/conformance/expression_templates/metaparam_axis_name_collision).
-var metaSubstSkipKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys)
+//
+// Every structural kind but boundKeys and the positional `from`/`of` is in: an
+// expression position is the ONLY thing substitution may rewrite, and boundKeys
+// is the one structural-table entry that IS one. This makes the set coincide
+// with renameProtectedKeys in template_rename.go; both stay derived from the
+// kind slices separately because they answer different questions and a future
+// kind may split them.
+var metaSubstSkipKeys = keySet(protectedKeys, axisKeys, nodeHeaderKeys, registryKeys)
 
 // substituteMetaparams substitutes bound metaparameter names — appearing as
 // bare strings, the variable-reference surface syntax — with their bound

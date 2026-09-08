@@ -292,6 +292,21 @@ fn metaparam_axis_name_collision_matches_golden() {
 
     // The two remaining collisions close in ordinary argument positions.
     assert_eq!(obs_def(model, "s")["args"], json!([5, 7]));
+
+    // OP-REGISTRY fields: a closed-registry id or literal enum parameterizing
+    // the node's op is a name, not a value, so it is not an expression position
+    // either. Each node carries a genuine expression position alongside it.
+    let r = obs_def(model, "r");
+    assert_eq!(r["args"][0]["reduce"], "max");
+    assert_eq!(r["args"][0]["expr"]["args"], json!(["i", 3]));
+    assert_eq!(r["args"][1]["semiring"], "min_sum");
+    assert_eq!(r["args"][1]["expr"]["args"], json!(["i", 6]));
+    assert_eq!(r["args"][2]["fn"], "max");
+    assert_eq!(r["args"][2]["args"], json!(["c", 3]));
+    // An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    // slots, not `args` — scalar attribute NAMES, never expressions.
+    assert_eq!(r["args"][3]["attrs"], json!({"limiter": "max"}));
+    assert_eq!(r["args"][3]["args"], json!(["c", 3]));
 }
 
 /// import_where_rename_unknown_index_set: a `where` shape naming a set the

@@ -1126,3 +1126,18 @@ def test_metaparam_substitution_is_per_field_not_per_node():
 
     # The two remaining collisions close in ordinary argument positions.
     assert _defining(d, "M", "s")["args"] == [5, 7]
+
+    # OP-REGISTRY fields: a closed-registry id or literal enum parameterizing the
+    # node's op is a name, not a value, so it is not an expression position
+    # either. Each node carries a genuine expression position alongside it.
+    rargs = _defining(d, "M", "r")["args"]
+    assert rargs[0]["reduce"] == "max"
+    assert rargs[0]["expr"]["args"] == ["i", 3]
+    assert rargs[1]["semiring"] == "min_sum"
+    assert rargs[1]["expr"]["args"] == ["i", 6]
+    assert rargs[2]["fn"] == "max"
+    assert rargs[2]["args"] == ["c", 3]
+    # An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    # slots, not `args` — scalar attribute NAMES, never expressions.
+    assert rargs[3]["attrs"] == {"limiter": "max"}
+    assert rargs[3]["args"] == ["c", 3]

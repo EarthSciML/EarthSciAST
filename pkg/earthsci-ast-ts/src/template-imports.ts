@@ -262,8 +262,11 @@ const AXIS_KEYS = ['wrt', 'dim', 'var'] as const
 // substitution AND copied verbatim by the rename walk.
 const NODE_HEADER_KEYS = ['op', 'id', 'expect_cadence'] as const
 
-// Closed-registry ids / literal enums PARAMETERIZING the node's op: copied
-// verbatim by the rename walk only.
+// Closed-registry ids / literal enums PARAMETERIZING the node's op. Like the
+// node-header fields these are names rather than values, so they are opaque to
+// metaparameter substitution AND copied verbatim by the rename walk; the kind is
+// kept distinct because the two answer different questions about a node (what it
+// IS vs how its op is parameterized).
 const REGISTRY_KEYS = [
   'reduce',
   'semiring',
@@ -284,10 +287,18 @@ const REGISTRY_KEYS = [
 // All five bindings MUST hold the SAME set here — a divergence is silent until
 // a document happens to name a metaparameter after a structural field's value
 // (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+//
+// Every structural kind but `bound` and `positional` is in: an expression
+// position is the ONLY thing substitution may rewrite, and `bound` is the one
+// structural-table entry that IS one. This makes the set coincide with
+// `RENAME_PROTECTED_KEYS` below; both stay derived from the kind arrays
+// separately because they answer different questions and a future kind may split
+// them.
 const META_SUBST_SKIP_KEYS = new Set<string>([
   ...PROTECTED_KEYS,
   ...AXIS_KEYS,
   ...NODE_HEADER_KEYS,
+  ...REGISTRY_KEYS,
 ])
 
 /**

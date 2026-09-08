@@ -113,9 +113,12 @@ const RENAME_AXIS_KEYS: [&str; 3] = ["wrt", "dim", "var"];
 /// Opaque to substitution AND copied verbatim by the rename walk.
 const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 
-/// Closed-registry ids / literal enums PARAMETERIZING the node's op: copied
-/// verbatim by the §9.7.7 rename walk only. `from`, `wrt`/`dim`, apply-`name`,
-/// and `of` are handled positionally.
+/// Closed-registry ids / literal enums PARAMETERIZING the node's op. Like
+/// [`NODE_HEADER_KEYS`] these are names rather than values, so they are opaque
+/// to metaparameter substitution AND copied verbatim by the §9.7.7 rename walk;
+/// the kind is kept distinct because the two answer different questions about a
+/// node (what it IS vs how its op is parameterized). `from`, `wrt`/`dim`,
+/// apply-`name`, and `of` are handled positionally.
 const REGISTRY_KEYS: [&str; 9] = [
     "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
 ];
@@ -135,8 +138,17 @@ const RENAME_BOUND_KEYS: [&str; 2] = ["lower", "upper"];
 /// All five bindings MUST agree on this predicate — a divergence is silent until
 /// a document happens to name a metaparameter after a structural field's value
 /// (`tests/conformance/expression_templates/metaparam_axis_name_collision`).
+///
+/// Every structural kind but `bound` and `positional` is in: an expression
+/// position is the ONLY thing substitution may rewrite, and `bound` is the one
+/// structural-table entry that IS one. This makes the predicate coincide with
+/// [`is_rename_protected`]; both stay separate because they answer different
+/// questions and a future kind may split them.
 fn is_meta_subst_skipped(k: &str) -> bool {
-    PROTECTED_KEYS.contains(&k) || RENAME_AXIS_KEYS.contains(&k) || NODE_HEADER_KEYS.contains(&k)
+    PROTECTED_KEYS.contains(&k)
+        || RENAME_AXIS_KEYS.contains(&k)
+        || NODE_HEADER_KEYS.contains(&k)
+        || REGISTRY_KEYS.contains(&k)
 }
 
 /// True when object key `k` is a structural scalar field the §9.7.7 rename walk

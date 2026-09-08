@@ -2,20 +2,22 @@
   "esm": "1.0.0",
   "metadata": {
     "name": "metaparam_axis_name_collision",
-    "description": "esm-spec 9.7.6: metaparameter substitution rewrites EXPRESSION positions ONLY. Four metaparameters are spelled exactly like the structural string field standing beside them in the same node - `lev` like the `dim` / `wrt` / `var` axis names (9.7.7, 4.9.1, 4.2), `max` like an operator name, `flux` like a node `id`, `continuous` like an `expect_cadence` enum value - and every one of the four ALSO occurs as a bare string in a genuine expression position. The golden pins the split: each `args` occurrence closes to its integer default (4 / 3 / 7 / 5) and each structural field survives verbatim. A binding whose substitution walk is per-NODE rather than per-FIELD corrupts the structural field; a binding whose skip set is too broad fails to close the expression position beside it."
+    "description": "esm-spec 9.7.6: metaparameter substitution rewrites EXPRESSION positions ONLY. Five metaparameters are spelled exactly like the structural string field standing beside them in the same node - `lev` like the `dim` / `wrt` / `var` axis names (9.7.7, 4.9.1, 4.2), `max` like an operator name and like the `reduce` / `fn` / `attrs` registry values, `flux` like a node `id`, `continuous` like an `expect_cadence` enum value, `min_sum` like a `semiring` id - and every one of the five ALSO occurs as a bare string in a genuine expression position IN THE SAME NODE. The golden pins the split: each expression-position occurrence closes to its integer default (4 / 3 / 7 / 5 / 6) and each structural field survives verbatim. A binding whose substitution walk is per-NODE rather than per-FIELD corrupts the structural field; a binding whose skip set is too broad fails to close the expression position beside it."
   },
   "metaparameters": {
     "lev": { "type": "integer", "default": 4, "description": "spelled like the `dim` / `wrt` / `var` axis name" },
-    "max": { "type": "integer", "default": 3, "description": "spelled like the `max` operator name" },
+    "max": { "type": "integer", "default": 3, "description": "spelled like the `max` operator name, and like a `reduce` / `fn` / `attrs` registry value" },
     "flux": { "type": "integer", "default": 7, "description": "spelled like the `id` of the node it sits on" },
-    "continuous": { "type": "integer", "default": 5, "description": "spelled like an `expect_cadence` enum value" }
+    "continuous": { "type": "integer", "default": 5, "description": "spelled like an `expect_cadence` enum value" },
+    "min_sum": { "type": "integer", "default": 6, "description": "spelled like a `semiring` registry id" }
   },
   "models": {
     "M": {
       "variables": {
         "c": { "type": "unknown", "units": "1", "default": 0.5, "description": "the integrated state" },
         "g": { "type": "unknown", "units": "1", "description": "axis-field carrier: dim, wrt, var" },
-        "s": { "type": "unknown", "units": "1", "description": "registry-field carrier: op, id, expect_cadence" }
+        "s": { "type": "unknown", "units": "1", "description": "node-header carrier: op, id, expect_cadence" },
+        "r": { "type": "unknown", "units": "1", "description": "op-registry carrier: reduce, semiring, fn, attrs" }
       },
       "equations": [
         {
@@ -37,6 +39,32 @@
         {
           "lhs": "s",
           "rhs": { "op": "+", "args": ["continuous", "flux"] }
+        },
+        {
+          "lhs": "r",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [],
+                "reduce": "max",
+                "ranges": { "i": [1, 3] },
+                "expr": { "op": "*", "args": ["i", "max"] }
+              },
+              {
+                "op": "aggregate",
+                "args": [],
+                "output_idx": [],
+                "semiring": "min_sum",
+                "ranges": { "i": [1, 3] },
+                "expr": { "op": "*", "args": ["i", "min_sum"] }
+              },
+              { "op": "broadcast", "fn": "max", "args": ["c", "max"] },
+              { "op": "godunov_hamiltonian", "args": ["c", "max"], "attrs": { "limiter": "max" } }
+            ]
+          }
         }
       ]
     }

@@ -242,6 +242,21 @@ describe('template-library imports + metaparameters (esm-spec §9.7)', () => {
 
     // The two remaining collisions close in ordinary argument positions.
     expect(definingRhs(d.models.M, 's').args).toEqual([5, 7])
+
+    // OP-REGISTRY fields: a closed-registry id or literal enum parameterizing
+    // the node's op is a name, not a value, so it is not an expression position
+    // either. Each node carries a genuine expression position alongside it.
+    const rArgs = definingRhs(d.models.M, 'r').args
+    expect(rArgs[0].reduce).toBe('max')
+    expect(rArgs[0].expr.args).toEqual(['i', 3])
+    expect(rArgs[1].semiring).toBe('min_sum')
+    expect(rArgs[1].expr.args).toEqual(['i', 6])
+    expect(rArgs[2].fn).toBe('max')
+    expect(rArgs[2].args).toEqual(['c', 3])
+    // An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+    // slots, not `args` — scalar attribute NAMES, never expressions.
+    expect(rArgs[3].attrs).toEqual({ limiter: 'max' })
+    expect(rArgs[3].args).toEqual(['c', 3])
   })
 
   it('import_where_rename_unknown_index_set: bad where set after rename rejected', () => {

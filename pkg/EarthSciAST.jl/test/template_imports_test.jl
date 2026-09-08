@@ -331,6 +331,22 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _normj
 
         # And the two remaining collisions close in ordinary argument positions.
         @test _defrhs(d, "M", "s")["args"] == Any[5, 7]
+
+        # OP-REGISTRY fields: a closed-registry id or literal enum
+        # parameterizing the node's op is a name, not a value, so it is not an
+        # expression position either. Each node carries a genuine expression
+        # position alongside it.
+        rargs = _defrhs(d, "M", "r")["args"]
+        @test rargs[1]["reduce"] == "max"
+        @test rargs[1]["expr"]["args"] == Any["i", 3]
+        @test rargs[2]["semiring"] == "min_sum"
+        @test rargs[2]["expr"]["args"] == Any["i", 6]
+        @test rargs[3]["fn"] == "max"
+        @test rargs[3]["args"] == Any["c", 3]
+        # An open rewrite-target op's `attrs` mirror the fixed dim/side/wrt/var
+        # slots, not `args` — scalar attribute NAMES, never expressions.
+        @test rargs[4]["attrs"]["limiter"] == "max"
+        @test rargs[4]["args"] == Any["c", 3]
     end
 
     @testset "loader-API bindings (§9.7.6 site 4) and defaults (site 5)" begin
