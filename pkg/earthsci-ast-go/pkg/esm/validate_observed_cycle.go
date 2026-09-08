@@ -97,7 +97,10 @@ func (s *structuralScan) validateObservedCycles(modelName string, model *Model, 
 			modelName, strings.Join(cycle, " -> ")),
 		// `cycle` is a PATH — ordered semantically, entry node repeated to close
 		// it — not one of the §7.1.0 lexicographically-ordered name lists.
-		Details: map[string]any{"cycle": cycle},
+		// `dependency_type` distinguishes this payload from
+		// `circular_dependency`'s, which carries a cycle among MODELS; the other
+		// four bindings emit the same pair.
+		Details: map[string]any{"cycle": cycle, "dependency_type": "observed_definitions"},
 	})
 }
 

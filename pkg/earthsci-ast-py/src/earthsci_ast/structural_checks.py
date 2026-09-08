@@ -971,7 +971,10 @@ def _check_observed_cycles(data: dict[str, Any], errors: list) -> None:
                     f"models/{mname}: observed definition cycle: {joined} — each of these "
                     f"observeds is defined in terms of the next, so no evaluation order "
                     f"satisfies every definition",
-                    {"cycle": found},
+                    # `dependency_type` distinguishes this payload from
+                    # `circular_dependency`'s, which carries a cycle among
+                    # MODELS; the other four bindings emit the same pair.
+                    {"cycle": found, "dependency_type": "observed_definitions"},
                 )
             )
 
