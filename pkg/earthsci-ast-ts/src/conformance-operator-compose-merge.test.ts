@@ -124,9 +124,7 @@ describe('conformance: operator_compose merge intent', () => {
       expect(manifest.codes[code]).toBe('error')
       // The manifest names an error type per binding per code; reading
       // TypeScript's column back keeps the record from drifting silently.
-      expect(manifest.diagnostic_surface.errors[code].typescript).toBe(
-        ERROR_FOR_CODE[code].name,
-      )
+      expect(manifest.diagnostic_surface.errors[code].typescript).toBe(ERROR_FOR_CODE[code].name)
     }
   })
 
@@ -179,9 +177,7 @@ describe('conformance: operator_compose merge intent', () => {
     // The table is the whole of `require_match`'s meaning, and its three states
     // are three different things an author can mean. A column with no case is a
     // column a binding could get wrong without failing anything.
-    const covered = new Set(
-      manifest.cases.map((c) => `${String(c.require_match)}|${c.outcome}`),
-    )
+    const covered = new Set(manifest.cases.map((c) => `${String(c.require_match)}|${c.outcome}`))
     expect(covered).toContain('absent|refused')
     expect(covered).toContain('absent|warning')
     expect(covered).toContain('absent|clean')
@@ -218,9 +214,7 @@ describe('conformance: operator_compose merge intent', () => {
     expect(Object.keys(resolved.stateVariables)).toEqual(['Chem.O3'])
     expect(resolved.stateVariables['Chem.O3'].default).toBe(30.0)
 
-    const owned = flatten(
-      loadFixture(byId.get('owner_rename_state_wins_observed_first')!.path),
-    )
+    const owned = flatten(loadFixture(byId.get('owner_rename_state_wins_observed_first')!.path))
     expect(Object.keys(owned.stateVariables)).toEqual(['Sink.O3'])
     expect(owned.stateVariables['Sink.O3'].default).toBe(40.0)
   })
@@ -230,8 +224,7 @@ describe('conformance: operator_compose merge intent', () => {
     // — dropping it as "the default" would silently re-arm the zero-merge
     // refusal on every document that opted out. An ABSENT flag must stay absent
     // for the same reason, in the other direction.
-    const emitted = (name: string) =>
-      JSON.parse(toJson(loadFixture(join('fixtures', name))))
+    const emitted = (name: string) => JSON.parse(toJson(loadFixture(join('fixtures', name))))
     expect(emitted('require_match_unmatched.esm').coupling[0].require_match).toBe(true)
     expect(emitted('no_merge_declared.esm').coupling[0].require_match).toBe(false)
     expect('require_match' in emitted('partial_merge.esm').coupling[0]).toBe(false)
