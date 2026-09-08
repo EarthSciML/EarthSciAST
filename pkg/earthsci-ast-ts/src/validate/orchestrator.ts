@@ -194,9 +194,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
       // declared quantity (issue #200). Independent of coupling.
       // Recurses into inline subsystems: a subsystem is a model, and a MOUNTED
       // subsystem is the shape #200 was reported in.
-      errors.push(
-        ...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile),
-      )
+      errors.push(...validateReservedModelNames(model, modelPath, `Model '${modelName}'`, esmFile))
 
       // (F-6) Static `aggregate` semantics decidable from this document alone:
       // a value-equality join key of a non-comparable type, an index-set range
