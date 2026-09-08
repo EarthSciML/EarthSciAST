@@ -280,8 +280,11 @@ Both directions were checked:
   collides today, and the mount rename is what separates them.
 - **Ordering hazard, flagged:** if a binding ever moved the §9.7.10 injection's index-set
   merge to *after* the mount (rather than through the leaf's resolution), the injected axes
-  would escape the rename. The pipeline in §3.2 pins the order to prevent it, and the
-  conformance fixture `mount_rename_two_columns/` covers a mount that renames *and* injects.
+  would escape the rename. The pipeline in §3.2 pins the order to prevent it. **No fixture
+  covers a mount that renames *and* injects** — `mount_rename_two_columns.esm` renames only —
+  so the order is pinned by prose alone; a mount edge carrying both
+  `expression_template_imports` and `index_set_rename` is the regression test this RFC still
+  owes.
 
 ### 4.4 Interaction with §9.7.6 metaparameter substitution
 
