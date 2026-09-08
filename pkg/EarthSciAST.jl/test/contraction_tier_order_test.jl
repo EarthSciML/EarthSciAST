@@ -8,24 +8,20 @@
 #   unroll + affine    one resolve + `_compile` per STRUCTURAL GROUP over a body
 #                      of ∏|k…| terms                      →  O(#groups · ∏|k…|)
 #
-# Only the first grows with the GRID, so choosing it unconditionally (which is
-# what testing `use_contraction_loop` before the affine block and gating that
-# block on `!use_contraction_loop` did) makes the build linear in the cell count
-# for every reduction at or above the length floor — including the plain column
-# sums a transport model is full of, which the affine tier compiles ONCE for the
-# whole array.
+# Only the first grows with the GRID, so choosing it unconditionally would make
+# the build linear in the cell count for every reduction at or above the length
+# floor — including the plain column sums a transport model is full of, which
+# the affine tier compiles ONCE for the whole array.
 #
-# The loop now preempts the affine tier only when `#output cells < ∏|k…|` — the
-# most optimistic (`#groups == 1`) form of "the unroll cannot be cheaper" — so:
+# The loop preempts the affine tier only when `#output cells < ∏|k…|` — the most
+# optimistic (`#groups == 1`) form of "the unroll cannot be cheaper" — so:
 #
-#   * a NARROW output over a LONG reduction (what the loop was added for, and
-#     every shape in `contraction_loop_test.jl`) still takes the loop, byte for
-#     byte;
+#   * a NARROW output over a LONG reduction (what the loop exists for, and every
+#     shape in `contraction_loop_test.jl`) takes the loop;
 #   * a WIDE output over a SHORT reduction — the column-sum shape
 #     `out[i,j] = Σ_k dp[i,j,k]·c[i,j,k]` — is offered to the affine tier first
-#     and lands there, so its build IR stops growing with the grid;
-#   * an equation the affine tier DECLINES still falls back to the loop, exactly
-#     as before.
+#     and lands there, so its build IR does not grow with the grid;
+#   * an equation the affine tier DECLINES falls back to the loop.
 #
 # Numerically nothing may move: the wide case is pinned bit-for-bit against the
 # pure-unroll reference (`ESS_CONTRACTION_LOOP=0`), the per-cell scalar-walk
@@ -125,10 +121,9 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
 
 @testset "contraction tier order (loop vs affine)" begin
 
-    # ── The change: a WIDE output over a SHORT reduction reaches the affine tier.
+    # ── A WIDE output over a SHORT reduction must reach the affine tier.
     # 36 output cells against 8 terms — the loop's per-cell cost is the larger of
-    # the two, so it must not preempt. Before the ordering fix this equation
-    # tallied `:percell_loop => 1` with `:affine` untouched by it.
+    # the two, so it must not preempt.
     @testset "wide output, short reduction → affine (not per-cell loop)" begin
         NI, NJ, NK = 6, 6, 8
         @test NI * NJ >= NK                 # the admission condition, stated
@@ -139,9 +134,8 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         @test _cto_outs(du, vm, NI, NJ) == _cto_exact(NI, NJ, NK)
     end
 
-    # ── What must NOT change: the shape the contraction loop was added for.
-    # 4 output cells against 8 terms — the unroll cannot be cheaper, so the loop
-    # keeps the equation and its lowering is what it always was.
+    # ── The shape the contraction loop exists for. 4 output cells against 8
+    # terms — the unroll cannot be cheaper, so the loop keeps the equation.
     @testset "narrow output, long reduction → contraction loop (unchanged)" begin
         NI, NJ, NK = 2, 2, 8
         @test NI * NJ < NK                  # the admission condition, stated
@@ -170,11 +164,10 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         @test _cto_outs(du_o, vm_o, NI, NJ) == A
     end
 
-    # ── The point of the whole thing: build IR for the column sum stops growing
+    # ── The point of the whole thing: build IR for the column sum does not grow
     # with the grid. Quadrupling the output cell count (6×6 → 12×12) at a fixed
-    # reduction length leaves node lowerings essentially flat; with the loop
-    # preempting, each new output cell cost its own resolve + `_compile`, so the
-    # count tracked the cell count.
+    # reduction length must leave node lowerings flat; a tier that lowers a node
+    # per output cell cannot hold that.
     @testset "node lowerings are FLAT in output cells" begin
         NK = 8
         _, _, t6,  n6  = _cto_build(6, 6, NK)      # 36 output cells
@@ -185,9 +178,7 @@ _cto_outs(du, vm, NI, NJ) = [ du[vm["out[$i,$j]"]] for i in 1:NI, j in 1:NJ ]
         end
         # 16× the output cells, IDENTICAL node lowerings — the grid-independence
         # property `grid_invariance_test.jl` states, which the loop tier cannot
-        # hold because it lowers a node per output cell. Measured on this document:
-        # 144 / 576 / 2304 before the ordering fix (exactly 4·#output cells),
-        # 9 / 9 / 9 after.
+        # hold because it lowers a node per output cell.
         @test n6 == n12 == n24
     end
 end
