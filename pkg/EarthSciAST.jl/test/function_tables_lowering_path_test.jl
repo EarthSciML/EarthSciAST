@@ -115,6 +115,14 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
               ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
         @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output="NO2")) ==
               ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        # `Bool <: Integer` in Julia, so an untyped `true` selector would
+        # otherwise resolve to output 1 instead of being refused — the trap the
+        # other four bindings guard against explicitly. §9.5.2 admits an
+        # integer or an output NAME, and a boolean is neither.
+        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=true)) ==
+              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=false)) ==
+              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
     end
 
     # ---- The regression itself: the shared end-to-end fixture, run through the

@@ -436,7 +436,11 @@ function _table_output_index(node::OpExpr, table::FunctionTable,
     out = node.output
     outputs = table.outputs
     out === nothing && return 1
-    if out isa Integer
+    # `!(out isa Bool)`: `Bool <: Integer` in Julia, so a JSON `true` would
+    # otherwise select output 1 rather than being refused. The other four
+    # bindings reject a boolean selector; §9.5.2 admits an integer or an
+    # output NAME and nothing else.
+    if out isa Integer && !(out isa Bool)
         idx = Int(out)
         if outputs !== nothing
             0 <= idx < length(outputs) || throw(TableLookupError(
