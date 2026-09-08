@@ -70,7 +70,7 @@ Each of these is expanded in the per-binding table it belongs to.
 
 # Part II — The document format changed
 
-These two changes are `format`-kind: they apply to `.esm` documents in every
+These changes are `format`-kind: they apply to `.esm` documents in every
 binding at once, whether or not you touch any API.
 
 ### `from_faq` resolves at DOCUMENT scope
@@ -125,6 +125,95 @@ model-nested key invisible. Measured before the change: a `ranges[*].from`
 naming a model-nested-only set raised `undeclared_index_set` in Python and
 resolved in Go and Rust; with the same name in both, Python took the *document*
 entry where Go and Rust took the *model* one. Python now matches.
+
+### An `operator_compose` entry that merges nothing is now REFUSED
+
+`§4.7.1` step 5 preserves an equation that matched nothing, and used to preserve
+it *silently*. That made **"merged everything"** and **"merged nothing"** the
+same observable outcome: an entry that matches nothing is indistinguishable from
+an entry that is not there — the operator integrates a private, decoupled system
+from its own defaults, the other system receives no contribution, and the only
+evidence is a state count one too high.
+
+Three diagnostics now exist, and two of them are **refusals at flatten** (not at
+`validate()` — such a document is schema-valid and structurally valid, and only
+the merge knows the answer):
+
+| Code | When | Severity |
+|---|---|---|
+| `operator_compose_no_merge` | zero of B's equations matched and `require_match` is **absent** | error |
+| `operator_compose_partial_merge` | some matched, some did not | warning |
+| `operator_compose_require_match_unmatched` | either, under `require_match: true` | error |
+
+**`require_match` is tri-state, and absent is NOT `false`.** The schema
+therefore declares no `default` for the property, and an explicit `false` is
+emitted rather than dropped — it carries meaning a missing key does not.
+
+| `require_match` | zero merged | some but not all | all merged |
+|---|---|---|---|
+| **absent** | error | warning | clean |
+| **`true`** | error | error | clean |
+| **`false`** | clean | clean | clean |
+
+**What to write instead.** If your operator really does contribute only states
+of its own — a transport operator whose one equation defines its own wind field,
+say — declare it:
+
+```json
+{ "type": "operator_compose", "systems": ["Chem", "Transport"],
+  "require_match": false }
+```
+
+`false` is a **declaration**, not a default: *this operator contributes only
+states of its own; unmatched equations are expected.* An absent flag means the
+author has not said, which is exactly why that is the case that errors. Seventeen
+entries across ten documents in this repo's own corpus needed the annotation; the
+diff is one line each.
+
+### An ambiguous bare-name `operator_compose` match is now REFUSED
+
+The bare-name fallback (`§4.7.1` step 3) binds `A.x` to `B.x` on a shared local
+name alone, and the merge keeps one of the two. Where **both are states**, each
+carries its own initial condition, so the choice decides what the flattened
+system integrates from — and flipping the entry's `systems` order silently
+changed the answer. That is now `operator_compose_ambiguous_bare_name`, an
+error.
+
+**Read this row as broad, not exotic. It refuses essentially every bare-name
+*rename* between two components.** For a bare-name match to happen at all, both
+sides must be namespaced dependent variables — and in practice both are then
+states, which is the refused case. So as a way of binding two components'
+same-named states, the fallback is now **closed**, and a document that relied on
+it loaded clean before and does not load at all now. This is a deliberate
+choice, not an edge case that happens to trip: the alternative is letting the
+`systems` argument order silently pick which initial condition the flattened
+system starts from.
+
+The fallback still works wherever it renames *nothing* — a direct match, a
+`_var` placeholder expansion — so an entry composing an operator over the
+mechanism's own scoped names (`D(Chemistry.O3, t) = …`) is unaffected.
+
+**How exposed are you?** Zero documents in this repo's corpus hit the refusal —
+the bare-name fallback produced no renames anywhere in the shipped tree — so the
+in-tree cost was two *tests* that had leaned on it, not any fixture. Your own
+documents are the ones to check: grep for an `operator_compose` whose two systems
+each declare the same local variable name with no `translate` between them.
+
+**What to write instead.** Name the surviving spelling outright:
+
+```json
+{ "type": "operator_compose", "systems": ["Sink", "Chem"],
+  "translate": { "Sink.O3": "Chem.O3" } }
+```
+
+or rename one of the two variables. The format will not infer which initial
+condition wins from argument order, from declaration order, or from anything
+else.
+
+Where **exactly one** side is a state the match is *not* ambiguous and nothing
+changes for you: the other name carries no initial condition, so the state owns
+the quantity and the other name is retargeted onto it — **in either argument
+order**, which is itself a fix for the old order-dependence.
 
 ---
 

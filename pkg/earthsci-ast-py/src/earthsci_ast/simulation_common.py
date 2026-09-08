@@ -419,9 +419,7 @@ def _observed_rows(vals, n: int, names: Sequence[str] | None = None) -> np.ndarr
     return block
 
 
-def resolve_merged_renames(
-    renames: dict[str, str], overrides: dict[str, Any]
-) -> dict[str, Any]:
+def resolve_merged_renames(renames: dict[str, str], overrides: dict[str, Any]) -> dict[str, Any]:
     """Rewrite override keys off names an ``operator_compose`` merge DELETED.
 
     esm-libraries-spec §4.7.1 step 4: a renaming match folds ``B.x`` into

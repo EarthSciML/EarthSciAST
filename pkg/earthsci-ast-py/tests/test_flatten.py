@@ -247,9 +247,7 @@ def test_flatten_operator_compose_lhs_match_and_sum():
     )
     adv = Model(name="Adv", variables={"O3": adv_o3}, equations=[adv_eq])
 
-    coupling = OperatorComposeCoupling(
-        systems=["Chem", "Adv"], translate={"Chem.O3": "Adv.O3"}
-    )
+    coupling = OperatorComposeCoupling(systems=["Chem", "Adv"], translate={"Chem.O3": "Adv.O3"})
     file = _empty_file(models={"Chem": chem, "Adv": adv}, coupling=[coupling])
 
     flat = flatten(file)

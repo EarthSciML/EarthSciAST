@@ -45,9 +45,7 @@ interface Manifest {
   merged_variable_renames_field: Record<string, string>
 }
 
-const manifest = JSON.parse(
-  readFileSync(join(categoryDir, 'manifest.json'), 'utf-8'),
-) as Manifest
+const manifest = JSON.parse(readFileSync(join(categoryDir, 'manifest.json'), 'utf-8')) as Manifest
 const flattenCases = manifest.cases.filter((c) => c.surface === 'flatten')
 
 function flattenCase(c: ReachCase) {
