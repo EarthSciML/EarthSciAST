@@ -1,0 +1,29 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "toplevel_ref_index_set_merge",
+    "description": "The TOP-LEVEL mount form of the §4.7 'Index-set merge' pin (esm-spec §4.7 'Two mount forms, one mechanism'). Mounts the SAME leaf as tests/valid/subsystem_index_set_merge.esm — ../../valid/subsystem_mesh_lib.esm — but through a top-level models.M {ref} instead of a subsystems entry, so the pair is a differential test of the two mount forms. The document redeclares cells (interval, 5) DEEP-EQUAL to the mesh file's declaration (idempotent) and does NOT declare vertices, which the merge must bring in from the mesh file (post-load, index_sets.vertices.size == 4). The assembling document's OWN Host.diag is shaped over vertices — an axis it never declares — so the merge is load-bearing, not cosmetic: before the merge existed at this attachment point the axis was silently dropped and an assembly had to redeclare its leaves' axes. Lives under tests/fixtures/ rather than tests/valid/ because TypeScript and Go do not implement the top-level mount form at all (they leave the {ref} entry unresolved), so the corpus sweep would score them a false pass here.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "merge", "mount", "toplevel-ref", "deep-equal"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 5 }
+  },
+  "models": {
+    "M": { "ref": "../../valid/subsystem_mesh_lib.esm" },
+    "Host": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.5, "description": "host scalar state" },
+        "diag": { "type": "parameter", "units": "1", "shape": ["vertices"], "default": 0.5, "description": "host per-vertex parameter shaped over an axis ONLY the mounted leaf declares" }
+      },
+      "equations": [
+        {
+          "_comment": "d(x)/dt = -0.5 * x; the host's dynamics do not touch the mesh, the fixture pins the registry merge.",
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] }
+        }
+      ]
+    }
+  }
+}

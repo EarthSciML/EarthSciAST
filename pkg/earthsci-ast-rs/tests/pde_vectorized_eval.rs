@@ -276,8 +276,8 @@ fn advection_1d_integrates_end_to_end_via_vectorized_path() {
     let t_end = 0.1f64;
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![t_end]),
         ..Default::default()
@@ -1024,8 +1024,8 @@ fn unary_broadcast_conformance_fixture_matches_its_inline_assertions() {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 100_000,
         saveat: Some(vec![1.0]),
         ..Default::default()

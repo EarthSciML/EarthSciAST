@@ -396,11 +396,16 @@ fn parse_solve_options(
         opts.alg =
             Alg::from_name(s).ok_or_else(|| JsValue::from_str(&format!("Unknown alg '{s}'")))?;
     }
+    // `Some(v)`: `SolveOptions::{abstol,reltol}` are `Option<f64>` so that "the
+    // caller said nothing" stays distinguishable from "the caller asked for the
+    // default value" -- esm-spec §2.2.2 puts the document's `solver` block
+    // between the two. A key absent from the options JSON leaves `None` and lets
+    // the document win.
     if let Some(v) = opts_json.get("abstol").and_then(|v| v.as_f64()) {
-        opts.abstol = v;
+        opts.abstol = Some(v);
     }
     if let Some(v) = opts_json.get("reltol").and_then(|v| v.as_f64()) {
-        opts.reltol = v;
+        opts.reltol = Some(v);
     }
     if let Some(v) = opts_json
         .get("maxiters")

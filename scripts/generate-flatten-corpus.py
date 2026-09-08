@@ -127,6 +127,32 @@ CASES: list[tuple[str, str, str]] = [
         "coupled_atmospheric_system",
         "end_to_end/coupled_atmospheric_system.esm",
     ),
+    # --- variable_map endpoints that reach INTO / OUT OF subsystems ----------
+    # Added 2026-09-06 with issue #198 item 1. EVERY `variable_map` above names
+    # two-segment endpoints (`Model.var`), so not one of them can tell a binding
+    # that resolves an endpoint by splitting on the FIRST dot from one that
+    # walks the whole §4.6 path -- and a wrapper model is exactly where the
+    # difference shows. This document pins the four shapes at once:
+    #
+    #   * INTO a parameter nested in a subsystem   (Wrapper.inner.gain);
+    #   * OUT OF a nested unknown                  (Wrapper.inner.tracer);
+    #   * OUT OF the wrapper's own observed, in a model that HAS subsystems
+    #     (Wrapper.exported), which is the shape where the mere presence of a
+    #     `subsystems` map was reported to break an otherwise two-segment edge;
+    #   * BETWEEN two subsystems of ONE parent     (inner.tracer -> sink.uptake),
+    #     the case that used to validate and then be silently dropped, leaving
+    #     the target at its declared default with nothing in the flattened
+    #     system to say the coupling was ever declared.
+    #
+    # Each mapped parameter is READ by an equation, so the substitution is
+    # observable in `equations` and not only in the parameter list: a binding
+    # that removes `Wrapper.inner.gain` without rewriting the reference to it
+    # records a dangling name here rather than `Source.drive`.
+    (
+        "coupled",
+        "variable_map_subsystem_endpoints",
+        "valid/variable_map_subsystem_endpoints.esm",
+    ),
     # --- operator_compose that actually COMPOSES -----------------------------
     # Added 2026-08-24. Until then EVERY coupled case above recorded an
     # operator_compose that matched nothing, because each named an operator model
@@ -316,6 +342,23 @@ REFUSALS: list[dict[str, str]] = [
             "It lives in tests/coupling/ and NOT in tests/invalid/ because it is schema-valid and "
             "structurally valid -- `tests/invalid/` means `validate()` must reject, and this "
             "document is refused at FLATTEN. Same placement rule as valid/template_import_lib.esm."
+        ),
+    },
+    {
+        "fixture": "coupling/coupling_resolution_edge_cases.esm",
+        "error": "VariableMapUnresolvedEndpointError",
+        "reason": (
+            "EDGE CASE 10 of this catalogue maps `SingleVariableSystem.x` onto "
+            "`EmptySystem.nonexistent_param`, which the document declares nowhere. Every binding "
+            "used to flatten it CLEANLY with the entry silently dropped: the substitution runs "
+            "over a name nothing references and the promotion pops a key that is not there, so "
+            "the flattened system is indistinguishable from one where the coupling applied and "
+            "happened to have no effect. That is the failure mode issue #198 item 1 reports from "
+            "the other end -- a target that keeps its declared default, and (when it is the "
+            "SOURCE that resolves to nothing) consumers rewritten to a name no table binds, which "
+            "reads NaN at run time rather than raising. Same placement rule as "
+            "`couple_multiplicative_no_tendency`: schema-valid and structurally valid, refused at "
+            "FLATTEN, so it lives in tests/coupling/ and not tests/invalid/."
         ),
     },
     {

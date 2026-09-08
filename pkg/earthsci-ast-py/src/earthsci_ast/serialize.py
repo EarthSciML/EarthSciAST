@@ -981,6 +981,11 @@ def _serialize_coupling_entry(coupling: CouplingEntry) -> dict[str, Any]:
             result["translate"] = coupling.translate
         if coupling.lifting is not None:
             result["lifting"] = coupling.lifting
+        # Emitted whenever the author SET it, `false` included: the flag is
+        # tri-state, so an explicit `false` (a DECLARED standalone-contributing
+        # operator) carries meaning that a dropped key does not.
+        if coupling.require_match is not None:
+            result["require_match"] = coupling.require_match
 
     elif isinstance(coupling, CouplingCouple):
         result["type"] = "couple"
@@ -1109,6 +1114,26 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
     # streaming-output-sinks §8) — a peer of `index_sets`, carried verbatim.
     if getattr(esm_file, "coordinates", None):
         result["coordinates"] = _json_deepcopy(esm_file.coordinates)
+
+    # Serialize the document-scoped solver hints (esm-spec §2.2). Authored
+    # configuration — a peer of `tolerance` and `parameter_overrides` — so it
+    # round-trips VERBATIM (§2.2.4 requirement 2), unlike the load-time §9.7.6
+    # constructs that are consumed and gone by emit time. Unset fields are
+    # omitted rather than emitted as null, so `parse -> emit` is stable.
+    _solver = getattr(esm_file, "solver", None)
+    if _solver is not None:
+        _block = {
+            k: v
+            for k, v in (
+                ("stiffness", _solver.stiffness),
+                ("abstol", _solver.abstol),
+                ("reltol", _solver.reltol),
+                ("splitting", _solver.splitting),
+            )
+            if v is not None
+        }
+        if _block:
+            result["solver"] = _block
 
     # Serialize the top-level DECLARATIONS (esm-spec §9.7.1) — peers of
     # `index_sets`. Option A expands `apply_expression_template` CALL SITES; it

@@ -307,6 +307,51 @@ end
         @test _uses_var(eq.rhs, "Source.value")
     end
 
+    @testset "7a. variable_map endpoints reach INTO a subsystem (esm-spec §4.6)" begin
+        # A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds
+        # the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.
+        # `to_endpoint` is spelled by the caller so a wrong path can be probed
+        # against the same document (issue #198 item 1).
+        function subsystem_map_file(to_endpoint::String; from_endpoint::String="Src.T")
+            inner = Model(
+                Dict{String, ModelVariable}(
+                    "gain" => ModelVariable(ParameterVariable, default=0.0),
+                    "x" => ModelVariable(UnknownVariable),
+                ),
+                [Equation(_deriv("x"), _V("gain"))])
+            wrap = Model(Dict{String, ModelVariable}(), Equation[],
+                         DiscreteEvent[], ContinuousEvent[],
+                         Dict{String, EarthSciAST.SubsystemNode}("inner" => inner))
+            src = Model(
+                Dict{String, ModelVariable}("T" => ModelVariable(UnknownVariable)),
+                [Equation(_deriv("T"), _N(1.0))])
+            return EarthSciAST.EsmFile("1.0.0",
+                EarthSciAST.Metadata("t7a"),
+                models=Dict("Src" => src, "Wrap" => wrap),
+                coupling=CouplingEntry[
+                    CouplingVariableMap(from_endpoint, to_endpoint, "param_to_var")])
+        end
+
+        # A `to` endpoint reaching INTO a subsystem resolves by its FULL dot
+        # path: the nested parameter is promoted away and the nested equation
+        # that read it now reads the source.
+        flat = flatten(subsystem_map_file("Wrap.inner.gain"))
+        @test !haskey(flat.parameters, "Wrap.inner.gain")
+        eq = _find_eq(flat, "Wrap.inner.x")
+        @test eq !== nothing
+        @test _uses_var(eq.rhs, "Src.T")
+
+        # The same edge with a MISSING segment resolves to nothing. It used to
+        # flatten cleanly with the coupling silently dropped -- the target kept
+        # its declared default and nothing downstream could tell "applied" from
+        # "ignored". The `from` half is the NaN case: the substitution runs
+        # regardless, so consumers read a name no table binds.
+        @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
+            subsystem_map_file("Wrap.gain"))
+        @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
+            subsystem_map_file("Wrap.inner.gain"; from_endpoint="Src.Nope.T"))
+    end
+
     @testset "7b. variable_map expression transform makes target an observed (esm-spec §10.4)" begin
         # Sink: parameter F_in (target), parameter offset, state u with du/dt = F_in.
         sink_vars = Dict{String, ModelVariable}(
@@ -410,9 +455,19 @@ end
     end
 
     @testset "8a. couple additive connector transform (esm-spec §10.3)" begin
-        # Chem: one species A (no reactions) → D(Chem.A) ~ 0.
-        # Sink: a parameter k. An additive couple edge Sink.k → Chem.A adds
-        # (-Sink.k)*Chem.A to A's tendency, so D(Chem.A) ~ 0 + (-k*A) = -k*A.
+        # Chem: one species A in NO reaction, so esm-libraries-spec §4.6.1 emits
+        # no equation for it and A has NO tendency yet. Sink: a parameter k.
+        #
+        # That makes this the case §4.7.2 spells out for `additive`: "If `to` has
+        # no tendency yet, `expression` BECOMES it (`D(to) ~ expression`) — an
+        # additive term against an absent tendency is well defined, because zero
+        # is the additive identity." So D(Chem.A) ~ (-Sink.k) * Chem.A exactly,
+        # with no summation node.
+        #
+        # This testset used to assert a `+` here, because Julia emitted a vacuous
+        # `D(Chem.A) = 0` for the inert species and the connector summed onto it.
+        # The `+` was pinning that artifact, not the coupling behaviour under
+        # test; §4.6.1 removed the artifact and §4.7.2's own rule is what is left.
         rsys = EarthSciAST.ReactionSystem(
             [EarthSciAST.Species("A", default=2.0)], EarthSciAST.Reaction[])
         sink = Model(
@@ -434,11 +489,13 @@ end
         @test isempty(flat.metadata.opaque_coupling_refs)
         eq_A = _find_eq(flat, "Chem.A")
         @test eq_A !== nothing
-        # The additive term was summed onto A's tendency: -k*A is present.
-        @test _has_op(eq_A.rhs, "+")          # 0 + <term>
+        # The expression BECAME the tendency (§4.7.2), rather than being summed
+        # onto a vacuous zero: `-k*A` is the whole RHS.
+        @test !_has_op(eq_A.rhs, "+")         # no `0 + <term>` left to sum onto
         @test _has_op(eq_A.rhs, "-")          # negation of Sink.k
         @test _uses_var(eq_A.rhs, "Sink.k")
         @test _uses_var(eq_A.rhs, "Chem.A")
+        @test to_ascii(eq_A.rhs) == "(-Sink.k) * Chem.A"
         # Exactly one D(Chem.A) equation (no over-determining duplicate).
         @test count(eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
                     flat.equations) == 1
@@ -733,7 +790,11 @@ end
         @test flat isa FlattenedSystem
         doc = E.flattened_to_esm(flat)
         @test doc["esm"] == E.SCHEMA_VERSION
-        @test E.SCHEMA_VERSION == "1.0.0"
+        # The literal is the point: it pins that the reconstituted document is
+        # stamped with the format version this binding implements, and it is
+        # expected to be updated by hand on each format bump. 1.0.0 -> 1.1.0
+        # with the top-level `solver` block (esm-spec §2.2).
+        @test E.SCHEMA_VERSION == "1.1.0"
     end
 
     @testset "Flatten valid fixtures smoke test" begin

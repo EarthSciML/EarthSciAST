@@ -1,0 +1,43 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "IndependentVariableRenamed",
+    "description": "The mirror of `tests/invalid/reserved_variable_name_renamed_independent.esm`. This document renames its independent variable to `s` (esm-spec §11.3), which FREES `t` — here the ordinary ERA5 short name for air temperature. A binding that hard-codes the literal `\"t\"` in the §4.9.1.1 reserved-name check rejects this conforming file; a binding that reads `domain.independent_variable` accepts it and rejects the `s` declaration in the invalid twin.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "validation",
+      "reserved-names",
+      "independent-variable"
+    ]
+  },
+  "domain": {
+    "independent_variable": "s"
+  },
+  "models": {
+    "Column": {
+      "system_kind": "nonlinear",
+      "variables": {
+        "t": {
+          "type": "parameter",
+          "units": "K",
+          "default": 288.0,
+          "description": "Air temperature (ERA5 short name). Legal: this document's independent variable is `s`."
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Equilibrium value"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 1.0
+        }
+      ]
+    }
+  }
+}

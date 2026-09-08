@@ -2,20 +2,24 @@
  * Bit-equivalent table_lookup → interp.* lowering harness (esm-lhm).
  *
  * For each conformance fixture under `tests/conformance/function_tables/`,
- * loadString the file, walk the model equations, lower every `table_lookup`
- * node to the structurally-equivalent inline-`const` `interp.linear` /
- * `interp.bilinear` invocation prescribed by esm-spec §9.5.3, and assert
- * IEEE-754 binary64 agreement with the equivalent hand-written
- * inline-`const` lookup at the §9.2 tolerance contract (`abs: 0, rel: 0`,
- * non-FMA reference path).
+ * loadString the file, walk the model equations, evaluate every `table_lookup`
+ * node THROUGH THE PRODUCTION EVALUATOR (which lowers it to the
+ * inline-`const` `interp.linear` / `interp.bilinear` invocation prescribed by
+ * esm-spec §9.5.3), and assert IEEE-754 binary64 agreement with the equivalent
+ * hand-written inline-`const` lookup at the §9.2 tolerance contract
+ * (`abs: 0, rel: 0`, non-FMA reference path).
  *
- * Both arms drive the same `dispatchClosedFunction` evaluator; the harness
- * catches lowering-side mistakes (wrong output slice, swapped axis order,
- * dropped input expression) by computing the reference value from the raw
- * `function_tables` block independently of the parsed `table_lookup` node.
+ * Both arms bottom out in the same `dispatchClosedFunction` implementations;
+ * the harness catches lowering-side mistakes (wrong output slice, swapped axis
+ * order, dropped input expression) by computing the reference value from the
+ * raw `function_tables` block independently of the parsed `table_lookup` node.
+ *
+ * The lowering itself lives in `lower-table-lookups.ts` — see
+ * `lower-table-lookups.test.ts` for the tree-level and diagnostic pins.
  */
 import { describe, it, expect } from 'vitest'
 import { dispatchClosedFunction } from './closed-functions.js'
+import { evaluateExpression } from './codegen.js'
 import { loadFixture as loadEsmFixture } from './test-helpers.js'
 
 function bitEq(a: number, b: number): boolean {
@@ -48,18 +52,6 @@ function resolveAxisValue(expr: unknown, vars: Record<string, Var>): number {
   throw new Error(`complex axis input not exercised: ${JSON.stringify(expr)}`)
 }
 
-function resolveOutputIndex(node: any, outputs: string[] | undefined): number {
-  if (node.output === undefined || node.output === null) return 0
-  if (typeof node.output === 'number') return node.output
-  if (typeof node.output === 'string') {
-    if (!outputs) throw new Error('string output requires table.outputs')
-    const idx = outputs.indexOf(node.output)
-    if (idx < 0) throw new Error(`output ${node.output} not found`)
-    return idx
-  }
-  throw new Error('table_lookup.output must be int or string')
-}
-
 function slice1d(data: any, idx: number, hasOutputs: boolean): number[] {
   return (hasOutputs ? data[idx] : data).map((v: any) => Number(v))
 }
@@ -68,35 +60,22 @@ function slice2d(data: any, idx: number, hasOutputs: boolean): number[][] {
   return rows.map((r: any) => r.map((v: any) => Number(v)))
 }
 
+/**
+ * Evaluate a `table_lookup` node through the PRODUCTION path: `codegen.ts`
+ * lowers it per §9.5.3 (`lower-table-lookups.ts`) and evaluates the result.
+ *
+ * This used to re-implement the lowering locally — which is exactly how issue
+ * #188 stayed hidden: the harness agreed with the reference while NOTHING on
+ * the path a caller actually takes could lower a table at all.
+ */
 function lowerAndEvaluate(node: any, file: any, vars: Record<string, Var>): number {
   expect(node.op).toBe('table_lookup')
   expect(node.args).toEqual([])
-  const table = file.function_tables[node.table]
-  const kind = (table.interpolation ?? 'linear') as string
-  const outIdx = resolveOutputIndex(node, table.outputs)
-  const hasOutputs = Array.isArray(table.outputs)
-
-  if (kind === 'linear' && table.axes.length === 1) {
-    const axis = table.axes[0]
-    const slice = slice1d(table.data, outIdx, hasOutputs)
-    const x = resolveAxisValue(node.axes[axis.name], vars)
-    return dispatchClosedFunction('interp.linear', [slice, axis.values.map(Number), x])
+  const bindings = new Map<string, number>()
+  for (const [name, v] of Object.entries(vars)) {
+    if (typeof v.default === 'number') bindings.set(name, v.default)
   }
-  if (kind === 'bilinear' && table.axes.length === 2) {
-    const ax = table.axes[0]
-    const ay = table.axes[1]
-    const slice = slice2d(table.data, outIdx, hasOutputs)
-    const x = resolveAxisValue(node.axes[ax.name], vars)
-    const y = resolveAxisValue(node.axes[ay.name], vars)
-    return dispatchClosedFunction('interp.bilinear', [
-      slice,
-      ax.values.map(Number),
-      ay.values.map(Number),
-      x,
-      y,
-    ])
-  }
-  throw new Error(`unsupported lowering: kind=${kind} axes=${table.axes.length}`)
+  return evaluateExpression(node, bindings, { functionTables: file.function_tables })
 }
 
 function referenceInlineConst(

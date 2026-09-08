@@ -1,7 +1,7 @@
 {
   "version_compatibility_test_matrix": {
-    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 1.0.0: the library implements major version 1, so major 0 is REJECTED (the 1.0.0 break carries no deprecation path) and the backward/forward gradation this category exists to cover is expressed in 1.x fixtures. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
-    "library_version": "1.0.0",
+    "description": "Expected behavior for ESM format version compatibility testing. Re-based on esm 1.1.0 (1.0.0 until the top-level `solver` block, esm-spec \u00a72.2, moved the library to 1.1.0): the library implements major version 1, so major 0 is REJECTED (the 1.0.0 break carries no deprecation path) and the backward/forward gradation this category exists to cover is expressed in 1.x fixtures. Each fixture declares the version it is NAMED for — these files exercise the version GATE, and a fixture restamped to the library's own version tests nothing.",
+    "library_version": "1.1.0",
     "migration_notes": {
       "0.x_to_1.0.0": {
         "summary": "Unified variable model — `states` and `observed` collapse into one `unknown` type whose behaviour is stated by equations, the per-variable `expression` field is removed, `brownian` and `discrete` become parameters carrying a `distribution` / `update`, and `data_loaders` becomes `data_sources`, a pure ingest registry. A CLEAN BREAK: a 1.0.0 library rejects every 0.x document rather than migrating it. See esm-spec.md §6.3 and §8.5.",
@@ -29,7 +29,7 @@
         "file": "version_1_0_0_baseline.esm",
         "file_version": "1.0.0",
         "expected_behavior": "load_success",
-        "description": "Exact version match - should load successfully",
+        "description": "The first 1.x release - an EARLIER minor than the library since the 1.1.0 bump, loaded without warning because the 1.x line is additive. It was the exact-version-match fixture while the library was 1.0.0; version_1_1_0_minor_upgrade.esm now holds that role.",
         "warnings": []
       },
       {
@@ -49,11 +49,9 @@
       {
         "file": "version_1_1_0_minor_upgrade.esm",
         "file_version": "1.1.0",
-        "expected_behavior": "load_with_warning",
-        "description": "Newer minor version - forward compatible with warning",
-        "warnings": [
-          "File version 1.1.0 is newer than library version 1.0.0. Unknown fields will be ignored."
-        ]
+        "expected_behavior": "load_success",
+        "description": "Exact version match - should load successfully. Named for the role it held while the library was 1.0.0 (a newer minor, forward compatible with warning); the esm 1.1.0 bump that added the top-level `solver` block moved the library up to meet it. The forward-compatible-with-warning role is covered by version_1_10_0_double_digit.esm.",
+        "warnings": []
       },
       {
         "file": "version_1_10_0_double_digit.esm",

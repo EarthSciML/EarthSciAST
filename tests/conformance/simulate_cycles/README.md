@@ -8,6 +8,17 @@ for the abs / min / max / pow / algebraic-elimination patterns) and
 guards the unhappy path that the audit captured under escalation
 `hq-wisp-ywi` from polecat nux.
 
+> **The validate-layer counterpart is `observed_cycle`** (esm-spec §4.9.6,
+> issue #181). A cycle among a model's *observed* unknowns is a function of the
+> equations alone, so from that section on it is a hard **structural** error
+> every binding reports from `validate` — before any build — naming the
+> observeds on the cycle. The corpus fixture is
+> `tests/invalid/observed_cycle_array_elementwise.esm`, pinned in
+> `tests/invalid/expected_errors.json`. This category is unchanged and still
+> useful: it pins the *build/simulate* half of the contract, which a document
+> that skipped `validate` still has to satisfy, and it covers algebraic cycles
+> reached through routes the observed graph does not describe.
+
 ## Fixture format
 
 Each fixture is a JSON document with shape:

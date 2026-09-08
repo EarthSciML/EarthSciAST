@@ -559,7 +559,16 @@ type ReactionSystem struct {
 // ========================================
 
 // Tolerance is a numerical comparison tolerance. Any of Abs/Rel may be set; an
-// assertion passes when any set bound is satisfied.
+// assertion passes when any set bound is satisfied:
+//
+//	|actual - expected| <= Abs   OR   |actual - expected| <= Rel * max(|actual|, |expected|)
+//
+// The relative bound is SYMMETRIC in actual and expected -- its scale is the
+// larger of the two magnitudes, not |expected| alone (Julia isapprox; esm-spec
+// 6.6.3). Finiteness is judged before tolerance: a non-finite actual fails
+// against every finite expected. Go has no simulator, so this binding never
+// evaluates the predicate; the contract is recorded here so a future runner
+// does not have to re-derive it.
 type Tolerance struct {
 	Abs *float64 `json:"abs,omitempty"`
 	Rel *float64 `json:"rel,omitempty"`
@@ -853,11 +862,27 @@ type CouplingEntry interface {
 
 // OperatorComposeCoupling represents operator composition
 type OperatorComposeCoupling struct {
-	Type        string         `json:"type"` // "operator_compose"
-	Systems     [2]string      `json:"systems"`
-	Translate   map[string]any `json:"translate,omitempty"`
-	Lifting     *string        `json:"lifting,omitempty"`
-	Description *string        `json:"description,omitempty"`
+	Type      string         `json:"type"` // "operator_compose"
+	Systems   [2]string      `json:"systems"`
+	Translate map[string]any `json:"translate,omitempty"`
+	Lifting   *string        `json:"lifting,omitempty"`
+	// RequireMatch is the entry's MERGE INTENT (esm-libraries-spec §4.7.1
+	// step 5). TRI-STATE, which is why it is a pointer: nil is NOT false.
+	//
+	//	nil    the author has not said. A zero-merge is then
+	//	       CodeOperatorComposeNoMerge, an ERROR (such an entry is
+	//	       indistinguishable from one that is absent); a partial merge is a
+	//	       warning.
+	//	true   the Systems[1] equations are CONTRIBUTIONS and every one must
+	//	       land; any shortfall, partial included, is a hard refusal.
+	//	false  a standalone-contributing operator, DECLARED. Unmatched equations
+	//	       are expected and nothing is reported.
+	//
+	// `omitempty` on a pointer drops only nil, so an explicit false survives the
+	// round trip -- dropping it would silently re-arm the zero-merge refusal on
+	// every document that opted out.
+	RequireMatch *bool   `json:"require_match,omitempty"`
+	Description  *string `json:"description,omitempty"`
 }
 
 func (o OperatorComposeCoupling) CouplingType() string { return o.Type }
@@ -1174,6 +1199,20 @@ type ESMFile struct {
 	// nothing to emit: the CF metadata that tells an output writer which arrays
 	// are latitude and longitude was silently deleted by a load → save.
 	Coordinates map[string]Coordinate `json:"coordinates,omitempty"`
+	// SolverHints is the document-scoped, OPTIONAL and purely ADVISORY solver
+	// block (esm-spec §2.2): stiffness, integration tolerances and a splitting
+	// hint the document knows about itself. Purely additive — presence changes
+	// no equations, no classification and no flattened system — which is why it
+	// is `omitempty`: materializing `"solver": {}` on every document without one
+	// would be noise. An empty block is LEGAL in the schema (§2.2) and means
+	// exactly what absence means, so `normalizeSolver` maps it to nil at decode
+	// — `omitempty` on a POINTER tests nil only, so without that a decoded
+	// `&Solver{}` would re-emit as `"solver": {}` while Python and Julia dropped
+	// it.
+	//
+	// Named SolverHints rather than Solver so the FIELD does not collide with
+	// the Solver TYPE in this package.
+	SolverHints *Solver `json:"solver,omitempty"`
 	// Metaparameters is the top-level §9.7.1 metaparameter declaration block, and
 	// ExpressionTemplates the top-level rewrite-rule registry — the payload of a
 	// template-library file (§9.7.1).

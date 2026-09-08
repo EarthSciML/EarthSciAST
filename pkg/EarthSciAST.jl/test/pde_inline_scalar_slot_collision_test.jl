@@ -1,5 +1,5 @@
 # Regression: model-qualified-first scalar-slot / array-cell resolution in the
-# §6.6.5 inline-test runner (pde_inline_tests.jl).
+# §6.6.5 inline-test runner (inline_tests.jl).
 #
 # Flattening qualifies every element with its owning model ("M1.k", "M2.k"), and
 # a coupled document routinely reuses the same BARE name across sibling
@@ -52,9 +52,9 @@ const _SSC_ESS = EarthSciAST
         @test [slot for (_, slot) in cb] == [1, 2]
     end
 
-    # ---- End-to-end: run_pde_tests over a 2-model doc (the Julia mirror of the
-    #      Python test_run_pde_tests_scalar_observed_tracks_parameter_overrides).
-    @testset "run_pde_tests reads each model's own k under overrides" begin
+    # ---- End-to-end: run_inline_tests over a 2-model doc (the Julia mirror of the
+    #      Python test_run_inline_tests_scalar_observed_tracks_parameter_overrides).
+    @testset "run_inline_tests reads each model's own k under overrides" begin
         # Each model M: k(0)=0, dk/dt = a·T, so k(t=1) = a·T. M1 (a=2) is laid
         # out before M2 (a=5). Julia's tree-walk pathway exposes STATES (not
         # scalar observeds) on the trajectory, so `k` is a scalar state here —
@@ -94,7 +94,7 @@ const _SSC_ESS = EarthSciAST
                              "expected" => 100.0, "tolerance" => Dict("rel" => 1e-9))])])))
 
         file = _SSC_ESS.load_string(IOBuffer(JSON3.write(doc)))
-        results = run_pde_tests(file; alg = OrdinaryDiffEqTsit5.Tsit5(),
+        results = run_inline_tests(file; alg = OrdinaryDiffEqTsit5.Tsit5(),
                                 reltol = 1e-12, abstol = 1e-14)
         by = Dict((r.model, r.test_id) => r for r in results)
         @test Set(keys(by)) == Set([("M1", "m1_base"), ("M2", "t_lo"), ("M2", "t_hi")])

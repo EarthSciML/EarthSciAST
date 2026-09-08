@@ -7,7 +7,12 @@ use std::collections::HashMap;
 /// Either or both of `abs` / `rel` may be set. An assertion passes when any
 /// set bound is satisfied:
 /// `|actual - expected| <= abs`  OR
-/// `|actual - expected| / max(|expected|, epsilon) <= rel`.
+/// `|actual - expected| <= rel * max(|actual|, |expected|)`.
+///
+/// The relative bound is SYMMETRIC in `actual` and `expected` — its scale is
+/// the larger of the two magnitudes, not `|expected|` alone (Julia `isapprox`;
+/// esm-spec §6.6.3). `inline_tests::check_assertion` carries the full
+/// predicate, whose finiteness clause precedes the tolerance test.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tolerance {
@@ -148,7 +153,7 @@ pub struct ModelTest {
     /// esm-spec §9.7.10 form C / §6.6.6: raw §9.7.2 import entries injected into
     /// the ENCLOSING component's template scope for THIS test's run only — the
     /// discretization a discretization-agnostic PDE leaf is lowered under in the
-    /// per-test ephemeral build ([`crate::pde_inline_tests::ephemeral_injected_file`]).
+    /// per-test ephemeral build ([`crate::inline_tests::ephemeral_injected_file`]).
     /// Authored per-run config (a peer of `parameter_overrides` / `tolerance`),
     /// so unlike a component's own imports it DOES survive `parse → emit`; the
     /// enclosing component round-trips with its rewrite-targets intact. Empty
@@ -164,7 +169,7 @@ impl ModelTest {
     /// The canonical SciML `u0` channel binds one f64 per state element, so a
     /// caller driving it directly wants exactly this projection; a shaped
     /// unknown's whole profile is bound by the inline-test runner instead
-    /// ([`crate::pde_inline_tests`]), which expands it into per-element entries.
+    /// ([`crate::inline_tests`]), which expands it into per-element entries.
     pub fn scalar_initial_conditions(&self) -> HashMap<String, f64> {
         scalar_entries(self.initial_conditions.as_ref())
     }

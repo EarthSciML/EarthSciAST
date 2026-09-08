@@ -143,6 +143,23 @@ pub enum CompileError {
         op: String,
     },
 
+    /// A `table_lookup` node that cannot be lowered to its esm-spec §9.5.3
+    /// `interp.linear` / `interp.bilinear` / `index` form — an unknown table,
+    /// an axis-key set that does not match the table's declared axes, an
+    /// out-of-range `output`, or a table whose `interpolation` and axis count
+    /// disagree.
+    ///
+    /// Raised by [`crate::lower_table_lookup`] during the build rather than by
+    /// the evaluator: `unevaluable_operator` would name `table_lookup` without
+    /// saying which of the §9.5.5 conditions the document actually trips.
+    #[error("{code}: {reason}")]
+    TableLookupLowering {
+        /// The esm-spec §9.5.5 diagnostic code.
+        code: &'static str,
+        /// What is wrong with this `table_lookup` (or the table it names).
+        reason: String,
+    },
+
     /// `domain.element_type` names a precision this evaluator does not have.
     ///
     /// Reported rather than defaulted to binary64: a document that asks for a
@@ -239,6 +256,32 @@ pub enum CompileError {
         result: String,
         /// The result's declared index sets, in declaration order.
         result_axes: Vec<String>,
+    },
+
+    /// A dependency cycle among the model's OBSERVED unknowns (esm-spec
+    /// §4.9.6): each observed on the cycle is defined by an equation whose RHS
+    /// names the next, so no evaluation order satisfies every definition.
+    ///
+    /// The equations decide this on their own, so `validate()` reports the same
+    /// defect as an `observed_cycle` structural error before any build is
+    /// attempted; this is the build-time backstop for a model compiled without
+    /// being validated first — and it is the reason this variant exists at all.
+    /// The ordering sweep used to *tolerate* an unorderable rule set, appending
+    /// the stuck rules in declaration order so "the build still proceeds"; what
+    /// actually proceeded was a materialization pass that read an observed with
+    /// no value yet and reported `E_TREEWALK_UNBOUND_NAME` against whichever
+    /// name it reached first — routinely an observed that is declared, defined
+    /// and referenced perfectly well (issue #181).
+    #[error(
+        "observed_cycle: dependency cycle among observed variables: {}. Each is defined in \
+         terms of the next, so no evaluation order satisfies every definition (esm-spec §4.9.6). \
+         `esm validate` reports this cycle before any build.",
+        cycle.join(" -> ")
+    )]
+    ObservedCycle {
+        /// The observeds on the cycle, in traversal order, with the entry node
+        /// repeated to close it (`["a", "b", "a"]`).
+        cycle: Vec<String>,
     },
 
     /// The convenience constructors flattened the input first; that step

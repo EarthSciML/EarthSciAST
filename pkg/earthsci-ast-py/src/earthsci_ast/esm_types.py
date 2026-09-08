@@ -616,6 +616,31 @@ class Tolerance:
 
 
 @dataclass
+class Solver:
+    """Document-scoped, OPTIONAL solver hints (esm-spec §2.2).
+
+    Numerics the document knows about *itself*, which each binding maps to its
+    own integrator. Every field is ADVISORY: a binding may ignore any or all of
+    them and still conform.
+
+    Advisory governs the MECHANISM, never the OUTCOME. A binding that ignores
+    every field and still converges conforms; the CONFORMANCE_SPEC §5.9
+    requirement to integrate successfully and agree within the error band is
+    untouched by this block and is not excused by it.
+
+    ``abstol`` / ``reltol`` are INTEGRATION tolerances and are a different
+    quantity from :class:`Tolerance`, which is what an assertion is COMPARED at
+    (esm-spec §6.6.4). They resolve on independent chains; neither substitutes
+    for the other.
+    """
+
+    stiffness: str | None = None
+    abstol: float | None = None
+    reltol: float | None = None
+    splitting: str | None = None
+
+
+@dataclass
 class TimeSpan:
     """Simulation time interval expressed in the component's time units."""
 
@@ -985,6 +1010,17 @@ class OperatorComposeCoupling(BaseCouplingEntry):
     # flattener array-ify each merged reaction+operator state ODE onto the grid
     # (per-cell reaction evaluation). None ⇒ no lift (0-D / already-array system).
     lifting: str | None = None
+    # esm-libraries-spec §4.7.1 step 5, TRI-STATE — ``None`` is not ``False``:
+    #
+    #   None   the author has not said. A zero-merge is then
+    #          ``operator_compose_no_merge``, an ERROR (such an entry is
+    #          indistinguishable from one that is absent); a partial merge is a
+    #          warning.
+    #   True   the ``systems[1]`` equations are CONTRIBUTIONS and every one must
+    #          land; any shortfall, partial included, is a hard refusal.
+    #   False  a standalone-contributing operator, DECLARED. Unmatched equations
+    #          are expected and nothing is reported.
+    require_match: bool | None = None
 
 
 @dataclass
@@ -1266,6 +1302,12 @@ class EsmFile:
     # as a physical coordinate and attaches CF metadata. Carried verbatim: the
     # core spec attaches no behaviour to it beyond preservation.
     coordinates: dict[str, Any] = field(default_factory=dict)
+    # Document-scoped, OPTIONAL solver hints (esm-spec §2.2) — stiffness,
+    # integration tolerances and a splitting hint the document knows about
+    # itself. Purely additive and purely ADVISORY: presence changes no
+    # equations, no classification and no flattened system. ``None`` when the
+    # document declares none; absence is NOT a synonym for any default value.
+    solver: Solver | None = None
     # Top-level DECLARATIONS (esm-spec §9.7.1), peers of `index_sets`. Option A
     # expands `apply_expression_template` CALL SITES; it does NOT delete these
     # declarations (§9.6.4 rule 5). They survive `parse -> emit` verbatim, which

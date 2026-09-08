@@ -401,8 +401,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: None,
         ..Default::default()
