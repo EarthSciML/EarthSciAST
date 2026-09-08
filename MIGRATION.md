@@ -179,10 +179,25 @@ system integrates from — and flipping the entry's `systems` order silently
 changed the answer. That is now `operator_compose_ambiguous_bare_name`, an
 error.
 
-**This refuses essentially every bare-name *rename* between two components**,
-because for a bare-name match to happen at all both sides must be namespaced
-dependent variables, and in practice both are states. The fallback still works
-where it renames nothing (a direct match, a `_var` expansion).
+**Read this row as broad, not exotic. It refuses essentially every bare-name
+*rename* between two components.** For a bare-name match to happen at all, both
+sides must be namespaced dependent variables — and in practice both are then
+states, which is the refused case. So as a way of binding two components'
+same-named states, the fallback is now **closed**, and a document that relied on
+it loaded clean before and does not load at all now. This is a deliberate
+choice, not an edge case that happens to trip: the alternative is letting the
+`systems` argument order silently pick which initial condition the flattened
+system starts from.
+
+The fallback still works wherever it renames *nothing* — a direct match, a
+`_var` placeholder expansion — so an entry composing an operator over the
+mechanism's own scoped names (`D(Chemistry.O3, t) = …`) is unaffected.
+
+**How exposed are you?** Zero documents in this repo's corpus hit the refusal —
+the bare-name fallback produced no renames anywhere in the shipped tree — so the
+in-tree cost was two *tests* that had leaned on it, not any fixture. Your own
+documents are the ones to check: grep for an `operator_compose` whose two systems
+each declare the same local variable name with no `translate` between them.
 
 **What to write instead.** Name the surviving spelling outright:
 
