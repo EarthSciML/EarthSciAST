@@ -51,9 +51,7 @@ def test_manifest_shape() -> None:
         assert reason.strip(), f"{binding} is excluded with no reason"
     # Both halves are present: dropping the refusal half would leave the
     # "in particular not 0" sentence ungated.
-    outcomes = {
-        c["outcome"] for fx in m["fixtures"] for c in fx["cases"]
-    }
+    outcomes = {c["outcome"] for fx in m["fixtures"] for c in fx["cases"]}
     assert outcomes == {"value", "refused"}
 
 
