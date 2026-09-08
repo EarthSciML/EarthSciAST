@@ -162,6 +162,10 @@ def test_a_name_keyed_read_of_the_result_resolves(case):
         f"{case['id']}: {dead!r} must read the SAME row as {survivor!r}"
     )
     assert sol.get(dead) is not None
+    # `plot(variables=[...])` selects rows through this same helper rather than
+    # through `__getitem__`, and matplotlib is an optional extra this suite does
+    # not install — so the shared resolution is asserted directly.
+    assert sol.resolve_name(dead) == survivor
 
     for gone in case["absent_from_row_names"]:
         assert gone not in sol.vars, (
