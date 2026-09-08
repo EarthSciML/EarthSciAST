@@ -398,6 +398,7 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
                      var_map, param_sym_set, reg_funcs,
                      okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
                      ranges::Union{Nothing,Vector{UnitRange{Int}}}=nothing)
+    _BENCH_ON[] && (_BENCH_PHASE_N[:cell_ckey] = get(_BENCH_PHASE_N, :cell_ckey, 0) + 1)
     bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
                                var_map, param_sym_set, reg_funcs)
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
@@ -868,6 +869,13 @@ end
 # per-lane slot vectors.
 function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
+    _t0 = time_ns()
+    r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays)
+    _bench_phase!(:mat_state_tbl, _t0)
+    return r
+end
+function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     tbl = Vector{Int}(undef, len)
     env = Dict{String,Int}()
@@ -905,6 +913,13 @@ _obsref_disabled() = get(ENV, "ESS_OBSREF_DISABLE", "") == "1"
 # per-cell merge (`_acc_merge_nodes`) already emits for divergent forcing
 # reads. Bit-identical by construction; O(box) build cost.
 function _materialize_pgather_tbl(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    _t0 = time_ns()
+    r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays)
+    _bench_phase!(:mat_pgather_tbl, _t0)
+    return r
+end
+function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
                                   var_map, const_arrays)
     pg = rec.arr::_PGatherArray
     s, off, len = _box_local_addr(box, D)
@@ -933,6 +948,13 @@ end
 # is the only place the invariance-to-literal fold is legal without a structural
 # argument; the LANE_CONST fast path below derives it from the index instead.
 function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
+                                var_map, const_arrays)
+    _t0 = time_ns()
+    r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays)
+    _bench_phase!(:mat_const_box, _t0)
+    return r
+end
+function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays)
     s, off, len = _box_local_addr(box, D)
     vals = Vector{Float64}(undef, len)
@@ -1184,12 +1206,12 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
 
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
-        lane_repl[k] = _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
+        lane_repl[k] = @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                          oln_rep, base, strides, D, var_map,
                                          const_arrays, flat_cache, box)
     end
 
-    spine, acc, cse, subs = get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
+    spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
@@ -1298,7 +1320,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     sig = _AffineSig()
     try
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
-        cuts = _affine_cut_points(sig, body, idx_names, ranges, ctx_proto,
+        cuts = @_bench :affine_cuts _affine_cut_points(sig, body, idx_names, ranges, ctx_proto,
                                   var_map, param_sym_set, reg_funcs,
                                   (base, strides))
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
@@ -1308,7 +1330,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         boxes = Vector{UnitRange{Int}}[]
         for segtuple in Iterators.product(segs...)
             box = UnitRange{Int}[segtuple[d] for d in 1:D]
-            _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
+            @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                                  body, ctx_proto, var_map, const_arrays,
                                  param_sym_set, reg_funcs, base, strides,
                                  lhs_var, lhs_idx_args, sig)
@@ -1316,7 +1338,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         end
         # Only after every box is verified: mark covered (untouched on fallback).
         for box in boxes
-            _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+            @_bench :mark_covered _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
         end
         return kernels
     catch err
