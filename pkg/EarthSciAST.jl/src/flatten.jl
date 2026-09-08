@@ -356,11 +356,13 @@ concentration to every rate law it appears in. It is therefore skipped as an
 equation TARGET only — it stays in `species` so `mass_action_rate` keeps
 reading it as a substrate/product factor.
 
-A species that appears in NO reaction likewise gets no equation. Its rate is the
-empty sum, and emitting `D(X, t) = 0` for it would make it a differential unknown
-that never moves; esm-spec §6.3.1 classifies by COMPLEMENT, so leaving the
-equation out is what makes it the ALGEBRAIC unknown it is. See the comment at the
-skip below.
+A species whose NET stoichiometry is zero in every reaction likewise gets no
+equation — usually because it appears in no reaction at all, but a catalyst
+(equal substrate and product stoichiometry everywhere it appears) meets the same
+test. Its rate is the empty sum, and emitting `D(X, t) = 0` for it would make it
+a differential unknown that never moves; esm-spec §6.3.1 classifies by
+COMPLEMENT, so leaving the equation out is what makes it the ALGEBRAIC unknown it
+is. See the comment at the skip below.
 """
 function lower_reactions_to_equations(reactions::Vector{Reaction},
                                       species::Vector{Species})::Vector{Equation}
