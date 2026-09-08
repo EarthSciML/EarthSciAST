@@ -114,36 +114,54 @@ export function validateObservedCycles(
   // Tri-state DFS: unseen -> on the current chain -> finished. Membership of
   // the CHAIN, not of `visited`, is what closes a cycle; a node already
   // finished on an earlier root is a shared tail, not a cycle.
+  //
+  // ITERATIVE, not recursive. The depth of this walk is the length of the
+  // longest observed CHAIN, which is a property of the document rather than of
+  // its expression nesting; a recursive version overflowed the JS call stack on
+  // an ACYCLIC chain of a few thousand observeds, and the overflow surfaced as
+  // a single `load_error: Maximum call stack size exceeded` at the document
+  // root that took every other structural finding with it. Each frame holds the
+  // node's own successor cursor, so resuming a parent after a child finishes
+  // picks up exactly where it left off.
   const ON_CHAIN = 1
   const FINISHED = 2
   const state = new Map<string, number>()
-  const chain: string[] = []
 
-  function visit(name: string): string[] | undefined {
-    const seen = state.get(name)
-    if (seen === ON_CHAIN) {
-      // Close the cycle at its ENTRY node: the suffix of the chain from where
-      // this name first appeared, with the name repeated to close it
-      // (`["gamfac", "hpbl", "wscale", "gamfac"]`). This is a path, so it is
-      // ordered semantically rather than by the §7.1.0 lexicographic rule.
-      const start = chain.indexOf(name)
-      return [...chain.slice(start === -1 ? 0 : start), name]
+  function firstCycleFrom(root: string): string[] | undefined {
+    if (state.get(root) !== undefined) return undefined
+    const chain: string[] = [root]
+    const cursor: number[] = [0]
+    state.set(root, ON_CHAIN)
+    while (chain.length > 0) {
+      const name = chain[chain.length - 1]
+      const successors = graph.get(name) ?? []
+      const i = cursor[cursor.length - 1]++
+      if (i >= successors.length) {
+        state.set(name, FINISHED)
+        chain.pop()
+        cursor.pop()
+        continue
+      }
+      const successor = successors[i]
+      const seen = state.get(successor)
+      if (seen === ON_CHAIN) {
+        // Close the cycle at its ENTRY node: the suffix of the chain from where
+        // this name first appeared, with the name repeated to close it
+        // (`["gamfac", "hpbl", "wscale", "gamfac"]`). This is a path, so it is
+        // ordered semantically rather than by the §7.1.0 lexicographic rule.
+        const start = chain.indexOf(successor)
+        return [...chain.slice(start === -1 ? 0 : start), successor]
+      }
+      if (seen === FINISHED) continue
+      state.set(successor, ON_CHAIN)
+      chain.push(successor)
+      cursor.push(0)
     }
-    if (seen === FINISHED) return undefined
-
-    state.set(name, ON_CHAIN)
-    chain.push(name)
-    for (const successor of graph.get(name) ?? []) {
-      const cycle = visit(successor)
-      if (cycle !== undefined) return cycle
-    }
-    chain.pop()
-    state.set(name, FINISHED)
     return undefined
   }
 
   for (const root of [...graph.keys()].sort()) {
-    const cycle = visit(root)
+    const cycle = firstCycleFrom(root)
     if (cycle === undefined) continue
     return [
       {

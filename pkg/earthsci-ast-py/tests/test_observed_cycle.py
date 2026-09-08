@@ -308,6 +308,42 @@ class TestNoFalsePositives:
         )
         assert _records(doc) == []
 
+    def test_a_chain_deeper_than_the_recursion_limit_loads_clean(self):
+        """The walk's depth is the length of the longest observed CHAIN, which is
+        a property of the DOCUMENT and unbounded — not of expression nesting,
+        which the schema caps.
+
+        A recursive DFS raised ``RecursionError`` out of ``load_string`` on an
+        acyclic chain of roughly 800 observeds (CPython's default limit is
+        ~1000), turning a document that must validate CLEAN into a crash. 1500
+        is comfortably past that limit and comfortably under anything a real
+        mechanism reaches, so it pins the ceiling without pinning the constant.
+        """
+        n = 1500
+        variables = {"p": {"type": "parameter", "units": "1", "default": 1.0}}
+        variables.update({f"x{i}": {"type": "unknown", "units": "1"} for i in range(n)})
+        # x_i reads x_{i+1}, so the DFS entered at the sorted-first root descends
+        # the whole chain; x_{n-1} is the base case that keeps it ACYCLIC.
+        equations = [
+            {"lhs": f"x{i}", "rhs": {"op": "+", "args": [f"x{i + 1}", "p"]}} for i in range(n - 1)
+        ]
+        equations.append({"lhs": f"x{n - 1}", "rhs": "p"})
+        assert _records(_model(variables, equations)) == []
+
+    def test_a_cycle_deeper_than_the_recursion_limit_is_still_named(self):
+        """The other half: closing the chain into a ring at the same depth must
+        still produce ``observed_cycle`` with the whole path, not a crash."""
+        n = 1500
+        variables = {"p": {"type": "parameter", "units": "1", "default": 1.0}}
+        variables.update({f"x{i}": {"type": "unknown", "units": "1"} for i in range(n)})
+        equations = [
+            {"lhs": f"x{i}", "rhs": {"op": "+", "args": [f"x{i + 1}", "p"]}} for i in range(n - 1)
+        ]
+        equations.append({"lhs": f"x{n - 1}", "rhs": {"op": "+", "args": ["x0", "p"]}})
+        found = [r for r in _records(_model(variables, equations)) if r["code"] == OBSERVED_CYCLE]
+        assert len(found) == 1
+        assert found[0]["details"]["cycle"] == [f"x{i}" for i in range(n)] + ["x0"]
+
 
 def test_the_code_is_in_the_public_registry():
     """``ERROR_CODES`` is the cross-binding vocabulary's single entry point, and

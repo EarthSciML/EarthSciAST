@@ -20,7 +20,8 @@ import { describe, it, expect } from 'vitest'
 import { validate, validateText } from './validate.js'
 import { fixturesDir, readFixture } from './test-helpers.js'
 import { dirname } from 'node:path'
-import type { EsmFile } from './types.js'
+import { validateObservedCycles } from './validate/observed-checks.js'
+import type { EsmFile, Model } from './types.js'
 
 /** Validate a `tests/`-relative fixture the way a consumer holding it would. */
 function validateFixture(...segments: string[]) {
@@ -237,5 +238,54 @@ describe('a legal recurrence keeps its self-edge exemption (§5.19.5)', () => {
     const codes = result.structural_errors.map((e) => e.code)
     expect(codes).toContain('recurrence_not_wellfounded')
     expect(codes).not.toContain('observed_cycle')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Walk depth is a property of the DOCUMENT, not of expression nesting
+// ---------------------------------------------------------------------------
+
+describe('a chain longer than the JS call stack', () => {
+  /**
+   * `validateObservedCycles` is exercised DIRECTLY here rather than through
+   * `validate()`, because the cadence seeder — which `validate()` also runs, and
+   * which this PR does not touch — recurses over the same chain and overflows
+   * first at a couple of thousand observeds. Calling the rule under test on its
+   * own is what isolates its own ceiling.
+   *
+   * The depth of this walk is the length of the longest observed CHAIN. That is
+   * unbounded in a document (a lowered mechanism is a long chain of algebraic
+   * definitions) and is not the expression nesting the schema caps, so the DFS
+   * must not be recursive: a recursive one turned a document that has to
+   * validate CLEAN into `RangeError: Maximum call stack size exceeded`.
+   */
+  function chain(n: number, cyclic: boolean) {
+    const variables: Record<string, unknown> = {
+      p: { type: 'parameter', units: '1', default: 1.0 },
+    }
+    const equations: unknown[] = []
+    for (let i = 0; i < n; i++) variables[`x${i}`] = { type: 'unknown', units: '1' }
+    // x_i reads x_{i+1}, so the DFS entered at the sorted-first root descends
+    // the whole chain in one go.
+    for (let i = 0; i < n - 1; i++) {
+      equations.push({ lhs: `x${i}`, rhs: { op: '+', args: [`x${i + 1}`, 'p'] } })
+    }
+    equations.push({
+      lhs: `x${n - 1}`,
+      rhs: cyclic ? { op: '+', args: ['x0', 'p'] } : 'p',
+    })
+    return { variables, equations } as unknown as Model
+  }
+
+  const DEPTH = 20000
+
+  it('reports nothing for an ACYCLIC chain of 20000 observeds', () => {
+    expect(validateObservedCycles(chain(DEPTH, false), '/models/M')).toEqual([])
+  })
+
+  it('still names the cycle when that chain is closed into a ring', () => {
+    const errors = validateObservedCycles(chain(DEPTH, true), '/models/M')
+    expect(errors.map((e) => e.code)).toEqual(['observed_cycle'])
+    expect((errors[0].details as { cycle: string[] }).cycle).toHaveLength(DEPTH + 1)
   })
 })

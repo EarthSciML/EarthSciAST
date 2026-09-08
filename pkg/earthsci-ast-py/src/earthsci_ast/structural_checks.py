@@ -42,6 +42,7 @@ module-import graph acyclic.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from . import index_alignment, op_registry, recurrence
@@ -834,27 +835,42 @@ def _first_observed_cycle(successors: dict[str, list[str]]) -> list[str] | None:
     per model out of possibly several. WHITE/GRAY/BLACK colouring, as
     :func:`_check_circular_references` uses on the model graph: a GRAY successor
     is on the current stack, so the cycle is the tail of the path from it
-    onwards, closed by repeating it."""
+    onwards, closed by repeating it.
+
+    ITERATIVE, not recursive, and that is not a style choice. The depth of a
+    recursive walk here is the length of the longest observed CHAIN, which is a
+    property of the document rather than of its nesting, and CPython's default
+    limit is ~1000 frames: an acyclic chain of ~800 observeds — one large
+    lowered mechanism — raised ``RecursionError`` out of :func:`load_string`
+    instead of validating clean. An explicit stack of ``(node, successor
+    iterator)`` frames costs the same asymptotics and has no such ceiling.
+    ``path`` is maintained as the GRAY stack itself, so closing a cycle is a
+    slice of it rather than a per-edge copy."""
     WHITE, GRAY, BLACK = 0, 1, 2
     color = dict.fromkeys(successors, WHITE)
 
-    def dfs(node: str, path: list[str]) -> list[str] | None:
-        color[node] = GRAY
-        for nxt in successors.get(node, ()):
-            if color.get(nxt) == GRAY:
-                return path[path.index(nxt) :] + [nxt]
-            if color.get(nxt) == WHITE:
-                cycle = dfs(nxt, path + [nxt])
-                if cycle is not None:
-                    return cycle
-        color[node] = BLACK
-        return None
-
     for root in sorted(successors):
-        if color[root] == WHITE:
-            cycle = dfs(root, [root])
-            if cycle is not None:
-                return cycle
+        if color[root] != WHITE:
+            continue
+        color[root] = GRAY
+        path = [root]
+        # Each frame is the node's own successor iterator, so resuming a parent
+        # after a child finishes picks up exactly where it left off.
+        stack: list[Iterator[str]] = [iter(successors.get(root, ()))]
+        while stack:
+            nxt = next(stack[-1], None)
+            if nxt is None:
+                color[path[-1]] = BLACK
+                path.pop()
+                stack.pop()
+                continue
+            state = color.get(nxt)
+            if state == GRAY:
+                return path[path.index(nxt) :] + [nxt]
+            if state == WHITE:
+                color[nxt] = GRAY
+                path.append(nxt)
+                stack.append(iter(successors.get(nxt, ())))
     return None
 
 
