@@ -35,15 +35,18 @@
       }
     },
     "output_selection": {
-      "_comment": "The OUTPUT half: a name-keyed read of a finished run, and a name-keyed output REQUEST. Only the three EXECUTING bindings have a result object or an output plan at all — the same scope split `override_key_diagnostics` and `output_derivation` record.",
+      "_comment": "The OUTPUT half: a name-keyed READ of a finished run. Scope is narrower than `override_keys` and the reasons differ per binding, so each is recorded. What is pinned is that the READ resolves, not that the row NAMES change — resolving a read must never invent a name the flattened system does not declare.",
       "bindings": [
-        "julia",
         "python",
         "rust"
       ],
       "scope_excluded": {
-        "go": "rewrite-only port; no simulator, so no result object and no output selection",
-        "typescript": "rewrite-only port; no simulator, so no result object and no output selection"
+        "go": "rewrite-only port; no simulator, so no result object to read by name",
+        "typescript": "rewrite-only port; no simulator, so no result object to read by name",
+        "julia": "the result is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache`: the package FILLS that name list (`_symbol_cache`) but does not own the lookup, so resolving a merged-away spelling there needs a custom SymbolicIndexingInterface system type. The problem-side name lookup this binding DOES own, `observed_field(prob, name)`, resolves through `EsmProblem.merged_renames`."
+      },
+      "not_covered_in_any_binding": {
+        "derive_output_plan": "The exported output-plan function takes the request list and the slot names and nothing else, in both Julia and Rust. Resolving a merged-away request INSIDE it needs a new parameter on a function `output_derivation` (§5.20) pins as a cross-binding surface, so every in-repo caller resolves at the CALL SITE instead (Rust's `esm simulate --format grid`, and `SolveOptions.output_observed` before the solve). An EXTERNAL caller passing a merged-away name straight to `derive_output_plan` is therefore still on its own. Julia's `_match_requested!` happens to tolerate the common case anyway, because it matches bare tails both ways."
       }
     }
   },

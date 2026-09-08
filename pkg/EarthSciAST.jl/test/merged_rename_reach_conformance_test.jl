@@ -20,11 +20,13 @@
 #   * `override_keys` — a caller's `initial_conditions` key naming the dead
 #     spelling addresses the survivor instead of being dropped so the state runs
 #     from its declared default.
-#   * `output_selection` — a name-keyed READ of a finished run resolves to the
-#     survivor instead of reporting a variable that never existed. In THIS
-#     binding the result is a SciML solution object, which the package does not
-#     own; what it does own is `observed_field(prob, name)`, the problem-side
-#     name lookup, so that is what the surface asserts here.
+#   * `output_selection` — a name-keyed READ of a finished run. This binding is
+#     EXCLUDED from that surface and asserts its own exclusion below: the result
+#     is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache`, so
+#     the package fills the name list (`_symbol_cache`) but does not own the
+#     lookup. What it DOES own — the problem-side `observed_field(prob, name)`
+#     — resolves through `EsmProblem.merged_renames`, and that is pinned here
+#     directly.
 #
 # Like `operator_compose_merge` the category carries no golden: what it pins is
 # REACH, asserted as structure.
@@ -59,7 +61,10 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         @test !isempty(_MRR_OUTPUT)
         @test "julia" in _MRR_MANIFEST.surfaces.flatten.bindings
         @test "julia" in _MRR_MANIFEST.surfaces.override_keys.bindings
-        @test "julia" in _MRR_MANIFEST.surfaces.output_selection.bindings
+        # The result-object READ is out of scope HERE, and the manifest must say
+        # WHY — an exclusion with no reason is indistinguishable from a gap.
+        @test !("julia" in _MRR_MANIFEST.surfaces.output_selection.bindings)
+        @test !isempty(_MRR_MANIFEST.surfaces.output_selection.scope_excluded.julia)
         @test _MRR_MANIFEST.merged_variable_renames_field.julia ==
               "FlattenMetadata.merged_variable_renames"
     end
@@ -127,6 +132,13 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
                     @test prob.u0[slot] ≈ Float64(want)
                 end
             end
+            # The problem carries the merge map, which is what every
+            # PROBLEM-SIDE name lookup in this binding resolves through --
+            # `observed_field(prob, name)` above all. Without it that lookup has
+            # nothing to consult, so this is the anchor for the half of
+            # `output_selection` Julia does own.
+            @test prob.merged_renames == flat.metadata.merged_variable_renames
+            @test !isempty(prob.merged_renames)
             for (name, unresolved) in pairs(case.default_without_resolution)
                 slot = get(prob.var_map, String(name), nothing)
                 if slot !== nothing

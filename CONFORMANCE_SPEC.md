@@ -4337,9 +4337,10 @@ three other places address the state BY NAME:
    reaches. §4.7.5 step 3 applies every `operator_compose` BEFORE any `couple`
    or `variable_map`, so such an entry can still name a spelling the merge has
    already deleted.
-2. **A runner's override keys.** `parameter_overrides` and
-   `initial_conditions` are keyed by name, as are output selections and any
-   consumer holding `"SuperFast.O3"` as a string.
+2. **A runner's override keys**, and **the output selections** beside them.
+   `parameter_overrides` and `initial_conditions` are keyed by name; so is an
+   output request (`output_observed`, `--observed`, `observed_field`), and so is
+   a read of the finished run (`sol["SuperFast.O3"]`).
 3. **A surviving expression-template registry body**, which is a shadow copy of
    authored source that expands at the build boundary rather than at flatten.
 
@@ -4360,7 +4361,19 @@ Consequently:
   the author wrote.
 - **An explicit key for the survivor wins** over an alias for the dead spelling,
   on the override-key surface: the caller who names the surviving state has said
-  what they mean.
+  what they mean. The same precedence governs a read: an exact hit on a live row
+  is taken before the map is consulted at all, so the map can never shadow a
+  variable the system really has.
+- **Resolving a read must not invent a name.** The reported row names, the
+  `variable_symbols` list, the output plan's variables — all continue to carry
+  only the SURVIVING spelling. The merge deleted a name; resolution makes the
+  dead spelling *reach* the survivor, it does not resurrect it as a variable the
+  flattened system declares.
+- **The map travels with the result, not just the problem.** A caller reading a
+  trajectory by name holds the solution and not the flattened system, so a
+  library whose result object supports name-keyed reads carries the map on that
+  object (Python `Solution.merged_renames`, Rust
+  `SolutionMetadata::merged_variable_renames`).
 - **The registry body is refused, not rewritten.** It is authored source the
   substitution never sees, so a body still naming a merged-away variable would
   expand at the build boundary into a name the flattened system no longer
@@ -4380,13 +4393,27 @@ Adapters: `pkg/EarthSciAST.jl/test/merged_rename_reach_conformance_test.jl`;
 `pkg/earthsci-ast-ts/src/conformance-merged-rename-reach.test.ts`;
 `pkg/earthsci-ast-go/pkg/esm/merged_rename_reach_conformance_test.go`.
 
-**Scope is per surface.** The `flatten` surface binds **all five bindings** —
-the rewrite is a pure structural transform, so a rewrite-only port implements it
-in full. The `override_keys` surface binds the three EXECUTING bindings
-(**Julia**, **Python**, **Rust**); **Go** and **TypeScript** have no simulator
-and therefore no override-key surface, the same split §5.19
-(`override_key_diagnostics`) records. Each excluded binding's adapter ASSERTS
-its own exclusion, so it cannot quietly become a gap.
+**Scope is per surface**, and each exclusion carries a RECORDED REASON that the
+excluded binding's own adapter asserts — an exclusion with no reason is
+indistinguishable from a gap.
+
+| Surface | Binds | Excluded, and why |
+|---|---|---|
+| `flatten` | all five | — the rewrite is a pure structural transform, so a rewrite-only port implements it in full. |
+| `override_keys` | Julia, Python, Rust | **Go**, **TypeScript**: no simulator, so no override-key surface. The same split §5.19 (`override_key_diagnostics`) records. |
+| `output_selection` | Python, Rust | **Go**, **TypeScript**: no simulator, so no result object to read by name. **Julia**: its result is a SciML `ODESolution` indexed through SciMLBase's own `SymbolCache` — the package fills that name list but does not own the lookup, so resolving there needs a custom SymbolicIndexingInterface system type. The problem-side lookup Julia DOES own, `observed_field(prob, name)`, resolves through `EsmProblem.merged_renames`, and the category pins that the problem carries the map. |
+
+**One surface is deliberately left uncovered, in every binding.** The exported
+`derive_output_plan` takes the request list and the slot names and nothing else,
+in both Julia and Rust. Resolving a merged-away request INSIDE it would need a
+new parameter on a function §5.20 (`output_derivation`) pins as a cross-binding
+surface, so every in-repo caller resolves at the CALL SITE instead — Rust's `esm
+simulate --format grid`, and `SolveOptions::output_observed` before the solve.
+An EXTERNAL caller handing a merged-away name straight to `derive_output_plan`
+is therefore still on its own. (Julia's `_match_requested!` happens to tolerate
+the common case anyway, because it matches bare tails both ways; that is an
+accident of its matching rule, not resolution, and it does not cover a
+`translate` that renames across differing local names.)
 
 **A merged-away name is never a parameter.** `operator_compose` deletes only a
 DEPENDENT VARIABLE — a state or an observed — so a `parameter_overrides` key can
