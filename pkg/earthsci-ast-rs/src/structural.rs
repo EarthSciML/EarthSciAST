@@ -29,6 +29,30 @@ pub(crate) fn validate_model(
 ) {
     let ctx = ModelCtx::new(esm_file, model_name, model, system_refs);
 
+    // esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped name
+    // is unreachable — `ModelCtx::new` puts the independent variable and `_var`
+    // into scope BY NAME, ahead of the declaration map, so every reader of the
+    // name receives the implicit symbol instead of the declared quantity
+    // (issue #200).
+    check_reserved_declaration_names(
+        esm_file,
+        model.variables.keys(),
+        &format!("/models/{model_name}/variables"),
+        &format!("Model '{model_name}'"),
+        "variable",
+        errors,
+    );
+    // A subsystem is a model, so its `variables` map is a declaration map too —
+    // and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
+    if let Some(subsystems) = &model.subsystems {
+        check_reserved_subsystem_names(
+            esm_file,
+            subsystems.iter(),
+            &format!("/models/{model_name}/subsystems"),
+            errors,
+        );
+    }
+
     ctx.check_equation_balance(errors);
     let unit_env = ctx.check_unit_declarations(errors);
     ctx.check_initialization_equation_refs(errors);
@@ -802,6 +826,106 @@ fn independent_variable(esm_file: &EsmFile) -> String {
         .as_ref()
         .and_then(|d| d.independent_variable.clone())
         .unwrap_or_else(|| "t".to_string())
+}
+
+/// Why a name is reserved, for the `reserved_variable_name` details payload.
+fn reserved_declaration_reason(
+    esm_file: &EsmFile,
+    name: &str,
+) -> Option<(&'static str, &'static str)> {
+    if name == independent_variable(esm_file) {
+        Some((
+            "independent_variable",
+            "the document's independent variable",
+        ))
+    } else if name == crate::flatten::VAR_PLACEHOLDER {
+        Some(("operator_placeholder", "the operator-model placeholder"))
+    } else {
+        None
+    }
+}
+
+/// `reserved_variable_name` for every key of one declaration map spelled with a
+/// globally-scoped name (esm-spec §4.9.1.1).
+///
+/// The independent variable and `_var` are in scope in every component and are
+/// resolved BY NAME ahead of the declaration maps — `ModelCtx::new` extends
+/// `defined_vars` with exactly these two — so the declaration is unreachable:
+/// the implicit symbol shadows it, not the other way round. Same reserved set as
+/// `parse::reject_reserved_index_symbols` uses for an `aggregate` binder,
+/// stated once per rule so the two cannot drift.
+///
+/// Findings are emitted in sorted key order, matching the peer bindings: two of
+/// the five cannot reproduce the authored key order at all (Go decodes
+/// `variables` into a plain map and this crate's own typed layer sorts its
+/// unknowns for the same reason), so sorted is the ordering every binding can
+/// give. Takes the KEYS rather than the map so the three declaration maps —
+/// which are not all the same container type — share one implementation.
+fn check_reserved_declaration_names<'a, I: IntoIterator<Item = &'a String>>(
+    esm_file: &EsmFile,
+    declarations: I,
+    container_path: &str,
+    owner: &str,
+    kind: &str,
+    errors: &mut Vec<StructuralError>,
+) {
+    let mut names: Vec<&String> = declarations.into_iter().collect();
+    names.sort();
+    for name in names {
+        let Some((reason, role)) = reserved_declaration_reason(esm_file, name) else {
+            continue;
+        };
+        errors.push(StructuralError {
+            path: format!("{container_path}/{name}"),
+            code: StructuralErrorCode::ReservedVariableName,
+            message: format!("{owner} declares a {kind} named '{name}', which is {role}"),
+            details: serde_json::json!({ "name": name, "reserved_as": reason }),
+        });
+    }
+}
+
+/// [`check_reserved_declaration_names`] over every INLINE subsystem of a model,
+/// recursively (esm-spec §4.9.1.1).
+///
+/// A subsystem is a model, so its `variables` map declares symbols of the
+/// assembled system exactly as the parent's does; the failure reported in issue
+/// #200 was a subsystem mount. `Model::subsystems` is untyped because an entry
+/// may be an unresolved `{"ref": …}`, which carries no `variables` key and
+/// contributes nothing — by the time validation runs the ref resolver has
+/// spliced a resolved mount into the same `{variables, equations}` shape, so
+/// one walk covers both. Keys are visited in sorted order, as the sibling
+/// declaration-map check is.
+fn check_reserved_subsystem_names<'a, I>(
+    esm_file: &EsmFile,
+    subsystems: I,
+    base_path: &str,
+    errors: &mut Vec<StructuralError>,
+) where
+    I: IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+{
+    let mut entries: Vec<(&String, &serde_json::Value)> = subsystems.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in entries {
+        let sub_path = format!("{base_path}/{name}");
+        if let Some(vars) = value.get("variables").and_then(|v| v.as_object()) {
+            check_reserved_declaration_names(
+                esm_file,
+                vars.keys(),
+                &format!("{sub_path}/variables"),
+                &format!("Model '{name}'"),
+                "variable",
+                errors,
+            );
+        }
+        if let Some(nested) = value.get("subsystems").and_then(|v| v.as_object()) {
+            check_reserved_subsystem_names(
+                esm_file,
+                nested.iter(),
+                &format!("{sub_path}/subsystems"),
+                errors,
+            );
+        }
+    }
 }
 
 /// True when this LHS marks an initial condition (`{"op": "ic", ...}`).
@@ -2223,6 +2347,28 @@ pub(crate) fn validate_reaction_system(
 
     // Rate expressions can reference both parameters and species names.
     let defined_parameters: HashSet<String> = rs.parameters.keys().cloned().collect();
+
+    // esm-spec §4.9.1.1, the same rule as for a model's `variables`: a species
+    // and a reaction parameter become symbols of the derived ODE system exactly
+    // as a `variables` entry does (§7.4), so all three declaration maps collide
+    // with the globally-scoped names identically.
+    let owner = format!("Reaction system '{rs_name}'");
+    check_reserved_declaration_names(
+        esm_file,
+        rs.species.keys(),
+        &format!("{rs_path}/species"),
+        &owner,
+        "species",
+        errors,
+    );
+    check_reserved_declaration_names(
+        esm_file,
+        rs.parameters.keys(),
+        &format!("{rs_path}/parameters"),
+        &owner,
+        "parameter",
+        errors,
+    );
 
     // Check that all reaction references are defined
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {

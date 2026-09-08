@@ -235,6 +235,26 @@ pub enum StructuralErrorCode {
     /// (CONFORMANCE_SPEC §5.19.5). Every other self-reference is a cycle of
     /// length one and is reported here.
     ObservedCycle,
+    /// A DECLARATION spelled with a globally-scoped name — the document's
+    /// independent variable (`domain.independent_variable`, default `"t"`) or
+    /// the §6.4 `_var` placeholder (esm-spec §4.9.1.1).
+    ///
+    /// Both names are implicitly declared in every component's expression scope
+    /// (§4.9.1) and are resolved BY NAME ahead of the declaration maps —
+    /// `ModelCtx::new` extends `defined_vars` with them, and every evaluator in
+    /// this crate resolves them first — so such a declaration is unreachable:
+    /// the implicit symbol shadows it, not the other way round. That is why it
+    /// is a hard error rather than a lint (issue #200). The reported document
+    /// VALIDATED, a bare build reported the observed as having no defining
+    /// expression, and a build with a subsystem mounted handed every reader of
+    /// `t` the simulation clock, so `log(t)` was `-inf` at `t = 0` and every
+    /// number downstream was finite, plausible and wrong.
+    ///
+    /// Reserved set defined by §4.9.1.1, shared with the sibling
+    /// `reserved_index_symbol` binder rule, and it follows the
+    /// document: renaming the independent variable moves the rejection onto the
+    /// new name and frees `t`.
+    ReservedVariableName,
 }
 
 use crate::diagnostic::codes;
@@ -272,6 +292,7 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::InvalidBroadcastFn => codes::INVALID_BROADCAST_FN,
             Self::ArrayShapeMismatch => codes::ARRAY_SHAPE_MISMATCH,
             Self::ObservedCycle => codes::OBSERVED_CYCLE,
+            Self::ReservedVariableName => codes::RESERVED_VARIABLE_NAME,
         };
         write!(f, "{s}")
     }

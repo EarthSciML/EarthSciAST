@@ -81,6 +81,15 @@ const ERROR_CODES = (
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded",
     RECURRENCE_UNSUPPORTED_FORM = "recurrence_unsupported_form",
     RELATIONAL_NODE_IN_CONTINUOUS = "relational_node_in_continuous",
+    # A DECLARATION — a `variables` key, a reaction species, or a reaction
+    # parameter — spelled with a globally-scoped name: the document's
+    # independent variable (`domain.independent_variable`, default "t") or the
+    # §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are implicitly declared
+    # in every component's expression scope and are resolved BY NAME ahead of
+    # the declaration maps, so the declaration is unreachable and every reader
+    # silently receives the implicit symbol — the simulation clock in place of
+    # the declared quantity.
+    RESERVED_VARIABLE_NAME = "reserved_variable_name",
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch",
     UNDEFINED_INDEX_SET = "undefined_index_set",
     UNDEFINED_OPERATOR = "undefined_operator",

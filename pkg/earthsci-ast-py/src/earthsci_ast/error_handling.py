@@ -96,6 +96,11 @@ class ErrorCode(Enum):
     # is optional and the derivation authoritative, so disagreement is always an
     # author error, never an override.
     SYSTEM_KIND_MISMATCH = "system_kind_mismatch"
+    # A declaration spelled with a globally-scoped name -- the document's
+    # independent variable, or the §6.4 `_var` placeholder (esm-spec §4.9.1.1).
+    # Both resolve BY NAME ahead of the declaration maps, so the declaration is
+    # unreachable and its readers silently get the implicit symbol instead.
+    RESERVED_VARIABLE_NAME = "reserved_variable_name"
     MISSING_REQUIRED_FIELD = "missing_required_field"
     UNIT_MISMATCH = "unit_mismatch"
     # Codes emitted by earthsci_ast.validation (previously ad-hoc string

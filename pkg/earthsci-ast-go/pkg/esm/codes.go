@@ -228,6 +228,18 @@ const (
 	// ModelA's equations reference ModelB's variables and vice versa
 	// (tests/invalid/circular_coupling.esm).
 	ErrorCircularDependency = "circular_dependency"
+	// ErrorReservedVariableName is a DECLARATION — a `variables` key, a species,
+	// or a reaction parameter — spelled with a globally-scoped name: the
+	// document's independent variable (`domain.independent_variable`, default
+	// "t") or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope
+	// in every component and are resolved BY NAME ahead of the declaration maps
+	// — creditIndependentVariable below is exactly that precedence — so the
+	// declaration is unreachable and every reader silently receives the implicit
+	// symbol instead of the declared quantity. Hard error: the document that
+	// reported this (issue #200) validated clean and then read the simulation
+	// clock in place of a fuel time-lag constant.
+	// (tests/invalid/reserved_variable_name_*.esm).
+	ErrorReservedVariableName = "reserved_variable_name"
 )
 
 // --- Diagnostic codes: structural validation, peers of the Error* block

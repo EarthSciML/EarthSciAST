@@ -591,11 +591,14 @@ impl ArrayCompiled {
         // subsystems / ragged sets.
         let mut index_sets_owned = index_sets.clone();
         mount_subsystems(&mut model_owned, &mut index_sets_owned)?;
-        // Lower every SHAPED parameter whose value is authored as inline array
-        // data (esm-spec §6.3 / §6.6.2) into the `const`-observed channel this
-        // runtime already reads. Runs after mounting so a subsystem's shaped
-        // parameter is lowered under its namespaced name too.
-        lower_inline_array_parameters(&mut model_owned, &index_sets_owned)?;
+        // Lower every SHAPED parameter whose value the document supplies —
+        // inline array data, or one scalar broadcast over the grid (esm-spec
+        // §6.3 / §6.6.2) — into the `const`-observed channel this runtime
+        // already reads. Runs after mounting so a subsystem's shaped parameter
+        // is lowered under its namespaced name too; `vi_arrays` is passed so a
+        // caller-supplied factor array stays authoritative over a declared
+        // default.
+        lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -1195,10 +1198,11 @@ fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
         .fold(0usize, |acc, (i, n)| acc * n + i)
 }
 
-/// Lower every SHAPED parameter whose value is authored as INLINE ARRAY DATA —
-/// a row-major nested JSON array on its `default` (esm-spec §6.3, and the
-/// `parameter_overrides` a test resolves into it, §6.6.2) — into the `const`
-/// observed channel this runtime already evaluates.
+/// Lower every SHAPED parameter whose value the document itself supplies —
+/// INLINE ARRAY DATA (a row-major nested JSON array on its `default`, esm-spec
+/// §6.3, and the `parameter_overrides` a test resolves into it, §6.6.2) or a
+/// SCALAR broadcast over the declared `shape` — into the `const` observed
+/// channel this runtime already evaluates.
 ///
 /// A parameter's value reaches the RHS through the positional scalar `params`
 /// vector, which has exactly one f64 per parameter: a whole column has nowhere
@@ -1210,9 +1214,22 @@ fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
 /// rewrite-rule library; doing it here is what lets one shared component carry
 /// its profiles inline.
 ///
-/// A parameter with a SCALAR default is untouched (it keeps its broadcast
-/// meaning and its `params` slot), and so is a 0-D one, so this is a no-op for
-/// every document that does not author array data.
+/// A SCALAR on a shaped parameter takes the SAME channel, because esm-spec §6.3
+/// gives it the same meaning — "the one value applies to every element" — and a
+/// scalar `params` slot cannot express that: every per-cell read of the name
+/// (`index(ramp, k)`, and the gather `index_array_leaves_by_loops` inserts for a
+/// bare whole-array RHS) indexes a scalar, which [`eval_index`] resolves to
+/// `NaN`. The solver then fails at `t = 0` naming no parameter at all
+/// (EarthSciML/EarthSciAST#219). Broadcasting the scalar here is the shaped
+/// UNKNOWN's rule — [`build_slot_tables`] already writes one scalar `default`
+/// into every per-cell slot — applied to the parameter side.
+///
+/// A 0-D parameter is untouched, and so is one whose value comes from OUTSIDE
+/// the document — an `update` binding (the loader / handler forcing seam) or a
+/// caller-supplied `vi_arrays` entry — because that channel owns the buffer and
+/// its data beats a declared default (the precedence the Julia reference's
+/// `_register_inline_array_parameters` takes). So this is a no-op for every
+/// document that does not declare a shaped parameter's value inline.
 ///
 /// # Errors
 ///
@@ -1222,6 +1239,7 @@ fn row_major_offset(multi: &[usize], shape: &[usize]) -> usize {
 fn lower_inline_array_parameters(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
+    external: Option<&HashMap<String, ArrayD<f64>>>,
 ) -> Result<(), CompileError> {
     let mut lowered: Vec<(String, JsonValue)> = Vec::new();
     for (name, var) in &mut model.variables {
@@ -1232,6 +1250,31 @@ fn lower_inline_array_parameters(
             continue;
         };
         if !default.is_array() {
+            // esm-spec §6.3 broadcast: one scalar over the whole declared grid.
+            // Only for a parameter this document is the sole source of — a 0-D
+            // one has no grid to broadcast over, an externally refreshed one is
+            // filled by the forcing buffer, and a caller `vi_arrays` entry is
+            // authoritative over any declared default.
+            let declared = var.shape.as_deref().unwrap_or(&[]);
+            if declared.is_empty()
+                || var.update.is_some()
+                || external.is_some_and(|a| a.contains_key(name))
+            {
+                continue;
+            }
+            // A shape that does not resolve (an unmaterialized derived set) has
+            // no extent to broadcast over; leave the parameter alone so the
+            // build's own extent checks report any real disagreement.
+            let Some(want) = resolve_declared_shape(declared, index_sets) else {
+                continue;
+            };
+            let Some(scalar) = default.as_scalar() else {
+                continue;
+            };
+            let values = vec![scalar; want.iter().copied().product::<usize>().max(1)];
+            var.var_type = VariableType::Unknown;
+            var.default = None;
+            lowered.push((name.clone(), dense_to_json(&want, &values)));
             continue;
         }
         let (shape, values) = default.to_dense().map_err(|e| {

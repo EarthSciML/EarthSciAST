@@ -2780,6 +2780,14 @@
       }
     },
     {
+      "name": "error_reserved_variable_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorReservedVariableName"
+      }
+    },
+    {
       "name": "error_system_kind_mismatch",
       "kind": "constant",
       "tier": "extension",

@@ -499,6 +499,35 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
         end
     end
 
+    # 3e. A DECLARATION spelled with a globally-scoped name — the independent
+    # variable or the §6.4 `_var` placeholder — is unreachable (esm-spec
+    # §4.9.1.1, `reserved_variable_name`). `_implicit_symbols` credits both by
+    # NAME, ahead of the declaration maps, so every reader gets the implicit
+    # symbol instead of the declared quantity (issue #200). All three
+    # declaration maps are covered: a species and a reaction parameter become
+    # symbols of the derived ODE system exactly as a `variables` entry does.
+    let indep = _indep_var(file)
+        if file.models !== nothing
+            for model_name in sort!(collect(keys(file.models)))
+                _check_reserved_model_names!(errors, file.models[model_name],
+                                             "/models/$model_name",
+                                             "Model '$model_name'"; indep=indep)
+            end
+        end
+        if file.reaction_systems !== nothing
+            for rs_name in sort!(collect(keys(file.reaction_systems)))
+                rs = file.reaction_systems[rs_name]
+                owner = "Reaction system '$rs_name'"
+                _check_reserved_declaration_names!(errors, (s.name for s in rs.species),
+                                                   "/reaction_systems/$rs_name/species",
+                                                   owner, "species"; indep=indep)
+                _check_reserved_declaration_names!(errors, (p.name for p in rs.parameters),
+                                                   "/reaction_systems/$rs_name/parameters",
+                                                   owner, "parameter"; indep=indep)
+            end
+        end
+    end
+
     # 4. Validate event consistency. Unlike balance and reference integrity, this
     # still RUNS for a coupled model — it is where a genuinely undeclared event
     # target is caught — but with the §6.4 `_var` placeholder credited (finding (b)).
@@ -1024,6 +1053,82 @@ function _check_system_kind!(errors::Vector{StructuralError}, model::Model, path
     end
     for (subsys_name, subsys) in model_subsystems(model)
         _check_system_kind!(errors, subsys, "$path/subsystems/$subsys_name")
+    end
+    return errors
+end
+
+"""
+    _reserved_declaration_names(indep::AbstractString) -> Dict{String,String}
+
+Every name a declaration map may NOT spell, mapped to the reason it is reserved
+(esm-spec §4.9.1.1).
+
+Two symbols, both GLOBALLY scoped: the document's independent variable and the
+§6.4 operator placeholder. §4.9.1.1 is the normative home of this set; the
+sibling `reserved_index_symbol` rule for an `aggregate` binder reads the same
+set, so the two cannot drift apart. (That sibling rule is currently implemented
+only in the Rust binding; this one is implemented in all five.)
+
+Spatial coordinate names are deliberately absent: they resolve as coordinates
+only in a coordinate position (§11.4), and
+`tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary
+position variable.
+"""
+_reserved_declaration_names(indep::AbstractString)::Dict{String,String} = Dict{String,String}(
+    String(indep) => "independent_variable",
+    _OPERATOR_PLACEHOLDER_VAR => "operator_placeholder")
+
+"""
+    _check_reserved_declaration_names!(errors, names, container_path, owner, kind; indep)
+
+`reserved_variable_name` for every declared `name` spelled with a globally-scoped
+name (esm-spec §4.9.1.1).
+
+The declaration never wins: the independent variable and `_var` are implicitly
+declared in every component's expression scope (§4.9.1) and are resolved BY NAME
+ahead of the declaration maps, so the implicit symbol shadows the declaration
+rather than the other way round. That is why this is a hard error and not a lint
+(issue #200) — the reported document validated clean, and a build with a
+subsystem mounted handed every reader of `t` the simulation clock in place of a
+fuel time-lag constant.
+
+`names` is walked in sorted order: `Model.variables` is ordered but a reaction
+system's species and parameters are vectors, and sorted is the ordering every
+binding can produce.
+"""
+function _check_reserved_declaration_names!(errors::Vector{StructuralError},
+                                            names, container_path::AbstractString,
+                                            owner::AbstractString, kind::AbstractString;
+                                            indep::AbstractString="t")
+    reserved = _reserved_declaration_names(indep)
+    for name in sort!(collect(String.(names)))
+        why = get(reserved, name, nothing)
+        why === nothing && continue
+        role = why == "independent_variable" ? "the document's independent variable" :
+               "the operator-model placeholder"
+        push!(errors, StructuralError(
+            "$container_path/$name",
+            "$owner declares a $kind named '$name', which is $role",
+            ERROR_CODES.RESERVED_VARIABLE_NAME,
+            Dict{String,Any}("name" => name, "reserved_as" => why)))
+    end
+    return errors
+end
+
+"""
+    _check_reserved_model_names!(errors, model, path; indep)
+
+[`_check_reserved_declaration_names!`](@ref) over a model's `variables`,
+recursing into subsystems.
+"""
+function _check_reserved_model_names!(errors::Vector{StructuralError}, model::Model,
+                                      path::String, owner::AbstractString;
+                                      indep::AbstractString="t")
+    _check_reserved_declaration_names!(errors, keys(model.variables), "$path/variables",
+                                       owner, "variable"; indep=indep)
+    for (subsys_name, subsys) in model_subsystems(model)
+        _check_reserved_model_names!(errors, subsys, "$path/subsystems/$subsys_name",
+                                     "Model '$subsys_name'"; indep=indep)
     end
     return errors
 end

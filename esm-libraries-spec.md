@@ -674,6 +674,59 @@ Beyond expression-level substitution, libraries must support model-level editing
 - `derive_odes(reaction_system) → Model` — generate the ODE model from a reaction system's stoichiometry and rate laws.
 - `stoichiometric_matrix(reaction_system) → Matrix` — compute the net stoichiometric matrix.
 
+#### 4.6.1 Which species `derive_odes` emits an equation for (normative)
+
+`derive_odes` emits `D(X, t) = Σⱼ stoichᵢⱼ · rateⱼ` for each species `X`, in the order the
+reaction system declares its species. **Two kinds of species get no equation at all**, and the
+distinction matters because §4.7.5 step 1 defers to this section:
+
+1. A **reservoir** species (`constant: true`, esm-spec §7.4) is held fixed. It is skipped as an
+   equation TARGET only — it stays a mass-action factor in every rate law that references it, and
+   it lowers to a parameter carrying its declared `default`.
+
+2. A species whose net stoichiometry is **zero in every column** of the stoichiometric matrix. Its
+   sum is empty, and a library MUST NOT emit `D(X, t) = 0` for it. The usual way to be such a
+   species is to appear in no reaction at all, but the test is on the NET column and a catalyst —
+   one that appears with equal substrate and product stoichiometry in every reaction it takes part
+   in — meets it too, and is skipped for the same reason.
+
+The second is the one worth arguing, because the empty sum really is zero and emitting it is
+defensible arithmetic. What settles it is that the two readings give the species **different
+roles**, and esm-spec §6.3.1 classifies by COMPLEMENT:
+
+- *With* the zero equation, `X` is a DIFFERENTIAL unknown — a state the solver advances, whose
+  derivative happens to be zero. It joins the `u` vector and is integrated.
+- *Without* it, `X` is an unknown that no equation names, which is exactly §6.3.1's ALGEBRAIC
+  category.
+
+The second is what the species IS. A declared species that no reaction touches is not a quantity
+whose dynamics are known to be trivial; it is a quantity the reaction network says nothing about,
+and §6.3.1 has a category for precisely that. Emitting the zero also makes `equation_count`
+depend on how many inert species a document happens to declare, which makes the count
+incomparable across documents that model the same chemistry.
+
+**This does not leave `X` unconstrained in every case.** A later coupling rule may still define it
+— §4.7.1 step 5 preserves an operator's unmatched equation, so a `_var` transport operator gives an
+inert species a transport-only tendency and it is differential after all. The point is that
+`derive_odes` does not decide that; the flattened system does, from what actually names `X`.
+
+**And where nothing does name it, the BACKEND has to say what "solved for" means.** §4.7.1 is
+blunt that an unknown with no constraint is a structurally singular system, and §4.7.5's field
+table is equally clear that `X` is still in `state_variables` — it is part of the solved-for
+vector either way. Those are reconciled at the lowering, not in the document: a simulation
+backend MUST keep such a state in its solution and MUST NOT silently drop it, and holding it at
+its initial value (an implicit `D(X, t) = 0` introduced by the backend, never written back into
+the flattened equation list) is what the Julia and Python reference bindings both do. A backend
+that instead REFUSES the system is also conforming — what it may not do is return a solution the
+state is missing from, because a caller that seeded `X` through `initial_conditions` then gets no
+error and no `X`.
+
+> **Note (was a cross-binding divergence).** Julia emitted `D(X, t) = 0` here while Python, Rust,
+> Go and TypeScript omitted the equation — a 4-1 split, recorded in the Julia binding's
+> `_FC_DIVERGENCES` ledger against `tests/valid/full_coupled.esm`, whose `AtmosphericChemistry.OH`
+> is declared and touched by no reaction. This clause is the ruling that closed it, in favour of
+> the four.
+
 ### 4.7 Coupling Resolution
 
 Libraries at **all tiers** (including Core) must implement coupling resolution as a **flattening** operation: transforming a set of coupled component systems into a single flat equation system with dot-namespaced variables. This flattened representation is the canonical intermediate form — it is the output of coupling resolution and the input to simulation backends, graph construction, and validation.
@@ -1030,7 +1083,7 @@ TypeScript `camelCase`, others verbatim).
 | Field | Type | Contents |
 |---|---|---|
 | `independent_variables` | list of name | Computed by the §4.7.6 algorithm: `["t"]` for a 0D system, `["t", <spatial axes>]` for a PDE. This is what selects `ODESystem` vs `PDESystem` downstream. NOT always `["t"]`. |
-| `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including every reaction-system species, which gets a derived `D` equation at step 1), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. |
+| `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including each reaction-system species that step 1 derives a `D` equation for — which is not all of them: see §4.6.1 for the reservoir and no-reaction exceptions), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. A species §4.6.1 emits no equation for is still IN this map — it is solved for either way; what changes is which half it lands in. |
 | `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus any promoted to variables by `variable_map`. |
 | `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation, bare-LHS or indexed-LHS (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; an arrayed observed materializes into a buffer and IS. |
 | `algebraic_variables` | ordered map name → variable | Unknowns CONSTRAINED only by an expression-LHS equation (esm-spec §6.3.1). A **subset** of `state_variables` — a DAE solves for them. |
