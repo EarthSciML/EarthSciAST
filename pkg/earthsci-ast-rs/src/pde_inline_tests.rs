@@ -1009,8 +1009,11 @@ fn push_test_error(
     message: &str,
 ) {
     for (i, a) in t.assertions.iter().enumerate() {
-        let (rtol, atol) =
-            resolve_tolerance(component_tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
+        let (rtol, atol) = resolve_tolerance(
+            component_tolerance,
+            t.tolerance.as_ref(),
+            a.tolerance.as_ref(),
+        );
         results.push(PdeAssertionResult {
             model: model_name.to_string(),
             test_id: t.id.clone(),
@@ -1612,8 +1615,11 @@ fn run_component_tests(
             }
         });
         for (i, a) in t.assertions.iter().enumerate() {
-            let (rtol, atol) =
-                resolve_tolerance(component_tolerance, t.tolerance.as_ref(), a.tolerance.as_ref());
+            let (rtol, atol) = resolve_tolerance(
+                component_tolerance,
+                t.tolerance.as_ref(),
+                a.tolerance.as_ref(),
+            );
             let outcome = match &sim {
                 Err(msg) => Err(msg.clone()),
                 Ok(sol) => eval_assertion(

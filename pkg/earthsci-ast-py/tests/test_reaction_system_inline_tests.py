@@ -246,9 +246,7 @@ def test_observed_derivative_of_a_sibling_reaction_systems_species():
         "models": {
             "Probe": {
                 "variables": {"dAdt": {"type": "unknown", "units": "mol/mol/s"}},
-                "equations": [
-                    {"lhs": "dAdt", "rhs": {"op": "D", "args": ["Chem.A"], "wrt": "t"}}
-                ],
+                "equations": [{"lhs": "dAdt", "rhs": {"op": "D", "args": ["Chem.A"], "wrt": "t"}}],
                 "tests": [
                     {
                         "id": "scoped_tendency_at_zero",

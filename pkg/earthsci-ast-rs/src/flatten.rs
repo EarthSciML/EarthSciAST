@@ -1521,9 +1521,9 @@ fn substitute_time_derivatives(
         active.pop();
         return out;
     }
-    Expr::operator(node.map_children(&mut |child| {
-        substitute_time_derivatives(child, tendency, active)
-    }))
+    Expr::operator(
+        node.map_children(&mut |child| substitute_time_derivatives(child, tendency, active)),
+    )
 }
 
 /// Flatten a single [`Model`] as a convenience wrapper around [`flatten`].

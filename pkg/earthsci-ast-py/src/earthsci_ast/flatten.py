@@ -2374,9 +2374,7 @@ def _derivative_target(expr: Expr) -> str | None:
     return arg if isinstance(arg, str) else None
 
 
-def _substitute_time_derivatives(
-    expr: Expr, tendency: dict[str, Expr], active: list[str]
-) -> Expr:
+def _substitute_time_derivatives(expr: Expr, tendency: dict[str, Expr], active: list[str]) -> Expr:
     """The rewrite :func:`_resolve_rhs_time_derivatives` documents, over one
     expression."""
     if not isinstance(expr, ExprNode):

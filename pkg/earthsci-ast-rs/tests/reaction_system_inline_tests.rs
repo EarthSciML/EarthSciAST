@@ -186,21 +186,27 @@ fn models_and_reaction_systems_both_run_models_first() {
     });
     let results = run(doc);
     let order: Vec<&str> = results.iter().map(|r| r.model.as_str()).collect();
-    assert_eq!(order, vec!["Mdl", "Chem"], "models first, then reaction systems");
+    assert_eq!(
+        order,
+        vec!["Mdl", "Chem"],
+        "models first, then reaction systems"
+    );
     assert!(results.iter().all(|r| r.passed), "{results:?}");
 }
 
 /// The `--model` selector names a COMPONENT, of either kind.
 #[test]
 fn component_selector_reaches_a_reaction_system() {
-    let file = load_string(&decay_mechanism(json!([{
-        "id": "initial_state",
-        "time_span": {"start": 0.0, "end": 1.0},
-        "assertions": [
-            {"variable": "A", "time": 0.0, "expected": 4.0, "tolerance": {"abs": 1e-12}}
-        ]
-    }]))
-    .to_string())
+    let file = load_string(
+        &decay_mechanism(json!([{
+            "id": "initial_state",
+            "time_span": {"start": 0.0, "end": 1.0},
+            "assertions": [
+                {"variable": "A", "time": 0.0, "expected": 4.0, "tolerance": {"abs": 1e-12}}
+            ]
+        }]))
+        .to_string(),
+    )
     .expect("document loads");
 
     assert_eq!(run_pde_tests(&file, Some("Chem"), &opts()).len(), 1);
