@@ -19,7 +19,7 @@ use crate::value_invention::{
 };
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 // ============================================================================
 // Detection: does the file contain array-op expressions anywhere?
@@ -367,7 +367,15 @@ impl ArrayCompiled {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        let mut compiled = Self::from_model(model, &index_sets)?;
+        // `from_model` clones the model internally anyway, so taking the clone
+        // here to rewrite it costs nothing extra — same shape as
+        // `from_file_owned` below, which owns its model outright.
+        let hits = self_qualified_references(model, model_name);
+        let mut local = model.clone();
+        if !hits.is_empty() {
+            resolve_self_qualified_references(&mut local, &hits);
+        }
+        let mut compiled = Self::from_model_owned(local, &index_sets)?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
@@ -394,7 +402,11 @@ impl ArrayCompiled {
         }
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
-        let (model_name, model) = models.into_iter().next().unwrap();
+        let (model_name, mut model) = models.into_iter().next().unwrap();
+        let hits = self_qualified_references(&model, &model_name);
+        if !hits.is_empty() {
+            resolve_self_qualified_references(&mut model, &hits);
+        }
         let mut compiled = Self::from_model_owned(model, &index_sets)?;
         compiled.namespace = Some(model_name);
         Ok(compiled)
@@ -3332,6 +3344,152 @@ pub(super) fn rhs_has_array_producer(expr: &Expr) -> bool {
     }
 }
 
+/// esm-spec §4.6: inside model `M`, `M.x` — and `M.sub.x` for a mounted
+/// subsystem `sub` — is the FULLY QUALIFIED spelling of the local `x`
+/// (`sub.x`): the same variable the bare / subsystem-relative form names. The
+/// single-model array build keeps the model's own unqualified names (the
+/// flattened multi-model build and the scalar path qualify everything, which is
+/// why the same reference resolves there), so a self-qualified reference has to
+/// be brought back to the local spelling before the build. This collects the
+/// `(qualified, local)` pairs to rewrite: every variable reference in the
+/// model's expressions that starts with `<model_name>.` and whose remainder is
+/// a declared variable or is rooted at a declared subsystem. Anything else is
+/// left alone for the usual unbound-name diagnostics. Empty — the common case,
+/// costing one read-only walk — means the model is used untouched.
+///
+/// Scope: the PARENT's own expressions. This runs before `mount_subsystems`,
+/// and `Model::subsystems` is still raw `serde_json::Value`, so a self-qualified
+/// reference authored INSIDE a subsystem body is not collected — an
+/// incompleteness of this rule, not a regression (that spelling never resolved
+/// on this path).
+fn self_qualified_references(model: &Model, model_name: &str) -> Vec<(String, String)> {
+    let prefix = format!("{model_name}.");
+    let subsystems: HashSet<&str> = model
+        .subsystems
+        .as_ref()
+        .map(|s| s.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    // A `BTreeMap` both DEDUPES and orders, where the first cut rescanned a
+    // growing `Vec` per name; and the walk looks only at variable LEAVES rather
+    // than materializing `free_variables`' whole name set for every node.
+    let mut hits: BTreeMap<String, String> = BTreeMap::new();
+    fn collect(
+        expr: &Expr,
+        prefix: &str,
+        model: &Model,
+        subsystems: &HashSet<&str>,
+        hits: &mut BTreeMap<String, String>,
+    ) {
+        match expr {
+            Expr::Variable(name) => {
+                let Some(rest) = name.strip_prefix(prefix) else {
+                    return;
+                };
+                let local = model.variables.contains_key(rest)
+                    || rest
+                        .split_once('.')
+                        .is_some_and(|(head, _)| subsystems.contains(head));
+                if local && !hits.contains_key(name) {
+                    hits.insert(name.clone(), rest.to_string());
+                }
+            }
+            Expr::Operator(node) => {
+                node.for_each_child(&mut |c| collect(c, prefix, model, subsystems, hits));
+            }
+            Expr::Number(_) | Expr::Integer(_) => {}
+        }
+    }
+    {
+        // Scoped so the closure's `&mut hits` borrow ends before the map is
+        // consumed below.
+        let mut visit = |expr: &Expr| collect(expr, prefix.as_str(), model, &subsystems, &mut hits);
+        // The expression-bearing fields the array build compiles: every equation
+        // (both sides) and every variable's own expressions (a parameter
+        // `update`'s `when` / `expression`, esm 1.0.0).
+        for eq in &model.equations {
+            visit(&eq.lhs);
+            visit(&eq.rhs);
+        }
+        for var in model.variables.values() {
+            var.for_each_expression(&mut visit);
+        }
+    }
+    hits.into_iter().collect()
+}
+
+/// Apply the `(qualified, local)` rewrites of [`self_qualified_references`] to
+/// every expression of `model`, in ONE capture-aware pass.
+///
+/// Capture-aware in BOTH directions, which is why this is not a loop over
+/// [`rename_free_symbol`]. That helper shadows on the name it renames FROM,
+/// which for a `<model>.`-qualified source is never a loop symbol; the direction
+/// that matters here is the TARGET. A node that binds the LOCAL name — model
+/// variable `i` read as `M.i` inside `aggregate(i from x; …)` — would otherwise
+/// capture the rewritten reference and silently read the loop index instead of
+/// the variable. The rewrite is therefore dropped for that subtree and the
+/// qualified spelling survives into the build's ordinary unbound-name
+/// diagnostic: a named error, not a wrong number. One pass rather than one per
+/// hit also stops an H-hit model from being rebuilt H times.
+fn resolve_self_qualified_references(model: &mut Model, hits: &[(String, String)]) {
+    let map: HashMap<&str, &str> = hits.iter().map(|(q, l)| (q.as_str(), l.as_str())).collect();
+    let mut rewrite = |expr: &mut Expr| {
+        *expr = rewrite_self_qualified(expr, &map);
+    };
+    for eq in &mut model.equations {
+        rewrite(&mut eq.lhs);
+        rewrite(&mut eq.rhs);
+    }
+    for var in model.variables.values_mut() {
+        var.for_each_expression_mut(&mut rewrite);
+    }
+}
+
+/// One capture-aware substitution pass for [`resolve_self_qualified_references`]:
+/// every free `Variable(q)` with `hits[q] == l` becomes `Variable(l)`, and a
+/// node that BINDS either spelling — as an `output_idx` / `ranges` loop symbol
+/// or an `integral`'s `var` — drops that hit for its whole subtree.
+fn rewrite_self_qualified(expr: &Expr, hits: &HashMap<&str, &str>) -> Expr {
+    if hits.is_empty() {
+        return expr.clone();
+    }
+    match expr {
+        Expr::Variable(v) => hits
+            .get(v.as_str())
+            .map_or_else(|| expr.clone(), |l| Expr::Variable((*l).to_string())),
+        Expr::Operator(node) => {
+            let binds = |s: &str| {
+                node.output_idx
+                    .as_ref()
+                    .is_some_and(|ix| ix.iter().any(|x| x == s))
+                    || node.ranges.as_ref().is_some_and(|r| r.contains_key(s))
+                    || node.int_var.as_deref() == Some(s)
+            };
+            // Only reallocate the map on the rare node that shadows something.
+            let narrowed: Option<HashMap<&str, &str>> =
+                hits.iter().any(|(q, l)| binds(q) || binds(l)).then(|| {
+                    hits.iter()
+                        .filter(|&(q, l)| !binds(q) && !binds(l))
+                        .map(|(q, l)| (*q, *l))
+                        .collect()
+                });
+            let sub = narrowed.as_ref().unwrap_or(hits);
+            let mut out = node.map_children(&mut |a| rewrite_self_qualified(a, sub));
+            // `map_children` preserves `join` verbatim, so the node's
+            // string-encoded variable references catch up with its child ones
+            // here — see [`rename_join_names`].
+            if let Some(join) = &out.join {
+                let mut renamed = join.clone();
+                for (q, l) in sub {
+                    renamed = rename_join_names(&renamed, q, l);
+                }
+                out.join = Some(renamed);
+            }
+            Expr::operator(out)
+        }
+        Expr::Number(_) | Expr::Integer(_) => expr.clone(),
+    }
+}
+
 /// Capture-aware rename of a free loop symbol: every free `Variable(from)`
 /// becomes `Variable(to)`; a node that BINDS `from` itself (its `output_idx`
 /// or `ranges` declare it) shadows the outer symbol and is left untouched.
@@ -4305,8 +4463,8 @@ mod subsystem_ragged_and_inspection_tests {
     fn erk_opts() -> SolveOptions {
         SolveOptions {
             alg: Alg::Erk,
-            reltol: 1e-10,
-            abstol: 1e-12,
+            reltol: Some(1e-10),
+            abstol: Some(1e-12),
             saveat: Some(vec![1.0]),
             ..Default::default()
         }
@@ -4606,5 +4764,48 @@ mod subsystem_ragged_and_inspection_tests {
         assert_eq!(w_ij.shape(), [2, 1]);
         assert_eq!(w_ij[IxDyn(&[0, 0])], 0.5);
         assert_eq!(w_ij[IxDyn(&[1, 0])], 0.5);
+    }
+
+    /// esm-spec §4.6: `M.x` inside model `M` is the fully qualified spelling of
+    /// the local `x`, and the single-model array build brings it back to the
+    /// local one before compiling. The rewrite is capture-aware in BOTH
+    /// directions: a node that BINDS the local name as a loop symbol keeps the
+    /// qualified spelling, so `M.i` under `aggregate(i from x; …)` never
+    /// silently becomes the loop index.
+    #[test]
+    fn self_qualified_rewrite_does_not_capture_a_bound_local_name() {
+        let m = model(json!({
+            "variables": {
+                "i": {"type": "parameter", "units": "1", "default": 3.0},
+                "u": {"type": "unknown", "units": "1", "shape": ["x"]},
+                "z": {"type": "unknown", "units": "1"}
+            },
+            "equations": [
+                // Free: rewritten to the local `i`.
+                {"lhs": "z", "rhs": "M.i"},
+                // Bound by the enclosing aggregate's own `i`: left alone.
+                {"lhs": "u", "rhs": {
+                    "op": "aggregate", "args": [], "output_idx": ["i"],
+                    "ranges": {"i": {"from": "x"}},
+                    "expr": {"op": "*", "args": ["M.i", "i"]}}}
+            ]
+        }));
+        let hits = self_qualified_references(&m, "M");
+        assert_eq!(hits, vec![("M.i".to_string(), "i".to_string())]);
+        let mut out = m.clone();
+        resolve_self_qualified_references(&mut out, &hits);
+        assert!(matches!(&out.equations[0].rhs, Expr::Variable(v) if v == "i"));
+        let Expr::Operator(node) = &out.equations[1].rhs else {
+            panic!("expected the aggregate");
+        };
+        let body = node.expr.as_deref().expect("aggregate body");
+        let Expr::Operator(mul) = body else {
+            panic!("expected the product");
+        };
+        assert!(
+            matches!(&mul.args[0], Expr::Variable(v) if v == "M.i"),
+            "a node binding `i` must keep the qualified spelling, got {:?}",
+            mul.args[0]
+        );
     }
 }

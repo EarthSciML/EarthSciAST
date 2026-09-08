@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 1.0.0**
+**EarthSciML Abstract Syntax Tree Format — Version 1.1.0**
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -65,7 +65,8 @@ The full authoring stance, normatively:
   "coordinates": { ... },
   "expression_templates": { ... },
   "expression_template_imports": [ ... ],
-  "metaparameters": { ... }
+  "metaparameters": { ... },
+  "solver": { ... }
 }
 ```
 
@@ -85,6 +86,7 @@ The full authoring stance, normatively:
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
+| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
@@ -150,6 +152,154 @@ expressible: connectivity is a `ragged`/`derived` `IndexSet`, and mesh location 
 `ModelVariable.location` — so UGRID-compliant output is a mapping choice over
 existing constructs, with plain-CF auxiliary coordinates the default emission
 (RFC streaming-output-sinks §8.4).
+
+### 2.2 Solver hints (`solver`)
+
+The `solver` block is a **document-scoped, optional** record of numerics the
+document knows about **itself** — facts about the model that every binding
+independently needs and none can derive cheaply. Like `coordinates` (§2.1) it is
+**purely additive**: a document without it validates, flattens and emits exactly
+as before, and adding it changes no dynamics and no flattened system.
+
+```json
+{
+  "esm": "1.1.0",
+  "solver": {
+    "stiffness": "high",
+    "abstol": 1e-8,
+    "reltol": 1e-6,
+    "splitting": "strang"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stiffness` | `"low"` \| `"moderate"` \| `"high"` | The author's declaration of the system's stiffness. A binding MAY select an implicit / BDF-family integrator on `"high"`. |
+| `abstol` | number > 0 | Absolute **integration** tolerance the document asks for. |
+| `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
+| `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
+
+Every field is optional, and so is the block itself.
+
+**An empty block normalizes to absence.** `"solver": {}` is legal and means
+exactly what omitting the block means. A binding MUST normalize it away **at
+load**, so the typed document never holds a block with nothing set and the
+block does not survive `parse → emit`. This is the one exception to the
+verbatim round-trip of §2.2.4, and it is deliberate: the alternative — making
+`{}` a validation error — would make `solver` the only optional top-level
+container in the format that rejects an empty object (`coordinates`,
+`index_sets`, `metaparameters` and `coupling_roles` all admit one), a lone rule
+a reader would have to learn for no gain, and a trap for any tool that builds
+the block from optional inputs that all happened to be absent.
+
+**Absence is not a default value.** A document with no `solver` block, or with no
+`stiffness` key, has *not declared* its stiffness — it does not thereby declare
+`"low"`. A binding MUST NOT read absence as an assertion about the system.
+
+#### 2.2.1 Advisory: the mechanism, never the outcome
+
+Every field in the block is **advisory**. A conforming binding MAY ignore any or
+all of them, and MAY reach a conforming result by any route — its default
+integrator, its own stiffness detection, or by acting on `stiffness`.
+
+What advisory does **not** mean is that the answer is optional. The requirement
+to integrate the document successfully and to agree with the other bindings
+within the stated error band is CONFORMANCE_SPEC §5.9, it is judged on a
+**different** tolerance from `abstol`/`reltol` (the agreement band, not the
+integrator's step control), and it is neither created nor weakened by this block.
+A binding that ignores `stiffness` and converges anyway is conforming; a binding
+that ignores it and hangs, overflows, or lands outside the band is not — and it
+fails against §5.9, which applied before this section existed.
+
+So the block carries information that helps a binding **choose a method that
+converges**. It hands no binding an excuse for not converging.
+
+The one consequence worth stating: because the hint may be ignored, two
+conforming bindings may select different integrators for the same document and
+differ in the last bits of the trajectory. That is already true of every
+simulation the format describes, and §5.9 already governs it.
+
+#### 2.2.2 `abstol` / `reltol` are not the assertion `tolerance`
+
+The `tolerance` object on a model, reaction system, test, or assertion (§6.6.4)
+is the tolerance an assertion result is **compared at**. The `solver` block's
+`abstol` / `reltol` are the tolerances the **integrator** is asked to hold. They
+are different quantities, they resolve independently, and neither substitutes for
+the other. The distinct spellings — `{abs, rel}` against `abstol`/`reltol`, the
+latter exactly the keyword names the integration entry points take — are
+deliberate, so that a reader can tell at a glance which is meant.
+
+**Resolution order for `abstol` / `reltol`**, most-specific first:
+
+1. An explicit argument at the call site — it always wins.
+2. Otherwise, the document's `solver.abstol` / `solver.reltol`.
+3. Otherwise, the binding default (`reltol` `1e-4`, `abstol` `1e-6`).
+
+**The chain resolves wherever a document is integrated, not at one named
+function.** A binding MUST run it at *every* entry point that hands a document
+to an integrator: `solve()`, and equally the stepping lifecycle's `init()` —
+whose integrator then carries the resolved tolerances through `step!` and
+`solve!` (`esm-libraries-spec.md` §2.5.6). Resolving only at `solve()` makes one
+document integrate to two different accuracies depending on which door the
+caller came through, which is exactly what a document-scoped declaration exists
+to prevent. A binding that ships no integrator has nothing to resolve here.
+
+Two properties follow from level 1 being *an explicit argument* rather than *a
+value*. First, a binding MUST be able to tell "the caller named no tolerance"
+apart from "the caller passed the binding default"; an entry point whose
+signature defaults to a concrete number cannot, and the document could then
+never win. Second, resolving an already-resolved pair is a no-op, so a stepping
+implementation whose `step!` re-enters `solve()` per segment MAY run the chain
+again without the second pass displacing the document.
+
+An inline-test runner's own default tolerances (§6.6) sit at level 3: they are
+binding defaults, and a document that declares `solver.reltol` displaces them.
+This is deliberate — it means every binding runs a given document's inline tests
+at one integration tolerance rather than at five different runner defaults.
+
+#### 2.2.3 What the block is not for
+
+A container named `solver` invites accretion, so the boundary is stated up front.
+It is **not** for:
+
+- **Algorithm names.** `"BDF"` and `"LSODA"` are scipy identifiers; Julia would
+  want `Rosenbrock23`. A document carrying one would not be portable, which is
+  why there is deliberately no `alg` field.
+- **Binding-specific compile knobs.** `cse` is a `sympy.lambdify` concern with no
+  meaning outside one binding; it belongs in that binding's harness.
+- **A DAE declaration.** `system_kind` / system class is **derived** from the
+  equation set (§6.3.1); a declared field could only agree with the derivation or
+  contradict it.
+- **Anything in the flattened IR.** Flattening (§10.7) does not consume,
+  transform, or namespace the block. It is document-level configuration riding
+  alongside the flat system, never an input to building it.
+
+#### 2.2.4 Normative requirements
+
+Advisory as the fields are, four things are **required** of every binding:
+
+1. **Parse and validate.** An unknown key, an unknown enum member, a
+   non-positive tolerance, or a wrong JSON type is a validation failure. This is
+   schema conformance, not behavior, and is not excused by the block being
+   advisory.
+2. **Round-trip verbatim**, with one exception. `solver` survives
+   `parse → emit` unchanged: it is authored configuration — a peer of
+   `tolerance` and `parameter_overrides` — not a load-time construct like
+   `expression_template_imports` (§9.7.6), which is consumed and gone by emit
+   time. The exception is the empty block: `"solver": {}` normalizes to absence
+   at load (§2.2) and therefore does not round-trip, because it carries nothing
+   to preserve.
+3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
+   classification, namespacing, or the flattened system.
+4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a
+   `solver` block MUST be rejected with `solver_version_too_old`.
+
+#### 2.2.5 Diagnostics
+
+| Code | Meaning |
+|---|---|
+| `solver_version_too_old` | File declares `esm` < 1.1.0 but carries a top-level `solver` block (§2.2.4). |
 
 ---
 
@@ -1131,7 +1281,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Volume | `L` `l` `mL` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
 | Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` |
-| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `psi` |
+| Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
@@ -2163,17 +2313,20 @@ This is what lets a column-physics test supply its inputs. The inputs of such a 
 **Override-key resolution.** `parameter_overrides` and `initial_conditions` are keyed by **local** name, but a runtime resolves them against a **flattened** system, in which every variable has been renamed after its owning component (`M.pert_amp`). A binding MUST resolve each key against the flattened names by this precedence, stopping at the first rule that applies:
 
 1. **Exact hit** — the key is a flattened name.
-2. **Dotted key, unqualified target** — the key contains a `.` and its trailing segment is itself a flattened name. (This is what lets one authored test run against both a single-model system whose names are bare and its composed, qualified form.)
+2. **Dotted key, shorter target** — the key contains a `.` and one of its dotted suffixes (the key with one or more leading segments dropped) is itself a flattened name; the **longest** such suffix wins, the trailing segment being the last one tried. Every leading segment dropped along the way MUST name a **component or subsystem the document declares** — the dropped prefix is a §4.6 qualifier, not filler — so a key whose qualifier names nothing (`Doc.Left.solo` where there is no `Doc`, `Missng.M.pert_amp` where the component is `M`) does NOT resolve under this rule. (What the rule is for: one authored test running against both a single-model system whose names are bare and its composed, qualified form. `M.A` binds a bare `A`, and the §4.6 fully-qualified `M.sub.A` binds a mounted subsystem parameter a single-model build carries as `sub.A` — in both, `M` names the model and `sub` the subsystem.)
 3. **Bare key, unique local name** — the key contains no `.` and is the trailing segment of exactly **one** flattened name. This is the spelling this section mandates, and it is the rule that makes it work.
 
 A key that reaches none of the three is **unrecognized** and MUST be rejected — see below. Note that rule 3 is restricted to bare keys, so a qualified key naming a component that does not exist (`Missing.pert_amp` where the parameter is `M.pert_amp`) is unrecognized rather than being silently re-pointed at `M.pert_amp` by its trailing segment.
 
-**Unrecognized override keys.** A `parameter_overrides` or `initial_conditions` key that resolves to no variable under the rules above is an **error**. A conforming runtime MUST reject the run rather than ignore the key. Two cases are distinguished, because the author's remedy differs and so must the diagnostic:
+**Unrecognized override keys.** A `parameter_overrides` or `initial_conditions` key that resolves to no variable under the rules above is an **error**, and so is a *variable* that two keys both resolve to. A conforming runtime MUST reject the run rather than ignore the key or pick a winner. Three cases are distinguished, because the author's remedy differs and so must the diagnostic:
 
 | Case | Condition | Diagnostic MUST |
 |---|---|---|
 | **unknown** | The key matches no flattened name under any rule. | Name the offending key. Reporting the names the system does declare is RECOMMENDED. |
 | **ambiguous** | The key is bare and is the trailing segment of **two or more** flattened names — the same local name in two mounted components. | Name the offending key **and every candidate**, so the author can qualify it. It MUST be distinguishable from the unknown case; binding one candidate arbitrarily is NOT conforming. |
+| **colliding keys** | **Two or more** keys resolve to the **one** flattened name under rules 2 and 3 — a bare spelling beside a more-qualified one (`solo` and `Doc.Left.solo` both reaching `Left.solo`), or two more-qualified ones (`A.M.g` and `B.M.g` both reaching `M.g`). | Name the resolved variable **and every colliding key**. Only one of the overrides can take effect, so choosing between them — by insertion order, or by ranking the rules — produces a wrong answer rather than a missing one, and is NOT conforming. |
+
+An **exact hit (rule 1) is never part of a collision**: it identifies its variable outright, so it wins over any rule-2 or rule-3 claim on that same variable and those claims are discarded without a diagnostic. Only two or more NON-exact claims on one name collide.
 
 Silently ignoring an unrecognized key is specifically non-conforming. It produces a *wrong answer rather than a missing one*: the author writes an override, nothing happens, the run proceeds on the declared defaults, and — for a key inside an inline `test` — the runner still reports a pass/fail verdict for a configuration that was never actually exercised. The error type is language-idiomatic (an exception, a `Result` error, a returned diagnostic); the **classification** of each key is the cross-binding contract, gated by the `override_key_diagnostics` conformance category (CONFORMANCE_SPEC §5.15).
 
@@ -2235,6 +2388,8 @@ Tolerance is resolved most-specific first:
 
 Each level is a `{abs?, rel?}` object; absent fields fall through to the next level independently. Specifying only `abs` at a lower level does not mask `rel` from an upper level — they are merged per-field.
 
+**This is not the integrator's tolerance.** The chain above resolves the tolerance an assertion result is **compared at**. The tolerance the **integrator** is asked to hold is the `solver` block's `abstol` / `reltol` (§2.2.2), which resolves on its own independent chain (call site → document → binding default). The two are different quantities and neither substitutes for the other: loosening `abstol` makes a trajectory less accurate and its assertions *more* likely to fail, while loosening `tolerance` makes the same trajectory easier to pass. The distinct spellings — `{abs, rel}` here, `abstol`/`reltol` there — are what keep the two legible at a glance. An inline-test runner's own default integration tolerances sit at the bottom of the §2.2.2 chain, so a document's `solver` block displaces them.
+
 #### 6.6.5 PDE-Aware Assertions
 
 Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only make sense on 0-D components: there is one trajectory per variable, indexed by time alone. On a component whose variables are shaped over one or more spatial index sets, every assertion MUST select a scalar via either `coords` or `reduce`. Validators MUST reject:
@@ -2257,10 +2412,12 @@ Pointwise scalar assertions (the default — neither `coords` nor `reduce`) only
 
 `reference` may be:
 
-- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`; or
+- an inline `Expression` whose free variables are the domain dimension names (e.g., `sin(π x)`), evaluated by the runtime over every grid point at the assertion `time`. For a field shaped over index sets (§5.2) the dimension names are the index-set names of the asserted variable's declared `shape`, each bound at every grid point to the **1-based position along that axis** — the same index space `coords` reads under convention 1 — so `index(table, lev)` reads a per-cell entry of a lookup array and `sin(π (x − ½) / N)` is the cell-centre analytic form, with no explicit gather. A reference that mentions a dimension name free is evaluated per cell exactly as if wrapped in an `aggregate` whose output indices are the dimension names in shape order; a reference that mentions none — a literal, a parameter expression, or an `aggregate` that already produces the whole field under its own loop symbols (including one that rebinds a dimension name as its own loop symbol) — is evaluated as written; or
 - `{type: "from_file", path, format?}` pointing at a precomputed snapshot in the same shape as the field (resolved and validated per convention 3 above).
 
 **Build-time evaluation scope.** Every reference resolved *before* the simulation runs — an inline `Expression` `reference` (above), the analytic materialization of a directly-asserted state-free array observed, a coordinate-expression `ic` (§11.4.1), and an `ic` seeded from a state-free array observed (§11.4) — resolves the model's **parameters** as in-scope names, bound to their load-time constant values (`parameter_overrides`-or-default), in addition to the domain dimension names. Model **unknowns** are NOT in scope (there is no trajectory value at build time); a build-time reference to an unknown is an error. Parameters are load-time constants, so binding them is deterministic and does not depend on the trajectory. This lets a parameter-dependent reference / observed / `ic` resolve directly — e.g. a free-name grid-geometry template `x0 + (i − 1/2)·dx` whose `x0`/`dx` are parameters — without declaring those scalars as constant-backed unknowns.
+
+Parameters and dimension names share that one scope, so a name MUST NOT be both. Where an inline `reference` mentions **free** a name that is both a dimension of the asserted field and a parameter in scope (a flattened parameter name or its unambiguous bare alias), binding the dimension name to the cell's 1-based position would shadow the parameter: the same expression, a different number, and no diagnostic. One name meaning two things in one scope is an ill-formed document, and an implementation MUST reject it with an error naming the clashing name rather than silently choosing either meaning. A reference that does not mention the name is unaffected, as is a gather that rebinds it as its own loop symbol. See CONFORMANCE_SPEC §5.30.
 
 Worked example — 1-D heat equation `u_t = α u_xx` on `x ∈ [0, 1]` with `u(x,0) = sin(π x)` and zero-Dirichlet BCs has analytic solution `u(x,t) = exp(−α π² t) · sin(π x)`. The corresponding L2-error assertion is:
 

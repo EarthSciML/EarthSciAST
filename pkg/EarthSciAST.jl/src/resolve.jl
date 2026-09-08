@@ -245,6 +245,8 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(raw_data)
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    reject_solver_pre_v11(raw_data)
 
     # Validate schema
     schema_errors = validate_schema(raw_data)
@@ -422,8 +424,12 @@ _with_declarations(file::EsmFile, templates, metaparams;
             coordinates=coordinates,
             # `coupling_roles` is read at the coercion boundary (no lowering
             # pass rewrites it), so carry the already-coerced value across
-            # this rebuild rather than re-snapshotting it.
-            coupling_roles=file.coupling_roles)
+            # this rebuild rather than re-snapshotting it. `solver` (esm-spec
+            # §2.2) is read at the same boundary for the same reason and is
+            # carried the same way — dropping it here would delete the block on
+            # every document that goes through template lowering.
+            coupling_roles=file.coupling_roles,
+            solver=file.solver)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])
@@ -1219,6 +1225,8 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
 
     reject_expression_templates_pre_v04(raw_data)
     reject_template_imports_pre_v08(raw_data)
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    reject_solver_pre_v11(raw_data)
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the

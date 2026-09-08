@@ -57,7 +57,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -65,6 +65,7 @@ import numpy as np
 
 from .classification import is_observed_unknown
 from .esm_types import EsmFile, Expr, ExprNode, Tolerance
+from .expr_walk import iter_children
 from .flatten import flatten
 from .parse import load_path, load_string
 from .problem import esm_problem, solve
@@ -96,6 +97,86 @@ _DEFAULT_REL_TOL = 1e-6
 #: fixtures, not a divergence in the library.
 TEST_RELTOL = 1e-10
 TEST_ABSTOL = 1e-14
+
+#: The integrator used when neither the caller nor the document says otherwise.
+DEFAULT_METHOD = "RK45"
+
+#: The integrator chosen for a document declaring ``solver.stiffness: "high"``
+#: (esm-spec §2.2). BDF is scipy's implicit multistep method; LSODA — which is
+#: what an unqualified default would reach for — cannot integrate a strongly
+#: stiff system like the POLLU benchmark at all: its Fortran callback overflows
+#: even with an analytic Jacobian and even over a 60 s window, while BDF does
+#: the full 3600 s in ~0.2 s and reproduces the published reference.
+STIFF_METHOD = "BDF"
+
+
+def _method_for(method: str | None, file: EsmFile) -> str:
+    """The integrator for ``file``, most-specific first (esm-spec §2.2).
+
+    1. An explicit ``method`` from the caller — wins outright.
+    2. Otherwise :data:`STIFF_METHOD` when the document declares
+       ``solver.stiffness: "high"``.
+    3. Otherwise :data:`DEFAULT_METHOD`.
+
+    ``stiffness`` is ADVISORY: this binding is free to ignore it, and does
+    ignore ``"low"`` / ``"moderate"``, which say nothing the default does not
+    already handle. Acting on ``"high"`` is what keeps a stiff document from
+    being an overflow — and it is the whole reason the block exists, since the
+    alternative is a basename lookup table in each binding's own harness that
+    cannot travel with the document.
+
+    Note this maps a portable DECLARATION onto THIS binding's integrator names.
+    The document never carries ``"BDF"`` itself: an algorithm name is a scipy
+    identifier where Julia would want ``Rosenbrock23``, which is exactly what
+    esm-spec §2.2.3 rules out.
+    """
+    if method is not None:
+        return method
+    solver = getattr(file, "solver", None)
+    if getattr(solver, "stiffness", None) == "high":
+        return STIFF_METHOD
+    return DEFAULT_METHOD
+
+
+def _integration_tolerances(
+    file: EsmFile, rtol: float | None, atol: float | None
+) -> tuple[float, float]:
+    """The INTEGRATION tolerances a run of ``file`` solves at (esm-spec §2.2.2).
+
+    Most-specific first:
+
+    1. An explicit ``rtol`` / ``atol`` from the caller — wins outright.
+    2. Otherwise this document's ``solver.reltol`` / ``solver.abstol``.
+    3. Otherwise this runner's :data:`TEST_RELTOL` / :data:`TEST_ABSTOL`.
+
+    The runner values sit at the BOTTOM of the chain — they are binding
+    defaults, not a caller's opinion — so a stiff document can ask for its own
+    integration accuracy without every caller naming it. They are still what an
+    assertion-bearing test gets by default, which is the property the comment on
+    ``TEST_RELTOL`` is about. The two resolve INDEPENDENTLY, so a document
+    declaring only ``reltol`` leaves ``atol`` on the runner default.
+
+    ``is not None``, never truthiness: ``0.0`` is a value the document SET, and
+    ``or`` would silently swap it for the runner default instead of letting the
+    integrator refuse it. The schema forbids a non-positive tolerance, but this
+    takes an ``EsmFile`` a caller may have built in memory and never re-validates
+    it.
+
+    Not :func:`~earthsci_ast.solver.resolve_tolerances` because that function's
+    level 3 is the ``solve()`` binding defaults; only the bottom of the chain
+    differs.
+
+    These are INTEGRATION tolerances. The tolerance each assertion is COMPARED
+    at is resolved separately (§6.6.4) and is untouched here.
+    """
+    solver = getattr(file, "solver", None)
+    doc_reltol = getattr(solver, "reltol", None)
+    doc_abstol = getattr(solver, "abstol", None)
+    return (
+        rtol if rtol is not None else (doc_reltol if doc_reltol is not None else TEST_RELTOL),
+        atol if atol is not None else (doc_abstol if doc_abstol is not None else TEST_ABSTOL),
+    )
+
 
 # Historical private spellings, kept so existing call sites keep working.
 _DEFAULT_SOLVER_RTOL = TEST_RELTOL
@@ -162,6 +243,66 @@ def evaluate_cellwise(
             )
         out.append(float(arr[tuple(int(c) - 1 for c in cell)]))
     return out
+
+
+def _mentions_free(expr: Expr, name: str) -> bool:
+    """Whether ``name`` occurs FREE in ``expr``: as a variable reference not
+    bound by an enclosing ``aggregate`` / ``arrayop`` / ``makearray`` loop
+    symbol (``output_idx``, a ``ranges`` key) or an ``integral``'s integration
+    variable. A node that binds ``name`` shadows it for its whole subtree."""
+    if isinstance(expr, str):
+        return expr == name
+    if not isinstance(expr, ExprNode):
+        return False
+    if name in (expr.output_idx or []) or name in (expr.ranges or {}) or expr.var == name:
+        return False
+    return any(_mentions_free(child, name) for child in iter_children(expr))
+
+
+def bind_dimension_names(
+    expr: Expr, dims: Sequence[str], scope: Mapping[str, float] | None = None
+) -> Expr:
+    """esm-spec §6.6.5: an inline ``reference``'s free variables are the
+    domain DIMENSION NAMES. For a field shaped over index sets those are the
+    asserted variable's ``shape`` entries, each bound at every grid point to
+    the 1-based position along its axis — the same index space ``coords``
+    reads (convention 1) — so ``index(table, lev)`` reads the cell's entry of
+    a lookup array and ``sin(pi * (x - 0.5) / N)`` is the cell-centre analytic
+    form, with no explicit gather. A reference that mentions a dimension name
+    FREE is turned into the whole field by wrapping it in an ``aggregate``
+    whose output indices ARE the dimension names (in shape order, each ranging
+    over its index set); one that mentions none — a literal, a parameter
+    expression, or an ``aggregate`` that already produces the field under its
+    own loop symbols — is returned untouched, so nothing that evaluated before
+    evaluates differently. Mirrors the Julia / Rust ``bind_dimension_names``.
+
+    ``scope`` is the reference's build-time parameter scope (flattened names
+    plus their unambiguous bare aliases). "Nothing that evaluated before
+    evaluates differently" holds only because a dimension name that scope ALSO
+    binds is rejected here: wrapping would silently shadow the parameter with
+    the cell's index — the same expression, a different number, no diagnostic.
+    One name meaning two things in one scope is an ill-formed document, so it
+    is a fault."""
+    dims = [str(d) for d in dims]
+    mentioned = [d for d in dims if _mentions_free(expr, d)]
+    if not mentioned:
+        return expr
+    clash = next((d for d in mentioned if scope is not None and d in scope), None)
+    if clash is not None:
+        raise RuntimeError(
+            f"inline `reference` mentions {clash!r}, which is both a dimension of the "
+            "asserted field and a parameter in scope. esm-spec §6.6.5 binds a free "
+            "dimension name to the cell's 1-based position, which would shadow the "
+            "parameter. Rename one of them, or gather explicitly with "
+            f"`aggregate(i from {clash}; …)`."
+        )
+    return ExprNode(
+        op="aggregate",
+        args=[],
+        output_idx=list(dims),
+        ranges={d: {"from": d} for d in dims},
+        expr=expr,
+    )
 
 
 def field_reduce(
@@ -580,9 +721,9 @@ def simulate_states(
     file: EsmFile,
     tspan: tuple[float, float],
     *,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     saveat: Sequence[float],
     parameters: dict[str, float] | None = None,
     initial_conditions: dict[str, float] | None = None,
@@ -606,7 +747,18 @@ def simulate_states(
         u0=dict(initial_conditions or {}),
         inspect=inspect,
     )
-    result = solve(prob, alg=method, reltol=rtol, abstol=atol)
+    # esm-spec §2.2.2, most-specific first: an explicit `rtol` / `atol` here
+    # wins, else this document's `solver` block, else the runner's own
+    # TEST_RELTOL / TEST_ABSTOL. The runner values sit at the BOTTOM of the
+    # chain — they are binding defaults, not a caller's opinion — so a stiff
+    # document can ask for its own integration accuracy without every caller
+    # naming it. They are still what an assertion-bearing test gets by default,
+    # which is the property the comment on TEST_RELTOL is about.
+    #
+    # Note this is the INTEGRATION tolerance. The tolerance each assertion is
+    # COMPARED at is resolved separately (§6.6.4) and is untouched here.
+    eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
+    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
@@ -894,12 +1046,19 @@ def _evaluate_assertion(
                         # Model parameters (load-time constants) are
                         # in scope for a §6.6.5 analytic reference;
                         # state is not. `insp.params` carries the
-                        # build's resolved scalar params.
+                        # build's resolved scalar params. The field's
+                        # dimension names are in scope too, bound per
+                        # cell (`bind_dimension_names`).
+                        try:
+                            dims = _variable_shape(eval_file, str(mname), str(a.variable))
+                        except RuntimeError:
+                            dims = []
+                        scope = _param_scope_with_aliases(insp.params)
                         ref = evaluate_cellwise(
-                            a.reference,
+                            bind_dimension_names(a.reference, dims, scope),
                             cell_tuples,
                             index_sets=eval_file.index_sets,
-                            params=_param_scope_with_aliases(insp.params),
+                            params=scope,
                         )
                     else:
                         raise RuntimeError(f"unsupported `reference` shape {type(a.reference)}")
@@ -913,9 +1072,9 @@ def run_pde_tests(
     pde_input: str | EsmFile,
     *,
     model_name: str | None = None,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     base_dir: str | None = None,
 ) -> list[PdeAssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
@@ -996,7 +1155,7 @@ def run_pde_tests(
                     sim = simulate_states(
                         run_file,
                         (t.time_span.start, t.time_span.end),
-                        method=method,
+                        method=_method_for(method, run_file),
                         rtol=rtol,
                         atol=atol,
                         saveat=times,
@@ -1033,6 +1192,7 @@ def run_pde_tests(
 __all__ = [
     "PdeAssertionResult",
     "SimulatedStates",
+    "bind_dimension_names",
     "evaluate_cellwise",
     "field_reduce",
     "run_pde_tests",

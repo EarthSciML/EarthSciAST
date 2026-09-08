@@ -39,6 +39,17 @@ pub struct EsmFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinates: Option<IndexMap<String, Coordinate>>,
 
+    /// Document-scoped, OPTIONAL and purely ADVISORY solver hints
+    /// (esm-spec §2.2): stiffness, integration tolerances and a splitting hint
+    /// the document knows about itself.
+    ///
+    /// Purely additive — presence changes no equations, no classification and
+    /// no flattened system. It is authored configuration, so it round-trips
+    /// VERBATIM (§2.2.4 requirement 2), unlike the load-time §9.7.6 constructs
+    /// above that are consumed and gone by emit time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<Solver>,
+
     /// Top-level rewrite-rule registry — the payload of a template-library file
     /// (esm-spec §9.7.1).
     ///
@@ -139,6 +150,7 @@ impl Default for EsmFile {
             metadata: Metadata::default(),
             index_sets: None,
             coordinates: None,
+            solver: None,
             expression_templates: None,
             metaparameters: None,
             models: None,

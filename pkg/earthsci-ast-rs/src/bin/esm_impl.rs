@@ -270,13 +270,16 @@ enum Commands {
         #[arg(long, default_value = "bdf")]
         solver: SolverAlg,
         /// Relative SOLVER tolerance — how accurately each test is integrated,
-        /// NOT the §6.6.4 tolerance its assertions are judged against
-        #[arg(long, default_value_t = TEST_RELTOL)]
-        reltol: f64,
+        /// NOT the §6.6.4 tolerance its assertions are judged against.
+        /// Unset resolves per esm-spec §2.2.2: the document's `solver.reltol`
+        /// if it declares one, else the runner default.
+        #[arg(long)]
+        reltol: Option<f64>,
         /// Absolute SOLVER tolerance — how accurately each test is integrated,
-        /// NOT the §6.6.4 tolerance its assertions are judged against
-        #[arg(long, default_value_t = TEST_ABSTOL)]
-        abstol: f64,
+        /// NOT the §6.6.4 tolerance its assertions are judged against.
+        /// Unset resolves per esm-spec §2.2.2, as `--reltol`.
+        #[arg(long)]
+        abstol: Option<f64>,
         /// Report every assertion, not just the summary table
         #[arg(short, long)]
         verbose: bool,
@@ -3748,8 +3751,8 @@ fn run_test(
     model: Option<String>,
     filter: Option<String>,
     solver: SolverAlg,
-    reltol: f64,
-    abstol: f64,
+    reltol: Option<f64>,
+    abstol: Option<f64>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let files = discover_test_inputs(&paths)?;
@@ -3762,10 +3765,11 @@ fn run_test(
         return Ok(());
     }
 
+    // Tolerances are NOT pinned here: they resolve per FILE, below, because
+    // level 2 of the esm-spec §2.2.2 chain is the document's own `solver`
+    // block and this command runs many documents.
     let opts = earthsci_ast::SolveOptions {
         alg: solver.into(),
-        reltol,
-        abstol,
         ..Default::default()
     };
 
@@ -3824,10 +3828,29 @@ fn run_test(
                 // rather than the whole document (it used to select rows out of
                 // an already-evaluated `Vec`). The surviving rows are the same
                 // either way: a result's `test_id` is its test's `id`.
+                // esm-spec §2.2.2, resolved per file: an explicit `--reltol` /
+                // `--abstol` wins, else this document's `solver` block, else
+                // the runner defaults. The runner defaults sit at the BOTTOM of
+                // the chain (they are binding defaults, not a caller's
+                // opinion), which is what lets a stiff document ask for its own
+                // integration accuracy without every invocation naming it.
+                let file_opts = earthsci_ast::SolveOptions {
+                    reltol: Some(
+                        reltol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.reltol))
+                            .unwrap_or(TEST_RELTOL),
+                    ),
+                    abstol: Some(
+                        abstol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.abstol))
+                            .unwrap_or(TEST_ABSTOL),
+                    ),
+                    ..opts.clone()
+                };
                 let results = earthsci_ast::run_pde_tests_filtered(
                     &esm_file,
                     model.as_deref(),
-                    &opts,
+                    &file_opts,
                     path.parent(),
                     providers.as_deref(),
                     filter.as_deref(),

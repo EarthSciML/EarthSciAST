@@ -207,6 +207,85 @@ pub fn evaluate_cellwise(
     }
 }
 
+/// Whether `name` occurs FREE in `expr`: as a variable reference not bound by
+/// an enclosing `aggregate` / `arrayop` / `makearray` loop symbol (`output_idx`,
+/// a `ranges` key) or an `integral`'s integration variable. A node that binds
+/// `name` shadows it for its whole subtree.
+fn mentions_free(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Variable(v) => v == name,
+        Expr::Operator(node) => {
+            let binds = node
+                .output_idx
+                .as_ref()
+                .is_some_and(|ix| ix.iter().any(|s| s == name))
+                || node.ranges.as_ref().is_some_and(|r| r.contains_key(name))
+                || node.int_var.as_deref() == Some(name);
+            !binds && node.any_child(&mut |c| mentions_free(c, name))
+        }
+        Expr::Number(_) | Expr::Integer(_) => false,
+    }
+}
+
+/// esm-spec §6.6.5: an inline `reference`'s free variables are the domain
+/// DIMENSION NAMES. For a field shaped over index sets those are the asserted
+/// variable's `shape` entries, each bound at every grid point to the 1-based
+/// position along its axis — the same index space `coords` reads
+/// (convention 1) — so `index(zc, lev)` reads the cell's coordinate from a
+/// geometry array and `sin(pi * (x - 0.5) / N)` is the cell-centre analytic
+/// form, with no explicit gather. A reference that mentions a dimension name
+/// FREE is turned into the whole field by wrapping it in an `aggregate` whose
+/// output indices ARE the dimension names (in shape order, each ranging over
+/// its index set); one that mentions none — a literal, a parameter expression,
+/// or an `aggregate` that already produces the field under its own loop
+/// symbols — is returned untouched, so nothing that evaluated before evaluates
+/// differently. Mirrors the Julia / Python `bind_dimension_names`.
+///
+/// `scope` is the reference's build-time parameter scope (flattened names plus
+/// their unambiguous bare aliases). "Nothing that evaluated before evaluates
+/// differently" holds only because a dimension name that scope ALSO binds is
+/// rejected here: wrapping would silently shadow the parameter with the cell's
+/// index — the same expression, a different number, no diagnostic. One name
+/// meaning two things in one scope is an ill-formed document, so it is a fault.
+pub fn bind_dimension_names(
+    expr: &Expr,
+    dims: &[String],
+    scope: &HashMap<String, f64>,
+) -> Result<Expr, String> {
+    let mentioned: Vec<&String> = dims.iter().filter(|d| mentions_free(expr, d)).collect();
+    if mentioned.is_empty() {
+        return Ok(expr.clone());
+    }
+    if let Some(clash) = mentioned.iter().find(|d| scope.contains_key(d.as_str())) {
+        return Err(format!(
+            "inline `reference` mentions '{clash}', which is both a dimension of the \
+             asserted field and a parameter in scope. esm-spec §6.6.5 binds a free \
+             dimension name to the cell's 1-based position, which would shadow the \
+             parameter. Rename one of them, or gather explicitly with \
+             `aggregate(i from {clash}; …)`."
+        ));
+    }
+    let ranges: serde_json::Map<String, serde_json::Value> = dims
+        .iter()
+        .map(|d| (d.clone(), serde_json::json!({ "from": d })))
+        .collect();
+    // Reported, not asserted: `run_pde_tests` records a per-assertion failure
+    // message for every error this returns, and `bind_dimension_names` is `pub`,
+    // so an `Expr` built programmatically (a non-finite `Expr::Number`, say)
+    // must not abort the whole run through a panicking `expect`.
+    let wrapped = serde_json::json!({
+        "op": "aggregate",
+        "args": [],
+        "output_idx": dims,
+        "ranges": ranges,
+        "expr": serde_json::to_value(expr)
+            .map_err(|e| format!("inline `reference` could not be serialized: {e}"))?,
+    });
+    serde_json::from_value(wrapped).map_err(|e| {
+        format!("inline `reference` could not be wrapped in a dimension-name gather: {e}")
+    })
+}
+
 /// Collapse a spatial field to the scalar a §6.6.5 `reduce` assertion
 /// compares (esm-spec §6.6.5); semantics identical to the Julia / Python
 /// references:
@@ -859,9 +938,12 @@ fn eval_assertion(
         Some(AssertionReference::Expression(expr)) => {
             // Model parameters (load-time constants) are in scope for a §6.6.5
             // analytic reference; state is not. `insp.params` carries the
-            // build's resolved scalar params.
+            // build's resolved scalar params. The field's dimension names are
+            // in scope too, bound per cell (`bind_dimension_names`).
             let scope = param_scope_with_aliases(&insp.params);
-            Some(evaluate_cellwise(expr, &cell_tuples, index_sets, &scope)?)
+            let dims = variable_shape(file, model_name, &assertion.variable).unwrap_or_default();
+            let bound = bind_dimension_names(expr, &dims, &scope)?;
+            Some(evaluate_cellwise(&bound, &cell_tuples, index_sets, &scope)?)
         }
         Some(AssertionReference::FromFile(ff)) => {
             Some(from_file_reference(ff, base_dir, &cell_tuples)?)
@@ -1916,8 +1998,8 @@ mod tests {
     fn tight_opts() -> SolveOptions {
         SolveOptions {
             alg: Alg::Erk,
-            reltol: 1e-12,
-            abstol: 1e-14,
+            reltol: Some(1e-12),
+            abstol: Some(1e-14),
             ..Default::default()
         }
     }
@@ -2368,6 +2450,155 @@ mod tests {
                 .iter()
                 .all(|r| r.model == "M" && r.test_id == "decay")
         );
+    }
+
+    /// esm-spec §6.6.5: the free variables of an inline `reference` are the
+    /// field's DIMENSION NAMES, bound per cell to the 1-based index position.
+    /// The analytic cell-centre form, a table lookup by the dimension name, the
+    /// explicit gather, and a gather that REBINDS the dimension name as its own
+    /// loop symbol must all read the same field.
+    #[test]
+    fn reference_binds_the_field_dimension_names() {
+        let free_x = json!({"op": "cos", "args": [{"op": "*", "args": [
+            std::f64::consts::PI,
+            {"op": "/", "args": [{"op": "-", "args": ["x", 0.5]}, N]}]}]});
+        let table: Vec<f64> = (1..=N)
+            .map(|i| (std::f64::consts::PI * (i as f64 - 0.5) / N as f64).cos())
+            .collect();
+        let mut doc = decay_doc();
+        doc["models"]["M"]["tests"][0]["assertions"] = json!([
+            {"variable": "u", "time": 0.0, "expected": 0.0,
+             "tolerance": {"abs": 1e-12}, "reduce": "L2_error", "reference": free_x},
+            {"variable": "u", "time": 0.0, "expected": 0.0,
+             "tolerance": {"abs": 1e-12}, "reduce": "Linf_error",
+             "reference": {"op": "index", "args": [
+                 {"op": "const", "args": [], "value": table}, "x"]}},
+            {"variable": "u", "time": 0.0, "expected": 0.0,
+             "tolerance": {"abs": 1e-12}, "reduce": "L2_error",
+             "reference": {"op": "aggregate", "args": [], "output_idx": ["x"],
+                           "ranges": {"x": {"from": "x"}}, "expr": free_x}},
+            {"variable": "u", "time": 1.0, "expected": 0.0,
+             "tolerance": {"abs": 1e-8}, "reduce": "L2_error",
+             "reference": {"op": "*", "args": [{"op": "exp", "args": [-1]}, free_x]}},
+        ]);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("M"), &tight_opts());
+        assert_eq!(results.len(), 4);
+        for r in &results {
+            assert!(r.passed, "assertion #{}: {}", r.assertion_idx, r.message);
+        }
+    }
+
+    #[test]
+    fn bind_dimension_names_wraps_only_a_free_mention() {
+        let dims = vec!["x".to_string()];
+        let scope: HashMap<String, f64> = HashMap::from([("k".to_string(), 2.0)]);
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let bind = |e: &Expr, d: &[String]| bind_dimension_names(e, d, &scope).expect("no clash");
+        // No mention: untouched.
+        let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
+        assert_eq!(bind(&lit, &dims), lit);
+        // Free mention: wrapped in an aggregate over the dimension names.
+        let free = parse(json!({"op": "+", "args": ["x", 1]}));
+        let Expr::Operator(node) = bind(&free, &dims) else {
+            panic!("expected an aggregate wrapper");
+        };
+        assert_eq!(node.op, "aggregate");
+        assert_eq!(node.output_idx.as_deref(), Some(&["x".to_string()][..]));
+        assert_eq!(node.expr.as_deref(), Some(&free));
+        // Bound mention (the gather rebinds `x`): untouched.
+        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
+                                 "ranges": {"x": {"from": "x"}},
+                                 "expr": {"op": "+", "args": ["x", 1]}}));
+        assert_eq!(bind(&bound, &dims), bound);
+        // An integral's variable is a binder too.
+        let integ = parse(
+            json!({"op": "integral", "args": [{"op": "*", "args": [2, "x"]}],
+                                 "var": "x", "lower": 0, "upper": 1}),
+        );
+        assert_eq!(bind(&integ, &dims), integ);
+        // A `wrt` is a differentiation TARGET, not a free read of the scope.
+        let deriv = parse(json!({"op": "D", "args": ["u"], "wrt": "x"}));
+        assert_eq!(bind(&deriv, &dims), deriv);
+        // Empty dims: untouched.
+        assert_eq!(bind(&free, &[]), free);
+    }
+
+    /// A dimension name the parameter scope ALSO binds is a fault, not a silent
+    /// rebinding: wrapping would shadow the parameter with the cell index, so
+    /// the same reference that used to read the parameter would quietly return
+    /// a different number. One name, two meanings, one scope — ill-formed.
+    #[test]
+    fn bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter() {
+        let dims = vec!["x".to_string()];
+        let parse = |v: serde_json::Value| -> Expr { serde_json::from_value(v).unwrap() };
+        let scope: HashMap<String, f64> = HashMap::from([("x".to_string(), 3.0)]);
+        let free = parse(json!({"op": "+", "args": ["x", 1]}));
+        let err = bind_dimension_names(&free, &dims, &scope).expect_err("clash is a fault");
+        assert!(err.contains("'x'"), "{err}");
+        assert!(err.contains("parameter in scope"), "{err}");
+        // A reference that does not mention it is unaffected — the clash only
+        // matters where the wrap would actually rebind the name.
+        let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
+        assert_eq!(
+            bind_dimension_names(&lit, &dims, &scope).expect("no mention"),
+            lit
+        );
+        // And a gather that rebinds `x` itself keeps working.
+        let bound = parse(json!({"op": "aggregate", "args": [], "output_idx": ["x"],
+                                 "ranges": {"x": {"from": "x"}},
+                                 "expr": {"op": "+", "args": ["x", 1]}}));
+        assert_eq!(
+            bind_dimension_names(&bound, &dims, &scope).expect("rebound"),
+            bound
+        );
+    }
+
+    /// esm-spec §4.6 / §6.6.2: inside model `P`, `P.sub.g` is the fully
+    /// qualified spelling of the mounted subsystem parameter the single-model
+    /// array build carries as `sub.g`. It must resolve in an EQUATION and as a
+    /// `parameter_overrides` key, in every spelling (`P.sub.g`, `sub.g`, `g`).
+    #[test]
+    fn self_qualified_subsystem_reference_and_override_spellings() {
+        let mut doc = decay_doc();
+        doc["models"]["P"] = doc["models"]["M"].take();
+        doc["models"].as_object_mut().unwrap().remove("M");
+        doc["models"]["P"]["subsystems"] = json!({"sub": {"variables": {
+            "g": {"type": "parameter", "units": "1", "default": 9.81}}, "equations": []}});
+        doc["models"]["P"]["variables"]["gg"] = json!({"type": "unknown", "units": "1"});
+        doc["models"]["P"]["equations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"lhs": "gg", "rhs": "P.sub.g"}));
+        let assert_gg = |want: f64| json!([{"variable": "gg", "time": 0.0, "expected": want, "tolerance": {"rel": 1e-12}}]);
+        doc["models"]["P"]["tests"] = json!([
+            {"id": "default", "time_span": {"start": 0.0, "end": 1.0},
+             "assertions": assert_gg(9.81)},
+            {"id": "qualified", "time_span": {"start": 0.0, "end": 1.0},
+             "parameter_overrides": {"P.sub.g": 1.5}, "assertions": assert_gg(1.5)},
+            {"id": "relative", "time_span": {"start": 0.0, "end": 1.0},
+             "parameter_overrides": {"sub.g": 2.5}, "assertions": assert_gg(2.5)},
+            {"id": "bare", "time_span": {"start": 0.0, "end": 1.0},
+             "parameter_overrides": {"g": 3.5}, "assertions": assert_gg(3.5)},
+        ]);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("P"), &tight_opts());
+        assert_eq!(results.len(), 4);
+        for r in &results {
+            assert!(r.passed, "test {}: {}", r.test_id, r.message);
+        }
+
+        // esm-spec §6.6.2 rule 2 validates the LEADING segments: `Q` names no
+        // component or subsystem, so the key is rejected instead of being
+        // suffix-matched down onto `sub.g` and quietly driving it.
+        doc["models"]["P"]["tests"] = json!([
+            {"id": "typo", "time_span": {"start": 0.0, "end": 1.0},
+             "parameter_overrides": {"Q.sub.g": 1.5}, "assertions": assert_gg(1.5)},
+        ]);
+        let file = load_string(&doc.to_string()).expect("doc loads");
+        let results = run_pde_tests(&file, Some("P"), &tight_opts());
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed, "a typo'd qualifier must not resolve");
     }
 
     #[test]

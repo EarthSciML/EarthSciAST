@@ -197,8 +197,8 @@ fn ess_tape_check_runs_both_paths_without_panicking() {
     // are dual-path verified inside the closure).
     let opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-8,
-        abstol: 1e-10,
+        reltol: Some(1e-8),
+        abstol: Some(1e-10),
         saveat: Some(vec![0.5, 1.0]),
         ..Default::default()
     };

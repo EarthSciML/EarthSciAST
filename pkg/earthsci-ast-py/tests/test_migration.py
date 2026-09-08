@@ -187,6 +187,12 @@ class TestMigrate:
 # ---------------------------------------------------------------------------
 
 
+def _semver(v: str) -> tuple[int, int, int]:
+    """Order a semver string numerically, so 1.10.0 sorts above 1.2.0."""
+    major, minor, patch = v.split(".")
+    return (int(major), int(minor), int(patch))
+
+
 class TestSharedFixtures:
     def test_schema_version_matches_the_matrix_library_version(self):
         matrix = json.loads((VERSION_DIR / "compatibility_matrix.json").read_text())
@@ -231,16 +237,26 @@ class TestSharedFixtures:
             "version_1_10_0_double_digit.esm",
         ],
     )
-    def test_forward_compatible_fixtures_have_no_migration_target(self, fixture):
-        """A file NEWER than the current schema sits above the additive ceiling.
+    def test_1x_fixture_migration_target_follows_the_additive_ceiling(self, fixture):
+        """Whether a 1.x fixture has a migration target is decided by where it
+        sits relative to the CURRENT schema version, not by a hardcoded list.
 
-        These load (the version gate accepts a newer patch outright and a newer
-        minor with a warning), but there is nothing to migrate them TO: the line
-        runs up to the current schema, not past it. TypeScript refuses `1.99.0`
-        for the same reason.
+        A file on the additive line (``1.0.0 … SCHEMA_VERSION``) migrates to the
+        current schema by a no-op marker bump. A file NEWER than the current
+        schema sits above the ceiling: it loads (the gate accepts a newer patch
+        outright and a newer minor with a warning), but there is nothing to
+        migrate it TO — the line runs up to the current schema, not past it.
+        TypeScript refuses ``1.99.0`` for the same reason.
+
+        This was a fixed list of "forward compatible" fixtures until esm 1.1.0
+        arrived and moved the ceiling past three of them. Deriving the
+        expectation from SCHEMA_VERSION is what keeps the next bump from
+        breaking it again.
         """
         doc = json.loads((VERSION_DIR / fixture).read_text())
-        assert supported_migration_targets(doc["esm"]) == []
+        version = doc["esm"]
+        expected = [] if _semver(version) > _semver(SCHEMA_VERSION) else [SCHEMA_VERSION]
+        assert supported_migration_targets(version) == expected
 
     @pytest.mark.parametrize(
         "fixture",

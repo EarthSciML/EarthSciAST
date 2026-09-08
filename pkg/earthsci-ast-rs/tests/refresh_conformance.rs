@@ -169,8 +169,8 @@ fn final_value(sol: &Solution, name: &str) -> f64 {
 fn base_opts() -> SolveOptions {
     SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 1_000_000,
         saveat: None,
         ..Default::default()

@@ -138,7 +138,12 @@ def test_emit_materialized_registry():
     assert s == open(_conf("emit_materialized_registry", "emitted.esm"), encoding="utf-8").read()
     doc = json.loads(s)
     adv = doc["models"]["Advection"]
-    assert doc["esm"] == "1.0.0"  # rule 8 version stamp
+    # Rule 8 version stamp: emitting a surviving reference requires Option B,
+    # i.e. `esm >= 0.9.0`. It is a FLOOR, not an assignment (§9.6.4 rule 8:
+    # "0.9.0 OR LATER") — the 1.0.0 source keeps its own version rather than
+    # being stamped up to whatever the library currently implements, or down to
+    # an unloadable 0.9.0.
+    assert doc["esm"] == "1.0.0"
     assert "expression_template_imports" not in adv  # imports consumed
     reg = adv["expression_templates"]
     assert set(reg.keys()) == {"central_D_lon_interior", "dlon_deg"}  # match-less only
