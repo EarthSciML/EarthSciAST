@@ -445,6 +445,22 @@ func TestObservedUnknownsSeeThroughIndexedLHSSpellings(t *testing.T) {
 			if got := ODEStates(model); !reflect.DeepEqual(got, []string{"u"}) {
 				t.Errorf("ODEStates = %v, want [u]", got)
 			}
+			// THE CONSEQUENCE, not just the bookkeeping. `w`'s definition is
+			// state-free, so an observed seeds from its RHS's class and folds at
+			// bind (cadence.go's own contract: "seeding every unknown CONTINUOUS
+			// is sound but stops a state-free observed folding at bind, which the
+			// geometry and projection-pushdown paths rely on"). While the
+			// aggregate spelling was mis-credited to AlgebraicUnknowns it seeded
+			// CONTINUOUS instead, putting build-time work on the per-timestep hot
+			// path — exactly what esm-spec §6.3.1 warns this misclassification
+			// costs.
+			cad, err := NewCadenceClassifier(nil, model).SeedLeaf("w")
+			if err != nil {
+				t.Fatalf("SeedLeaf(w): %v", err)
+			}
+			if cad != CadenceConst {
+				t.Errorf("cadence(w) = %v, want const (a state-free observed folds at bind)", cad)
+			}
 		})
 	}
 }

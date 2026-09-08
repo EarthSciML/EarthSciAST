@@ -29,6 +29,7 @@ import {
   unknowns,
   parameters,
 } from './classification.js'
+import { leafCadence } from './cadence.js'
 import type { Model } from './types.js'
 import { fixturesDir } from './test-helpers.js'
 
@@ -248,6 +249,15 @@ describe('an ARRAYED definition is observed, in every LHS spelling (§6.3.1)', (
 
       it('leaves the ODE partition untouched', () => {
         expect(odeStates(model)).toEqual(['u'])
+      })
+
+      // THE CONSEQUENCE, not just the bookkeeping. `w`'s definition is
+      // state-free, so an observed seeds from its RHS's class and folds at bind.
+      // While the aggregate spelling was mis-credited to `algebraicUnknowns` it
+      // seeded CONTINUOUS instead, putting build-time work on the per-timestep
+      // hot path — exactly what §6.3.1 warns this misclassification costs.
+      it('folds a state-free arrayed observed at bind', () => {
+        expect(leafCadence(model, 'w')).toBe('const')
       })
     })
   }
