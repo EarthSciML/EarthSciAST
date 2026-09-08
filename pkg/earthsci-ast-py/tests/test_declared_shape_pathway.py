@@ -33,7 +33,7 @@ import numpy as np
 import pytest
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem, solve
 
 # The issue's minimal reproducer, verbatim in substance: no parameters at all,
@@ -218,11 +218,11 @@ def test_bare_whole_array_derivative_over_a_declared_shape_routes_to_the_array_p
 
 
 def test_the_bare_spelling_passes_its_inline_coords_assertion(tmp_path):
-    """``run_pde_tests`` reported ``array state 'theta' has no cells in
+    """``run_inline_tests`` reported ``array state 'theta' has no cells in
     var_map``; ``D(theta) ~ 1`` from ``theta(0) = 1`` must reach 2.0 at t=1."""
     path = _write(tmp_path, BARE, "bare.esm.json")
 
-    results = run_pde_tests(path)
+    results = run_inline_tests(path)
     assert len(results) == 1
     r = results[0]
     assert r.passed, r.message
@@ -238,8 +238,8 @@ def test_the_bare_and_aggregate_spellings_agree(tmp_path):
     assert esm_problem(bare, (0.0, 1.0)).pathway == "array"
     assert esm_problem(agg, (0.0, 1.0)).pathway == "array"
 
-    (bare_result,) = run_pde_tests(bare)
-    (agg_result,) = run_pde_tests(agg)
+    (bare_result,) = run_inline_tests(bare)
+    (agg_result,) = run_inline_tests(agg)
     assert bare_result.passed, bare_result.message
     assert agg_result.passed, agg_result.message
     assert bare_result.actual == pytest.approx(agg_result.actual, rel=1e-6)
