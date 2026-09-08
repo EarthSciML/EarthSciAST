@@ -54,9 +54,16 @@ class TestVersionCompatibility:
     """Test version compatibility handling."""
 
     def test_exact_version_match(self):
-        """The library's own version loads with no warning."""
-        fixture = load_fixture("version_1_0_0_baseline.esm")
-        assert fixture["esm"] == _EXPECTED_VERSION == "1.0.0"
+        """The library's own version loads with no warning.
+
+        The fixture is whichever one DECLARES the library's version — the
+        corpus keeps each file stamped with the version it is named for
+        (compatibility_matrix.json), so the exact-match role moves between
+        files as the library advances rather than a file being restamped.
+        It was version_1_0_0_baseline.esm until esm 1.1.0.
+        """
+        fixture = load_fixture("version_1_1_0_minor_upgrade.esm")
+        assert fixture["esm"] == _EXPECTED_VERSION
 
         with no_version_warning():
             result = load_document(fixture)
@@ -90,12 +97,18 @@ class TestVersionCompatibility:
         assert result.metadata.name == "Version_1_0_5_PatchUpgrade"
 
     def test_forward_compatibility_warning(self):
-        """A newer MINOR loads, but warns that it postdates the library."""
-        with pytest.warns(UserWarning, match="1.1.0 is newer than"):
-            result = load_document(load_fixture("version_1_1_0_minor_upgrade.esm"))
+        """A newer MINOR loads, but warns that it postdates the library.
 
-        assert result.esm == "1.1.0"
-        assert result.metadata.name == "Version_1_1_0_MinorUpgrade"
+        Uses 1.10.0 rather than 1.1.0: the esm 1.1.0 bump moved the library up
+        to meet the latter, which is now the exact-match fixture. 1.10.0 also
+        keeps the double-digit ordering honest — it is newer than 1.2.0, which
+        a lexicographic compare gets backwards.
+        """
+        with pytest.warns(UserWarning, match="1.10.0 is newer than"):
+            result = load_document(load_fixture("version_1_10_0_double_digit.esm"))
+
+        assert result.esm == "1.10.0"
+        assert result.metadata.name == "Version_1_10_0_DoubleDigit"
 
     def test_forward_compatibility_unknown_fields_is_rejected(self):
         """A newer minor carrying an unmodelled TOP-LEVEL block is REJECTED.
@@ -218,7 +231,11 @@ class TestMigrationExample:
         new_version = load_fixture("migration_test_to_1_0_0.esm")
 
         assert old_version["esm"] == "0.0.5"
-        assert new_version["esm"] == _EXPECTED_VERSION
+        # The target is stamped 1.0.0, the version it is NAMED for and the one
+        # the migration it demonstrates actually produced. It is not restamped
+        # as the library advances — what matters is that the target LOADS,
+        # asserted below, not that it equals the current schema version.
+        assert new_version["esm"] == "1.0.0"
 
         with pytest.raises(UnsupportedVersionError, match="Unsupported major version 0"):
             load_document(old_version)
@@ -226,7 +243,7 @@ class TestMigrationExample:
         # 0.x target this pair used to carry was itself unloadable, which made
         # it a poor demonstration of a migration TARGET.
         migrated = load_document(new_version)
-        assert migrated.esm == _EXPECTED_VERSION
+        assert migrated.esm == "1.0.0"
 
         # Check that CH4 units were migrated from ppbv to mol/mol
         old_ch4 = old_version["reaction_systems"]["LegacyChemistry"]["species"]["CH4"]

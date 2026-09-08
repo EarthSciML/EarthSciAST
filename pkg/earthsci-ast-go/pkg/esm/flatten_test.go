@@ -433,6 +433,104 @@ func TestFlattenCouple_MultiplicativeWithoutTendencyIsAnError(t *testing.T) {
 	}
 }
 
+// subsystemMapFile builds a wrapper model whose SUBSYSTEM owns the coupling
+// target: `Src.T` feeds the parameter `Wrap.inner.gain`, which `Wrap.inner`'s
+// own ODE reads. `toEndpoint` is spelled by the caller so a wrong path can be
+// probed against the same document.
+func subsystemMapFile(toEndpoint string) *ESMFile {
+	inner := map[string]any{
+		"variables": map[string]any{
+			"gain": map[string]any{"type": "parameter", "default": 0.0},
+			"x":    map[string]any{"type": "unknown"},
+		},
+		"equations": []any{map[string]any{
+			"lhs": map[string]any{"op": "D", "args": []any{"x"}, "wrt": "t"},
+			"rhs": "gain",
+		}},
+	}
+	return &ESMFile{
+		ESM:      "1.0.0",
+		Metadata: Metadata{Name: "test"},
+		Models: map[string]Model{
+			"Src": {
+				Variables: map[string]ModelVariable{"T": {Type: "unknown"}},
+				Equations: []Equation{{
+					LHS: ExprNode{Op: "D", Args: []any{"T"}, Wrt: strPtr("t")},
+					RHS: 1.0,
+				}},
+			},
+			"Wrap": {Subsystems: map[string]any{"inner": inner}},
+		},
+		Coupling: []CouplingEntry{VariableMapCoupling{
+			Type: "variable_map", From: "Src.T", To: toEndpoint, Transform: "param_to_var",
+		}},
+	}
+}
+
+// TestFlattenVariableMap_IntoSubsystemParameter pins esm-spec §4.6: a `to`
+// endpoint reaching INTO a subsystem resolves by its FULL dot path, so the
+// nested parameter is promoted away and the nested equation that read it now
+// reads the source. This is the shape a two-segment endpoint resolver cannot
+// express (issue #198 item 1).
+func TestFlattenVariableMap_IntoSubsystemParameter(t *testing.T) {
+	flat, err := Flatten(subsystemMapFile("Wrap.inner.gain"))
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	for _, p := range flat.Parameters {
+		if p.Name == "Wrap.inner.gain" {
+			t.Fatalf("the nested target must be promoted away, found %q", p.Name)
+		}
+	}
+	var found bool
+	for _, eq := range flat.Equations {
+		if ToASCII(eq.LHS) != "D(Wrap.inner.x)/Dt" {
+			continue
+		}
+		found = true
+		if got := ToASCII(eq.RHS); got != "Src.T" {
+			t.Errorf("nested ODE RHS = %q, want %q", got, "Src.T")
+		}
+	}
+	if !found {
+		t.Fatal("the nested ODE did not survive flatten")
+	}
+}
+
+// TestFlattenVariableMap_UnresolvedEndpointIsAnError pins the refusal. The same
+// edge spelled with a MISSING segment resolves to nothing; it used to flatten
+// cleanly with the coupling silently dropped — the target kept its declared
+// default and nothing downstream could tell "applied" from "ignored". The
+// `from` half is the NaN case: the substitution runs regardless, so consumers
+// end up reading a name no table binds.
+func TestFlattenVariableMap_UnresolvedEndpointIsAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name, to, from, side, endpoint string
+	}{
+		{"to", "Wrap.gain", "Src.T", "to", "Wrap.gain"},
+		{"from", "Wrap.inner.gain", "Src.Nope.T", "from", "Src.Nope.T"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := subsystemMapFile(tc.to)
+			file.Coupling[0] = VariableMapCoupling{
+				Type: "variable_map", From: tc.from, To: tc.to, Transform: "param_to_var",
+			}
+			_, err := Flatten(file)
+			if err == nil {
+				t.Fatal("expected a refusal; the coupling was silently dropped instead")
+			}
+			var ue *variableMapUnresolvedEndpointError
+			if !errors.As(err, &ue) {
+				t.Fatalf("error = %v (%T), want *variableMapUnresolvedEndpointError", err, err)
+			}
+			if ue.Side != tc.side || ue.Endpoint != tc.endpoint {
+				t.Errorf("Side/Endpoint = %q/%q, want %q/%q",
+					ue.Side, ue.Endpoint, tc.side, tc.endpoint)
+			}
+		})
+	}
+}
+
 // TestFlattenCouple_AdditiveWithoutTendencyIsNotAnError pins the DELIBERATE
 // asymmetry of §4.7.2: zero is the additive identity, so an additive term
 // against an absent tendency is well defined and there is no counterpart error.

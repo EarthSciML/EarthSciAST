@@ -571,8 +571,11 @@ impl Compiled {
         let jac_closure = self.make_jac_closure();
 
         // ----- Build the OdeBuilder -----
-        let abstol = opts.abstol;
-        let reltol = opts.reltol;
+        // Concrete values: `solve` has already resolved the esm-spec §2.2.2
+        // chain into `opts`. The fallback covers a direct call that bypasses
+        // `solve` and therefore has no document to consult.
+        let abstol = opts.abstol_or_default();
+        let reltol = opts.reltol_or_default();
         let ic_for_init = ic_vec.to_vec();
 
         let builder = OdeBuilder::<FaerMat<f64>>::new()

@@ -91,18 +91,18 @@
     }
   },
   "counts": {
-    "symbols": 853,
+    "symbols": 860,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 298,
-      "typescript": 231,
-      "python": 243,
-      "rust": 329,
-      "go": 384
+      "julia": 302,
+      "typescript": 235,
+      "python": 247,
+      "rust": 332,
+      "go": 388
     },
     "by_tier": {
-      "extension": 590,
-      "stable": 263
+      "extension": 592,
+      "stable": 268
     }
   },
   "planned": [
@@ -1511,6 +1511,14 @@
       }
     },
     {
+      "name": "coerce_solver",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "coerce_solver"
+      }
+    },
+    {
       "name": "common_subexpression",
       "kind": "type",
       "tier": "extension",
@@ -2075,9 +2083,10 @@
     {
       "name": "default_abstol",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "DEFAULT_ABSTOL"
+        "rust": "DEFAULT_ABSTOL",
+        "typescript": "DEFAULT_ABSTOL"
       }
     },
     {
@@ -2107,9 +2116,10 @@
     {
       "name": "default_reltol",
       "kind": "constant",
-      "tier": "extension",
+      "tier": "stable",
       "bindings": {
-        "rust": "DEFAULT_RELTOL"
+        "rust": "DEFAULT_RELTOL",
+        "typescript": "DEFAULT_RELTOL"
       }
     },
     {
@@ -2783,6 +2793,14 @@
       "tier": "extension",
       "bindings": {
         "go": "ErrorNullReaction"
+      }
+    },
+    {
+      "name": "error_reserved_variable_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "ErrorReservedVariableName"
       }
     },
     {
@@ -5598,6 +5616,18 @@
       }
     },
     {
+      "name": "reject_solver_pre_v11",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "RejectSolverPreV11",
+        "julia": "reject_solver_pre_v11",
+        "python": "reject_solver_pre_v11",
+        "rust": "reject_solver_pre_v11",
+        "typescript": "rejectSolverPreV11"
+      }
+    },
+    {
       "name": "reject_template_imports_pre_v08",
       "kind": "function",
       "tier": "stable",
@@ -5891,6 +5921,17 @@
       }
     },
     {
+      "name": "resolve_tolerances",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "resolve_tolerances",
+        "python": "resolve_tolerances",
+        "rust": "resolve_tolerances",
+        "typescript": "resolveTolerances"
+      }
+    },
+    {
       "name": "resolved_expr",
       "kind": "type",
       "tier": "extension",
@@ -6005,6 +6046,14 @@
       }
     },
     {
+      "name": "run_pde_tests_filtered",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "rust": "run_pde_tests_filtered"
+      }
+    },
+    {
       "name": "run_pde_tests_with_base_dir",
       "kind": "function",
       "tier": "extension",
@@ -6018,14 +6067,6 @@
       "tier": "extension",
       "bindings": {
         "rust": "run_pde_tests_with_providers"
-      }
-    },
-    {
-      "name": "run_pde_tests_filtered",
-      "kind": "function",
-      "tier": "extension",
-      "bindings": {
-        "rust": "run_pde_tests_filtered"
       }
     },
     {
@@ -6408,6 +6449,25 @@
       "tier": "extension",
       "bindings": {
         "rust": "solve_to_completion"
+      }
+    },
+    {
+      "name": "solver",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Solver",
+        "julia": "Solver",
+        "python": "Solver",
+        "rust": "Solver"
+      }
+    },
+    {
+      "name": "solver_block_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "python": "SolverBlockError"
       }
     },
     {

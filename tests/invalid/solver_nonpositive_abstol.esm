@@ -1,0 +1,38 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "solver_nonpositive_abstol",
+    "description": "A `solver.abstol` of zero. Integration tolerances are strictly positive (`exclusiveMinimum: 0`); zero is not a looser or tighter tolerance but an unsatisfiable one. MUST be rejected."
+  },
+  "solver": {
+    "abstol": 0
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

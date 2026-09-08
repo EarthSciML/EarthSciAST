@@ -1,0 +1,236 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "VariableMapSubsystemEndpoints",
+    "description": "A `variable_map` (esm-spec \u00a710.4) whose endpoints reach INTO and OUT OF nested subsystems (\u00a74.6), in the four shapes a two-segment endpoint resolver cannot express: into a nested parameter, out of a nested unknown, out of the wrapper's own observed, and between two subsystems of one parent model.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": [
+      "coupling",
+      "scoping"
+    ]
+  },
+  "models": {
+    "Source": {
+      "variables": {
+        "ramp": {
+          "type": "parameter",
+          "units": "K/s",
+          "default": 1.0,
+          "description": "Constant warming rate"
+        },
+        "drive": {
+          "type": "unknown",
+          "units": "K",
+          "default": 1.0,
+          "description": "Driving signal"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "drive"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "ramp"
+        }
+      ]
+    },
+    "Wrapper": {
+      "variables": {
+        "exported": {
+          "type": "unknown",
+          "units": "K",
+          "description": "The wrapper's own observed, defined from a subsystem state"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "exported",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2.0,
+              "inner.tracer"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "inner": {
+          "variables": {
+            "gain": {
+              "type": "parameter",
+              "units": "K",
+              "default": 0.0,
+              "description": "Coupling target: replaced by Source.drive"
+            },
+            "tau": {
+              "type": "parameter",
+              "units": "s",
+              "default": 1.0,
+              "description": "Relaxation time"
+            },
+            "tracer": {
+              "type": "unknown",
+              "units": "K",
+              "default": 1.0,
+              "description": "Nested state, also a coupling source"
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "tracer"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "/",
+                "args": [
+                  "gain",
+                  "tau"
+                ]
+              }
+            }
+          ]
+        },
+        "sink": {
+          "variables": {
+            "uptake": {
+              "type": "parameter",
+              "units": "K",
+              "default": 0.0,
+              "description": "Coupling target: replaced by the SIBLING subsystem's tracer"
+            },
+            "tau": {
+              "type": "parameter",
+              "units": "s",
+              "default": 1.0,
+              "description": "Relaxation time"
+            },
+            "load": {
+              "type": "unknown",
+              "units": "K",
+              "default": 0.0,
+              "description": "Nested state driven by the sibling subsystem"
+            }
+          },
+          "equations": [
+            {
+              "lhs": {
+                "op": "D",
+                "args": [
+                  "load"
+                ],
+                "wrt": "t"
+              },
+              "rhs": {
+                "op": "/",
+                "args": [
+                  "uptake",
+                  "tau"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Receiver": {
+      "variables": {
+        "nested_in": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "description": "Coupling target: replaced by Wrapper.inner.tracer"
+        },
+        "wrapper_in": {
+          "type": "parameter",
+          "units": "K",
+          "default": 0.0,
+          "description": "Coupling target: replaced by the wrapper's observed Wrapper.exported"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 1.0,
+          "description": "Relaxation time"
+        },
+        "total": {
+          "type": "unknown",
+          "units": "K",
+          "default": 0.0,
+          "description": "Accumulated signal"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "total"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  "nested_in",
+                  "wrapper_in"
+                ]
+              },
+              "tau"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Source.drive",
+      "to": "Wrapper.inner.gain",
+      "transform": "param_to_var",
+      "description": "INTO a parameter nested in a top-level model's subsystem"
+    },
+    {
+      "type": "variable_map",
+      "from": "Wrapper.inner.tracer",
+      "to": "Receiver.nested_in",
+      "transform": "param_to_var",
+      "description": "OUT OF a nested subsystem's unknown"
+    },
+    {
+      "type": "variable_map",
+      "from": "Wrapper.exported",
+      "to": "Receiver.wrapper_in",
+      "transform": "param_to_var",
+      "description": "OUT OF the wrapper's own observed, in a model that has subsystems"
+    },
+    {
+      "type": "variable_map",
+      "from": "Wrapper.inner.tracer",
+      "to": "Wrapper.sink.uptake",
+      "transform": "param_to_var",
+      "description": "BETWEEN two subsystems of one parent model"
+    }
+  ],
+  "domain": {
+    "temporal": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z"
+    }
+  }
+}

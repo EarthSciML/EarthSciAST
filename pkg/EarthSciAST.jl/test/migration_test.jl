@@ -59,11 +59,19 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         end
 
         # Numeric, not lexicographic, comparison: `1.10.0` is NEWER than the
-        # current 1.0.0 and so off the line, while a large patch of the current
-        # minor is off it too. A string comparison would get "1.10.0" < "1.9.0"
-        # and could place either on the line.
+        # current version and so off the line, while a large patch of the
+        # CURRENT minor is off it too. A string comparison would get
+        # "1.10.0" < "1.9.0" and could place either on the line.
+        #
+        # The second case is derived from `_MIG_SCHEMA_VERSION` rather than
+        # written out: "1.0.100" was above the ceiling while the library was
+        # 1.0.0 and fell BELOW it the moment the library reached 1.1.0, at
+        # which point the case silently stopped testing what it names.
         @test supported_migration_targets("1.10.0") == String[]
-        @test supported_migration_targets("1.0.100") == String[]
+        let m = match(r"^(\d+)\.(\d+)\.(\d+)$", _MIG_SCHEMA_VERSION)
+            big_patch = "$(m[1]).$(m[2]).$(parse(Int, m[3]) + 100)"
+            @test supported_migration_targets(big_patch) == String[]
+        end
     end
 
     @testset "can_migrate" begin
@@ -80,9 +88,15 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
         @testset "rejects an intermediate (non-current) target" begin
             # Only the current schema is a valid target; per-minor jumps are not
             # offered, because there is no per-minor transform to encode.
-            @test can_migrate("1.0.0", "1.0.1") == false
-            @test can_migrate("1.0.0", "1.1.0") == false
-            @test can_migrate("1.0.0", "2.0.0") == false
+            #
+            # The current version is skipped rather than listed: "1.1.0" was an
+            # intermediate target until the library itself reached 1.1.0, at
+            # which point this case asserted the exact opposite of the line
+            # above it (`can_migrate("1.0.0", _MIG_SCHEMA_VERSION) == true`).
+            for target in ("1.0.1", "1.1.0", "1.2.0", "2.0.0")
+                target == _MIG_SCHEMA_VERSION && continue
+                @test can_migrate("1.0.0", target) == false
+            end
         end
 
         @test can_migrate("not-a-version", _MIG_SCHEMA_VERSION) == false
@@ -229,9 +243,13 @@ _mig_file(version) = EarthSciAST.EsmFile(String(version), EarthSciAST.Metadata("
                 @test can_migrate(src_version, tgt_version) == false
                 @test_throws MigrationError migrate(_mig_file(src_version), tgt_version)
 
-                # The target is a document this library reads, and migrating it
-                # to the current schema is the identity no-op.
-                @test tgt_version == _MIG_SCHEMA_VERSION
+                # The target is a document this library reads. It keeps the
+                # version it is NAMED for (1.0.0) rather than being restamped as
+                # the library advances — what matters is that it is ON the
+                # additive line, i.e. that migrating it to the current schema is
+                # offered (a marker bump, the identity no-op when the two
+                # versions coincide).
+                @test !isempty(supported_migration_targets(tgt_version))
                 @test can_migrate(tgt_version, _MIG_SCHEMA_VERSION) == true
                 target_file = EarthSciAST.load_path(tgt_path)
                 @test migrate(target_file, _MIG_SCHEMA_VERSION).esm == _MIG_SCHEMA_VERSION

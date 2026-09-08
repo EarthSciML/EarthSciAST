@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 1.0.0**
+**EarthSciML Abstract Syntax Tree Format — Version 1.1.0**
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -65,7 +65,8 @@ The full authoring stance, normatively:
   "coordinates": { ... },
   "expression_templates": { ... },
   "expression_template_imports": [ ... ],
-  "metaparameters": { ... }
+  "metaparameters": { ... },
+  "solver": { ... }
 }
 ```
 
@@ -85,6 +86,7 @@ The full authoring stance, normatively:
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `aggregate` dense ranges, and `makearray` regions (§9.7.6) |
+| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `aggregate` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
@@ -150,6 +152,154 @@ expressible: connectivity is a `ragged`/`derived` `IndexSet`, and mesh location 
 `ModelVariable.location` — so UGRID-compliant output is a mapping choice over
 existing constructs, with plain-CF auxiliary coordinates the default emission
 (RFC streaming-output-sinks §8.4).
+
+### 2.2 Solver hints (`solver`)
+
+The `solver` block is a **document-scoped, optional** record of numerics the
+document knows about **itself** — facts about the model that every binding
+independently needs and none can derive cheaply. Like `coordinates` (§2.1) it is
+**purely additive**: a document without it validates, flattens and emits exactly
+as before, and adding it changes no dynamics and no flattened system.
+
+```json
+{
+  "esm": "1.1.0",
+  "solver": {
+    "stiffness": "high",
+    "abstol": 1e-8,
+    "reltol": 1e-6,
+    "splitting": "strang"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stiffness` | `"low"` \| `"moderate"` \| `"high"` | The author's declaration of the system's stiffness. A binding MAY select an implicit / BDF-family integrator on `"high"`. |
+| `abstol` | number > 0 | Absolute **integration** tolerance the document asks for. |
+| `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
+| `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
+
+Every field is optional, and so is the block itself.
+
+**An empty block normalizes to absence.** `"solver": {}` is legal and means
+exactly what omitting the block means. A binding MUST normalize it away **at
+load**, so the typed document never holds a block with nothing set and the
+block does not survive `parse → emit`. This is the one exception to the
+verbatim round-trip of §2.2.4, and it is deliberate: the alternative — making
+`{}` a validation error — would make `solver` the only optional top-level
+container in the format that rejects an empty object (`coordinates`,
+`index_sets`, `metaparameters` and `coupling_roles` all admit one), a lone rule
+a reader would have to learn for no gain, and a trap for any tool that builds
+the block from optional inputs that all happened to be absent.
+
+**Absence is not a default value.** A document with no `solver` block, or with no
+`stiffness` key, has *not declared* its stiffness — it does not thereby declare
+`"low"`. A binding MUST NOT read absence as an assertion about the system.
+
+#### 2.2.1 Advisory: the mechanism, never the outcome
+
+Every field in the block is **advisory**. A conforming binding MAY ignore any or
+all of them, and MAY reach a conforming result by any route — its default
+integrator, its own stiffness detection, or by acting on `stiffness`.
+
+What advisory does **not** mean is that the answer is optional. The requirement
+to integrate the document successfully and to agree with the other bindings
+within the stated error band is CONFORMANCE_SPEC §5.9, it is judged on a
+**different** tolerance from `abstol`/`reltol` (the agreement band, not the
+integrator's step control), and it is neither created nor weakened by this block.
+A binding that ignores `stiffness` and converges anyway is conforming; a binding
+that ignores it and hangs, overflows, or lands outside the band is not — and it
+fails against §5.9, which applied before this section existed.
+
+So the block carries information that helps a binding **choose a method that
+converges**. It hands no binding an excuse for not converging.
+
+The one consequence worth stating: because the hint may be ignored, two
+conforming bindings may select different integrators for the same document and
+differ in the last bits of the trajectory. That is already true of every
+simulation the format describes, and §5.9 already governs it.
+
+#### 2.2.2 `abstol` / `reltol` are not the assertion `tolerance`
+
+The `tolerance` object on a model, reaction system, test, or assertion (§6.6.4)
+is the tolerance an assertion result is **compared at**. The `solver` block's
+`abstol` / `reltol` are the tolerances the **integrator** is asked to hold. They
+are different quantities, they resolve independently, and neither substitutes for
+the other. The distinct spellings — `{abs, rel}` against `abstol`/`reltol`, the
+latter exactly the keyword names the integration entry points take — are
+deliberate, so that a reader can tell at a glance which is meant.
+
+**Resolution order for `abstol` / `reltol`**, most-specific first:
+
+1. An explicit argument at the call site — it always wins.
+2. Otherwise, the document's `solver.abstol` / `solver.reltol`.
+3. Otherwise, the binding default (`reltol` `1e-4`, `abstol` `1e-6`).
+
+**The chain resolves wherever a document is integrated, not at one named
+function.** A binding MUST run it at *every* entry point that hands a document
+to an integrator: `solve()`, and equally the stepping lifecycle's `init()` —
+whose integrator then carries the resolved tolerances through `step!` and
+`solve!` (`esm-libraries-spec.md` §2.5.6). Resolving only at `solve()` makes one
+document integrate to two different accuracies depending on which door the
+caller came through, which is exactly what a document-scoped declaration exists
+to prevent. A binding that ships no integrator has nothing to resolve here.
+
+Two properties follow from level 1 being *an explicit argument* rather than *a
+value*. First, a binding MUST be able to tell "the caller named no tolerance"
+apart from "the caller passed the binding default"; an entry point whose
+signature defaults to a concrete number cannot, and the document could then
+never win. Second, resolving an already-resolved pair is a no-op, so a stepping
+implementation whose `step!` re-enters `solve()` per segment MAY run the chain
+again without the second pass displacing the document.
+
+An inline-test runner's own default tolerances (§6.6) sit at level 3: they are
+binding defaults, and a document that declares `solver.reltol` displaces them.
+This is deliberate — it means every binding runs a given document's inline tests
+at one integration tolerance rather than at five different runner defaults.
+
+#### 2.2.3 What the block is not for
+
+A container named `solver` invites accretion, so the boundary is stated up front.
+It is **not** for:
+
+- **Algorithm names.** `"BDF"` and `"LSODA"` are scipy identifiers; Julia would
+  want `Rosenbrock23`. A document carrying one would not be portable, which is
+  why there is deliberately no `alg` field.
+- **Binding-specific compile knobs.** `cse` is a `sympy.lambdify` concern with no
+  meaning outside one binding; it belongs in that binding's harness.
+- **A DAE declaration.** `system_kind` / system class is **derived** from the
+  equation set (§6.3.1); a declared field could only agree with the derivation or
+  contradict it.
+- **Anything in the flattened IR.** Flattening (§10.7) does not consume,
+  transform, or namespace the block. It is document-level configuration riding
+  alongside the flat system, never an input to building it.
+
+#### 2.2.4 Normative requirements
+
+Advisory as the fields are, four things are **required** of every binding:
+
+1. **Parse and validate.** An unknown key, an unknown enum member, a
+   non-positive tolerance, or a wrong JSON type is a validation failure. This is
+   schema conformance, not behavior, and is not excused by the block being
+   advisory.
+2. **Round-trip verbatim**, with one exception. `solver` survives
+   `parse → emit` unchanged: it is authored configuration — a peer of
+   `tolerance` and `parameter_overrides` — not a load-time construct like
+   `expression_template_imports` (§9.7.6), which is consumed and gone by emit
+   time. The exception is the empty block: `"solver": {}` normalizes to absence
+   at load (§2.2) and therefore does not round-trip, because it carries nothing
+   to preserve.
+3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
+   classification, namespacing, or the flattened system.
+4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a
+   `solver` block MUST be rejected with `solver_version_too_old`.
+
+#### 2.2.5 Diagnostics
+
+| Code | Meaning |
+|---|---|
+| `solver_version_too_old` | File declares `esm` < 1.1.0 but carries a top-level `solver` block (§2.2.4). |
 
 ---
 
@@ -1054,7 +1204,9 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 - A file whose sole top-level component is `data_sources` is a valid ESM document — a **source-catalog file** — but it is NOT referenceable as a subsystem: a data source is ingest configuration, not a component. Sharing one across documents is a matter of the catalog file being read, not of it being mounted.
 - The subsystem key in the parent file determines the subsystem's name, not any name in the referenced file.
 
-**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time, after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own subsystem refs merged in.
+**Two mount forms, one mechanism.** A `ref` object is admissible at two attachment points: a `subsystems.<k>` entry (above), and a **top-level `models.<k>` / `reaction_systems.<k>` entry** — the schema gives each of those blocks `oneOf [<component>, SubsystemRef]`. The second form mounts the referenced component as a *top-level system* of the assembling document, under the map key, which is what lets a coupled document name its components by file and have its `coupling` endpoints (`<key>.<var>`) resolve with no rewriting. **The two forms differ only in where the mounted component lands.** Everything else this section states applies to both identically: the reference formats and `${VAR}` expansion, the single-component requirement and the `model` / `reaction_system` selector, `bindings` (§9.7.6 site 3), the §9.7.10 edge injection, the resolution-timing rule — **and the index-set merge below**. Two mount forms that merged different things would make an assembly's meaning depend on which attachment point the author happened to pick; a binding MUST NOT make them differ. Current bindings: **Julia**, **Python** and **Rust** mount at both attachment points for `models` (Julia alone also mounts a top-level `reaction_systems` ref); **TypeScript** and **Go** implement the `subsystems` form only, and leave a top-level `{ref}` entry unresolved. One gap remains at the top-level form in **Julia** and **Rust**, where it is a raw pre-pass that defers all of §9.7 to the root document's resolution: the mounted leaf's own `metaparameters` are neither closed by the edge's `bindings` nor folded at the mount, so a leaf metaparameter reaches the assembled document unbound and a leaf axis whose `size` is still a metaparameter expression does not join the registry (it is skipped, not merged half-folded). **Python** closes and folds at both forms. Until Julia and Rust do, an assembly mounting such a leaf top-level must still declare that axis itself.
+
+**Index-set merge (mirrors §9.7.5).** A referenced subsystem file's top-level `index_sets` merge into the importing **document's** document-scoped registry at resolution time — **at either mount form**, a `subsystems.<k>` ref or a top-level `models.<k>` ref — after the referenced document's metaparameters are closed and folded (a subsystem edge's `bindings` bind first, then defaults — §9.7.6 site 3). Deep-equal redeclaration is idempotent; a non-equal collision — the same name reaching the registry with a different definition, e.g. a mounted mesh file whose `cells` size disagrees with the importer's declaration — is a load-time error, `subsystem_index_set_conflict` (§9.6.6). This is what makes the mounted-mesh pattern sound: the importing model's variables may be shaped over the mesh file's axes without redeclaring them, the mesh file stays the source of truth for its own sizes, and a disagreement between an importer's declaration (or another mounted file's) and the mesh fails loudly at load instead of silently resolving against whichever declaration the binding happened to keep. The merge composes transitively: a mounted file's registry already contains whatever its own refs — of either form — merged in. One diagnostic serves both forms: a collision at a top-level `models.<k>` mount is `subsystem_index_set_conflict` too, not a second code.
 
 **Mount-edge index-set renaming (`index_set_rename`).** Because the registry is document-scoped, two mounts that independently use the same axis name at different lengths — a 59-layer atmospheric column and a 4-layer soil column both over a `lev` axis — collide, and no leaf-side edit can express *one* component mounted twice at two resolutions. A mount edge therefore carries an OPTIONAL `index_set_rename` map, index-set name → importer-visible name, that translates the mounted document's axes into the mounting document's vocabulary at load. It is the §9.7.7 renaming mechanism at a component-mount edge, restricted to index sets — the only declaration kind that crosses a mount into document scope (templates are component-local, §9.6.3 constraint 4; metaparameters are closed at the mount by `bindings`, §9.7.6 site 3; variables are namespaced by the mount key, §4.6). Design history: `docs/content/rfcs/mount-edge-index-set-renaming.md`.
 
@@ -1064,7 +1216,7 @@ A ref MAY contain `${VAR}` tokens (e.g. `"${ESD_ROOT}/grids/cartesian_uniform_1d
 
 *Checks.* A key MUST name an index set of the resolved mounted document, else `subsystem_index_set_rename_unknown_name` — renames never invent names, matching §9.7.7. Targets MUST be dotted identifiers (§9.7.7 grammar), else `template_import_rename_invalid`; post-rename names MUST be distinct within the edge, else `template_import_rename_collision`. Identity entries are no-ops; an absent or empty map leaves resolution exactly as it was. The map need not be total — an axis the mount does not name passes through unrenamed, which is what keeps a *deliberately shared* axis (a common mesh, a common vertical coordinate) merging deep-equal across two mounts.
 
-*Where it applies (normative at both mount forms).* `index_set_rename` is a `SubsystemRef` property, and `SubsystemRef` is the shape of BOTH mount forms — the §4.7 `subsystems.<k> = {ref}` edge and a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — so the field is normative at both, with the same meaning and the same pipeline. A binding that cannot yet apply it at a given form MUST REFUSE that edge with `subsystem_index_set_rename_unsupported_mount_form` (§9.6.6) rather than mount the leaf under its pre-rename axis names: silently merging the wrong axes is the exact failure this field exists to prevent, and it would surface later as an unrelated shape or `undefined_index_set` error. Status: every binding applies it at the `subsystems.<k>` edge. At the top-level form, **Python** applies it (both forms share one ref-loading path); **Julia** and **Rust** inline that form with a raw pre-pass that defers the leaf's §9.7 resolution to the root document, so they have no resolved mounted document to rename and refuse the edge with the code above; **TypeScript** and **Go** do not inline a top-level `{ref}` at all, so the field is unreachable there.
+*Where it applies (normative at both mount forms).* `index_set_rename` is a `SubsystemRef` property, so by "Two mount forms, one mechanism" above it is normative at BOTH attachment points — the `subsystems.<k>` edge and a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — with the same meaning and the same pipeline. That section's rule that a binding MUST NOT make the two forms differ is what makes silence unacceptable here: a binding that cannot yet APPLY the field at a form MUST REFUSE that edge with `subsystem_index_set_rename_unsupported_mount_form` (§9.6.6) rather than mount the leaf under its pre-rename axis names, which is the exact failure this field exists to prevent and would surface later as an unrelated shape or `undefined_index_set` error. Status: every binding applies it at the `subsystems.<k>` edge. At the top-level form, **Python** applies it (both forms share one ref-loading path, and Python closes and folds at both); **Julia** and **Rust** inline that form with the raw pre-pass "Two mount forms" names as the remaining gap — it defers the leaf's §9.7 resolution to the root document, so there is no resolved mounted document to rename — and therefore refuse the edge with the code above; **TypeScript** and **Go** do not inline a top-level `{ref}` at all, so the field is unreachable there. The refusal is scoped to this field and closes when that gap does.
 
 *Round trip.* `index_set_rename` rides on a mount edge, and a mount edge is consumed at load ("after resolution, the in-memory representation is identical to a file with all subsystems defined inline"). Like `bindings` and the §9.7.10 injection on the same edge, it does **not** survive `parse → emit`: the emitted document carries the inlined component with its axes already spelled under the post-rename names, and `emit ∘ load` stays a byte-wise fixed point because the second load has no edge left to rename.
 
@@ -1236,6 +1388,81 @@ Three classes of symbol are in scope in a model's expressions **without appearin
 | **The independent variable** — `domain.independent_variable`, default `"t"` | §11.3. Every time-dependent model may write `t` in an equation, a condition, or an event affect; an analytic forcing `A*sin(omega*t)` is the ordinary spelling. Its dimension is the time dimension (`s`). | `tests/valid/cadence/pure_pointwise.esm` |
 | **Spatial coordinate names** | §11.4. A coordinate expression's free symbols name spatial coordinates: `x`, `y`, `z`, `lon`, `lat`, `lev`. A checker resolves as a coordinate any free symbol that is (i) a key of `index_sets`, (ii) the value of a `dim` field on **any** Expression node, or a spatial `wrt` (a `wrt` naming an axis other than the independent variable) on a `D` node, anywhere in the document — these are axis-naming scalar fields, resolved **structurally by field, without regard to the enclosing `op`** (a `dim` on a user rewrite-target op names a coordinate exactly as a `dim` on `grad` does), or (iii) a free symbol in the RHS of an `ic` equation — which §11.4 *defines* to be a coordinate expression. Its dimension is the coordinate's; where undeclared, treat it as `unknown` (§4.8.4), never as an error. | `tests/valid/initial_conditions/expression_ignition_front_1d.esm`, `tests/spatial/*.esm` |
 | **`_var`** | §6.4. The operator-model placeholder, substituted with each matching **ODE state** of the target system at `operator_compose` time — the set `ode_states` returns (§6.3.1), never the observed or algebraic unknowns. It is legal **wherever an ODE state is legal** — including an equation LHS/RHS, a continuous-event `affects` / `affect_neg` LHS, and a parameter update handler's `read_vars`. A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target. | `tests/valid/full_coupled.esm` |
+
+##### 4.9.1.1 A DECLARATION MUST NOT spell one of them (`reserved_variable_name`)
+
+Two of those three symbols are **globally scoped**: the independent variable and
+`_var` are in scope in every model, resolved **by name**, everywhere. A
+declaration spelled with one of them therefore does not shadow the implicit
+symbol — the implicit symbol shadows *it*, and the declaration becomes
+unreachable. Declaring one is a **hard error** (`is_valid: false`), code
+`reserved_variable_name`.
+
+**The reserved set is `{ domain.independent_variable (default "t"), "_var" }`**,
+and this section is its normative home: the sibling `reserved_index_symbol`
+rule — which rejects an `aggregate` binder (a `ranges` key or an `output_idx`
+entry, §4.3.1) spelled with one of these names, for the same reason and with the
+same silent failure mode — uses **this** set, so the two cannot drift apart. It
+follows the *document*: a file that renames its independent variable to `s`
+reserves `s` and **frees** `t`, which is then an ordinary name like any other.
+Spatial coordinate names are **not** in the set:
+`x`, `y`, `lon` resolve as coordinates only in a coordinate position (§11.4), and
+`tests/valid/units_dimensional_analysis.esm` declares `x` as an ordinary position
+variable.
+
+**The rule covers the three declaration maps**, and reports at the offending key:
+
+| Site | Pointer |
+|---|---|
+| `models[M].variables` | `/models/<M>/variables/<name>` |
+| an inline SUBSYSTEM's `variables`, at any depth | `/models/<M>/subsystems/<S>/variables/<name>` |
+| `reaction_systems[S].species` | `/reaction_systems/<S>/species/<name>` |
+| `reaction_systems[S].parameters` | `/reaction_systems/<S>/parameters/<name>` |
+
+All three declare symbols of the assembled system — a species and a reaction
+parameter become symbols of the derived ODE system exactly as a `variables` entry
+does (§7.4) — so all three collide identically. A subsystem is a model (§4.7),
+so its `variables` map is a declaration map like any other and a checker MUST
+recurse into every inline subsystem — a MOUNTED subsystem is the shape issue
+#200 was reported in, and a `ref` mount has been spliced in by the time
+structural validation runs.
+
+**Why a hard error and not a warning.** The three things this cost in practice
+are the whole argument, and the third is why the severity is not negotiable
+(reported as issue #200, from a WRF-Fire fuel-moisture component that declared
+its fuel time-lag constant as `t`):
+
+1. the document **validated**;
+2. built bare, the model reported the observed as having *no defining
+   expression* — a diagnostic about the wrong thing;
+3. built with a subsystem mounted, every equation that read `t` **silently
+   received the simulation time instead of the declared quantity**, so
+   `log(t)` was `-inf` at `t = 0` and every number downstream was finite,
+   plausible and wrong.
+
+Silence is the failure mode §4.8.4 and §4.9.5 already refuse to accept elsewhere,
+and it is deterministic and statically decidable here: the collision is visible in
+the declaration map alone. Nothing an author wants is lost by rejecting — a
+declared name is the author's free choice, so the fix is to spell it anything
+else.
+
+**Why the schema does not enforce it.** The reserved name is the *value of
+another field* (`domain.independent_variable`), which JSON Schema cannot
+express; a hard-coded `propertyNames: {not: {const: "t"}}` would reject a
+conforming document that renames its independent variable, and would be silent
+about the renamed one. A schema rejection would also pre-empt the check it
+replaces: a schema-invalid file never reaches structural validation
+(CONFORMANCE_SPEC §7.1.2), so the finding could not be pinned where it belongs.
+The rule is a structural check in every binding, and the schema is unchanged.
+
+Fixtures: `tests/invalid/reserved_variable_name_observed.esm` (the reported
+shape), `…_parameter.esm` (both reserved names, including the ERA5 short name
+`t` for air temperature — how this reaches a real document), `…_species.esm`
+(the two reaction maps), `…_subsystem.esm` (an inline subsystem — the mounted
+shape of #200), `…_renamed_independent.esm` and its valid twin
+`tests/valid/independent_variable_renamed.esm` (the reserved name follows
+`domain.independent_variable`; a binding that hard-codes `"t"` fails one of the
+two).
 
 #### 4.9.2 Scoped references are ARBITRARY DEPTH
 
@@ -1856,12 +2083,22 @@ convention `from_file` reference data follows (§6.6.5 convention 3). A
 **scalar** on a shaped variable keeps its broadcast meaning — the one value
 applies to every element — so nothing about existing documents changes.
 
-Inline array data is **build-time constant data**: it is fixed at load, so a
-binding MAY bind it through whatever channel it already uses for constant
-arrays rather than through its scalar parameter vector. A test supplies the same
-union through `parameter_overrides` / `initial_conditions` (§6.6.2), which is
-what lets a column-physics component carry its profiles per regime without one
-generated document per regime.
+A shaped variable's value is **build-time constant data** — the whole union, the
+broadcast scalar included: it is fixed at load, so a binding MAY bind it through
+whatever channel it already uses for constant arrays rather than through its
+scalar parameter vector. The **choice of channel is the binding's, but the
+broadcast is not**: whichever channel carries the value, a scalar on a shaped
+variable MUST be materialized over the variable's whole declared grid, so that
+`p` and `index(p, k)` mean what §4.3.4 says they mean and the two spellings of
+this union differ only in what they say. A binding that leaves a shaped
+parameter's scalar in a one-slot parameter vector has not implemented the
+broadcast — the value is then unindexable, and the failure surfaces far from the
+declaration (a non-finite right-hand side, an out-of-rank gather, a refusal to
+build) rather than as anything naming the variable.
+
+A test supplies the same union through `parameter_overrides` /
+`initial_conditions` (§6.6.2), which is what lets a column-physics component
+carry its profiles per regime without one generated document per regime.
 
 Precision:
 
@@ -2132,7 +2369,7 @@ Because a test lives inside its parent component, there is no `model_ref` field:
 | `expression_template_imports` | | Ordered `TemplateImport[]` (§9.7.2 shape) registered into the enclosing component's template scope **for this run only** — the discretization under which this test runs (§6.6.6, §9.7.10). |
 | `assertions` | ✓ | Array of scalar checks; must contain at least one. |
 
-**Shaped values.** An `initial_conditions` or `parameter_overrides` value is a **number**, or — for a variable whose `shape` is non-empty — a **row-major nested JSON array** carrying the whole field. The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**; this is the same convention `from_file` reference data already follows (§6.6.5 convention 3). A **scalar** on a shaped variable keeps its broadcast meaning: the one value applies to every element. The same union applies to a shaped variable's declared `default` (§6.3).
+**Shaped values.** An `initial_conditions` or `parameter_overrides` value is a **number**, or — for a variable whose `shape` is non-empty — a **row-major nested JSON array** carrying the whole field. The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**; this is the same convention `from_file` reference data already follows (§6.6.5 convention 3). A **scalar** on a shaped variable keeps its broadcast meaning: the one value applies to every element. The same union applies to a shaped variable's declared `default` (§6.3). A scalar override of a shaped variable is therefore a value of that variable's full shape, and MUST be honoured on whatever channel the binding uses for that shape (§6.3) — never silently dropped because the scalar override channel has no room for a field.
 
 This is what lets a column-physics test supply its inputs. The inputs of such a component *are* columns — θ, q_v, u, v, p, dz, K profiles — and the instantaneous-derivative test shape (observed tendencies asserted at `time: 0`) needs them as `parameter_overrides` / `initial_conditions` of one shared model, per regime, not as one generated document per regime.
 
@@ -2225,6 +2462,8 @@ Tolerance is resolved most-specific first:
 4. Otherwise, an **implementation default** — conforming runtimes should use `rel = 1e-6` and no `abs` bound.
 
 Each level is a `{abs?, rel?}` object; absent fields fall through to the next level independently. Specifying only `abs` at a lower level does not mask `rel` from an upper level — they are merged per-field.
+
+**This is not the integrator's tolerance.** The chain above resolves the tolerance an assertion result is **compared at**. The tolerance the **integrator** is asked to hold is the `solver` block's `abstol` / `reltol` (§2.2.2), which resolves on its own independent chain (call site → document → binding default). The two are different quantities and neither substitutes for the other: loosening `abstol` makes a trajectory less accurate and its assertions *more* likely to fail, while loosening `tolerance` makes the same trajectory easier to pass. The distinct spellings — `{abs, rel}` here, `abstol`/`reltol` there — are what keep the two legible at a glance. An inline-test runner's own default integration tolerances sit at the bottom of the §2.2.2 chain, so a document's `solver` block displaces them.
 
 #### 6.6.5 PDE-Aware Assertions
 
@@ -3885,7 +4124,7 @@ Bindings MUST emit the following stable diagnostic codes (cross-language uniform
 | `subsystem_ref_is_template_library` | A §4.7 subsystem `ref` targets a template-library file. |
 | `template_inject_target_unknown` | A `CouplingEntry.expression_template_imports` key (§9.7.10) names no system referenced by that entry. |
 | `template_inject_target_not_component` | A coupling-entry injection key (§9.7.10) resolves to something that is neither a model nor a reaction system. |
-| `subsystem_index_set_conflict` | A §4.7 subsystem ref's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry (§4.7 "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). The message MUST name both contributors, both definitions, and the `index_set_rename` remedy. |
+| `subsystem_index_set_conflict` | A §4.7 ref mount's merged top-level `index_sets` name collides with a non-deep-equal definition in the importing document's registry — at **either** mount form, a `subsystems.<k>` ref or a top-level `models.<k>` ref (§4.7 "Two mount forms, one mechanism" / "Index-set merge"; the subsystem-edge mirror of `template_import_index_set_conflict`). The message MUST name both contributors, both definitions, and the `index_set_rename` remedy. |
 | `subsystem_index_set_rename_unknown_name` | A mount edge's `index_set_rename` key names an index set the RESOLVED mounted document does not declare (§4.7 "Mount-edge index-set renaming"). The mount-edge mirror of `template_import_rename_unknown_name`. |
 | `subsystem_index_set_rename_unsupported_mount_form` | A mount edge carries `index_set_rename` at a mount form this binding cannot apply it at (§4.7 "Mount-edge index-set renaming", "Where it applies"). Refusing is REQUIRED: mounting the leaf under its pre-rename axis names would be silently wrong. |
 | `template_import_cycle` | Import-graph cycle over canonical paths (§9.7.2). |
@@ -4722,7 +4961,7 @@ The `domain` supports the following fields:
 
 | Field | Required | Description |
 |---|---|---|
-| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1). |
+| `independent_variable` | | Name of the time variable (default: `"t"`). It is **implicitly declared** in every model's expression scope — writing `t` in an equation, an event condition or an affect is never `undefined_variable` (§4.9.1) — and it is correspondingly **reserved**: no `variables` key, species, or reaction parameter may be spelled with it (`reserved_variable_name`), and no `aggregate` binder may bind it (`reserved_index_symbol`). Both rules read their reserved set from §4.9.1.1, so renaming the independent variable moves both onto the new name and frees `t`. |
 | `temporal` | | Temporal extent: `start`, `end`, `reference_time` (ISO 8601) |
 | `element_type` | | The precision the document is **evaluated in**: `"Float64"` (default) or `"Float32"`. See §11.3.1 — this is a semantic declaration, not a storage hint. |
 | `array_type` | | Array implementation type (e.g., `"Array"`) |

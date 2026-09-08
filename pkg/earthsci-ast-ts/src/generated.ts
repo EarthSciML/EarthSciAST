@@ -758,6 +758,7 @@ export interface ESMFormat2 {
   coordinates?: {
     [k: string]: Coordinate;
   };
+  solver?: Solver;
   /**
    * Top-level rewrite rules / templates — the payload of a template-library file (esm-spec §9.7.1). Only valid in a library file (which carries no models/reaction_systems/data_loaders/coupling/domain, `template_import_not_library` when imported otherwise); component-local templates stay inside their model/reaction_system (§9.6.1). Arrives at esm 0.8.0 (`template_import_version_too_old`).
    */
@@ -1717,6 +1718,27 @@ export interface FunctionTableAxis {
    * @minItems 2
    */
   values: [number, number, ...number[]];
+}
+/**
+ * Document-scoped, OPTIONAL solver hints (esm-spec §2.2): numerics the document knows about ITSELF, which each binding maps to its own integrator. Purely additive — a document without it validates, flattens and emits exactly as before. Every field is ADVISORY: a binding MAY ignore any or all of them and still conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that ignores every field and still converges conforms; the requirement to integrate successfully and agree within the CONFORMANCE_SPEC §5.9 error band is untouched by this block and is not excused by it. What IS normative: parse it, validate it, round-trip it VERBATIM (it is authored configuration, a peer of `tolerance` and `parameter_overrides` — not a load-time construct like `expression_template_imports`), leave the flattened system unchanged, and reject it in a document declaring `esm` below 1.1.0 with `solver_version_too_old`. This block is NOT for algorithm names (`BDF`/`LSODA`/`Rosenbrock23` are per-binding identifiers and would not be portable — there is deliberately no `alg` field), NOT for binding-specific compile knobs (`cse` is a sympy.lambdify concern), and NOT a DAE declaration (`system_class` is DERIVED from the equation set). An empty block (`"solver": {}`) is LEGAL and means exactly what absence means; it NORMALIZES to absence at load, so it does not survive `parse -> emit` and the typed value never holds a block with nothing set. That normalization is why the schema does NOT carry `minProperties: 1`: every other optional top-level container (`coordinates`, `index_sets`, `metaparameters`, `coupling_roles`) admits an empty object, and a lone exception here would be a rule a reader has to learn for no gain. Arrives at esm 1.1.0.
+ */
+export interface Solver {
+  /**
+   * The author's declaration of the system's stiffness. A binding MAY select an implicit / BDF-family integrator on `high`. ABSENCE IS NOT A DEFAULT VALUE: a document that omits this key has not declared its stiffness and does not thereby declare `low`; bindings MUST NOT read absence as an assertion about the system. The motivating case is the POLLU stiff-ODE benchmark (Verwer 1994), whose rate constants span ~8e-7 to ~7e9 1/s: scipy's LSODA cannot integrate it at all while BDF reproduces the published reference, a fact that is true of the MODEL rather than of any runner.
+   */
+  stiffness?: "low" | "moderate" | "high";
+  /**
+   * Absolute INTEGRATION tolerance the document asks for. Spelled as the `solve()` keyword (API_SPEC §4) so it passes through literally. This is a DIFFERENT QUANTITY from the `tolerance` object on a model / reaction system / test / assertion (esm-spec §6.6.4), which is the tolerance an assertion is COMPARED at; the two resolve independently and neither substitutes for the other. Resolution order, most-specific first: an explicit argument at the `solve()` call site, then this field, then the binding default (1e-6).
+   */
+  abstol?: number;
+  /**
+   * Relative INTEGRATION tolerance the document asks for. Same resolution order and the same distinction from the assertion-comparison `tolerance` object as `abstol`; the binding default is 1e-4.
+   */
+  reltol?: number;
+  /**
+   * Advisory: the system tolerates or benefits from this operator-splitting convention. Carries NO prescribed substep structure and does not amend esm-spec §9's single-flat-system model — a binding that does not split ignores it. The vocabulary is deliberately the one the discretization RFC §7.5 dimensional-splitting field already uses, so the word means one thing across the spec, even though that occurrence is executable and this one is a hint.
+   */
+  splitting?: "none" | "lie" | "strang";
 }
 /**
  * Document-scoped named integers bound at load (esm-spec §9.7.6): at import/subsystem edges via `bindings`, at the loader API for the root document, or by `default`. Admissible — as names or `{op, args}` integer expressions — in `index_sets` interval sizes, `aggregate` dense ranges, and `makearray` regions (folded exactly at load), and substituted as integer literals in ordinary expression positions. A metaparameter name MUST NOT collide with any visible variable/parameter/species/index-set name (`metaparameter_name_conflict`).

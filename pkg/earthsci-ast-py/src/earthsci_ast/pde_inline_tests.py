@@ -98,6 +98,86 @@ _DEFAULT_REL_TOL = 1e-6
 TEST_RELTOL = 1e-10
 TEST_ABSTOL = 1e-14
 
+#: The integrator used when neither the caller nor the document says otherwise.
+DEFAULT_METHOD = "RK45"
+
+#: The integrator chosen for a document declaring ``solver.stiffness: "high"``
+#: (esm-spec §2.2). BDF is scipy's implicit multistep method; LSODA — which is
+#: what an unqualified default would reach for — cannot integrate a strongly
+#: stiff system like the POLLU benchmark at all: its Fortran callback overflows
+#: even with an analytic Jacobian and even over a 60 s window, while BDF does
+#: the full 3600 s in ~0.2 s and reproduces the published reference.
+STIFF_METHOD = "BDF"
+
+
+def _method_for(method: str | None, file: EsmFile) -> str:
+    """The integrator for ``file``, most-specific first (esm-spec §2.2).
+
+    1. An explicit ``method`` from the caller — wins outright.
+    2. Otherwise :data:`STIFF_METHOD` when the document declares
+       ``solver.stiffness: "high"``.
+    3. Otherwise :data:`DEFAULT_METHOD`.
+
+    ``stiffness`` is ADVISORY: this binding is free to ignore it, and does
+    ignore ``"low"`` / ``"moderate"``, which say nothing the default does not
+    already handle. Acting on ``"high"`` is what keeps a stiff document from
+    being an overflow — and it is the whole reason the block exists, since the
+    alternative is a basename lookup table in each binding's own harness that
+    cannot travel with the document.
+
+    Note this maps a portable DECLARATION onto THIS binding's integrator names.
+    The document never carries ``"BDF"`` itself: an algorithm name is a scipy
+    identifier where Julia would want ``Rosenbrock23``, which is exactly what
+    esm-spec §2.2.3 rules out.
+    """
+    if method is not None:
+        return method
+    solver = getattr(file, "solver", None)
+    if getattr(solver, "stiffness", None) == "high":
+        return STIFF_METHOD
+    return DEFAULT_METHOD
+
+
+def _integration_tolerances(
+    file: EsmFile, rtol: float | None, atol: float | None
+) -> tuple[float, float]:
+    """The INTEGRATION tolerances a run of ``file`` solves at (esm-spec §2.2.2).
+
+    Most-specific first:
+
+    1. An explicit ``rtol`` / ``atol`` from the caller — wins outright.
+    2. Otherwise this document's ``solver.reltol`` / ``solver.abstol``.
+    3. Otherwise this runner's :data:`TEST_RELTOL` / :data:`TEST_ABSTOL`.
+
+    The runner values sit at the BOTTOM of the chain — they are binding
+    defaults, not a caller's opinion — so a stiff document can ask for its own
+    integration accuracy without every caller naming it. They are still what an
+    assertion-bearing test gets by default, which is the property the comment on
+    ``TEST_RELTOL`` is about. The two resolve INDEPENDENTLY, so a document
+    declaring only ``reltol`` leaves ``atol`` on the runner default.
+
+    ``is not None``, never truthiness: ``0.0`` is a value the document SET, and
+    ``or`` would silently swap it for the runner default instead of letting the
+    integrator refuse it. The schema forbids a non-positive tolerance, but this
+    takes an ``EsmFile`` a caller may have built in memory and never re-validates
+    it.
+
+    Not :func:`~earthsci_ast.solver.resolve_tolerances` because that function's
+    level 3 is the ``solve()`` binding defaults; only the bottom of the chain
+    differs.
+
+    These are INTEGRATION tolerances. The tolerance each assertion is COMPARED
+    at is resolved separately (§6.6.4) and is untouched here.
+    """
+    solver = getattr(file, "solver", None)
+    doc_reltol = getattr(solver, "reltol", None)
+    doc_abstol = getattr(solver, "abstol", None)
+    return (
+        rtol if rtol is not None else (doc_reltol if doc_reltol is not None else TEST_RELTOL),
+        atol if atol is not None else (doc_abstol if doc_abstol is not None else TEST_ABSTOL),
+    )
+
+
 # Historical private spellings, kept so existing call sites keep working.
 _DEFAULT_SOLVER_RTOL = TEST_RELTOL
 _DEFAULT_SOLVER_ATOL = TEST_ABSTOL
@@ -641,9 +721,9 @@ def simulate_states(
     file: EsmFile,
     tspan: tuple[float, float],
     *,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     saveat: Sequence[float],
     parameters: dict[str, float] | None = None,
     initial_conditions: dict[str, float] | None = None,
@@ -667,7 +747,18 @@ def simulate_states(
         u0=dict(initial_conditions or {}),
         inspect=inspect,
     )
-    result = solve(prob, alg=method, reltol=rtol, abstol=atol)
+    # esm-spec §2.2.2, most-specific first: an explicit `rtol` / `atol` here
+    # wins, else this document's `solver` block, else the runner's own
+    # TEST_RELTOL / TEST_ABSTOL. The runner values sit at the BOTTOM of the
+    # chain — they are binding defaults, not a caller's opinion — so a stiff
+    # document can ask for its own integration accuracy without every caller
+    # naming it. They are still what an assertion-bearing test gets by default,
+    # which is the property the comment on TEST_RELTOL is about.
+    #
+    # Note this is the INTEGRATION tolerance. The tolerance each assertion is
+    # COMPARED at is resolved separately (§6.6.4) and is untouched here.
+    eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
+    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
@@ -946,9 +1037,9 @@ def run_pde_tests(
     pde_input: str | EsmFile,
     *,
     model_name: str | None = None,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     base_dir: str | None = None,
 ) -> list[PdeAssertionResult]:
     """Run every inline test (esm-spec §6.6, including the §6.6.5 PDE
@@ -1026,7 +1117,7 @@ def run_pde_tests(
                     sim = simulate_states(
                         run_file,
                         (t.time_span.start, t.time_span.end),
-                        method=method,
+                        method=_method_for(method, run_file),
                         rtol=rtol,
                         atol=atol,
                         saveat=times,

@@ -112,7 +112,8 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
 	// the v0.8.0 §9.7 constructs (expression_template_imports, top-level
 	// expression_templates, metaparameters) when the file declares
-	// esm < 0.8.0 (esm-spec §9.6.5). Surfaced before schema validation so
+	// esm < 0.8.0 (esm-spec §9.6.5), and the top-level `solver` block when the
+	// file declares esm < 1.1.0 (esm-spec §2.2.4). Surfaced before schema validation so
 	// the user sees the version hint instead of a generic "extra property"
 	// schema error. Operates on a generic map view of the JSON (UseNumber to
 	// preserve int/float).
@@ -125,6 +126,9 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 				return nil, err
 			}
 			if err := RejectTemplateImportsPreV08(preCheck); err != nil {
+				return nil, err
+			}
+			if err := RejectSolverPreV11(preCheck); err != nil {
 				return nil, err
 			}
 		}

@@ -1565,15 +1565,46 @@ def emit_document(raw_source: Any, base_path: str) -> dict:
 
     root.pop("expression_template_imports", None)
     if bump:
-        # The §9.6.4 rule-8 emit stamp. It has to track the format version the
-        # emitter WRITES, so it is read from the parser's supported version
-        # rather than hard-coded: with major 0 rejected outright from 1.0.0, an
-        # older stamp makes every bumped document unloadable by its own loader.
-        # Imported lazily -- `parse` imports this module at load.
-        from .parse import _CURRENT_VERSION
-
-        root["esm"] = ".".join(str(v) for v in _CURRENT_VERSION)
+        # The §9.6.4 rule-8 emit stamp is a FLOOR, not an assignment: an emitted
+        # document carrying a surviving reference or a materialized entry "MUST
+        # declare `esm: 0.9.0` OR LATER". A document already at or above the
+        # floor keeps its own declared version.
+        #
+        # This read `_CURRENT_VERSION` unconditionally, which is a different
+        # rule that happened to agree while the current version WAS 1.0.0 — the
+        # floor and the assignment give the same answer for a 1.0.0 document
+        # only until the schema moves on. At esm 1.1.0 they diverged and this
+        # binding started stamping 1.0.0 documents up to 1.1.0 on re-emit,
+        # against TypeScript, which had the floor right. Raising the stamp is
+        # not harmless: it claims the document uses a format version it does
+        # not, and needlessly puts it out of reach of a 1.0.x reader.
+        #
+        # In practice the floor never fires: esm 1.0.0 is a clean break that
+        # rejects every 0.x document at load, so anything reaching emit already
+        # declares >= 1.0.0. It is written out anyway so the rule is stated
+        # where it is applied rather than resting on that coincidence.
+        _RULE8_FLOOR = (0, 9, 0)
+        declared = _parse_semver_tuple(root.get("esm"))
+        if declared is None or declared < _RULE8_FLOOR:
+            root["esm"] = ".".join(str(v) for v in _RULE8_FLOOR)
     return root
+
+
+def _parse_semver_tuple(v: object) -> tuple[int, int, int] | None:
+    """``"1.2.3"`` -> ``(1, 2, 3)``; ``None`` for anything unparseable.
+
+    Compares numerically, so 1.10.0 orders above 1.2.0 where a lexicographic
+    compare gets it backwards.
+    """
+    if not isinstance(v, str):
+        return None
+    parts = v.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
 
 
 # --- Canonical byte writer (2-space indent, keys sorted except the ordered

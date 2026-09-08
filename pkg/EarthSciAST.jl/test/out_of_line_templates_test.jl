@@ -106,7 +106,11 @@ end
         # Rule 8's stamp is a MINIMUM ("a consumer needs at least this"), so it
         # only ever raises: a 1.0.0 source keeps 1.0.0 rather than being
         # downgraded to a schema that cannot describe it.
-        @test doc["esm"] == EarthSciAST.SCHEMA_VERSION
+        # The literal, not SCHEMA_VERSION: the source declares 1.0.0 and the
+        # floor leaves it there. Comparing against the library's own version
+        # only agreed while that version WAS 1.0.0, and it asserted the opposite
+        # rule — that emit restamps — which is what the two lines below pin.
+        @test doc["esm"] == "1.0.0"
         @test EarthSciAST._esm_stamp_floor("0.8.0") == "0.9.0"   # below the floor: raised
         @test EarthSciAST._esm_stamp_floor("1.0.0") == "1.0.0"   # at/above: untouched
         @test !haskey(adv, "expression_template_imports")     # imports consumed
