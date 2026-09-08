@@ -108,6 +108,86 @@ _DEFAULT_REL_TOL = 1e-6
 TEST_RELTOL = 1e-10
 TEST_ABSTOL = 1e-14
 
+#: The integrator used when neither the caller nor the document says otherwise.
+DEFAULT_METHOD = "RK45"
+
+#: The integrator chosen for a document declaring ``solver.stiffness: "high"``
+#: (esm-spec §2.2). BDF is scipy's implicit multistep method; LSODA — which is
+#: what an unqualified default would reach for — cannot integrate a strongly
+#: stiff system like the POLLU benchmark at all: its Fortran callback overflows
+#: even with an analytic Jacobian and even over a 60 s window, while BDF does
+#: the full 3600 s in ~0.2 s and reproduces the published reference.
+STIFF_METHOD = "BDF"
+
+
+def _method_for(method: str | None, file: EsmFile) -> str:
+    """The integrator for ``file``, most-specific first (esm-spec §2.2).
+
+    1. An explicit ``method`` from the caller — wins outright.
+    2. Otherwise :data:`STIFF_METHOD` when the document declares
+       ``solver.stiffness: "high"``.
+    3. Otherwise :data:`DEFAULT_METHOD`.
+
+    ``stiffness`` is ADVISORY: this binding is free to ignore it, and does
+    ignore ``"low"`` / ``"moderate"``, which say nothing the default does not
+    already handle. Acting on ``"high"`` is what keeps a stiff document from
+    being an overflow — and it is the whole reason the block exists, since the
+    alternative is a basename lookup table in each binding's own harness that
+    cannot travel with the document.
+
+    Note this maps a portable DECLARATION onto THIS binding's integrator names.
+    The document never carries ``"BDF"`` itself: an algorithm name is a scipy
+    identifier where Julia would want ``Rosenbrock23``, which is exactly what
+    esm-spec §2.2.3 rules out.
+    """
+    if method is not None:
+        return method
+    solver = getattr(file, "solver", None)
+    if getattr(solver, "stiffness", None) == "high":
+        return STIFF_METHOD
+    return DEFAULT_METHOD
+
+
+def _integration_tolerances(
+    file: EsmFile, rtol: float | None, atol: float | None
+) -> tuple[float, float]:
+    """The INTEGRATION tolerances a run of ``file`` solves at (esm-spec §2.2.2).
+
+    Most-specific first:
+
+    1. An explicit ``rtol`` / ``atol`` from the caller — wins outright.
+    2. Otherwise this document's ``solver.reltol`` / ``solver.abstol``.
+    3. Otherwise this runner's :data:`TEST_RELTOL` / :data:`TEST_ABSTOL`.
+
+    The runner values sit at the BOTTOM of the chain — they are binding
+    defaults, not a caller's opinion — so a stiff document can ask for its own
+    integration accuracy without every caller naming it. They are still what an
+    assertion-bearing test gets by default, which is the property the comment on
+    ``TEST_RELTOL`` is about. The two resolve INDEPENDENTLY, so a document
+    declaring only ``reltol`` leaves ``atol`` on the runner default.
+
+    ``is not None``, never truthiness: ``0.0`` is a value the document SET, and
+    ``or`` would silently swap it for the runner default instead of letting the
+    integrator refuse it. The schema forbids a non-positive tolerance, but this
+    takes an ``EsmFile`` a caller may have built in memory and never re-validates
+    it.
+
+    Not :func:`~earthsci_ast.solver.resolve_tolerances` because that function's
+    level 3 is the ``solve()`` binding defaults; only the bottom of the chain
+    differs.
+
+    These are INTEGRATION tolerances. The tolerance each assertion is COMPARED
+    at is resolved separately (§6.6.4) and is untouched here.
+    """
+    solver = getattr(file, "solver", None)
+    doc_reltol = getattr(solver, "reltol", None)
+    doc_abstol = getattr(solver, "abstol", None)
+    return (
+        rtol if rtol is not None else (doc_reltol if doc_reltol is not None else TEST_RELTOL),
+        atol if atol is not None else (doc_abstol if doc_abstol is not None else TEST_ABSTOL),
+    )
+
+
 # Historical private spellings, kept so existing call sites keep working.
 _DEFAULT_SOLVER_RTOL = TEST_RELTOL
 _DEFAULT_SOLVER_ATOL = TEST_ABSTOL
@@ -188,12 +268,18 @@ class InlineTestOptions:
 @dataclass(frozen=True)
 class _ResolvedOptions:
     """One document's options after ``options_for`` has been folded onto the
-    call-level defaults. Internal; every field is concrete."""
+    call-level defaults. Internal.
+
+    ``method`` / ``rtol`` / ``atol`` may still be ``None``: those three resolve
+    further against the DOCUMENT's own ``solver`` block (esm-spec §2.2.2,
+    §2.2.3), which is only reachable once the document is loaded. ``None`` here
+    means "neither ``options_for`` nor the caller named one", which is what
+    keeps the document's own opinion expressible."""
 
     model_name: str | None
-    method: str
-    rtol: float
-    atol: float
+    method: str | None
+    rtol: float | None
+    atol: float | None
     base_dir: str | None
     cse: bool
     initial_conditions: Mapping[str, Any] = field(default_factory=dict)
@@ -754,9 +840,9 @@ def simulate_states(
     file: EsmFile,
     tspan: tuple[float, float],
     *,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     saveat: Sequence[float],
     parameters: dict[str, float] | None = None,
     initial_conditions: dict[str, float] | None = None,
@@ -789,7 +875,18 @@ def simulate_states(
         cse=cse,
         inspect=inspect,
     )
-    result = solve(prob, alg=method, reltol=rtol, abstol=atol)
+    # esm-spec §2.2.2, most-specific first: an explicit `rtol` / `atol` here
+    # wins, else this document's `solver` block, else the runner's own
+    # TEST_RELTOL / TEST_ABSTOL. The runner values sit at the BOTTOM of the
+    # chain — they are binding defaults, not a caller's opinion — so a stiff
+    # document can ask for its own integration accuracy without every caller
+    # naming it. They are still what an assertion-bearing test gets by default,
+    # which is the property the comment on TEST_RELTOL is about.
+    #
+    # Note this is the INTEGRATION tolerance. The tolerance each assertion is
+    # COMPARED at is resolved separately (§6.6.4) and is untouched here.
+    eff_rtol, eff_atol = _integration_tolerances(file, rtol, atol)
+    result = solve(prob, alg=_method_for(method, file), reltol=eff_rtol, abstol=eff_atol)
     if result.retcode is not ReturnCode.Success:
         raise RuntimeError(f"solve returned {result.retcode.value}: {result.message}")
     var_map = {str(name): i for i, name in enumerate(result.vars)}
@@ -1084,6 +1181,16 @@ def _run_document_tests(
         resolved_base = os.path.dirname(os.path.abspath(source))
     else:
         resolved_base = os.getcwd()
+    # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
+    # call-level argument, then THIS DOCUMENT's `solver` block, then the runner
+    # defaults. `opts.rtol` / `opts.atol` already carry the first two folded
+    # together — `None` there means neither was named — so this call appends the
+    # last two. Same chain for `method` via `_method_for` at the solve below
+    # (§2.2.3, where the document speaks through `solver.stiffness`).
+    #
+    # These are INTEGRATION tolerances; the tolerance each assertion is COMPARED
+    # at resolves separately (§6.6.4) and is untouched here.
+    doc_rtol, doc_atol = _integration_tolerances(file, opts.rtol, opts.atol)
     for mname, component in _test_components(file, opts.model_name):
         for t in component.tests:
             times = sorted({float(a.time) for a in t.assertions})
@@ -1128,9 +1235,9 @@ def _run_document_tests(
                     sim = simulate_states(
                         run_file,
                         (t.time_span.start, t.time_span.end),
-                        method=opts.method,
-                        rtol=opts.rtol,
-                        atol=opts.atol,
+                        method=_method_for(opts.method, run_file),
+                        rtol=doc_rtol,
+                        atol=doc_atol,
                         saveat=times,
                         parameters=_scope_to_component(
                             {**dict(opts.parameter_overrides), **(t.parameter_overrides or {})},
@@ -1236,9 +1343,9 @@ def _fold_options(
     override: InlineTestOptions | None,
     *,
     model_name: str | None,
-    method: str,
-    rtol: float,
-    atol: float,
+    method: str | None,
+    rtol: float | None,
+    atol: float | None,
     base_dir: str | None,
     cse: bool,
 ) -> _ResolvedOptions:
@@ -1274,9 +1381,9 @@ def run_inline_tests(
     inputs: str | EsmFile | Iterable[str | EsmFile],
     *,
     model_name: str | None = None,
-    method: str = "RK45",
-    rtol: float = _DEFAULT_SOLVER_RTOL,
-    atol: float = _DEFAULT_SOLVER_ATOL,
+    method: str | None = None,
+    rtol: float | None = None,
+    atol: float | None = None,
     base_dir: str | None = None,
     cse: bool = True,
     options_for: Callable[[Any], InlineTestOptions | None] | None = None,
@@ -1322,6 +1429,21 @@ def run_inline_tests(
     basename-keyed tables — a stiff-solver map, a ``cse`` allowlist, an
     initial-condition seed — can stay in the gate instead of forcing it to
     re-implement §6.6 to get at them.
+
+    ``method`` / ``rtol`` / ``atol`` default to ``None``, and that is load
+    bearing rather than merely tidy: it is what keeps the DOCUMENT's own
+    opinion expressible. Each resolves most-specific first — an ``options_for``
+    override, then the argument here, then this document's ``solver`` block
+    (``solver.stiffness`` for the method per esm-spec §2.2.3,
+    ``solver.reltol`` / ``solver.abstol`` for the tolerances per §2.2.2), then
+    this runner's own :data:`TEST_RELTOL` / :data:`TEST_ABSTOL` and
+    :data:`DEFAULT_METHOD`. The runner values sit at the BOTTOM of the chain
+    because they are binding defaults, not a caller's opinion, so a stiff
+    document gets the integration accuracy it asked for without every caller
+    naming it. Passing a value explicitly overrides the document, which is why
+    a concrete default here would silently have suppressed it. These are
+    INTEGRATION tolerances; the tolerance each assertion is COMPARED at is the
+    separate §6.6.4 quantity and is untouched.
 
     A document that fails to LOAD raises when ``inputs`` names a single
     document, exactly as before. In a BATCH — an iterable or a directory — it

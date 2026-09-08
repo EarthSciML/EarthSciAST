@@ -1183,6 +1183,20 @@ type ESMFile struct {
 	// nothing to emit: the CF metadata that tells an output writer which arrays
 	// are latitude and longitude was silently deleted by a load → save.
 	Coordinates map[string]Coordinate `json:"coordinates,omitempty"`
+	// SolverHints is the document-scoped, OPTIONAL and purely ADVISORY solver
+	// block (esm-spec §2.2): stiffness, integration tolerances and a splitting
+	// hint the document knows about itself. Purely additive — presence changes
+	// no equations, no classification and no flattened system — which is why it
+	// is `omitempty`: materializing `"solver": {}` on every document without one
+	// would be noise. An empty block is LEGAL in the schema (§2.2) and means
+	// exactly what absence means, so `normalizeSolver` maps it to nil at decode
+	// — `omitempty` on a POINTER tests nil only, so without that a decoded
+	// `&Solver{}` would re-emit as `"solver": {}` while Python and Julia dropped
+	// it.
+	//
+	// Named SolverHints rather than Solver so the FIELD does not collide with
+	// the Solver TYPE in this package.
+	SolverHints *Solver `json:"solver,omitempty"`
 	// Metaparameters is the top-level §9.7.1 metaparameter declaration block, and
 	// ExpressionTemplates the top-level rewrite-rule registry — the payload of a
 	// template-library file (§9.7.1).

@@ -84,12 +84,20 @@ fn flag<'a>(flags: &'a HashMap<String, String>, name: &str) -> Result<&'a str, S
 fn sim_options(flags: &HashMap<String, String>) -> Result<SolveOptions, String> {
     Ok(SolveOptions {
         alg: parse_solver(flag(flags, "solver")?)?,
-        reltol: flag(flags, "reltol")?
-            .parse()
-            .map_err(|e| format!("--reltol: {e}"))?,
-        abstol: flag(flags, "abstol")?
-            .parse()
-            .map_err(|e| format!("--abstol: {e}"))?,
+        // `Some(..)`: the conformance harness names both tolerances explicitly,
+        // so it is a caller WITH an opinion — level 1 of the esm-spec §2.2.2
+        // chain, above any `solver` block a fixture declares. That is what
+        // keeps the comparison apples-to-apples across bindings.
+        reltol: Some(
+            flag(flags, "reltol")?
+                .parse()
+                .map_err(|e| format!("--reltol: {e}"))?,
+        ),
+        abstol: Some(
+            flag(flags, "abstol")?
+                .parse()
+                .map_err(|e| format!("--abstol: {e}"))?,
+        ),
         ..Default::default()
     })
 }

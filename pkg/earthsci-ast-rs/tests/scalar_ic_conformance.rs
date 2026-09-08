@@ -41,8 +41,8 @@ fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
     SolveOptions {
         alg: Alg::Erk,
-        reltol: rs["reltol"].as_f64().expect("reltol"),
-        abstol: rs["abstol"].as_f64().expect("abstol"),
+        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
+        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
         ..Default::default()
     }
 }
@@ -119,8 +119,8 @@ fn scalar_ic_seeding_precedence() {
     let file = load_string(&text).expect("fixture loads");
     let opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-12,
-        abstol: 1e-14,
+        reltol: Some(1e-12),
+        abstol: Some(1e-14),
         saveat: Some(vec![0.0]),
         ..Default::default()
     };

@@ -4418,6 +4418,113 @@ brings a self-qualified reference (`<model>.<local>` where `<local>` is a
 declared variable or is rooted at a declared subsystem) back to the local
 spelling before the build; the multi-model and scalar paths were already right.
 
+### 5.32 A Scalar on a Shaped PARAMETER Broadcasts (normative)
+
+§5.28 governs the ARRAY arm of esm-spec §6.3 / §6.6.2's value union. This
+section governs the other arm — the one the spec added so that "nothing about
+existing documents changes": **a scalar on a shaped variable keeps its broadcast
+meaning — the one value applies to every element**, for a declared `default` and
+for a test's `parameter_overrides` alike. The three simulation bindings —
+**Julia, Python, Rust** — must agree on the resulting assertion actuals. The
+shared **offline** fixture lives in
+`tests/conformance/shaped_parameter_broadcast/`.
+
+The shaped **unknown** side of the rule was already covered: a state's scalar
+`default` seeds every cell of the state vector. The shaped **parameter** side was
+covered nowhere, and all three bindings got it wrong in their own vocabulary
+(EarthSciML/EarthSciAST#219):
+
+* **Rust** left the parameter in its positional scalar `params` vector, so every
+  per-cell read — the `index(p, k)` a document writes, and the gather the
+  whole-array lowering inserts for a bare `D(state) ~ p` — indexed a scalar and
+  resolved to `NaN`. The right-hand side went non-finite on its first evaluation
+  and the solve died at `t = 0` with `Exceeded maximum number of nonlinear solver
+  failures`, naming no parameter at all. This is the **loudest** failure with the
+  **least** information: the fail-closed unbound-name path does not fire, because
+  the name IS bound — to a value of the wrong rank.
+* **Python** bound it in the scalar `param_values` map, where a BARE read
+  broadcast correctly but `index(p, k)` raised "index applied to scalar value" —
+  so the defect was invisible to a whole-array document and fatal to the per-cell
+  spelling a column component actually writes.
+* **Julia** refused the document outright with `E_TREEWALK_UNSUPPORTED_SHAPE`,
+  because `_partition_variables` requires an array-shaped parameter to be backed
+  by `const_arrays` or `param_arrays` and a scalar `default` reached neither.
+
+The fix is one shape in all three: the value is BROADCAST onto the declared grid
+and bound on the array channel the binding already uses for a shaped parameter's
+inline column (§5.28.5), so the scalar and array spellings of §6.3 differ in what
+they *say* and never in what the runtime *does*.
+
+#### 5.32.1 What is compared
+
+The in-scope bindings run the fixture's inline tests through their official
+inline-test runner (`run_inline_tests`) with the pinned integrator and compare every
+assertion's ACTUAL against the Julia-minted golden, keyed by
+`(test_id, assertion_idx)`.
+
+| Band | rtol | atol |
+|------|------|------|
+| Assertion actual (vs golden) | 1e-9 | 1e-11 |
+
+#### 5.32.2 Non-vacuity
+
+`phi` integrates the broadcast parameter DIRECTLY, with no array operand anywhere
+in its right-hand side, and is asserted under both `reduce: "min"` and
+`reduce: "max"` — **min == max over four cells** is the sharpest available
+statement of "the one value applies to every element", and it fails both for a
+binding that fills one cell and for one that fills none. `theta` gathers the same
+parameter at the same cell as a SECOND shaped parameter whose array-valued
+`default` has pairwise-distinct cells, so the two operands cannot be confused for
+one another: a binding that broadcast the wrong one disagrees on at least one
+cell rather than passing on a coincidence. `theta(0)` pins the shaped
+UNKNOWN's own scalar default, so the fixture states both halves of the rule
+rather than assuming the half that worked.
+
+The fixture's first three tests hold the issue's bisection axis inside ONE
+document — the declared scalar, a SCALAR `parameter_overrides` value, and the
+ARRAY `parameter_overrides` spelling of the SAME parameter. The array arm passed
+*before* the fix and must keep passing, which is what stops a
+"treat every shaped parameter as array data" over-correction from breaking §5.28
+silently.
+
+A fourth test, `scalar_override_beats_array_default`, pins the §6.6.2
+PRECEDENCE arm on the other shaped parameter — the one whose declared `default`
+IS an array. `scale` is overridden by one scalar, so every `theta` cell is
+`1 + 0.5*3 = 2.5` and `min == max` again; a binding that ranks the scalar
+override behind the declared array reads `[1, 2, 3, 4]` and answers
+`[1.5, 2.0, 2.5, 3.0]`, disagreeing in three cells of four and on both
+reductions. Julia did exactly that — its registration tested the scalar arm
+AFTER the declared-`default` arms, so a scalar override of a parameter with an
+array `default` was silently dropped while Rust and Python honoured it.
+
+#### 5.32.3 A scalar override takes the same channel
+
+esm-spec §6.6.2 puts an override in the same value union as the `default`, so a
+SCALAR `parameter_overrides` entry naming a shaped parameter MUST broadcast too —
+it does not fall back to the scalar `p` vector, which cannot express it, and it
+MUST NOT lose to the very `default` it replaces, whichever spelling that default
+uses. One union means one precedence: the two spellings of an override rank
+identically against the declaration. The
+routing is each binding's own (Julia broadcasts it in
+`_register_inline_array_parameters`; Python resolves it before broadcasting onto
+`input_arrays`; Rust binds it onto the ephemeral run document's `default`, which
+the array compile then lowers); the assertion actual is what conforms.
+
+#### 5.32.4 Gate
+
+Per-binding runners drive the fixture and gate every assertion actual against the
+committed golden: **Julia** —
+`pkg/EarthSciAST.jl/test/conformance_shaped_parameter_broadcast_test.jl`;
+**Python** —
+`pkg/earthsci-ast-py/tests/test_shaped_parameter_broadcast_conformance.py`;
+**Rust** —
+`pkg/earthsci-ast-rs/tests/shaped_parameter_broadcast_conformance.rs`.
+`bindings_required` is `["julia", "python", "rust"]`; `reference_binding` is
+**julia**. TypeScript and Go are `scope_excluded` — rewrite-only ports whose
+runners are, respectively, a scalar expression evaluator with no state vector and
+a parse-plus-validate surface with no evaluator at all — though both accept and
+round-trip the document.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
@@ -4486,6 +4593,7 @@ ever emitted it, and the code had zero real coverage.
 | `array_shape_mismatch` | Structural | An operand of a BARE array-level expression is declared over an index set the result is not shaped over (esm-spec §4.3.4). Operands align by index-set NAME: one declared over a SUBSET of the result's sets broadcasts along the missing axes and axis order is immaterial, but one carrying an EXTRA set has no axis to align to. Pointer: the containing expression field (`…/equations/i/rhs`, `…/variables/v/expression`). Both shapes are declared, so this is static — hard error, NOT a warning, and NOT a runtime concern. Fixture: `tests/invalid/array_broadcast/operand_index_set_not_in_result.esm`. |
 | `recurrence_not_wellfounded` | Structural | A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier along exactly one axis: a read provably at the same cell or later on its axis, an index argument that is not affine in its frame symbol with coefficient 1, an offset on more than one axis, self-reads disagreeing on the axis, a bare read of the variable in its own RHS, or a recurrence axis that is ragged / derived / strided. Hard error in EVERY binding, executing or not (§5.19.5) — the pre-1.0 behaviour was a plausible wrong number. Pointer: the containing expression field (`…/equations/i/rhs`). |
 | `recurrence_unsupported_form` | Structural | A self-read the runtime cannot restrict to one cell: reached through a `makearray` region value or a `reshape`/`transpose`/`concat` operand, or in an equation whose RHS is not an `aggregate` over the variable's frame or whose output ranges are not statically resolvable (esm-spec §4.3.1.1). Distinct from `recurrence_not_wellfounded`: the READ is causal, the CARRIER cannot sequence it. |
+| `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 
 #### 7.1.0 List-valued diagnostic details are sorted
 

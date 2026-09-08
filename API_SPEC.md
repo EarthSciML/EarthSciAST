@@ -863,6 +863,7 @@ reading that as a gap.
 | `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
 | `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceError` / `ReferenceResolutionError` | `ReferenceResolutionError` |
 | `reference_vertex` | type | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
+| `reject_solver_pre_v11` | function | `reject_solver_pre_v11` | `rejectSolverPreV11` | `reject_solver_pre_v11` | `reject_solver_pre_v11` | `RejectSolverPreV11` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
 | `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` / `remove_coupling_from_file` | `remove_coupling` | `RemoveCoupling` |
 | `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` / `remove_reaction_from_system` | `remove_reaction` | `RemoveReaction` |
@@ -944,6 +945,8 @@ reading that as a gap.
 | `remove_event` | function | `remove_event` | `removeEvent` | `remove_event` / `remove_event_from_model` | – | `RemoveEvent` |
 | `rename_variable` | function | `rename_variable` | `renameVariable` | `rename_variable` / `rename_variable_in_model` | – | `RenameVariable` |
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
+| `resolve_tolerances` | function | `resolve_tolerances` | `resolveTolerances` | `resolve_tolerances` | `resolve_tolerances` | – |
+| `solver` | type | `Solver` | – | `Solver` | `Solver` | `Solver` |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
@@ -1014,6 +1017,8 @@ reading that as a gap.
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
 | `dae_info` | type | – | – | – | `DaeInfo` | `DAEInfo` |
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
+| `default_abstol` | constant | – | `DEFAULT_ABSTOL` | – | `DEFAULT_ABSTOL` | – |
+| `default_reltol` | constant | – | `DEFAULT_RELTOL` | – | `DEFAULT_RELTOL` | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
 | `derive_output_meta` | function | `derive_output_meta` | – | – | `derive_output_meta` | – |
 | `derive_output_plan` | function | `derive_output_plan` | – | – | `derive_output_plan` | – |

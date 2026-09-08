@@ -245,6 +245,8 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(raw_data)
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    reject_solver_pre_v11(raw_data)
 
     # Validate schema
     schema_errors = validate_schema(raw_data)
@@ -422,8 +424,12 @@ _with_declarations(file::EsmFile, templates, metaparams;
             coordinates=coordinates,
             # `coupling_roles` is read at the coercion boundary (no lowering
             # pass rewrites it), so carry the already-coerced value across
-            # this rebuild rather than re-snapshotting it.
-            coupling_roles=file.coupling_roles)
+            # this rebuild rather than re-snapshotting it. `solver` (esm-spec
+            # §2.2) is read at the same boundary for the same reason and is
+            # carried the same way — dropping it here would delete the block on
+            # every document that goes through template lowering.
+            coupling_roles=file.coupling_roles,
+            solver=file.solver)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])
@@ -476,11 +482,81 @@ function _reject_library_ref(raw_doc, ref::AbstractString,
 end
 
 """
+    _native_index_set_is_folded(decl) -> Bool
+
+Is this post-wire `index_sets` entry mergeable as it stands, i.e. is its `size`
+either absent (categorical / derived / ragged) or already a concrete integer?
+
+A `size` that is still a metaparameter expression — a bare name, or an
+`{op, args}` tree (esm-spec §9.7.6) — is not. See [`_merge_native_index_sets!`](@ref).
+"""
+function _native_index_set_is_folded(decl)
+    decl isa AbstractDict || return false
+    haskey(decl, "size") || return true
+    sz = decl["size"]
+    return sz isa Integer && !(sz isa Bool)
+end
+
+"""
+    _merge_native_index_sets!(native, comp, ref) -> native
+
+Merge a mounted component file's top-level `index_sets` into the importing
+document's registry at the NATIVE-dict layer (esm-spec §4.7 "Index-set merge").
+
+The typed [`_merge_subsystem_index_sets!`](@ref) cannot serve here: a top-level
+`models.<k>` `{ref}` mount is inlined by a raw pre-pass that runs BEFORE schema
+validation and coercion, so both sides are still post-wire `OrderedDict` trees.
+The RULE is the same one — deep-equal redeclaration is idempotent (`==` on the
+post-wire carrier is structural and key-order-independent), an absent name is
+added, and a non-deep-equal collision throws
+[`ExpressionTemplateError`](@ref) with the stable code
+`subsystem_index_set_conflict`. Merging here is what keeps the two model mount
+forms consistent: an assembly that mounts a leaf through a top-level `ref`
+inherits the leaf's axes exactly as one that mounts it as a subsystem does,
+instead of having to redeclare them.
+
+One declaration is NOT merged here: an `interval` whose `size` is still an
+unfolded metaparameter expression. §4.7 merges a mounted file's axes "after the
+referenced document's metaparameters are closed and folded", and at THIS
+attachment point they have not been — the top-level inliner is a raw pre-pass
+that drops the leaf's `metaparameters` block and defers everything §9.7 to the
+ROOT pass. Merging such a declaration anyway resolves it in the wrong scope: the
+root either has no binding for the leaf's name, and coercing `size` to `Int`
+dies with a bare `MethodError`, or it happens to declare the same name and the
+axis silently takes the ROOT's value instead of the leaf's own default. Skipping
+leaves the axis exactly where it was before this merge existed — undeclared, so
+the importer must redeclare it — which is the honest state until a top-level
+mount edge closes the leaf's metaparameters the way a subsystem edge does
+(`_load_ref`'s `metaparameters=ref.bindings`).
+"""
+function _merge_native_index_sets!(native::AbstractDict{String,Any}, comp, ref::String)
+    loaded = get(comp, "index_sets", nothing)
+    (loaded isa AbstractDict && !isempty(loaded)) || return native
+    registry = get!(() -> OrderedDict{String,Any}(), native, "index_sets")
+    registry isa AbstractDict || return native
+    for (n, decl) in loaded
+        _native_index_set_is_folded(decl) || continue
+        if haskey(registry, n)
+            registry[n] == decl || throw(ExpressionTemplateError(
+                ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT,
+                "index set '$(n)' from subsystem ref '$(ref)' collides with a " *
+                "non-deep-equal declaration in the importing document. A referenced " *
+                "subsystem file's top-level index_sets merge into the importing " *
+                "document's registry; deep-equal redeclaration is idempotent, " *
+                "a size/kind disagreement is a load-time error (esm-spec §4.7)."))
+        else
+            registry[n] = decl
+        end
+    end
+    return native
+end
+
+"""
     _inline_toplevel_model_refs(raw_data, base_path) -> Union{Nothing,Dict{String,Any}}
 
 Return a native ESM dict with every top-level model `{ref}` stub replaced by the
-referenced component's model (and its `function_tables` / `enums` /
-`data_sources` merged in), or `nothing` when `raw_data` has no such stub.
+referenced component's model (and its `index_sets` / `function_tables` / `enums`
+/ `data_sources` merged in), or `nothing` when `raw_data` has no such stub.
 The stub path copies the document (`_to_ordered`, order-preserving) so the
 in-place worker never mutates the caller's tree; the reaction-system inliner
 composes on the same copy, and `load_document` resolves stubs exactly
@@ -569,6 +645,17 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
                 _absolutize_nested_refs!(imports_native, base_path)
                 _append_component_imports!(cmodel, imports_native)
             end
+            # esm-spec §4.7 "Index-set merge": the leaf's document-scoped
+            # `index_sets` join THIS document's registry, exactly as they do at a
+            # subsystem-ref edge (`_resolve_subsystem_ref`) — the two mount forms
+            # are one mechanism at two attachment points, so an assembly may shape
+            # its coupling over the leaf's axes without redeclaring them. Merged
+            # AFTER the component-of-component recursion above, so `comp`'s
+            # registry already carries whatever ITS own mounts brought in and the
+            # merge composes transitively. Unlike the by-name blocks below, the
+            # importer does NOT silently win a clash: a non-deep-equal collision is
+            # the load-time error `subsystem_index_set_conflict`.
+            _merge_native_index_sets!(native, comp, ref)
             # Merge the by-name blocks the model's AST references; the parent wins
             # on a key clash (its own definitions take precedence).
             for blk in ("function_tables", "data_sources", "enums")
@@ -1219,6 +1306,8 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
 
     reject_expression_templates_pre_v04(raw_data)
     reject_template_imports_pre_v08(raw_data)
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    reject_solver_pre_v11(raw_data)
 
     # A §4.7 subsystem ref MUST NOT target a template- or coupling-library
     # file (esm-spec §9.7.1, §10.9). No location suffix for a remote ref: the

@@ -141,6 +141,30 @@ end
         sol = solve!(integ)
         @test sol.retcode == ReturnCode.Success
         @test isapprox(sol[Y][end], 1.0; atol = 1e-6)
+
+        # esm-spec §2.2.2: the chain runs wherever a document is INTEGRATED, not
+        # at the `solve()` call site, so `init` resolves it too — a stepping
+        # caller who names no tolerance gets the DOCUMENT's, and an explicit
+        # argument still wins. Both doors go through `_run_kwargs`, which is what
+        # keeps them from drifting; this pins that they have not.
+        with_solver(block) = merge(scalar_esm(1.0), Dict{String,Any}(
+            "esm" => "1.1.0", "solver" => block))
+        declared = init(esm_problem(with_solver(Dict{String,Any}(
+            "abstol" => 1e-8, "reltol" => 1e-6)), (0.0, 1.0)), Tsit5())
+        @test declared.opts.abstol == 1e-8
+        @test declared.opts.reltol == 1e-6
+
+        explicit = init(esm_problem(with_solver(Dict{String,Any}(
+            "abstol" => 1e-8, "reltol" => 1e-6)), (0.0, 1.0)), Tsit5();
+            abstol = 1e-12, reltol = 1e-11)
+        @test explicit.opts.abstol == 1e-12
+        @test explicit.opts.reltol == 1e-11
+
+        # Per FIELD: what the document leaves unsaid falls through to level 3.
+        partial = init(esm_problem(with_solver(Dict{String,Any}("reltol" => 1e-9)),
+                                   (0.0, 1.0)), Tsit5())
+        @test partial.opts.reltol == 1e-9
+        @test partial.opts.abstol == EarthSciAST.DEFAULT_SIM_ABSTOL
     end
 
     @testset "retcode is a SciML ReturnCode, not a Symbol or a success flag" begin

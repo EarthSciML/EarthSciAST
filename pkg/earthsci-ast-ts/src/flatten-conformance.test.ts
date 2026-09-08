@@ -153,9 +153,16 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // the tree that pins a real TRANSLATION match (§4.7.1 step 2's namespaced
     // endpoints and step 4's merged-away-name prune), plus the
     // `chained_compose` tier: three entries chained over one state with the
-    // OPERATOR as A, which is what makes step 4's ownership rule observable.
-    expect(corpus.cases.length).toBe(24)
-    expect(corpus.refusals.length).toBe(3)
+    // OPERATOR as A, which is what makes step 4's ownership rule observable,
+    // plus `variable_map_subsystem_endpoints` — the one document that spells
+    // coupling endpoints with THREE segments, so a binding resolving them by
+    // splitting on the first dot is distinguishable from one that walks the
+    // whole §4.6 path.
+    expect(corpus.cases.length).toBe(25)
+    // 4 = template_import_lib, couple_multiplicative_no_tendency, the
+    // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
+    // CASE 10 maps onto a target the document declares nowhere.
+    expect(corpus.refusals.length).toBe(4)
     expect(corpus.oracle).toContain('earthsci_ast.flatten')
   })
 

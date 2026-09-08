@@ -62,8 +62,8 @@ fn reference_dimension_names_are_bound_per_cell() {
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
     let opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: rs["reltol"].as_f64().expect("reltol"),
-        abstol: rs["abstol"].as_f64().expect("abstol"),
+        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
+        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
         ..Default::default()
     };
     let rtol = manifest["tolerances"]["assertion_rtol"]

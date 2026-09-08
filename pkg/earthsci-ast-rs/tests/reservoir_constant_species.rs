@@ -58,8 +58,8 @@ fn reservoir_reactant_held_fixed() {
     let sample_times = vec![1.0, 2.0, 3.0];
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-14,
-        reltol: 1e-10,
+        abstol: Some(1e-14),
+        reltol: Some(1e-10),
         maxiters: 1_000_000,
         saveat: Some(sample_times.clone()),
         ..Default::default()

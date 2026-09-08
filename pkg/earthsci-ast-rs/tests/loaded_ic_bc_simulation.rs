@@ -152,8 +152,8 @@ fn loaded_ic_bc_simulation_provider_injection() {
     // ---- Simulate 0 -> 600 ---------------------------------------------------
     let opts = SolveOptions {
         alg: Alg::Erk,
-        abstol: 1e-12,
-        reltol: 1e-10,
+        abstol: Some(1e-12),
+        reltol: Some(1e-10),
         maxiters: 10_000_000,
         saveat: Some(vec![0.0, 600.0]),
         ..Default::default()

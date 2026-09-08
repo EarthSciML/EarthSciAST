@@ -574,6 +574,16 @@ def _expr_to_sympy(
         # Handle different operations
         if expr.op == "+":
             return sum(sympy_args) if sympy_args else 0
+        if expr.op == "neg":
+            # Strictly unary (op_registry `Arity::Exact(1)`), and NOT a spelling
+            # alias of `-`: `canonicalize()` REWRITES a 1-operand `-` into `neg`,
+            # so a canonicalized document contains `neg` nodes and every consumer
+            # must accept one. The op registry listed it while this dispatch did
+            # not, which made this binding's own canonicalizer output unevaluable
+            # -- and made `tests/valid/solver_block.esm` unrunnable here.
+            if len(sympy_args) != 1:
+                raise SimulationError(f"neg requires exactly 1 argument, got {len(sympy_args)}")
+            return -sympy_args[0]
         if expr.op == "-":
             if len(sympy_args) == 1:
                 return -sympy_args[0]

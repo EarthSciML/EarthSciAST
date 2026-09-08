@@ -442,7 +442,7 @@ fn flatten_matches_the_shared_corpus() {
     );
 }
 
-/// The two documents the corpus records as REFUSALS must be refused here too.
+/// Every document the corpus records as a REFUSAL must be refused here too.
 ///
 /// The corpus names the oracle's exception CLASS; Rust's taxonomy is its own,
 /// so what is pinned is the refusal itself and the STAGE it happens at — the

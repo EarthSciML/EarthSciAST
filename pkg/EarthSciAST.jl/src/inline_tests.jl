@@ -1640,8 +1640,18 @@ resolution, the pass predicate, per-test wall-time accounting, and JUnit
 emission ([`write_junit_xml`](@ref), with `file=...` labeling the batch)
 cannot drift apart. `alg` is REQUIRED (e.g. `Tsit5()` with
 OrdinaryDiffEqTsit5 loaded) — the solve runs in the SciMLBase extension.
-`reltol`/`abstol` default to the shared inline-test solver tolerances
-`DEFAULT_TEST_RELTOL` / `DEFAULT_TEST_ABSTOL`.
+`reltol`/`abstol` default to `nothing`, and that is load bearing rather than
+merely tidy: it is what keeps the DOCUMENT's own opinion expressible. Each
+resolves per esm-spec §2.2.2, most-specific first — an `options_for` override,
+then the keyword here, then this document's `solver.reltol` / `solver.abstol`
+(§2.2), then the shared inline-test defaults `DEFAULT_TEST_RELTOL` /
+`DEFAULT_TEST_ABSTOL`. The runner defaults sit at the BOTTOM of the chain
+because they are binding defaults, not a caller's opinion, so a document that
+declares its own integration accuracy gets it without every caller naming it.
+Passing a value explicitly overrides the document, which is why a concrete
+default here would silently have suppressed it. These are INTEGRATION
+tolerances and are a different quantity from the §6.6.4 assertion tolerance
+above.
 
 This entry was called `run_pde_tests` until it grew the ability to run a whole
 corpus. The name was always too narrow — the §6.6.5 spatial reductions are one
@@ -1651,8 +1661,8 @@ assertions of an ODE document through the same frame — so it is now
 """
 function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=nothing,
                           alg=nothing,
-                          reltol::Float64=DEFAULT_TEST_RELTOL,
-                          abstol::Float64=DEFAULT_TEST_ABSTOL,
+                          reltol::Union{Float64,Nothing}=nothing,
+                          abstol::Union{Float64,Nothing}=nothing,
                           base_dir::Union{Nothing,AbstractString}=nothing,
                           options_for=nothing)
     documents = _expand_inputs(inputs)
@@ -1689,8 +1699,14 @@ function _run_document_tests!(results, file::EsmFile, document, o;
                               model_name, alg, reltol, abstol, base_dir)
     d_model_name = _opt_or(o, :model_name, model_name)
     d_alg        = _opt_or(o, :alg, alg)
-    d_reltol     = Float64(_opt_or(o, :reltol, reltol))
-    d_abstol     = Float64(_opt_or(o, :abstol, abstol))
+    # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
+    # keyword, then THIS DOCUMENT's `solver` block, then the runner defaults
+    # (which `_test_integration_tolerances` supplies as its own fallback). A
+    # `nothing` at either of the first two levels is what lets the next one
+    # speak. INTEGRATION tolerances; the §6.6.4 assertion tolerance is separate.
+    doc_reltol, doc_abstol = _test_integration_tolerances(file.solver)
+    d_reltol     = Float64(_opt_or(o, :reltol, reltol === nothing ? doc_reltol : reltol))
+    d_abstol     = Float64(_opt_or(o, :abstol, abstol === nothing ? doc_abstol : abstol))
     d_base_dir   = _opt_or(o, :base_dir, base_dir)
     seed_p       = _opt_dict(o, :parameter_overrides)
     seed_u0      = _opt_dict(o, :initial_conditions)

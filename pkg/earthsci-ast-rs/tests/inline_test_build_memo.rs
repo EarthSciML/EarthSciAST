@@ -32,8 +32,8 @@ use std::path::Path;
 
 fn opts() -> SolveOptions {
     SolveOptions {
-        reltol: 1e-10,
-        abstol: 1e-12,
+        reltol: Some(1e-10),
+        abstol: Some(1e-12),
         ..Default::default()
     }
 }

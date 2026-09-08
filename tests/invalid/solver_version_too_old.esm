@@ -1,0 +1,38 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "solver_version_too_old",
+    "description": "A `solver` block in a document declaring esm 1.0.0. The block arrives at esm 1.1.0, so this MUST be rejected with `solver_version_too_old` (esm-spec \u00a72.2.4, \u00a72.2.5) \u2014 the version hint, not a generic unknown-property schema error, which is why every binding runs the gate BEFORE schema validation."
+  },
+  "solver": {
+    "stiffness": "high"
+  },
+  "models": {
+    "TestModel": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "m",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
