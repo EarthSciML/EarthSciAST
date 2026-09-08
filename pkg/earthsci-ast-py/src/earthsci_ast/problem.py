@@ -801,7 +801,7 @@ def solve(
             prob.inspect,
             maxiters=maxiters,
         )
-        return _finish_segmented(sol, saveat, cb)
+        return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.pathway == "loaders":
         sol = _simulate_with_loaders(
             prob.flat,
@@ -815,36 +815,61 @@ def solve(
             provider_factory=prob.provider_factory,
             maxiters=maxiters,
         )
-        return _finish_segmented(sol, saveat, cb)
+        return _with_merged_renames(prob, _finish_segmented(sol, saveat, cb))
     if prob.pathway == "array":
-        return _simulate_with_numpy(
+        return _with_merged_renames(
+            prob,
+            _simulate_with_numpy(
+                prob.flat,
+                prob.tspan,
+                prob.p,
+                prob.u0,
+                alg,
+                rtol=reltol,
+                atol=abstol,
+                loader_arrays=prob.const_arrays,
+                prebuilt=prob.build,
+                maxiters=maxiters,
+                saveat=saveat,
+                callback=cb,
+            ),
+        )
+    return _with_merged_renames(
+        prob,
+        _simulate_scalar(
             prob.flat,
             prob.tspan,
             prob.p,
             prob.u0,
             alg,
-            rtol=reltol,
-            atol=abstol,
-            loader_arrays=prob.const_arrays,
-            prebuilt=prob.build,
+            reltol,
+            abstol,
+            prob.cse,
+            prebuilt=prob.scalar_build,
             maxiters=maxiters,
             saveat=saveat,
             callback=cb,
-        )
-    return _simulate_scalar(
-        prob.flat,
-        prob.tspan,
-        prob.p,
-        prob.u0,
-        alg,
-        reltol,
-        abstol,
-        prob.cse,
-        prebuilt=prob.scalar_build,
-        maxiters=maxiters,
-        saveat=saveat,
-        callback=cb,
+        ),
     )
+
+
+def _with_merged_renames(prob: EsmProblem, sol: Solution) -> Solution:
+    """Stamp the flatten-time merge map onto a finished solution (issue #230).
+
+    A caller reading ``sol["Sink.O3"]`` after an ``operator_compose`` renaming
+    match folded it into ``Chem.O3`` is naming a state that MOVED. The solution
+    is the one object such a caller holds and the flattened system is not in its
+    hand, so the map travels with the result; :meth:`Solution.resolve_name`
+    consults it only for a name the solution does not already carry.
+
+    Mutates in place rather than rebuilding: the pathways return solutions built
+    at four different sites, and a rebuild would have to keep every optional
+    field of each in step.
+    """
+    renames = prob.flat.metadata.merged_variable_renames
+    if renames:
+        sol.merged_renames = dict(renames)
+    return sol
 
 
 def _finish_segmented(sol: Solution, saveat: Any, cb: Any) -> Solution:

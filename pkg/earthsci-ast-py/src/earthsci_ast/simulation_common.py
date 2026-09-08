@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -117,6 +117,16 @@ class Solution:
     njev: int = 0
     nlu: int = 0
     events: list[np.ndarray] | None = None
+    #: Every state spelling an ``operator_compose`` renaming match DELETED,
+    #: mapped onto the survivor it was folded into
+    #: (:attr:`~earthsci_ast.flatten.FlattenMetadata.merged_variable_renames`;
+    #: EarthSciML/EarthSciAST#230). A caller holding ``"Sink.O3"`` after the
+    #: merge folded it into ``Chem.O3`` is naming a state that MOVED, not one
+    #: that never existed, so the name-keyed reads below resolve through this
+    #: before reporting a miss. Empty for a document with no renaming merge,
+    #: which is the overwhelming majority; the field is defaulted so every
+    #: construction site that does not know the map is unaffected.
+    merged_renames: dict[str, str] = field(default_factory=dict)
 
     # ---- name-keyed access (esm-libraries-spec §2.5.7) --------------------
     def __getitem__(self, key: str | int) -> np.ndarray:
@@ -140,7 +150,20 @@ class Solution:
             f"{name!r} is not a variable of this solution (have: {', '.join(self.vars)})"
         )
 
+    def resolve_name(self, name: str) -> str:
+        """``name``, or the survivor it was merged into (issue #230).
+
+        An exact hit on a live row always wins; the map is consulted only for a
+        name this solution does not carry, so it can never shadow a real one.
+        """
+        if name in self.vars:
+            return name
+        return self.merged_renames.get(name, name)
+
     def _row_index(self, name: str) -> int | None:
+        if name in self.vars:
+            return self.vars.index(name)
+        name = self.resolve_name(name)
         if name in self.vars:
             return self.vars.index(name)
         tails = [i for i, v in enumerate(self.vars) if v.rsplit(".", 1)[-1] == name]
@@ -150,6 +173,7 @@ class Solution:
 
     def _element_rows(self, name: str) -> list[int]:
         """Row indices of the element spellings of an array state ``name``."""
+        name = self.resolve_name(name)
         out: list[int] = []
         for i, v in enumerate(self.vars):
             base = v.split("[", 1)[0]
@@ -214,9 +238,13 @@ class Solution:
             plot_vars = []
             plot_indices = []
             for var in variables:
-                if var in self.vars:
+                # A merged-away spelling names a state that MOVED (issue #230),
+                # so it resolves to the survivor's row — but the series keeps
+                # the label the caller asked for. An exact hit still wins.
+                resolved = self.resolve_name(var)
+                if resolved in self.vars:
                     plot_vars.append(var)
-                    plot_indices.append(self.vars.index(var))
+                    plot_indices.append(self.vars.index(resolved))
                 else:
                     warnings.warn(
                         f"Variable '{var}' not found in simulation results",
