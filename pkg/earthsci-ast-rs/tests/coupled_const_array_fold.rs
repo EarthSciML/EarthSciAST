@@ -21,7 +21,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use earthsci_ast::{SolveOptions, flatten, load_path, run_pde_tests_with_base_dir};
 
