@@ -330,7 +330,11 @@ function outputSlice(table: FunctionTable, output: number, tableId: string): unk
 function axisConst(axis: FunctionTableAxis, tableId: string): Expr {
   for (const value of axis.values) {
     const n = numericValue(value)
-    if (n === undefined || Number.isNaN(n)) {
+    // `isFinite`, not `isNaN`: §9.5.1 requires FINITE floats, and the other
+    // four bindings reject ±Infinity here too. An infinite knot is the worse
+    // of the two failures — it makes the §9.2 blend weight 0 or NaN with no
+    // diagnostic, and the lowered `const` then serializes as JSON `null`.
+    if (n === undefined || !Number.isFinite(n)) {
       fail(
         ERROR_CODES.TABLE_AXIS_NAN,
         `table \`${tableId}\`: axis \`${axis.name}\` carries a non-finite value; axis \`values\` ` +

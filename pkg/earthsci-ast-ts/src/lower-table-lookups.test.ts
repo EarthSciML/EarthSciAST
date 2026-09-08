@@ -341,6 +341,16 @@ describe('§9.5.5 diagnostics', () => {
       ERROR_CODES.TABLE_AXIS_NAN,
     )
   })
+
+  // §9.5.1 says FINITE, and the other four bindings refuse ±Infinity here.
+  // An infinite knot is worse than a NaN one: it yields a 0-or-NaN §9.2 blend
+  // weight with no diagnostic, and the lowered `const` serializes as `null`.
+  it.each([Infinity, -Infinity])('names an infinite axis knot (%s) `table_axis_nan`', (v) => {
+    const inf = tables({ t: { axes: [{ name: 'p', values: [1, v] }], data: [10, 20] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup(), inf))).toBe(
+      ERROR_CODES.TABLE_AXIS_NAN,
+    )
+  })
 })
 
 describe('§9.5.4 round-trip: lowering never touches the loaded image', () => {
