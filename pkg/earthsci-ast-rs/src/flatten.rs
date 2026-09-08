@@ -2982,9 +2982,13 @@ fn check_variable_map_endpoints(
             continue;
         };
         // A `from` served by a data source never lands in the collected tables.
-        let from_is_loaded = from
+        // The owner is the segment BEFORE the first dot, and a dotless `from`
+        // is its own owner — matching the other four bindings, which all take
+        // the whole string when there is no dot.
+        let from_owner = from
             .split_once('.')
-            .is_some_and(|(owner, _)| loader_names.contains(owner));
+            .map_or(from.as_str(), |(owner, _)| owner);
+        let from_is_loaded = loader_names.contains(from_owner);
         for (side, endpoint) in [("from", from), ("to", to)] {
             if endpoint.is_empty()
                 || known.contains(endpoint.as_str())
