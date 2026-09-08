@@ -795,6 +795,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         end
     end
 
+    # Step 2b: coupling ENDPOINT preflight (esm-spec §4.6 / §10.4). Runs here,
+    # after collection and before any coupling is applied, so it sees the
+    # PRE-coupling tables — an `operator_compose` `translate` merge (§10.2)
+    # legitimately consumes one of two spellings of a quantity, and checking
+    # afterwards would flag a well-formed endpoint.
+    _check_variable_map_endpoints(file, states, params, observeds)
+
     # Step 3: Apply coupling rules.
     coupling_rules_applied = String[]
     opaque_refs = String[]
