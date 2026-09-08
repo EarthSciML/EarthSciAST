@@ -35,7 +35,7 @@ from earthsci_ast.error_handling import (
 )
 from earthsci_ast.numpy_interpreter import EvalContext, NumpyInterpreterError, sweep_recurrence
 from earthsci_ast.parse import SchemaValidationError, load_path, load_string
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _RECURRENCE_DIR = FIXTURES_ROOT / "fixtures" / "recurrence"
 
@@ -44,7 +44,7 @@ _RECURRENCE_DIR = FIXTURES_ROOT / "fixtures" / "recurrence"
 # 1. The six pinned fixtures
 # ---------------------------------------------------------------------------
 #
-# Each fixture declares `tolerance: {rel: 0, abs: 0}`, so `run_pde_tests`
+# Each fixture declares `tolerance: {rel: 0, abs: 0}`, so `run_inline_tests`
 # compares with `==` and "passed" here means BIT-identical to the pinned value.
 # The expected values are restated in this module as well, so a fixture edited
 # to match a wrong implementation would fail here rather than pass quietly.
@@ -167,7 +167,7 @@ def test_fixture_inline_assertions_pass_at_zero_tolerance(stem: str) -> None:
     a missing ``actual`` is reported separately because it is what a variable
     that never materialized looks like.
     """
-    results = run_pde_tests(str(_RECURRENCE_DIR / f"{stem}.esm"))
+    results = run_inline_tests(str(_RECURRENCE_DIR / f"{stem}.esm"))
     assert results, f"{stem}: the fixture asserts nothing"
     for r in results:
         assert r.rtol == 0.0 and r.atol == 0.0, (
@@ -307,7 +307,7 @@ def test_unguarded_self_read_never_reaches_an_assertion_as_a_value() -> None:
     plausible-looking numbers for the whole axis, so the assertion here is that
     ``actual`` is absent — not that it differs from the expected value.
     """
-    results = run_pde_tests(load_string(_probe_document(_UNGUARDED_BODY)))
+    results = run_inline_tests(load_string(_probe_document(_UNGUARDED_BODY)))
     assert len(results) == 1
     assert results[0].actual is None and not results[0].passed
     assert "E_TREEWALK_RECUR_UNAVAILABLE" in results[0].message

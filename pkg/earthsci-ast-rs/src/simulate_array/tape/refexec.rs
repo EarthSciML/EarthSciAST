@@ -218,6 +218,7 @@ pub(super) fn run_reference(
                     forcing: &compiled.forcing,
                     cse: None,
                     const_arrays: &compiled.const_scope,
+                    declared: &compiled.declared_names,
                 };
                 match info.kind {
                     RuleKind::Observed(i) => {

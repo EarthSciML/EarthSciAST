@@ -5,7 +5,7 @@
 # scalar, a state with no `ic` falls back to its declared `default`, and a
 # test's `initial_conditions` overrides the `ic` for that run. Model PARAMETERS
 # bind in the RHS's build-time evaluation scope (§6.6.5). The reference binding
-# (Julia) runs the OFFICIAL `run_pde_tests` pathway over the committed fixtures
+# (Julia) runs the OFFICIAL `run_inline_tests` pathway over the committed fixtures
 # and must reproduce the committed goldens (which that same pathway minted).
 #
 # This is the conformance GATE for the 0-D `ic` fix. Before it, Python dropped
@@ -51,7 +51,7 @@ const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=1e-12, abstol=1e-14)
             @test length(results) == length(golden.assertions)

@@ -21,6 +21,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # ---- Core types, parse, validate, display (src/types.jl, parse.jl,
     #      validate.jl, display.jl, graph.jl) ----
     include("types_test.jl")
+    include("solver_block_test.jl")
     include("classification_test.jl")
     include("parse_test.jl")
     # Version-marker migration (src/migration.jl, esm-libraries-spec §8.3) —
@@ -36,6 +37,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # category (CONFORMANCE_SPEC §5.19.5), so it sits with the other structural
     # checks rather than with the tree-walk tests.
     include("recurrence_validation_test.jl")
+    # Observed dependency cycles (esm-spec §4.9.6, issue #181). Sits beside the
+    # recurrence pass because the two share the CANDIDACY gate that decides
+    # which of them owns a self-edge (CONFORMANCE_SPEC §5.19.5).
+    include("observed_cycle_validation_test.jl")
     include("expression_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
@@ -82,6 +87,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("shape_promotion_test.jl")
     include("shape_promotion_consumer_refs_test.jl")  # promoted-var consumers gathered in-loop
     include("subsystem_ref_test.jl")
+    include("mount_index_set_rename_test.jl")  # §4.7 mount-edge index_set_rename
     include("reaction_system_ref_test.jl")
     include("editing_test.jl")
     include("data_loader_fixtures_test.jl")
@@ -261,7 +267,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("gated_sibling_loaders_test.jl")      # hook 2: sibling loaders sharing a variable name
     include("build_inspection_test.jl")
     include("observed_field_static_test.jl")  # §5.8 name resolution on a state-free document
-    include("pde_inline_tests_test.jl")
+    include("inline_tests_test.jl")
     include("pde_inline_scalar_slot_collision_test.jl")
     include("pde_inline_dead_observed_test.jl")  # #176: an observed no live equation consumes
     include("mounted_component_tests_test.jl")   # #198: a mount does not carry the leaf's tests
@@ -275,6 +281,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("conformance_assertion_nonfinite_test.jl")  # §6.6.3 non-finite actuals
     include("assertion_tolerance_symmetry_test.jl")     # §6.6.3 symmetric relative bound
     include("conformance_scalar_ic_test.jl")
+    include("conformance_shaped_parameter_broadcast_test.jl")  # §6.3 scalar-on-a-shaped-parameter broadcast
     include("conformance_override_key_diagnostics_test.jl")
     include("conformance_pde_inline_reference_dimension_names_test.jl")  # §6.6.5 reference dimension names
     include("closed_functions_test.jl")
@@ -284,6 +291,10 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("closed_functions_mtk_test.jl")
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+    # …and the same lowering on the path that EVALUATES a document (#188):
+    # the harness above does the lowering itself, so it cannot see whether the
+    # build front doors do.
+    include("function_tables_lowering_path_test.jl")
 
     # ---- Expression templates & scoped imports
     #      (src/lower_expression_templates.jl, template_imports.jl) ----

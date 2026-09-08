@@ -18,7 +18,7 @@ from __future__ import annotations
 from conftest import FIXTURES_ROOT
 
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 FIXTURES = FIXTURES_ROOT / "conformance" / "mounted_component_tests" / "fixtures"
 
@@ -27,7 +27,7 @@ def _run(name: str):
     """A fixture's inline tests through the library runner, ``load_path``
     included — that is what resolves the mount."""
     esm_file = load_path(str(FIXTURES / name))
-    return esm_file, run_pde_tests(esm_file, base_dir=str(FIXTURES))
+    return esm_file, run_inline_tests(esm_file, base_dir=str(FIXTURES))
 
 
 def test_the_leaf_alone_passes_its_own_test():

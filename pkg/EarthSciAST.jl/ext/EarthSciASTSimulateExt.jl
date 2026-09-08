@@ -40,7 +40,7 @@ const SII = SciMLBase.SymbolicIndexingInterface
 # --------------------------------------------------------------------------- #
 EarthSciAST._callback_set(cbs::AbstractVector) = SciMLBase.CallbackSet(cbs...)
 
-# The core's internal solve bridge (`run_pde_tests` and friends), routed through
+# The core's internal solve bridge (`run_inline_tests` and friends), routed through
 # the ONE public solve path so there is no second mechanism.
 EarthSciAST._solve_problem(prob::EsmProblem, alg; kwargs...) =
     SciMLBase.solve(prob, alg; kwargs...)
@@ -101,8 +101,24 @@ _ode_problem(prob::EsmProblem, tspan) = SciMLBase.ODEProblem(
 # --------------------------------------------------------------------------- #
 function _run_kwargs(prob::EsmProblem; kwargs...)
     kw = Dict{Symbol,Any}(kwargs)
-    haskey(kw, :reltol) || (kw[:reltol] = DEFAULT_SIM_RELTOL)
-    haskey(kw, :abstol) || (kw[:abstol] = DEFAULT_SIM_ABSTOL)
+    # esm-spec §2.2.2: caller > the document's `solver` block > binding default.
+    # `haskey` is what makes the first step expressible — a caller who named no
+    # tolerance is distinguishable from one who passed the default value, which
+    # is exactly the distinction the document sits in the middle of. Resolved
+    # per field, so a document declaring only `reltol` leaves `abstol` on the
+    # default (the same per-field fall-through §6.6.4 uses).
+    #
+    # These are INTEGRATION tolerances. The `tolerance` object an assertion is
+    # COMPARED at (§6.6.4) is a different quantity on its own chain and is not
+    # touched here.
+    let solver = EarthSciAST._document_solver(prob)
+        haskey(kw, :reltol) ||
+            (kw[:reltol] = something(solver === nothing ? nothing : solver.reltol,
+                                     DEFAULT_SIM_RELTOL))
+        haskey(kw, :abstol) ||
+            (kw[:abstol] = something(solver === nothing ? nothing : solver.abstol,
+                                     DEFAULT_SIM_ABSTOL))
+    end
     if haskey(kw, :callback)
         kw[:callback] === nothing && delete!(kw, :callback)
     else

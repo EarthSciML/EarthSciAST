@@ -95,6 +95,44 @@ func (e *CoupleMultiplicativeNoTendencyError) DiagnosticCode() string {
 	return CodeCoupleMultiplicativeNoTendency
 }
 
+// variableMapUnresolvedEndpointError reports that a `variable_map` endpoint
+// names nothing the flattened system carries (esm-spec §4.6, §10.4).
+//
+// Both halves of the entry are load-bearing and both used to fail SILENTLY. A
+// `to` that resolves to no parameter is simply never promoted: the document
+// declares a coupling, the target keeps its declared default, and nothing
+// downstream can tell "applied" from "ignored". A `from` that resolves to
+// nothing is worse — the substitution still runs, so every consumer of `to` is
+// rewritten to a name no table binds and the run yields NaN rather than a
+// diagnostic.
+//
+// Same reasoning as CoupleMultiplicativeNoTendencyError: a coupling
+// mis-specification must not have the one outcome that looks like success.
+//
+// Deliberately UNEXPORTED and carrying no stable diagnostic code.
+// `api-surface.json` is the cross-binding record of what every binding exports
+// ("a symbol absent from this manifest MUST NOT be exported"), and adding a
+// name there — or a code to the API_SPEC §8 registry — is a five-binding
+// contract change. Callers see the message; the refusal itself is what the
+// shared flatten corpus pins.
+type variableMapUnresolvedEndpointError struct {
+	// From and To are the entry's two endpoints as authored.
+	From string
+	To   string
+	// Side is "from" or "to" — which endpoint failed to resolve.
+	Side     string
+	Endpoint string
+}
+
+func (e *variableMapUnresolvedEndpointError) Error() string {
+	return fmt.Sprintf(
+		"flatten: variable_map(%s -> %s): the %q endpoint %q resolves to no variable, parameter "+
+			"or observed in the flattened system (esm-spec §4.6, §10.4). A scoped reference walks "+
+			"EVERY dot-separated segment, so a subsystem endpoint is spelled "+
+			"'<Model>.<Subsystem>.<name>'.",
+		e.From, e.To, e.Side, e.Endpoint)
+}
+
 // DimensionPromotionError reports that a variable or equation cannot be
 // promoted onto the target grid (esm-libraries-spec §4.7.6): here, that the
 // pointwise spatial lift (esm-spec §10.5) could not read the spatial loop
@@ -301,7 +339,10 @@ type FlattenedSystem struct {
 	// arrayed equations.
 	IndexSets []FlattenedIndexSet
 	// FunctionTables is the merged function-table registry; it resolves a
-	// surviving `table_lookup`.
+	// surviving `table_lookup`. Flattening deliberately does NOT lower those
+	// nodes (esm-spec §9.5.3 / §9.5.4 — see lower_table_lookup.go), so this
+	// registry is what makes them evaluable: (*FlattenedSystem).Evaluate lowers
+	// against it.
 	FunctionTables []FlattenedFunctionTable
 	// TemplateRegistry is the merged expression-template registry (esm-spec
 	// §9.6.4 rule 7, §10.7).
@@ -1724,6 +1765,61 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 	return nil
 }
 
+// checkVariableMapEndpoints is the resolution preflight for every
+// `variable_map` entry: each endpoint must name a state, parameter or observed
+// the collected system carries, under its FULL dot path (esm-spec §4.6).
+//
+// Until it existed both halves failed silently: applyVariableMap substitutes
+// `to` -> `from` whether or not either name binds, and its promotion step's
+// `parameters.remove` returns an `ok` that was discarded with `continue`. An
+// endpoint resolving to nothing therefore produced a flattened system
+// indistinguishable from one where the coupling had been applied and had
+// simply had no effect.
+//
+// EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
+// Such a producer is served through the runtime forcing seam rather than as a
+// declared variable, so it is legitimately absent from the tables (see
+// applyVariableMap, which records it as a loaded producer).
+//
+// Deliberately NOT checked: whether a promoting transform's `to` is a
+// PARAMETER rather than an unknown. tests/valid/scoped_refs_coupling.esm maps
+// `param_to_var` onto a declared unknown, and tightening that is a separate
+// question from whether the endpoint resolves at all.
+func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSystem,
+	order []string, coupling []CouplingEntry) error {
+	declared := map[string]bool{}
+	for _, sysName := range order {
+		comp := components[sysName]
+		for _, t := range []*varTable{comp.stateVars, comp.parameters, comp.observed} {
+			for _, v := range t.slice() {
+				declared[v.Name] = true
+			}
+		}
+	}
+	for _, entry := range coupling {
+		vm, ok := entry.(VariableMapCoupling)
+		if !ok {
+			continue
+		}
+		fromOwner, _, _ := strings.Cut(vm.From, ".")
+		_, fromIsLoaded := file.DataSources[fromOwner]
+		for _, side := range []struct{ name, endpoint string }{
+			{"from", vm.From}, {"to", vm.To},
+		} {
+			if side.endpoint == "" || declared[side.endpoint] {
+				continue
+			}
+			if side.name == "from" && fromIsLoaded {
+				continue
+			}
+			return &variableMapUnresolvedEndpointError{
+				From: vm.From, To: vm.To, Side: side.name, Endpoint: side.endpoint,
+			}
+		}
+	}
+	return nil
+}
+
 // applyVariableMap substitutes the target parameter with the source variable.
 //
 // For `param_to_var`, `conversion_factor`, and the empty/absent transform the
@@ -2048,6 +2144,13 @@ func collectComponents(file *ESMFile) (map[string]*componentSystem, []string, er
 // under it.
 func applyCouplings(file *ESMFile, components map[string]*componentSystem, order []string,
 	metadata *FlattenMetadata, coupling []CouplingEntry) error {
+	// Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
+	// `translate` merge (§10.2) legitimately consumes one of two spellings of a
+	// quantity, so checking after it ran would flag a well-formed endpoint.
+	if err := checkVariableMapEndpoints(file, components, order, coupling); err != nil {
+		return err
+	}
+
 	var composes []OperatorComposeCoupling
 	var couples []CouplingCouple
 	var varMaps []VariableMapCoupling

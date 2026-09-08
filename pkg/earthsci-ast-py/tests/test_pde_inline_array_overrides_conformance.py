@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "pde_inline_array_overrides"
 _MANIFEST = _ROOT / "manifest.json"
@@ -62,7 +62,7 @@ def test_array_overrides_match_golden(fixture: dict) -> None:
     golden = json.loads((_ROOT / fixture["golden"]).read_text())
     assert golden["reference_binding"] == "julia"
 
-    results = run_pde_tests(
+    results = run_inline_tests(
         str(esm_path),
         model_name=fixture["model"],
         method=integ["method"],

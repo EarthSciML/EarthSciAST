@@ -243,13 +243,27 @@ def parameters(model: Any) -> list[str]:
 
 def _base_name(expr: Any) -> str | None:
     """The variable an LHS position ultimately names: a bare string is itself,
-    ``index(u, …)`` is ``u``. Anything else has no single base name."""
+    ``index(u, …)`` is ``u``, and an ``aggregate`` whose ``expr`` is an ``index``
+    (the arrayed definition ``y[i] ~ f(…)`` as documents actually spell it) is
+    that index's base. Anything else has no single base name.
+
+    The aggregate unwrap is the mirror of :func:`_derivative_targets`' — that one
+    sees through the same shell for a ``D`` body, and §6.3.1 reads BOTH defining
+    spellings through the LHS's base name. Without it an array-shaped observed
+    written the indexed way was credited to nobody, so
+    :func:`observed_definitions` did not know it was an observed at all — which is
+    what made a §6.6.5 assertion on such an observed refuse to look up its field
+    (issue #232's Python half)."""
     if isinstance(expr, str):
         return expr
     op = _op(expr)
     if op == "index":
         args = _args(expr)
         return _base_name(args[0]) if args else None
+    if op == "aggregate":
+        inner = _slot(expr, "expr", "expr")
+        if inner is not None and _op(inner) == "index":
+            return _base_name(inner)
     return None
 
 
