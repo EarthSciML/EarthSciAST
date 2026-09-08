@@ -2921,7 +2921,7 @@ mod tests {
         }
         // An AMBIGUOUS bare alias is not in scope under either spelling, so it
         // does not clash — the same rule `param_scope_with_aliases` applies.
-        let ambiguous = array_scope_names(["A.lev", "B.lev"].into_iter());
+        let ambiguous = array_scope_names(["A.lev", "B.lev"]);
         assert!(!ambiguous.contains("lev"));
         let wrapped = bind_dimension_names(&free, &dims, &no_params, &ambiguous)
             .expect("no unambiguous alias, no clash");
@@ -2931,7 +2931,7 @@ mod tests {
         assert_eq!(node.op, "aggregate");
         // A reference that does not mention the name is unaffected, and so is a
         // gather that rebinds it as its own loop symbol.
-        let arrays = array_scope_names(["lev"].into_iter());
+        let arrays = array_scope_names(["lev"]);
         let lit = parse(json!({"op": "*", "args": [2.0, "k"]}));
         assert_eq!(
             bind_dimension_names(&lit, &dims, &no_params, &arrays).expect("no mention"),

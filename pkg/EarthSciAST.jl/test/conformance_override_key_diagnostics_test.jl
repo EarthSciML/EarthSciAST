@@ -3,9 +3,10 @@
 # esm-spec §6.6.2 "Unrecognized override keys": every `parameter_overrides` key
 # must designate exactly ONE parameter of the flattened system, and one that
 # designates none is an ERROR rather than a silently-ignored no-op. Three
-# outcomes, kept distinct: a key that resolves (exactly, or by the LOCAL
-# spelling §6.6 mandates) runs; a BARE key that is the local name of two or more
-# parameters is AMBIGUOUS; anything else is UNKNOWN.
+# outcomes, kept distinct: a key that resolves (exactly, or as a dotted SUFFIX
+# of exactly one flattened name — the LOCAL spelling §6.6 mandates, and any
+# longer partial qualification of it) runs; a key carried as a suffix by two or
+# more parameters is AMBIGUOUS; anything else is UNKNOWN.
 #
 # Julia used to leave an unmatched key verbatim, so it bound nothing and the run
 # quietly used every declared default while still reporting a verdict — the same
