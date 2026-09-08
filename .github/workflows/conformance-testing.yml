@@ -28,12 +28,6 @@ on:
         type: string
         default: ''
   workflow_dispatch:  # Allow manual triggering
-    inputs:
-      run_performance_analysis:
-        description: 'Run detailed performance analysis'
-        required: false
-        default: 'true'
-        type: boolean
 
 permissions:
   contents: read
@@ -600,7 +594,6 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-            pkg/earthsci-ast-rs/target
             pkg/earthsci-ast-ts/node_modules
           key: ${{ runner.os }}-conformance-${{ hashFiles('pkg/*/Project.toml', 'pkg/*/package*.json', 'pkg/*/pyproject.toml', 'pkg/*/Cargo.lock') }}
           restore-keys: |
@@ -674,105 +667,6 @@ jobs:
             conformance-results/
           retention-days: 30
 
-  # Performance analysis job
-  performance-analysis:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: github.event.inputs.run_performance_analysis != 'false'
-    needs: [standard-conformance-testing]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || '' }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install performance analysis dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install matplotlib seaborn plotly pandas numpy scipy
-
-      - name: Download conformance results
-        uses: actions/download-artifact@v4
-        with:
-          name: conformance-results-${{ github.run_number }}
-          path: conformance-results/
-
-      - name: Run performance analysis
-        run: |
-          python3 -c "
-          import json
-          import os
-          from pathlib import Path
-
-          # Load performance data
-          performance_file = Path('conformance-results/performance_summary.json')
-          if performance_file.exists():
-              with open(performance_file) as f:
-                  data = json.load(f)
-
-              print('=== PERFORMANCE ANALYSIS SUMMARY ===')
-              print(f'Analysis completed at: {data.get(\"timestamp\", \"unknown\")}')
-
-              languages = data.get('languages', {})
-              if languages:
-                  # Find fastest and slowest
-                  exec_times = {lang: info.get('execution_time_ms', 0) for lang, info in languages.items()}
-                  fastest = min(exec_times, key=exec_times.get) if exec_times else 'unknown'
-                  slowest = max(exec_times, key=exec_times.get) if exec_times else 'unknown'
-
-                  print(f'Fastest implementation: {fastest} ({exec_times.get(fastest, 0):.1f}ms)')
-                  print(f'Slowest implementation: {slowest} ({exec_times.get(slowest, 0):.1f}ms)')
-
-                  # Memory usage
-                  mem_usage = {lang: info.get('memory_peak_mb', 0) for lang, info in languages.items()}
-                  lowest_mem = min(mem_usage, key=mem_usage.get) if mem_usage else 'unknown'
-                  highest_mem = max(mem_usage, key=mem_usage.get) if mem_usage else 'unknown'
-
-                  print(f'Lowest memory usage: {lowest_mem} ({mem_usage.get(lowest_mem, 0):.1f}MB)')
-                  print(f'Highest memory usage: {highest_mem} ({mem_usage.get(highest_mem, 0):.1f}MB)')
-          else:
-              print('No performance data available')
-          "
-
-      - name: Upload performance analysis
-        uses: actions/upload-artifact@v4
-        with:
-          name: performance-analysis-${{ github.run_number }}
-          path: |
-            conformance-results/performance_summary.json
-          retention-days: 90
-
-  # Report aggregation and final status.
-  #
-  # This job reports a conformance VERDICT. When there is no verdict it must
-  # say so, and must not manufacture one (#224). Three upstream outcomes, three
-  # different things to say:
-  #
-  #   success / failure  the harness ran. `comparison/analysis.json` carries the
-  #                      verdict; report it, and fail on FAIL. (A harness that
-  #                      ran and produced NO analysis is broken, which is a
-  #                      different sentence from "the bindings diverged" — it is
-  #                      still red, but it says which.)
-  #   skipped            an upstream language job failed, so `needs` was never
-  #                      satisfied and no conformance work happened at all.
-  #   cancelled          the harness hit its own timeout mid-run.
-  #
-  # The last two used to fall through to "❌ Cross-language conformance testing
-  # failed — no results generated", posted as a PR comment and exited 1: a red
-  # check reading as a conformance regression when nothing conformance-related
-  # had happened. That is 27 of the last 54 runs. They now report NOT RUN and
-  # exit 0 — the run is already red on the job that actually failed, and this
-  # job stops adding a second, false, reason.
-  #
-  # `!cancelled()` rather than `always()`: on a run superseded by a newer push
-  # (`cancel-in-progress`), the honest report is no report. `cancelled()` is
-  # true only when the WORKFLOW RUN was cancelled, so the harness's own
-  # 45-minute timeout — a cancelled JOB in a live run — still reaches the
-  # NOT RUN path above rather than being silently dropped.
   conformance-results:
     runs-on: ubuntu-latest
     timeout-minutes: 10
