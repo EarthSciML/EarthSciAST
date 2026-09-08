@@ -20,6 +20,11 @@
 #   * `override_keys` — a caller's `initial_conditions` key naming the dead
 #     spelling addresses the survivor instead of being dropped so the state runs
 #     from its declared default.
+#   * `output_selection` — a name-keyed READ of a finished run resolves to the
+#     survivor instead of reporting a variable that never existed. In THIS
+#     binding the result is a SciML solution object, which the package does not
+#     own; what it does own is `observed_field(prob, name)`, the problem-side
+#     name lookup, so that is what the surface asserts here.
 #
 # Like `operator_compose_merge` the category carries no golden: what it pins is
 # REACH, asserted as structure.
@@ -42,6 +47,7 @@ const _MRR_MANIFEST = JSON3.read(read(joinpath(_MRR_DIR, "manifest.json"), Strin
 const _MRR_CASES = _MRR_MANIFEST.cases
 const _MRR_FLATTEN = [c for c in _MRR_CASES if c.surface == "flatten"]
 const _MRR_OVERRIDE = [c for c in _MRR_CASES if c.surface == "override_keys"]
+const _MRR_OUTPUT = [c for c in _MRR_CASES if c.surface == "output_selection"]
 
 _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
 
@@ -50,8 +56,10 @@ _mrr_flatten(case) = flatten(load_path(joinpath(_MRR_DIR, String(case.path))))
         # Zero cases would make every testset below vacuously green.
         @test !isempty(_MRR_FLATTEN)
         @test !isempty(_MRR_OVERRIDE)
+        @test !isempty(_MRR_OUTPUT)
         @test "julia" in _MRR_MANIFEST.surfaces.flatten.bindings
         @test "julia" in _MRR_MANIFEST.surfaces.override_keys.bindings
+        @test "julia" in _MRR_MANIFEST.surfaces.output_selection.bindings
         @test _MRR_MANIFEST.merged_variable_renames_field.julia ==
               "FlattenMetadata.merged_variable_renames"
     end

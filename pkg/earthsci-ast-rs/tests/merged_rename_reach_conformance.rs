@@ -19,6 +19,8 @@
 //!   flattened system cannot resolve.
 //! * `override_keys` — a caller's initial-condition key naming the dead spelling
 //!   addresses the survivor instead of designating nothing.
+//! * `output_selection` — a name-keyed READ of the finished run resolves to the
+//!   survivor's row instead of reporting a variable that never existed.
 //!
 //! Like `operator_compose_merge` the category carries no golden: what it pins is
 //! REACH, asserted as structure.
@@ -75,7 +77,11 @@ fn the_manifest_is_not_empty_and_names_this_binding() {
         !cases_for(&m, "override_keys").is_empty(),
         "no override_keys cases"
     );
-    for surface in ["flatten", "override_keys"] {
+    assert!(
+        !cases_for(&m, "output_selection").is_empty(),
+        "no output_selection cases"
+    );
+    for surface in ["flatten", "override_keys", "output_selection"] {
         let bindings = m["surfaces"][surface]["bindings"]
             .as_array()
             .expect("`bindings` is an array");
@@ -222,6 +228,62 @@ fn an_override_key_naming_the_merged_away_state_resolves() {
                 (got - want).abs() < 1e-9,
                 "{}: {name} must start at {want} (the caller's value under the merged-away \
                  spelling), got {got}",
+                case["id"]
+            );
+        }
+    }
+}
+
+#[cfg(feature = "solve")]
+#[test]
+fn a_name_keyed_read_of_the_result_resolves() {
+    // The solution is the one object a caller reading a trajectory by name
+    // holds — the flattened system is not in its hand — so the merge's map
+    // rides along on `SolutionMetadata`.
+    //
+    // Three things are pinned, and the third keeps the first two honest: the
+    // read lands on the survivor's row, it is the SAME row (not merely some
+    // row), and the reported row NAMES still carry only the surviving spelling,
+    // because resolving a read must not invent a name the flattened system does
+    // not declare.
+    use earthsci_ast::{ProblemInput, ProblemOptions, SolveOptions, esm_problem, solve};
+
+    for case in cases_for(&manifest(), "output_selection") {
+        let path = category_dir().join(case["path"].as_str().expect("`path` is a string"));
+        let prob = esm_problem(
+            ProblemInput::Path(&path),
+            (0.0, 1.0),
+            ProblemOptions::default(),
+        )
+        .unwrap_or_else(|e| panic!("{}: building: {e}", case["id"]));
+        let sol = solve(&prob, &SolveOptions::default())
+            .unwrap_or_else(|e| panic!("{}: solving: {e}", case["id"]));
+
+        let dead = case["read_by_name"].as_str().expect("`read_by_name`");
+        let survivor = case["same_row_as"].as_str().expect("`same_row_as`");
+        let got = sol.get(dead).unwrap_or_else(|| {
+            panic!(
+                "{}: '{dead}' must resolve through the merge map; rows are {:?}",
+                case["id"], sol.state_variable_names
+            )
+        });
+        let want = sol
+            .get(survivor)
+            .unwrap_or_else(|| panic!("{}: no row named '{survivor}'", case["id"]));
+        assert_eq!(
+            got, want,
+            "{}: '{dead}' must read the SAME row as '{survivor}'",
+            case["id"]
+        );
+
+        for gone in case["absent_from_row_names"]
+            .as_array()
+            .expect("`absent_from_row_names` is an array")
+        {
+            let gone = gone.as_str().expect("a name");
+            assert!(
+                !sol.state_variable_names.iter().any(|n| n == gone),
+                "{}: resolving a read must not add '{gone}' to the row names",
                 case["id"]
             );
         }
