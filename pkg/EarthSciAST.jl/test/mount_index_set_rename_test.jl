@@ -44,6 +44,41 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test !occursin("\"lev\"", soil_json)
     end
 
+    @testset "the field is refused, not ignored, at a top-level model `{ref}`" begin
+        # esm-spec §4.7 "Where it applies": `index_set_rename` is normative at
+        # BOTH mount forms, but Julia inlines a top-level `models.<k>` `{ref}`
+        # with a raw pre-pass that defers the leaf's §9.7 resolution to the root,
+        # so there is no resolved mounted document to rename. Since #198 item 3
+        # that form MERGES the leaf's `index_sets`, so ignoring the field would
+        # mount the leaf under its PRE-rename axis names — silently. Refuse.
+        dir = mktempdir()
+        leaf = Dict{String,Any}(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "leaf"),
+            "index_sets" => Dict("ax" => Dict("kind" => "interval", "size" => 3)),
+            "models" => Dict("Leaf" => Dict(
+                "variables" => Dict("u" => Dict("type" => "unknown", "units" => "1",
+                                                "shape" => ["ax"], "default" => 1.0)),
+                "equations" => [Dict(
+                    "lhs" => Dict("op" => "D", "args" => ["u"], "wrt" => "t"),
+                    "rhs" => Dict("op" => "*", "args" => [-1.0, "u"]))])))
+        write(joinpath(dir, "leaf.esm"), JSON3.write(leaf))
+        host = Dict{String,Any}(
+            "esm" => "1.0.0", "metadata" => Dict("name" => "host"),
+            "models" => Dict("L" => Dict("ref" => "./leaf.esm",
+                                         "index_set_rename" => Dict("ax" => "renamed_ax"))))
+        write(joinpath(dir, "host.esm"), JSON3.write(host))
+        err = try
+            EarthSciAST.load_path(joinpath(dir, "host.esm"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ExpressionTemplateError
+        @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM
+        @test occursin("not supported at this mount form", err.message)
+        @test occursin("subsystems", err.message)   # names the form that works
+    end
+
     @testset "a rename key the mounted document does not declare is loud" begin
         # Renames never invent names — the §9.7.7 rule at a mount edge.
         bad = joinpath(repo_root, "tests", "invalid", "template_imports",

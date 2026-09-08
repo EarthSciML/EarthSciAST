@@ -744,8 +744,10 @@ fn name_map(
 /// clause, and its shape is unambiguous, so the key plus this test is a sound
 /// positional guard.
 fn is_join_on_pairs(v: &Value) -> bool {
-    v.as_array()
-        .is_some_and(|arr| arr.iter().all(|p| p.as_array().is_some_and(|p| p.len() == 2)))
+    v.as_array().is_some_and(|arr| {
+        arr.iter()
+            .all(|p| p.as_array().is_some_and(|p| p.len() == 2))
+    })
 }
 
 /// Rewrite a join clause's `on` key columns under an index-set rename (esm-spec

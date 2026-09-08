@@ -415,6 +415,31 @@ fn inline_toplevel_model_refs(
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
+        // esm-spec §4.7 "Mount-edge index-set renaming", "Where it applies".
+        // `index_set_rename` is a legal `SubsystemRef` property at BOTH mount
+        // forms, but THIS one — the top-level `models.<k>` `{ref}` — is inlined
+        // by a raw pre-pass that splices the leaf and defers all of §9.7 to the
+        // root, so there is no resolved mounted document for the rename to speak
+        // about and no hook to apply it at. Merging the leaf under its PRE-rename
+        // axis names would be silently wrong exactly where the field exists to
+        // prevent silence, so refuse the edge instead.
+        if entry_obj
+            .get("index_set_rename")
+            .is_some_and(|v| !v.is_null())
+        {
+            return Err(err(
+                codes::SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
+                format!(
+                    "models.{name}: `index_set_rename` is not supported at this mount \
+                     form. This binding inlines a top-level `models.<k>` `{{ref}}` with \
+                     a raw pre-pass that defers the leaf's §9.7 resolution to the root \
+                     document, so the edge has no resolved mounted document to rename \
+                     and the leaf would merge under its ORIGINAL axis names. Mount the \
+                     component at a `subsystems.<k>` `{{ref}}` edge instead, where the \
+                     rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"
+                ),
+            ));
+        }
         let ref_str = entry_obj
             .get("ref")
             .and_then(|v| v.as_str())

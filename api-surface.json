@@ -1319,6 +1319,14 @@
       }
     },
     {
+      "name": "code_subsystem_index_set_rename_unsupported_mount_form",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSubsystemIndexSetRenameUnsupportedMountForm"
+      }
+    },
+    {
       "name": "code_subsystem_ref_is_coupling_library",
       "kind": "constant",
       "tier": "extension",

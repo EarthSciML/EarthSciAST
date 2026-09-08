@@ -379,8 +379,9 @@ Stated plainly, because the change touches the load pipeline:
 3. **The two mount forms resolve at different times in different bindings** (§4.11). At a
    §4.7 subsystem edge every binding resolves the leaf as a complete document at the mount,
    which is what makes this change uniform there. The top-level `models.<k>` `{ref}` form
-   does not have that property today, so the field's reach at that form is not yet uniform,
-   and #198 item 3 is changing exactly that merge.
+   does not have that property in Julia or Rust, so the field cannot be applied there and is
+   refused instead (§4.11). #198 item 3 changed that form's index-set MERGE without changing
+   when the leaf resolves, which is what makes the refusal necessary rather than cosmetic.
 4. **Interaction with an inline test's ephemeral build (§9.7.10 timing regime 2).** A test's
    injection rebuilds the enclosing component per test; a mount rename belongs to the
    composed document and should be invisible to a leaf's own tests run standalone. Believed
@@ -390,23 +391,25 @@ Stated plainly, because the change touches the load pipeline:
 
 ### 4.11 Where the field reaches today, per binding
 
-`$defs/SubsystemRef` is the schema shape of both mount forms, so the field is *spellable* at
-both. What it *does* at the top-level `models.<k>` `{ref}` form follows that form's index-set
-merge, which the five bindings do not implement alike — a pre-existing divergence that is
-#198 item 3's subject, not this RFC's:
+`$defs/SubsystemRef` is the schema shape of both mount forms, so the field is normative at
+both (esm-spec §4.7 "Where it applies"). What differs is whether a binding can *apply* it at
+the top-level `models.<k>` / `reaction_systems.<k>` `{ref}` form, and that follows how each
+binding inlines that form:
 
-| Binding | §4.7 subsystem edge | Top-level `models.<k>` `{ref}` mount |
+| Binding | §4.7 subsystem edge | Top-level `{ref}` mount |
 |---|---|---|
-| Julia | implemented | mount exists, but it splices the leaf raw and **drops** its `index_sets`, deferring the leaf's `expression_template_imports` to the root pass — no merge, so nothing to rename |
-| Rust | implemented | same deferral as Julia |
-| Python | implemented | **implemented** — both forms share `_load_ref_data`, which already resolves the leaf fully at the mount and merges its `index_sets` |
-| TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately) |
+| Julia | implemented | **refused** — a raw pre-pass splices the leaf and defers its §9.7 resolution to the root, so there is no resolved mounted document to rename; the edge raises `subsystem_index_set_rename_unsupported_mount_form` |
+| Rust | implemented | same pre-pass, same refusal |
+| Python | implemented | **implemented** — both forms share `_load_ref_data`, which resolves the leaf fully at the mount; verified end-to-end |
+| TypeScript | implemented | the form is not inlined at all (a bare `{ref}` stub returns immediately), so the field is unreachable |
 | Go | implemented | the form does not exist |
 
-The honest summary: this RFC makes the mechanism uniform at the edge where the merge itself
-is uniform, and Python gets the top-level form for free because its two mount forms are one
-code path. Bringing Julia/Rust/TS/Go's top-level form up to the same line is item 3's work,
-and the field needs nothing further once that lands.
+Refusing rather than ignoring is the load-bearing part, and it became load-bearing when #198
+item 3 landed: that change makes the top-level form MERGE the leaf's `index_sets` in Julia and
+Rust. Before it, an ignored `index_set_rename` there merged nothing and the axes simply did not
+arrive. After it, an ignored rename would merge the leaf under its **pre-rename** axis names —
+silently, in the one place the field exists to make loud. The refusal keeps that door shut
+until the two forms resolve alike.
 
 ---
 
@@ -477,16 +480,22 @@ breaks URL refs and offers no per-name control.
    §9.7.2's bare `rename`. Reusing `rename` on `SubsystemRef` would read symmetrically but
    would imply the §9.7.7 domain (templates ∪ index sets ∪ open metaparameters), only one
    third of which crosses a mount. Recommendation: keep `index_set_rename`.
-2. **How does the top-level `models.<k>` `{ref}` mount get there?** (§4.11.) Schema-wise the
-   field is already free at that form, and Python honours it today. The other four need item
-   3's decision first: either the deferring bindings (Julia, Rust) resolve a mounted leaf as a
-   closed build boundary the way the subsystem edge does — which costs them the loader-API
-   metaparameters reaching a mounted leaf document-wide — or the top-level merge is defined
-   some other way. That is a real trade-off and it is item 3's to make, not this RFC's.
-   **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts (they
-   are pushed there by #198 item 1, since `variable_map` cannot reach into a subsystem), so
-   `index_set_rename` unblocks them under Python today and under the Rust CLI only once item
-   3 lands.
+2. **How does the top-level `models.<k>` `{ref}` mount get to APPLYING the field?** (§4.11.)
+   Settled for now: normative at both forms, honoured by Python, refused with
+   `subsystem_index_set_rename_unsupported_mount_form` by Julia and Rust, unreachable in
+   TypeScript and Go. What remains open is the trade-off item 3 named — whether the deferring
+   bindings resolve a mounted leaf as a closed build boundary the way the subsystem edge does,
+   which costs them the loader-API metaparameters reaching a mounted leaf document-wide, or the
+   top-level merge is defined some other way. Until that is decided the refusal is the answer.
+   **This matters for the reporter**: EqWeFiC's assemblies use top-level `ref` mounts, so under
+   Julia and the Rust CLI they must move the component to a `subsystems.<k>` edge to use the
+   field, or wait for that resolution to converge. (An earlier draft said they were *pushed* to
+   the top-level form because `variable_map` cannot reach into a subsystem. That is **wrong**,
+   and #198 item 1 established why: `variable_map` resolves subsystem endpoints in all five
+   bindings — into a nested parameter, out of a nested unknown, between two subsystems of one
+   wrapper, with the subsystems mounted by `{"ref": …}` — verified end-to-end. The real defect
+   was that an endpoint resolving to *nothing* was silently dropped rather than diagnosed. So
+   the top-level form is a choice here, not a forced move, and `subsystems.<k>` is available.)
 3. **Mount-relative node `id`s** (§4.6) — required before "one component mounted twice" works
    for a leaf that assigns `id`s. Separate change, separate RFC.
 4. **A `rebind` counterpart** for ragged keyed factors at a mount edge (§4.7). Needs a

@@ -531,6 +531,26 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         (entry isa AbstractDict && haskey(entry, "ref") &&
             !haskey(entry, "variables")) || continue
         ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
+        # esm-spec §4.7 "Mount-edge index-set renaming", "Where it applies".
+        # `index_set_rename` is a legal `SubsystemRef` property at BOTH mount
+        # forms, but THIS one — the top-level `models.<k>` `{ref}` — is inlined
+        # by a raw pre-pass that splices the leaf and defers all of §9.7 to the
+        # root, so there is no resolved mounted document for the rename to speak
+        # about and no hook to apply it at. Merging the leaf under its
+        # PRE-rename axis names would be silently wrong exactly where the field
+        # exists to prevent silence, so refuse the edge instead. Use the
+        # `subsystems.<k>` mount form, which resolves the leaf at the mount.
+        if haskey(entry, "index_set_rename") && entry["index_set_rename"] !== nothing
+            throw(ExpressionTemplateError(
+                ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
+                "models.$(name): `index_set_rename` is not supported at this mount " *
+                "form. This binding inlines a top-level `models.<k>` `{ref}` with a " *
+                "raw pre-pass that defers the leaf's §9.7 resolution to the root " *
+                "document, so the edge has no resolved mounted document to rename " *
+                "and the leaf would merge under its ORIGINAL axis names. Mount the " *
+                "component at a `subsystems.<k>` `{ref}` edge instead, where the " *
+                "rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"))
+        end
         # Optional model selector: when the referenced file holds several models
         # (e.g. an ESD regridder library), `model` names which one to splice in.
         sel = haskey(entry, "model") && entry["model"] !== nothing ?
@@ -652,6 +672,20 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
         (entry isa AbstractDict && haskey(entry, "ref") &&
             !haskey(entry, "species")) || continue
         ref = _expand_ref_env(String(entry["ref"]))  # esm-spec §4.7 ${VAR} expansion
+        # Same refusal as `_inline_toplevel_model_refs!`, for the same reason:
+        # a top-level `{ref}` stub is spliced by a raw pre-pass with no resolved
+        # mounted document to rename (esm-spec §4.7 "Where it applies").
+        if haskey(entry, "index_set_rename") && entry["index_set_rename"] !== nothing
+            throw(ExpressionTemplateError(
+                ERROR_CODES.SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
+                "reaction_systems.$(name): `index_set_rename` is not supported at " *
+                "this mount form. This binding inlines a top-level `{ref}` with a " *
+                "raw pre-pass that defers the leaf's §9.7 resolution to the root " *
+                "document, so the edge has no resolved mounted document to rename " *
+                "and the leaf would merge under its ORIGINAL axis names. Mount the " *
+                "component at a `subsystems.<k>` `{ref}` edge instead, where the " *
+                "rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"))
+        end
         # Optional reaction-system selector: when the referenced file holds
         # several reaction systems, `reaction_system` names which one to splice.
         sel = haskey(entry, "reaction_system") && entry["reaction_system"] !== nothing ?

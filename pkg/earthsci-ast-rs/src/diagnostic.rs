@@ -243,6 +243,13 @@ diagnostic_code_registry! {
     /// renaming") — the mount-edge mirror of
     /// [`TEMPLATE_IMPORT_RENAME_UNKNOWN_NAME`].
     SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name";
+    /// `index_set_rename` on a mount form that does not implement it (§4.7
+    /// "Mount-edge index-set renaming", "Where it applies"). The field is a
+    /// legal `SubsystemRef` property at either mount form, but a binding whose
+    /// top-level `models.<k>` `{ref}` inliner cannot apply it MUST say so
+    /// rather than merge the leaf under its pre-rename axis names.
+    SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM =
+        "subsystem_index_set_rename_unsupported_mount_form";
     /// A `subsystem` ref pointing at a COUPLING library, which exports roles
     /// rather than a mountable system.
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
