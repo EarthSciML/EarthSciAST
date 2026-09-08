@@ -87,3 +87,38 @@ def test_mount_rename_unknown_index_set_is_a_loud_load_error():
         load_path(_fixture("invalid/template_imports/mount_rename_unknown_index_set.esm"))
     assert exc.value.code == "subsystem_index_set_rename_unknown_name"
     assert "celsl" in str(exc.value)
+
+
+def test_two_rename_keys_onto_one_target_is_a_collision(tmp_path):
+    # esm-spec §4.7 "Mount-edge index-set renaming", Checks: post-rename names
+    # MUST be distinct within one edge. `subsystem_mesh_lib.esm` declares two
+    # axes, so mapping both onto `merged` is the minimal violation. Without this
+    # the second write would silently win and one axis would vanish from the
+    # registry it was supposed to reach.
+    host = {
+        "esm": "1.0.0",
+        "metadata": {"name": "rename_collision", "description": "two keys, one target"},
+        "models": {
+            "Host": {
+                "variables": {"x": {"type": "unknown", "units": "1", "default": 1.0}},
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                        "rhs": {"op": "*", "args": [-0.5, "x"]},
+                    }
+                ],
+                "subsystems": {
+                    "M": {
+                        "ref": _fixture("valid/subsystem_mesh_lib.esm"),
+                        "index_set_rename": {"cells": "merged", "vertices": "merged"},
+                    }
+                },
+            }
+        },
+    }
+    p = tmp_path / "rename_collision.esm"
+    p.write_text(json.dumps(host))
+    with pytest.raises(ExpressionTemplateError) as exc:
+        load_path(str(p))
+    assert exc.value.code == "template_import_rename_collision"
+    assert "merged" in str(exc.value)

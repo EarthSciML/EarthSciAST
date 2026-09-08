@@ -16,10 +16,11 @@
 //! (registry key, variable `shape`, aggregate `{"from"}` range) so both axes
 //! reach the merged registry at their own sizes, and a key that names no axis of
 //! the RESOLVED mounted document is a loud
-//! `subsystem_index_set_rename_unknown_name` rather than a silent no-op. That
-//! the SAME pair still collides without the field is pinned in the Python
-//! binding (`test_without_the_rename_the_two_columns_still_collide`), which is
-//! the only one that builds the un-renamed variant.
+//! `subsystem_index_set_rename_unknown_name` rather than a silent no-op. Two
+//! more checks are pinned only in the Python binding, which is the only one that
+//! builds the variants inline: that the SAME pair still collides without the
+//! field, and that two rename keys onto one target is
+//! `template_import_rename_collision`.
 
 #![cfg(not(target_arch = "wasm32"))]
 
