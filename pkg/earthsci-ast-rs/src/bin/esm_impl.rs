@@ -270,13 +270,16 @@ enum Commands {
         #[arg(long, default_value = "bdf")]
         solver: SolverAlg,
         /// Relative SOLVER tolerance — how accurately each test is integrated,
-        /// NOT the §6.6.4 tolerance its assertions are judged against
-        #[arg(long, default_value_t = TEST_RELTOL)]
-        reltol: f64,
+        /// NOT the §6.6.4 tolerance its assertions are judged against.
+        /// Unset resolves per esm-spec §2.2.2: the document's `solver.reltol`
+        /// if it declares one, else the runner default.
+        #[arg(long)]
+        reltol: Option<f64>,
         /// Absolute SOLVER tolerance — how accurately each test is integrated,
-        /// NOT the §6.6.4 tolerance its assertions are judged against
-        #[arg(long, default_value_t = TEST_ABSTOL)]
-        abstol: f64,
+        /// NOT the §6.6.4 tolerance its assertions are judged against.
+        /// Unset resolves per esm-spec §2.2.2, as `--reltol`.
+        #[arg(long)]
+        abstol: Option<f64>,
         /// Report every assertion, not just the summary table
         #[arg(short, long)]
         verbose: bool,
@@ -3384,10 +3387,10 @@ const TEST_ABSTOL: f64 = 1e-14;
 
 /// PASS / FAIL / ERROR — the tri-state verdict the Julia runner reports.
 ///
-/// [`earthsci_ast::PdeAssertionResult`] carries a two-state `passed: bool` and
+/// [`earthsci_ast::AssertionResult`] carries a two-state `passed: bool` and
 /// stays that way: it is `Serialize`d verbatim by `examples/pde_conformance.rs`
 /// as a payload an external runner consumes. The third state is RECOVERED from
-/// it instead. `run_pde_tests` sets `actual: Some(_)` exactly on the path that
+/// it instead. `run_inline_tests` sets `actual: Some(_)` exactly on the path that
 /// got as far as comparing a number against the resolved tolerance, and
 /// `actual: None` on every path that failed before then — discretization
 /// injection, the problem build, the solve, the solver retcode, and assertion
@@ -3681,7 +3684,7 @@ fn data_source_providers(
 
 /// One assertion's outcome, tagged with the file it came from.
 ///
-/// The file is not part of [`earthsci_ast::PdeAssertionResult`] (the engine is
+/// The file is not part of [`earthsci_ast::AssertionResult`] (the engine is
 /// handed an already-loaded document), and a file that fails to LOAD produces
 /// a row with no assertion behind it at all — so the runner keeps its own row
 /// type rather than the library's.
@@ -3748,8 +3751,8 @@ fn run_test(
     model: Option<String>,
     filter: Option<String>,
     solver: SolverAlg,
-    reltol: f64,
-    abstol: f64,
+    reltol: Option<f64>,
+    abstol: Option<f64>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let files = discover_test_inputs(&paths)?;
@@ -3762,10 +3765,11 @@ fn run_test(
         return Ok(());
     }
 
+    // Tolerances are NOT pinned here: they resolve per FILE, below, because
+    // level 2 of the esm-spec §2.2.2 chain is the document's own `solver`
+    // block and this command runs many documents.
     let opts = earthsci_ast::SolveOptions {
         alg: solver.into(),
-        reltol,
-        abstol,
         ..Default::default()
     };
 
@@ -3824,10 +3828,29 @@ fn run_test(
                 // rather than the whole document (it used to select rows out of
                 // an already-evaluated `Vec`). The surviving rows are the same
                 // either way: a result's `test_id` is its test's `id`.
-                let results = earthsci_ast::run_pde_tests_filtered(
+                // esm-spec §2.2.2, resolved per file: an explicit `--reltol` /
+                // `--abstol` wins, else this document's `solver` block, else
+                // the runner defaults. The runner defaults sit at the BOTTOM of
+                // the chain (they are binding defaults, not a caller's
+                // opinion), which is what lets a stiff document ask for its own
+                // integration accuracy without every invocation naming it.
+                let file_opts = earthsci_ast::SolveOptions {
+                    reltol: Some(
+                        reltol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.reltol))
+                            .unwrap_or(TEST_RELTOL),
+                    ),
+                    abstol: Some(
+                        abstol
+                            .or(esm_file.solver.as_ref().and_then(|s| s.abstol))
+                            .unwrap_or(TEST_ABSTOL),
+                    ),
+                    ..opts.clone()
+                };
+                let results = earthsci_ast::run_inline_tests_filtered(
                     &esm_file,
                     model.as_deref(),
-                    &opts,
+                    &file_opts,
                     path.parent(),
                     providers.as_deref(),
                     filter.as_deref(),

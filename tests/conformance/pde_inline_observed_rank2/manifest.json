@@ -1,7 +1,7 @@
 {
   "category": "pde_inline_observed_rank2",
   "version": "1.0",
-  "description": "Cross-binding conformance for §6.6.5 inline-test assertions on a RANK-2 (multidimensional) array OBSERVED. The asserted variable `scaled` is a state-free computed observed of shape [rows, cols]; each binding materializes it over the field's Cartesian index sets and evaluates `reduce` collapses (max/min) and `coords` point-samples. Julia is the reference binding: its `run_pde_tests` minted golden/observed_rank2.json. Python (np.ndindex) and Rust (row-major IxDyn enumeration) are already rank-agnostic here, so all three must agree on the assertion actuals within tolerance. This guards the Julia rank>=2 observed-materialization fix (a Matrix-shaped CartesianIndices comprehension that `sort!` could not order without dims=; fixed by vec()).",
+  "description": "Cross-binding conformance for §6.6.5 inline-test assertions on a RANK-2 (multidimensional) array OBSERVED. The asserted variable `scaled` is a state-free computed observed of shape [rows, cols]; each binding materializes it over the field's Cartesian index sets and evaluates `reduce` collapses (max/min) and `coords` point-samples. Julia is the reference binding: its `run_inline_tests` minted golden/observed_rank2.json. Python (np.ndindex) and Rust (row-major IxDyn enumeration) are already rank-agnostic here, so all three must agree on the assertion actuals within tolerance. This guards the Julia rank>=2 observed-materialization fix (a Matrix-shaped CartesianIndices comprehension that `sort!` could not order without dims=; fixed by vec()).",
   "reference_binding": "julia",
   "bindings_required": [
     "julia",

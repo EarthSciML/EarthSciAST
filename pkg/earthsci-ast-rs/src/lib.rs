@@ -91,6 +91,7 @@ pub(crate) mod join;
 pub(crate) mod json_visit;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
+pub(crate) mod lower_table_lookup;
 pub(crate) mod migration;
 pub(crate) mod op_registry;
 pub(crate) mod parse;
@@ -110,6 +111,7 @@ pub(crate) mod reference_resolution;
 pub(crate) mod registered_functions;
 pub(crate) mod relational;
 pub(crate) mod serialize;
+pub(crate) mod solver;
 pub(crate) mod structural;
 pub(crate) mod substitute;
 pub(crate) mod template_imports;
@@ -144,7 +146,7 @@ pub mod simulate_array;
 // reductions, analytic references, coordinate-expression evaluation) —
 // native-only like the `simulate_array` runtime it drives.
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub(crate) mod pde_inline_tests;
+pub(crate) mod inline_tests;
 
 // `polygon_area` as a sum_product FAQ over the clip ring — evaluated through the
 // array simulator, so native-only like `simulate_array` (the wasm regridder keeps
@@ -266,6 +268,10 @@ pub use template_imports::{
     apply_scope_injections, is_template_library_doc, reject_template_imports_pre_v08,
     resolve_template_machinery,
 };
+// Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
+// §2.2.2 tolerance resolution order — the two parts of the block that are NOT
+// advisory.
+pub use solver::{reject_solver_pre_v11, resolve_tolerances};
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
@@ -273,8 +279,8 @@ pub use types::{
     DiscreteEventTrigger, DiscretizedFrom, Distribution, DistributionParam, Domain, Equation,
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelTest,
     ModelTestAssertion, ModelVariable, Operator, ParameterUpdate, ParameterUpdateSpec, Reaction,
-    ReactionSystem, RecordsPerFile, RegionBound, Species, StoichiometricEntry, TimeSpan, Tolerance,
-    UnitConversion, UpdateValue, VariableMapTransform, VariableType,
+    ReactionSystem, RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, TimeSpan,
+    Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
@@ -324,10 +330,11 @@ pub use migration::get_supported_migration_targets;
 pub use compile_error::CompileError;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solve"))]
-pub use pde_inline_tests::{
-    BuildProviderFactory, PdeAssertionResult, ephemeral_injected_file, evaluate_cellwise,
-    field_reduce, run_pde_tests, run_pde_tests_filtered, run_pde_tests_with_base_dir,
-    run_pde_tests_with_providers, state_cells,
+pub use inline_tests::{
+    AssertionResult, BuildProviderFactory, InlineTestOptions, ephemeral_injected_file,
+    evaluate_cellwise, field_reduce, run_inline_tests, run_inline_tests_filtered,
+    run_inline_tests_paths, run_inline_tests_with_base_dir, run_inline_tests_with_providers,
+    state_cells,
 };
 pub use performance::{CompactExpr, PerformanceError};
 #[cfg(feature = "parallel")]
@@ -372,7 +379,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "1.0.0";
+pub const SCHEMA_VERSION: &str = "1.1.0";
 
 #[cfg(test)]
 mod version_tests {

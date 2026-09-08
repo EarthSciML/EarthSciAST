@@ -1,0 +1,238 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ObservedCycleArrayElementwise",
+    "description": "INVALID cross-binding fixture for esm-spec §4.9.6 (issue #181): three ARRAY observeds over one index set that reference each other ELEMENTWISE, closing the dependency cycle gamfac -> hpbl -> wscale -> gamfac. No evaluation order satisfies all three definitions, and the equations alone decide that — so every binding MUST reject the document in `validate` with `observed_cycle` at /models/YSU, naming the observeds on the cycle.\n\nThe names are the reporter's, and the two observeds that are NOT on the cycle are the whole reason the fixture has this shape. `in_pbl` is declared, defined and referenced perfectly well; it merely reads `hpbl`. `z_ent_flux` reads `in_pbl` and is declared FIRST, so a build that tolerates the cycle and materializes the observeds in declaration order evaluates `z_ent_flux` before anything has produced `in_pbl` — and reports `E_TREEWALK_UNBOUND_NAME: 'in_pbl'`, which is exactly what issue #181 reported and exactly the wrong answer. `in_pbl` MUST NOT appear on the reported cycle, and no binding may describe it as unbound: it is bound. (`z_ent_flux` is spelled to sort LAST so the sorted-root DFS still enters the cycle at `gamfac` — the reported path is a property of the graph, not of who happens to consume it.)",
+    "authors": [
+      "EarthSciAST Test Suite"
+    ],
+    "tags": [
+      "observed",
+      "cycle",
+      "array",
+      "elementwise",
+      "invalid",
+      "issue-181"
+    ]
+  },
+  "domain": {
+    "independent_variable": "t"
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "YSU": {
+      "variables": {
+        "ustar": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.3,
+          "description": "Friction velocity. Declared, on no cycle."
+        },
+        "zi": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1000.0,
+          "description": "Reference height. Declared, on no cycle."
+        },
+        "wscale": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Velocity scale. Reads `gamfac` elementwise."
+        },
+        "gamfac": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Counter-gradient factor. Reads `hpbl` elementwise."
+        },
+        "hpbl": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Diagnosed PBL height. Reads `wscale` elementwise — and that closes the cycle."
+        },
+        "in_pbl": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "The innocent bystander. Defined correctly, references only `hpbl` and `ustar`, and is on NO cycle. A binding that reports THIS name as unbound has misattributed the defect (issue #181)."
+        },
+        "z_ent_flux": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lev"
+          ],
+          "description": "Reads `in_pbl`, is declared FIRST among the equations, and is stuck behind the cycle like everything else. It is the consumer whose evaluation reports `in_pbl` as unbound when the cycle is allowed through to a build. Named to sort LAST so the reported cycle is unaffected."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Declared FIRST. Reads `in_pbl` (not on the cycle) and `wscale` (on it), so an ordering sweep that tolerates the cycle and falls back to declaration order evaluates this rule with NOTHING materialized — and names `in_pbl`.",
+          "lhs": "z_ent_flux",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "in_pbl",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "wscale",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "in_pbl is downstream of the cycle but not on it.",
+          "lhs": "in_pbl",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "ustar",
+                {
+                  "op": "index",
+                  "args": [
+                    "hpbl",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "wscale -> gamfac",
+          "lhs": "wscale",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "ustar",
+                {
+                  "op": "index",
+                  "args": [
+                    "gamfac",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "gamfac -> hpbl",
+          "lhs": "gamfac",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "hpbl",
+                    "i"
+                  ]
+                },
+                "zi"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "hpbl -> wscale, closing gamfac -> hpbl -> wscale -> gamfac",
+          "lhs": "hpbl",
+          "rhs": {
+            "op": "aggregate",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "zi",
+                {
+                  "op": "index",
+                  "args": [
+                    "wscale",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

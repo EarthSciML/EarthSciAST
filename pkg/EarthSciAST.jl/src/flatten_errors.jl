@@ -105,6 +105,44 @@ Base.showerror(io::IO, e::OperatorComposeAmbiguousBareNameError) =
     print(io, "OperatorComposeAmbiguousBareNameError: ", e.details)
 
 """
+    VariableMapUnresolvedEndpointError
+
+Raised when a `variable_map` endpoint names nothing the flattened system
+carries (esm-spec §4.6, §10.4).
+
+Both halves of the entry are load-bearing and both used to fail SILENTLY. A
+`to` that resolves to no parameter is simply never promoted
+(`_promote_variable_map_param!` returns on `haskey(params, entry.to) ||
+return`): the document declares a coupling, the target keeps its declared
+default, and nothing downstream can tell "applied" from "ignored". A `from`
+that resolves to nothing is worse — `_substitute_variable_map!` runs
+regardless, so every consumer of `to` is rewritten to a name no table binds and
+the run yields NaN rather than a diagnostic.
+
+Deliberately NOT exported: `api-surface.json` is the cross-binding record of
+what every binding exports, and adding a name there is a five-binding contract
+change. Callers catch `EarthSciASTError`.
+
+Fields:
+- `from`, `to`: the entry's two endpoints as authored.
+- `side`: `"from"` or `"to"` — which endpoint failed to resolve.
+- `endpoint`: the offending reference.
+"""
+struct VariableMapUnresolvedEndpointError <: EarthSciASTError
+    from::String
+    to::String
+    side::String
+    endpoint::String
+end
+
+Base.showerror(io::IO, e::VariableMapUnresolvedEndpointError) =
+    print(io, "VariableMapUnresolvedEndpointError: variable_map(", e.from, " -> ", e.to,
+          "): the '", e.side, "' endpoint '", e.endpoint, "' resolves to no variable, ",
+          "parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped ",
+          "reference walks EVERY dot-separated segment, so a subsystem endpoint is spelled ",
+          "'<Model>.<Subsystem>.<name>'.")
+
+"""
     DimensionPromotionError
 
 Raised during flatten when a variable or equation cannot be promoted from

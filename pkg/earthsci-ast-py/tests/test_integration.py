@@ -293,10 +293,27 @@ class TestWorkflowRobustness:
                         # integrity covers every equation RHS (esm-spec §4.9.5).
                         **{f"param{i}": {"type": "parameter", "default": 1.0} for i in range(20)},
                     },
+                    # A 20-long CHAIN, not a ring. The `% 20` this replaces wrapped
+                    # `x19` back to `x0` and closed a 20-node cycle in the observed
+                    # dependency graph (esm-spec §4.9.6) — `x0` defined in terms of
+                    # `x1` … in terms of `x19` in terms of `x0`, which no evaluation
+                    # order satisfies. It validated clean only because nothing looked;
+                    # `observed_cycle` now names it. The same class of defect as the
+                    # undeclared `param{i}` noted above: a synthetic model written for
+                    # its SIZE, patched each time a checker learned to read it.
+                    #
+                    # `x0` is the base case and the rest chain off it, so the model
+                    # keeps its 20 unknowns and 20 equations — the balance and the
+                    # size this test measures are unchanged, and the topological sort
+                    # now has a 20-deep chain to actually order.
                     "equations": [
                         {
                             "lhs": f"x{i}",
-                            "rhs": {"op": "+", "args": [f"x{(i + 1) % 20}", f"param{i}"]},
+                            "rhs": (
+                                f"param{i}"
+                                if i == 0
+                                else {"op": "+", "args": [f"x{i - 1}", f"param{i}"]}
+                            ),
                         }
                         for i in range(20)
                     ],

@@ -165,13 +165,33 @@ pub fn emit_document(
 
     root.remove("expression_template_imports");
     if bump {
-        // Stamp the version this binding implements rather than a literal, so
-        // the emitted byte form tracks `SCHEMA_VERSION` instead of drifting
-        // from it at the next format bump.
-        root.insert(
-            "esm".to_string(),
-            Value::String(crate::SCHEMA_VERSION.to_string()),
-        );
+        // The §9.6.4 rule-8 emit stamp is a FLOOR, not an assignment: an emitted
+        // document carrying a surviving reference or a materialized entry "MUST
+        // declare `esm: 0.9.0` OR LATER". A document already at or above the
+        // floor keeps its OWN declared version.
+        //
+        // This wrote `SCHEMA_VERSION` unconditionally, which is a different rule
+        // that happened to agree while the current version WAS 1.0.0. At esm
+        // 1.1.0 the two diverged and this binding started stamping 1.0.0
+        // documents up to 1.1.0 on re-emit — five `emitted.esm` goldens stopped
+        // matching byte-for-byte, and TypeScript and Julia (which apply the
+        // floor) would have disagreed with it on every such document. Raising
+        // the stamp is not harmless: it claims the document uses a format
+        // version it does not, and needlessly puts it out of reach of a 1.0.x
+        // reader.
+        //
+        // In practice the floor never fires: esm 1.0.0 is a clean break that
+        // rejects every 0.x document at load, so anything reaching emit already
+        // declares >= 1.0.0. It is written out anyway so the rule is stated
+        // where it is applied rather than resting on that coincidence.
+        const RULE8_FLOOR: (u32, u32, u32) = (0, 9, 0);
+        let declared = root
+            .get("esm")
+            .and_then(|v| v.as_str())
+            .and_then(crate::diagnostic::parse_semver);
+        if declared.is_none_or(|d| d < RULE8_FLOOR) {
+            root.insert("esm".to_string(), Value::String("0.9.0".to_string()));
+        }
     }
     Ok(loaded)
 }

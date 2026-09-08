@@ -214,6 +214,11 @@ function _serialize_subsystem(v)::Dict{String,Any}
         isempty(v.expression_template_imports) ||
             (out["expression_template_imports"] =
                 [_to_native_json(e) for e in v.expression_template_imports])
+        # Mount-edge index-set renaming (esm-spec §4.7): same fate — it survives
+        # only while the ref is unresolved.
+        (v.index_set_rename === nothing || isempty(v.index_set_rename)) ||
+            (out["index_set_rename"] =
+                Dict{String,Any}(k => n for (k, n) in v.index_set_rename))
         return out
     else
         return serialize_model(v)
@@ -392,6 +397,26 @@ end
 
 
 """
+    serialize_solver(solver::Solver) -> OrderedDict{String,Any}
+
+Serialize the document-scoped §2.2 `solver` block back to its raw JSON shape.
+
+Unset fields are OMITTED rather than emitted as `null`, so `parse -> emit` is
+stable. The result is EMPTY only for a `Solver` with nothing set — which
+[`coerce_solver`](@ref) normalizes to `nothing` at load, so no `EsmFile` read
+from a document carries one — and callers drop the key rather than writing
+`"solver": {}`, since §2.2 makes the empty block a second spelling of absence.
+"""
+function serialize_solver(solver::Solver)::OrderedDict{String,Any}
+    block = OrderedDict{String,Any}()
+    solver.stiffness === nothing || (block["stiffness"] = solver.stiffness)
+    solver.abstol === nothing || (block["abstol"] = solver.abstol)
+    solver.reltol === nothing || (block["reltol"] = solver.reltol)
+    solver.splitting === nothing || (block["splitting"] = solver.splitting)
+    return block
+end
+
+"""
     serialize_esm_file(file::EsmFile) -> Dict{String,Any}
 
 Serialize EsmFile to JSON-compatible format.
@@ -453,6 +478,12 @@ function serialize_esm_file(file::EsmFile)::Dict{String,Any}
     # back VERBATIM (same round-trip contract as the two above).
     if file.coordinates !== nothing && !isempty(file.coordinates)
         result["coordinates"] = file.coordinates
+    end
+    # esm-spec §2.2 `solver` hints, written back VERBATIM (§2.2.4 requirement 2:
+    # authored configuration, a peer of `tolerance`).
+    if file.solver !== nothing
+        block = serialize_solver(file.solver)
+        isempty(block) || (result["solver"] = block)
     end
     # esm-spec §10.9 `coupling_roles`, written back VERBATIM. Presence of this
     # key is the sole positive identifier of the coupling-library file kind, so

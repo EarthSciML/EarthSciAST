@@ -65,9 +65,11 @@ fn root_metaparameter_env(
 /// importing document's registry (esm-spec §4.7, mirroring the §9.7.5
 /// template-import merge): deep-equal redeclaration is idempotent, an absent
 /// name is added, and a non-deep-equal collision is `subsystem_index_set_conflict`.
-/// The merge is scoped to MODEL subsystems, matching the Julia resolver (a
-/// mounted mesh file whose axis size disagrees with the importer must fail at
-/// load rather than the importer silently winning).
+/// The merge is scoped to MODEL mounts, matching the Julia resolver (a mounted
+/// mesh file whose axis size disagrees with the importer must fail at load
+/// rather than the importer silently winning) — and it applies to BOTH model
+/// mount forms: a `subsystems.<k>` ref and a top-level `models.<k>` ref
+/// ([`inline_toplevel_model_refs`]) merge identically.
 ///
 /// # Arguments
 ///
@@ -134,6 +136,26 @@ pub fn resolve_subsystem_refs_with_metaparameters(
     walk_top_level(value, base_path, &mut visited, &root_meta)
 }
 
+/// A one-line rendering of an index-set declaration for the collision message
+/// — `kind=interval, size=59` — so the diagnostic names both definitions rather
+/// than only the axis they disagree about. Mirrors the Julia `_index_set_show`.
+fn show_index_set(decl: &Value) -> String {
+    let Some(obj) = decl.as_object() else {
+        return decl.to_string();
+    };
+    let parts: Vec<String> = [
+        "kind", "size", "members", "of", "offsets", "values", "from_faq",
+    ]
+    .iter()
+    .filter_map(|k| obj.get(*k).map(|v| format!("{k}={v}")))
+    .collect();
+    if parts.is_empty() {
+        decl.to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
 /// Merge a referenced subsystem file's top-level `index_sets` into the
 /// importing document's `registry` (esm-spec §4.7). Deep-equal redeclaration is
 /// idempotent; a non-deep-equal collision is `subsystem_index_set_conflict`.
@@ -150,11 +172,18 @@ fn merge_subsystem_index_sets(
                 return Err(err(
                     codes::SUBSYSTEM_INDEX_SET_CONFLICT,
                     format!(
-                        "index set '{n}' from subsystem ref \
-                         '{ref_str}' collides with a non-deep-equal declaration in the importing \
-                         document. A referenced subsystem file's top-level index_sets merge into \
-                         the importing document's registry; deep-equal redeclaration is \
-                         idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)."
+                        "index set '{n}' from subsystem ref '{ref_str}' ({}) collides with a \
+                         non-deep-equal declaration already in the importing document's registry \
+                         ({}) — contributed by the document's own `index_sets` or by an earlier \
+                         mount. A referenced subsystem file's top-level index_sets merge into the \
+                         importing document's registry; deep-equal redeclaration is idempotent, a \
+                         size/kind disagreement is a load-time error (esm-spec §4.7). If the two \
+                         are genuinely different axes that happen to share a name, rename one at \
+                         its mount edge with `index_set_rename` (esm-spec §4.7 \"Mount-edge \
+                         index-set renaming\"), e.g. \
+                         {{\"ref\": \"{ref_str}\", \"index_set_rename\": {{\"{n}\": \"{n}_2\"}}}}.",
+                        show_index_set(decl),
+                        show_index_set(existing),
                     ),
                 ));
             }
@@ -163,6 +192,22 @@ fn merge_subsystem_index_sets(
         }
     }
     Ok(())
+}
+
+/// Is this post-wire `index_sets` entry mergeable as it stands, i.e. is its
+/// `size` either absent (categorical / derived / ragged) or already a concrete
+/// integer? A `size` that is still a metaparameter expression — a bare name, or
+/// an `{op, args}` tree (esm-spec §9.7.6) — is not. Used only by
+/// [`inline_toplevel_model_refs`], where nothing has folded the leaf's
+/// metaparameters yet; mirrors the Julia `_native_index_set_is_folded`.
+fn native_index_set_is_folded(decl: &Value) -> bool {
+    let Some(obj) = decl.as_object() else {
+        return false;
+    };
+    match obj.get("size") {
+        None => true,
+        Some(v) => v.as_i64().is_some(),
+    }
 }
 
 /// Wording for [`load_ref_document`]'s diagnostics, so each call site keeps its
@@ -311,9 +356,10 @@ fn walk_top_level(
     inline_toplevel_model_refs(obj, base_path, visited)?;
 
     // The importing document's index-set registry starts from its own
-    // top-level `index_sets`; model subsystem refs merge theirs into it
-    // (esm-spec §4.7). Reaction-system subsystem refs do NOT merge (Julia
-    // resolver scope), so they thread `None`.
+    // top-level `index_sets` — already carrying whatever the top-level model
+    // mounts above merged in, since they run first — and model subsystem refs
+    // merge theirs into it (esm-spec §4.7). Reaction-system subsystem refs do
+    // NOT merge (Julia resolver scope), so they thread `None`.
     let mut registry: Map<String, Value> = obj
         .get("index_sets")
         .and_then(|v| v.as_object())
@@ -356,6 +402,9 @@ fn walk_top_level(
 ///   subsystems) are absolutized against the LEAF's dir, and the edge's imports
 ///   against THIS document's dir, so both resolve after the model lands in a
 ///   parent whose directory differs;
+/// * the leaf's top-level `index_sets` merge into THIS document's registry under
+///   the §4.7 deep-equal-or-`subsystem_index_set_conflict` rule — the same merge
+///   a subsystem mount performs, so the two mount forms agree;
 /// * the leaf's `function_tables` / `data_sources` / `enums` are merged in
 ///   (parent wins on a key clash).
 ///
@@ -388,6 +437,31 @@ fn inline_toplevel_model_refs(
             .and_then(|m| m.remove(&name))
             .expect("edge entry present");
         let entry_obj = entry.as_object().expect("edge entry is an object");
+        // esm-spec §4.7 "Mount-edge index-set renaming", "Where it applies".
+        // `index_set_rename` is a legal `SubsystemRef` property at BOTH mount
+        // forms, but THIS one — the top-level `models.<k>` `{ref}` — is inlined
+        // by a raw pre-pass that splices the leaf and defers all of §9.7 to the
+        // root, so there is no resolved mounted document for the rename to speak
+        // about and no hook to apply it at. Merging the leaf under its PRE-rename
+        // axis names would be silently wrong exactly where the field exists to
+        // prevent silence, so refuse the edge instead.
+        if entry_obj
+            .get("index_set_rename")
+            .is_some_and(|v| !v.is_null())
+        {
+            return Err(err(
+                codes::SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM,
+                format!(
+                    "models.{name}: `index_set_rename` is not supported at this mount \
+                     form. This binding inlines a top-level `models.<k>` `{{ref}}` with \
+                     a raw pre-pass that defers the leaf's §9.7 resolution to the root \
+                     document, so the edge has no resolved mounted document to rename \
+                     and the leaf would merge under its ORIGINAL axis names. Mount the \
+                     component at a `subsystems.<k>` `{{ref}}` edge instead, where the \
+                     rename applies (esm-spec §4.7 \"Mount-edge index-set renaming\")"
+                ),
+            ));
+        }
         let ref_str = entry_obj
             .get("ref")
             .and_then(|v| v.as_str())
@@ -451,6 +525,46 @@ fn inline_toplevel_model_refs(
         // declares no sources, which is almost every leaf.
         crate::data_source_urls::resolve_data_source_urls(&mut comp, &leaf_dir)
             .map_err(|e| err(e.code, e.message))?;
+        // esm-spec §4.7 "Index-set merge": a top-level `models.<k>` mount edge
+        // merges the leaf's document-scoped `index_sets` into THIS document's
+        // registry, exactly as a subsystem mount does — the two mount forms are
+        // one mechanism at two attachment points, so an assembly may shape its
+        // coupling over the leaf's axes without redeclaring them. Deep-equal
+        // redeclaration is idempotent; a non-deep-equal collision is
+        // `subsystem_index_set_conflict`. Merged AFTER the component-of-component
+        // recursion above, so `comp`'s registry already carries whatever ITS own
+        // mounts brought in and the merge composes transitively. Unlike the
+        // by-name blocks below, the importer does NOT silently win a clash.
+        //
+        // One declaration is held back: an `interval` whose `size` is still an
+        // unfolded metaparameter expression. §4.7 merges a mounted file's axes
+        // "after the referenced document's metaparameters are closed and
+        // folded", and at THIS attachment point they have not been — this
+        // inliner is a raw pre-pass that drops the leaf's `metaparameters`
+        // block and defers everything §9.7 to the ROOT pass. Merging one anyway
+        // resolves it in the wrong scope: either the root has no binding for
+        // the leaf's name and coercion to `IndexSet.size: i64` fails with a raw
+        // serde message, or the root happens to declare the same name and the
+        // axis silently takes the ROOT's value instead of the leaf's own
+        // default. Skipping leaves the axis where it was before this merge
+        // existed — undeclared, so the importer must redeclare it — until a
+        // top-level mount edge closes the leaf's metaparameters the way a
+        // subsystem edge does. Mirrors the Julia
+        // `_native_index_set_is_folded` guard.
+        if let Some(loaded) = comp.get("index_sets").and_then(|v| v.as_object()).cloned()
+            && !loaded.is_empty()
+        {
+            let loaded: Map<String, Value> = loaded
+                .into_iter()
+                .filter(|(_, decl)| native_index_set_is_folded(decl))
+                .collect();
+            let registry = obj
+                .entry("index_sets".to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Some(registry) = registry.as_object_mut() {
+                merge_subsystem_index_sets(registry, &loaded, ref_str)?;
+            }
+        }
         for blk in ["function_tables", "data_sources", "enums"] {
             let Some(src) = comp.get(blk).and_then(|v| v.as_object()) else {
                 continue;
@@ -753,6 +867,19 @@ fn resolve_value(
                 crate::lower_expression_templates::expand(&mut resolved)?;
                 parsed = resolved;
             }
+            // esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2.
+            // The referenced document has now resolved in its OWN scope — its
+            // imports, this edge's `bindings` and injection, its metaparameter
+            // close and fold, the §9.6.3 fixpoint — so its `index_sets` are the
+            // post-resolution vocabulary the edge's `index_set_rename` speaks.
+            // Before its own nested mounts resolve: each nested edge renames
+            // what IT contributes, at its own edge. Absent or empty ⇒ identity,
+            // so an edge that does not use the field resolves exactly as before.
+            crate::template_imports::apply_mount_index_set_rename(
+                &mut parsed,
+                obj,
+                &format!("subsystem ref '{ref_str}'"),
+            )?;
             Ok(())
         })();
         if let Err(e) = edge_result {

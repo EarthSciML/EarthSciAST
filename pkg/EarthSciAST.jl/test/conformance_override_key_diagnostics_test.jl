@@ -105,3 +105,98 @@ const _OKD_MANIFEST = joinpath(_OKD_CAT_DIR, "manifest.json")
         end
     end
 end
+
+# Rule 2 was widened to the LONGEST dotted suffix (CONFORMANCE_SPEC §5.31), which
+# has two consequences this testset pins.
+#
+# 1. The leading segments a dotted key drops must NAME SOMETHING — a component or
+#    a subsystem the document declares. Without that check `Doc.Left.solo` binds
+#    `Left.solo` where no `Doc` exists and a typo'd `Missng.M.pert_amp` quietly
+#    drives `M.pert_amp`: an accepted override pointed at a name the author never
+#    wrote.
+# 2. It makes it possible for TWO distinct keys to designate ONE build name. That
+#    is a document authoring error, not a race to settle by ranking the rules:
+#    the caller wrote two overrides and only one can take effect, so the run is
+#    rejected naming the resolved name and every colliding key. An EXACT hit is
+#    never part of a collision — it identifies its name outright and wins.
+#
+# The collision message is worded identically in Python (`_collision_message`)
+# and Rust (`SimulateError::CollidingParameterKeys`); it is asserted verbatim
+# here so the three cannot drift.
+@testset "override keys: rule 2 validates the leading segments" begin
+    names = Set{String}(["Left.gain", "Left.solo", "Right.gain"])
+    ns = EarthSciAST._override_namespaces(names)
+    @test ns == Set{String}(["Left", "Right"])
+    @test EarthSciAST._dotted_suffix_hit(names, ns, "Doc.Left.solo") === nothing
+    @test EarthSciAST._dotted_suffix_hit(names, ns, "Left.Left.solo") == "Left.solo"
+    _, unknown, _, _ = EarthSciAST._canonicalize_override_keys(
+        Float64, names, ns, Dict("Doc.Left.solo" => 9.0))
+    @test unknown == ["Doc.Left.solo"]
+    # The §4.6 fully-qualified spelling of a name the build holds shorter, with
+    # `P` the model's own name and `sub` its mounted subsystem.
+    sub_names = Set{String}(["sub.g", "g"])
+    sub_ns = EarthSciAST._override_namespaces(sub_names; model_name = "P")
+    sub, u, a, c = EarthSciAST._canonicalize_override_keys(
+        Float64, sub_names, sub_ns, Dict("P.sub.g" => 1.5))
+    @test sub == Dict("sub.g" => 1.5)
+    @test isempty(u) && isempty(a) && isempty(c)
+    # ...and with `P` out of scope the same key names nothing.
+    _, u_np, _, _ = EarthSciAST._canonicalize_override_keys(
+        Float64, sub_names, EarthSciAST._override_namespaces(sub_names),
+        Dict("P.sub.g" => 1.5))
+    @test u_np == ["P.sub.g"]
+    # A key none of whose suffixes is a name stays UNKNOWN (rule 3 is bare-only).
+    _, u2, _, _ = EarthSciAST._canonicalize_override_keys(
+        Float64, names, ns, Dict("Missing.solo" => 1.0))
+    @test u2 == ["Missing.solo"]
+end
+
+@testset "override keys: two keys, one name, is ambiguous" begin
+    names = Set{String}(["Left.solo"])
+    ns = Set{String}(["A", "B", "Doc", "Left"])
+    collide(pairs) = begin
+        _, u, a, c = EarthSciAST._canonicalize_override_keys(Float64, names, ns, Dict(pairs))
+        @test isempty(u)
+        @test isempty(a)
+        c
+    end
+    # Rule 3 (bare) + rule 2 (longer dotted) on one name.
+    c1 = collide(["solo" => 2.0, "Doc.Left.solo" => 9.0])
+    @test c1 == Dict("Left.solo" => ["Doc.Left.solo", "solo"])
+    # Two rule-2 keys on one name, in either insertion order.
+    @test collide(["A.Left.solo" => 1.0, "B.Left.solo" => 2.0]) ==
+          Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
+    @test collide(["B.Left.solo" => 2.0, "A.Left.solo" => 1.0]) ==
+          Dict("Left.solo" => ["A.Left.solo", "B.Left.solo"])
+    # An EXACT hit wins outright over the competing suffix claims, which are
+    # discarded rather than reported.
+    n, u, a, c = EarthSciAST._canonicalize_override_keys(
+        Float64, names, ns,
+        Dict("Left.solo" => 1.0, "solo" => 2.0, "Doc.Left.solo" => 9.0))
+    @test n == Dict("Left.solo" => 1.0)
+    @test isempty(u) && isempty(a) && isempty(c)
+    # The cross-binding message, verbatim.
+    @test EarthSciAST._override_collision_message(
+              "parameter_overrides", "parameter", "Left.solo",
+              ["Doc.Left.solo", "solo"]) ==
+          "parameter_overrides: 2 keys designate the parameter 'Left.solo' " *
+          "(Doc.Left.solo, solo). Supply exactly one override key per name " *
+          "(esm-spec §6.6.2)."
+end
+
+# End to end through the document front door: the collision is reported by
+# `esm_problem`, not swallowed into a silent winner.
+@testset "override keys: a collision reaches the front door" begin
+    err = try
+        EarthSciAST.esm_problem(joinpath(_OKD_CAT_DIR, "fixtures",
+                                         "override_key_diagnostics.esm"), (0.0, 1.0);
+                                p = Dict("solo" => 9.0, "Left.Left.solo" => 8.0))
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    msg = err === nothing ? "" : sprint(showerror, err)
+    @test occursin("2 keys designate the parameter 'Left.solo'", msg)
+    @test occursin("Left.Left.solo, solo", msg)
+end

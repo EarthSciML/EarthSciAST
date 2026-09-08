@@ -39,12 +39,6 @@
           "default": 9.81,
           "description": "Acceleration"
         },
-        "t": {
-          "type": "parameter",
-          "units": "s",
-          "default": 1.0,
-          "description": "Time"
-        },
         "x": {
           "type": "unknown",
           "units": "m",

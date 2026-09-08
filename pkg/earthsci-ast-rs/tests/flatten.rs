@@ -36,6 +36,7 @@ fn empty_file() -> EsmFile {
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -172,6 +173,7 @@ fn flatten_reactions_only_file_produces_mass_action_odes() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -259,6 +261,7 @@ fn flatten_mixed_model_and_reaction_system() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
@@ -309,6 +312,7 @@ fn flatten_autocatalytic_reaction_net_stoichiometry() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -372,6 +376,7 @@ fn flatten_source_and_sink_reactions() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         reaction_systems: Some(reaction_systems),
         ..empty_file()
@@ -456,6 +461,7 @@ fn flatten_conflicting_derivative_raises_error() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         reaction_systems: Some(reaction_systems),
@@ -595,6 +601,7 @@ fn flatten_operator_compose_sums_matched_rhses() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -740,6 +747,7 @@ fn flatten_variable_map_param_to_var_substitutes_and_removes_parameter() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -824,6 +832,7 @@ fn flatten_couple_includes_connector_equations() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         coupling: Some(coupling),
@@ -959,6 +968,7 @@ fn flatten_derives_spatial_independent_variable_from_grad() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()
@@ -1043,6 +1053,7 @@ fn flatten_derives_spatial_independent_variable_from_non_time_derivative() {
     let file = EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         coupling_roles: None,
         models: Some(models),
         ..empty_file()

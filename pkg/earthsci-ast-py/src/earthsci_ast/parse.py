@@ -88,6 +88,7 @@ from .esm_types import (
     Reaction,
     ReactionSystem,
     Reference,
+    Solver,
     Species,
     SweepDimension,
     SweepRange,
@@ -1381,6 +1382,26 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     if "coordinates" in data and data["coordinates"] is not None:
         coordinates = copy.deepcopy(dict(data["coordinates"]))
 
+    # Parse the document-scoped solver hints (esm-spec §2.2) — advisory
+    # numerics the document knows about itself. Typed rather than carried as a
+    # raw dict because `solve` READS it (§2.2.2 resolution order); `None` when
+    # the document declares none, which is NOT a synonym for any default.
+    solver: Solver | None = None
+    if isinstance(data.get("solver"), dict):
+        _s = data["solver"]
+        _candidate = Solver(
+            stiffness=_s.get("stiffness"),
+            abstol=_s.get("abstol"),
+            reltol=_s.get("reltol"),
+            splitting=_s.get("splitting"),
+        )
+        # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
+        # means what omitting the block means, so the typed document never holds
+        # a block with nothing set — which is what keeps the five bindings from
+        # disagreeing about whether `{}` survives `parse -> emit`.
+        if _candidate != Solver():
+            solver = _candidate
+
     # Parse the document-scoped data-source ingest registry (esm-spec §8).
     data_sources: dict[str, DataSource] = {}
     if "data_sources" in data:
@@ -1504,6 +1525,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
         domain=domain,
         index_sets=index_sets,
         coordinates=coordinates,
+        solver=solver,
     )
 
 
@@ -1620,6 +1642,8 @@ def _load_ref_data(
     injected_imports: list[Any] | None = None,
     loader_metaparameters: dict[str, int] | None = None,
     parent_metaparameters: dict[str, int] | None = None,
+    index_set_rename: Any = None,
+    rename_where: str = "mount edge",
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1752,6 +1776,18 @@ def _load_ref_data(
     ref_data = lower_expression_templates(ref_data)
     ref_data = expand_document(ref_data)
 
+    # esm-spec §4.7 "Mount-edge index-set renaming", pipeline step 2. The
+    # referenced document has now resolved in its OWN scope — its imports, this
+    # edge's `bindings` and injection, its metaparameter close and fold, the
+    # §9.6.3 fixpoint — so its `index_sets` are the post-resolution vocabulary
+    # the edge's `index_set_rename` speaks. Before its own nested mounts
+    # resolve: each nested edge renames what IT contributes, at its own edge.
+    # Absent or empty => identity, so an edge that does not use the field
+    # resolves exactly as before.
+    from .template_imports import apply_mount_index_set_rename
+
+    apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
+
     return ref_data, new_base
 
 
@@ -1812,12 +1848,17 @@ def _merge_subsystem_index_sets(
                     "subsystem_index_set_conflict",
                     f"index set '{n}' from subsystem ref '{ref}' "
                     f"({_index_set_show(decl)}) collides with a non-deep-equal "
-                    "declaration in the importing document "
-                    f"({_index_set_show(registry[n])}). A referenced subsystem "
-                    "file's top-level index_sets merge into the importing "
-                    "document's registry; deep-equal redeclaration is "
-                    "idempotent, a size/kind disagreement is a load-time error "
-                    "(esm-spec §4.7).",
+                    "declaration already in the importing document's registry "
+                    f"({_index_set_show(registry[n])}) — contributed by the "
+                    "document's own `index_sets` or by an earlier mount. A "
+                    "referenced subsystem file's top-level index_sets merge into "
+                    "the importing document's registry; deep-equal redeclaration "
+                    "is idempotent, a size/kind disagreement is a load-time error "
+                    "(esm-spec §4.7). If the two are genuinely different axes "
+                    "that happen to share a name, rename one at its mount edge "
+                    'with `index_set_rename` (esm-spec §4.7 "Mount-edge '
+                    'index-set renaming"), e.g. '
+                    f'{{"ref": "{ref}", "index_set_rename": {{"{n}": "{n}_2"}}}}.',
                 )
         else:
             registry[n] = decl
@@ -1894,7 +1935,13 @@ def _resolve_subsystems_generic(
             mount_pointer = f"/{kind}/{component.name}/subsystems/{sub_name}"
             try:
                 ref_data, new_base = _load_ref_data(
-                    ref_str, base_path, bindings, "subsystem", injected
+                    ref_str,
+                    base_path,
+                    bindings,
+                    "subsystem",
+                    injected,
+                    index_set_rename=sub_value.get("index_set_rename"),
+                    rename_where=f"subsystem ref '{ref_str}'",
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2145,6 +2192,8 @@ def resolve_model_refs(
             injected,
             loader_metaparameters=loader_metaparameters,
             parent_metaparameters=parent_metaparameters,
+            index_set_rename=model_value.get("index_set_rename"),
+            rename_where=f"top-level model ref '{ref_str}'",
         )
 
         parsed = _parse_esm_data(ref_data)
@@ -2337,6 +2386,7 @@ def _load_data(
         reject_expression_templates_pre_v04,
     )
     from ._data_source_urls import resolve_data_source_urls
+    from .solver import reject_solver_pre_v11
     from .template_imports import (
         apply_scope_injections,
         reject_template_imports_pre_v08,
@@ -2349,6 +2399,10 @@ def _load_data(
     # expression_templates, metaparameters) are rejected when the file
     # declares esm < 0.8.0 (esm-spec §9.6.5).
     reject_template_imports_pre_v08(data)
+
+    # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
+    # earlier version that carries one is rejected (esm-spec §2.2.4).
+    reject_solver_pre_v11(data)
 
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed

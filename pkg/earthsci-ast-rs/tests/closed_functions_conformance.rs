@@ -179,12 +179,15 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
     let file = load_string(&json_str).unwrap_or_else(|e: earthsci_ast::EsmError| {
         panic!("parse failed for {}: {e}", canonical.display())
     });
+    // The shared corpus is stamped 1.0.0 and is NOT restamped as the library
+    // advances: the 1.x line is additive, so an older minor stays loadable and a
+    // fixture bumped to the library's own version would stop exercising that.
+    // Pinning SCHEMA_VERSION here only worked while the two coincided.
     assert_eq!(
         file.esm,
-        earthsci_ast::SCHEMA_VERSION,
-        "fixture {} esm version not {}",
+        "1.0.0",
+        "fixture {} esm version not 1.0.0",
         canonical.display(),
-        earthsci_ast::SCHEMA_VERSION
     );
 
     let spec_str = fs::read_to_string(&expected).expect("read expected.json");

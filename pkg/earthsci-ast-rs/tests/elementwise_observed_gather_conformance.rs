@@ -27,7 +27,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_pde_tests_with_base_dir;
+use earthsci_ast::run_inline_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::BTreeMap;
 use std::fs;
@@ -49,8 +49,11 @@ fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
     SolveOptions {
         alg: Alg::Erk,
-        reltol: rs["reltol"].as_f64().expect("reltol"),
-        abstol: rs["abstol"].as_f64().expect("abstol"),
+        // `Some`: the manifest NAMES both tolerances, and `SolveOptions` takes
+        // `Option<f64>` so that "the caller said nothing" stays distinguishable
+        // from "the caller asked for the default" (esm-spec §2.2.2).
+        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
+        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
         ..Default::default()
     }
 }
@@ -82,7 +85,7 @@ fn run_fixture(
     let text = fs::read_to_string(&esm_path).unwrap_or_else(|e| panic!("read {esm_path:?}: {e}"));
     let file =
         load_string(&text).unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
-    let results = run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir));
+    let results = run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir));
 
     let expected = golden["assertions"].as_array().expect("golden assertions");
     assert_eq!(results.len(), expected.len());

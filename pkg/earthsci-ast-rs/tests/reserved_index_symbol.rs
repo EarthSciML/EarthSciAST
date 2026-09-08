@@ -32,7 +32,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_path, load_string, run_pde_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path, load_string, run_inline_tests_with_base_dir};
 use serde_json::{Value, json};
 
 mod common;
@@ -100,7 +100,8 @@ fn the_const_array_key_column_variant_is_rejected_too() {
 fn the_control_spelling_loads_and_answers_two() {
     let path = fixture("loop_symbol_named_k_control.esm");
     let file = load_path(&path).expect("control loads");
-    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 1, "one inline assertion: {results:?}");
     let r = &results[0];
     assert!(

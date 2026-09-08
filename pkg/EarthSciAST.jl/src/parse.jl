@@ -681,6 +681,13 @@ function coerce_esm_file(data::Any)::EsmFile
     # boundary means the direct `coerce_esm_file` entry point keeps it too.
     coupling_roles = _maybe(_to_native_json, _get_field(data, :coupling_roles, nothing))
 
+    # Document-scoped solver hints (esm-spec §2.2), read at the coercion
+    # boundary for the same reason as `coupling_roles` above: no lowering pass
+    # rewrites the block, and reading it here means the direct
+    # `coerce_esm_file` entry point keeps it too. Typed rather than verbatim
+    # because `solve` READS it (§2.2.2 resolution order).
+    solver = coerce_solver(_get_field(data, :solver, nothing))
+
     file = EsmFile(esm, metadata,
                   models=models,
                   reaction_systems=reaction_systems,
@@ -691,12 +698,43 @@ function coerce_esm_file(data::Any)::EsmFile
                   function_tables=function_tables,
                   index_sets=index_sets,
                   component_templates=component_templates,
-                  coupling_roles=coupling_roles)
+                  coupling_roles=coupling_roles,
+                  solver=solver)
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
     lower_enums!(file)
     return file
+end
+
+"""
+    coerce_solver(data) -> Union{Solver,Nothing}
+
+Coerce the top-level `solver` block (esm-spec §2.2) into the typed
+[`Solver`](@ref) carried on [`EsmFile`](@ref), or `nothing` when the document
+declares none.
+
+Field VALUES are not re-validated here — the schema already pins the two enums
+and the two positive tolerances, and this runs after schema validation. What it
+does is keep absence distinguishable from any default: a missing key stays
+`nothing` rather than acquiring a value the author never wrote.
+"""
+function coerce_solver(data)
+    data === nothing && return nothing
+    data isa AbstractDict || return nothing
+    _f(k) = _raw_get(data, k)  # 2-arity; absent reports as `nothing`
+    _num(v) = v === nothing ? nothing : Float64(v)
+    _str(v) = v === nothing ? nothing : String(v)
+    s = Solver(stiffness=_str(_f("stiffness")),
+               abstol=_num(_f("abstol")),
+               reltol=_num(_f("reltol")),
+               splitting=_str(_f("splitting")))
+    # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
+    # means what omitting the block means, so the typed document never holds a
+    # block with nothing set — which is what keeps the five bindings from
+    # disagreeing about whether `{}` survives `parse -> emit`.
+    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting)) && return nothing
+    return s
 end
 
 """
@@ -859,7 +897,29 @@ function _coerce_subsystem_entry(name::String, v)
         if imports_raw !== nothing
             injected = Any[_to_native_json(e) for e in imports_raw]
         end
-        return SubsystemRef(string(v["ref"]), bindings, injected)
+        # Optional `index_set_rename` translates the MOUNTED document's index-set
+        # names into this document's vocabulary at load (esm-spec §4.7
+        # "Mount-edge index-set renaming"). Kept as a raw name→name map;
+        # `_resolve_subsystem_ref` threads it into the referenced document's load
+        # and applies it once that document has resolved in its own scope, so it
+        # is consumed at the mount and does not survive `parse → emit`.
+        iset_rename = nothing
+        rename_raw = _get_field(v, :index_set_rename, nothing)
+        if rename_raw !== nothing
+            # A malformed (non-object) map is left for `_name_map` to reject with
+            # `template_import_rename_invalid` at the mount, not stringified here.
+            iset_rename = _is_object(rename_raw) ?
+                OrderedDict{String,String}(
+                    string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)) :
+                OrderedDict{String,String}()
+            _is_object(rename_raw) || throw(ExpressionTemplateError(
+                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+                "subsystems.$(name): `index_set_rename` must be an object mapping " *
+                "index-set names to names (esm-spec §4.7)"))
+        end
+        return SubsystemRef(string(v["ref"]),
+                            Dict{String,Int}(bindings), Any[e for e in injected],
+                            iset_rename)
     else
         return coerce_model(v)
     end

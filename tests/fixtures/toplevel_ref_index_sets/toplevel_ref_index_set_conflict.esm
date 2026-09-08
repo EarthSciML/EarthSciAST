@@ -1,0 +1,27 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "toplevel_ref_index_set_conflict",
+    "description": "The collision half of the top-level mount form's §4.7 index-set merge (esm-spec §4.7 'Two mount forms, one mechanism'). The document's own index_sets.cells (interval, size 7) collides with the mounted mesh file's cells (interval, size 5) from ../../valid/subsystem_mesh_lib.esm, mounted here through a TOP-LEVEL models.M {ref}. Merging must not be last-writer-wins: the size disagreement is the load-time error subsystem_index_set_conflict — the SAME diagnostic the subsystems-edge form raises (tests/invalid/template_imports/subsystem_index_set_conflict.esm), because the two mount forms are one mechanism at two attachment points. Lives under tests/fixtures/ rather than tests/invalid/ because TypeScript and Go do not implement the top-level mount form at all, so the corpus sweep would demand a rejection they cannot make.",
+    "authors": ["EarthSciAST"],
+    "created": "2026-09-06T00:00:00Z",
+    "tags": ["subsystem", "index_sets", "merge", "mount", "toplevel-ref", "conflict"]
+  },
+  "index_sets": {
+    "cells": { "kind": "interval", "size": 7 }
+  },
+  "models": {
+    "M": { "ref": "../../valid/subsystem_mesh_lib.esm" },
+    "Host": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.5, "description": "host scalar state" }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.5, "x"] }
+        }
+      ]
+    }
+  }
+}

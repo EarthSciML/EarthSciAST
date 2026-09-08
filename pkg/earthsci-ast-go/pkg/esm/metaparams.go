@@ -86,6 +86,12 @@ func collectMetaparamDecls(raw map[string]any, origin string, order []string) (*
 var metaSubstSkipKeys = map[string]struct{}{
 	"metadata": {}, "params": {}, "type": {}, "units": {}, "kind": {},
 	"description": {}, "name": {}, "wrt": {},
+	// `dim` is a scalar field naming a spatial axis (esm-spec §4.9.1) — an axis
+	// NAME, never an expression position, exactly like the `wrt` above it. A
+	// bound metaparameter sharing that name must not rewrite it into an integer.
+	// (The §9.7.7 rename walk handles renaming it, via renameAxisKeys.) Omitting
+	// it here diverged from the other four bindings, all of which skip `dim`.
+	"dim": {},
 	// `integral`'s integration variable (esm-spec §4.2) is an axis NAME, never
 	// an expression position — a bound metaparameter of the same name must not
 	// rewrite it into an integer. (The §9.7.7 rename walk handles renaming.)

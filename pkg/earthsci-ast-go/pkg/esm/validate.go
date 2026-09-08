@@ -822,6 +822,17 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// §6.3.1 derivation.
 	s.validateSystemKind(modelName, model, basePath)
 
+	// esm-spec §4.9.1.1. A `variables` key spelled with a globally-scoped name
+	// is unreachable — creditIndependentVariable above puts the independent
+	// variable into scope by NAME, ahead of the declaration map, so every reader
+	// gets the clock instead of the declared quantity (issue #200).
+	validateReservedDeclarationNames(s, model.Variables,
+		basePath+"/variables", fmt.Sprintf("Model '%s'", modelName), "variable")
+	// A subsystem is a model, so its `variables` map is a declaration map too —
+	// and a MOUNTED subsystem is exactly the shape issue #200 was reported in.
+	// Subsystems are held untyped, so the walk is over raw JSON.
+	validateReservedSubsystemNames(s, model.Subsystems, basePath+"/subsystems")
+
 	for i, event := range model.DiscreteEvents {
 		event := event
 		eventPath := fmt.Sprintf("%s/discrete_events/%d", basePath, i)
@@ -854,6 +865,15 @@ func (s *structuralScan) validateModel(modelName string, model *Model) {
 	// rejection duty as the three executing ones, so this static check is the
 	// whole of the construct in Go. See validate_recurrence.go.
 	s.validateRecurrences(model, basePath)
+
+	// esm-spec §4.9.6 "An observed dependency cycle": the model's observed
+	// definitions induce a dependency graph over the observed names, and a cycle
+	// in it means no evaluation order satisfies every definition. Decidable from
+	// the equations alone, so it is a hard structural error here rather than
+	// something a build stumbles over and misattributes to an innocent name
+	// (issue #181). Runs AFTER validateRecurrences, whose §4.3.1.1 candidates own
+	// their self-edge. See validate_observed_cycle.go.
+	s.validateObservedCycles(modelName, model, basePath)
 }
 
 // validateExpressionVariables checks that every variable referenced in an
@@ -1587,6 +1607,89 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 	}
 }
 
+// reservedDeclarationNames maps every name a declaration map may NOT spell to
+// the reason it is reserved (esm-spec §4.9.1.1).
+//
+// Two symbols, both GLOBALLY scoped: the document's independent variable and
+// the §6.4 operator placeholder. Exactly the pair creditIndependentVariable and
+// the `_var` concession put into scope ahead of the declaration maps, and the
+// same set the sibling `reserved_index_symbol` binder rule uses — §4.9.1.1 is
+// its normative home, so the two rules cannot drift apart. (That sibling rule
+// is currently implemented only in the Rust binding; this one is in all five.)
+//
+// Spatial coordinate names are deliberately NOT here: they are coordinates only
+// in a coordinate position (§11.4), and tests/valid/units_dimensional_analysis.esm
+// declares `x` as an ordinary position variable.
+func (s *structuralScan) reservedDeclarationNames() map[string]string {
+	indep := s.indep
+	if indep == "" {
+		indep = DefaultIndepVar
+	}
+	return map[string]string{
+		indep:                  "independent_variable",
+		operatorPlaceholderVar: "operator_placeholder",
+	}
+}
+
+// validateReservedDeclarationNames emits `reserved_variable_name` for every key
+// of one declaration map spelled with a globally-scoped name.
+//
+// The declaration does not shadow the implicit symbol — the implicit symbol
+// shadows it, so every reader of the name silently receives the simulation
+// clock (or the operand placeholder) instead of the declared quantity. It is a
+// free function rather than a method because Go methods cannot take type
+// parameters, and the three declaration maps hold three different value types.
+func validateReservedDeclarationNames[V any](
+	s *structuralScan, decls map[string]V, containerPath, owner, kind string,
+) {
+	reserved := s.reservedDeclarationNames()
+	for _, name := range sortedKeys(decls) {
+		why, ok := reserved[name]
+		if !ok {
+			continue
+		}
+		role := "the document's independent variable"
+		if why == "operator_placeholder" {
+			role = "the operator-model placeholder"
+		}
+		s.addErr(StructuralError{
+			Path: fmt.Sprintf("%s/%s", containerPath, name),
+			Code: ErrorReservedVariableName,
+			Message: fmt.Sprintf("%s declares a %s named '%s', which is %s",
+				owner, kind, name, role),
+			Details: map[string]any{
+				"name":        name,
+				"reserved_as": why,
+			},
+		})
+	}
+}
+
+// validateReservedSubsystemNames applies the §4.9.1.1 rule to every INLINE
+// subsystem of a model, recursively.
+//
+// A subsystem is a model, so its `variables` map declares symbols of the
+// assembled system exactly as the parent's does; the reported failure in issue
+// #200 was a subsystem mount. `Model.Subsystems` is `map[string]any` because an
+// entry may also be an unresolved `{"ref": …}` — which carries no `variables`
+// key and so contributes nothing — so the walk is over raw decoded JSON.
+func validateReservedSubsystemNames(s *structuralScan, subsystems map[string]any, basePath string) {
+	for _, name := range sortedKeys(subsystems) {
+		sub, ok := subsystems[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		subPath := fmt.Sprintf("%s/%s", basePath, name)
+		if vars, ok := sub["variables"].(map[string]any); ok {
+			validateReservedDeclarationNames(s, vars, subPath+"/variables",
+				fmt.Sprintf("Model '%s'", name), "variable")
+		}
+		if nested, ok := sub["subsystems"].(map[string]any); ok {
+			validateReservedSubsystemNames(s, nested, subPath+"/subsystems")
+		}
+	}
+}
+
 // countDerivatives returns, per variable, how many time derivatives of it an
 // expression carries. It walks EVERY expression-bearing field (the shared
 // field-preserving walk), so it finds the `D` an array-form equation hides in an
@@ -1643,6 +1746,14 @@ func (s *structuralScan) validateReactionSystem(systemName string, system *React
 	s.creditIndependentVariable(allVars)
 	s.creditCoordinateNames(allVars)
 	s.creditCallbackVariables(allVars, systemName)
+
+	// esm-spec §4.9.1.1, the same rule as for a model's `variables`: a species
+	// and a reaction parameter become symbols of the derived ODE system exactly
+	// as a `variables` entry does (§7.4), so all three declaration maps collide
+	// with the globally-scoped names identically.
+	owner := fmt.Sprintf("Reaction system '%s'", systemName)
+	validateReservedDeclarationNames(s, system.Species, basePath+"/species", owner, "species")
+	validateReservedDeclarationNames(s, system.Parameters, basePath+"/parameters", owner, "parameter")
 
 	for i, reaction := range system.Reactions {
 		reactionPath := fmt.Sprintf("%s/reactions/%d", basePath, i)

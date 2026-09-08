@@ -154,6 +154,58 @@ function _check_variable_map_units(file::EsmFile)
 end
 
 """
+Resolution preflight for every `variable_map` entry: each endpoint must name a
+state, parameter or observed the COLLECTED system carries, under its FULL dot
+path (esm-spec §4.6). Raises `VariableMapUnresolvedEndpointError` otherwise.
+
+Until this existed both halves failed silently: `_substitute_variable_map!`
+rewrites `to` -> `from` whether or not either name binds, and
+`_promote_variable_map_param!` returns early on a `to` that is not a key of
+`params`. An endpoint resolving to nothing therefore produced a flattened
+system indistinguishable from one where the coupling had been applied and had
+simply had no effect.
+
+Runs on the PRE-coupling tables: an `operator_compose` `translate` merge (§10.2)
+legitimately consumes one of two spellings of a quantity, so checking after it
+ran would flag a well-formed endpoint.
+
+EXEMPTION: a `from` whose owning system is a top-level `data_sources` key. Such
+a producer is served through the runtime forcing seam rather than as a declared
+variable, so it is legitimately absent from the tables.
+
+Deliberately NOT checked: whether a promoting transform's `to` is a PARAMETER
+rather than an unknown. `tests/valid/scoped_refs_coupling.esm` maps
+`param_to_var` onto a declared unknown, and tightening that is a separate
+question from whether the endpoint resolves at all.
+"""
+function _check_variable_map_endpoints(file::EsmFile,
+                                       states::AbstractDict{String, ModelVariable},
+                                       params::AbstractDict{String, ModelVariable},
+                                       observeds::AbstractDict{String, ModelVariable})
+    isempty(file.coupling) && return
+    declared = Set{String}()
+    for tbl in (states, params, observeds)
+        for name in keys(tbl)
+            push!(declared, name)
+        end
+    end
+    loader_names = file.data_sources === nothing ? Set{String}() :
+        Set{String}(keys(file.data_sources))
+    for entry in file.coupling
+        entry isa CouplingVariableMap || continue
+        dot = findfirst('.', entry.from)
+        from_owner = dot === nothing ? entry.from : String(SubString(entry.from, 1, dot - 1))
+        from_is_loaded = from_owner in loader_names
+        for (side, endpoint) in (("from", entry.from), ("to", entry.to))
+            (isempty(endpoint) || endpoint in declared) && continue
+            (side == "from" && from_is_loaded) && continue
+            throw(VariableMapUnresolvedEndpointError(entry.from, entry.to, side, endpoint))
+        end
+    end
+    return
+end
+
+"""
 Look up a dot-qualified variable's declared units across models, subsystems,
 and reaction systems (species + parameters). Returns `nothing` when the
 variable is missing or carries no declared units.
