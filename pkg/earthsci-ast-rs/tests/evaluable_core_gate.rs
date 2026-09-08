@@ -37,7 +37,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiled, EsmFile, SolveOptions, load_path, run_pde_tests, run_pde_tests_with_base_dir,
+    Compiled, EsmFile, SolveOptions, load_path, run_inline_tests, run_inline_tests_with_base_dir,
 };
 use serde_json::json;
 
@@ -53,7 +53,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn a_true_body_counts_instead_of_panicking() {
     let path = fixture("semijoin_true_body.esm");
     let file = load_path(&path).expect("loads");
-    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {
         assert!(
@@ -169,7 +170,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
         }))
         .expect("typed document");
 
-        let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
+        let results = run_inline_tests(&file, Some("M"), &SolveOptions::default());
         assert_eq!(results.len(), 1, "`{op}`: one assertion, got {results:?}");
         let r = &results[0];
         assert!(

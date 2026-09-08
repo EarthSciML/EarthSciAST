@@ -29,7 +29,7 @@ from earthsci_ast import load_document, load_path, to_json
 from earthsci_ast.error_handling import ErrorCode
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.lower_table_lookup import TableLookupError, lower_table_lookups
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem
 from earthsci_ast.serialize import _serialize_expression
 
@@ -93,7 +93,7 @@ def test_inline_test_fixture_evaluates_every_table_lookup_assertion():
     table above its last knot so the default `out_of_bounds: "clamp"` holds the
     last value. Before the lowering reached the build path, `y` and `w` could
     not be evaluated at all."""
-    results = run_pde_tests(str(FIXTURES_ROOT / "inline_test" / "fixture.esm"))
+    results = run_inline_tests(str(FIXTURES_ROOT / "inline_test" / "fixture.esm"))
     by_variable = {r.variable: r for r in results}
     assert set(by_variable) == {"y", "z", "w"}
     for name, expected in (("y", 25.0), ("z", 25.0), ("w", 40.0)):
@@ -256,7 +256,7 @@ def test_out_of_bounds_error_is_refused_by_name():
 def test_out_of_bounds_error_is_refused_on_the_inline_test_path_too():
     file = load_path(FIXTURES_ROOT / "out_of_bounds_error" / "fixture.esm")
     with pytest.raises(TableLookupError) as excinfo:
-        run_pde_tests(file)
+        run_inline_tests(file)
     assert excinfo.value.code == ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED.value
 
 

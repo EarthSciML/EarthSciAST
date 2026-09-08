@@ -12,7 +12,7 @@
 //! Rust-local copies, because the property is cross-binding: all five bindings
 //! had the same gap, and the same two files pin all five.
 //!
-//! * `inline_test/` — the end-to-end case, through `run_pde_tests`. Its three
+//! * `inline_test/` — the end-to-end case, through `run_inline_tests`. Its three
 //!   assertions are the differential: `y` (a `table_lookup`) and `w` (a
 //!   `table_lookup` past the last knot, exercising the default clamp) fail
 //!   while `z` (the hand-lowered twin) passes, for exactly as long as the
@@ -26,7 +26,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::{SolveOptions, load_path, run_pde_tests_with_base_dir};
+use earthsci_ast::{SolveOptions, load_path, run_inline_tests_with_base_dir};
 
 mod common;
 
@@ -37,7 +37,8 @@ mod common;
 fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     let path = common::repo_fixture("conformance/function_tables/inline_test/fixture.esm");
     let file = load_path(&path).expect("fixture loads");
-    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
 
     assert_eq!(results.len(), 3, "three inline assertions: {results:?}");
     for r in &results {

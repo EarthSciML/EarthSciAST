@@ -72,7 +72,7 @@ mod rhs;
 pub mod tape;
 mod vectorized;
 
-// Only `area_faq` / `pde_inline_tests` consume this re-export, and both stay
+// Only `area_faq` / `inline_tests` consume this re-export, and both stay
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};

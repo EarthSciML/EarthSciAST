@@ -42,7 +42,7 @@ import pytest
 from earthsci_ast.classification import is_observed_unknown, observed_unknowns
 from earthsci_ast.flatten import _normalize_indexed_observed_lhs, flatten
 from earthsci_ast.parse import load_path
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 from earthsci_ast.problem import esm_problem
 
 E2 = math.exp(2.0)
@@ -117,7 +117,7 @@ def _write(tmp_path, doc, name):
 def _actuals(tmp_path, name, equations, assertions):
     """``{variable: actual}`` from running the document's inline test."""
     path = _write(tmp_path, _doc(name, equations, assertions), name + ".esm.json")
-    return {r.variable: r.actual for r in run_pde_tests(path)}
+    return {r.variable: r.actual for r in run_inline_tests(path)}
 
 
 ASSERT_U = [{"variable": "u", "time": 1.0, "coords": {"lev": 1}, "expected": E2}]

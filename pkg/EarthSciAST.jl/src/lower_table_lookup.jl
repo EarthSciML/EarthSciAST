@@ -32,7 +32,7 @@
 #
 # Hooked in at the three places a document enters an evaluator:
 #   * `_run_container_tests!`  (run_tests.jl)       — the MTK inline-test engine
-#   * `run_pde_tests`          (pde_inline_tests.jl) — the tree-walk engine, and
+#   * `run_inline_tests`        (inline_tests.jl) — the tree-walk engine, and
 #     with it the §6.6.5 assertion `reference` expressions it evaluates
 #   * `_prepare_run_doc`       (simulate.jl)        — every `esm_problem` build
 # ===========================================================================
@@ -255,7 +255,7 @@ function _lower_events!(events::Vector{DiscreteEvent}, f)::Vector{DiscreteEvent}
 end
 
 # esm-spec §6.6.5: an error-norm assertion's `reference` is an EXPRESSION the
-# runner evaluates cellwise (`run_pde_tests` → `evaluate_cellwise`), so it is an
+# runner evaluates cellwise (`run_inline_tests` → `evaluate_cellwise`), so it is an
 # evaluated position like any other. A `{type: "from_file"}` reference is a data
 # descriptor and is left alone.
 function _lower_test_references!(tests::Vector{InlineTest}, f)::Vector{InlineTest}

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from earthsci_ast.pde_inline_tests import run_pde_tests
+from earthsci_ast.inline_tests import run_inline_tests
 
 _ROOT = Path(__file__).resolve().parents[3] / "tests" / "conformance" / "shaped_parameter_broadcast"
 _MANIFEST = _ROOT / "manifest.json"
@@ -51,7 +51,7 @@ def test_shaped_parameter_broadcast_matches_golden(fixture: dict) -> None:
     golden = json.loads((_ROOT / fixture["golden"]).read_text())
     assert golden["reference_binding"] == "julia"
 
-    results = run_pde_tests(
+    results = run_inline_tests(
         str(esm_path),
         model_name=fixture["model"],
         method=integ["method"],
@@ -135,7 +135,7 @@ def test_a_shaped_parameter_with_no_value_at_all_is_not_zero_filled(tmp_path: Pa
     path = tmp_path / "no_value_shaped_parameter.esm"
     path.write_text(json.dumps(doc))
 
-    results = run_pde_tests(str(path), model_name="C", method="RK45", rtol=1e-10, atol=1e-12)
+    results = run_inline_tests(str(path), model_name="C", method="RK45", rtol=1e-10, atol=1e-12)
     assert len(results) == 1
     r = results[0]
     assert not r.passed, (

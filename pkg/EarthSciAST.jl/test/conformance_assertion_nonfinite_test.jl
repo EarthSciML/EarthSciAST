@@ -49,7 +49,7 @@ _anf_class(v) = isnan(v) ? "nan" : (v == Inf ? "+inf" : (v == -Inf ? "-inf" : "f
         @testset "$(id)" begin
             esm_path = joinpath(_ANF_CAT_DIR, String(fixture.path))
             @test isfile(esm_path)
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=1e-12, abstol=1e-14)
             @test length(results) == length(fixture.cases)

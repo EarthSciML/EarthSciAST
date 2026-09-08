@@ -723,7 +723,7 @@ function resolveReactionSystemRefs(
  * The raw base is re-read from `sourcePath` when given (relative import `ref`s
  * resolve against its directory), else re-serialized from `file`; `baseDir`
  * anchors the injected `ref`s. Mirrors the Julia reference
- * `_ephemeral_injected_file` (`EarthSciAST.jl/src/pde_inline_tests.jl`).
+ * `_ephemeral_injected_file` (`EarthSciAST.jl/src/inline_tests.jl`).
  *
  * This binding does not numerically simulate PDEs; the ephemeral build is the
  * structural-lowering half of form C (the leaf's rewrite-target is lowered in

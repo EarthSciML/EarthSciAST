@@ -2578,7 +2578,7 @@ configuration.
 #### 5.14.1 What is compared
 
 Each in-scope binding runs the fixture's inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — the three tests differ *only* in their
 `parameter_overrides`, so the pair is the identity.
@@ -2703,7 +2703,7 @@ both ranks and is the reference binding.
 #### 5.16.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator and compares every
+inline-test runner (`run_inline_tests`) with the pinned integrator and compares every
 assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)`.
 
@@ -3280,7 +3280,7 @@ because every other fixture's actuals are finite.
 #### 5.20.2 What is compared
 
 Each in-scope binding runs the fixture's inline test through its official
-inline-test runner (`run_pde_tests`) with the pinned integrator, and for each
+inline-test runner (`run_inline_tests`) with the pinned integrator, and for each
 `(test_id, assertion_idx)` the manifest's `cases` entry declares:
 
 | Field | Contract |
@@ -3535,7 +3535,7 @@ laundered answer would have gone green on the defect.
 
 Rust drives it on both routes in
 `pkg/earthsci-ast-rs/tests/undeclared_operand_gate.rs` — the per-step route
-(`run_pde_tests`), the build pipeline (`build_pipeline: true`, which needs no
+(`run_inline_tests`), the build pipeline (`build_pipeline: true`, which needs no
 data reader linked and reaches the identical code an ingest reaches), a
 cross-route assertion that both name the same operand in the same words, and the
 resolver-level backstop with its non-vacuity twin.
@@ -4122,7 +4122,7 @@ asserted at `time: 0`) needs them on one shared model.
 #### 5.28.1 What is compared
 
 Each in-scope binding runs the fixtures' inline tests through its official
-inline-PDE-test runner (`run_pde_tests`) with the pinned integrator and compares
+inline-PDE-test runner (`run_inline_tests`) with the pinned integrator and compares
 every assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)` — each fixture's tests differ *only* in their inline
 array data, so the pair is the identity.
@@ -4335,19 +4335,19 @@ The two clauses above that a document cannot express as a passing fixture — a
 `wrt` that must not trigger the wrap, and the scope clash that must be a fault —
 are gated per binding on `bind_dimension_names` directly, one test each.
 
-The `wrt` clause: **Julia** `test/pde_inline_tests_test.jl`
+The `wrt` clause: **Julia** `test/inline_tests_test.jl`
 (`bind_dimension_names` wraps only a free mention), **Python**
-`tests/test_pde_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
-**Rust** `pde_inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
+`tests/test_inline_tests.py::test_bind_dimension_names_wraps_only_a_free_mention`,
+**Rust** `inline_tests::tests::bind_dimension_names_wraps_only_a_free_mention`.
 The same three cases also pin the two other non-mentions the rule turns on: an
 `aggregate` that rebinds the dimension name, and an `integral` whose integration
 variable is it.
 
-The scope clash: **Julia** `test/pde_inline_tests_test.jl`
+The scope clash: **Julia** `test/inline_tests_test.jl`
 (`bind_dimension_names` rejects a dimension the parameter scope binds),
 **Python**
-`tests/test_pde_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
-**Rust** `pde_inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
+`tests/test_inline_tests.py::test_bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`,
+**Rust** `inline_tests::tests::bind_dimension_names_rejects_a_dimension_that_shadows_a_parameter`.
 
 ### 5.31 Override Keys: the Longest Dotted Suffix, Its Guard, and Key Collisions (normative)
 
@@ -4458,7 +4458,7 @@ they *say* and never in what the runtime *does*.
 #### 5.32.1 What is compared
 
 The in-scope bindings run the fixture's inline tests through their official
-inline-test runner (`run_pde_tests`) with the pinned integrator and compare every
+inline-test runner (`run_inline_tests`) with the pinned integrator and compare every
 assertion's ACTUAL against the Julia-minted golden, keyed by
 `(test_id, assertion_idx)`.
 
