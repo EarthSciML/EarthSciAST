@@ -72,9 +72,14 @@ describe('conformance: merged_rename_reach (esm-libraries-spec §4.7.1 step 4)',
     // vacuously green.
     expect(flattenCases.length).toBeGreaterThan(0)
     expect(manifest.surfaces.flatten.bindings).toContain('typescript')
-    // …and the runner half is recorded as OUT of scope here, with a reason.
-    expect(manifest.surfaces.override_keys.bindings).not.toContain('typescript')
-    expect(manifest.surfaces.override_keys.scope_excluded?.typescript).toBeTruthy()
+    // …and both runtime halves are recorded as OUT of scope here, each with a
+    // reason. This binding has no simulator, so it has neither an override-key
+    // surface nor a result object to read by name; asserting the exclusion is
+    // what keeps it from quietly becoming a gap.
+    for (const surface of ['override_keys', 'output_selection'] as const) {
+      expect(manifest.surfaces[surface].bindings).not.toContain('typescript')
+      expect(manifest.surfaces[surface].scope_excluded?.typescript).toBeTruthy()
+    }
     expect(manifest.merged_variable_renames_field.typescript).toBe(
       'FlattenMetadata.mergedVariableRenames',
     )

@@ -16,7 +16,9 @@ no longer exists. This module pins that they RESOLVE to the survivor:
 * a later ``variable_map`` sourcing the dead name substitutes the SURVIVOR,
   instead of injecting a reference the flattened system cannot resolve;
 * a runner override key naming the dead name addresses the survivor, instead of
-  being dropped so the state runs from its declared default.
+  being dropped so the state runs from its declared default;
+* a name-keyed READ of the finished run resolves to the survivor's row, instead
+  of reporting a variable that never existed.
 
 Like ``operator_compose_merge`` the category carries no golden: what it pins is
 REACH, asserted as structure.
@@ -32,7 +34,7 @@ from conftest import CONFORMANCE_DIR
 
 from earthsci_ast import flatten, load_path
 from earthsci_ast.flatten import _expr_to_string, _lhs_dependent_var
-from earthsci_ast.problem import esm_problem
+from earthsci_ast.problem import esm_problem, solve
 
 CATEGORY_DIR = CONFORMANCE_DIR / "merged_rename_reach"
 MANIFEST_FILE = CATEGORY_DIR / "manifest.json"
@@ -50,6 +52,7 @@ CASES = MANIFEST["cases"]
 IDS = [c["id"] for c in CASES]
 FLATTEN_CASES = [c for c in CASES if c["surface"] == "flatten"]
 OVERRIDE_CASES = [c for c in CASES if c["surface"] == "override_keys"]
+OUTPUT_CASES = [c for c in CASES if c["surface"] == "output_selection"]
 
 
 def _flatten(case):
@@ -63,8 +66,10 @@ def test_the_manifest_is_not_empty():
     test below vacuously green."""
     assert FLATTEN_CASES, "the merged_rename_reach manifest recorded no flatten cases"
     assert OVERRIDE_CASES, "the merged_rename_reach manifest recorded no override cases"
+    assert OUTPUT_CASES, "the merged_rename_reach manifest recorded no output cases"
     assert "python" in MANIFEST["surfaces"]["flatten"]["bindings"]
     assert "python" in MANIFEST["surfaces"]["override_keys"]["bindings"]
+    assert "python" in MANIFEST["surfaces"]["output_selection"]["bindings"]
 
 
 def test_the_binding_column_of_the_manifest_is_this_binding():
@@ -135,3 +140,30 @@ def test_an_override_key_naming_the_merged_away_state_resolves(case):
     assert prob.u0 == case["resolves_to"]
     for name, unresolved in case["default_without_resolution"].items():
         assert prob.u0[name] != unresolved
+
+
+@pytest.mark.parametrize("case", OUTPUT_CASES, ids=[c["id"] for c in OUTPUT_CASES])
+def test_a_name_keyed_read_of_the_result_resolves(case):
+    """The solution is the one object a caller reading by name holds.
+
+    Three things are pinned, and the third keeps the first two honest: the read
+    lands on the survivor's row, it is the SAME row (not merely some row), and
+    the reported row NAMES still carry only the surviving spelling — resolving a
+    read must not invent a name the flattened system does not declare.
+    """
+    flat = _flatten(case)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sol = solve(esm_problem(flat, (0.0, 1.0)))
+
+    dead, survivor = case["read_by_name"], case["same_row_as"]
+    assert dead in sol, f"{case['id']}: {dead!r} must resolve through the merge map"
+    assert (sol[dead] == sol[survivor]).all(), (
+        f"{case['id']}: {dead!r} must read the SAME row as {survivor!r}"
+    )
+    assert sol.get(dead) is not None
+
+    for gone in case["absent_from_row_names"]:
+        assert gone not in sol.vars, (
+            f"{case['id']}: resolving a read must not add {gone!r} to the row names"
+        )

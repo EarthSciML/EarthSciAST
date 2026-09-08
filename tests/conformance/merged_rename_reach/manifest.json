@@ -33,6 +33,18 @@
         "go": "rewrite-only port; no simulator, so no override-key surface",
         "typescript": "rewrite-only port; no simulator, so no override-key surface"
       }
+    },
+    "output_selection": {
+      "_comment": "The OUTPUT half: a name-keyed read of a finished run, and a name-keyed output REQUEST. Only the three EXECUTING bindings have a result object or an output plan at all — the same scope split `override_key_diagnostics` and `output_derivation` record.",
+      "bindings": [
+        "julia",
+        "python",
+        "rust"
+      ],
+      "scope_excluded": {
+        "go": "rewrite-only port; no simulator, so no result object and no output selection",
+        "typescript": "rewrite-only port; no simulator, so no result object and no output selection"
+      }
     }
   },
   "merged_variable_renames_field": {
@@ -101,6 +113,17 @@
         "Chem.O3": 30.0
       },
       "note": "A caller's initial-condition key naming the deleted spelling. Unresolved it designates nothing: the key is silently dropped (Python, Julia) or reported unknown (Rust), and the state runs from its declared 30.0 — a wrong answer, not a missing one, because the run still reports a verdict. `parameter_overrides` shares this canonicalization, but a merged-away name is always a DEPENDENT VARIABLE (a state or an observed) and never a parameter, so the state side is where the case actually lands."
+    },
+    {
+      "id": "output_selection_names_the_merged_away_state",
+      "path": "fixtures/later_couple_connector.esm",
+      "surface": "output_selection",
+      "read_by_name": "Sink.O3",
+      "same_row_as": "Chem.O3",
+      "absent_from_row_names": [
+        "Sink.O3"
+      ],
+      "note": "A caller reading the finished run by the deleted spelling. The trajectory it names MOVED to `Chem.O3`'s row, so the read resolves there rather than reporting a variable that never existed — and the row NAMES still report only the surviving spelling, because resolving a read must not invent a name the flattened system does not declare. Where a binding also takes an output REQUEST (an `output_observed` / `--observed` list, an `observed_field` lookup), the same map resolves it before the plan is derived."
     }
   ]
 }

@@ -87,11 +87,16 @@ func TestMergedRenameReachManifestNamesThisBinding(t *testing.T) {
 	if !slices.Contains(m.Surfaces["flatten"].Bindings, "go") {
 		t.Error("the flatten surface must bind Go: the rewrite is a pure structural transform")
 	}
-	if slices.Contains(m.Surfaces["override_keys"].Bindings, "go") {
-		t.Error("Go has no simulator, so it cannot implement the override-key surface")
-	}
-	if m.Surfaces["override_keys"].ScopeExcluded["go"] == "" {
-		t.Error("the override_keys exclusion must record a REASON for Go")
+	// Both RUNTIME halves are out of scope here: this binding has no simulator,
+	// so it has neither an override-key surface nor a result object to read by
+	// name. Asserting the exclusion is what keeps it from quietly becoming a gap.
+	for _, surface := range []string{"override_keys", "output_selection"} {
+		if slices.Contains(m.Surfaces[surface].Bindings, "go") {
+			t.Errorf("Go has no simulator, so it cannot implement the %s surface", surface)
+		}
+		if m.Surfaces[surface].ScopeExcluded["go"] == "" {
+			t.Errorf("the %s exclusion must record a REASON for Go", surface)
+		}
 	}
 	if got := m.MergedVariableRenamesField["go"]; got != "FlattenMetadata.MergedVariableRenames" {
 		t.Errorf("manifest names the Go rename-map field %q; the code calls it "+
