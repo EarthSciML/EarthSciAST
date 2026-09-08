@@ -391,6 +391,35 @@ def _observed_rows(vals, n: int, names: Sequence[str] | None = None) -> np.ndarr
     return block
 
 
+def resolve_merged_renames(
+    renames: dict[str, str], overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """Rewrite override keys off names an ``operator_compose`` merge DELETED.
+
+    esm-libraries-spec §4.7.1 step 4: a renaming match folds ``B.x`` into
+    ``A.x``, so only ``A.x`` still exists and every equation is rewritten off
+    the dead spelling. A CALLER holding ``"B.x"`` -- a ``parameter_overrides``
+    or ``initial_conditions`` key, an output selection -- is addressing a state
+    that has moved, and nothing rewrites the strings it holds
+    (EarthSciML/EarthSciAST#230). ``renames`` is the map flatten recorded on
+    :class:`~earthsci_ast.flatten.FlattenMetadata`; resolve through it before
+    the §6.6.2 key check, so the key lands on the survivor instead of being
+    reported unknown.
+
+    An EXPLICIT key for the survivor wins over an alias for the dead spelling:
+    the caller who names the surviving state has said what they mean.
+    """
+    if not renames or not overrides:
+        return overrides
+    out: dict[str, Any] = {}
+    for key, value in overrides.items():
+        survivor = renames.get(key, key)
+        if survivor != key and survivor in overrides:
+            continue
+        out[survivor] = value
+    return out
+
+
 def check_parameter_override_keys(
     parameter_names: Iterable[str], overrides: dict[str, Any] | None
 ) -> None:

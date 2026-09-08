@@ -135,7 +135,8 @@
           {
             "from": "Emis.flux",
             "to": "Sink.O3",
-            "transform": "additive"
+            "transform": "additive",
+            "expression": "Emis.flux"
           }
         ]
       },

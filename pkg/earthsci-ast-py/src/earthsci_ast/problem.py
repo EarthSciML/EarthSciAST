@@ -85,6 +85,7 @@ from .simulation_common import (
     _retcode_for_error,
     _scipy_missing_message,
     check_parameter_override_keys,
+    resolve_merged_renames,
 )
 from .simulation_loaders import (
     LoaderProvider,
@@ -560,6 +561,16 @@ def esm_problem(
     # leaves every parameter at its default, so the author's binding does
     # nothing and the run still reports a verdict: a wrong answer, not a
     # missing one.
+    # ...but resolve the merged-away spellings FIRST. An `operator_compose`
+    # renaming match DELETES the name it consumed (esm-libraries-spec §4.7.1
+    # step 4) and rewrites every equation off it -- a caller still holding
+    # `"Sink.O3"` is addressing a state that moved, and the key check would
+    # report it as merely unknown (issue #230). `u0` rides along: it is the same
+    # kind of key against the same renames, on the state side.
+    renames = dict(flat.metadata.merged_variable_renames)
+    p = resolve_merged_renames(renames, p)
+    u0 = resolve_merged_renames(renames, u0)
+
     check_parameter_override_keys(flat.parameters, p)
 
     # ---- provider injection: eager CONST materialization; gated deferral ----
@@ -909,6 +920,13 @@ def remake(
     the parameter and the class that makes it un-substitutable, rather than
     silently rebuilding or silently ignoring it.
     """
+    # Resolve merged-away spellings before anything reads the keys, exactly as
+    # `esm_problem` does at the build front door (issue #230): `prob.p` /
+    # `prob.u0` are already resolved, so only the caller's new keys need it.
+    renames = dict(prob.flat.metadata.merged_variable_renames)
+    p = None if p is None else resolve_merged_renames(renames, p)
+    u0 = None if u0 is None else resolve_merged_renames(renames, u0)
+
     new_p = dict(prob.p) if p is None else {**prob.p, **p}
     new_u0 = dict(prob.u0) if u0 is None else {**prob.u0, **u0}
     new_tspan = prob.tspan if tspan is None else (float(tspan[0]), float(tspan[1]))
