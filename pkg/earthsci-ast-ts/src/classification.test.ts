@@ -207,8 +207,8 @@ describe('effectiveSystemKind (API_SPEC.md §8 item 11)', () => {
  * Both spellings of the indexed one must credit `w` an OBSERVED: the bare
  * `index(w, i)` LHS that §6.3.1's worked example names verbatim, and the
  * `aggregate{k}(index(w, k))` shell that documents in this repo actually use
- * (every array observed in `tests/conformance/pde_inline_observed_indexed_lhs/`
- * is written that way). `baseVariableName` stopped at the aggregate shell, so
+ * (both are written out in `tests/conformance/classification_indexed_lhs/`).
+ * `baseVariableName` stopped at the aggregate shell, so
  * the second spelling was credited to nobody and {@link algebraicUnknowns}
  * claimed `w` by elimination.
  *

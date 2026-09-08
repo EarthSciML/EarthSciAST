@@ -406,8 +406,8 @@ func TestSystemKindMismatchIsReported(t *testing.T) {
 // Both spellings of the indexed one must therefore credit `w` an OBSERVED: the
 // bare `index(w, i)` LHS that §6.3.1's worked example names verbatim, and the
 // `aggregate{k}(index(w, k))` shell that documents in this repo actually use
-// (every array observed in tests/conformance/pde_inline_observed_indexed_lhs/
-// is written that way). definedVariableName stopped at the aggregate shell, so
+// (both are written out in tests/conformance/classification_indexed_lhs/).
+// definedVariableName stopped at the aggregate shell, so
 // the second spelling was credited to nobody and AlgebraicUnknowns claimed `w`
 // by elimination.
 //
@@ -417,7 +417,7 @@ func TestSystemKindMismatchIsReported(t *testing.T) {
 // build-time work ... onto the per-timestep hot path". The partition assertion
 // below is what pins that consequence.
 //
-// See issue #232 (Julia), issue #231 / PR #237 (Python), PR #250.
+// See issue #232: PR #250 carries the Julia half, PR #276 the Python one.
 func TestObservedUnknownsSeeThroughIndexedLHSSpellings(t *testing.T) {
 	// `aggregate{k}(index(w, k))` — the whole-array spelling of `w[k] ~ …`.
 	aggregateIndexed := ExprNode{
