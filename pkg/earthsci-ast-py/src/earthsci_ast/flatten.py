@@ -16,7 +16,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .classification import inlined_unknowns, ode_states
+from .classification import inlined_unknowns
 from .errors import EarthSciAstError
 from .esm_types import (
     ARRAY_OPS,
@@ -28,7 +28,6 @@ from .esm_types import (
     DataSource,
     DiscreteEvent,
     Domain,
-    Equation,
     EsmFile,
     Expr,
     ExprNode,
@@ -37,7 +36,6 @@ from .esm_types import (
     OperatorComposeCoupling,
     ReactionSystem,
     VariableMapCoupling,
-    is_aggregate_op,
 )
 from .expr_walk import any_child, iter_children, map_children, walk
 
@@ -975,110 +973,6 @@ def _data_source_fields(
     return fields
 
 
-def _frame_symbol_occurs_free(expr: Expr, syms: set[str]) -> bool:
-    """Does any of ``syms`` occur as a bare reference not rebound by an aggregate?
-
-    The discriminator for :func:`_normalize_indexed_observed_lhs`: a right-hand
-    side that mentions the LHS frame's own index symbols is a PER-CELL body and
-    needs the frame wrapped around it; one that does not (a literal, a whole-array
-    expression, or an aggregate that binds those symbols itself) is already the
-    whole array. Mirrors Julia's use of ``free_variables``, which subtracts
-    aggregate binders — :func:`earthsci_ast.expression.free_variables` does not,
-    so the binder-aware walk lives here.
-    """
-    if isinstance(expr, str):
-        return expr in syms
-    if not isinstance(expr, ExprNode):
-        return False
-    inner = syms
-    if is_aggregate_op(expr.op):
-        inner = syms - (set(expr.output_idx or []) | set(expr.ranges or {}))
-        if not inner:
-            return False
-    return any(_frame_symbol_occurs_free(child, inner) for child in iter_children(expr))
-
-
-def _normalized_indexed_definition(eq: Equation, model: Model, states: set[str]) -> Equation | None:
-    """The bare-LHS rewrite of one indexed array-observed definition, or None.
-
-    Recognition is deliberately narrow, mirroring Julia's
-    ``_normalize_indexed_observed_lhs``: the shell must carry no
-    ``filter`` / ``join`` / ``key`` / ``distinct``; the gather must be the
-    IDENTITY on the frame (``index(V, k…)``, same symbols in the same order, so
-    ``index(V, k+1)`` and permutations are not recognized); ``output_idx`` must be
-    non-empty (a scalar reduction is no frame); ``ranges`` must bind exactly those
-    symbols; and ``V`` must be a declared ``unknown`` of this model that is not an
-    ODE state and whose declared ``shape`` has the frame's rank. Anything else
-    returns None and the equation is passed through untouched.
-    """
-    lhs = eq.lhs
-    if not (isinstance(lhs, ExprNode) and is_aggregate_op(lhs.op)):
-        return None
-    if any(getattr(lhs, f, None) is not None for f in ("filter", "join", "key", "distinct")):
-        return None
-    frame = [s for s in (lhs.output_idx or []) if isinstance(s, str)]
-    if not frame or len(frame) != len(lhs.output_idx or []):
-        return None
-    ranges = lhs.ranges if isinstance(lhs.ranges, dict) else {}
-    if set(ranges) != set(frame):
-        return None
-    body = lhs.expr
-    if not (isinstance(body, ExprNode) and body.op == "index" and body.args):
-        return None
-    head = body.args[0]
-    if not isinstance(head, str) or list(body.args[1:]) != frame:
-        return None
-    var = model.variables.get(head)
-    if var is None or var.type != "unknown" or head in states:
-        return None
-    if len(var.shape or []) != len(frame):
-        return None
-    rhs = eq.rhs
-    if _frame_symbol_occurs_free(rhs, set(frame)):
-        # A per-cell body: wrap it in the LHS's own frame, so the definition
-        # denotes the whole array exactly as the bare spelling would.
-        rhs = replace(lhs, args=[], expr=rhs)
-    return replace(eq, lhs=head, rhs=rhs)
-
-
-def _normalize_indexed_observed_lhs(model: Model) -> list[Equation]:
-    """Rewrite the INDEXED spelling of an array-observed definition to the bare one.
-
-    esm-spec §6.3.1 admits two LHS spellings for the equation that DEFINES an
-    unknown — bare (``y ~ f(…)``) and indexed (``y[i] ~ f(…)``, "which defines the
-    whole array ``y``") — and reads the defining form through the LHS's BASE NAME:
-    "an arrayed definition is observed exactly as its scalar counterpart is".
-    Neither spelling is restricted by rank.
-
-    This binding classified by the LHS's SYNTAX instead, through
-    :func:`~earthsci_ast.classification.inlined_unknowns` — the strict
-    ``y ~ f(…)`` set §6.3.1 sanctions for *inlining specifically*, used here as if
-    it were the classification, which §6.3.1 says it is not ("does not narrow the
-    partition"). An array-shaped observed written the indexed way therefore landed
-    in ``state_vars``, where nothing ever wrote it, and three things went wrong at
-    once (issue #232's Python half): asserting the observed itself returned 0.0
-    from its never-written state slot; a per-cell RHS matched no driver case and
-    was dropped with the ``unrecognized algebraic equation`` warning, freezing the
-    state it constrained; and a bare whole-array reader (``D(u) ~ w``) read that
-    same zero slot, because the array build's algebraic elimination substitutes
-    only INDEXED reads.
-
-    Normalizing the spelling once, upstream of classification and of every
-    downstream consumer, fixes all three at their single cause and leaves exactly
-    one LHS form in the flattened system — upstream normalization, not runner
-    dispatch (``AGENTS.md``). Returns ``model.equations`` BY IDENTITY when nothing
-    matches.
-    """
-    states = set(ode_states(model))
-    out: list[Equation] = []
-    changed = False
-    for eq in model.equations:
-        rewritten = _normalized_indexed_definition(eq, model, states)
-        out.append(eq if rewritten is None else rewritten)
-        changed = changed or rewritten is not None
-    return out if changed else model.equations
-
-
 def _collect_model(
     name: str,
     model: Model,
@@ -1089,20 +983,14 @@ def _collect_model(
     full_prefix = prefix or name
     component = _ComponentSystem(name=full_prefix)
 
-    # esm-spec §6.3.1 admits BOTH LHS spellings for the equation that defines an
-    # unknown, and reads the defining form through the LHS's base name. Normalize
-    # the indexed one (`y[i] ~ f(…)`) to the bare one FIRST, so classification and
-    # every downstream consumer see exactly one form.
-    equations = _normalize_indexed_observed_lhs(model)
-    if equations is not model.equations:
-        model = replace(model, equations=equations)
-
     # The variable's role comes from the §6.3.1 classification, NOT from a
-    # declared type. `observed` is the unknown a bare-variable LHS defines, which
-    # is substituted into its consumers; with the indexed spelling normalized
-    # above, an ARRAYED definition (`y[i] ~ f(i)`) reaches this as the bare form
-    # and is classified observed too, as §6.3.1 requires. Every other unknown is
-    # SOLVED FOR and lands in `state_vars`: an ODE state and an algebraic unknown.
+    # declared type. `observed` is the INLINED form specifically -- an unknown a
+    # bare-variable LHS defines, which is substituted into its consumers. Every
+    # other unknown is SOLVED FOR and lands in `state_vars`: an ODE state, an
+    # algebraic unknown, and an ARRAYED definition (`y[i] ~ f(i)`) alike. The
+    # arrayed one is observed by §6.3.1 and its cadence resolves through its RHS,
+    # but it materializes into a buffer its consumers index rather than being
+    # inlined -- exactly the 0.x `state` + index-LHS shape.
     observed = set(inlined_unknowns(model))
 
     for var_name, var in model.variables.items():
