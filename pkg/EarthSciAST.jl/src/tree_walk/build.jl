@@ -834,7 +834,9 @@ end
 # neither `const_arrays` nor `param_arrays` and throws
 # `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
 # (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
-# name, so the broadcast never displaces one.
+# name, so broadcasting a DECLARED scalar never displaces one; an explicit
+# override is the caller speaking for this run and outranks both registries,
+# exactly as the array spelling of that override already does.
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
                                            index_sets::AbstractDict;
@@ -845,22 +847,32 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
+        elseif ov isa Number
+            # A SCALAR override is tested BESIDE the array one, before either
+            # default arm: §6.6.2 gives the two spellings of the §6.3 union one
+            # precedence, so an override must not lose to the very `default` it
+            # replaces (nor to caller-supplied data, which the array arm above
+            # already outranks). Tested after it, a scalar override of a
+            # parameter whose declared `default` is an inline array was silently
+            # DROPPED and the default used instead.
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
             continue                      # caller-supplied data is authoritative
         elseif is_inline_array(v.default)
             v.default
-        else
-            # esm-spec §6.3 broadcast. Skipped when a live forcing buffer
-            # already carries the name, and when the shape does not resolve (an
-            # unmaterialized derived set has no extent to fill) — the build's own
-            # extent checks then report any real disagreement.
+        elseif v.default isa Number
+            # esm-spec §6.3 broadcast of the DECLARED scalar. Skipped when a live
+            # forcing buffer already carries the name, and when the shape does
+            # not resolve (an unmaterialized derived set has no extent to fill) —
+            # the build's own extent checks then report any real disagreement.
             haskey(param_arrays, name) && continue
-            scalar = ov isa Number ? Float64(ov) :
-                     v.default isa Number ? Float64(v.default) : nothing
-            scalar === nothing && continue
             exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
             exts === nothing && continue
-            fill(scalar, Tuple(exts))
+            fill(Float64(v.default), Tuple(exts))
+        else
+            continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
                             ov === nothing ? "default" : "parameter_overrides")
