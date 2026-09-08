@@ -1054,7 +1054,8 @@ Every name a declaration map may NOT spell, mapped to the reason it is reserved
 Two symbols, both GLOBALLY scoped: the document's independent variable and the
 §6.4 operator placeholder. §4.9.1.1 is the normative home of this set; the
 sibling `reserved_index_symbol` rule for an `aggregate` binder reads the same
-set, so the two cannot drift apart.
+set, so the two cannot drift apart. (That sibling rule is currently implemented
+only in the Rust binding; this one is implemented in all five.)
 
 Spatial coordinate names are deliberately absent: they resolve as coordinates
 only in a coordinate position (§11.4), and

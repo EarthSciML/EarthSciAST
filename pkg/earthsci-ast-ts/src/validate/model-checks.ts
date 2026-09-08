@@ -159,7 +159,8 @@ type ReservedReason = 'independent_variable' | 'operator_placeholder'
  *
  * Two symbols, both GLOBALLY scoped: the document's independent variable and
  * the §6.4 operator placeholder. Same set the §4.3.1 `reserved_index_symbol`
- * binder rule uses, so the two rules cannot drift apart.
+ * binder rule uses, so the two rules cannot drift apart. (That sibling rule is
+ * currently implemented only in the Rust binding; this one is in all five.)
  *
  * Spatial coordinate names are deliberately NOT here. They resolve as
  * coordinates only in a coordinate position (§11.4), and

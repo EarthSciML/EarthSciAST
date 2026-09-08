@@ -1605,7 +1605,8 @@ func (s *structuralScan) validateUpdateSources(modelName string, model *Model, b
 // the §6.4 operator placeholder. Exactly the pair creditIndependentVariable and
 // the `_var` concession put into scope ahead of the declaration maps, and the
 // same set the sibling `reserved_index_symbol` binder rule uses — §4.9.1.1 is
-// its normative home, so the two rules cannot drift apart.
+// its normative home, so the two rules cannot drift apart. (That sibling rule
+// is currently implemented only in the Rust binding; this one is in all five.)
 //
 // Spatial coordinate names are deliberately NOT here: they are coordinates only
 // in a coordinate position (§11.4), and tests/valid/units_dimensional_analysis.esm

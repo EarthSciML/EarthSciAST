@@ -1712,7 +1712,8 @@ def _reserved_declaration_names(data: dict[str, Any]) -> dict[str, str]:
     variable (``domain.independent_variable``, default ``"t"``) and the §6.4
     operator placeholder. §4.9.1.1 is the normative home of this set; the
     sibling ``reserved_index_symbol`` rule for an ``aggregate`` binder reads the
-    same set, so the two cannot drift apart.
+    same set, so the two cannot drift apart. (That sibling rule is currently
+    implemented only in the Rust binding; this one is implemented in all five.)
 
     Spatial coordinate names are deliberately absent: ``x``, ``y``, ``lon`` are
     coordinates only in a coordinate position (§11.4), and
