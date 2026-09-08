@@ -88,8 +88,10 @@ fn create_test_esm(num_models: usize, equations_per_model: usize) -> EsmFile {
     }
 
     EsmFile {
-        // `EsmFile::default()` sets `esm` to the current `SCHEMA_VERSION`,
-        // which is what the literal "1.0.0" here used to spell out by hand.
+        // `EsmFile::default()` sets `esm` to the current `SCHEMA_VERSION`.
+        // The literal "1.0.0" this replaces was already stale -- the schema is
+        // at 1.1.0 now -- so the fixture declared a version it no longer
+        // matched, which is exactly the drift spreading `Default` stops.
         metadata: Metadata {
             name: Some("benchmark_test".to_string()),
             description: Some("Benchmark test file".to_string()),
