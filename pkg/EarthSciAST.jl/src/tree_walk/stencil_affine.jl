@@ -423,7 +423,7 @@ function _cell_ckey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
             v == 0 ? print(io, "G,") : print(io, v - oln, ',')
         end
     else
-        # LANE-AFFINE key (see `_lane_affine_ref!`): the ghost pattern, then
+        # LANE-AFFINE key (see `_lane_nonaffine_args!`): the ghost pattern, then
         # every lane subscript's DEVIATION from its own affine model of the loop
         # indices. Zero wherever the lane is affine — at any grid size — so a
         # cross-shape gather (lower-rank geometry, staggered face, surface
@@ -808,10 +808,8 @@ end
 # (NLON+1, NLAT, NLEV), a 2-D surface field. Those slots are affine in the loop
 # indices too, but with the ARRAY's own strides, so `Δ` is not constant and the
 # derivation below fell through to a dense per-box slot table — one
-# `_eval_recipe` and one stored `Int` per box CELL, per lane. On ReSEACT
-# transport that is the single largest grid-dependent term in the build
-# (4.49 M table entries at 18x12x72 — 289 per cell — all of them state gathers
-# of exactly this shape).
+# `_eval_recipe` and one stored `Int` per box CELL, per lane, which is the
+# build's largest grid-dependent term on a transport model.
 #
 # The const and live-forcing branches already have the right descriptor for
 # this: `_AccConstBox` / `_AccForcingBox` address their own grid as
@@ -991,10 +989,26 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
         # STATE BOX note above): finite-difference the slot across a unit step in
         # each non-thin dim, then VERIFY at every corner — the same derivation
-        # and the same verification standard the const / live-forcing branches
-        # below use. A ghost anywhere in the probe or the corners declines (the
-        # table's per-cell 0 sentinel is what models a ghost).
-        if !_state_box_disabled()
+        # the const / live-forcing branches below use. A ghost anywhere in the
+        # probe or the corners declines (the table's per-cell 0 sentinel is what
+        # models a ghost).
+        #
+        # GUARD — every subscript must be STRUCTURALLY affine in the output loop
+        # indices. Corner verification alone does NOT license this lowering: a
+        # 2^D-corner check cannot see the interior, and a state subscript can be
+        # arbitrary data (an unstructured `index(conn, i)` gather, whose slot map
+        # is affine at the corners and at `rep + e_d` whenever the connectivity
+        # happens to agree there). The `_derive_var_affine` slot map is affine in
+        # the SUBSCRIPT VALUES, so the composed map is affine in the loop exactly
+        # when the subscripts are — and `_affine_idx_expr` admits nothing but
+        # `+ - neg *` over loop names and integer literals, which is a proof, not
+        # a sample. Anything else keeps the exact per-box table it had before.
+        # (This is the same reasoning the LANE_CONST branch below spells out: its
+        # index affinity holds "BY CONSTRUCTION within a box", not by corner
+        # agreement.) The motivating shapes — a lower-rank geometry column, a
+        # staggered face field, a 2-D surface field — all pass this guard.
+        if !_state_box_disabled() &&
+           all(a -> _affine_idx_expr(a, idx_names), rec.idx_args)
             blk = _state_slot_block(rec)
             if blk !== nothing
                 lo0, hi0 = blk

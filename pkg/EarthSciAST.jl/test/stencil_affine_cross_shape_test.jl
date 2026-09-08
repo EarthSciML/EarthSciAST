@@ -120,3 +120,59 @@ _cs_run_pre(N) = withenv("ESS_CODEGEN_DISABLE" => "1",
         end
     end
 end
+
+# The lane-affine STATE BOX is licensed by a PROOF, not by a sample.
+#
+# `_derive_lane_repl` verifies a derived affine slot map at the 2^D box corners
+# and at `rep + e_d`. That is a sample of 2^D + D cells; it cannot see the box
+# interior. A state subscript may be arbitrary data — an unstructured
+# `index(conn, i)` gather — so agreement at the corners says nothing about the
+# cells between them, exactly as the `LANE_CONST` branch's comment says of the
+# value fold it removed for the same reason.
+#
+# The guard is that every subscript is STRUCTURALLY affine in the output loop
+# indices (`_affine_idx_expr`), which is a property of the expression and holds
+# at every cell. This pins it: a CROSS-SHAPE gather (so the Δ test fails and the
+# state-box branch is reached) whose connectivity is the identity except for one
+# swapped INTERIOR cell — affine at every corner and at `rep + e_d`, and far
+# enough from both ends that `_AFFINE_STABLE_GUARD` retires the cut scan before
+# it gets there. Without the guard the interior cell reads the wrong slot,
+# silently, with no error and no fallback.
+@testset "cross-shape state box is not licensed by corner agreement" begin
+    N, i0 = 40, 20
+    perm = collect(1:N); perm[i0] = i0 + 1        # identity but for one swap
+    vars = Dict{String,ESM_CS.ModelVariable}(
+        "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
+    ao2(body) = ESM_CS.OpExpr("arrayop", ESM_CS.ASTExpr[];
+        output_idx = Any["i", "j"], expr_body = body,
+        ranges = Dict("i" => [1, N], "j" => [1, N]))
+    model = ESM_CS.Model(vars, [
+        ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
+                        _ao1(_n(0.0), "i", 1, N)),
+        ESM_CS.Equation(ao2(_Didx("u", _v("i"), _v("j"))),
+                        ao2(_idx("w", _idx("conn", _v("i")))))])
+    ics = Dict{String,Float64}()
+    for k in 1:N
+        ics["w[$k]"] = 10.0k
+        for j in 1:N; ics["u[$k,$j]"] = 0.0; end
+    end
+    ca = Dict("conn" => Float64.(perm))
+
+    ev(envs...) = withenv(envs...) do
+        f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
+            initial_conditions = ics, const_arrays = ca)
+        du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
+        (du = du, vm = vm, u0 = u0)
+    end
+
+    got = ev()
+    ref = ev("ESS_STENCIL_DISABLE" => "1")        # forced per-cell walk
+    @test got.du == ref.du
+    # ... and spelled out around the swap, so a failure names the cell rather
+    # than a whole vector (`i0` is the wrong one; its neighbours are the
+    # control that the rest of the box is still right).
+    for i in (i0 - 1, i0, i0 + 1), j in (1, N)
+        @test got.du[got.vm["u[$i,$j]"]] == got.u0[got.vm["w[$(perm[i])]"]]
+    end
+end
