@@ -1051,7 +1051,6 @@ class TestReservedDeclarationNames:
         result = validate_text(content)
         assert result.is_valid, [(e.code, e.path) for e in result.structural_errors]
 
-
     def test_subsystem_declarations_are_covered(self):
         """A subsystem is a model, so its ``variables`` map is a declaration map
         like any other -- and a MOUNTED subsystem is the exact shape issue #200
