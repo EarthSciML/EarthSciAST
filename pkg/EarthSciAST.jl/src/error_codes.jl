@@ -135,6 +135,9 @@ const ERROR_CODES = (
     # Option B / CONFORMANCE_SPEC §5.5.7).
     TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE = "template_body_references_pushdown_rewritten_variable",
 
+    # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
+    SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
+
     # ── Template-library imports + load-time metaparameters (esm-spec §9.7;
     #    template_imports.jl). ──────────────────────────────────────────────
     TEMPLATE_IMPORT_VERSION_TOO_OLD = "template_import_version_too_old",

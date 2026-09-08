@@ -82,6 +82,10 @@ include("json_walk.jl")
 include("registered_functions.jl")
 include("lower_expression_templates.jl")
 include("template_imports.jl")
+# Document-scoped solver hints (esm-spec §2.2): the version gate and the §2.2.2
+# tolerance resolution order. After template_imports.jl, whose raw-JSON helpers
+# and ExpressionTemplateError it shares.
+include("solver.jl")
 # Wire I/O
 include("parse.jl")
 include("serialize.jl")
@@ -400,7 +404,9 @@ export
     ExpressionTemplateError,
     # Template-library imports + load-time metaparameters (esm-spec §9.7 /
     # docs/content/rfcs/template-library-imports.md)
-    resolve_template_machinery, reject_template_imports_pre_v08
+    resolve_template_machinery, reject_template_imports_pre_v08,
+    # Document-scoped solver hints (esm-spec §2.2).
+    Solver, reject_solver_pre_v11, resolve_tolerances, coerce_solver
 
 """
 Register this module's own `Unitful.@unit` definitions with Unitful.

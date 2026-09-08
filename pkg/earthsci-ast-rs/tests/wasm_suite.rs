@@ -175,8 +175,8 @@ fn array_pde_heat_matches_analytic() {
     .collect();
     let opts = SolveOptions {
         alg: Alg::Bdf,
-        abstol: 1e-10,
-        reltol: 1e-8,
+        abstol: Some(1e-10),
+        reltol: Some(1e-8),
         maxiters: 100_000,
         saveat: Some(vec![0.1]),
         ..Default::default()
