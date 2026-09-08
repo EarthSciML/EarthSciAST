@@ -525,9 +525,12 @@ Shared corpus (every `.esm` under `tests/valid/**` and `tests/invalid/**` is swe
   `expected_errors.json`, `resolver_only`) — `subsystem_index_set_rename_unknown_name`.
 
 Per-binding regression tests (`mount_index_set_rename` / `mount-index-set-rename` in each
-package) pin three things: the collision still fires without the field, the rename rewrites
-the registry key **and** the mounted component's variable `shape` and aggregate `{"from"}`
-range while leaving the sibling mount untouched, and an unknown key is a loud load error.
+package) pin two things in all five: the rename rewrites the registry key **and** the mounted
+component's variable `shape` and aggregate `{"from"}` range while leaving the sibling mount
+untouched, and an unknown key is a loud load error. A third — that the same pair still
+collides *without* the field — is pinned only in Python
+(`test_without_the_rename_the_two_columns_still_collide`), and the §4.7 mount-edge
+`template_import_rename_collision` (two keys onto one target) has no test in any binding.
 
 A post-lowering `expanded.esm` golden under `tests/conformance/` was deliberately **not**
 added: the fixture's value is the registry and the mounted component's spelling, both of which

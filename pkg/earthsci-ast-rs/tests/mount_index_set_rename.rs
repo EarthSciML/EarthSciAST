@@ -12,11 +12,14 @@
 //! to re-scope it but to let the ASSEMBLER say "this mount's `lev` is not that
 //! mount's `lev`" at the edge.
 //!
-//! These pin the three things that matter: the collision still fires without
-//! the field, the rename rewrites the mounted component transitively (registry
-//! key, variable `shape`, aggregate `{"from"}` range), and a key that names no
-//! axis of the RESOLVED mounted document is a loud
-//! `subsystem_index_set_rename_unknown_name` rather than a silent no-op.
+//! These pin two things: the rename rewrites the mounted component transitively
+//! (registry key, variable `shape`, aggregate `{"from"}` range) so both axes
+//! reach the merged registry at their own sizes, and a key that names no axis of
+//! the RESOLVED mounted document is a loud
+//! `subsystem_index_set_rename_unknown_name` rather than a silent no-op. That
+//! the SAME pair still collides without the field is pinned in the Python
+//! binding (`test_without_the_rename_the_two_columns_still_collide`), which is
+//! the only one that builds the un-renamed variant.
 
 #![cfg(not(target_arch = "wasm32"))]
 
