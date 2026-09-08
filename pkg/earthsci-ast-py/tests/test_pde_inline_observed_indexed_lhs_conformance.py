@@ -16,9 +16,32 @@ array-shaped observed written the indexed way matched no owner bucket and was
 refused outright with ``E_TREEWALK_UNSUPPORTED_SHAPE`` on a document Rust and
 Python both ran (issue #232).
 
-Both array observeds here use the indexed spelling: ``wf`` is STATE-FREE and
-``ws`` is STATE-DEPENDENT, the two classes a binding routes differently, so
-fixing one path only does not pass this category.
+Both array observeds here use the indexed spelling and are asserted DIRECTLY —
+that is what makes the category state the §6.3.1 contract rather than the
+intersection the bindings happen to agree on. They are a controlled pair:
+``wf`` is STATE-FREE and ``ws`` is STATE-DEPENDENT, the two classes a binding
+routes differently, so fixing one path only does not pass. The states they drive
+are asserted alongside, so answering the observeds while dropping them out of
+the dynamics (or the reverse) still fails.
+
+.. warning::
+
+   **This binding is expected to FAIL this category today, and that is
+   deliberate.** Python is kept in ``bindings_required`` rather than
+   ``scope_excluded`` because it has a real runner: a conformance category
+   states the contract and lets a non-conforming binding be red against it,
+   instead of being defined down to what already passes.
+
+   Python currently answers ``0.0`` for both indexed-LHS observeds (failing the
+   six non-zero observed assertions) and passes the seven state assertions.
+   Three divergences are involved — an indexed-LHS array observed is not
+   readable by an assertion; one whose rhs is a PER-CELL body is silently
+   dropped from the ODE RHS; and one feeding a WHOLE-ARRAY derivative
+   (``D(u) ~ wf``) is dropped the same way. All three are being folded into
+   PR #237 (issue #231), the last likely being the very defect that PR already
+   fixes. Reproducers are in the body of PR #250, which introduced this
+   category. See ``tests/conformance/pde_inline_observed_indexed_lhs/README.md``
+   and CONFORMANCE_SPEC §5.30.1.
 """
 
 from __future__ import annotations

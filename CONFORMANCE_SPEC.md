@@ -4454,7 +4454,14 @@ would admit the shape with no owner to evaluate it.
 
 `tests/conformance/pde_inline_observed_indexed_lhs/` holds the shared fixture
 and the Julia-minted golden. Every array observed in it uses the indexed
-spelling, and it carries a CONTROLLED PAIR of them: `wf` is STATE-FREE (the
+spelling, and the fixture asserts those observeds **DIRECTLY** — not merely the
+states they drive. That is deliberate: asserting the observeds is what makes the
+category state the §6.3.1 contract, rather than the weaker intersection the
+bindings happen to agree on. The driven states are asserted alongside, so a
+binding that answers the observeds but drops them out of the dynamics (or the
+reverse) still fails.
+
+The two observeds are a CONTROLLED PAIR: `wf` is STATE-FREE (the
 build-materialized path) and `ws` is STATE-DEPENDENT (evaluated at the sampled
 state) — the two classes a binding routes differently, so fixing one path only
 does not pass the category. Both right-hand sides are exactly integrable —
@@ -4475,8 +4482,34 @@ rewrite-only ports with no simulator and no inline-test runner, and are
 **Julia** — FIXED. `_normalize_indexed_observed_lhs` (tree_walk/build_helpers.jl)
 rewrites `aggregate{k…}(index(V, k…)) ~ rhs` into the bare `V ~ rhs` before any
 classifier reads an LHS, wrapping the rhs in the LHS's own frame when the rhs is
-a per-cell body rather than the whole array. **Python**, **Rust** — already
-conforming; the category pins them.
+a per-cell body rather than the whole array. All thirteen assertions pass.
+
+**Rust** — conforming; all thirteen assertions pass. The category pins it.
+
+**Python** — **EXPECTED TO FAIL this category today.** It is kept in
+`bindings_required` on purpose. `scope_excluded` is for a binding with no
+runner at all; Python has one, and defining the contract down to what already
+passes would be the weaker use of the mechanism. Python fails the six non-zero
+observed assertions, returning `0.0` for both `wf` and `ws`, and passes the
+seven state assertions. Three distinct divergences are involved, all on this
+same spelling:
+
+1. an indexed-LHS array observed is **not readable by an assertion** — `wf` and
+   `ws` answer `0.0` at every time rather than their field values;
+2. an indexed LHS with a **PER-CELL** right-hand side (`aggregate{k}(w[k]) ~
+   2*u[k]`, no `aggregate` on the right) is silently dropped —
+   `RuntimeWarning: unrecognized algebraic equation … was not applied to the ODE
+   RHS; any state it constrains stays frozen at its initial value`, and it does
+   stay frozen;
+3. an indexed-LHS observed feeding a **WHOLE-ARRAY** derivative (`D(u) ~ wf`)
+   is dropped the same way, while `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])`
+   — the spelling this fixture uses — integrates.
+
+All three are being folded into PR #237 (Python routing, issue #231); divergence
+3 is likely the very defect that PR already addresses, since it is about a bare
+whole-array derivative routing to the scalar pathway. Complete reproducer
+documents are in the body of PR #250, which introduced this category. This
+category goes green for Python when that work lands.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 
