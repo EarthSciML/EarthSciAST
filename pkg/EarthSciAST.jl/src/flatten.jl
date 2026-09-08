@@ -474,6 +474,123 @@ function _collect_spatial_dims!(dims::Vector{Symbol}, expr::ASTExpr,
 end
 
 # ========================================
+# Right-hand-side time derivatives (esm-spec §4.2)
+# ========================================
+
+"""
+    _is_structural_time_derivative(e) -> Bool
+
+True iff `e` is the STRUCTURAL time derivative — a `D` with `wrt == "t"` or no
+`wrt` at all (esm-spec §4.2: an absent `wrt` MEANS `t`) — applied to a single
+operand. The strict-unary check is the §4.2 arity contract for this tier; a
+SPATIAL `D` (a `wrt` naming an axis) is the rewrite-target tier, may carry
+trailing auxiliary operands, and is deliberately not matched here.
+"""
+_is_structural_time_derivative(e::ASTExpr)::Bool =
+    e isa OpExpr && e.op == "D" && length(e.args) == 1 &&
+    (e.wrt === nothing || e.wrt == "t")
+
+"""
+    _rhs_derivative_target(e) -> Union{String,Nothing}
+
+The name a structural `D` differentiates, when `args[1]` is a bare variable
+reference; `nothing` otherwise (including for a `D` of a compound expression,
+which names no variable and so cannot be looked up).
+"""
+function _rhs_derivative_target(e::ASTExpr)::Union{String,Nothing}
+    _is_structural_time_derivative(e) || return nothing
+    a = e.args[1]
+    return a isa VarExpr ? (a::VarExpr).name : nothing
+end
+
+"""
+    _resolve_rhs_time_derivatives!(equations)
+
+Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
+of an ODE unknown into that unknown's TENDENCY — the right-hand side of its own
+`D(x)/dt ~ f` equation (esm-spec §4.2).
+
+`D` on an equation's LEFT-hand side is structural: it is what makes the equation
+differential, and system assembly consumes it. On a RIGHT-hand side there is no
+such consumer, so an observed written `dxdt ~ D(x, t)` — the standard shape for
+asserting a species tendency at `t = 0` (§6.6.2 "instantaneous-derivative test
+shape") — was unrunnable: the tree-walk runner's `unlowered_operator` gate
+refused it, and the Rust binding silently evaluated it to `0`.
+
+The value is not a runner's to invent or refuse: `x` already carries a defining
+`D(x)/dt ~ f` equation in this very system, so resolving it is an ordinary AST
+substitution over the canonical flattened form — the same layer that qualifies
+names, applies coupling and lowers a reaction network to its mass-action ODEs.
+Doing it here is what lets a sibling model's `D(Chem.O3, t)` resolve to the
+mechanism's tendency (§7.4) with no runner learning anything about reactions.
+
+Scope, deliberately narrow (identical to the Rust `resolve_rhs_time_derivatives`
+and the Python `_resolve_rhs_time_derivatives`):
+
+  * only an `args[1]` that is a bare variable REFERENCE naming an unknown that
+    carries a differential equation is resolved;
+  * `D` of an OBSERVED or a PARAMETER, and `D` of a compound expression, are
+    left exactly as authored — resolving those is symbolic differentiation,
+    which this format does not define, and the `unlowered_operator` gate in
+    `tree_walk/compile.jl` refuses them before evaluation;
+  * a SPATIAL `D` is untouched: it is a rewrite target for a discretization rule
+    (§9.6.8);
+  * left-hand sides are never rewritten.
+
+The tendency table is built straight from the equations' LHS FORMS, never from a
+classification set: §6.3.1 derives an unknown's role from the equations, and
+`inlined_unknowns` in particular is the strict `y ~ f(…)` inlining set, not the
+classification (the substitution PR #250 unpicked).
+
+A tendency may itself name another state's derivative
+(`D(lai)/dt ~ sla · D(biomass)/dt`), so substitution recurses; `active` carries
+the chain being expanded and a self- or mutually-referential definition stops
+there with the node left as authored, which the gate then catches.
+"""
+function _resolve_rhs_time_derivatives!(equations::Vector{Equation})
+    tendency = Dict{String,ASTExpr}()
+    for eq in equations
+        t = _rhs_derivative_target(eq.lhs)
+        t === nothing || (tendency[t] = eq.rhs)
+    end
+    isempty(tendency) && return equations
+    for (i, eq) in enumerate(equations)
+        # While expanding the RHS of `D(x)/dt` itself, `x`'s tendency is the very
+        # thing being defined and so is not available to substitute into.
+        own = _rhs_derivative_target(eq.lhs)
+        active = own === nothing ? String[] : String[own]
+        new_rhs = _substitute_time_derivatives(eq.rhs, tendency, active)
+        new_rhs === eq.rhs || (equations[i] = Equation(eq.lhs, new_rhs))
+    end
+    return equations
+end
+
+"""
+    _substitute_time_derivatives(e, tendency, active) -> ASTExpr
+
+The rewrite [`_resolve_rhs_time_derivatives!`](@ref) documents, over one
+expression. `map_children` is identity-preserving, so an expression carrying no
+resolvable `D` is returned unchanged rather than rebuilt.
+"""
+function _substitute_time_derivatives(e::ASTExpr, tendency::Dict{String,ASTExpr},
+                                      active::Vector{String})::ASTExpr
+    e isa OpExpr || return e
+    target = _rhs_derivative_target(e)
+    if target !== nothing && haskey(tendency, target)
+        # A cycle: leave the node as authored rather than expanding it without
+        # end. It reaches the `unlowered_operator` gate exactly as before.
+        target in active && return e
+        push!(active, target)
+        try
+            return _substitute_time_derivatives(tendency[target], tendency, active)
+        finally
+            pop!(active)
+        end
+    end
+    return map_children(x -> _substitute_time_derivatives(x, tendency, active), e)
+end
+
+# ========================================
 # Independent-variable detection
 # ========================================
 
@@ -885,6 +1002,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
                            template_registry=(isempty(template_registry) ? nothing :
                                               template_registry),
                            lifted_shapes=lifted_shapes)
+
+    # Step 3c: Resolve a right-hand-side STRUCTURAL time derivative of an ODE
+    # unknown to the tendency this system defines for it (esm-spec §4.2). Runs
+    # after the lift so it sees the equations the lift produced, and after Step
+    # 1+2 so a reaction network's mass-action tendency (§7.4) is available to a
+    # sibling model's scoped `D(Chem.O3, t)`.
+    _resolve_rhs_time_derivatives!(equations)
 
     # Step 4: Compute independent variables.
     ivs = _compute_independent_variables(equations)
