@@ -819,30 +819,63 @@ end
 # such a value into a dense `Array{Float64,N}`; these two stages route it to the
 # channel the build already reads it from.
 
-# Every SHAPED parameter whose resolved value is inline array data, merged into
+# Every SHAPED parameter whose resolved value the DOCUMENT supplies, merged into
 # the const-array registry. Precedence follows §6.6.2: an explicit
 # `parameter_overrides` entry wins over everything, then a caller-supplied
 # `const_arrays` entry (loaded data beats a document default), then the declared
 # `default`. Returns the ORIGINAL registry object when nothing was added, so a
 # document with no inline array data builds byte-identically.
+#
+# The value is inline array data, or a SCALAR — which esm-spec §6.3 gives the
+# same meaning, "the one value applies to every element" — BROADCAST over the
+# declared grid. The broadcast is what a shaped UNKNOWN's scalar `default`
+# already gets from `_build_u0` (one value into every cell of the state vector);
+# without it here, `_partition_variables` reaches a shaped parameter backed by
+# neither `const_arrays` nor `param_arrays` and throws
+# `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
+# (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
+# name, so broadcasting a DECLARED scalar never displaces one; an explicit
+# override is the caller speaking for this run and outranks both registries,
+# exactly as the array spelling of that override already does.
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
-                                           index_sets::AbstractDict)
+                                           index_sets::AbstractDict;
+                                           param_arrays::AbstractDict=Dict{String,Any}())
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
+        elseif ov isa Number
+            # A SCALAR override is tested BESIDE the array one, before either
+            # default arm: §6.6.2 gives the two spellings of the §6.3 union one
+            # precedence, so an override must not lose to the very `default` it
+            # replaces (nor to caller-supplied data, which the array arm above
+            # already outranks). Tested after it, a scalar override of a
+            # parameter whose declared `default` is an inline array was silently
+            # DROPPED and the default used instead.
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
             continue                      # caller-supplied data is authoritative
         elseif is_inline_array(v.default)
             v.default
+        elseif v.default isa Number
+            # esm-spec §6.3 broadcast of the DECLARED scalar. Skipped when a live
+            # forcing buffer already carries the name, and when the shape does
+            # not resolve (an unmaterialized derived set has no extent to fill) —
+            # the build's own extent checks then report any real disagreement.
+            haskey(param_arrays, name) && continue
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(v.default), Tuple(exts))
         else
             continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            is_inline_array(ov) ? "parameter_overrides" : "default")
+                            ov === nothing ? "default" : "parameter_overrides")
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -2784,7 +2817,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # bytes as before this change. A factored array observed no longer sits
         # in the RHS substitution map (its readers gather its buffer), but the
         # observability surface is not the RHS: `_observed_field`
-        # (pde_inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
+        # (inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
         # observed's expression CELLWISE, off the ODE path, so every reference
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
@@ -3321,17 +3354,19 @@ function _build_evaluator_impl_inner(model::Model;
     parameter_overrides = _normalize_param_override_keys(model, parameter_overrides;
                                                         model_name=_model_name)
     # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
-    # A SHAPED parameter whose value is authored as a row-major nested array —
-    # on its own `default`, or in the caller's `parameter_overrides` — is
-    # BUILD-TIME DATA, not a scalar `p` slot. Register it in the const-array
-    # registry, which is exactly the channel `_partition_variables` already
-    # requires an array-shaped parameter to be backed by; nothing else in the
-    # build then needs to know the column was authored inline rather than
-    # loaded. A shaped UNKNOWN's inline `initial_conditions` profile is expanded
-    # into the per-cell keys `_build_u0` seeds from. Both are no-ops (and the
-    # registries byte-identical) for a document that authors no array data.
+    # A SHAPED parameter whose value the document supplies — a row-major nested
+    # array on its own `default` or in the caller's `parameter_overrides`, or one
+    # SCALAR broadcast over the declared grid (§6.3) — is BUILD-TIME DATA, not a
+    # scalar `p` slot. Register it in the const-array registry, which is exactly
+    # the channel `_partition_variables` already requires an array-shaped
+    # parameter to be backed by; nothing else in the build then needs to know the
+    # column was authored inline rather than loaded. A shaped UNKNOWN's inline
+    # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
+    # seeds from. Both are no-ops (and the registries byte-identical) for a
+    # document that declares no shaped parameter.
     const_arrays = _register_inline_array_parameters(model, const_arrays,
-                                                     parameter_overrides, index_sets)
+                                                     parameter_overrides, index_sets;
+                                                     param_arrays=param_arrays)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;

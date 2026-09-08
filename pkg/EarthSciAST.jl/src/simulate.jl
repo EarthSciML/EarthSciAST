@@ -114,6 +114,14 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = flatten(input)
     end
     if input isa FlattenedSystem
+        # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
+        # the one point every input kind (path, native Dict, EsmFile,
+        # already-flattened system) has funnelled into, and the first point
+        # inside a BUILD. Not at load: §9.5.4 requires the authored form to
+        # round-trip, and `save` re-serializes the very image `load` produced.
+        # First in the block, so the shape transforms below see the closed-
+        # function tree rather than an op they would have to know about.
+        input = lower_table_lookups(input)
         # Surviving references are THE behavior: they ride through
         # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
         # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
@@ -357,7 +365,7 @@ _compose_callbacks(cbs::AbstractVector) =
 
 # --------------------------------------------------------------------------- #
 # Internal solve bridge, for the CORE-RESIDENT callers that have to run a
-# problem themselves — today only the inline-test engine (`run_pde_tests`),
+# problem themselves — today only the inline-test engine (`run_inline_tests`),
 # which lives in this package and is handed an `alg` by its caller. It is NOT a
 # second public entry point beside `solve`: the extension implements it BY
 # calling `SciMLBase.solve(prob, alg; …)`, so there is exactly one solve path.

@@ -307,6 +307,7 @@
         "ChemistrySystem",
         "AdvectionSystem"
       ],
+      "require_match": false,
       "description": "TEST CASE 1: Basic operator_compose with placeholder expansion - AdvectionSystem's _var equation should expand to three equations for O3, NO, NO2"
     },
     {
@@ -333,6 +334,7 @@
         "ChemistrySystem",
         "AdvectionSystem"
       ],
+      "require_match": false,
       "translate": {
         "O3": {
           "var": "O3",
@@ -355,6 +357,7 @@
         "DiffusionSystem",
         "DepositionSystem"
       ],
+      "require_match": false,
       "translate": {
         "ozone_conc": {
           "var": "O3",

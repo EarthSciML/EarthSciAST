@@ -5,7 +5,7 @@
 # inline analytic assertion `reference` — binds the model's parameters to their
 # `parameter_overrides`-or-default values, with the overrides keyed by LOCAL
 # parameter name (§6.6). The reference binding (Julia) runs the OFFICIAL
-# `run_pde_tests` pathway over the committed fixture and must reproduce the
+# `run_inline_tests` pathway over the committed fixture and must reproduce the
 # committed golden actuals (which that same pathway minted). The manifest
 # declares julia/python/rust as bindings_required.
 #
@@ -57,7 +57,7 @@ const _ICPO_MANIFEST  = joinpath(_ICPO_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_pde_tests(esm_path; model_name=String(fixture.model),
+            results = run_inline_tests(esm_path; model_name=String(fixture.model),
                                     alg=OrdinaryDiffEqTsit5.Tsit5(),
                                     reltol=1e-12, abstol=1e-14)
             @test length(results) == length(golden.assertions)

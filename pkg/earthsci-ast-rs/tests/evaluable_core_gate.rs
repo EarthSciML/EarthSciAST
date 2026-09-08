@@ -15,7 +15,8 @@
 //! | op | why it has no rule | what must happen |
 //! |---|---|---|
 //! | `skolem`, `rank`, `distinct`, `argmin`, `argmax` | build-time relational, materialized by `value_invention` | build error |
-//! | `enum`, `table_lookup`, `apply_expression_template` | lowered at LOAD; surviving one is a lowering bug | build error |
+//! | `enum`, `apply_expression_template` | lowered at LOAD; surviving one is a lowering bug | build error |
+//! | `table_lookup` | lowered on the way into the BUILD (§9.5.3, `lower_table_lookup`) — at load it would break the §9.5.4 round trip; surviving one is a lowering bug | build error |
 //! | `ic` | structural: initial-condition assembly reads the equation, the evaluator never sees the node | build error in a BODY, legal as an equation LHS |
 //! | `true` | **nothing consumes it** — it is a boolean literal | EVALUATE it |
 //!
@@ -36,7 +37,7 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    Compiled, EsmFile, SolveOptions, load_path, run_pde_tests, run_pde_tests_with_base_dir,
+    Compiled, EsmFile, SolveOptions, load_path, run_inline_tests, run_inline_tests_with_base_dir,
 };
 use serde_json::json;
 
@@ -52,7 +53,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn a_true_body_counts_instead_of_panicking() {
     let path = fixture("semijoin_true_body.esm");
     let file = load_path(&path).expect("loads");
-    let results = run_pde_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
+    let results =
+        run_inline_tests_with_base_dir(&file, None, &SolveOptions::default(), path.parent());
     assert_eq!(results.len(), 2, "two inline assertions: {results:?}");
     for r in &results {
         assert!(
@@ -71,10 +73,12 @@ fn a_true_body_counts_instead_of_panicking() {
 /// gate, six of these nine reached `eval_op`'s `unreachable!` exactly as `true`
 /// did, so the panic was a class and not one op.
 ///
-/// Built as a typed document rather than loaded, deliberately: `enum`,
-/// `table_lookup` and `apply_expression_template` are lowered at LOAD, so a
-/// loader-borne test could never place one in front of the build gate, which is
-/// the gate under test.
+/// Built as a typed document rather than loaded, deliberately: `enum` and
+/// `apply_expression_template` are lowered at LOAD, so a loader-borne test
+/// could never place one in front of the build gate, which is the gate under
+/// test. `table_lookup` lowers on the way into the build instead (§9.5.3), and
+/// reaches the gate here for the reason a real document would — the document
+/// declares no `function_tables`, so there is nothing to lower it against.
 #[test]
 fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
     /// What refuses this op, audited case by case rather than asserted
@@ -166,7 +170,7 @@ fn every_unevaluable_core_op_ends_in_a_diagnostic_not_a_panic() {
         }))
         .expect("typed document");
 
-        let results = run_pde_tests(&file, Some("M"), &SolveOptions::default());
+        let results = run_inline_tests(&file, Some("M"), &SolveOptions::default());
         assert_eq!(results.len(), 1, "`{op}`: one assertion, got {results:?}");
         let r = &results[0];
         assert!(

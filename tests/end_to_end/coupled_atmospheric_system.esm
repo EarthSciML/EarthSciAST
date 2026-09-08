@@ -989,6 +989,7 @@
         "AtmosphericChemistry",
         "AtmosphericTransport"
       ],
+      "require_match": false,
       "description": "Couple 3D transport with gas-phase chemistry"
     },
     {
