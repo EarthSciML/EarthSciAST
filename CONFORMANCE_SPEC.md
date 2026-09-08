@@ -4505,11 +4505,14 @@ same spelling:
    is dropped the same way, while `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])`
    — the spelling this fixture uses — integrates.
 
-All three are being folded into PR #237 (Python routing, issue #231); divergence
-3 is likely the very defect that PR already addresses, since it is about a bare
-whole-array derivative routing to the scalar pathway. Complete reproducer
-documents are in the body of PR #250, which introduced this category. This
-category goes green for Python when that work lands.
+All three are being folded into PR #237 (Python routing, issue #231). MEASURED,
+NOT ASSUMED: all three reproducers were run against #237 at head `67504523` and
+it closes NONE of them — each fails there exactly as on `main`, and this category
+scores the same 7/13 either way. Divergence 3 in particular reads like that PR's
+subject ("a declared `shape` routes to the array pathway, whatever the equation
+spelling") and is nonetheless not yet covered by it. Complete reproducer
+documents are in the body of PR #250, which introduced this category; the
+numbers above are the check to re-run.
 
 **TypeScript**, **Go** — rewrite-only ports with no simulator; no rows apply.
 

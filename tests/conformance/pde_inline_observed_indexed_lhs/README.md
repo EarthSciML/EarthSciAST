@@ -63,14 +63,19 @@ distinct divergences are involved, all on this same spelling:
 3. **An indexed-LHS observed feeding a WHOLE-ARRAY derivative is dropped the
    same way.** `D(u) ~ wf` leaves `u` at its initial value; spelling the
    derivative `aggregate{k}(D(u[k])) ~ aggregate{k}(wf[k])` — which is what this
-   fixture does — makes it integrate. This one is likely the same defect PR #237
-   (Python routing, issue #231) already addresses, since that PR is about a bare
-   whole-array derivative routing to the scalar pathway.
+   fixture does — makes it integrate.
 
-All three are Python-side and are being folded into **PR #237**; complete
-reproducer documents for each are in the body of **PR #250**, which introduced
-this category. This category goes green for Python when #237 lands (possibly
-plus follow-on work for divergences 1 and 2).
+All three are Python-side and are being folded into **PR #237** ("a declared
+`shape` routes to the array pathway, whatever the equation spelling", issue
+#231). Complete reproducer documents for each are in the body of **PR #250**,
+which introduced this category.
+
+**Measured, not assumed:** all three reproducers were run against #237 at head
+`67504523`, and it closes **none** of them — each fails there exactly as it does
+on `main`, and this fixture scores the same 7/13 either way. Divergence 3 in
+particular looked like #237's subject from the title, and is not (yet) covered by
+it. So this category goes green for Python only once that work actually reaches
+these three shapes; the numbers above are the check to re-run.
 
 Julia and Rust pass all thirteen assertions.
 

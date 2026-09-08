@@ -38,8 +38,9 @@ the dynamics (or the reverse) still fails.
    readable by an assertion; one whose rhs is a PER-CELL body is silently
    dropped from the ODE RHS; and one feeding a WHOLE-ARRAY derivative
    (``D(u) ~ wf``) is dropped the same way. All three are being folded into
-   PR #237 (issue #231), the last likely being the very defect that PR already
-   fixes. Reproducers are in the body of PR #250, which introduced this
+   PR #237 (issue #231). Measured, not assumed: #237 at head ``67504523``
+   closes NONE of the three — this fixture scores the same 7/13 there as on
+   ``main``. Reproducers are in the body of PR #250, which introduced this
    category. See ``tests/conformance/pde_inline_observed_indexed_lhs/README.md``
    and CONFORMANCE_SPEC §5.30.1.
 """
