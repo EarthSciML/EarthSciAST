@@ -117,15 +117,7 @@ const NODE_HEADER_KEYS: [&str; 3] = ["op", "id", "expect_cadence"];
 /// verbatim by the §9.7.7 rename walk only. `from`, `wrt`/`dim`, apply-`name`,
 /// and `of` are handled positionally.
 const REGISTRY_KEYS: [&str; 9] = [
-    "reduce",
-    "semiring",
-    "manifold",
-    "fn",
-    "table",
-    "side",
-    "attrs",
-    "members",
-    "from_faq",
+    "reduce", "semiring", "manifold", "fn", "table", "side", "attrs", "members", "from_faq",
 ];
 
 /// `integral` bound fields (esm-spec §4.2). Unlike `var` these are full
