@@ -4913,6 +4913,20 @@ Julia-minted golden. A binding can pass §5.34 and fail this one: Julia's
 `aggregate` shell), and its tree-walk **build** still refused the document
 outright.
 
+**Scope: the `aggregate`-shelled spelling only.** This section pins
+`aggregate{k…}(index(V, k…)) ~ …`, whose `ranges` bind the frame symbols.
+§6.3.1's *other* arrayed spelling — a **bare** `index(V, i)` LHS with no shell,
+the form the spec's own worked example writes (`rg_src_bin[a] ~ …`) — is
+classified correctly by all five bindings (§5.34's `wb`) and **run by none**: a
+bare `index` LHS carries no binder for `i`, so the frame would have to be
+inferred from the declared `shape`, which is a normative decision this section
+does not make. Issue #291 carries it. What this section DOES require in the
+meantime is that the two executing bindings agree the spelling is
+**unsupported** rather than one refusing and the other integrating an unwritten
+slot: both MUST refuse under `E_TREEWALK_UNSUPPORTED_SHAPE`, naming the
+variable. A binding that answers `0.0` from a never-written solver slot grades a
+wrong document green, which is strictly worse than refusing it.
+
 esm-spec §6.3.1 admits **two** LHS spellings for the equation that DEFINES an
 unknown, and states the criterion semantically: the defining form is read
 through the LHS's **base name**, so an unknown is observed when some equation

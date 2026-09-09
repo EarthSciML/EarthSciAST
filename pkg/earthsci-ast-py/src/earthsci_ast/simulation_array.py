@@ -597,7 +597,7 @@ def _apply_equation_to_dy(
     # `aggregate{k}(index(y, k…))` shell, whose `ranges` bind the frame symbols;
     # a bare `index` LHS carries no binder for `i`, so inferring the frame from
     # the declared `shape` is a cross-binding semantic decision and is NOT made
-    # here. Every OTHER unapplied shape keeps the warning.
+    # here — issue #291 carries it. Every OTHER unapplied shape keeps the warning.
     if (
         isinstance(lhs, ExprNode)
         and lhs.op == "index"
