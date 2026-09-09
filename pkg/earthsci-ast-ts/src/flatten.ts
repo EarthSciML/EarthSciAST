@@ -2060,6 +2060,11 @@ function applyCouplings(
     metadata.couplingRules.push(describeCoupling(entry))
   }
 
+  // Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
+  // `translate` merge (§10.2) legitimately consumes one of two spellings of a
+  // quantity, so checking after it ran would flag a well-formed endpoint.
+  checkVariableMapEndpoints(file, components, varMaps)
+
   // The document-wide merge map: every state spelling an `operator_compose`
   // renaming match has DELETED, mapped onto the survivor (issue #230). It
   // accumulates across the `operator_compose` pass and is applied to the by-name
@@ -2078,6 +2083,72 @@ function applyCouplings(
   const loaderNames = new Set(Object.keys(file.data_sources ?? {}))
   for (const vm of varMaps) {
     applyVariableMap(components, retargetPendingEntry(vm, mergedRenames), loaderNames)
+  }
+}
+
+/**
+ * Resolution preflight for every `variable_map` entry: each endpoint must name
+ * a state, parameter or observed the collected system carries, under its FULL
+ * dot path (esm-spec §4.6).
+ *
+ * Until it existed both halves failed silently. `applyVariableMap` substitutes
+ * `to` -> `from` whether or not either name binds, and its promotion step
+ * `continue`s past a `to` that is not in `comp.parameters`. An endpoint
+ * resolving to nothing therefore produced a flattened system indistinguishable
+ * from one where the coupling had been applied and had simply had no effect:
+ * the target keeps its declared default, and — when it is the SOURCE that
+ * resolves to nothing — every rewritten consumer reads a name no table binds.
+ *
+ * EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
+ * Such a producer is served through the runtime forcing seam rather than as a
+ * declared variable, so it is legitimately absent from the tables.
+ *
+ * Deliberately NOT checked: whether a promoting transform's `to` is a PARAMETER
+ * rather than an unknown. `tests/valid/scoped_refs_coupling.esm` maps
+ * `param_to_var` onto a declared unknown, and tightening that is a separate
+ * question from whether the endpoint resolves at all.
+ *
+ * Throws a bare `FlattenError` rather than a new exported subclass:
+ * `api-surface.json` is the cross-binding record of what every binding
+ * exports, and adding a name there is a five-binding contract change. The code
+ * is the EXISTING `unresolved_scoped_ref` — this is that condition, at the
+ * coupling-entry site (§7.1.2, §4.9.5) — not a new registry entry. It is also
+ * what `tests/coupling_libraries/expected_errors.json` already expects from
+ * flatten for a mis-bound coupling-library edge, whose expanded endpoint
+ * resolves to nothing for exactly this reason.
+ */
+function checkVariableMapEndpoints(
+  file: EsmFile,
+  components: Record<string, ComponentSystem>,
+  varMaps: CouplingEntry[],
+): void {
+  const declared = new Set<string>()
+  for (const comp of Object.values(components)) {
+    for (const name of Object.keys(comp.stateVars)) declared.add(name)
+    for (const name of Object.keys(comp.parameters)) declared.add(name)
+    for (const name of Object.keys(comp.observed)) declared.add(name)
+  }
+  const loaderNames = new Set(Object.keys(file.data_sources ?? {}))
+  for (const entry of varMaps) {
+    const e = entry as unknown as { from?: string; to?: string }
+    const fromVar = e.from ?? ''
+    const toVar = e.to ?? ''
+    const fromOwner = fromVar.includes('.') ? fromVar.slice(0, fromVar.indexOf('.')) : fromVar
+    const sides: Array<[string, string]> = [
+      ['from', fromVar],
+      ['to', toVar],
+    ]
+    for (const [side, endpoint] of sides) {
+      if (endpoint === '' || declared.has(endpoint)) continue
+      if (side === 'from' && loaderNames.has(fromOwner)) continue
+      throw new FlattenError(
+        `variable_map(${fromVar} -> ${toVar}): the '${side}' endpoint '${endpoint}' resolves ` +
+          'to no variable, parameter or observed in the flattened system (esm-spec §4.6, ' +
+          '§10.4). A scoped reference walks EVERY dot-separated segment, so a subsystem ' +
+          "endpoint is spelled '<Model>.<Subsystem>.<name>'.",
+        'unresolved_scoped_ref',
+      )
+    }
   }
 }
 

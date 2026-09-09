@@ -666,6 +666,7 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 		FunctionTables  map[string]FunctionTable  `json:"function_tables,omitempty"`
 		IndexSets       map[string]IndexSet       `json:"index_sets,omitempty"`
 		Coordinates     map[string]Coordinate     `json:"coordinates,omitempty"`
+		SolverHints     *Solver                   `json:"solver,omitempty"`
 	}
 
 	var temp TempESMFile
@@ -685,6 +686,16 @@ func (esm *ESMFile) UnmarshalJSON(data []byte) error {
 	esm.FunctionTables = temp.FunctionTables
 	esm.IndexSets = temp.IndexSets
 	esm.Coordinates = temp.Coordinates
+	// esm-spec §2.2. ESMFile has a custom UnmarshalJSON, so a field is only
+	// decoded if it is listed HERE — the struct tag alone is not enough, which
+	// is how the block reached the emitter as nil and was silently dropped on
+	// round trip until TestCorpusRoundTripIsLossless caught it.
+	// esm-spec §2.2: an EMPTY block normalizes to absence at load. `{}` is legal
+	// and means what omitting the block means. This is NOT covered by the
+	// `omitempty` struct tag: on a POINTER, omitempty tests nil only, so a
+	// decoded `&Solver{}` would re-emit as `"solver": {}` while Python and Julia
+	// dropped it — the five bindings disagreeing on one document.
+	esm.SolverHints = normalizeSolver(temp.SolverHints)
 
 	// Handle coupling array with proper type deserialization
 	if rawIsPresent(temp.Coupling) {

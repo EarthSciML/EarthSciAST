@@ -5,6 +5,7 @@ import pytest
 from earthsci_ast.display import to_ascii
 from earthsci_ast.flatten import (
     ConflictingDerivativeError,
+    VariableMapUnresolvedEndpointError,
     _namespace_expr,
     flatten,
 )
@@ -425,6 +426,77 @@ def test_flatten_variable_map_param_to_var():
     assert len(chem_eqs) == 1
     assert "GEOSFP.T" in chem_eqs[0].rhs_str
     assert "Chem.T" not in chem_eqs[0].rhs_str
+
+
+# ----------------------------------------------------------------------------
+# variable_map endpoint resolution (esm-spec §4.6 / §10.4)
+# ----------------------------------------------------------------------------
+
+
+def _subsystem_map_file(to_endpoint: str) -> EsmFile:
+    """A wrapper model whose SUBSYSTEM owns the coupling target.
+
+    ``Src.T`` feeds the parameter ``Wrap.inner.gain``, which ``Wrap.inner``'s
+    own ODE reads. ``to_endpoint`` is spelled by the caller so a wrong path can
+    be probed against the same document.
+    """
+    src = Model(
+        name="Src",
+        variables={"T": ModelVariable(type="unknown")},
+        equations=[Equation(lhs=ExprNode(op="D", args=["T"], wrt="t"), rhs=1.0)],
+    )
+    inner = Model(
+        name="inner",
+        variables={
+            "gain": ModelVariable(type="parameter", default=0.0),
+            "x": ModelVariable(type="unknown"),
+        },
+        equations=[Equation(lhs=ExprNode(op="D", args=["x"], wrt="t"), rhs="gain")],
+    )
+    wrap = Model(name="Wrap", subsystems={"inner": inner})
+    vm = VariableMapCoupling(from_var="Src.T", to_var=to_endpoint, transform="param_to_var")
+    return _empty_file(models={"Src": src, "Wrap": wrap}, coupling=[vm])
+
+
+def test_flatten_variable_map_into_subsystem_parameter():
+    """A `to` endpoint reaching INTO a subsystem resolves by its FULL dot path.
+
+    The nested parameter is promoted away and the nested equation that read it
+    now reads the source. This is the shape a two-segment endpoint resolver
+    cannot express (issue #198 item 1).
+    """
+    flat = flatten(_subsystem_map_file("Wrap.inner.gain"))
+    assert "Wrap.inner.gain" not in flat.parameters
+    eqs = [e for e in flat.equations if "Wrap.inner.x" in e.lhs_str]
+    assert len(eqs) == 1
+    assert eqs[0].rhs_str == "Src.T"
+
+
+def test_flatten_variable_map_unresolved_to_endpoint_raises():
+    """A `to` spelled with a MISSING segment resolves to nothing.
+
+    It used to flatten cleanly with the coupling silently dropped -- the target
+    kept its declared default and nothing downstream could tell "applied" from
+    "ignored".
+    """
+    with pytest.raises(VariableMapUnresolvedEndpointError) as exc:
+        flatten(_subsystem_map_file("Wrap.gain"))
+    assert "'to'" in str(exc.value)
+    assert "Wrap.gain" in str(exc.value)
+
+
+def test_flatten_variable_map_unresolved_from_endpoint_raises():
+    """A `from` that resolves to nothing is the NaN half.
+
+    The substitution runs regardless, so every consumer of `to` was rewritten
+    to a name no table binds.
+    """
+    file = _subsystem_map_file("Wrap.inner.gain")
+    file.coupling[0].from_var = "Src.Nope.T"
+    with pytest.raises(VariableMapUnresolvedEndpointError) as exc:
+        flatten(file)
+    assert "'from'" in str(exc.value)
+    assert "Src.Nope.T" in str(exc.value)
 
 
 # ----------------------------------------------------------------------------

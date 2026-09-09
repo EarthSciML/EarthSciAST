@@ -54,13 +54,23 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .esm_types import EsmFile
+from . import op_registry
+from .esm_types import EsmFile, ExprNode
+from .expr_walk import iter_children
+
+# `DEFAULT_ABSTOL` / `DEFAULT_RELTOL` are a pure RE-EXPORT here (see the note
+# under `DEFAULT_ALG`): nothing in this module names them any more, because no
+# entry point may default to a concrete tolerance — that would occupy level 1 of
+# the §2.2.2 chain and the document could never win. Hence the `noqa`.
+from .solver import DEFAULT_ABSTOL, DEFAULT_RELTOL, resolve_tolerances  # noqa: F401
 from .flatten import (
     FlattenedSystem,
     UnsupportedDimensionalityError,
     _has_array_op,
     flatten,
 )
+from .lower_table_lookup import lower_table_lookups
+from .numpy_interpreter import _EVALUABLE_CORE_OPS, UnreachableSpatialOperatorError
 from .parse import load_document, load_path
 from .pushdown_rewrite import (
     _inject_pushdown_aliases,
@@ -74,6 +84,7 @@ from .simulation_array import (
     _element_names,
     _fill_build_inspection,
     _NumpyRhsBuild,
+    _resolve_index_set_shape,
     _simulate_with_numpy,
 )
 from .simulation_common import (
@@ -85,6 +96,7 @@ from .simulation_common import (
     _retcode_for_error,
     _scipy_missing_message,
     check_parameter_override_keys,
+    flat_namespace_scope,
     resolve_merged_renames,
 )
 from .simulation_loaders import (
@@ -123,18 +135,13 @@ __all__ = [
 #: (API_SPEC §4); this binding's ecosystem has no first-class algorithm object,
 #: so a SciPy method NAME is accepted, which §2.5.3 explicitly permits.
 DEFAULT_ALG = "LSODA"
-#: Canonical cross-binding tolerance defaults (API_SPEC §5.8): the same knobs
-#: under the same names produce comparable trajectories in Julia, Python and Rust.
-#:
-#: These are Julia's values, and they are LOOSER than what this binding used to
-#: default to (1e-10 / 1e-14). A default is what a document gets when its author
-#: has expressed no opinion about accuracy, so it is the cheapest of the three
-#: rather than the most accurate. A caller who needs tighter integration passes
-#: `reltol=` / `abstol=` -- and a TEST that asserts trajectory accuracy must do
-#: so, rather than lean on the default and thereby assert something about the
-#: library's default instead of about the model.
-DEFAULT_RELTOL = 1e-4
-DEFAULT_ABSTOL = 1e-6
+# `DEFAULT_RELTOL` / `DEFAULT_ABSTOL` are imported at the top of this module from
+# `solver.py`, which owns them because it also owns the §2.2.2 chain they sit at
+# the bottom of. A second copy here would let the entry points and the bottom of
+# that chain drift apart. They stay importable from this module under their
+# historical names, but no entry point here uses them as a signature default:
+# `solve` and `init` both take `None` and hand the chain a "caller said nothing",
+# which is the only way the document can sit BETWEEN the call site and these.
 
 
 def _discover_loader_extents(
@@ -336,6 +343,13 @@ class EsmProblem:
     providers: dict[str, Any] | None = None
     gated_provider_keys: list[str] = field(default_factory=list)
     doc: dict | None = None  # the (possibly rewritten) raw document
+    #: The document's §2.2 `solver` block, captured at construction. Kept as its
+    #: OWN field rather than read back out of :attr:`doc`, because ``doc`` is
+    #: only populated on the pushdown-rewrite path — reading the block from
+    #: there made the §2.2.2 chain dead code for every ordinary problem. ``None``
+    #: when the document declares no block, or when the problem was built from a
+    #: bare :class:`FlattenedSystem` (which carries no document at all).
+    solver: Any = None
     model_name: str | None = None
     metaparameters: dict[str, int] = field(default_factory=dict)
     sample_time: float = 0.0
@@ -537,6 +551,16 @@ def esm_problem(
     else:
         file = load_path(input, metaparameters=closed_metaparameters)
 
+    # esm-spec §9.5.3: `table_lookup` is SUGAR over the §9.2 closed functions,
+    # and nothing downstream of the loader evaluates it — the interpreter
+    # refuses the op outright. The lowering runs HERE, not in `parse`, because
+    # §9.5.4 makes the AUTHORED form round-trip and this binding serializes the
+    # typed document it loaded, so a load-time rewrite would emit the lowered
+    # `fn` tree (issue #188). Pure and idempotent, and not even a walk for a
+    # document declaring no `function_tables`.
+    if file is not None:
+        file = lower_table_lookups(file)
+
     flat = input if isinstance(input, FlattenedSystem) else flatten(file)
 
     # esm-spec §4.7.6.12: an ODE backend MUST reject a system with a surviving
@@ -555,6 +579,12 @@ def esm_problem(
             f"PDEs run natively here."
         )
 
+    # esm-spec §9.6.3 constraint 6 — the REWRITE-TARGET OPERATOR GATE, run here
+    # as the spec words it: "before a component is EVALUATED or COMPILED for
+    # simulation, its expression trees are WALKED". A whole-tree walk, not a
+    # reachability check.
+    _assert_no_unlowered_operator(flat)
+
     # esm-spec §6.6.2 "Unrecognized override keys": a `p` key that names no
     # single parameter is an ERROR, raised at the one front door every pathway
     # routes through so the three executing bindings agree. Ignoring it silently
@@ -571,7 +601,7 @@ def esm_problem(
     p = resolve_merged_renames(renames, p)
     u0 = resolve_merged_renames(renames, u0)
 
-    check_parameter_override_keys(flat.parameters, p)
+    check_parameter_override_keys(flat.parameters, p, flat_namespace_scope(flat))
 
     # ---- provider injection: eager CONST materialization; gated deferral ----
     merged: dict[str, Any] = {
@@ -670,6 +700,9 @@ def esm_problem(
         providers=dict(providers) if providers else None,
         gated_provider_keys=sorted(gated),
         doc=doc_for_record,
+        # esm-spec §2.2: the document's own solver hints, taken from the TYPED
+        # file, which every input carrier except a bare FlattenedSystem produces.
+        solver=getattr(file, "solver", None),
         model_name=model_name,
         metaparameters=dict(closed_metaparameters),
         sample_time=t0,
@@ -697,8 +730,9 @@ def _choose_pathway(
     the NumPy interpreter and take precedence over the in-document data-loader
     seam (a document with both binds the injected arrays, as the pre-EsmProblem
     entry points did). ``loader_fields`` alone means cadence segmentation.
-    Otherwise an array op anywhere (including every discretized PDE) routes to
-    the NumPy interpreter, and a scalar-only system to the lambdified SymPy
+    Otherwise ARRAY-NESS routes to the NumPy interpreter — a DECLARED ``shape``
+    (esm-spec §6.3) or an array op anywhere (including every discretized PDE) —
+    and a system that is scalar by both measures goes to the lambdified SymPy
     pathway.
     """
     if discrete_providers:
@@ -707,9 +741,119 @@ def _choose_pathway(
         return "array"
     if flat.loader_fields:
         return "loaders"
+    if _declares_resolvable_shape(flat):
+        return "array"
     if any(_has_array_op(eq.lhs) or _has_array_op(eq.rhs) for eq in flat.equations):
         return "array"
     return "scalar"
+
+
+def _declares_resolvable_shape(flat: FlattenedSystem) -> bool:
+    """Does any variable DECLARE an array shape this document can resolve?
+
+    esm-spec §6.3 makes ``shape`` — "the ordered list of index-set names the
+    variable is arrayed over" — the authoritative statement of array-ness; it
+    says nothing about how the defining equation happens to be spelled. Equation
+    content alone therefore under-reports: a bare whole-array ``D(theta) ~ 1``
+    over ``"shape": ["lev"]`` carries no ``index`` / ``aggregate`` / ``arrayop``
+    node anywhere, so :func:`_has_array_op` sees a scalar system and the state
+    reaches the SymPy pathway with no cells at all (issue #231). The
+    ``aggregate`` spelling of the SAME semantics routed to the array runtime,
+    which made the choice of spelling — not the model — decide the answer.
+
+    This mirrors ``_build_numpy_rhs``'s own declared-shape resolution (esm-spec
+    §11), including its fallback: a shape is only counted when every axis
+    RESOLVES against the document's ``index_sets`` registry to a concrete
+    extent. An unresolvable shape (an axis naming no registry entry, or a
+    ``derived`` set whose extent value-invention has not materialized yet) is
+    exactly the case where the array build would fall back to usage inference
+    and infer the same scalar, so routing on it would change the engine without
+    changing the answer.
+
+    All three §6.3 roles, because §6.3 gives them all the same ``shape`` field
+    and privileges none. A shaped PARAMETER carrying inline array data (§6.3
+    "Inline array data") is array-valued whatever its consumers look like, and
+    the scalar pathway refuses to bind it. A shaped OBSERVED is array-valued for
+    the same reason its state counterpart is, and ``_build_numpy_rhs`` resolves
+    an observed's declared shape through this very resolver — so a declaration
+    that routes a document here is a declaration the build then honours.
+    """
+    for varmap in (flat.state_variables, flat.parameters, flat.observed_variables):
+        for var in varmap.values():
+            declared = getattr(var, "shape", None)
+            if not declared:
+                continue
+            resolved = _resolve_index_set_shape(list(declared), flat.index_sets)
+            if resolved:
+                return True
+    return False
+
+
+def _assert_no_unlowered_operator(flat: FlattenedSystem) -> None:
+    """esm-spec §9.6.3 constraint 6 / §9.6.8 — the pre-evaluation rewrite-target gate.
+
+    The spec makes this a WALK, not a reachability test: "before a component is
+    EVALUATED or COMPILED for simulation, its expression trees are walked; any
+    node whose ``op`` is not in the evaluable-core set (§4.2) — including a
+    spatial ``D``, or any ``D`` in a right-hand-side / evaluation position — is
+    rejected with diagnostic ``unlowered_operator``". §9.6.8 calls it "the sole
+    guarantee that a rewrite-target op cannot reach evaluation", and §9.6.3
+    constraint 6 is what a constrained rule that never fires falls through to.
+
+    Python used to have no such walk. Both pathways raised ``unlowered_operator``
+    REACTIVELY, when the evaluator happened to reach the node — which made the
+    gate an artifact of the engine rather than of the document. The scalar-SymPy
+    pathway lambdifies every observed eagerly and so tripped over a surviving
+    op in a DEAD observed; the NumPy pathway evaluates observeds lazily and
+    never reached one. The same document therefore passed or failed on which
+    engine ``_choose_pathway`` picked. Walking here, at the one front door every
+    pathway routes through, makes the answer a property of the document.
+
+    Scope. Equations (which is where flatten puts every observed body) and the
+    ``ic`` right-hand sides — the trees that are compiled for simulation. A
+    ``D`` is evaluable-core ONLY in its structural equation-LHS role, where it
+    names the differentiated state and is never evaluated; ``args`` of an LHS
+    ``aggregate`` are still LHS, so the array-level spelling
+    ``aggregate{k}(D(theta[k]))`` stays legal. Anywhere on a right-hand side,
+    any ``D`` at all is a rewrite target — exactly the rule
+    :mod:`earthsci_ast.numpy_interpreter` already applies at evaluation.
+
+    This does NOT narrow CONFORMANCE_SPEC §5.27.3 ("a dead observed is still an
+    observed"): §5.27.3 is about a dead observed's field staying READABLE
+    however the build chose to treat it, and a dead observed whose body is fully
+    lowered is untouched here. What the walk refuses is a rewrite-target op that
+    no rule eliminated — dead or live, which is §9.6.3's point.
+
+    Runs AFTER the §4.7.6.12 surviving-spatial-dimension check above, so a
+    document that trips both keeps the diagnostic it has always reported. Both
+    carry ``code = "unlowered_operator"``.
+    """
+    for eq in flat.equations:
+        _walk_for_unlowered(eq.lhs, structural_derivative_ok=True)
+        _walk_for_unlowered(eq.rhs, structural_derivative_ok=False)
+    for _target, rhs in flat.field_ics:
+        _walk_for_unlowered(rhs, structural_derivative_ok=False)
+
+
+def _walk_for_unlowered(expr: Any, *, structural_derivative_ok: bool) -> None:
+    """Raise on the first non-evaluable-core node in ``expr`` (pre-order).
+
+    ``structural_derivative_ok`` marks an equation-LHS tree, the one position
+    where a time ``D`` is core (§4.2). It propagates to children so a ``D``
+    nested under an LHS ``aggregate`` is still structural.
+    """
+    if not isinstance(expr, ExprNode):
+        return
+    op = expr.op
+    if op == "D":
+        if not structural_derivative_ok or op_registry.is_rewrite_target_derivative(
+            op, getattr(expr, "wrt", None)
+        ):
+            raise UnreachableSpatialOperatorError(op)
+    elif op not in _EVALUABLE_CORE_OPS:
+        raise UnreachableSpatialOperatorError(op)
+    for child in iter_children(expr):
+        _walk_for_unlowered(child, structural_derivative_ok=structural_derivative_ok)
 
 
 # --------------------------------------------------------------------------- #
@@ -721,8 +865,8 @@ def solve(
     prob: EsmProblem | EnsembleProblem,
     *,
     alg: str = DEFAULT_ALG,
-    abstol: float = DEFAULT_ABSTOL,
-    reltol: float = DEFAULT_RELTOL,
+    abstol: float | None = None,
+    reltol: float | None = None,
     saveat: Any = None,
     callback: Any = None,
     maxiters: int | None = None,
@@ -748,7 +892,15 @@ def solve(
         The solver algorithm. This binding's ecosystem has no first-class
         algorithm object, so a SciPy method name is accepted (§2.5.3).
     abstol, reltol:
-        Absolute and relative solver tolerances.
+        Absolute and relative INTEGRATION tolerances. ``None`` (the default)
+        means "not given" and resolves per esm-spec §2.2.2, most-specific
+        first: an explicit argument here, then the document's
+        ``solver.abstol`` / ``solver.reltol`` (§2.2), then the binding default
+        (``abstol`` 1e-6, ``reltol`` 1e-4). The two resolve independently, so a
+        document declaring only ``reltol`` leaves ``abstol`` on the default.
+
+        These are a different quantity from the ``tolerance`` object an
+        assertion is COMPARED at (§6.6.4), which resolves on its own chain.
     saveat:
         Output times: an explicit sequence, or a scalar output STEP measured
         from ``tspan[0]``. ``None`` keeps the dense uniform default grid.
@@ -771,6 +923,12 @@ def solve(
         violation still raises.
     """
     if isinstance(prob, EnsembleProblem):
+        # `abstol` / `reltol` are forwarded UNRESOLVED — still `None` when the
+        # caller named nothing. Resolving here would turn "caller said nothing"
+        # into an explicit binding default at level 1 of the §2.2.2 chain, and
+        # each trajectory's own document could then never win. The recursive
+        # `solve()` on each member problem runs the chain against that member's
+        # document.
         return prob.solve(
             trajectories=trajectories,
             alg=alg,
@@ -780,6 +938,12 @@ def solve(
             callback=callback,
             maxiters=maxiters,
         )
+
+    # esm-spec §2.2.2: caller > document `solver` block > binding default. Read
+    # from the typed block the EsmProblem captured at construction, so the order
+    # holds however the problem was built (`prob.doc` is populated only on the
+    # pushdown-rewrite path).
+    abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
     if not SCIPY_AVAILABLE:
         return _failure_result(_scipy_missing_message("solve"))
 
@@ -973,7 +1137,7 @@ def remake(
                 f"state vector. Build a new EsmProblem with "
                 f"esm_problem(..., metaparameters={{'{clash[0]}': ...}})."
             )
-        check_parameter_override_keys(prob.flat.parameters, p)
+        check_parameter_override_keys(prob.flat.parameters, p, flat_namespace_scope(prob.flat))
         # A gated provider's fetch was SLICED to the support set value-invention
         # derived from the parameters at construction. Substituting a parameter
         # can move that set, and re-fetching is exactly what remake must not do.
@@ -1014,6 +1178,7 @@ def remake(
         providers=prob.providers,
         gated_provider_keys=list(prob.gated_provider_keys),
         doc=prob.doc,
+        solver=prob.solver,
         model_name=prob.model_name,
         metaparameters=dict(prob.metaparameters),
         sample_time=prob.sample_time,
@@ -1056,6 +1221,12 @@ class Integrator:
 
     ``u`` is the current state vector; :meth:`__getitem__` indexes it BY NAME
     (§2.5.7), as a :class:`Solution` does.
+
+    ``abstol`` / ``reltol`` resolve on the esm-spec §2.2.2 chain — call site,
+    then the document's ``solver`` block, then the binding default — the same
+    chain :func:`solve` runs, because it belongs to a document being integrated
+    rather than to one entry point. The resolved values are readable back as
+    :attr:`abstol` / :attr:`reltol`.
     """
 
     def __init__(
@@ -1063,8 +1234,8 @@ class Integrator:
         prob: EsmProblem,
         *,
         alg: str = DEFAULT_ALG,
-        abstol: float = DEFAULT_ABSTOL,
-        reltol: float = DEFAULT_RELTOL,
+        abstol: float | None = None,
+        reltol: float | None = None,
         callback: Any = None,
         maxiters: int | None = None,
     ) -> None:
@@ -1083,9 +1254,26 @@ class Integrator:
                 f"init: alg={alg!r} is not a steppable SciPy solver "
                 f"(have: {', '.join(_STEPPABLE_ALGS)})"
             )
+        # esm-spec §2.2.2: caller > the document's `solver` block > binding
+        # default, per field. The chain belongs to "a document is being
+        # integrated", not to the `solve()` call site, so it runs at THIS door
+        # too — otherwise ``solve(prob)`` honoured a declared ``abstol`` and
+        # ``init(prob)`` + ``step`` silently did not, on the same document.
+        #
+        # ``None`` (not ``DEFAULT_ABSTOL``) is what makes level 1 expressible: a
+        # concrete default here would be indistinguishable from a caller who
+        # passed that value, and the document could never win. The chain tests
+        # ``is not None`` rather than truthiness, so a declared ``0.0`` — a
+        # value the author SET — is not swallowed.
+        abstol, reltol = resolve_tolerances(prob.solver, abstol=abstol, reltol=reltol)
         rhs, y0, names = _rhs_of(prob)
         self.prob = prob
         self.vars: list[str] = names
+        #: The effective INTEGRATION tolerances this integrator holds, after the
+        #: §2.2.2 chain. A different quantity from the assertion-comparison
+        #: ``tolerance`` object of §6.6.4.
+        self.abstol: float = abstol
+        self.reltol: float = reltol
         self.callbacks: CallbackSet = prob.callbacks if callback is None else CallbackSet(callback)
         self.retcode: ReturnCode | None = None
         self.message: str = ""
@@ -1215,12 +1403,20 @@ def init(
     prob: EsmProblem,
     *,
     alg: str = DEFAULT_ALG,
-    abstol: float = DEFAULT_ABSTOL,
-    reltol: float = DEFAULT_RELTOL,
+    abstol: float | None = None,
+    reltol: float | None = None,
     callback: Any = None,
     maxiters: int | None = None,
 ) -> Integrator:
-    """Build a stepping :class:`Integrator` over ``prob`` (esm-libraries-spec §2.5.6)."""
+    """Build a stepping :class:`Integrator` over ``prob`` (esm-libraries-spec §2.5.6).
+
+    ``abstol`` / ``reltol`` resolve on the esm-spec §2.2.2 chain, exactly as
+    :func:`solve`'s do: ``None`` (the default) means "not given", so the
+    document's ``solver.abstol`` / ``solver.reltol`` are used, falling through
+    per field to the binding defaults (``abstol`` 1e-6, ``reltol`` 1e-4). An
+    explicit argument here wins outright. The chain runs wherever a document is
+    integrated, so stepping honours the document as solving does.
+    """
     return Integrator(
         prob, alg=alg, abstol=abstol, reltol=reltol, callback=callback, maxiters=maxiters
     )

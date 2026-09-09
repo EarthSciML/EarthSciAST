@@ -11,7 +11,7 @@ import guard, and the dense-output point budget — so the pathway submodules
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -446,24 +446,86 @@ def resolve_merged_renames(renames: dict[str, str], overrides: dict[str, Any]) -
     return out
 
 
+def namespace_scope(names: Iterable[str], extra: Iterable[str] = ()) -> set[str]:
+    """The COMPONENT / SUBSYSTEM names a rule-2 override key may spell in its
+    LEADING segments (esm-spec §6.6.2 rule 2, §4.6).
+
+    Every non-final dotted segment of a build-resolved name is a namespace the
+    build itself carries (``Left.gain`` ⇒ ``Left``; ``M.sub.A`` ⇒ ``M``,
+    ``sub``), and ``extra`` supplies the namespaces the NAMES cannot show: the
+    contributing component systems of a flattened build
+    (``FlattenMetadata.source_systems``) and the enclosing model's own name on a
+    build that does not qualify its variables at all.
+
+    The Julia (``_override_namespaces``) and Rust (``namespace_scope``) mirrors
+    derive the same set.
+    """
+    out = {str(e) for e in extra}
+    for name in names:
+        parts = str(name).split(".")
+        out.update(parts[:-1])
+    return out
+
+
+def flat_namespace_scope(flat: Any) -> set[str]:
+    """:func:`namespace_scope` for a whole :class:`~earthsci_ast.flatten.FlattenedSystem`.
+
+    The namespace segments of every flattened name (which is where a mounted
+    subsystem shows up at all) plus ``metadata.source_systems``, the contributing
+    component names — a component that declares no variable of its own still
+    names a legal §4.6 qualifier. The Rust mirror reads the same two sources in
+    ``Compiled::from_flattened``.
+    """
+    names = [
+        *flat.state_variables,
+        *flat.parameters,
+        *flat.observed_variables,
+    ]
+    return namespace_scope(names, getattr(flat.metadata, "source_systems", ()) or ())
+
+
 def check_parameter_override_keys(
-    parameter_names: Iterable[str], overrides: dict[str, Any] | None
+    parameter_names: Iterable[str],
+    overrides: dict[str, Any] | None,
+    namespaces: Collection[str] | None = None,
 ) -> None:
-    """Reject any ``parameter_overrides`` key that names no single parameter
-    (esm-spec §6.6.2 "Unrecognized override keys").
+    """Reject any ``parameter_overrides`` key that names no single parameter, and
+    any parameter that two keys both designate (esm-spec §6.6.2 "Unrecognized
+    override keys").
 
     A key resolves under the same precedence :func:`_resolve_override` reads
     with, and that Julia's ``_canonicalize_override_keys`` and Rust's
     ``canonicalize_override_keys`` implement:
 
     1. an exact hit on a flattened parameter name wins;
-    2. else a DOTTED key whose trailing segment is itself a parameter name
-       resolves to it (``M.A`` against a bare-named single-model system);
+    2. else a DOTTED key whose LONGEST dotted suffix is itself a parameter
+       name resolves to it (``M.A`` against a bare-named single-model system;
+       ``M.sub.A`` against a build that carries the mounted subsystem parameter
+       as ``sub.A`` — the §4.6 fully-qualified spelling of a name the build
+       holds in a shorter form); suffixes are tried most-qualified first and
+       the trailing segment last, and EVERY leading segment dropped along the
+       way must name a component or subsystem in ``namespaces``, so a typo'd
+       ``Missng.M.pert_amp`` is reported rather than silently suffix-matched
+       onto ``M.pert_amp``;
     3. else a BARE key that is the trailing segment of exactly ONE parameter
        resolves to it (``A`` against the flattened ``M.A``);
     4. else a BARE key carried by two or more parameters is AMBIGUOUS —
        :class:`AmbiguousParameterError`, reported with its candidates;
     5. else it is UNKNOWN — :class:`UnknownParameterError`.
+
+    Two NON-EXACT keys designating ONE parameter — ``solo`` (rule 3) and
+    ``Doc.Left.solo`` (rule 2) both landing on ``Left.solo``, or ``A.M.g`` and
+    ``B.M.g`` both landing on ``M.g`` — is a document authoring error, raised as
+    :class:`AmbiguousParameterError` naming the parameter and every colliding
+    key. Picking a winner among them would be a wrong answer rather than a
+    missing one: the caller wrote two overrides and only one can take effect. An
+    EXACT key is never part of a collision — rule 1 identifies its parameter
+    outright, so it wins over any suffix or bare claim on that parameter.
+
+    ``namespaces`` defaults to the namespaces the parameter names themselves
+    carry (:func:`namespace_scope`); a caller that knows the document's
+    component and subsystem names passes them so a build whose variables are
+    unqualified still admits their §4.6 spelling.
 
     Rules 4 and 5 used to be silent: ``_resolve_override`` simply never found
     the key and every parameter kept its default, so a mis-keyed override ran
@@ -477,6 +539,7 @@ def check_parameter_override_keys(
     if not overrides:
         return
     known = set(parameter_names)
+    ns = namespace_scope(known) if namespaces is None else set(namespaces)
     groups: dict[str, list[str]] = {}
     for name in known:
         bare = name.rsplit(".", 1)[-1]
@@ -484,23 +547,37 @@ def check_parameter_override_keys(
             groups.setdefault(bare, []).append(name)
     unknown: list[str] = []
     ambiguous: list[tuple[str, list[str]]] = []
+    exact: set[str] = set()
+    claims: dict[str, list[str]] = {}
     for key in overrides:
         if key in known:
+            exact.add(key)
             continue
-        bare = key.rsplit(".", 1)[-1]
-        if bare != key and bare in known:
+        hit = _dotted_suffix_hit(known, key, ns)
+        if hit is not None:
+            claims.setdefault(hit, []).append(key)
             continue
         candidates = groups.get(key)
         if candidates is None:
             unknown.append(key)
         elif len(candidates) > 1:
             ambiguous.append((key, sorted(candidates)))
+        else:
+            claims.setdefault(candidates[0], []).append(key)
     if ambiguous:
         key, candidates = sorted(ambiguous)[0]
         raise AmbiguousParameterError(
             f"parameter_overrides: ambiguous parameter name {key!r} — it is the local "
             f"name of {len(candidates)} parameters ({', '.join(candidates)}). Qualify "
             f"it with its owning component (esm-spec §6.6.2)."
+        )
+    collisions = sorted(
+        (name, sorted(keys)) for name, keys in claims.items() if name not in exact and len(keys) > 1
+    )
+    if collisions:
+        name, keys = collisions[0]
+        raise AmbiguousParameterError(
+            _collision_message("parameter_overrides", "parameter", name, keys)
         )
     if unknown:
         listed = ", ".join(sorted(known)) if known else "none"
@@ -511,22 +588,120 @@ def check_parameter_override_keys(
         )
 
 
-def resolve_override_raw(name: str, overrides: dict[str, Any], default: Any) -> Any:
+def _collision_message(surface: str, kind: str, name: str, keys: list[str]) -> str:
+    """The esm-spec §6.6.2 "two keys, one name" diagnostic, worded identically in
+    Julia (``_override_collision_message``) and Rust
+    (``SimulateError::CollidingParameterKeys``)."""
+    return (
+        f"{surface}: {len(keys)} keys designate the {kind} '{name}' "
+        f"({', '.join(keys)}). Supply exactly one override key per name "
+        f"(esm-spec §6.6.2)."
+    )
+
+
+def _dotted_suffix_hit(
+    known: Collection[str], key: str, namespaces: Collection[str] | None = None
+) -> str | None:
+    """Rule 2 of :func:`check_parameter_override_keys`: the LONGEST dotted
+    suffix of a dotted ``key`` — every ``<segment>.`` prefix dropped in turn,
+    most-qualified first — that is itself a known name, PROVIDED every segment
+    dropped along the way names a component or subsystem in ``namespaces``.
+
+    ``None`` for a bare key, when no suffix is known, or when a leading segment
+    names nothing: ``M.sub.A`` tries ``sub.A`` then ``A`` when ``M`` and ``sub``
+    are real, while ``Doc.Left.solo`` in a build with no component ``Doc`` is
+    rejected rather than re-pointed at ``Left.solo``.
+    """
+    names = known if isinstance(known, (set, frozenset, dict)) else set(known)
+    ns = namespace_scope(names) if namespaces is None else namespaces
+    rest = key
+    while "." in rest:
+        head, rest = rest.split(".", 1)
+        if head not in ns:
+            return None
+        if rest in names:
+            return rest
+    return None
+
+
+def resolve_override_raw(
+    name: str,
+    overrides: dict[str, Any],
+    default: Any,
+    known: Collection[str] | None = None,
+    namespaces: Collection[str] | None = None,
+    *,
+    surface: str = "parameter_overrides",
+    kind: str = "parameter",
+) -> Any:
     """The value :func:`_resolve_override` resolves, BEFORE the ``float`` cast.
 
-    Precedence: a caller override wins — the dot-namespaced ``name`` first, then
-    its bare trailing segment — otherwise the declared ``default``. Returns the
-    value exactly as authored, so a caller that supports shaped data (esm-spec
-    §6.3 / §6.6.2: a row-major nested JSON array on a SHAPED variable's
-    ``default``, ``parameter_overrides`` or ``initial_conditions``) can route
-    a list to its array channel instead of forcing it through ``float``.
-    ``None`` when neither an override nor a declared default supplies a value.
+    Precedence: a caller override wins — the dot-namespaced ``name`` first
+    (rule 1, an EXACT hit), then a single NON-EXACT claim on it: its bare
+    trailing segment (rule 3) or a MORE-qualified key that RESOLVES to ``name``
+    under rule 2 of :func:`check_parameter_override_keys` (``Outer.M.A`` for the
+    name ``M.A``) — otherwise the declared ``default``. Returns the value exactly
+    as authored, so a caller that supports shaped data (esm-spec §6.3 / §6.6.2: a
+    row-major nested JSON array on a SHAPED variable's ``default``,
+    ``parameter_overrides`` or ``initial_conditions``) can route a list to its
+    array channel instead of forcing it through ``float``. ``None`` when neither
+    an override nor a declared default supplies a value.
+
+    TWO non-exact claims on one name — the bare spelling and a more-qualified
+    one, or two more-qualified ones — raise :class:`AmbiguousParameterError`
+    naming ``name`` and every colliding key. The caller wrote two overrides and
+    only one can take effect, so choosing between them would be a wrong answer
+    rather than a missing one. An EXACT hit is never part of a collision: rule 1
+    identifies the name outright and the other claims are discarded.
+
+    Rule 2 is applied FORWARD — key to the one name it designates — exactly as
+    Julia's ``_canonicalize_override_keys`` and Rust's
+    ``canonicalize_override_keys`` apply it, which is why ``known`` (the build's
+    full set of resolvable names) is needed rather than just ``name``. Matching
+    backwards, "every key of which ``name`` is a dotted suffix", is not the same
+    rule: with the flattened parameters ``Left.solo`` and ``Right.Left.solo``
+    both in the build, the key ``Right.Left.solo`` is an EXACT hit on the second
+    and a dotted suffix of nothing else, but read backwards it also matches
+    ``Left.solo`` and silently drives two unrelated parameters from one
+    override. A key that is itself a known name is therefore never read as a
+    more-qualified spelling of some other name.
+
+    ``known`` defaults to ``{name}`` — the single-name view — so a caller
+    resolving one isolated name need not supply it; every caller resolving a
+    whole build passes its name set. It must be a CONTAINER, not a one-shot
+    iterator: it is membership-tested and reused per call. ``namespaces`` is the
+    component / subsystem scope rule 2 validates a key's leading segments
+    against (:func:`namespace_scope`), defaulting to the namespaces the names
+    themselves carry — under which ``Doc.Left.solo`` no longer reaches
+    ``Left.solo``, because no component ``Doc`` exists.
+
+    ``surface`` / ``kind`` word the collision diagnostic for the caller's
+    channel (``"parameter_overrides"`` / ``"parameter"`` versus
+    ``"initial_conditions"`` / ``"state"``).
     """
+    if not overrides:
+        return default
     bare = name.rsplit(".", 1)[-1]
     if name in overrides:
         return overrides[name]
-    if bare in overrides:
-        return overrides[bare]
+    # `name` is always in the view, so a caller that passes a partial `known`
+    # cannot make its own name unresolvable. The caller's own set is REUSED when
+    # it already carries `name` — copying it per parameter is quadratic on a
+    # build with thousands of them, and this is the common case.
+    if known is None:
+        names: Collection[str] = {name}
+    elif name in known:
+        names = known
+    else:
+        names = set(known) | {name}
+    ns = namespace_scope(names) if namespaces is None else namespaces
+    claims = [k for k in overrides if k not in names and _dotted_suffix_hit(names, k, ns) == name]
+    if bare != name and bare in overrides:
+        claims.append(bare)
+    if len(claims) > 1:
+        raise AmbiguousParameterError(_collision_message(surface, kind, name, sorted(claims)))
+    if claims:
+        return overrides[claims[0]]
     return default
 
 
@@ -583,19 +758,34 @@ def coerce_inline_array(
     return arr
 
 
-def _resolve_override(name: str, overrides: dict[str, Any], default: Any) -> float:
+def _resolve_override(
+    name: str,
+    overrides: dict[str, Any],
+    default: Any,
+    known: Collection[str] | None = None,
+    namespaces: Collection[str] | None = None,
+    *,
+    surface: str = "parameter_overrides",
+    kind: str = "parameter",
+) -> float:
     """Resolve a parameter / initial-condition value against caller overrides.
 
     Precedence: a caller override wins — the dot-namespaced ``name`` first, then
-    its bare trailing segment — otherwise the declared ``default`` when numeric,
-    otherwise ``0.0``. Always returned as ``float``.
+    a single non-exact claim on it (its bare trailing segment, or a
+    MORE-qualified key that resolves to ``name`` under rule 2 of
+    :func:`check_parameter_override_keys`) — otherwise the declared ``default``
+    when numeric, otherwise ``0.0``. Always returned as ``float``. See
+    :func:`resolve_override_raw` for the precedence itself, for what ``known``
+    and ``namespaces`` are, and for the two-keys-one-name collision it raises.
 
     INLINE ARRAY data (esm-spec §6.3 / §6.6.2) is a hard error here rather than a
     ``TypeError`` out of ``float``: a shaped value belongs on the caller's ARRAY
     channel (:func:`coerce_inline_array`), and a pathway with no array channel —
     the scalar SymPy one — must say so plainly instead of failing on the cast.
     """
-    value = resolve_override_raw(name, overrides, default)
+    value = resolve_override_raw(
+        name, overrides, default, known, namespaces, surface=surface, kind=kind
+    )
     if is_inline_array_value(value):
         raise SimulationError(
             f"{name!r} carries inline ARRAY data (esm-spec §6.3 / §6.6.2), which this "

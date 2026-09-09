@@ -3,7 +3,7 @@
 #   * scalar `ic(var)` RHS may reference model PARAMETERS (esm-spec §6.6.5
 #     build-time evaluation scope), matching the array/field-ic path;
 #   * `_parse_cell_key` — the shared inverse of `_cell_key` (also consumed by
-#     simulate.jl / pde_inline_tests.jl);
+#     simulate.jl / inline_tests.jl);
 #   * `_sub_preserving` preserves EVERY OpExpr field (now routed through
 #     `reconstruct`), including `table`/`table_axes`/`output`/`distinct`/`key`
 #     which the hand-rolled rebuild used to drop;

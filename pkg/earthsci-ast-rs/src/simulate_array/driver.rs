@@ -120,6 +120,7 @@ impl ArrayCompiled {
                 params: &param_vec,
                 forcing: &self.forcing,
                 t,
+                declared: &self.declared_names,
             },
             &mut dy,
             force_scalar,
@@ -200,6 +201,7 @@ impl ArrayCompiled {
                 params: param_vec,
                 forcing: &self.forcing,
                 t,
+                declared: &self.declared_names,
             },
             dy,
             false,
@@ -301,6 +303,26 @@ impl ArrayCompiled {
         Ok(out)
     }
 
+    /// The component / subsystem names a rule-2 override key may spell in its
+    /// LEADING segments (esm-spec §6.6.2, §4.6).
+    ///
+    /// The namespace segments the build's own names carry cover a mounted
+    /// subsystem (`sub` in `sub.g`) and, on the `from_flattened` path, every
+    /// contributing component (`Left` in `Left.gain`). [`Self::namespace`]
+    /// supplies the one namespace the names CANNOT show: the enclosing model's
+    /// own, which the single-model path does not qualify its variables with —
+    /// it is exactly what makes `P.sub.g` a legal spelling of `sub.g`.
+    #[cfg(feature = "solve")]
+    fn override_namespaces(&self) -> std::collections::HashSet<String> {
+        crate::simulate::namespace_scope(
+            self.param_names
+                .iter()
+                .chain(self.scalar_state_names.iter())
+                .map(String::as_str),
+            self.namespace.as_deref(),
+        )
+    }
+
     /// Run the simulation.
     /// Validate override parameter names and build the positional param
     /// vector (override > variable default; a parameter with neither is an
@@ -316,6 +338,7 @@ impl ArrayCompiled {
         // flattening-qualified `M.A` — which the prefix strip could not do.
         let params = crate::simulate::canonicalize_override_keys(
             &self.param_index,
+            &self.override_namespaces(),
             params,
             &self.merged_renames,
         )
@@ -349,6 +372,7 @@ impl ArrayCompiled {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
         let initial_conditions = crate::simulate::canonicalize_override_keys(
             &self.scalar_state_index,
+            &self.override_namespaces(),
             initial_conditions,
             &self.merged_renames,
         )
@@ -524,7 +548,12 @@ impl ArrayCompiled {
                 time,
                 state,
                 retcode,
-                solution_metadata(solver_name, &stats, tape_fallbacks, self.merged_renames.clone()),
+                solution_metadata(
+                    solver_name,
+                    &stats,
+                    tape_fallbacks,
+                    self.merged_renames.clone(),
+                ),
                 &param_vec,
                 &setup,
                 &opts.output_observed,
@@ -552,7 +581,12 @@ impl ArrayCompiled {
             time,
             state,
             retcode,
-            solution_metadata(solver_name, &stats, tape_fallbacks, self.merged_renames.clone()),
+            solution_metadata(
+                solver_name,
+                &stats,
+                tape_fallbacks,
+                self.merged_renames.clone(),
+            ),
             &param_vec,
             &setup,
             &opts.output_observed,
@@ -655,6 +689,7 @@ impl ArrayCompiled {
             // structural analysis over).
             cse: None,
             const_arrays: &self.const_scope,
+            declared: &self.declared_names,
         };
         materialize_observeds_into(&mut static_obs, &cadence.static_rules, &env);
         drop(static_rings_cell);
@@ -706,6 +741,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: None,
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     // Build-time t0 snapshot: vectorized overlay (bit-identical).
                     force_scalar: false,
@@ -945,6 +981,11 @@ impl ArrayCompiled {
         let varying_rules_jac = continuous_rules.to_vec();
         let var_shapes_jac = var_shapes.clone();
         let param_names_jac = param_names.clone();
+        // See [`EvalCtx::declared`] (issue #181): the declared-name set is a
+        // property of the compiled MODEL, so each RHS/Jacobian closure carries
+        // its own clone rather than borrowing `self`.
+        let declared = self.declared_names.clone();
+        let declared_jac = declared.clone();
 
         // Materialize the DISCRETE (segment-invariant) observeds ONCE for this
         // segment, on top of the CONST `static_obs`. The caller refreshed the
@@ -976,6 +1017,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: None,
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     force_scalar: false,
                 },
@@ -1039,6 +1081,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_rhs,
                     t,
+                    declared: &declared,
                 },
                 dy_s,
                 false,
@@ -1087,6 +1130,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_jac,
                     t,
+                    declared: &declared_jac,
                 },
                 &mut f_y,
                 false,
@@ -1103,6 +1147,7 @@ impl ArrayCompiled {
                     params: p_s,
                     forcing: &forcing_jac,
                     t,
+                    declared: &declared_jac,
                 },
                 &mut f_yp,
                 false,
@@ -1115,8 +1160,11 @@ impl ArrayCompiled {
             }
         };
 
-        let abstol = opts.abstol;
-        let reltol = opts.reltol;
+        // Concrete values: `solve` has already resolved the esm-spec §2.2.2
+        // chain into `opts`. The fallback covers a direct call that bypasses
+        // `solve` and therefore has no document to consult.
+        let abstol = opts.abstol_or_default();
+        let reltol = opts.reltol_or_default();
         let ic_for_init = u0.to_vec();
 
         let builder = OdeBuilder::<FaerMat<f64>>::new()
@@ -1323,6 +1371,7 @@ impl ArrayCompiled {
                         forcing: &self.forcing,
                         cse: Some(&cse),
                         const_arrays: &self.const_scope,
+                        declared: &self.declared_names,
                     },
                     // Output-node observed snapshot: vectorized overlay.
                     force_scalar: false,
@@ -1436,6 +1485,7 @@ impl ArrayCompiled {
                             forcing: &self.forcing,
                             cse: Some(&cse),
                             const_arrays: &self.const_scope,
+                            declared: &self.declared_names,
                         },
                         force_scalar: false,
                     },

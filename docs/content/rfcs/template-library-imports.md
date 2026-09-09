@@ -193,6 +193,15 @@ in expression positions: `{"op": "/", "args": [360, "NLON"]}` becomes
 schema demands an integer keeps the rule trivially deterministic; everything else is the
 evaluator's job.)
 
+Substitution is per-**field**, not per-node. A structural string field of an Expression
+node holds a *name*, not a reference to a value, and is copied verbatim even when a bound
+metaparameter spells it exactly — in particular the axis-naming scalars `wrt`, `dim` and
+`integral`'s `var`, which name a spatial coordinate (esm-spec §4.9.1, §4.2) and are the
+same three the §9.7.7 rename walk rewrites through `isetmap`. So with `x` bound to 3,
+`{"op": "grad", "args": ["x"], "dim": "x"}` becomes
+`{"op": "grad", "args": [3], "dim": "x"}` — the `args` occurrence folds, the `dim`
+occurrence does not.
+
 ### 5.3 Binding sites and value flow
 
 Bindings flow **down** the reference DAG; open (unbound) metaparameters flow **up**:

@@ -52,6 +52,13 @@ pub struct Compiled {
     /// state the merge moved resolves instead of silently designating nothing.
     /// Empty for every document with no renaming merge.
     merged_renames: HashMap<String, String>,
+    /// The component / subsystem names a rule-2 override key may spell in its
+    /// LEADING segments (esm-spec §6.6.2, §4.6) — the flattened names' own
+    /// namespace segments plus the contributing component systems. Carried so
+    /// a key whose qualifier names nothing (`Doc.Left.solo` in a build with no
+    /// component `Doc`) is reported rather than silently suffix-matched onto
+    /// the name it happens to end with.
+    namespaces: HashSet<String>,
 }
 
 /// Internal classification of how a state variable is defined.
@@ -157,6 +164,19 @@ impl Compiled {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        // (8) The rule-2 namespace scope (esm-spec §6.6.2, §4.6): every
+        // component that contributed equations, plus the namespace segments the
+        // flattened names themselves carry (a mounted subsystem shows up only
+        // there). An override key's leading segments are validated against it.
+        let namespaces = namespace_scope(
+            state_names
+                .iter()
+                .chain(param_names.iter())
+                .chain(observed_names.iter())
+                .map(String::as_str),
+            flat.metadata.source_systems.iter().map(String::as_str),
+        );
+
         Ok(Self {
             state_names,
             state_index,
@@ -176,6 +196,7 @@ impl Compiled {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            namespaces,
         })
     }
 
@@ -289,9 +310,13 @@ impl Compiled {
         // both spellings bind, then reject anything that still designates no
         // parameter — an unknown key is `InvalidParameter`, a bare name two
         // components both carry is the distinct `AmbiguousParameter`.
-        let params =
-            canonicalize_override_keys(&self.param_index, params, &self.merged_renames)
-                .map_err(param_key_error)?;
+        let params = canonicalize_override_keys(
+            &self.param_index,
+            &self.namespaces,
+            params,
+            &self.merged_renames,
+        )
+        .map_err(param_key_error)?;
         let mut param_vec = vec![0.0f64; self.param_names.len()];
         for (i, name) in self.param_names.iter().enumerate() {
             if let Some(&v) = params.get(name) {
@@ -319,9 +344,13 @@ impl Compiled {
         t0: f64,
     ) -> Result<Vec<f64>, SimulateError> {
         // Same §6.6.2 canonicalization as `build_param_vec`, on the state side.
-        let initial_conditions =
-            canonicalize_override_keys(&self.state_index, initial_conditions, &self.merged_renames)
-                .map_err(ic_key_error)?;
+        let initial_conditions = canonicalize_override_keys(
+            &self.state_index,
+            &self.namespaces,
+            initial_conditions,
+            &self.merged_renames,
+        )
+        .map_err(ic_key_error)?;
         let no_state: [f64; 0] = [];
         let no_obs: [f64; 0] = [];
         let mut ic_vec = vec![0.0f64; self.state_names.len()];
@@ -572,8 +601,11 @@ impl Compiled {
         let jac_closure = self.make_jac_closure();
 
         // ----- Build the OdeBuilder -----
-        let abstol = opts.abstol;
-        let reltol = opts.reltol;
+        // Concrete values: `solve` has already resolved the esm-spec §2.2.2
+        // chain into `opts`. The fallback covers a direct call that bypasses
+        // `solve` and therefore has no document to consult.
+        let abstol = opts.abstol_or_default();
+        let reltol = opts.reltol_or_default();
         let ic_for_init = ic_vec.to_vec();
 
         let builder = OdeBuilder::<FaerMat<f64>>::new()

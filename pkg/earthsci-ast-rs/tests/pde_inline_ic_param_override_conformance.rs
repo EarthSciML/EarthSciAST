@@ -24,7 +24,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use earthsci_ast::run_pde_tests_with_base_dir;
+use earthsci_ast::run_inline_tests_with_base_dir;
 use earthsci_ast::{Alg, SolveOptions, load_string};
 use std::collections::HashMap;
 use std::fs;
@@ -46,8 +46,8 @@ fn manifest_opts(manifest: &serde_json::Value) -> SolveOptions {
     assert_eq!(rs["solver"].as_str(), Some("Erk"));
     SolveOptions {
         alg: Alg::Erk,
-        reltol: rs["reltol"].as_f64().expect("reltol"),
-        abstol: rs["abstol"].as_f64().expect("abstol"),
+        reltol: Some(rs["reltol"].as_f64().expect("reltol")),
+        abstol: Some(rs["abstol"].as_f64().expect("abstol")),
         ..Default::default()
     }
 }
@@ -89,7 +89,7 @@ fn ic_param_override_matches_golden() {
         let file = load_string(&text)
             .unwrap_or_else(|e| panic!("fixture {esm_path:?} does not load: {e}"));
         let results =
-            run_pde_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
+            run_inline_tests_with_base_dir(&file, fx["model"].as_str(), &opts, Some(dir.as_path()));
 
         let expected = golden["assertions"].as_array().expect("golden assertions");
         assert_eq!(results.len(), expected.len());
@@ -129,8 +129,8 @@ fn local_and_qualified_override_keys_both_bind_the_build_scope() {
     let file = load_string(&text).expect("fixture loads");
     let mut opts = SolveOptions {
         alg: Alg::Erk,
-        reltol: 1e-12,
-        abstol: 1e-14,
+        reltol: Some(1e-12),
+        abstol: Some(1e-14),
         ..Default::default()
     };
     opts.saveat = Some(vec![0.0]);

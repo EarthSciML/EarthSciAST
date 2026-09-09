@@ -200,10 +200,22 @@ pub struct SolveOptions {
     /// Named `alg` — not `solver` — because `API_SPEC.md` §4 makes the SciML
     /// spelling canonical in every binding.
     pub alg: Alg,
-    /// Absolute tolerance. Defaults to [`DEFAULT_ABSTOL`] (`1e-6`).
-    pub abstol: f64,
-    /// Relative tolerance. Defaults to [`DEFAULT_RELTOL`] (`1e-4`).
-    pub reltol: f64,
+    /// Absolute INTEGRATION tolerance, or `None` for "caller has no opinion".
+    ///
+    /// `None` is not the same as [`DEFAULT_ABSTOL`]: esm-spec §2.2.2 puts the
+    /// document's `solver` block BETWEEN the call site and the binding default,
+    /// so the two must be distinguishable. A concrete `f64` here could not
+    /// express that — a caller who never touched the field was indis-
+    /// tinguishable from one who set it to `1e-6`, and the document could never
+    /// win. Resolved by [`crate::resolve_tolerances`]; read the effective value
+    /// with [`SolveOptions::abstol_or_default`].
+    ///
+    /// This is an INTEGRATION tolerance, a different quantity from
+    /// [`crate::Tolerance`], which is what an assertion is COMPARED at (§6.6.4).
+    pub abstol: Option<f64>,
+    /// Relative INTEGRATION tolerance, or `None` for "caller has no opinion".
+    /// See [`SolveOptions::abstol`] for why this is an `Option`.
+    pub reltol: Option<f64>,
     /// Maximum number of integrator steps before bailing out. Defaults to `10_000`.
     pub maxiters: usize,
     /// If `Some`, the solution is sampled (via dense output / interpolation)
@@ -283,8 +295,11 @@ impl Default for SolveOptions {
     fn default() -> Self {
         Self {
             alg: Alg::Bdf,
-            abstol: DEFAULT_ABSTOL,
-            reltol: DEFAULT_RELTOL,
+            // `None`, not the constant: "the caller expressed no opinion", so a
+            // document's §2.2 `solver` block can still supply a value. The
+            // constants remain the bottom of that chain.
+            abstol: None,
+            reltol: None,
             maxiters: 10_000,
             saveat: None,
             callback: None,
@@ -295,6 +310,20 @@ impl Default for SolveOptions {
 }
 
 impl SolveOptions {
+    /// The effective absolute tolerance: the caller's value, else
+    /// [`DEFAULT_ABSTOL`]. Use this at the point of USE when no document is in
+    /// hand; when one is, resolve the full §2.2.2 chain with
+    /// [`crate::resolve_tolerances`] instead.
+    pub fn abstol_or_default(&self) -> f64 {
+        self.abstol.unwrap_or(DEFAULT_ABSTOL)
+    }
+
+    /// The effective relative tolerance: the caller's value, else
+    /// [`DEFAULT_RELTOL`]. See [`SolveOptions::abstol_or_default`].
+    pub fn reltol_or_default(&self) -> f64 {
+        self.reltol.unwrap_or(DEFAULT_RELTOL)
+    }
+
     /// Request `n` evenly spaced output samples across `[t0, t_end]`.
     ///
     /// Hosts almost always express "how much output do I want" as a count, not
@@ -354,11 +383,7 @@ impl Solution {
         // survivor's row rather than never existing. Consulted only after the
         // exact match, so the map can never shadow a live row.
         if let Some(survivor) = self.metadata.merged_variable_renames.get(name) {
-            if let Some(i) = self
-                .state_variable_names
-                .iter()
-                .position(|n| n == survivor)
-            {
+            if let Some(i) = self.state_variable_names.iter().position(|n| n == survivor) {
                 return Some(&self.state[i]);
             }
         }

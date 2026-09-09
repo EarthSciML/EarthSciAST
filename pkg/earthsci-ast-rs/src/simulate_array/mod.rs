@@ -72,7 +72,7 @@ mod rhs;
 pub mod tape;
 mod vectorized;
 
-// Only `area_faq` / `pde_inline_tests` consume this re-export, and both stay
+// Only `area_faq` / `inline_tests` consume this re-export, and both stay
 // native-only, so gate it to avoid an unused-import warning on wasm.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{eval_buildtime_field, eval_buildtime_field_in_scope};
@@ -651,6 +651,11 @@ pub struct ArrayCompiled {
     /// artifact carrying its own precision is what makes that true by
     /// construction rather than by the caller remembering.
     precision: crate::precision::Env,
+    /// Every name this model DECLARES — states, parameters and observeds —
+    /// captured at compile so the evaluator's fault arm can tell a name the
+    /// document never declared from one it declared but had not produced a
+    /// value for yet. See [`EvalCtx::declared`]; issue #181.
+    declared_names: HashSet<String>,
 }
 
 /// A reuse pool of `f64` backing buffers for vectorized kernel intermediates.
@@ -775,6 +780,8 @@ struct EvalEnv<'a> {
     cse: Option<&'a CseRt>,
     /// See [`EvalCtx::const_arrays`].
     const_arrays: &'a ConstArrayScope,
+    /// See [`EvalCtx::declared`].
+    declared: &'a HashSet<String>,
 }
 
 impl<'a> EvalEnv<'a> {
@@ -794,6 +801,7 @@ impl<'a> EvalEnv<'a> {
             cse: self.cse,
             const_arrays: self.const_arrays,
             recur: None,
+            declared: self.declared,
         }
     }
 
@@ -882,6 +890,39 @@ struct EvalCtx<'a> {
     /// not use it: one `Option` test on the `index` fast path and one on each
     /// vectorized-overlay entry gate.
     recur: Option<&'a RecurScope<'a>>,
+    /// Every name the compiled model DECLARES — states, parameters and
+    /// observeds — regardless of whether a value for it exists in any of the
+    /// maps above *at this moment*.
+    ///
+    /// Read on exactly one path: the final arm of [`lookup_variable`], where
+    /// every resolution scope has been tried and none matched. Without it that
+    /// arm can only report `E_TREEWALK_UNBOUND_NAME` — "bound by NOTHING in
+    /// scope" — which is a claim about the DOCUMENT that the evaluator is not
+    /// in a position to make. It was routinely false: a declared observed
+    /// whose rule had not run yet (a dependency cycle stalls the sweep,
+    /// esm-spec §4.9.6) resolved through the same arm and was reported as
+    /// undeclared, naming a variable that is defined and referenced perfectly
+    /// well while saying nothing about the actual defect (issue #181).
+    ///
+    /// With it the arm splits the two cases: a name in this set is
+    /// `E_TREEWALK_UNRESOLVED_ORDER` (declared, no value HERE), a name outside
+    /// it keeps `E_TREEWALK_UNBOUND_NAME` (declared nowhere, CONFORMANCE_SPEC
+    /// §5.23). [`empty_declared_names`] on the standalone expression entry
+    /// points, which evaluate against a scope the caller supplies rather than a
+    /// compiled model — an empty set never claims a name IS declared, so those
+    /// paths keep exactly the diagnosis they had.
+    declared: &'a HashSet<String>,
+}
+
+/// The shared empty declared-name set (see [`EvalCtx::declared`]).
+///
+/// Handed to every evaluation seam with no compiled model behind it. Empty
+/// means "this evaluation cannot vouch for any name", which is the
+/// conservative reading: the fault arm then reports the general
+/// `E_TREEWALK_UNBOUND_NAME` exactly as it did before this field existed.
+fn empty_declared_names() -> &'static HashSet<String> {
+    static EMPTY: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(HashSet::new)
 }
 
 /// Which arrays in an evaluation are CONST-ARRAY factors, and each one's

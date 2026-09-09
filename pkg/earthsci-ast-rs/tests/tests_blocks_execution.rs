@@ -89,6 +89,7 @@ fn model_only_subset(file: &EsmFile, model_key: &str) -> EsmFile {
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -117,6 +118,7 @@ fn reaction_system_only_subset(file: &EsmFile, rs_key: &str) -> EsmFile {
     EsmFile {
         component_templates: None,
         coordinates: None,
+        solver: None,
         expression_templates: None,
         metaparameters: None,
         coupling_roles: None,
@@ -205,8 +207,8 @@ fn execute_component(
 
         let opts = SolveOptions {
             alg: solver,
-            abstol: 1e-15,
-            reltol: 1e-10,
+            abstol: Some(1e-15),
+            reltol: Some(1e-10),
             maxiters: 1_000_000,
             saveat: Some(sample_times.clone()),
             ..Default::default()

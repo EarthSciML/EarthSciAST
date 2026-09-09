@@ -391,6 +391,15 @@ pub struct EsmProblem {
     pub(crate) inspect: bool,
     /// Callbacks declared on the EsmProblem (§2.5.4).
     pub(crate) callbacks: CallbackSet,
+    /// The document's §2.2 `solver` block, captured at construction.
+    ///
+    /// Its OWN field rather than a read-back out of `doc`, because `doc` is
+    /// `JsonValue::Null` whenever the problem was built from a typed
+    /// [`EsmFile`] and the build pipeline was not requested — which made the
+    /// §2.2.2 chain dead on exactly the paths a library caller uses. `None` when
+    /// the document declares no block, or when the problem was built from a bare
+    /// [`FlattenedSystem`], which carries no document at all.
+    pub(crate) solver: Option<crate::types::Solver>,
     /// Bound run-time providers, already CONST-materialized.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) refresh: Option<std::cell::RefCell<crate::provider::RefreshExecutor>>,
@@ -416,6 +425,14 @@ impl std::fmt::Debug for EsmProblem {
 }
 
 impl EsmProblem {
+    /// The document's §2.2 `solver` block, or `None` when it declares none.
+    ///
+    /// The middle level of the esm-spec §2.2.2 tolerance chain, captured at
+    /// construction so it holds however the problem was built.
+    pub fn solver(&self) -> Option<&crate::types::Solver> {
+        self.solver.as_ref()
+    }
+
     /// The integration interval.
     pub fn tspan(&self) -> (f64, f64) {
         self.tspan
@@ -999,6 +1016,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
 
     Ok(EsmProblem {
         doc: Rc::clone(&prob.doc),
+        solver: prob.solver.clone(),
         model_name: prob.model_name.clone(),
         precision: prob.precision.clone(),
         tspan,
@@ -1213,6 +1231,24 @@ pub fn esm_problem<'a>(
         inferred = true;
     }
 
+    // ---- (1d) Lower `table_lookup` (esm-spec §9.5.3). ---------------------
+    // `table_lookup` is sugar over `interp.linear` / `interp.bilinear` /
+    // `index`, and NOTHING downstream evaluates it — the array runtime's
+    // stage-(0) gate refuses it as `unevaluable_operator`. Lowering happens
+    // here rather than in `parse::load_value` because §9.5.4 requires the
+    // AUTHORED form to round-trip and this binding serializes the typed
+    // document it loaded; a load-time rewrite would emit the lowered `fn`
+    // tree (issue #188).
+    //
+    // Done for a TYPED input before the block below re-serializes it, so the
+    // build pipeline's own observed-graph evaluation sees the lowered form
+    // too; a raw-JSON input gets the same treatment at stage (3c), after its
+    // typed parse. The pass is idempotent, so a document that goes through
+    // both is lowered once.
+    if let Some(f) = owned_file.as_mut() {
+        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
+    }
+
     // ---- (2) The deterministic build pipeline. ----------------------------
     // `mut` on wasm32 only in the sense that the pipeline that writes these is
     // native-only; the bindings themselves exist on both targets.
@@ -1300,6 +1336,14 @@ pub fn esm_problem<'a>(
         crate::precision_infer::annotate_models(models, prec).map_err(SimulateError::Compile)?;
     }
 
+    // ---- (3c) Lower `table_lookup`, for a RAW-JSON input. ------------------
+    // The counterpart of stage (1d) for a document that had no typed form
+    // until stage (3). Idempotent, so a typed input already lowered above
+    // walks nothing here.
+    if let Some(f) = owned_file.as_mut() {
+        crate::lower_table_lookup::lower_table_lookups(f).map_err(SimulateError::Compile)?;
+    }
+
     // ---- (4) Compile the right-hand side. ---------------------------------
     let backend = compile_backend(
         owned_file.as_ref(),
@@ -1332,8 +1376,18 @@ pub fn esm_problem<'a>(
     let (refresh, discrete_forcing, refresh_boundaries) =
         bind_providers(&backend, &mut opts, tspan)?;
 
+    // esm-spec §2.2: the document's own solver hints. Read from whichever
+    // carrier survived to here — the raw JSON when there is one, else the typed
+    // file — so the §2.2.2 chain holds however the problem was built.
+    let doc_solver = match (owned_json.as_ref(), owned_file.as_ref()) {
+        (Some(raw), _) => document_solver(raw),
+        (None, Some(file)) => crate::solver::normalize_empty(file.solver.clone()),
+        (None, None) => None,
+    };
+
     let prob = EsmProblem {
         doc: Rc::new(owned_json.unwrap_or(JsonValue::Null)),
+        solver: doc_solver,
         model_name,
         precision: precision::Env::capture(),
         tspan,
@@ -1815,9 +1869,38 @@ fn append_requested_observeds(prob: &EsmProblem, sol: &mut Solution, requested: 
     }
 }
 
+/// Run the esm-spec §2.2.2 tolerance chain against `prob`'s `solver` block and
+/// return `opts` with both tolerances made CONCRETE.
+///
+/// Caller > the document's `solver` block > binding default, per field. The
+/// chain belongs to "a document is being integrated", not to one entry point,
+/// so it is applied at BOTH doors a document can be integrated through: `solve`
+/// (via [`effective_options`]) and `init` (§2.5.6's stepping lifecycle). A
+/// stepping caller who names no tolerance must get the document's, exactly as a
+/// `solve` caller does.
+///
+/// **Idempotent**, which is what makes applying it at both doors safe: the
+/// result has `Some` in both slots, so a second pass resolves at level 1 to the
+/// same values. `init` relies on this — its `step` runs each segment through
+/// `solve`, which resolves again.
+///
+/// Deliberately does NOT touch callbacks. Callback folding is `solve`-only for
+/// the same reason: [`effective_options`] is *not* idempotent in that field
+/// (a second pass would wrap the already-wrapped observer and invoke every
+/// callback twice per step), so `init` must resolve tolerances without it.
+fn with_resolved_tolerances(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
+    let (abstol, reltol) =
+        crate::resolve_tolerances(prob.solver.as_ref(), opts.abstol, opts.reltol);
+    SolveOptions {
+        abstol: Some(abstol),
+        reltol: Some(reltol),
+        ..opts.clone()
+    }
+}
+
 /// Fold the EsmProblem's callbacks (or the run's REPLACEMENT set) and the
 /// extension-seam progress observer into the one per-step hook `run_solver`
-/// already drives.
+/// already drives, on top of the §2.2.2 tolerance chain.
 fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // An OUTPUT REQUEST is keyed by name, so it addresses a state an
     // `operator_compose` renaming match may have DELETED (issue #230). Resolve
@@ -1825,6 +1908,11 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     // artifact's map is in hand — `derive_output_plan` sees only the request and
     // the slot names, and would report the dead spelling as unknown.
     let observed = resolve_output_request(prob, &opts.output_observed);
+
+    // esm-spec §2.2.2, resolved once here — the single point where a `solve`
+    // run's options and the document meet — so every backend below sees
+    // concrete tolerances and none of them has to know about the chain.
+    let resolved = with_resolved_tolerances(prob, opts);
 
     // §2.5.4: the run's `callback` REPLACES the EsmProblem's set. It does not
     // append, merge, or wrap.
@@ -1836,9 +1924,9 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
         return match observed {
             Some(output_observed) => SolveOptions {
                 output_observed,
-                ..opts.clone()
+                ..resolved
             },
-            None => opts.clone(),
+            None => resolved,
         };
     }
     let user = opts.progress.clone();
@@ -1846,7 +1934,7 @@ fn effective_options(prob: &EsmProblem, opts: &SolveOptions) -> SolveOptions {
     SolveOptions {
         progress: Some(observer),
         output_observed: observed.unwrap_or_else(|| opts.output_observed.clone()),
-        ..opts.clone()
+        ..resolved
     }
 }
 
@@ -1876,9 +1964,28 @@ fn resolve_output_request(prob: &EsmProblem, requested: &[String]) -> Option<Vec
     Some(
         requested
             .iter()
-            .map(|n| renames.get(n.as_str()).cloned().unwrap_or_else(|| n.clone()))
+            .map(|n| {
+                renames
+                    .get(n.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| n.clone())
+            })
             .collect(),
     )
+}
+
+/// The document's §2.2 `solver` block, read out of a raw document.
+///
+/// Used at CONSTRUCTION, for the input carriers that reach `esm_problem` as raw
+/// JSON (a path, a `Json` value, or a typed file the build pipeline
+/// re-serialized). The typed carriers read `EsmFile::solver` directly; either
+/// way the block lands on [`EsmProblem::solver`], which is what the §2.2.2
+/// chain consults at solve time.
+fn document_solver(doc: &JsonValue) -> Option<crate::Solver> {
+    let block = doc.get("solver")?;
+    // §2.2: an EMPTY block means what absence means, so it normalizes away
+    // rather than becoming a `Solver` with nothing set.
+    crate::solver::normalize_empty(serde_json::from_value(block.clone()).ok()?)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1973,6 +2080,11 @@ pub enum StepStatus {
 ///
 /// The step grid is `opts.saveat` when the caller supplied one, else 100 evenly
 /// spaced points across `tspan`.
+///
+/// The esm-spec §2.2.2 tolerance chain runs HERE, not only at `solve`: the
+/// integrator this returns carries the document's `solver.abstol` / `reltol`
+/// whenever the caller named none, so stepping a document honours its declared
+/// numerics exactly as solving it does.
 #[cfg(feature = "solve")]
 pub fn init<'a>(
     prob: &'a EsmProblem,
@@ -1999,7 +2111,12 @@ pub fn init<'a>(
     };
     Ok(Integrator {
         prob,
-        opts: opts.clone(),
+        // esm-spec §2.2.2: caller > the document's `solver` block > binding
+        // default. Resolved once, at construction, so the integrator HOLDS the
+        // effective tolerances rather than leaving them to be rediscovered —
+        // and so `step`'s per-segment `solve` sees them as explicit call-site
+        // values (level 1) that resolve to themselves.
+        opts: with_resolved_tolerances(prob, opts),
         grid,
         next: 0,
         t: t0,
@@ -2120,4 +2237,100 @@ pub fn step(integrator: &mut Integrator<'_>) -> Result<StepStatus, SimulateError
 #[cfg(feature = "solve")]
 pub fn solve_to_completion(integrator: &mut Integrator<'_>) -> Result<Solution, SimulateError> {
     integrator.solve_to_completion()
+}
+
+// ===========================================================================
+// Unit tests
+// ===========================================================================
+
+/// The esm-spec §2.2.2 chain at the STEPPING door.
+///
+/// These live in-crate rather than in `tests/solver_block.rs` because what has
+/// to be pinned is that the resolved tolerances land ON the integrator — a
+/// private field. An observational test (does a looser tolerance change the
+/// trajectory?) would pass either way for a well-conditioned decay and is not
+/// the property; this is.
+#[cfg(all(test, feature = "solve", not(target_arch = "wasm32")))]
+mod stepping_tolerance_tests {
+    use super::*;
+    use crate::simulate::{DEFAULT_ABSTOL, DEFAULT_RELTOL};
+
+    fn doc(solver: &str) -> serde_json::Value {
+        serde_json::from_str(&format!(
+            r#"{{"esm":"1.1.0","metadata":{{"name":"T"}},{solver}"models":{{"M":{{
+                 "variables":{{"y":{{"type":"unknown","units":"m","default":1.0}}}},
+                 "equations":[{{"lhs":{{"op":"D","args":["y"],"wrt":"t"}},
+                                "rhs":{{"op":"neg","args":["y"]}}}}]}}}}}}"#
+        ))
+        .expect("fixture parses")
+    }
+
+    fn problem(solver: &str) -> EsmProblem {
+        let json = doc(solver);
+        esm_problem(
+            ProblemInput::Json(&json),
+            (0.0, 1.0),
+            ProblemOptions::default(),
+        )
+        .expect("builds")
+    }
+
+    /// A stepping caller who names no tolerance gets the DOCUMENT's, not the
+    /// binding default.
+    ///
+    /// `init` used to store the caller's `SolveOptions` verbatim. The effect was
+    /// MASKED in this binding — `step` remakes each segment and re-enters
+    /// `solve`, and `remake` carries `solver` across, so the chain still ran, one
+    /// layer down and once per segment. That is a coincidence of the current
+    /// segment-per-step implementation, not the contract: the integrator did not
+    /// hold the tolerances it was running at, and a step path that does not
+    /// re-enter `solve` would silently drop the document. §2.2.2 puts the
+    /// resolution at the DOOR, so this pins it at the door.
+    #[test]
+    fn init_resolves_the_documents_tolerances() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let integ = init(&prob, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.abstol, Some(1e-8));
+        assert_eq!(integ.opts.reltol, Some(1e-6));
+    }
+
+    /// Level 1 still wins: an explicitly-passed option beats the document.
+    #[test]
+    fn an_explicit_call_site_option_still_beats_the_document() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let opts = SolveOptions {
+            abstol: Some(1e-12),
+            reltol: Some(1e-11),
+            ..SolveOptions::default()
+        };
+        let integ = init(&prob, &opts).expect("init");
+        assert_eq!(integ.opts.abstol, Some(1e-12));
+        assert_eq!(integ.opts.reltol, Some(1e-11));
+    }
+
+    /// Per FIELD, and level 3 for whatever the document leaves unsaid.
+    #[test]
+    fn each_tolerance_falls_through_on_its_own() {
+        let only_reltol = problem(r#""solver":{"reltol":1e-9},"#);
+        let integ = init(&only_reltol, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.reltol, Some(1e-9));
+        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
+
+        let no_block = problem("");
+        let integ = init(&no_block, &SolveOptions::default()).expect("init");
+        assert_eq!(integ.opts.abstol, Some(DEFAULT_ABSTOL));
+        assert_eq!(integ.opts.reltol, Some(DEFAULT_RELTOL));
+    }
+
+    /// The chain is idempotent, which is what lets `init` and the per-segment
+    /// `solve` inside `step` both run it without the second pass changing the
+    /// answer or displacing the document.
+    #[test]
+    fn resolving_twice_is_resolving_once() {
+        let prob = problem(r#""solver":{"abstol":1e-8,"reltol":1e-6},"#);
+        let once = with_resolved_tolerances(&prob, &SolveOptions::default());
+        let twice = with_resolved_tolerances(&prob, &once);
+        assert_eq!((twice.abstol, twice.reltol), (once.abstol, once.reltol));
+        assert_eq!((twice.abstol, twice.reltol), (Some(1e-8), Some(1e-6)));
+    }
 }

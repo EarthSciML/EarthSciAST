@@ -819,30 +819,63 @@ end
 # such a value into a dense `Array{Float64,N}`; these two stages route it to the
 # channel the build already reads it from.
 
-# Every SHAPED parameter whose resolved value is inline array data, merged into
+# Every SHAPED parameter whose resolved value the DOCUMENT supplies, merged into
 # the const-array registry. Precedence follows §6.6.2: an explicit
 # `parameter_overrides` entry wins over everything, then a caller-supplied
 # `const_arrays` entry (loaded data beats a document default), then the declared
 # `default`. Returns the ORIGINAL registry object when nothing was added, so a
 # document with no inline array data builds byte-identically.
+#
+# The value is inline array data, or a SCALAR — which esm-spec §6.3 gives the
+# same meaning, "the one value applies to every element" — BROADCAST over the
+# declared grid. The broadcast is what a shaped UNKNOWN's scalar `default`
+# already gets from `_build_u0` (one value into every cell of the state vector);
+# without it here, `_partition_variables` reaches a shaped parameter backed by
+# neither `const_arrays` nor `param_arrays` and throws
+# `E_TREEWALK_UNSUPPORTED_SHAPE` on a document the spec says is valid
+# (EarthSciML/EarthSciAST#219). A LIVE forcing buffer (`param_arrays`) owns its
+# name, so broadcasting a DECLARED scalar never displaces one; an explicit
+# override is the caller speaking for this run and outranks both registries,
+# exactly as the array spelling of that override already does.
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
-                                           index_sets::AbstractDict)
+                                           index_sets::AbstractDict;
+                                           param_arrays::AbstractDict=Dict{String,Any}())
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
+        elseif ov isa Number
+            # A SCALAR override is tested BESIDE the array one, before either
+            # default arm: §6.6.2 gives the two spellings of the §6.3 union one
+            # precedence, so an override must not lose to the very `default` it
+            # replaces (nor to caller-supplied data, which the array arm above
+            # already outranks). Tested after it, a scalar override of a
+            # parameter whose declared `default` is an inline array was silently
+            # DROPPED and the default used instead.
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
             continue                      # caller-supplied data is authoritative
         elseif is_inline_array(v.default)
             v.default
+        elseif v.default isa Number
+            # esm-spec §6.3 broadcast of the DECLARED scalar. Skipped when a live
+            # forcing buffer already carries the name, and when the shape does
+            # not resolve (an unmaterialized derived set has no extent to fill) —
+            # the build's own extent checks then report any real disagreement.
+            haskey(param_arrays, name) && continue
+            exts = _declared_shape_extents(v.shape, index_sets, _EMPTY_DERIVED_EXTENTS)
+            exts === nothing && continue
+            fill(Float64(v.default), Tuple(exts))
         else
             continue
         end
         _check_inline_shape(name, value, v.shape, index_sets,
-                            is_inline_array(ov) ? "parameter_overrides" : "default")
+                            ov === nothing ? "default" : "parameter_overrides")
         additions[name] = value
     end
     isempty(additions) && return const_arrays
@@ -914,8 +947,12 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 # So rewrite each caller key onto the name the build actually resolves, once,
 # before any consumer sees it:
 #   1. an exact parameter-name hit wins;
-#   2. else a DOTTED key whose trailing segment is itself a parameter name
-#      resolves to that parameter (`M.A` against a bare-named `Model`);
+#   2. else a DOTTED key whose LONGEST dotted suffix is itself a parameter name
+#      resolves to that parameter (`M.A` against a bare-named `Model`, `M.sub.A`
+#      against a build carrying the mounted subsystem parameter as `sub.A`) —
+#      PROVIDED every leading segment dropped along the way names a component or
+#      subsystem the document actually declares, so a typo'd `Missng.M.pert_amp`
+#      is reported rather than silently suffix-matched onto `M.pert_amp`;
 #   3. else a BARE key that is the trailing segment of exactly ONE parameter
 #      resolves to it (`A` against the flattened `M.A`);
 #   4. a BARE key that is the trailing segment of MORE THAN ONE parameter is
@@ -923,6 +960,12 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 #      components both carry — and is rejected naming the candidates, never
 #      guessed at;
 #   5. anything else matches no parameter and is rejected as UNKNOWN.
+# Two NON-EXACT keys designating ONE parameter — `solo` (rule 3) and
+# `Doc.Left.solo` (rule 2) both landing on `Left.solo`, or `A.M.g` and `B.M.g`
+# both landing on `M.g` — is likewise rejected: the caller wrote two overrides
+# and only one can take effect, so picking a winner would be a wrong answer
+# rather than a missing one. An EXACT key is never part of a collision — rule 1
+# identifies its parameter outright and wins over any suffix or bare claim.
 # This is the Julia counterpart of Python's `_resolve_override` and Rust's
 # `Compiled::normalize_override_keys`, so one authored test behaves identically
 # in all three executing bindings — see esm-spec §6.6.2 "Unrecognized override
@@ -935,22 +978,29 @@ const _EMPTY_DERIVED_EXTENTS = Dict{String,Int}()
 # happens, and the model quietly measures the configuration they thought they
 # had switched off. Rust already raised `InvalidParameter` here; Julia and
 # Python now match it.
-function _normalize_param_override_keys(model::Model, overrides::AbstractDict)
+function _normalize_param_override_keys(model::Model, overrides::AbstractDict;
+                                        model_name=nothing)
     isempty(overrides) && return overrides
     param_names = Set{String}(n for (n, v) in model.variables
                               if v.type == ParameterVariable)
+    namespaces = _override_namespaces(param_names; model=model, model_name=model_name)
     # `Any`-valued: esm-spec §6.6.2 admits INLINE ARRAY DATA for a SHAPED
     # parameter alongside a scalar, and the array must survive key
     # canonicalization intact (`_register_inline_array_parameters` routes it to
     # the const-array channel just below).
-    normalized, unknown, ambiguous =
-        _canonicalize_override_keys(Any, param_names, overrides)
+    normalized, unknown, ambiguous, collisions =
+        _canonicalize_override_keys(Any, param_names, namespaces, overrides)
     if !isempty(ambiguous)
         k, cands = first(sort!(collect(ambiguous), by = first))
         throw(ArgumentError(
             "parameter_overrides: ambiguous parameter name '$(k)' — it is the " *
             "local name of $(length(cands)) parameters ($(join(sort(cands), ", "))). " *
             "Qualify it with its owning component (esm-spec §6.6.2)."))
+    end
+    if !isempty(collisions)
+        name, keys_ = first(sort!(collect(collisions), by = first))
+        throw(ArgumentError(_override_collision_message(
+            "parameter_overrides", "parameter", name, keys_)))
     end
     if !isempty(unknown)
         throw(ArgumentError(
@@ -964,23 +1014,32 @@ end
 
 # ---- Shared caller-key canonicalization (esm-spec §6.6.2) ----
 # Rewrite each caller key onto the build-resolved name it designates, and
-# classify the ones that designate none. `names` is the set of names the build
-# actually resolves (flattening-qualified parameters, or state elements).
-# Returns `(normalized, unknown, ambiguous)` where `ambiguous` maps a bare key
-# to the candidates that carry it, so the caller can raise the two cases apart.
+# classify the ones that designate none — or the ones that designate one the
+# same name as another key. `names` is the set of names the build actually
+# resolves (flattening-qualified parameters, or state elements); `namespaces` is
+# the component / subsystem scope rule 2 validates a key's LEADING segments
+# against (`_override_namespaces`).
+#
+# Returns `(normalized, unknown, ambiguous, collisions)`: `ambiguous` maps a
+# bare key to the candidates that carry it, and `collisions` maps a resolved
+# name to the two or more NON-EXACT keys that all designate it — so the caller
+# can raise the three cases apart, each with the remedy that fits it (correct
+# the name; qualify it; drop one of the duplicate keys).
 #
 # The value type `V` is a parameter so the SOLVE-time override path
 # (`remake_parameters`, simulate.jl) can reuse the identical key resolution
 # while keeping each value's own type — a `Dual` passed as a numeric parameter
 # override must stay a `Dual`, or differentiating through `remake(prob; p = …)`
 # would be defeated by the resolver.
-_canonicalize_override_keys(names::AbstractSet{String}, overrides::AbstractDict) =
-    _canonicalize_override_keys(Float64, names, overrides)
+_canonicalize_override_keys(names::AbstractSet{String}, namespaces::AbstractSet{String},
+                            overrides::AbstractDict) =
+    _canonicalize_override_keys(Float64, names, namespaces, overrides)
 
 @inline _override_value(::Type{Any}, v) = v
 @inline _override_value(::Type{V}, v) where {V} = V(v)
 
 function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
+                                     namespaces::AbstractSet{String},
                                      overrides::AbstractDict) where {V}
     # Bare trailing segment → the unique name carrying it. A bare segment
     # carried by two or more names is AMBIGUOUS: recorded here with its
@@ -994,32 +1053,116 @@ function _canonicalize_override_keys(::Type{V}, names::AbstractSet{String},
     normalized = Dict{String,V}()
     unknown = String[]
     ambiguous = Dict{String,Vector{String}}()
-    # Two passes so precedence is DETERMINISTIC when a caller supplies both
-    # spellings of one name (`A` and `M.A`): the alias-resolved keys land first,
-    # the exact-name keys overwrite them. Same order as Python's
-    # `_resolve_override` (exact key checked before the bare segment).
+    # Which key(s) CLAIMED each resolved name. An EXACT hit (rule 1) is recorded
+    # apart from the non-exact claims (rules 2 and 3) because it WINS rather
+    # than collides: it identifies its name outright, so any bare or
+    # more-qualified claim on that same name is simply discarded. Two NON-EXACT
+    # keys on one name — `solo` (rule 3) and `Doc.Left.solo` (rule 2) both
+    # landing on `Left.solo`, or `A.M.g` and `B.M.g` both landing on `M.g` — is a
+    # document authoring error: the caller wrote two overrides and only one can
+    # take effect, so it is reported rather than ranked away.
+    exact = Set{String}()
+    claims = Dict{String,Vector{Tuple{String,Any}}}()
     for (rawk, v) in overrides
         k = String(rawk)
-        k in names && continue
-        bare = _bare_param_name(k)
-        if bare in names                      # rule 2: dotted key, bare target
-            normalized[bare] = _override_value(V, v)
+        if k in names                             # rule 1: exact hit
+            push!(exact, k)
+            normalized[k] = _override_value(V, v)
+            continue
+        end
+        local name::String
+        suffix = _dotted_suffix_hit(names, namespaces, k)
+        if suffix !== nothing                     # rule 2: longest known suffix
+            name = suffix
         elseif haskey(bare_group, k)
             cands = bare_group[k]
-            if length(cands) == 1             # rule 3: unique bare alias
-                normalized[cands[1]] = _override_value(V, v)
-            else                              # rule 4: ambiguous local name
+            if length(cands) == 1                 # rule 3: unique bare alias
+                name = cands[1]
+            else                                  # rule 4: ambiguous local name
                 ambiguous[k] = cands
+                continue
             end
-        else                                  # rule 5: matches nothing
+        else                                      # rule 5: matches nothing
             push!(unknown, k)
+            continue
+        end
+        push!(get!(claims, name, Tuple{String,Any}[]), (k, v))
+    end
+    collisions = Dict{String,Vector{String}}()
+    for (name, cs) in claims
+        name in exact && continue
+        if length(cs) > 1
+            collisions[name] = sort!(String[k for (k, _) in cs])
+        else
+            normalized[name] = _override_value(V, cs[1][2])
         end
     end
-    for (rawk, v) in overrides
-        k = String(rawk)
-        k in names && (normalized[k] = _override_value(V, v))   # rule 1: exact hit
+    sort!(unknown)
+    return normalized, unknown, ambiguous, collisions
+end
+
+# The esm-spec §6.6.2 "two keys, one name" diagnostic, worded identically in
+# Python (`_collision_message`) and Rust
+# (`SimulateError::CollidingParameterKeys`).
+_override_collision_message(surface::AbstractString, kind::AbstractString,
+                            name::AbstractString, keys_::AbstractVector{String}) =
+    "$(surface): $(length(keys_)) keys designate the $(kind) '$(name)' " *
+    "($(join(keys_, ", "))). Supply exactly one override key per name " *
+    "(esm-spec §6.6.2)."
+
+# The COMPONENT / SUBSYSTEM names a rule-2 override key may spell in its LEADING
+# segments (esm-spec §6.6.2 rule 2, §4.6).
+#
+# Every non-final dotted segment of a build-resolved name is a namespace the
+# build itself carries (`Left.gain` ⇒ `Left`; `M.sub.A` ⇒ `M`, `sub`). `model`
+# and `model_name` supply the namespaces the NAMES cannot show: an unmounted
+# subsystem's own name, and — on the raw single-model front door, whose
+# variables are BARE — the enclosing model's name, which is exactly what makes
+# `M.A` a legal spelling of `A`. The Python (`namespace_scope`) and Rust
+# (`namespace_scope`) mirrors derive the same set.
+function _override_namespaces(names::AbstractSet{String};
+                              model::Union{Nothing,Model}=nothing,
+                              model_name=nothing)
+    ns = Set{String}()
+    for n in names
+        parts = split(n, '.')
+        for i in 1:(length(parts) - 1)
+            push!(ns, String(parts[i]))
+        end
     end
-    return normalized, unknown, ambiguous
+    model_name === nothing || push!(ns, String(model_name))
+    model === nothing || _collect_subsystem_names!(ns, model)
+    return ns
+end
+
+function _collect_subsystem_names!(ns::Set{String}, model::Model)
+    for (sname, sub) in model.subsystems
+        push!(ns, String(sname))
+        sub isa Model && _collect_subsystem_names!(ns, sub)
+    end
+    return ns
+end
+
+# Rule 2: the LONGEST dotted suffix of a dotted key `k` — every `<segment>.`
+# prefix dropped in turn, most-qualified first — that is itself a known name,
+# PROVIDED every segment dropped along the way names a component or subsystem in
+# `namespaces`. `nothing` for a bare key, when no suffix is known, or when a
+# leading segment names nothing. `M.sub.A` tries `sub.A` then `A` when `M` and
+# `sub` are real (`M.A` against a bare-named single-model system; `M.sub.A`
+# against a build carrying the mounted subsystem parameter as `sub.A` — the §4.6
+# fully-qualified spelling of a name the build holds in a shorter form), while
+# `Doc.Left.solo` in a document with no component `Doc` is rejected rather than
+# re-pointed at `Left.solo`.
+function _dotted_suffix_hit(names::AbstractSet{String}, namespaces::AbstractSet{String},
+                            k::AbstractString)
+    rest = String(k)
+    while (i = findfirst('.', rest)) !== nothing
+        head = rest[1:prevind(rest, i)]
+        head in namespaces || return nothing
+        rest = rest[nextind(rest, i):end]
+        rest in names && return rest
+    end
+    return nothing
 end
 
 _bare_param_name(name::AbstractString) =
@@ -2674,7 +2817,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # bytes as before this change. A factored array observed no longer sits
         # in the RHS substitution map (its readers gather its buffer), but the
         # observability surface is not the RHS: `_observed_field`
-        # (pde_inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
+        # (inline_tests.jl, esm-spec §6.6.5) evaluates an asserted array
         # observed's expression CELLWISE, off the ODE path, so every reference
         # in it must be substituted — including references between factored
         # observeds. Re-resolving the merged map restores exactly that, and only
@@ -3124,7 +3267,17 @@ function _build_evaluator_impl_inner(model::Model;
                          # selected model (esm-spec §9.6.4 Option B; name → raw
                          # decl). Supplied by the `EsmFile` front-door when the
                          # document carries references; `nothing` everywhere else.
-                         _template_reg=nothing)
+                         _template_reg=nothing,
+                         # Internal: the SELECTED MODEL's own name, threaded from
+                         # the `EsmFile` / `AbstractDict` front-doors. Used only
+                         # for the esm-spec §6.6.2 rule-2 namespace scope — a raw
+                         # single-model build keeps its variable names BARE, so
+                         # the model's name is the one legal leading segment its
+                         # names cannot show. `nothing` on a direct `Model` call,
+                         # where the key's leading segments are then validated
+                         # against the model's own subsystems and name prefixes
+                         # alone.
+                         _model_name::Union{Nothing,AbstractString}=nothing)
     # Runtime contraction-loop var registry (ess-runtime-contraction) is a
     # build-scoped resolve→compile side channel; clear any stale entries from a
     # prior build so it never accumulates across builds. Loop-var names are
@@ -3198,19 +3351,22 @@ function _build_evaluator_impl_inner(model::Model;
     # NamedTuple, the coordinate-expression `ic` seed, the setup env, and
     # `inspect.params`. Idempotent — the AbstractDict front-door normalizes
     # too, and a document whose parameters are already bare is unchanged.
-    parameter_overrides = _normalize_param_override_keys(model, parameter_overrides)
+    parameter_overrides = _normalize_param_override_keys(model, parameter_overrides;
+                                                        model_name=_model_name)
     # ---- Inline array data (esm-spec §6.3 / §6.6.2) ----
-    # A SHAPED parameter whose value is authored as a row-major nested array —
-    # on its own `default`, or in the caller's `parameter_overrides` — is
-    # BUILD-TIME DATA, not a scalar `p` slot. Register it in the const-array
-    # registry, which is exactly the channel `_partition_variables` already
-    # requires an array-shaped parameter to be backed by; nothing else in the
-    # build then needs to know the column was authored inline rather than
-    # loaded. A shaped UNKNOWN's inline `initial_conditions` profile is expanded
-    # into the per-cell keys `_build_u0` seeds from. Both are no-ops (and the
-    # registries byte-identical) for a document that authors no array data.
+    # A SHAPED parameter whose value the document supplies — a row-major nested
+    # array on its own `default` or in the caller's `parameter_overrides`, or one
+    # SCALAR broadcast over the declared grid (§6.3) — is BUILD-TIME DATA, not a
+    # scalar `p` slot. Register it in the const-array registry, which is exactly
+    # the channel `_partition_variables` already requires an array-shaped
+    # parameter to be backed by; nothing else in the build then needs to know the
+    # column was authored inline rather than loaded. A shaped UNKNOWN's inline
+    # `initial_conditions` profile is expanded into the per-cell keys `_build_u0`
+    # seeds from. Both are no-ops (and the registries byte-identical) for a
+    # document that declares no shaped parameter.
     const_arrays = _register_inline_array_parameters(model, const_arrays,
-                                                     parameter_overrides, index_sets)
+                                                     parameter_overrides, index_sets;
+                                                     param_arrays=param_arrays)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
@@ -4265,9 +4421,13 @@ function build_evaluator(file::EsmFile;
                          kwargs...)
     model = _select_model(file, model_name)
     # Thread the document-scoped index-set registry (esm-spec v0.8.0) into the
-    # typed evaluator, which no longer reads it off the `Model`.
+    # typed evaluator, which no longer reads it off the `Model`. `_model_name`
+    # rides along for the §6.6.2 rule-2 namespace scope: the selected model's
+    # own name is the one namespace its (bare) variable names cannot show.
     return build_evaluator(model; index_sets=file.index_sets,
                            _template_reg=_component_template_reg(file, model_name),
+                           _model_name=(model_name === nothing ?
+                                        _sole_model_name(file) : String(model_name)),
                            kwargs...)
 end
 
@@ -4642,8 +4802,13 @@ function build_evaluator(esm::AbstractDict;
     # SAME resolved values. Without this a spec-spelled `{"pert_amp": 0}`
     # missed every one of them and the run silently used the default.
     if model !== nothing && haskey(kwd, :parameter_overrides)
-        kwd[:parameter_overrides] =
-            _normalize_param_override_keys(model, kwd[:parameter_overrides])
+        # `model_name` is the one namespace this raw, UNFLATTENED model cannot
+        # show in its own variable names — the single-model front door keeps
+        # them bare — and it is exactly what makes the §4.6 spelling `M.A` a
+        # legal rule-2 key for the parameter `A` (esm-spec §6.6.2).
+        kwd[:parameter_overrides] = _normalize_param_override_keys(
+            model, kwd[:parameter_overrides];
+            model_name=(model_name === nothing ? _sole_model_name(file) : String(model_name)))
     end
 
     # ---- Build-time binning-coordinate derivation (RFC §8.6.1 purity) ----
@@ -4809,6 +4974,17 @@ function _model_has_surviving_refs(model::Model)
         end
     end
     return found
+end
+
+# The single model's name when the document declares exactly one, else
+# `nothing` — the name `build_evaluator(file)` selects by default, needed for
+# the esm-spec §6.6.2 rule-2 namespace scope (a bare-named single-model build
+# admits the §4.6 spelling `M.A` for its parameter `A` only if `M` is known to
+# name the model).
+function _sole_model_name(file::EsmFile)
+    models = file.models
+    (models === nothing || length(models) != 1) && return nothing
+    return String(first(keys(models)))
 end
 
 # Select one typed model from an `EsmFile`, mirroring `_select_model`'s name

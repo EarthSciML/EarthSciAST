@@ -1,0 +1,80 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "function_tables_inline_test_conformance",
+    "description": "The esm-spec §9.5.3 lowering exercised END TO END, through each binding's inline-test runner rather than through a hand-written lowering harness. `y` is an observed defined by a `table_lookup`; `z` is the SAME lookup spelled in the lowered `fn interp.linear(const data, const axis, x)` form; `w` reads the same table by an out-of-range input that MUST clamp (`out_of_bounds` defaults to \"clamp\"). A binding that lowers only inside its test harness — and not on the path `run_tests` / `esm test` takes — fails the `y` and `w` assertions while passing `z`, which is exactly issue #188.",
+    "authors": ["esm-hid conformance"]
+  },
+  "function_tables": {
+    "t_prof": {
+      "description": "Temperature vs. pressure level (synthetic, 1-D linear).",
+      "axes": [
+        { "name": "p", "units": "Pa", "values": [1.0, 2.0, 3.0, 4.0] }
+      ],
+      "interpolation": "linear",
+      "out_of_bounds": "clamp",
+      "data": [10.0, 20.0, 30.0, 40.0]
+    }
+  },
+  "models": {
+    "TableLookupObserved": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 },
+        "y": { "type": "unknown", "units": "1", "default": 0.0 },
+        "z": { "type": "unknown", "units": "1", "default": 0.0 },
+        "w": { "type": "unknown", "units": "1", "default": 0.0 },
+        "p": { "type": "parameter", "units": "Pa", "default": 2.5 },
+        "p_hi": { "type": "parameter", "units": "Pa", "default": 99.0 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "const", "args": [], "value": 0.0 }
+        },
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "t_prof",
+            "axes": { "p": "p" },
+            "args": []
+          }
+        },
+        {
+          "lhs": "z",
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              { "op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0] },
+              { "op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0] },
+              "p"
+            ]
+          }
+        },
+        {
+          "lhs": "w",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "t_prof",
+            "axes": { "p": "p_hi" },
+            "args": []
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "table_lookup_matches_hand_lowered",
+          "description": "p = 2.5 falls midway between the 2.0 and 3.0 knots, so both spellings must give 25. p_hi = 99 is above the last knot, so the default clamp holds the last table value, 40.",
+          "parameter_overrides": { "p": 2.5, "p_hi": 99.0 },
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "y", "time": 0.0, "expected": 25.0 },
+            { "variable": "z", "time": 0.0, "expected": 25.0 },
+            { "variable": "w", "time": 0.0, "expected": 40.0 }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -135,8 +135,16 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
     # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
     # it into the run doc below so `derive_output_meta` can emit CF coordinates.
     run_coordinates = nothing
+    # Same for the document-scoped `solver` block (esm-spec §2.2): it rides on
+    # `EsmFile`, not on `FlattenedSystem`, so `flattened_to_esm` cannot know
+    # about it. Captured here and re-attached below, which is what makes
+    # `_document_solver` — and therefore the whole §2.2.2 chain — reachable at
+    # all; without it the run doc never carries the key and the document's
+    # declared tolerances were silently dropped.
+    run_solver = nothing
     if input isa EsmFile
         run_coordinates = input.coordinates
+        run_solver = input.solver
         # esm-spec §9.6.4 Option B: `flatten` ALWAYS carries surviving
         # `apply_expression_template` references into the FlattenedSystem; they
         # ride to the tree-walk build boundary below. Under
@@ -144,6 +152,14 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = flatten(input)
     end
     if input isa FlattenedSystem
+        # esm-spec §9.5.3: lower `table_lookup` to its `interp.*` form HERE —
+        # the one point every input kind (path, native Dict, EsmFile,
+        # already-flattened system) has funnelled into, and the first point
+        # inside a BUILD. Not at load: §9.5.4 requires the authored form to
+        # round-trip, and `save` re-serializes the very image `load` produced.
+        # First in the block, so the shape transforms below see the closed-
+        # function tree rather than an op they would have to know about.
+        input = lower_table_lookups(input)
         renames_out === nothing ||
             merge!(renames_out, input.metadata.merged_variable_renames)
         # Surviving references are THE behavior: they ride through
@@ -175,6 +191,13 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         # like `index_sets`, so it drops straight onto the run doc.
         run_coordinates !== nothing && !isempty(run_coordinates) &&
             (doc["coordinates"] = run_coordinates)
+        # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
+        # shape, which is what `_document_solver` coerces back. Document-scoped
+        # and un-namespaced, like `coordinates`.
+        if run_solver !== nothing
+            block = serialize_solver(run_solver)
+            isempty(block) || (doc["solver"] = block)
+        end
         return doc
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
@@ -197,8 +220,8 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # 'u'". Same defect as `parameter_overrides` had, on the state side; it
     # merely failed loudly instead of silently. Resolve the caller's key onto
     # the name the build uses with the SAME rules (build.jl
-    # `_canonicalize_override_keys`): exact hit, else a dotted key whose
-    # trailing segment is a state name, else a bare key that is the trailing
+    # `_canonicalize_override_keys`): exact hit, else a dotted key whose LONGEST
+    # dotted suffix is a state name, else a bare key that is the trailing
     # segment of exactly one — an ambiguous local name is rejected, never
     # guessed at.
     #
@@ -220,9 +243,40 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     base_names = Set{String}(keys(cells_of))
     element_alias = _bare_alias_groups(element_names)
     base_alias = _bare_alias_groups(base_names)
+    # esm-spec §6.6.2 rule 2 validates a key's LEADING segments against the
+    # component / subsystem scope, so `Missing.u` is reported rather than
+    # silently re-pointed at the state `u` by its trailing segment. The scope is
+    # read off the build's own names (`M.u` ⇒ `M`), the only structure reachable
+    # here.
+    namespaces = _override_namespaces(union(element_names, base_names))
+    # Which NON-EXACT key claimed each resolved name. Two of them designating one
+    # state is a document authoring error, not a last-write-wins race: the caller
+    # wrote two initial conditions and only one can take effect (Decision: §6.6.2
+    # "two keys, one name"). An EXACT key wins outright and never collides.
+    claimed = Dict{String,Vector{String}}()
+    exact_keys = Set{String}()
+    for (rawkey, _) in ics
+        key = String(rawkey)
+        if key in element_names || key in base_names
+            push!(exact_keys, key)
+            continue
+        end
+        for (space, alias) in ((element_names, element_alias), (base_names, base_alias))
+            hit = _resolve_state_key(key, space, alias, namespaces)
+            if hit !== nothing
+                push!(get!(claimed, hit, String[]), key)
+                break
+            end
+        end
+    end
+    for name in sort!(collect(keys(claimed)))
+        (name in exact_keys || length(claimed[name]) < 2) && continue
+        throw(SimulateError(_override_collision_message(
+            "initial_conditions", "state", name, sort!(claimed[name]))))
+    end
     for (rawkey, value) in ics
         key = String(rawkey)
-        resolved = _resolve_state_key(key, element_names, element_alias)
+        resolved = _resolve_state_key(key, element_names, element_alias, namespaces)
         if resolved !== nothing
             is_inline_array(value) && throw(SimulateError(
                 "simulate: initial_conditions['$key'] carries inline array data for a " *
@@ -231,7 +285,7 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
             u0[var_map[resolved]] = Float64(value)
             continue
         end
-        resolved = _resolve_state_key(key, base_names, base_alias)
+        resolved = _resolve_state_key(key, base_names, base_alias, namespaces)
         if resolved !== nothing
             cells = cells_of[resolved]
             if is_inline_array(value)
@@ -276,10 +330,14 @@ end
 # its own diagnostic rather than being lumped in with "unknown" — silently
 # binding one of the candidates would be a wrong answer, not a missing one.
 function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
-                            alias::AbstractDict{String,Vector{String}})
+                            alias::AbstractDict{String,Vector{String}},
+                            namespaces::AbstractSet{String})
     key in names && return String(key)
-    bare = _bare_param_name(key)
-    bare != key && bare in names && return bare
+    # Rule 2, leading segments validated (`_dotted_suffix_hit`): a dotted key
+    # resolves to the LONGEST of its dotted suffixes that is a state name, and
+    # only when every qualifier it drops names a real component or subsystem.
+    suffix = _dotted_suffix_hit(names, namespaces, key)
+    suffix === nothing || return suffix
     cands = get(alias, String(key), nothing)
     cands === nothing && return nothing
     length(cands) == 1 && return cands[1]
@@ -347,7 +405,7 @@ _compose_callbacks(cbs::AbstractVector) =
 
 # --------------------------------------------------------------------------- #
 # Internal solve bridge, for the CORE-RESIDENT callers that have to run a
-# problem themselves — today only the inline-test engine (`run_pde_tests`),
+# problem themselves — today only the inline-test engine (`run_inline_tests`),
 # which lives in this package and is handed an `alg` by its caller. It is NOT a
 # second public entry point beside `solve`: the extension implements it BY
 # calling `SciMLBase.solve(prob, alg; …)`, so there is exactly one solve path.
@@ -1144,8 +1202,12 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     pm = param_map(prob.p)
     names = Set{String}(keys(classes))
     union!(names, keys(pm))
-    normalized, unknown, ambiguous =
-        _canonicalize_override_keys(Any, names, overrides)
+    namespaces = _override_namespaces(names)
+    normalized, unknown, ambiguous, collisions =
+        _canonicalize_override_keys(Any, names, namespaces, overrides)
+    isempty(collisions) || throw(SimulateError(_override_collision_message(
+        "remake(prob; p)", "parameter",
+        first(sort!(collect(collisions), by = first))...)))
     isempty(unknown) || throw(SimulateError(
         "remake(prob; p): no parameter named " *
         join(("'" * k * "'" for k in sort(unknown)), ", ") *

@@ -195,6 +195,37 @@ pub enum FlattenError {
     )]
     VariableMapExpressionMissingFrom { from: String, to: String },
 
+    /// A `variable_map` endpoint names nothing the flattened system carries
+    /// (esm-spec §4.6, §10.4).
+    ///
+    /// Both halves of the entry are load-bearing and both used to fail
+    /// SILENTLY. A `to` that resolves to no parameter is simply never
+    /// promoted: the document declares a coupling, the target keeps its
+    /// declared default, and nothing downstream can tell "applied" from
+    /// "ignored". A `from` that resolves to nothing is worse — the
+    /// substitution still runs, so every consumer of `to` is rewritten to a
+    /// name no table binds, and the run produces NaN instead of a diagnostic.
+    ///
+    /// Same reasoning as [`FlattenError::CoupleMultiplicativeNoTendency`]: a
+    /// coupling mis-specification must not have the one outcome that looks
+    /// like success.
+    ///
+    /// A `from` whose owning system is a top-level `data_sources` key is
+    /// exempt — such a producer is served through the forcing seam rather than
+    /// as a declared variable (see [`apply_variable_map_removals`]).
+    #[error(
+        "variable_map({from} -> {to}): the '{side}' endpoint '{endpoint}' resolves to no variable, \
+         parameter or observed in the flattened system (esm-spec §4.6, §10.4). A scoped reference \
+         walks EVERY dot-separated segment, so a subsystem endpoint is spelled \
+         '<Model>.<Subsystem>.<name>'."
+    )]
+    VariableMapUnresolvedEndpoint {
+        from: String,
+        to: String,
+        side: String,
+        endpoint: String,
+    },
+
     /// Wrapped reaction-lowering failure.
     #[error("Reaction lowering failed: {0}")]
     Reaction(#[from] crate::reactions::DeriveError),
@@ -623,6 +654,13 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 
     // Phase 1: collect per-system lowered equations and namespaced variables.
     let (source_systems, mut per_system) = collect_component_systems(file)?;
+
+    // Phase 2 preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint
+    // must name something the collected system carries. Run against the
+    // PRE-coupling tables so an `operator_compose` `translate` merge (§10.2,
+    // which legitimately consumes one of the two spellings) cannot make a
+    // well-formed endpoint look unresolvable.
+    check_variable_map_endpoints(file, &per_system)?;
 
     // NOTE: flatten does NOT reject an undiscretized spatial operator. It used
     // to, and that was this binding's own stricter behaviour rather than the
@@ -3361,6 +3399,78 @@ fn rename_join_names_in(expr: &Expr, to: &str, from: &str) -> Expr {
     Expr::operator(out)
 }
 
+/// Preflight (esm-spec §4.6 / §10.4): every `variable_map` endpoint must name
+/// something the collected system carries — a state, a parameter, or an
+/// observed, under its FULL dot path.
+///
+/// This is the resolution half of the entry, and until it existed both halves
+/// failed silently. `apply_variable_map` substitutes `to` -> `from` whether or
+/// not either name binds, and `apply_variable_map_removals` pops `to` with
+/// `shift_remove`, whose `None` was discarded — so an endpoint that resolved
+/// to nothing produced a flattened system that looked exactly like one where
+/// the coupling had been applied and had simply had no effect. The two failure
+/// modes reported in issue #198 are both this: a target that keeps its
+/// declared default, and a source that leaves every rewritten consumer reading
+/// a name no table binds (NaN at run time, not a diagnostic).
+///
+/// EXEMPTION: a `from` whose owning system is a top-level `data_sources` key.
+/// Such a producer is served through the runtime forcing seam rather than as a
+/// declared variable, so it is legitimately absent from the collected tables
+/// (see [`apply_variable_map_removals`], which records it as a loaded
+/// producer).
+///
+/// Deliberately NOT checked: whether a promoting transform's `to` is a
+/// PARAMETER rather than an unknown. `tests/valid/scoped_refs_coupling.esm`
+/// maps `param_to_var` onto a declared unknown, and tightening that is a
+/// separate question from whether the endpoint resolves at all.
+fn check_variable_map_endpoints(
+    file: &EsmFile,
+    per_system: &[SystemBlock],
+) -> Result<(), FlattenError> {
+    let Some(entries) = &file.coupling else {
+        return Ok(());
+    };
+    let mut known: HashSet<&str> = HashSet::new();
+    for block in per_system {
+        known.extend(block.state_vars.keys().map(String::as_str));
+        known.extend(block.parameters.keys().map(String::as_str));
+        known.extend(block.observed_vars.keys().map(String::as_str));
+    }
+    let loader_names: HashSet<&str> = file
+        .data_sources
+        .as_ref()
+        .map(|ds| ds.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    for entry in entries {
+        let CouplingEntry::VariableMap { from, to, .. } = entry else {
+            continue;
+        };
+        // A `from` served by a data source never lands in the collected tables.
+        // The owner is the segment BEFORE the first dot, and a dotless `from`
+        // is its own owner — matching the other four bindings, which all take
+        // the whole string when there is no dot.
+        let from_owner = from
+            .split_once('.')
+            .map_or(from.as_str(), |(owner, _)| owner);
+        let from_is_loaded = loader_names.contains(from_owner);
+        for (side, endpoint) in [("from", from), ("to", to)] {
+            if endpoint.is_empty()
+                || known.contains(endpoint.as_str())
+                || (side == "from" && from_is_loaded)
+            {
+                continue;
+            }
+            return Err(FlattenError::VariableMapUnresolvedEndpoint {
+                from: from.clone(),
+                to: to.clone(),
+                side: side.to_string(),
+                endpoint: endpoint.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Preflight (esm-spec §10.4): walk every `variable_map` coupling entry whose
 /// transform is the named `identity` and raise [`FlattenError::DomainUnitMismatch`]
 /// when the `from` and `to` variables both carry DECLARED, non-empty, and
@@ -3800,7 +3910,7 @@ fn apply_pointwise_lift(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ddt, var};
+    use crate::test_support::{ddt, test_file, var};
     use crate::types::{Model, ModelVariable, VariableType};
     use std::collections::HashMap;
 
@@ -3964,6 +4074,114 @@ mod tests {
     fn test_variable_map_identity_missing_unit_ok() {
         assert!(flatten(&identity_map_file(None, Some("degC"))).is_ok());
         assert!(flatten(&identity_map_file(Some("K"), None)).is_ok());
+    }
+
+    // ---- variable_map endpoint resolution (esm-spec §4.6 / §10.4) ----------
+
+    /// A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds
+    /// the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.
+    /// `to_endpoint` is spelled by the caller so a wrong path can be probed.
+    fn subsystem_map_file(to_endpoint: &str) -> EsmFile {
+        let src = make_model(
+            vec![("T", var(VariableType::Unknown, Some("K")))],
+            vec![ddt("T", Expr::Number(1.0))],
+        );
+        let inner = make_model(
+            vec![
+                ("gain", var(VariableType::Parameter, Some("K"))),
+                ("x", var(VariableType::Unknown, Some("K"))),
+            ],
+            vec![ddt("x", Expr::Variable("gain".to_string()))],
+        );
+        let mut subsystems = IndexMap::new();
+        subsystems.insert(
+            "inner".to_string(),
+            serde_json::to_value(&inner).expect("model serializes"),
+        );
+        let wrap = Model {
+            subsystems: Some(subsystems),
+            ..Default::default()
+        };
+
+        let mut models = IndexMap::new();
+        models.insert("Src".to_string(), src);
+        models.insert("Wrap".to_string(), wrap);
+
+        EsmFile {
+            models: Some(models),
+            coupling: Some(vec![CouplingEntry::VariableMap {
+                from: "Src.T".to_string(),
+                to: to_endpoint.to_string(),
+                transform: VariableMapTransform::Named("param_to_var".to_string()),
+                factor: None,
+                lifting: None,
+                description: None,
+            }]),
+            ..test_file()
+        }
+    }
+
+    // A `to` endpoint reaching INTO a subsystem resolves by its FULL dot path:
+    // the nested parameter is promoted away and the nested equation that read
+    // it now reads the source. This is issue #198 item 1's first shape, and it
+    // is the case a two-segment endpoint resolver cannot express.
+    #[test]
+    fn test_variable_map_into_subsystem_parameter_resolves() {
+        let flat = flatten(&subsystem_map_file("Wrap.inner.gain")).expect("flattens");
+        assert!(
+            !flat.parameters.contains_key("Wrap.inner.gain"),
+            "the nested target must be promoted away, got {:?}",
+            flat.parameters.keys().collect::<Vec<_>>()
+        );
+        let rhs = &flat
+            .equations
+            .iter()
+            .find(|e| {
+                matches!(&e.lhs, Expr::Operator(n) if n.op == "D"
+                && n.args.first() == Some(&Expr::Variable("Wrap.inner.x".to_string())))
+            })
+            .expect("the nested ODE survives")
+            .rhs;
+        assert_eq!(*rhs, Expr::Variable("Src.T".to_string()));
+    }
+
+    // The same edge spelled with a MISSING segment (`Wrap.gain` for a
+    // parameter that lives at `Wrap.inner.gain`) resolves to nothing. It used
+    // to flatten cleanly with the coupling silently dropped — the target kept
+    // its declared default and nothing downstream could tell "applied" from
+    // "ignored" (issue #198 item 1's third shape).
+    #[test]
+    fn test_variable_map_unresolved_to_endpoint_errors() {
+        match flatten(&subsystem_map_file("Wrap.gain")).unwrap_err() {
+            FlattenError::VariableMapUnresolvedEndpoint {
+                side, endpoint, to, ..
+            } => {
+                assert_eq!(side, "to");
+                assert_eq!(endpoint, "Wrap.gain");
+                assert_eq!(to, "Wrap.gain");
+            }
+            other => panic!("expected VariableMapUnresolvedEndpoint, got {other:?}"),
+        }
+    }
+
+    // A `from` that resolves to nothing is the NaN half: the substitution runs
+    // regardless, so every consumer of `to` was rewritten to a name no table
+    // binds and the run produced NaN rather than a diagnostic.
+    #[test]
+    fn test_variable_map_unresolved_from_endpoint_errors() {
+        let mut file = subsystem_map_file("Wrap.inner.gain");
+        if let Some(CouplingEntry::VariableMap { from, .. }) =
+            file.coupling.as_mut().and_then(|c| c.first_mut())
+        {
+            *from = "Src.Nope.T".to_string();
+        }
+        match flatten(&file).unwrap_err() {
+            FlattenError::VariableMapUnresolvedEndpoint { side, endpoint, .. } => {
+                assert_eq!(side, "from");
+                assert_eq!(endpoint, "Src.Nope.T");
+            }
+            other => panic!("expected VariableMapUnresolvedEndpoint, got {other:?}"),
+        }
     }
 
     // C2: a pointwise-lift merged ODE whose operator makearray carries no

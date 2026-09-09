@@ -378,6 +378,15 @@ describe('Conformance Test Suite', () => {
         file: join(testsDir, 'invalid/ic_in_reaction_system.esm'),
         expectedCode: 'ic_in_reaction_system',
       },
+      {
+        // spec §4.9.6 (issue #181): three array observeds reading each other
+        // elementwise, closing `gamfac -> hpbl -> wscale -> gamfac`. Named here
+        // as well as swept above because the defect is a relationship BETWEEN
+        // schema-valid equations — the kind a binding is most likely to defer to
+        // its build, where the name reported is an innocent bystander.
+        file: join(testsDir, 'invalid/observed_cycle_array_elementwise.esm'),
+        expectedCode: 'observed_cycle',
+      },
     ]
 
     it.each(structuralErrorCases)(

@@ -165,6 +165,7 @@ var transformingFixtures = map[string]string{
 	"lib_calendar_subsystem_inclusion.esm": "subsystem ref resolution",
 	"lib_solar_subsystem_inclusion.esm":    "subsystem ref resolution",
 	"subsystem_index_set_merge.esm":        "subsystem ref resolution + index_sets merge",
+	"mount_rename_two_columns.esm":         "subsystem ref resolution + index_sets merge under a mount-edge index_set_rename",
 
 	// Enum lowering (esm-spec §9.3): `enum` op nodes are resolved to `const`
 	// integers at load time.

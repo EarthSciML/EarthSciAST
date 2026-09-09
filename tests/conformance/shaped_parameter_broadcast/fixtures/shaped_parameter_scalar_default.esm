@@ -1,0 +1,383 @@
+{
+    "esm": "1.0.0",
+    "metadata": {
+        "name": "shaped_parameter_scalar_default",
+        "description": "esm-spec 6.3 'Inline array data' + 6.6.2 'Shaped values': a SCALAR on a shaped variable keeps its broadcast meaning -- the one value applies to every element -- and the same union applies to a shaped variable's declared `default`. `ramp` is a shaped PARAMETER whose value is one scalar; `scale` is the shaped parameter carrying the array spelling of the same union, and its pairwise-distinct cells make every theta cell distinct so a binding that broadcast the wrong operand disagrees somewhere. `phi` integrates ramp[k] ALONE, so min == max over its four cells says exactly what the rule says; `theta` integrates ramp[k]*scale[k], gathering the broadcast parameter and the array-valued one at the same cell. The three tests are the bisection axis of EarthSciML/EarthSciAST#219 held inside ONE document: the declared scalar, a SCALAR parameter_overrides value, and the ARRAY parameter_overrides spelling of the same parameter.",
+        "authors": [
+            "EarthSciAST"
+        ],
+        "tags": [
+            "pde-inline-test",
+            "esm-spec-6.3",
+            "esm-spec-6.6.2",
+            "shaped-parameter",
+            "scalar-broadcast",
+            "parameter-overrides"
+        ]
+    },
+    "index_sets": {
+        "lev": {
+            "kind": "interval",
+            "size": 4
+        }
+    },
+    "models": {
+        "Column": {
+            "tolerance": {
+                "abs": 1e-12,
+                "rel": 1e-09
+            },
+            "variables": {
+                "ramp": {
+                    "type": "parameter",
+                    "units": "K/s",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": 0.5,
+                    "description": "THE SUBJECT: a shaped parameter whose declared `default` is one SCALAR. esm-spec 6.3 broadcasts it over every cell of `lev`, so every per-cell read below sees 0.5. A binding that leaves it in its scalar parameter vector has nothing to gather at index k."
+                },
+                "scale": {
+                    "type": "parameter",
+                    "units": "1",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": [
+                        1.0,
+                        2.0,
+                        3.0,
+                        4.0
+                    ],
+                    "description": "The CONTROL: the array spelling of the same 6.3 union, already supported. Its cells are pairwise distinct, so `theta` separates the cells and a broadcast applied to the wrong operand is caught rather than masked."
+                },
+                "theta": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": 1.0,
+                    "description": "Integrates ramp[k] * scale[k] = [0.5, 1.0, 1.5, 2.0] -- the broadcast parameter gathered at the same cell as the array-valued one. Its own scalar `default` is the half of the 6.3 rule that already worked on the UNKNOWN side -- asserted at t=0 so this fixture pins both sides of the rule, not only the parameter one."
+                },
+                "phi": {
+                    "type": "unknown",
+                    "units": "K",
+                    "shape": [
+                        "lev"
+                    ],
+                    "default": 0.0,
+                    "description": "Integrates ramp[k] DIRECTLY, with no array operand anywhere in its right-hand side. min == max over its four cells is the sharpest statement of 'the one value applies to every element'."
+                }
+            },
+            "equations": [
+                {
+                    "_comment": "D(theta[k])/dt = ramp[k] * scale[k] -- the broadcast parameter and the array-valued one gathered at the SAME cell, so a binding that broadcast the wrong operand disagrees somewhere.",
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "theta",
+                                        "k"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "*",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "ramp",
+                                        "k"
+                                    ]
+                                },
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "scale",
+                                        "k"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "_comment": "D(phi[k])/dt = ramp[k]: the broadcast parameter alone, straight into the state right-hand side.",
+                    "lhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "D",
+                            "args": [
+                                {
+                                    "op": "index",
+                                    "args": [
+                                        "phi",
+                                        "k"
+                                    ]
+                                }
+                            ],
+                            "wrt": "t"
+                        }
+                    },
+                    "rhs": {
+                        "op": "aggregate",
+                        "args": [],
+                        "output_idx": [
+                            "k"
+                        ],
+                        "ranges": {
+                            "k": {
+                                "from": "lev"
+                            }
+                        },
+                        "expr": {
+                            "op": "index",
+                            "args": [
+                                "ramp",
+                                "k"
+                            ]
+                        }
+                    }
+                }
+            ],
+            "tests": [
+                {
+                    "id": "scalar_default_broadcasts",
+                    "description": "No overrides. ramp = 0.5 in every cell, so phi(1) = 0.5 everywhere (min == max) and theta(1) = 1 + 0.5*scale = [1.5, 2.0, 2.5, 3.0]. theta(0) = 1 pins the shaped UNKNOWN's own scalar default, the half of esm-spec 6.3 that already worked.",
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 0.5
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 0.5
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "reduce": "min",
+                            "expected": 0.5
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 0.5
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 0.0,
+                            "coords": {
+                                "lev": 2
+                            },
+                            "expected": 1.0
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 1.5
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 3.0
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 3.0
+                        }
+                    ]
+                },
+                {
+                    "id": "scalar_override_broadcasts",
+                    "description": "esm-spec 6.6.2: a SCALAR parameter_overrides value on a shaped parameter keeps the same broadcast meaning. ramp = 2.0 everywhere, so phi(1) = 2.0 in every cell and theta(1) = 1 + 2*scale = [3, 5, 7, 9]. `scale` is untouched, so a binding that let the override leak into the other shaped parameter fails here.",
+                    "parameter_overrides": {
+                        "ramp": 2.0
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "reduce": "min",
+                            "expected": 2.0
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 2.0
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 3.0
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 9.0
+                        }
+                    ]
+                },
+                {
+                    "id": "array_override_still_binds",
+                    "description": "The ARRAY spelling of the same union on the SAME parameter -- the other arm of the #219 bisection, held in one document so the two spellings cannot drift apart. ramp = [1, 2, 3, 4], so phi(1) is that profile and theta(1) = 1 + ramp*scale = [2, 5, 10, 17].",
+                    "parameter_overrides": {
+                        "ramp": [
+                            1.0,
+                            2.0,
+                            3.0,
+                            4.0
+                        ]
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 1.0
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 4.0
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 17.0
+                        }
+                    ]
+                },
+                {
+                    "id": "scalar_override_beats_array_default",
+                    "description": "esm-spec 6.6.2 precedence, on the parameter whose DECLARED default is an array: a SCALAR parameter_overrides value replaces that array outright, it does not lose to it. scale = 3.0 everywhere and ramp keeps its declared 0.5, so theta(1) = 1 + 0.5*3 = 2.5 in EVERY cell -- min == max. A binding that ranked the override behind the declared array default reads scale = [1,2,3,4] and gets [1.5, 2.0, 2.5, 3.0] instead, which disagrees in three cells of four and on both reductions.",
+                    "parameter_overrides": {
+                        "scale": 3.0
+                    },
+                    "time_span": {
+                        "start": 0.0,
+                        "end": 1.0
+                    },
+                    "assertions": [
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 1
+                            },
+                            "expected": 2.5
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "coords": {
+                                "lev": 4
+                            },
+                            "expected": 2.5
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "reduce": "min",
+                            "expected": 2.5
+                        },
+                        {
+                            "variable": "theta",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 2.5
+                        },
+                        {
+                            "variable": "phi",
+                            "time": 1.0,
+                            "reduce": "max",
+                            "expected": 0.5
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

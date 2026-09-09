@@ -123,6 +123,58 @@ describe('flatten', () => {
     expect(toAscii(flat.equations[1]!.rhs)).toBe('A.x')
   })
 
+  // A wrapper model whose SUBSYSTEM owns the coupling target: `Src.T` feeds the
+  // parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads. The `to`
+  // endpoint is spelled by the caller so a wrong path can be probed against the
+  // same document.
+  const subsystemMapFile = (toEndpoint: string, fromEndpoint = 'Src.T') =>
+    ({
+      esm: '1.0.0',
+      metadata: { name: 'test' },
+      models: {
+        Src: {
+          variables: { T: { type: 'unknown' } },
+          equations: [{ lhs: { op: 'D', args: ['T'], wrt: 't' }, rhs: 1 }],
+        },
+        Wrap: {
+          variables: {},
+          equations: [],
+          subsystems: {
+            inner: {
+              variables: { gain: { type: 'parameter', default: 0 }, x: { type: 'unknown' } },
+              equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: 'gain' }],
+            },
+          },
+        },
+      },
+      coupling: [
+        { type: 'variable_map', from: fromEndpoint, to: toEndpoint, transform: 'param_to_var' },
+      ],
+    }) satisfies EsmFile
+
+  it('resolves a variable_map endpoint reaching INTO a subsystem (§4.6)', () => {
+    // The nested parameter is promoted away by its FULL dot path and the nested
+    // equation that read it now reads the source — the shape a two-segment
+    // endpoint resolver cannot express (issue #198 item 1).
+    const flat = flatten(subsystemMapFile('Wrap.inner.gain'))
+    expect(Object.keys(flat.parameters)).not.toContain('Wrap.inner.gain')
+    const nested = flat.equations.find((e) => toAscii(e.lhs) === 'D(Wrap.inner.x)/Dt')
+    expect(nested).toBeDefined()
+    expect(toAscii(nested!.rhs)).toBe('Src.T')
+  })
+
+  it('refuses a variable_map endpoint that resolves to nothing', () => {
+    // The same edge with a MISSING segment used to flatten cleanly with the
+    // coupling silently dropped: the target kept its declared default and
+    // nothing downstream could tell "applied" from "ignored". The `from` half is
+    // the NaN case — the substitution runs regardless, so consumers end up
+    // reading a name no table binds.
+    expect(() => flatten(subsystemMapFile('Wrap.gain'))).toThrow(/'to' endpoint 'Wrap\.gain'/)
+    expect(() => flatten(subsystemMapFile('Wrap.inner.gain', 'Src.Nope.T'))).toThrow(
+      /'from' endpoint 'Src\.Nope\.T'/,
+    )
+  })
+
   it('handles an expression (object) transform in variable_map', () => {
     const file = {
       esm: '1.0.0',
