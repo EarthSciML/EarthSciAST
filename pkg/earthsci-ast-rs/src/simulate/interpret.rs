@@ -80,9 +80,13 @@ fn eval_fn(
 ///
 /// On success returns `Ok(value)`. If `expr` references variable names that
 /// are not in `bindings` (and that aren't `t`), returns `Err(names)` listing
-/// each missing reference in encounter order. Math errors (division by zero,
-/// log of a non-positive number, unknown ops) propagate as `f64::NAN` or
-/// `±inf` in the `Ok` branch — that is the canonical runner's convention.
+/// each missing reference in encounter order. An operator this interpreter has
+/// no rule for is likewise an `Err` (a rendered
+/// [`CompileError::UnevaluableOperatorError`]) — it used to fold to `NaN` in
+/// the `Ok` branch, which is the defect issue #220 closed. Genuine MATH errors
+/// (division by zero, log of a non-positive number) still propagate as
+/// `f64::NAN` or `±inf` in the `Ok` branch: that is the canonical runner's
+/// convention, and the one case where a NaN really is the answer.
 pub fn fold_constant_expr(
     expr: &Expr,
     bindings: &HashMap<String, f64>,
@@ -122,6 +126,67 @@ fn collect_unbound(expr: &Expr, bindings: &HashMap<String, f64>, out: &mut Vec<S
             }
         }
     }
+}
+
+/// Does this interpreter have an evaluation rule for `op`?
+///
+/// The scalar analogue of [`crate::simulate_array::is_evaluable_op`], and the
+/// single source of truth for THIS evaluator's operator coverage. It is kept
+/// adjacent to [`eval_op`] so the two cannot drift: every name listed here has
+/// a `match` arm below (or, for `fn` and the precision marker, a dedicated
+/// [`ResolvedExpr`] variant that [`interpret`] dispatches before `eval_op` is
+/// reached), and every arm below is listed here.
+///
+/// It is NOT the same set as [`crate::op_registry::is_core_op`]: the registry
+/// answers "may this op appear in a legal AST", this answers "can the scalar
+/// interpreter produce a number for it". Nor is it the same set as the ARRAY
+/// runtime's oracle — this evaluator's values are `f64`, so on top of the nine
+/// core ops neither evaluator has a rule for (`skolem`, `rank`, `distinct`,
+/// `argmin`, `argmax`, `ic`, `enum`, `table_lookup`,
+/// `apply_expression_template`) it also has none for the array / tensor ops
+/// (`aggregate`, `makearray`, `index`, `reshape`, `transpose`, `concat`,
+/// `broadcast`) or the geometry ops (`intersect_polygon`,
+/// `polygon_intersection_area`) — a document carrying one belongs to
+/// [`crate::simulate_array`], which [`crate::simulate::is_array_file`] routes
+/// it to.
+///
+/// `const` is absent for a different reason: its value hangs off the NODE, not
+/// off `args`, so a plain [`ResolvedExpr::Op`] cannot carry it.
+/// [`crate::simulate::resolve_expr`] folds a SCALAR `const` straight to a
+/// [`ResolvedExpr::Number`] before this oracle is consulted; only an ARRAY
+/// `const`, which this evaluator has no value type for, reaches the gate.
+///
+/// Every one of the gated ops used to reach [`eval_op`]'s `_ => f64::NAN`
+/// backstop and come back as a NUMBER (issue #220). They are refused by name
+/// now, and that backstop is an `unreachable!`.
+#[must_use]
+pub fn is_evaluable_op(op: &str) -> bool {
+    matches!(
+        op,
+        // n-ary arithmetic and the n-ary reductions (left fold).
+        "+" | "*" | "min" | "max"
+        // Unary negate OR binary subtract.
+        | "-"
+        // Strictly-binary arithmetic, comparisons and logicals.
+        | "/" | "^" | "atan2" | "<" | ">" | "<=" | ">=" | "==" | "!=" | "and" | "or"
+        // Unary elementary functions / trig / rounding / sign / abs / not.
+        | "exp" | "log" | "ln" | "log10" | "sqrt" | "abs" | "sign" | "floor" | "ceil"
+        | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+        | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "not"
+        // Canonical unary negate and the nullary boolean literal.
+        | "neg" | "true"
+        // Conditional.
+        | "ifelse"
+        // Form ops with a defined runtime meaning here: a `D` on the RHS is the
+        // legacy-parity zero, `Pre` passes its operand through.
+        | "D" | "Pre"
+        // Resolved to their own `ResolvedExpr` variants by `resolve_expr` and
+        // dispatched by `interpret` before `eval_op` sees them — the closed
+        // function registry (esm-spec §9.2) and the engine-internal
+        // precision-boundary marker (`crate::precision_infer::MARKER_OP`).
+        | "fn"
+        | crate::precision_infer::MARKER_OP
+    )
 }
 
 fn eval_op(
@@ -177,6 +242,18 @@ fn eval_op(
             _ => f64::NAN,
         },
 
+        // The canonical unary negation `canonicalize.rs` emits — the same sign
+        // flip as the unary `-` above, and the same primitive the array
+        // evaluator routes `neg` through, so the two agree by construction.
+        "neg" => -v(0),
+
+        // The nullary boolean literal (esm-spec §4.2). This interpreter's
+        // boolean convention is 1.0 / 0.0 — every comparison and `and`/`or`/
+        // `not` above produces it — so the value is forced, not chosen, and it
+        // is what the array evaluator, Python (`numpy_interpreter`), Julia and
+        // Go all already produce for the same node.
+        "true" => 1.0,
+
         // Strictly-binary arithmetic + comparisons + logicals, all via the shared
         // `apply_binary`. Comparisons route through `scalar_compare` internally,
         // so `==`/`!=` stay EXACT equality (`a == b`) — the pinned cross-binding
@@ -208,21 +285,32 @@ fn eval_op(
         // if it shows up on the RHS we treat it as 0 (legacy parity).
         "D" => 0.0,
 
-        // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
-        // `integral`) and every other unregistered op carry NO privileged
-        // semantics: they are open-tier rewrite targets that a discretization
-        // rule must lower to a stencil before evaluation, and their value is
-        // UNDETERMINABLE until then (esm-spec §4.2). The normal pipeline rejects
-        // them at compile time (`resolve_expr`); reaching this direct-evaluation
-        // fallback with one still present yields `NaN` (undeterminable) via the
-        // catch-all below — never a silent `0.0`, which would quietly poison a
-        // trajectory.
-
         // Pre is the previous-value operator (used by event handling). With
         // events disallowed in v1 it should never appear, but if it does we
         // pass through the argument unchanged.
         "Pre" => v(0),
 
-        _ => f64::NAN,
+        // The spatial-calculus sugar ops (`grad`/`div`/`laplacian`/`curl`/`∇`/
+        // `integral`), every other unregistered op, and the evaluable-core ops
+        // this interpreter has no rule for (the array/tensor and geometry ops
+        // and the build-time relational ops) are ALL refused before a
+        // `ResolvedExpr::Op` carrying one can exist — from a DOCUMENT by
+        // `resolve_expr` (the open tier via `op_registry::check_node`, the
+        // evaluable-core remainder via `is_evaluable_op`), and from a CALLER by
+        // `ResolvedExpr::op`, the sealed variant's only constructor outside
+        // this crate. Reaching here therefore means the oracle and this `match`
+        // have drifted, which is a bug in this crate and not in the document.
+        //
+        // This used to be `_ => f64::NAN`, which meant an ungated op came back
+        // as a NUMBER: indistinguishable from a legitimate result, propagating
+        // into the solution, and reported to the author as an assertion that
+        // "expected 25, got NaN" rather than as the pipeline defect it is
+        // (issue #220). The array evaluator's backstop is `unreachable!` for
+        // exactly this reason; this one now matches it.
+        _ => unreachable!(
+            "scalar interpreter reached operator '{op}' with no evaluation rule — \
+             `resolve_expr` and `ResolvedExpr::op` both gate on `is_evaluable_op()` \
+             before building a `ResolvedExpr::Op`, so the two have drifted"
+        ),
     }
 }

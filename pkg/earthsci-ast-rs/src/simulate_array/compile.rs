@@ -2768,10 +2768,13 @@ pub(super) fn resolve_field_ic_cell(
             ),
         });
     }
-    // (2) Broadcast constant. Finite-only: `fold_constant_expr` renders any op
-    // outside the scalar interpreter (an `aggregate` grid-geometry node) as
-    // NaN rather than erroring, and a NaN must fall through to the
-    // coordinate-expression path — never silently seed the state vector.
+    // (2) Broadcast constant. Finite-only, and `Ok`-only: an op outside the
+    // scalar interpreter's rule set (an `aggregate` grid-geometry node) must
+    // fall through to the coordinate-expression path below — never silently
+    // seed the state vector. `fold_constant_expr` used to render one as `NaN`,
+    // and the `is_finite()` guard is what caught it; since issue #220 it errors
+    // instead, and the `if let Ok(..)` catches it one step earlier. Both arms
+    // are still needed: the guard also rejects a genuine `1.0/0.0`.
     if let Ok(c) = crate::simulate::fold_constant_expr(rhs, params)
         && c.is_finite()
     {
