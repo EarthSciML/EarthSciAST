@@ -72,6 +72,7 @@
         }
       ],
       "tolerance": {
+        "rel": 0.0,
         "abs": 1e-09
       },
       "tests": [

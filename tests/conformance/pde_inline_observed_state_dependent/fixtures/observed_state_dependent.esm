@@ -184,6 +184,7 @@
               "reduce": "max",
               "expected": 40.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -193,6 +194,7 @@
               "reduce": "min",
               "expected": 4.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -202,6 +204,7 @@
               "reduce": "mean",
               "expected": 20.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -213,6 +216,7 @@
               },
               "expected": 12.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -224,6 +228,7 @@
               },
               "expected": 21.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             },
@@ -233,6 +238,7 @@
               "reduce": "max",
               "expected": 4.0,
               "tolerance": {
+                "rel": 0.0,
                 "abs": 1e-09
               }
             }

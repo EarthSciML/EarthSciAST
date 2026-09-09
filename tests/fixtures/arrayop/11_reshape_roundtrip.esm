@@ -48,7 +48,7 @@
           }
         }
       ],
-      "tolerance": { "abs": 1.0e-9 },
+      "tolerance": { "rel": 0.0, "abs": 1.0e-9 },
       "tests": [
         {
           "id": "roundtrip_and_column_major",

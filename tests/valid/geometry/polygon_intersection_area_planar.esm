@@ -155,6 +155,7 @@
             "end": 1.0
           },
           "tolerance": {
+            "rel": 0.0,
             "abs": 1e-09
           },
           "assertions": [

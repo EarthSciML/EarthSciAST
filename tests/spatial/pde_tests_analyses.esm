@@ -53,7 +53,7 @@
           "id": "point_sample_at_center",
           "description": "(a) Spatial-point assertion: sample u at x=0.5, t=0.1. Analytic value exp(-alpha pi^2 t) * sin(pi/2) = exp(-0.00986960) ~ 0.99018.",
           "time_span": { "start": 0.0, "end": 0.1 },
-          "tolerance": { "abs": 1.0e-3 },
+          "tolerance": { "rel": 0.0, "abs": 1.0e-3 },
           "assertions": [
             {
               "variable": "u",
@@ -67,7 +67,7 @@
           "id": "domain_integral_conservation",
           "description": "(b) Domain-reduce assertion: integral of u over x in [0,1] at t=0.1. Analytic integral = exp(-alpha pi^2 t) * (2/pi) ~ 0.63037.",
           "time_span": { "start": 0.0, "end": 0.1 },
-          "tolerance": { "abs": 1.0e-3 },
+          "tolerance": { "rel": 0.0, "abs": 1.0e-3 },
           "assertions": [
             {
               "variable": "u",
@@ -81,7 +81,7 @@
           "id": "analytic_l2_error",
           "description": "(c) L2-error assertion against analytic reference exp(-alpha pi^2 t) sin(pi x).",
           "time_span": { "start": 0.0, "end": 0.1 },
-          "tolerance": { "abs": 1.0e-3 },
+          "tolerance": { "rel": 0.0, "abs": 1.0e-3 },
           "assertions": [
             {
               "variable": "u",
