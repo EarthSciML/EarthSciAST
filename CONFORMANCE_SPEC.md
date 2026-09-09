@@ -3465,6 +3465,12 @@ Julia `pkg/EarthSciAST.jl/test/conformance_tolerance_resolution_test.jl`, Python
 `pkg/earthsci-ast-rs/src/inline_tests.rs`. `bindings_required` is
 `["julia", "python", "rust"]`; Go and TypeScript carry the `Tolerance` type but
 have no inline-test runner, so they never resolve one and are `scope_excluded`.
+Both of them assert that exclusion themselves — Go
+`pkg/earthsci-ast-go/pkg/esm/tolerance_resolution_scope_test.go`, TypeScript
+`pkg/earthsci-ast-ts/src/tolerance-resolution-scope.test.ts`, the same shape
+§5.20 uses — so a binding that grows a §6.6.4 resolver cannot leave itself out
+of the category quietly. (TypeScript's existing `resolveTolerances` is the
+§2.2.2 INTEGRATION chain, a different quantity on a different chain.)
 
 Each gate also asserts **monotonicity** against the pre-#228 rule: per field the
 merged value can only come from a level the wholesale rule ignored, never from
